@@ -12,6 +12,16 @@ module.exports = defineConfig({
       authCors: process.env.AUTH_CORS!,
       jwtSecret: process.env.JWT_SECRET || "supersecret",
       cookieSecret: process.env.COOKIE_SECRET || "supersecret",
+      session_options: {
+        resave: true,
+        rolling: true,
+        saveUninitialized: true,
+        cookie: {
+          sameSite: "none",
+          secure: true,
+          maxAge: 10 * 60 * 60 * 1000, // 10 hours
+        }
+      }
     }
   },
   modules: [
