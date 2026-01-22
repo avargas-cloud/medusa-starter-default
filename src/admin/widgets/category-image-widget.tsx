@@ -7,7 +7,8 @@ const CategoryImageWidget = ({
     data
 }: DetailWidgetProps<AdminProductCategory>) => {
     // Read from native thumbnail column (migrated from metadata)
-    const thumbnailUrl = data?.thumbnail
+    // Fallback to metadata.thumbnail if native column is not returned by API yet
+    const thumbnailUrl = data?.thumbnail || (data.metadata?.thumbnail as string)
 
     if (!thumbnailUrl) {
         return <></> // Don't show widget if no image
