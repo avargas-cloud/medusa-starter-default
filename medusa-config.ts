@@ -19,6 +19,20 @@ module.exports = defineConfig({
       maxAge: 10 * 60 * 60 * 1000, // 10 hours
     }
   },
+  admin: {
+    backendUrl: process.env.MEDUSA_BACKEND_URL || "http://localhost:9000",
+  },
+  plugins: [
+    {
+      resolve: "@medusajs/admin",
+      options: {
+        autoRebuild: true,
+        develop: {
+          open: false,
+        },
+      },
+    },
+  ],
   modules: [
     {
       resolve: "@medusajs/medusa/event-bus-redis",
