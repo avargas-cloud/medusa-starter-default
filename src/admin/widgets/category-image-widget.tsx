@@ -6,7 +6,10 @@ import { DetailWidgetProps, AdminProductCategory } from "@medusajs/framework/typ
 const CategoryImageWidget = ({
     data
 }: DetailWidgetProps<AdminProductCategory>) => {
-    if (!data?.thumbnail) {
+    // Read from native thumbnail column (migrated from metadata)
+    const thumbnailUrl = data?.thumbnail
+
+    if (!thumbnailUrl) {
         return <></> // Don't show widget if no image
     }
 
@@ -15,7 +18,7 @@ const CategoryImageWidget = ({
             <div className="flex flex-col gap-4 px-6 py-4">
                 <Heading level="h2">Category Image</Heading>
                 <img
-                    src={data.thumbnail}
+                    src={thumbnailUrl}
                     alt={data.name}
                     className="w-full rounded-lg border border-gray-200"
                 />
