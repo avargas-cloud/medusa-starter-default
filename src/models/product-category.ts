@@ -1,5 +1,5 @@
 import { model } from "@medusajs/framework/utils"
-import { ProductCategory as MedusaProductCategory } from "@medusajs/medusa/dist/models"
+
 
 /**
  * Extended ProductCategory entity with additional thumbnail column.
