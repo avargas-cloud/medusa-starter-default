@@ -75,6 +75,88 @@ This is a **comprehensive, battle-tested guide** documenting the full deployment
 
 ---
 
+## 🏠 Local Development with Railway Database
+
+This guide explains how to run this project locally while connecting to the **Production Railway Database**. This allows you to develop and test with real data.
+
+### ⚠️ ONE RULE TO RULE THEM ALL
+**DO NOT RUN MIGRATIONS LOCALLY.** (`npx medusa db:migrate`).
+You are connected to the LIVE production database. If you break the schema locally, you break the live store.
+
+### 1. Prerequisites
+- Node.js v20+
+- Git
+- Access to the Railway Dashboard
+
+### 2. Setup Steps
+
+1.  **Clone the Repo**:
+    ```bash
+    git clone <your-repo-url>
+    cd medusa-starter-default
+    ```
+
+2.  **Install Dependencies**:
+    ```bash
+    npm install --legacy-peer-deps
+    ```
+
+3.  **Configure Environment (`.env`)**:
+    Create a file named `.env` in the root folder. Copy the following template and fill in the missing **Proxy Addresses**:
+
+    ```bash
+    NODE_ENV=development
+    PORT=9000
+    
+    # --------------------------------------------------------
+    # 1. DATABASE (Get from Railway -> Postgres -> Variables)
+    # --------------------------------------------------------
+    # Look for "DATABASE_PUBLIC_URL". Copy the domain:port part.
+    # It looks like: interchange.proxy.rlwy.net:12345
+    DATABASE_URL=postgresql://postgres:<PASSWORD>@<PROXY_HOST>:<PROXY_PORT>/railway
+    
+    # --------------------------------------------------------
+    # 2. REDIS (Get from Railway -> Redis -> Variables)
+    # --------------------------------------------------------
+    # Look for "REDIS_PUBLIC_URL". Copy the domain:port part.
+    # It looks like: roundhouse.proxy.rlwy.net:54321
+    # NOTE: You may need to "Enable Public Networking" in Redis Settings first.
+    REDIS_URL=redis://default:<PASSWORD>@<PROXY_HOST>:<PROXY_PORT>
+    
+    # --------------------------------------------------------
+    # 3. SECURITY (Must match Railway Variables exactly)
+    # --------------------------------------------------------
+    JWT_SECRET=<COPY_FROM_RAILWAY>
+    COOKIE_SECRET=<COPY_FROM_RAILWAY>
+    
+    # --------------------------------------------------------
+    # 4. CORS (Allows both Localhost and Production)
+    # --------------------------------------------------------
+    # Note: We include localhost:5173 (Vite default) and 9000
+    ADMIN_CORS=http://localhost:5173,http://localhost:9000,https://<YOUR_RAILWAY_APP>.up.railway.app
+    AUTH_CORS=http://localhost:5173,http://localhost:9000,https://<YOUR_RAILWAY_APP>.up.railway.app
+    STORE_CORS=http://localhost:8000,https://docs.medusajs.com
+    ```
+
+### 3. Running the Server
+
+Start the local server:
+```bash
+npm run dev
+```
+Accessed at: `http://localhost:9000/app`
+
+### 4. User Management (CLI)
+
+Since you cannot run the seeding script (it would overwrite production data), functionality like resetting passwords or creating admins must be done via CLI:
+
+**Create/Reset Admin User:**
+```bash
+npx medusa user --email admin@example.com --password NewSecretPassword123
+```
+
+---
+
 ## 🚀 Step-by-Step Deployment Process
 
 ### Prerequisites
