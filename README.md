@@ -587,3 +587,32 @@ Join our [Discord server](https://discord.com/invite/medusajs) to meet other com
 - [Twitter](https://twitter.com/medusajs)
 - [LinkedIn](https://www.linkedin.com/company/medusajs)
 - [Medusa Blog](https://medusajs.com/blog/)
+
+---
+
+## 📝 Session Log: Jan 22, 2026 - Deployment & Migration Fixes
+
+### 🚨 Problems Encountered & Solved
+
+#### 1. Railway Build Failure (`@medusajs/admin`)
+- **Issue**: Build failed because `@medusajs/admin` (v7) was installed but is incompatible with Medusa v2 project structure.
+- **Fix**: Removed the dependency from `package.json`. Medusa v2 uses the admin dashboard plugin differently.
+
+#### 2. "Failed to fetch" Login Error
+- **Issue**: Admin UI loads but login returns "Failed to fetch". Browser console showed CORS/Network errors targeting `localhost`.
+- **Cause**: Missing `MEDUSA_BACKEND_URL` environment variable in Railway. The Admin UI didn't know where the backend was running.
+- **Fix**: Added `MEDUSA_BACKEND_URL=https://medusa-starter-default-production-b69e.up.railway.app` to Railway variables.
+
+#### 3. Database Column Missing (`thumbnail`)
+- **Issue**: Data migration script failed with `errorMissingColumn`. The automatic TypeORM migration didn't run during deployment.
+- **Fix**: Created and ran `src/scripts/force-add-thumbnail-column.ts` to manually add the column via SQL (`ALTER TABLE...`).
+
+#### 4. Admin Widget Image Fallback
+- **Issue**: Even after adding the column, the API wasn't returning the `thumbnail` field immediately, hiding the images.
+- **Fix**: Updated `category-image-widget.tsx` to fallback to `metadata.thumbnail`. This ensured images were visible immediately while the native integration stabilizes.
+
+### 🔜 Next Steps (To-Do)
+
+1. **Enhance Category Widget**: Make the image **editable** (upload/replace) directly in the Admin UI (Current version is read-only).
+2. **Product Attributes**: Implement "Material", "Voltaje", "IP Rating", etc., using the Data Model Extension pattern.
+3. **Catalog Migration**: Run the full bulk migration for Products, ensuring Images and Categories are linked correctly.
