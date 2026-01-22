@@ -23,15 +23,7 @@ module.exports = defineConfig({
     backendUrl: process.env.MEDUSA_BACKEND_URL || "http://localhost:9000",
   },
   plugins: [
-    {
-      resolve: "@medusajs/admin",
-      options: {
-        autoRebuild: true,
-        develop: {
-          open: false,
-        },
-      },
-    },
+    // Deleted incompatible @medusajs/admin plugin
   ],
   modules: [
     {
