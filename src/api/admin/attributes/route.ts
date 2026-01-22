@@ -8,7 +8,9 @@ export async function GET(
 ): Promise<void> {
     const productAttributesService = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE)
 
-    const attribute_keys = await productAttributesService.listAttributeKeys()
+    const attribute_keys = await productAttributesService.listAttributeKeys({}, {
+        relations: ["values"]
+    })
 
     res.json({ attribute_keys })
 }

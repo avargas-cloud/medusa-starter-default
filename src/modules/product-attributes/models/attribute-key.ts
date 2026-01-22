@@ -1,5 +1,6 @@
 import { model } from "@medusajs/framework/utils"
 import { AttributeSet } from "./attribute-set"
+import { AttributeValue } from "./attribute-value"
 
 export const AttributeKey = model.define("attribute_key", {
     id: model.id().primaryKey(),
@@ -14,4 +15,8 @@ export const AttributeKey = model.define("attribute_key", {
     attribute_set: model.belongsTo(() => AttributeSet, {
         mappedBy: "attributes",
     }).nullable(),
+
+    values: model.hasMany(() => AttributeValue, {
+        mappedBy: "attribute_key"
+    })
 })

@@ -1,0 +1,7 @@
+{
+  "stack": "Error: Cannot create multiple links between 'product' and 'productAttributes'\n    at Link.create (D:\\Webapps\\medusa-starter-default\\node_modules\\@medusajs\\modules-sdk\\src\\link.ts:514:17)\n    at processTicksAndRejections (node:internal/process/task_queues:103:5)\n    at async testLinkCreation (D:\\Webapps\\medusa-starter-default\\src\\scripts\\test-link-creation.ts:47:23)\n    at async exec (D:\\Webapps\\medusa-starter-default\\node_modules\\@medusajs\\medusa\\src\\commands\\exec.ts:57:5)",
+  "__isMedusaError": true,
+  "type": "invalid_data",
+  "message": "Cannot create multiple links between 'product' and 'productAttributes'",
+  "date": "2026-01-22T21:15:13.473Z"
+}

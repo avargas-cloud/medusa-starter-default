@@ -104,7 +104,7 @@ export default async function organizeAttributes({ container }: ExecArgs) {
             console.log(`   ✅ Target: ${set.title} (ID: ${set.id})`)
 
             // 3. Batch Update Attributes
-            const updatePayloads = []
+            const updatePayloads: any[] = []
 
             for (const slug of legacySlugs) {
                 // Strip 'pa_' prefix
@@ -119,7 +119,7 @@ export default async function organizeAttributes({ container }: ExecArgs) {
                     updatePayloads.push({
                         id: attribute.id,
                         attribute_set_id: set.id
-                    })
+                    } as any)
                 }
             }
 

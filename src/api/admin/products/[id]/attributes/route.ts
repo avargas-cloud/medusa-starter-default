@@ -1,33 +1,77 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 
-export async function GET(
-    req: MedusaRequest,
-    res: MedusaResponse
-): Promise<void> {
-    const productId = req.params.id
+import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { updateProductAttributesWorkflow } from "../../../../../workflows/product-attributes/update-product-attributes"
+import { Modules } from "@medusajs/framework/utils"
+import { PRODUCT_ATTRIBUTES_MODULE } from "../../../../../modules/product-attributes"
+
+export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     const query = req.scope.resolve("query")
+    const remoteLink = req.scope.resolve("remoteLink")
+    const { id } = req.params
 
     try {
-        const { data } = await query.graph({
-            entity: "product",
-            fields: ["id", "attribute_value.*", "attribute_value.attribute_key.*"],
-            filters: { id: productId },
+        // 1. Get Links directly (Since Graph traversal is defaulting to 1:1)
+        // This is the robust fix to ensure we get ALL links
+        const links = await remoteLink.list({
+            [Modules.PRODUCT]: { product_id: id }
         })
 
-        const product = data?.[0]
-        const attributeValues = Array.isArray(product?.attribute_value)
-            ? product.attribute_value
-            : (product?.attribute_value ? [product.attribute_value] : [])
+        const ids = links.map((l: any) => l.attribute_value_id)
 
-        const attributes = attributeValues.map((av: any) => ({
-            id: av.id,
-            value: av.value,
-            label: av.attribute_key?.label,
-            handle: av.attribute_key?.handle,
-        }))
+        if (ids.length === 0) {
+            console.log(`🔍 [API] No links found for ${id}`)
+            return res.json({ attributes: [] })
+        }
+
+        // 2. Fetch Values
+        const { data: attributes } = await query.graph({
+            entity: "attribute_value",
+            fields: [
+                "id",
+                "value",
+                "metadata",
+                "attribute_key.id",
+                "attribute_key.label",
+                "attribute_key.handle",
+                "attribute_key.attribute_set.id",
+                "attribute_key.attribute_set.title"
+            ],
+            filters: {
+                id: ids
+            }
+        })
+
+        console.log(`🔍 [API] Hydrated ${attributes.length} attributes for ${id}`)
 
         res.json({ attributes })
     } catch (error) {
-        res.json({ attributes: [] })
+        console.error("❌ [API] Error fetching attributes:", error)
+        res.status(500).json({
+            message: "Failed to fetch product attributes",
+            error: (error as Error).message
+        })
+    }
+}
+
+export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+    const { attributes, variant_keys } = req.body
+    const { id } = req.params
+
+    try {
+        const { result } = await updateProductAttributesWorkflow(req.scope).run({
+            input: {
+                productId: id,
+                attributeValueIds: attributes,
+            }
+        })
+
+        // TODO: Handle variant_keys if passed in (future step)
+
+        res.json({ result })
+    } catch (error) {
+        res.status(500).json({
+            message: "Failed to update product attributes",
+            error: (error as Error).message
+        })
     }
 }

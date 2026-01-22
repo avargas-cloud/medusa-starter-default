@@ -1,0 +1,13 @@
+⚖️ DATA INTEGRITY CHECK for prod_100w-indoor-meanwell-power-supply-24vdc
+----------------------------------------
+📦 WooCommerce Source: 18 attributes defined in metadata.
+
+❌ CRITICAL FAILURE: Cannot convert undefined or null to object
+TypeError: Cannot convert undefined or null to object
+    at Object.keys (<anonymous>)
+    at Link.getLinkDataConfig (D:\Webapps\medusa-starter-default\node_modules\@medusajs\modules-sdk\src\link.ts:385:31)
+    at Link.getLinkModuleOrThrow (D:\Webapps\medusa-starter-default\node_modules\@medusajs\modules-sdk\src\link.ts:362:12)
+    at Link.list (D:\Webapps\medusa-starter-default\node_modules\@medusajs\modules-sdk\src\link.ts:597:28)
+    at verifyDataMatch (D:\Webapps\medusa-starter-default\src\scripts\verify-data-match.ts:35:40)
+    at processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async exec (D:\Webapps\medusa-starter-default\node_modules\@medusajs\medusa\src\commands\exec.ts:57:5)
