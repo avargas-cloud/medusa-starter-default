@@ -1,10 +1,14 @@
 import { defineWidgetConfig } from "@medusajs/admin-sdk"
-import { Container, Heading, Badge } from "@medusajs/ui"
+import { Container, Heading, Badge, Button } from "@medusajs/ui"
 import { DetailWidgetProps, AdminProduct } from "@medusajs/framework/types"
 import { useQuery } from "@tanstack/react-query"
+import { useState } from "react"
+import { PencilSquare } from "@medusajs/icons"
+import { ManageAttributesModal } from "../components/manage-attributes-modal"
 
 const ProductAttributesWidget = ({ data }: DetailWidgetProps<AdminProduct>) => {
     const productId = data?.id
+    const [open, setOpen] = useState(false)
 
     const { data: linkedAttrs } = useQuery({
         queryKey: ["product-attributes", productId],
@@ -18,15 +22,20 @@ const ProductAttributesWidget = ({ data }: DetailWidgetProps<AdminProduct>) => {
         enabled: !!productId,
     })
 
-    const attributes = linkedAttrs?.attributes || []
+    const attributes = Array.isArray(linkedAttrs?.attributes) ? linkedAttrs.attributes : []
 
     return (
         <Container>
             <div className="flex items-center justify-between mb-4">
-                <Heading level="h2">Product Attributes</Heading>
-                <Badge size="small" color="grey">
-                    {attributes.length} assigned
-                </Badge>
+                <div className="flex items-center gap-2">
+                    <Heading level="h2">Product Attributes</Heading>
+                    <Badge size="small" color="grey">
+                        {attributes.length} assigned
+                    </Badge>
+                </div>
+                <Button variant="secondary" onClick={() => setOpen(true)}>
+                    <PencilSquare /> Edit
+                </Button>
             </div>
 
             {attributes.length === 0 ? (
@@ -40,14 +49,21 @@ const ProductAttributesWidget = ({ data }: DetailWidgetProps<AdminProduct>) => {
                             key={attr.id}
                             className="bg-ui-bg-subtle p-3 rounded border border-ui-border-base"
                         >
-                            <p className="text-ui-fg-base font-medium text-sm">{attr.label}</p>
+                            <p className="text-ui-fg-base font-medium text-sm">{attr.attribute_key?.label || "Unknown"}</p>
                             <p className="text-ui-fg-muted text-xs">
-                                Value: <span className="text-ui-fg-subtle">{attr.value}</span>
+                                <span className="text-ui-fg-subtle">{attr.value}</span>
                             </p>
                         </div>
                     ))}
                 </div>
             )}
+
+            <ManageAttributesModal
+                open={open}
+                onOpenChange={setOpen}
+                productId={productId}
+                currentAttributes={attributes}
+            />
         </Container>
     )
 }
