@@ -1,11 +1,12 @@
-import { Column } from "typeorm"
-import { ProductCategory as MedusaProductCategory } from "@medusajs/framework/types"
+import { model } from "@medusajs/framework/utils"
+import { ProductCategory as MedusaProductCategory } from "@medusajs/medusa/dist/models"
 
 /**
  * Extended ProductCategory entity with additional thumbnail column.
  * This replaces the previous metadata.thumbnail approach with a native column.
  */
-export default class ProductCategory extends MedusaProductCategory {
-    @Column({ type: "text", nullable: true })
-    thumbnail?: string | null
-}
+const ProductCategory = model.define("product_category", {
+    thumbnail: model.text().nullable(),
+})
+
+export default ProductCategory
