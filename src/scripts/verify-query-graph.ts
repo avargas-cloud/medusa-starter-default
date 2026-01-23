@@ -12,9 +12,9 @@ export default async function verifyQueryGraph({ container }: ExecArgs) {
             fields: [
                 "id",
                 "title",
-                "attribute_value.*",
-                "attribute_value.value",
-                "attribute_value.attribute_key.label"
+                "attribute_values.*",
+                "attribute_values.value",
+                "attribute_values.attribute_key.label"
             ],
             filters: {
                 id: [productId]
@@ -23,7 +23,7 @@ export default async function verifyQueryGraph({ container }: ExecArgs) {
 
         console.log("📊 Result:")
         if (products.length > 0) {
-            const attrs = products[0].attribute_value
+            const attrs = products[0].attribute_values
             console.log(`   - Linked Attributes Type: ${Array.isArray(attrs) ? 'Array' : typeof attrs}`)
             console.log(`   - Count: ${Array.isArray(attrs) ? attrs.length : '1 (Single Object)'}`)
             console.log("   - Dump:", JSON.stringify(attrs, null, 2))
