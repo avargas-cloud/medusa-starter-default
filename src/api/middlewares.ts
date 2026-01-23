@@ -4,14 +4,7 @@ export default defineMiddlewares({
     routes: [
         {
             matcher: "/admin/attributes*",
-            middlewares: [
-                (req, res, next) => {
-                    console.log(`🔍 [Middleware] Request to ${req.originalUrl || req.url}`)
-                    console.log(`🔍 [Middleware] Cookies present: ${!!req.headers.cookie}`)
-                    next()
-                },
-                authenticate("user", ["session", "bearer", "api-key"])
-            ],
+            middlewares: [authenticate("user", ["session", "bearer", "api-key"])],
         },
         {
             matcher: "/admin/attribute-sets*",
