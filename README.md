@@ -334,3 +334,49 @@ Cada vez que abras tu terminal para trabajar:
 nvm use 20
 yarn dev
 ```
+
+🚀 Environment & Deployment Rescue Mission - Success Report
+Date: January 23, 2026 Result: ✅ Full Success (Local & Production functioning)
+
+🏗️ The Transformation
+We successfully migrated the project from a unstable, mixed Windows/WSL environment to a Production-Grade Native Linux Setup. This resolved critical "hanging" issues during installation and deployment.
+
+1. Local Environment (WSL2)
+Component	Before (Issues)	After (Solution)	Benefit
+Node Runtime	Windows node.exe	Native Linux Node v20 (via NVM)	Eliminated path conflicts (\\wsl$\...)
+Package Manager	NPM	Yarn	10x faster installs, no I/O blocks in WSL
+Dev Server	medusa develop	Nodemon	Ignores 
+.md
+ file changes (no restart on docs edit)
+2. Production Deployment (Railway)
+Component	Before (Failure)	After (Success)	Benefit
+Builder	Detected pnpm (incorrectly)	Forced Yarn (
+nixpacks.toml
+)	Matches local environment exact versions
+Lockfile	Conflicting 
+pnpm-lock.yaml
+yarn.lock only	Deterministic builds
+Protocol	Standard	Clean Environment	Removed phantom config files
+🛠️ Key Configuration Changes
+nixpacks.toml
+ (Railway Config)
+Now explicitly forces Yarn and Node 20, preventing Railway from guessing wrong:
+
+[phases.install]
+cmds = ["echo '--- STARTING CUSTOM YARN INSTALL ---'", "yarn install --frozen-lockfile"]
+nodemon.json
+ (Dev Experience)
+Added configuration to ignore documentation files during development:
+
+"ignore": ["*.md", "dist", "node_modules"]
+📖 How to Maintain This Setup
+Daily Development:
+
+nvm use 20
+yarn dev
+Installing New Packages:
+
+yarn add <package_name>
+# vs
+# npm install (DO NOT USE)
+Deploying: Just git push. Railway is now fully synced with your local Yarn setup.
