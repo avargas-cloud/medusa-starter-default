@@ -267,6 +267,14 @@ Usaremos **Node Nativo de Linux** (vía NVM) y **Yarn** (que es más eficiente).
 
 ---
 
+### Paso 0: Prerequisitos del Sistema (Ubuntu/WSL)
+Antes de empezar, actualiza el sistema e instala Git y las herramientas de compilación necesarias (para que no fallen las librerías nativas):
+
+```bash
+sudo apt update
+sudo apt install -y git python3 make g++ build-essential
+```
+
 ### Paso 1: Limpieza (Si ya intentaste instalar antes)
 Desde tu terminal en la carpeta del proyecto:
 ```bash
