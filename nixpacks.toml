@@ -2,10 +2,10 @@
 NIXPACKS_NODE_VERSION = "20"
 
 [phases.setup]
-nixPkgs = ["nodejs-20_x"]
+nixPkgs = ["nodejs-20_x", "python3", "gnumake", "gcc", "g++"]
 
 [phases.install]
-cmds = ["npm cache clean --force", "npm ci --omit=dev --no-audit --no-fund --loglevel=verbose"]
+cmds = ["yarn install --production=false"]
 
 [phases.build]
-cmds = ["npm run build"]
+cmds = ["yarn run build"]
