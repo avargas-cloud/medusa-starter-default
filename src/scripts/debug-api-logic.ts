@@ -17,7 +17,7 @@ export default async function debugApiLogic({ container }: ExecArgs) {
         // TEST 1: Generic remoteLink list
         console.log("\n🧪 Test 1: remoteLink.list({}) (Fetch any link)...")
         try {
-            const anyLinks = await remoteLink.list({}, { take: 1 })
+            const anyLinks = await remoteLink.list({})
             console.log(`   ✅ Success. Found ${anyLinks.length} generic links.`)
             if (anyLinks.length > 0) console.log("   Sample:", JSON.stringify(anyLinks[0]))
         } catch (e: any) {

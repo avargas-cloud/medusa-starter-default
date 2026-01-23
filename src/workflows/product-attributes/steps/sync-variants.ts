@@ -54,14 +54,15 @@ export const syncVariantsStep = createStep(
 
         // 3. Ensure Product Option Exists
         // We look for an option with the same Title as the Attribute Label
-        let targetOption = product.options.find(o => o.title === attributeKey.label)
+        let targetOption: any = product.options.find((o: any) => o.title === attributeKey.label)
 
         if (!targetOption) {
             logger.info(`[Sync Variants] Creating missing Option: ${attributeKey.label}`)
             targetOption = await productModule.createProductOptions([
                 {
                     title: attributeKey.label,
-                    product_id: product.id
+                    product_id: product.id,
+                    values: []
                 }
             ]).then(res => res[0])
         }
@@ -72,13 +73,13 @@ export const syncVariantsStep = createStep(
         for (const variant of product.variants) {
             // Logic: Variant Title === Attribute Value
             // We look for an AttributeValue (from the key) that matches the Variant Title
-            const matchedValue = attributeKey.values.find(v => v.value === variant.title)
+            const matchedValue = attributeKey.values.find((v: any) => v.value === variant.title)
 
             if (matchedValue) {
                 // MATCH FOUND!
 
                 // Check if variant involves this option already
-                const existingOptionValue = variant.options.find(opt => opt.option_id === targetOption.id)
+                const existingOptionValue = variant.options.find((opt: any) => opt.option_id === targetOption?.id)
 
                 if (!existingOptionValue) {
                     logger.info(`[Sync Variants] Healing Variant: ${variant.title} -> Linking to Option: ${attributeKey.label}`)
@@ -104,7 +105,10 @@ export const syncVariantsStep = createStep(
         }
 
         if (updates.length > 0) {
-            await productModule.updateProductVariants(updates)
+            // Update variants one by one as bulk update might require different signature
+            await Promise.all(updates.map(update =>
+                productModule.updateProductVariants(update.id, update)
+            ))
             logger.info(`[Sync Variants] Successfully updated ${updates.length} variants.`)
         } else {
             logger.info(`[Sync Variants] No variants needed healing.`)
