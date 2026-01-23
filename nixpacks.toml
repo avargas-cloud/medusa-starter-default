@@ -2,7 +2,7 @@
 NIXPACKS_NODE_VERSION = "20"
 
 [phases.setup]
-nixPkgs = ["nodejs-20_x", "python3", "gnumake", "gcc", "g++"]
+nixPkgs = ["nodejs-20_x", "yarn", "python3", "gnumake", "gcc", "g++"]
 
 [phases.install]
 cmds = ["yarn install --production=false"]
