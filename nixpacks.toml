@@ -1,11 +1,12 @@
 [variables]
 NIXPACKS_NODE_VERSION = "20"
+NODE_OPTIONS = "--max-old-space-size=4096"
 
 [phases.setup]
 nixPkgs = ["nodejs-20_x", "yarn", "python3", "gnumake", "gcc", "g++"]
 
 [phases.install]
-cmds = ["yarn install --production=false"]
+cmds = ["echo '--- STARTING CUSTOM YARN INSTALL ---'", "yarn install --production=false"]
 
 [phases.build]
 cmds = ["yarn run build"]
