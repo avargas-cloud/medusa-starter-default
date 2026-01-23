@@ -2,7 +2,7 @@
 import { ExecArgs } from "@medusajs/framework/types"
 
 export default async function verifyQueryGraph({ container }: ExecArgs) {
-    const query = container.resolve("query")
+    const query = container.resolve("query") as any
     const productId = "prod_100w-indoor-meanwell-power-supply-24vdc"
 
     try {
