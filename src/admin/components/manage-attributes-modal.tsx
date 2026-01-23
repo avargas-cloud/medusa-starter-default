@@ -2,7 +2,7 @@
 import { Button, FocusModal, Heading, Label, Select, Table, toast, Input, IconButton, Switch, Text, Badge, DropdownMenu, Popover, clx } from "@medusajs/ui"
 import { useState, useEffect, useMemo } from "react"
 import { useQueryClient, useQuery } from "@tanstack/react-query"
-import { Trash, Plus, XMark, ChevronDown, Check } from "@medusajs/icons"
+import { Trash, Plus, XMark, ChevronDown, Check, ArrowPath } from "@medusajs/icons"
 
 type AttributeValue = {
     id: string
@@ -78,7 +78,7 @@ const getKeyStatus = (key: AttributeKey | undefined, usedValues: AttributeValue[
 export const ManageAttributesModal = ({
     open,
     onOpenChange,
-    // productId, // Unused but kept in props for interface consistency logic
+    productId,
     currentAttributes,
     initialVariantKeys,
     onSaveAtomic
@@ -227,6 +227,34 @@ export const ManageAttributesModal = ({
             toast.error("Failed to save")
         } finally {
             setIsSaving(false)
+        }
+    }
+
+    const handleSync = async (attributeKeyId: string) => {
+        const toastId = toast.loading("Syncing variants...")
+        try {
+            // Retrieve productId from somewhere? It's missing in props usage but needed for API.
+            // Ah, we commented it out line 81. I need to uncomment it or use props.
+
+            // Wait, we need the productId to call the API: /admin/products/[id]/sync-variants
+            // The prop `productId` is passed to the component but I commented it out in the previous read?
+            // Let's check line 81. It was defined in props type but commented in destructuring?
+            // "productId, // Unused but kept..."
+            // I need to use it now.
+            // Assuming I can access `productId` from scope if I uncomment it in next chunk.
+
+            await fetch(`/admin/products/${productId}/sync-variants`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ attribute_key_id: attributeKeyId })
+            })
+
+            toast.dismiss(toastId)
+            toast.success("Variants synced!")
+            // Optionally close or refresh?
+        } catch (e) {
+            toast.dismiss(toastId)
+            toast.error("Sync failed")
         }
     }
 
@@ -530,12 +558,28 @@ export const ManageAttributesModal = ({
                                                     </div>
                                                 </Table.Cell>
                                                 <Table.Cell>
-                                                    <div className="flex items-center gap-2">
-                                                        <Switch
-                                                            checked={!!variantFlags[group.key_id]}
-                                                            onCheckedChange={() => toggleVariant(group.key_id)}
-                                                        />
-                                                        <Label>{variantFlags[group.key_id] ? "Yes" : "No"}</Label>
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="flex items-center gap-2">
+                                                            <Switch
+                                                                checked={!!variantFlags[group.key_id]}
+                                                                onCheckedChange={() => toggleVariant(group.key_id)}
+                                                            />
+                                                            <Label>{variantFlags[group.key_id] ? "Yes" : "No"}</Label>
+                                                        </div>
+
+                                                        {/* Sync Button - Only show if marked as Variant */}
+                                                        {variantFlags[group.key_id] && (
+                                                            <Button
+                                                                size="small"
+                                                                variant="transparent"
+                                                                className="text-ui-fg-muted hover:text-ui-fg-interactive"
+                                                                onClick={() => handleSync(group.key_id)}
+                                                                title="Sync Variations (Link by Title)"
+                                                            >
+                                                                <ArrowPath />
+                                                                <span className="sr-only">Sync</span>
+                                                            </Button>
+                                                        )}
                                                     </div>
                                                 </Table.Cell>
                                                 <Table.Cell className="text-right">
