@@ -3,10 +3,10 @@ NIXPACKS_NODE_VERSION = "20"
 NODE_OPTIONS = "--max-old-space-size=4096"
 
 [phases.setup]
-nixPkgs = ["nodejs-20_x", "pnpm", "python3", "gnumake", "gcc", "g++"]
+nixPkgs = ["nodejs-20_x", "yarn", "python3", "gnumake", "gcc", "g++"]
 
 [phases.install]
-cmds = ["echo '--- STARTING CUSTOM PNPM INSTALL ---'", "pnpm install --frozen-lockfile --prefer-offline"]
+cmds = ["echo '--- STARTING CUSTOM YARN INSTALL ---'", "yarn install --frozen-lockfile"]
 
 [phases.build]
-cmds = ["pnpm run build"]
+cmds = ["yarn build"]

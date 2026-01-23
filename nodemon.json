@@ -1,12 +1,16 @@
 {
-    "ignore": [
-        "docs/*",
-        "**/*.md",
-        ".git",
-        "node_modules"
+    "watch": [
+        "src",
+        "medusa-config.ts",
+        ".env"
     ],
     "ext": "ts,js,json",
-    "execMap": {
-        "ts": "ts-node"
-    }
+    "ignore": [
+        "*.md",
+        "dist",
+        "node_modules",
+        "uploads",
+        ".git"
+    ],
+    "exec": "medusa start"
 }
