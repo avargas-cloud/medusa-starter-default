@@ -64,5 +64,18 @@ module.exports = defineConfig({
     {
       resolve: "./src/modules/product-attributes",
     },
+    {
+      resolve: "@medusajs/file-s3",
+      id: "file",
+      options: {
+        file_url: process.env.MINIO_ENDPOINT ? `${process.env.MINIO_ENDPOINT}/${process.env.MINIO_BUCKET}` : undefined,
+        access_key_id: process.env.MINIO_ACCESS_KEY,
+        secret_access_key: process.env.MINIO_SECRET_KEY,
+        region: "us-east-1",
+        bucket: process.env.MINIO_BUCKET,
+        endpoint: process.env.MINIO_ENDPOINT,
+        s3_force_path_style: true,
+      },
+    },
   ]
 })
