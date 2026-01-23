@@ -112,6 +112,12 @@ module.exports = defineConfig({
 ### 🎯 Objective
 Implement a custom module to handle **technical specifications** (Voltage, Material, IP Rating) for EcoPowerTech products, fully integrated into the Medusa v2 Admin Dashboard.
 
+### 🎯 Objective
+Implement a custom module to handle **technical specifications** (Voltage, Material, IP Rating) for EcoPowerTech products, fully integrated into the Medusa v2 Admin Dashboard.
+
+> [!IMPORTANT]
+> **Rescue Manual**: For troubleshooting database issues or 1:N link failures, refer to the [Rescue Manual & Architecture Guide](./docs/product-attributes-architecture.md).
+
 ---
 
 ### ⚙️ Backend Architecture (The "Engine")

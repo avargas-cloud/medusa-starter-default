@@ -244,7 +244,7 @@ const AttributeDetailPage = () => {
                                         ))
                                     ) : (
                                         <Table.Row>
-                                            <Table.Cell colSpan={2} className="text-center py-8 text-ui-fg-muted italic">
+                                            <Table.Cell className="text-center py-8 text-ui-fg-muted italic">
                                                 No values defined for this attribute. Add one above.
                                             </Table.Cell>
                                         </Table.Row>

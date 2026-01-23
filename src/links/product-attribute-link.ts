@@ -4,6 +4,6 @@ import AttributeModule from "../modules/product-attributes"
 import { defineLink } from "@medusajs/framework/utils"
 
 export default defineLink(
-    ProductModule.linkable.product,
-    AttributeModule.linkable.attributeValue
+    { linkable: ProductModule.linkable.product, isList: true },
+    { linkable: AttributeModule.linkable.attributeValue, isList: true }
 )

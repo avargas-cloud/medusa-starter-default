@@ -1,161 +1,163 @@
 
 import { defineWidgetConfig } from "@medusajs/admin-sdk"
-import { Container, Heading, Accordion, Text, Button, Badge, StatusBadge } from "@medusajs/ui"
+import { DetailWidgetProps, AdminProduct } from "@medusajs/framework/types"
+import { Container, Heading, Table, Badge, Text, Button } from "@medusajs/ui"
 import { useQuery } from "@tanstack/react-query"
-import { useParams, Link } from "react-router-dom"
-import { PencilSquare } from "@medusajs/icons"
+import { useState } from "react"
+import { ManageAttributesModal } from "../components/manage-attributes-modal"
+import { sdk } from "../../lib/sdk"
 
-// Type Definition matching our API
-type AttributeValue = {
-    id: string
-    value: string
-    attribute_key: {
-        id: string
-        label: string
-        handle: string
-        attribute_set?: {
-            id: string
-            title: string
+
+
+// Helper to group flat attributes by Key
+const groupAttributesByKey = (flatAttributes: any[], variantKeys: string[] = []) => {
+    const groups: Record<string, any> = {};
+
+    flatAttributes.forEach(attr => {
+        const keyId = attr.attribute_key.id;
+
+        if (!groups[keyId]) {
+            groups[keyId] = {
+                key_id: keyId,
+                key_title: attr.attribute_key.label || attr.attribute_key.title,
+                handle: attr.attribute_key.handle,
+                is_variant: variantKeys.includes(keyId),
+                values: []
+            };
+        }
+        groups[keyId].values.push({
+            id: attr.id,
+            value: attr.value
+        });
+    });
+
+    return Object.values(groups);
+};
+
+const ProductAttributesWidget = ({ data: initialProduct }: DetailWidgetProps<AdminProduct>) => {
+
+    // 1. Fetch Attributes using Custom API (Robust)
+    const { data: customData, isLoading, refetch } = useQuery({
+        queryFn: async () => {
+            return sdk.client.fetch<any>(`/admin/products/${initialProduct.id}/attributes`)
+        },
+        queryKey: [["product", initialProduct.id, "custom-attributes"]],
+        retry: false
+    })
+
+    // Cast response to avoid TS error
+    const attributes = (customData as any)?.attributes || []
+
+
+    // 2. Fetch Product Metadata to know which keys are Variants
+    // We can rely on initialProduct, but a fresh fetch is safer for "Atomic" truth
+    const { data: productData } = useQuery({
+        queryFn: async () => {
+            return sdk.admin.product.retrieve(initialProduct.id)
+        },
+        queryKey: [["product", initialProduct.id, "fresh-metadata"]]
+    })
+
+    const variantKeys = (productData?.product?.metadata?.variant_attributes as string[]) || []
+
+    const [isManageModalOpen, setIsManageModalOpen] = useState(false)
+
+    // Calculate Groups for Display
+    const groupedAttributes = groupAttributesByKey(attributes, variantKeys)
+
+    const handleSave = async (selectedAttributes: any[], variantFlags: Record<string, boolean>) => {
+        // 1. Flatten selected values (Links)
+        const valueIds = selectedAttributes.map(a => a.id)
+
+        // 2. Collect Variant Keys
+        // We only care about keys that are present in the selection AND flagged true
+        const activeVariantKeys = Object.keys(variantFlags).filter(keyId => variantFlags[keyId])
+
+        try {
+            // Atomic POST
+            await sdk.client.fetch(`/admin/products/${initialProduct.id}/attributes`, {
+                method: "POST",
+                body: {
+                    value_ids: valueIds,
+                    variant_keys: activeVariantKeys
+                }
+            })
+
+            await refetch() // Reload attributes
+            setIsManageModalOpen(false)
+
+        } catch (e) {
+            console.error("Save Failed:", e)
         }
     }
-}
 
-type AttributeResponse = {
-    attributes: AttributeValue[]
-}
-
-const ProductAttributesWidget = () => {
-    const { id } = useParams()
-
-    const { data, isLoading, isError } = useQuery<AttributeResponse>({
-        queryKey: ["product-attributes", id],
-        queryFn: async () => {
-            const res = await fetch(`http://localhost:9000/admin/products/${id}/attributes`)
-            if (!res.ok) throw new Error("Failed to fetch attributes")
-            return res.json()
-        }
-    })
 
     if (isLoading) {
-        return (
-            <Container className="p-8">
-                <Text>Loading attributes...</Text>
-            </Container>
-        )
+        return <Container className="p-8">Loading attributes...</Container>
     }
-
-    if (isError || !data) {
-        return (
-            <Container className="p-8">
-                <Text className="text-ui-fg-error">Error loading attributes.</Text>
-            </Container>
-        )
-    }
-
-    const attributes = data.attributes
-
-    // Grouping Logic
-    const groups: Record<string, { title: string, items: AttributeValue[] }> = {}
-    const unsorted: AttributeValue[] = []
-
-    attributes.forEach(attr => {
-        const set = attr.attribute_key?.attribute_set
-        if (set) {
-            if (!groups[set.id]) {
-                groups[set.id] = { title: set.title, items: [] }
-            }
-            groups[set.id].items.push(attr)
-        } else {
-            unsorted.push(attr)
-        }
-    })
-
-    // Sort Groups (Optional: Alphabetical)
-    const sortedGroupKeys = Object.keys(groups).sort((a, b) =>
-        groups[a].title.localeCompare(groups[b].title)
-    )
-
-    // Helper to render a list of attributes
-    const AttributeList = ({ items }: { items: AttributeValue[] }) => (
-        <div className="flex flex-col gap-2 py-2">
-            {items.map(attr => (
-                <div
-                    key={attr.id}
-                    className="flex items-center justify-between p-3 rounded-md hover:bg-ui-bg-base-hover transition-colors border border-transparent hover:border-ui-border-base cursor-pointer group"
-                // On click logic could go here, or link wrapping
-                >
-                    <div className="flex flex-col">
-                        <Text className="txt-small text-ui-fg-subtle">{attr.attribute_key.label}</Text>
-                        <Text className="txt-medium font-medium text-ui-fg-base">{attr.value}</Text>
-                    </div>
-                    {/* Visual hint for interaction */}
-                    <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                        <PencilSquare className="text-ui-fg-muted" />
-                    </div>
-                </div>
-            ))}
-        </div>
-    )
 
     return (
-        <Container className="p-0 overflow-hidden">
-            <div className="p-6 border-b border-ui-border-base flex justify-between items-center bg-ui-bg-subtle">
-                <div className="flex flex-col gap-1">
-                    <Heading level="h2">Product Attributes</Heading>
-                    <Text className="text-ui-fg-subtle">
-                        {attributes.length} attributes assigned to this product.
-                    </Text>
-                </div>
-                <Button variant="secondary" size="small">
+        <Container className="p-0">
+            <div className="flex items-center justify-between px-6 py-4">
+                <Heading level="h2">Product Attributes</Heading>
+                <Button variant="secondary" onClick={() => setIsManageModalOpen(true)}>
                     Edit Attributes
                 </Button>
             </div>
 
-            <div className="p-0">
-                <Accordion type="multiple" defaultValue={["unsorted"]}>
-                    {/* Unsorted Group (Always First) */}
-                    {unsorted.length > 0 && (
-                        <Accordion.Item value="unsorted" className="border-b border-ui-border-base">
-                            <Accordion.Trigger className="px-6 py-4 hover:bg-ui-bg-subtle">
-                                <div className="flex items-center gap-2">
-                                    <Text className="font-medium">Unsorted / General</Text>
-                                    <Badge size="small" color="grey">{unsorted.length}</Badge>
-                                </div>
-                            </Accordion.Trigger>
-                            <Accordion.Content className="px-6 pb-4">
-                                <AttributeList items={unsorted} />
-                            </Accordion.Content>
-                        </Accordion.Item>
-                    )}
-
-                    {/* Attribute Sets */}
-                    {sortedGroupKeys.map(groupId => {
-                        const group = groups[groupId]
-                        return (
-                            <Accordion.Item key={groupId} value={groupId} className="border-b border-ui-border-base last:border-b-0">
-                                <Accordion.Trigger className="px-6 py-4 hover:bg-ui-bg-subtle">
-                                    <div className="flex items-center gap-2">
-                                        <Text className="font-medium">{group.title}</Text>
-                                        <Badge size="small" color="blue">{group.items.length}</Badge>
+            <Table>
+                <Table.Header>
+                    <Table.Row>
+                        <Table.HeaderCell>Attribute</Table.HeaderCell>
+                        <Table.HeaderCell>Values</Table.HeaderCell>
+                        <Table.HeaderCell>Variant?</Table.HeaderCell>
+                    </Table.Row>
+                </Table.Header>
+                <Table.Body>
+                    {groupedAttributes.length === 0 ? (
+                        <Table.Row>
+                            {/* @ts-expect-error colSpan valid in DOM but missing in Table.Cell types */}
+                            <Table.Cell colSpan={3} className="text-ui-fg-subtle">
+                                No attributes linked.
+                            </Table.Cell>
+                        </Table.Row>
+                    ) : (
+                        groupedAttributes.map((group: any) => (
+                            <Table.Row key={group.key_id}>
+                                <Table.Cell>
+                                    <Text weight="plus">{group.key_title}</Text>
+                                    <Text size="small" className="text-ui-fg-muted">{group.handle}</Text>
+                                </Table.Cell>
+                                <Table.Cell>
+                                    <div className="flex gap-2 flex-wrap">
+                                        {group.values.map((val: any) => (
+                                            <Badge key={val.id}>{val.value}</Badge>
+                                        ))}
                                     </div>
-                                </Accordion.Trigger>
-                                <Accordion.Content className="px-6 pb-4">
-                                    <AttributeList items={group.items} />
-                                </Accordion.Content>
-                            </Accordion.Item>
-                        )
-                    })}
-
-                    {attributes.length === 0 && (
-                        <div className="p-8 flex flex-col items-center justify-center text-center">
-                            <Text className="text-ui-fg-subtle">No attributes found.</Text>
-                            <Text className="txt-small text-ui-fg-muted mt-2">
-                                Run the migration or add attributes manually.
-                            </Text>
-                        </div>
+                                </Table.Cell>
+                                <Table.Cell>
+                                    {group.is_variant ? (
+                                        <Badge color="purple">Variant</Badge>
+                                    ) : (
+                                        <Text size="small" className="text-ui-fg-muted">-</Text>
+                                    )}
+                                </Table.Cell>
+                            </Table.Row>
+                        ))
                     )}
-                </Accordion>
-            </div>
+                </Table.Body>
+            </Table>
+
+            {isManageModalOpen && (
+                <ManageAttributesModal
+                    open={isManageModalOpen}
+                    onOpenChange={setIsManageModalOpen}
+                    productId={initialProduct.id}
+                    currentAttributes={attributes}
+                    initialVariantKeys={variantKeys}
+                    onSaveAtomic={handleSave}
+                />
+            )}
         </Container>
     )
 }
