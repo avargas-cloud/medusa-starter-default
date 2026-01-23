@@ -2043,6 +2043,14 @@
   resolved "https://registry.npmjs.org/@medusajs/inventory/-/inventory-2.12.5.tgz"
   integrity sha512-DFZI8AgB3C4lOJqW26KVbZUGRrYcyHW8+5mQAjFhQM1daTVRl/slpCwKzn3LaoOzvuFlVM1hGuS9oIZVyWWU9A==
 
+"@medusajs/js-sdk@^2.13.0":
+  version "2.13.0"
+  resolved "https://registry.npmjs.org/@medusajs/js-sdk/-/js-sdk-2.13.0.tgz"
+  integrity sha512-Eu5EPzOvbsCykbQCTh4c3zD/i0zKaM7rOOJbKvF7F9vgIEXB4T5sC9o/fpByI6T5Sav3YfXv6fZaQDQV21QX2g==
+  dependencies:
+    fetch-event-stream "^0.1.5"
+    qs "^6.12.1"
+
 "@medusajs/js-sdk@2.12.5":
   version "2.12.5"
   resolved "https://registry.npmjs.org/@medusajs/js-sdk/-/js-sdk-2.12.5.tgz"

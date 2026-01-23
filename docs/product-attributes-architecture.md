@@ -1,94 +1,101 @@
+# Especificación Técnica & Manual de Rescate: Atributos de Producto (v2.1)
 
-# Especificación Técnica: Módulo de Atributos de Producto
+> [!WARNING]
+> **LEER ANTES DE TOCAR:** Este módulo utiliza una implementación personalizada ("Nuclear Option") para superar limitaciones del Link Service de Medusa v2. No ejecutar `db:migrate` ciegamente sin entender la sección de "Persistencia Manual".
 
-Este documento describe la arquitectura final, validada y funcional del módulo de Atributos de Producto (`product-attributes`) implementado en el sistema Medusa. Sirve como referencia para futuros desarrollos y para evitar regresiones.
+## 1. Arquitectura "Nuclear" (La Solución)
 
-## 1. Arquitectura de Datos
+Debido a un bug persistente en Medusa v2 que forzaba relaciones 1:1 en los Remote Links, implementamos una solución híbrida robusta.
 
-### Modelos
-El módulo define tres modelos principales. Es crítico respetar los nombres de las propiedades.
+### A. Base de Datos (SQL Manual)
+No confiamos en la migración automática de Medusa para la tabla de links.
+La tabla `product_product_productattributes_attribute_value` fue creada/parcheada manualmente para imponer una restricción `UNIQUE (product_id, attribute_value_id)` en lugar de `UNIQUE (product_id)`.
 
-#### `AttributeKey` (Definición del Atributo)
-- **Propiedad Clave:** `label` (String). NO usar `title`.
-- **Relaciones:**
-  - `values`: `hasMany` -> `AttributeValue`. (Requerida para que la API pueda incluir valores anidados).
-  - `attribute_set`: `belongsTo` -> `AttributeSet`.
+*   **Tabla Real:** `product_product_productattributes_attribute_value`
+*   **Constraint Crítico:** `UNIQUE ("product_id", "attribute_value_id")`
+*   **Script de Rescate:** `src/scripts/force-create-link-table.js` (Ejecutar esto si la tabla desaparece o se corrompe).
 
-```typescript
-// src/modules/product-attributes/models/attribute-key.ts
-export const AttributeKey = model.define("attribute_key", {
-    id: model.id().primaryKey(),
-    handle: model.text().unique(),
-    label: model.text(), // CORRECTO. No usar 'title'.
-    values: model.hasMany(() => AttributeValue, {
-        mappedBy: "attribute_key"
-    })
-    // ...
-})
-```
+### B. Workflow Atómico (Backend)
+Para garantizar consistencia, no guardamos links y metadata por separado. Usamos un workflow unificado.
 
-#### `AttributeValue` (Valor Específico)
-- **Propiedad Clave:** `value` (String).
-- **Relaciones:**
-  - `attribute_key`: `belongsTo` -> `AttributeKey`.
+*   **Archivo:** `src/workflows/product-attributes/update-product-attributes.ts`
+*   **Entrada:**
+    ```typescript
+    {
+      productId: string,
+      valueIds: string[],      // IDs de los valores (Links)
+      variantKeys: string[]    // IDs de los Keys que son Switches (Metadata)
+    }
+    ```
+*   **Lógica:**
+    1.  `update-links`: Sincroniza los links.
+    2.  `update-product-metadata`: Actualiza `product.metadata.variant_attributes`.
 
-## 2. Configuración de Links (Vínculos)
+### C. Widget Atómico (Frontend)
+El Widget (`product-attributes-widget.tsx`) agrupa visualmente los atributos y envía un **payload único** al guardar.
 
-El vínculo entre Productos (Core) y Atributos (Módulo) se define mediante un Remote Link.
-
-**Archivo:** `src/links/product-attribute.ts`
-```typescript
-import ProductModule from "@medusajs/medusa/product"
-import AttributeModule from "../modules/product-attributes"
-import { defineLink } from "@medusajs/framework/utils"
-
-export default defineLink(
-    ProductModule.linkable.product,
-    AttributeModule.linkable.attributeValue // Nota: CamelCase 'attributeValue'
-)
-```
-
-## 3. API & Endpoints
-
-### GET `/admin/products/[id]/attributes`
-Este endpoint alimenta el widget del dashboard.
-
-**Puntos Críticos:**
-1. **Query Graph:** Debe solicitar `attribute_key.label`, NUNCA `title`.
-2. **Manejo de Errores:** Debe estar envuelto en `try-catch` para evitar crashear el frontend si la integridad de datos falla.
-3. **Respuesta:** Devuelve `{ attributes: [...] }`.
-
-```typescript
-// Ejemplo correcto de Query
-const { data: productData } = await query.graph({
-    entity: "product",
-    fields: [
-        "attribute_value.id",
-        "attribute_value.value",
-        "attribute_value.attribute_key.label", // <-- IMPORTANTE
-        // ...
-    ],
-    // ...
-})
-```
-
-## 4. Frontend Widget (`ProductAttributesWidget`)
-
-El widget debe ser defensivo contra datos malformados.
-
-**Reglas de Oro:**
-1. **Validar Arrays:** Nunca asumir que `attributes` es un array. Usar `Array.isArray(attributes) ? attributes : []`.
-2. **Fallbacks de UI:** Si `attribute_key` es null (borrado), mostrar "Unknown" en lugar de crashear.
-3. **Uso de Claves:** Usar `attr.attribute_key?.label` para mostrar el nombre.
-
-## 5. Solución de Problemas Comunes
-
-| Síntoma | Causa Probable | Solución |
-|---------|---------------|----------|
-| **Dropdown vacío** | El frontend busca `title` pero el modelo tiene `label`. | Cambiar `k.title` por `k.label` en el componente React. |
-| **Error 500 en API** | Falta relación `values` en `AttributeKey`. | Agregar `values: model.hasMany(...)` al modelo y migrar. |
-| **Crash "map is not a function"** | API devuelve objeto o null en lugar de array. | Envolver la variable en `Array.isArray(...)`. |
-| **"Error saving attributes"** | Conflicto de IDs o módulo mal referenciado en Link. | Verificar `medusa-config` y nombres de exportación del módulo. |
+*   **Endpoint:** `POST /admin/products/[id]/attributes`
+*   **Payload:** `{ value_ids: [...], variant_keys: [...] }`
+*   **Visualización:** Agrupa por `AttributeKey`. Si un atributo se marca como "Variant", el frontend lo sabe leyendo `product.metadata`.
 
 ---
-**Generado:** 2026-01-22
+
+## 2. Manual de Rescate (Troubleshooting)
+
+### Escenario A: "Los atributos desaparecieron del Admin"
+**Diagnóstico:** Probablemente la base de datos se reinició o Medusa intentó una migración automática que borró la tabla.
+
+**Solución 1 (Verificación):**
+Ejecuta el script de auditoría:
+```bash
+npx medusa exec ./src/scripts/verify-db-count.ts
+```
+*   Si dice `0 links`, la data se borró.
+*   Si dice `N links` pero no se ven, falla la API (ver Escenario B).
+
+**Solución 2 (Reconstrucción de Tabla):**
+Si la tabla da error de "Relation does not exist":
+```bash
+node src/scripts/force-create-link-table.js
+```
+Esto recreará la tabla con la estructura correcta (1:N permisiva).
+
+**Solución 3 (Repoblar Datos):**
+Si tienes los datos en JSON original (WooCommerce):
+```bash
+npx medusa exec ./src/scripts/migrate-product-attributes.ts
+```
+Este script usa inyección SQL directa para saltarse bloqueos de aplicación.
+
+---
+
+### Escenario B: "Error al Guardar" (Toast Rojo)
+
+**Verificar:**
+1.  Revisar logs de terminal. ¿Dice `Duplicate key value violates unique constraint`?
+    *   Significa que intentas guardar lo mismo dos veces. (No debería pasar con el UI actual).
+2.  Revisar `update-product-attributes.ts`. Asegurar que los pasos están exportados y registrados.
+
+---
+
+### Escenario C: "Vuelven a ser solo 1 por producto"
+
+**Diagnóstico:** Medusa v2 regeneró la migración automática y sobreescribió nuestra tabla manual.
+
+**Solución:**
+1.  Ejecutar `src/scripts/drop-link-table.js` (Limpieza).
+2.  Ejecutar `src/scripts/force-create-link-table.js` (Reconstrucción Nuclear).
+3.  Ejecutar migración de datos de nuevo.
+
+---
+
+## 3. Referencia de Archivos Críticos
+
+| Archivo | Propósito | Nivel de Riesgo |
+|---------|-----------|-----------------|
+| `src/scripts/force-create-link-table.js` | Crea la tabla SQL raw | 🔴 Alto (DANGER) |
+| `src/scripts/migrate-product-attributes.ts` | Inserta datos masivos vía SQL | 🟠 Medio |
+| `src/workflows/product-attributes/update-product-attributes.ts` | Lógica de negocio (Links + Meta) | 🟢 Seguro |
+| `src/admin/widgets/product-attributes-widget.tsx` | UI Principal | 🟢 Seguro |
+
+**Generado:** 22 Enero 2026 - Sesión de Reparación de Arquitectura.

@@ -12,6 +12,8 @@ export async function GET(
         relations: ["values"]
     })
 
+    console.log("DEBUG: GET /admin/attributes RESPONSE SAMPLE:", JSON.stringify(attribute_keys[0], null, 2))
+
     res.json({ attribute_keys })
 }
 
