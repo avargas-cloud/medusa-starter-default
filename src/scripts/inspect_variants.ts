@@ -12,8 +12,8 @@ async function inspectProduct() {
     console.log("--- OPTIONS ---")
     console.log(JSON.stringify(product.options, null, 2))
 
-    console.log("\n--- VARIANTS ---")
-    product.variants?.forEach(v => {
+    console.log("\n--- VARIANTS ---");
+    (product.variants || []).forEach(v => {
         console.log(`Variant: ${v.title} (ID: ${v.id})`)
         console.log(`   SKU: ${v.sku}`)
         console.log(`   Options:`, v.options)
