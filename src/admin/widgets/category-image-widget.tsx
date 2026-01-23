@@ -27,7 +27,7 @@ const MediaLibraryModal = ({
                 </Drawer.Header>
                 <Drawer.Body className="p-4 overflow-y-auto">
                     {isLoading ? (
-                        <div className="flex justify-center p-8"><Spinner /></div>
+                        <div className="flex justify-center p-8 text-ui-fg-subtle">Loading library...</div>
                     ) : (
                         <div className="grid grid-cols-3 gap-4">
                             {data?.files?.map((file) => (
