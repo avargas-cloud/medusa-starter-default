@@ -1,5 +1,4 @@
-import { defineMiddlewares } from "@medusajs/medusa"
-import { authenticate } from "@medusajs/medusa"
+import { defineMiddlewares, authenticate } from "@medusajs/framework/http"
 
 export default defineMiddlewares({
     routes: [
