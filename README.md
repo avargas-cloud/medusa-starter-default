@@ -254,3 +254,75 @@ We encountered and resolved significant build and deployment issues on Railway. 
 *   **Install Command:** `pnpm install --frozen-lockfile --prefer-offline`
 *   **Engine:** Node v20
 *   **PackageManager:** `pnpm@9.15.9`
+
+## 🏗️ Guía de Instalación Detallada (Home Setup / Replicación)
+
+Esta guía explica **exactamente** cómo instalar este proyecto en un entorno Windows con WSL (Ubuntu) para evitar los problemas de "bloqueo" de NPM.
+
+### El Problema
+WSL (Subsistema Linux para Windows) tiene un rendimiento de disco (I/O) lento cuando maneja los miles de archivos pequeños que `npm` intenta escribir en paralelo. Además, usar el `node.exe` de Windows dentro de Linux causa conflictos de rutas.
+
+### La Solución
+Usaremos **Node Nativo de Linux** (vía NVM) y **Yarn** (que es más eficiente).
+
+---
+
+### Paso 1: Limpieza (Si ya intentaste instalar antes)
+Desde tu terminal en la carpeta del proyecto:
+```bash
+# Borra todo rastro de intentos anteriores
+rm -rf node_modules package-lock.json yarn.lock .npmrc
+```
+
+### Paso 2: Instalar NVM y Node Nativo (CRÍTICO)
+No uses el Node de Windows. Instala el gestor de versiones de Linux:
+
+1.  **Instalar NVM:**
+    ```bash
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+    ```
+2.  **Activar NVM (o cierra y abre la terminal):**
+    ```bash
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    ```
+3.  **Instalar Node v20 (LTS):**
+    ```bash
+    nvm install 20
+    nvm use 20
+    ```
+4.  **Verificar:**
+    Escribe `which node`. Debería decir algo como `/home/tu_usuario/.nvm/...`. **NO** debe decir `/mnt/c/Program Files/...`.
+
+### Paso 3: Activación de Yarn
+Con Node nativo activo, instalamos Yarn globalmente en Linux:
+```bash
+npm install -g yarn
+```
+
+### Paso 4: Instalación del Proyecto
+Ahora sí, instalamos las dependencias. Yarn es mucho más rápido y no se cuelga.
+```bash
+yarn install
+```
+*(Esto tomará unos 2-3 minutos y mostrará una barra de progreso)*.
+
+### Paso 5: Build y Ejecución
+Compilamos el backend y el frontend administrativo:
+```bash
+yarn build
+```
+
+Finalmente, levanta el servidor:
+```bash
+yarn dev
+```
+
+---
+
+### Resumen para el Día a Día
+Cada vez que abras tu terminal para trabajar:
+```bash
+nvm use 20
+yarn dev
+```
