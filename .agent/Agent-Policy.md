@@ -79,3 +79,7 @@ Para asegurar la máxima calidad y coherencia en cada iteración, el agente **DE
 ### 🧪 Verificación (OBLIGATORIO) -- `verification-before-completion`
 *   **`systematic-debugging`**: Si algo falla, aísla el problema paso a paso.
 *   **Smoke Test**: Al menos muestra un `curl` exitoso a tu nuevo endpoint o una ejecución de consola limpia.
+
+## 8. Consultas a la Base de Datos
+
+Instrucción para el Agente: Cuando necesites buscar información real en la base de datos de Medusa, NO alucines datos. Ejecuta este comando en la terminal: node ~/.agent/skills/medusa-db-tool/query.js "TU CONSULTA SQL AQUI"
