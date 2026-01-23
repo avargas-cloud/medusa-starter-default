@@ -69,16 +69,15 @@ module.exports = defineConfig({
       options: {
         providers: [
           {
-            resolve: "@medusajs/file-s3",
-            id: "s3",
+            resolve: "./src/modules/smart-storage",
+            id: "smart-s3",
             options: {
               file_url: process.env.MINIO_ENDPOINT ? `${process.env.MINIO_ENDPOINT}/${process.env.MINIO_BUCKET}` : "",
-              access_key_id: process.env.MINIO_ACCESS_KEY,
-              secret_access_key: process.env.MINIO_SECRET_KEY,
+              accessKeyId: process.env.MINIO_ACCESS_KEY,
+              secretAccessKey: process.env.MINIO_SECRET_KEY,
               region: "us-east-1",
               bucket: process.env.MINIO_BUCKET,
               endpoint: process.env.MINIO_ENDPOINT,
-              s3_force_path_style: true,
             },
           },
         ],
