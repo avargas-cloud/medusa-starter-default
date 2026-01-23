@@ -219,3 +219,38 @@ The module is **fully functional** and production-ready.
     *   **Filtering**: Verified "missing sets" were due to API 404s, created missing `attribute-sets/route.ts` to solve it.
 
 You can now manage the entire product specification lifecycle from the Admin Dashboard. 🚀
+
+---
+
+## 🛠️ Railway Deployment & Build Fixes (Jan 23, 2026)
+
+We encountered and resolved significant build and deployment issues on Railway. Here is the successful configuration for future reference.
+
+### 1. Build Timeout & Hangs (`npm ci`)
+**Problem:** The build process was hanging indefinitely during dependency installation due to memory constraints and `npm` inefficiency in the CI environment.
+**Solution:**
+*   **Switched to pnpm:** Migrated the project to `pnpm` (v9.15.9) for faster, more memory-efficient installs.
+*   **Optimized `nixpacks.toml`:**
+    *   Explicitly defined `pnpm` in the build phases.
+    *   Added `NODE_OPTIONS="--max-old-space-size=4096"` to prevent OOM errors.
+    *   Included build tools (`python3`, `make`, `gcc`, `g++`) for native modules.
+*   **Hoisting Fix:** Created `.npmrc` with `shamefully-hoist=true` to resolve phantom dependency issues (missing `@medusajs/dashboard`).
+
+### 2. Deployment Freeze (`db:migrate`)
+**Problem:** The deployment hung during the `predeploy` phase because `medusa db:migrate` was waiting for interactive user confirmation to sync database links.
+**Solution:**
+*   Updated `package.json` predeploy script to use the `--execute-safe-links` flag:
+    ```json
+    "predeploy": "medusa db:migrate --execute-safe-links"
+    ```
+    This automatically accepts safe schema synchronizations without blocking the CI/CD pipeline.
+
+### 3. TypeScript Compilation Errors
+**Problem:** `attribute_value` property access caused a build failure.
+**Solution:** Fixed typo in `src/scripts/verify-query-graph.ts` (changed to `attribute_values`).
+
+### ✅ Final Successful Configuration
+*   **Build Command:** `pnpm run build`
+*   **Install Command:** `pnpm install --frozen-lockfile --prefer-offline`
+*   **Engine:** Node v20
+*   **PackageManager:** `pnpm@9.15.9`
