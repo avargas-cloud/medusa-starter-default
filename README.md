@@ -45,57 +45,6 @@ We have successfully implemented a custom **Product Attributes Module** to handl
 - **Inspector Script**: `npx medusa exec ./src/scripts/inspect-product-options.ts` shows the current state of products and attributes.
 - **Import Script**: `npx medusa exec ./src/scripts/import-wc-attributes.ts` migrates attributes from legacy WooCommerce JSON data into the new structure.
 
----
-
-## 🛠️ Local Development
-
-### Prerequisites
-- Node.js v20+
-- Git
-- Access to the Railway Dashboard (for DB credentials if connecting to prod)
-
-### Setup Steps
-
-1.  **Clone the Repo**:
-    ```bash
-    git clone <your-repo-url>
-    cd medusa-starter-default
-    ```
-
-2.  **Install Dependencies**:
-    ```bash
-    npm install --legacy-peer-deps
-    ```
-
-3.  **Start the Server**:
-    ```bash
-    npm run dev
-    ```
-    Accessed at: `http://localhost:9000/app`
-
----
-
-## 🚀 Deployment Guide (Railway)
-
-### Critical Configuration (`medusa-config.ts`)
-
-These configurations are **REQUIRED** for Railway deployment to ensure persistence and stability.
-
-```typescript
-module.exports = defineConfig({
-  projectConfig: {
-    // ... DB and Redis URLs
-  },
-  modules: [
-    // ✅ CRITICAL: Redis Modules for Persistence
-    { resolve: "@medusajs/medusa/event-bus-redis", ... },
-    { resolve: "@medusajs/medusa/locking", ... },
-    { resolve: "@medusajs/medusa/cache-redis", ... },
-    { resolve: "@medusajs/medusa/workflow-engine-redis", ... },
-  ],
-})
-```
-
 ### Environment Variables
 
 | Variable | Value | Importance |
@@ -220,52 +169,9 @@ The module is **fully functional** and production-ready.
 
 You can now manage the entire product specification lifecycle from the Admin Dashboard. 🚀
 
----
-
-## 🛠️ Railway Deployment & Build Fixes (Jan 23, 2026)
-
-We encountered and resolved significant build and deployment issues on Railway. Here is the successful configuration for future reference.
-
-### 1. Build Timeout & Hangs (`npm ci`)
-**Problem:** The build process was hanging indefinitely during dependency installation due to memory constraints and `npm` inefficiency in the CI environment.
-**Solution:**
-*   **Switched to pnpm:** Migrated the project to `pnpm` (v9.15.9) for faster, more memory-efficient installs.
-*   **Optimized `nixpacks.toml`:**
-    *   Explicitly defined `pnpm` in the build phases.
-    *   Added `NODE_OPTIONS="--max-old-space-size=4096"` to prevent OOM errors.
-    *   Included build tools (`python3`, `make`, `gcc`, `g++`) for native modules.
-*   **Hoisting Fix:** Created `.npmrc` with `shamefully-hoist=true` to resolve phantom dependency issues (missing `@medusajs/dashboard`).
-
-### 2. Deployment Freeze (`db:migrate`)
-**Problem:** The deployment hung during the `predeploy` phase because `medusa db:migrate` was waiting for interactive user confirmation to sync database links.
-**Solution:**
-*   Updated `package.json` predeploy script to use the `--execute-safe-links` flag:
-    ```json
-    "predeploy": "medusa db:migrate --execute-safe-links"
-    ```
-    This automatically accepts safe schema synchronizations without blocking the CI/CD pipeline.
-
-### 3. TypeScript Compilation Errors
-**Problem:** `attribute_value` property access caused a build failure.
-**Solution:** Fixed typo in `src/scripts/verify-query-graph.ts` (changed to `attribute_values`).
-
-### ✅ Final Successful Configuration
-*   **Build Command:** `pnpm run build`
-*   **Install Command:** `pnpm install --frozen-lockfile --prefer-offline`
-*   **Engine:** Node v20
-*   **PackageManager:** `pnpm@9.15.9`
-
 ## 🏗️ Guía de Instalación Detallada (Home Setup / Replicación)
 
 Esta guía explica **exactamente** cómo instalar este proyecto en un entorno Windows con WSL (Ubuntu) para evitar los problemas de "bloqueo" de NPM.
-
-### El Problema
-WSL (Subsistema Linux para Windows) tiene un rendimiento de disco (I/O) lento cuando maneja los miles de archivos pequeños que `npm` intenta escribir en paralelo. Además, usar el `node.exe` de Windows dentro de Linux causa conflictos de rutas.
-
-### La Solución
-Usaremos **Node Nativo de Linux** (vía NVM) y **Yarn** (que es más eficiente).
-
----
 
 ### Paso 0: Prerequisitos del Sistema (Ubuntu/WSL)
 Antes de empezar, actualiza el sistema e instala Git y las herramientas de compilación necesarias (para que no fallen las librerías nativas):
