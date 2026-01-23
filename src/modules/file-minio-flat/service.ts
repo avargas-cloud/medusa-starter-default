@@ -1,6 +1,7 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3"
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 import { AbstractFileProviderService } from "@medusajs/framework/utils"
+import { FileTypes } from "@medusajs/framework/types"
 
 interface FileServiceOptions {
     endpoint?: string
@@ -9,12 +10,6 @@ interface FileServiceOptions {
     region?: string
     bucket?: string
     file_url?: string
-}
-
-interface UploadedFile {
-    originalname: string
-    buffer: Buffer
-    mimetype: string
 }
 
 export default class FileMinioFlatService extends AbstractFileProviderService {
@@ -39,21 +34,24 @@ export default class FileMinioFlatService extends AbstractFileProviderService {
         this.fileUrl = options.file_url || options.endpoint!
     }
 
-    async upload(file: UploadedFile, context?: Record<string, any>): Promise<{ url: string; key: string }> {
-        // Determine folder based on context
-        const folder = this.getFolderFromContext(context)
+    async upload(file: FileTypes.ProviderUploadFileDTO): Promise<FileTypes.ProviderFileResultDTO> {
+        // Determine folder based on filename (could be extended with metadata)
+        const folder = this.getFolderFromFilename(file.filename)
 
         // Generate unique filename
         const timestamp = Date.now()
-        const filename = `${timestamp}-${file.originalname}`
+        const filename = `${timestamp}-${file.filename}`
         const key = `${folder}/${filename}`
+
+        // Convert base64 content to Buffer
+        const buffer = Buffer.from(file.content, 'base64')
 
         // Upload to MinIO
         await this.s3Client.send(new PutObjectCommand({
             Bucket: this.bucket,
             Key: key,
-            Body: file.buffer,
-            ContentType: file.mimetype,
+            Body: buffer,
+            ContentType: file.mimeType,
         }))
 
         const url = `${this.fileUrl}/${key}`
@@ -81,14 +79,17 @@ export default class FileMinioFlatService extends AbstractFileProviderService {
         return await getSignedUrl(this.s3Client, command, { expiresIn: 3600 })
     }
 
-    async uploadProtected(file: UploadedFile): Promise<{ url: string, key: string }> {
-        const key = `protected/${Date.now()}-${file.originalname}`
+    async uploadProtected(file: FileTypes.ProviderUploadFileDTO): Promise<FileTypes.ProviderFileResultDTO> {
+        const key = `protected/${Date.now()}-${file.filename}`
+
+        // Convert base64 content to Buffer
+        const buffer = Buffer.from(file.content, 'base64')
 
         await this.s3Client.send(new PutObjectCommand({
             Bucket: this.bucket,
             Key: key,
-            Body: file.buffer,
-            ContentType: file.mimetype,
+            Body: buffer,
+            ContentType: file.mimeType,
         }))
 
         return {
@@ -97,17 +98,16 @@ export default class FileMinioFlatService extends AbstractFileProviderService {
         }
     }
 
-    // Helper to determine folder from context
-    private getFolderFromContext(context?: Record<string, any>): string {
-        if (!context) return "products"
+    // Helper to determine folder from filename (smart routing)
+    private getFolderFromFilename(filename: string): string {
+        const lowerName = filename.toLowerCase()
 
-        // Check for entity type hints in context
-        if (context.entity === "category" || context.entityType === "category") {
-            return "categories"
-        }
-
-        if (context.entity === "product" || context.entityType === "product") {
+        // Prefix-based logic
+        if (lowerName.startsWith("prod_") || lowerName.includes("/products/")) {
             return "products"
+        }
+        if (lowerName.startsWith("cat_") || lowerName.includes("/categories/")) {
+            return "categories"
         }
 
         // Default to products

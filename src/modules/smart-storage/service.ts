@@ -1,4 +1,5 @@
 import { AbstractFileProviderService } from "@medusajs/framework/utils"
+import { FileTypes } from "@medusajs/framework/types"
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3"
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 import { parse } from "path"
@@ -10,12 +11,6 @@ interface S3FileOptions {
     bucket: string
     endpoint?: string
     file_url?: string
-}
-
-interface UploadedFile {
-    originalname: string
-    buffer: Buffer
-    mimetype: string
 }
 
 class SmartStorageService extends AbstractFileProviderService {
@@ -56,19 +51,22 @@ class SmartStorageService extends AbstractFileProviderService {
         return "content"
     }
 
-    async upload(file: UploadedFile): Promise<{ url: string; key: string }> {
-        const parsedFilename = parse(file.originalname)
-        const folder = this.getTargetFolder(file.originalname)
+    async upload(file: FileTypes.ProviderUploadFileDTO): Promise<FileTypes.ProviderFileResultDTO> {
+        const parsedFilename = parse(file.filename)
+        const folder = this.getTargetFolder(file.filename)
 
         // Generate the "Key" (full path in S3)
         // Example: products/prod_shoes_12345.jpg
         const fileKey = `${folder}/${parsedFilename.name}-${Date.now()}${parsedFilename.ext}`
 
+        // Convert base64 content to Buffer
+        const buffer = Buffer.from(file.content, 'base64')
+
         const command = new PutObjectCommand({
             Bucket: this.options.bucket,
             Key: fileKey,
-            Body: file.buffer,
-            ContentType: file.mimetype,
+            Body: buffer,
+            ContentType: file.mimeType,
         })
 
         try {
@@ -122,15 +120,18 @@ class SmartStorageService extends AbstractFileProviderService {
         return await getSignedUrl(this.client, command, { expiresIn: 3600 })
     }
 
-    async uploadProtected(file: UploadedFile): Promise<{ url: string; key: string }> {
-        const parsedFilename = parse(file.originalname)
+    async uploadProtected(file: FileTypes.ProviderUploadFileDTO): Promise<FileTypes.ProviderFileResultDTO> {
+        const parsedFilename = parse(file.filename)
         const fileKey = `protected/${parsedFilename.name}-${Date.now()}${parsedFilename.ext}`
+
+        // Convert base64 content to Buffer
+        const buffer = Buffer.from(file.content, 'base64')
 
         const command = new PutObjectCommand({
             Bucket: this.options.bucket,
             Key: fileKey,
-            Body: file.buffer,
-            ContentType: file.mimetype,
+            Body: buffer,
+            ContentType: file.mimeType,
         })
 
         await this.client.send(command)
