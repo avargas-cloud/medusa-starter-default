@@ -12,5 +12,5 @@
         "uploads",
         ".git"
     ],
-    "exec": "medusa start"
+    "exec": "medusa develop"
 }
