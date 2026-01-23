@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Container, Heading, Text, Button, Table, IconButton, usePrompt, toast, Input, Label, Badge } from "@medusajs/ui"
+import { Container, Heading, Button, Table, IconButton, usePrompt, toast, Input, Label, Badge } from "@medusajs/ui"
 import { Trash, ArrowLeftMini, Plus, PencilSquare, Check } from "@medusajs/icons"
 import { useState, useEffect } from "react"
 
@@ -89,7 +89,7 @@ const AttributeDetailPage = () => {
             return
         }
 
-        const newOptions = currentOptions.map(o => o === oldVal ? newVal.trim() : o)
+        const newOptions = currentOptions.map((o: string) => o === oldVal ? newVal.trim() : o)
 
         updateAttribute.mutate({
             label: attribute.label,
@@ -124,7 +124,7 @@ const AttributeDetailPage = () => {
         if (!confirmed) return
 
         const currentOptions = attribute.options || []
-        const newOptions = currentOptions.filter(o => o !== valToDelete)
+        const newOptions = currentOptions.filter((o: string) => o !== valToDelete)
         updateAttribute.mutate({
             label: attribute.label,
             options: newOptions
