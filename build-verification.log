@@ -1,0 +1,134 @@
+
+> medusa-starter-default@0.0.1 build
+> medusa build
+
+[32minfo[39m:    Generating types...
+[32minfo[39m:    No link to load from /home/alejo/medusa-starter-default/node_modules/@medusajs/draft-order/.medusa/server/src/links. skipped.
+[32minfo[39m:    Types generated successfully
+[32minfo[39m:    Starting build...
+[32minfo[39m:    Compiling backend source...
+[32minfo[39m:    Removing existing ".medusa/server" folder
+[32minfo[39m:    Compiling frontend source...
+[96msrc/scripts/add-usd-currency.ts[0m:[93m17[0m:[93m61[0m - [91merror[0m[90m TS2322: [0mType 'string' is not assignable to type 'string[]'.
+
+[7m17[0m     const existing = await currencyService.listCurrencies({ code: "usd" })
+[7m  [0m [91m                                                            ~~~~[0m
+[96msrc/scripts/add-usd-currency.ts[0m:[93m21[0m:[93m31[0m - [91merror[0m[90m TS2339: [0mProperty 'createCurrencies' does not exist on type 'ICurrencyModuleService'.
+
+[7m21[0m         await currencyService.createCurrencies({
+[7m  [0m [91m                              ~~~~~~~~~~~~~~~~[0m
+[96msrc/scripts/analyze-variant-values.ts[0m:[93m120[0m:[93m25[0m - [91merror[0m[90m TS18046: [0m'b' is of type 'unknown'.
+
+[7m120[0m         .sort((a, b) => b[1] - a[1])
+[7m   [0m [91m                        ~[0m
+[96msrc/scripts/analyze-variant-values.ts[0m:[93m120[0m:[93m32[0m - [91merror[0m[90m TS18046: [0m'a' is of type 'unknown'.
+
+[7m120[0m         .sort((a, b) => b[1] - a[1])
+[7m   [0m [91m                               ~[0m
+[96msrc/scripts/analyze-variant-values.ts[0m:[93m123[0m:[93m16[0m - [91merror[0m[90m TS2488: [0mType 'unknown' must have a '[Symbol.iterator]()' method that returns an iterator.
+
+[7m123[0m     for (const [word, count] of sortedWords) {
+[7m   [0m [91m               ~~~~~~~~~~~~~[0m
+[96msrc/scripts/analyze-variant-values.ts[0m:[93m135[0m:[93m45[0m - [91merror[0m[90m TS2769: [0mNo overload matches this call.
+  Overload 1 of 2, '(entries: Iterable<readonly [PropertyKey, any]>): { [k: string]: any; }', gave the following error.
+    Argument of type 'unknown[]' is not assignable to parameter of type 'Iterable<readonly [PropertyKey, any]>'.
+      The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.
+        Type 'IteratorResult<unknown, any>' is not assignable to type 'IteratorResult<readonly [PropertyKey, any], any>'.
+          Type 'IteratorYieldResult<unknown>' is not assignable to type 'IteratorResult<readonly [PropertyKey, any], any>'.
+            Type 'IteratorYieldResult<unknown>' is not assignable to type 'IteratorYieldResult<readonly [PropertyKey, any]>'.
+              Type 'unknown' is not assignable to type 'readonly [PropertyKey, any]'.
+  Overload 2 of 2, '(entries: Iterable<readonly any[]>): any', gave the following error.
+    Argument of type 'unknown[]' is not assignable to parameter of type 'Iterable<readonly any[]>'.
+      The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.
+        Type 'IteratorResult<unknown, any>' is not assignable to type 'IteratorResult<readonly any[], any>'.
+          Type 'IteratorYieldResult<unknown>' is not assignable to type 'IteratorResult<readonly any[], any>'.
+            Type 'IteratorYieldResult<unknown>' is not assignable to type 'IteratorYieldResult<readonly any[]>'.
+              Type 'unknown' is not assignable to type 'readonly any[]'.
+
+[7m135[0m             commonWords: Object.fromEntries(sortedWords),
+[7m   [0m [91m                                            ~~~~~~~~~~~[0m
+
+[96msrc/scripts/link-products-to-attribute-values.ts[0m:[93m129[0m:[93m53[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string' is not assignable to parameter of type 'never'.
+
+[7m129[0m                         matchedAttributeValues.push(matchingAttrValue.value)
+[7m   [0m [91m                                                    ~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/scripts/link-usd-to-store.ts[0m:[93m34[0m:[93m32[0m - [91merror[0m[90m TS18046: [0m'manager' is of type 'unknown'.
+
+[7m34[0m         const existing = await manager.execute(
+[7m  [0m [91m                               ~~~~~~~[0m
+[96msrc/scripts/link-usd-to-store.ts[0m:[93m43[0m:[93m19[0m - [91merror[0m[90m TS18046: [0m'manager' is of type 'unknown'.
+
+[7m43[0m             await manager.execute(
+[7m  [0m [91m                  ~~~~~~~[0m
+[96msrc/scripts/link-usd-to-store.ts[0m:[93m50[0m:[93m19[0m - [91merror[0m[90m TS18046: [0m'manager' is of type 'unknown'.
+
+[7m50[0m             await manager.execute(
+[7m  [0m [91m                  ~~~~~~~[0m
+[96msrc/scripts/link-usd-to-store.ts[0m:[93m58[0m:[93m15[0m - [91merror[0m[90m TS18046: [0m'manager' is of type 'unknown'.
+
+[7m58[0m         await manager.execute(
+[7m  [0m [91m              ~~~~~~~[0m
+[96msrc/scripts/link-usd-to-store.ts[0m:[93m69[0m:[93m30[0m - [91merror[0m[90m TS18046: [0m'manager' is of type 'unknown'.
+
+[7m69[0m         const tables = await manager.execute(
+[7m  [0m [91m                             ~~~~~~~[0m
+[96msrc/scripts/list-all-attributes.ts[0m:[93m34[0m:[93m40[0m - [91merror[0m[90m TS18047: [0m'val' is possibly 'null'.
+
+[7m34[0m                 console.log(`      - ${val.value}`)
+[7m  [0m [91m                                       ~~~[0m
+[96msrc/scripts/match-options-with-attributes.ts[0m:[93m92[0m:[93m40[0m - [91merror[0m[90m TS2339: [0mProperty 'title' does not exist on type 'AttributeKey'.
+
+[7m92[0m                 const attrTitle = attr.title?.toLowerCase().trim()
+[7m  [0m [91m                                       ~~~~~[0m
+[96msrc/scripts/match-options-with-attributes.ts[0m:[93m111[0m:[93m56[0m - [91merror[0m[90m TS2339: [0mProperty 'title' does not exist on type 'AttributeKey'.
+
+[7m111[0m                     attributeTitle: matchingAttribute?.title,
+[7m   [0m [91m                                                       ~~~~~[0m
+[96msrc/scripts/match-options-with-attributes.ts[0m:[93m134[0m:[93m38[0m - [91merror[0m[90m TS18047: [0m'val' is possibly 'null'.
+
+[7m134[0m                     const valLabel = val.label?.toLowerCase().trim()
+[7m   [0m [91m                                     ~~~[0m
+[96msrc/scripts/match-options-with-attributes.ts[0m:[93m134[0m:[93m42[0m - [91merror[0m[90m TS2339: [0mProperty 'label' does not exist on type 'AttributeValue'.
+
+[7m134[0m                     const valLabel = val.label?.toLowerCase().trim()
+[7m   [0m [91m                                         ~~~~~[0m
+[96msrc/scripts/match-options-with-attributes.ts[0m:[93m135[0m:[93m38[0m - [91merror[0m[90m TS18047: [0m'val' is possibly 'null'.
+
+[7m135[0m                     const valValue = val.value?.toLowerCase().trim()
+[7m   [0m [91m                                     ~~~[0m
+[96msrc/scripts/match-options-with-attributes.ts[0m:[93m150[0m:[93m52[0m - [91merror[0m[90m TS2339: [0mProperty 'label' does not exist on type 'AttributeValue'.
+
+[7m150[0m                         valueLabel: matchingValue?.label,
+[7m   [0m [91m                                                   ~~~~~[0m
+[96msrc/scripts/match-options-with-attributes.ts[0m:[93m151[0m:[93m52[0m - [91merror[0m[90m TS2339: [0mProperty 'label' does not exist on type 'AttributeValue'.
+
+[7m151[0m                         exactMatch: matchingValue?.label?.toLowerCase() === variantTitle,
+[7m   [0m [91m                                                   ~~~~~[0m
+[96msrc/scripts/setup-store-for-usa.ts[0m:[93m29[0m:[93m47[0m - [91merror[0m[90m TS2339: [0mProperty 'default_currency_code' does not exist on type 'StoreDTO'.
+
+[7m29[0m     console.log(`   Default Currency: ${store.default_currency_code || "(not set)"}`)
+[7m  [0m [91m                                              ~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/scripts/setup-store-for-usa.ts[0m:[93m32[0m:[93m63[0m - [91merror[0m[90m TS2322: [0mType 'string' is not assignable to type 'string[]'.
+
+[7m32[0m     const currencies = await currencyService.listCurrencies({ code: "usd" })
+[7m  [0m [91m                                                              ~~~~[0m
+[96msrc/scripts/setup-store-for-usa.ts[0m:[93m36[0m:[93m31[0m - [91merror[0m[90m TS2339: [0mProperty 'createCurrencies' does not exist on type 'ICurrencyModuleService'.
+
+[7m36[0m         await currencyService.createCurrencies({
+[7m  [0m [91m                              ~~~~~~~~~~~~~~~~[0m
+[96msrc/scripts/update-store-config.ts[0m:[93m26[0m:[93m46[0m - [91merror[0m[90m TS2339: [0mProperty 'default_currency_code' does not exist on type 'StoreDTO'.
+
+[7m26[0m     console.log(`  Default Currency: ${store.default_currency_code}`)
+[7m  [0m [91m                                             ~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/scripts/update-store-config.ts[0m:[93m33[0m:[93m24[0m - [91merror[0m[90m TS2769: [0mNo overload matches this call.
+  Overload 1 of 2, '(id: string, data: UpdateStoreDTO, sharedContext?: Context | undefined): Promise<StoreDTO>', gave the following error.
+    Object literal may only specify known properties, and 'default_currency_code' does not exist in type 'UpdateStoreDTO'.
+  Overload 2 of 2, '(selector: FilterableStoreProps, data: UpdateStoreDTO, sharedContext?: Context | undefined): Promise<StoreDTO[]>', gave the following error.
+    Type 'string' has no properties in common with type 'FilterableStoreProps'.
+
+[7m33[0m     await storeService.updateStores(store.id, {
+[7m  [0m [91m                       ~~~~~~~~~~~~[0m
+
+
+[33mwarn[39m:    Backend build completed with errors (5.23s)
+[32minfo[39m:    Frontend build completed successfully (20.43s)

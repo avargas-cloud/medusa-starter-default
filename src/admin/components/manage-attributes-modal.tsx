@@ -1,8 +1,14 @@
-
-import { Button, FocusModal, Heading, Label, Select, Table, toast, Input, IconButton, Switch, Text, Badge, DropdownMenu, Popover, clx } from "@medusajs/ui"
+import { Button, FocusModal, Heading, Label, Select, Table, toast, Switch, Text, Badge } from "@medusajs/ui"
 import { useState, useEffect, useMemo } from "react"
-import { useQueryClient, useQuery } from "@tanstack/react-query"
-import { Trash, Plus, XMark, ChevronDown, Check, ArrowPath } from "@medusajs/icons"
+import { useQuery } from "@tanstack/react-query"
+import { Plus, XMark } from "@medusajs/icons"
+
+// Import modular utilities and hooks
+import { groupAttributesByKey, getKeyAvailability } from "./attribute-management/utils/groupAttributes"
+import { shouldShowVariantToggle } from "./attribute-management/utils/validateVariants"
+import { useConfirmation } from "./attribute-management/hooks/useConfirmation"
+import { useAttributeActions } from "./attribute-management/hooks/useAttributeActions"
+import { ConfirmationDialog } from "./attribute-management/components/ConfirmationDialog"
 
 type AttributeValue = {
     id: string
@@ -31,67 +37,21 @@ type ManageAttributesModalProps = {
     onSaveAtomic: (selectedAttributes: any[], variantFlags: Record<string, boolean>) => Promise<void>
 }
 
-// Helper to group for the Modal UI too
-const groupAttrs = (flatAttributes: any[]) => {
-    const groups: Record<string, any> = {};
-    flatAttributes.forEach(attr => {
-        const keyId = attr.attribute_key.id;
-        if (!groups[keyId]) {
-            groups[keyId] = {
-                key_id: keyId,
-                key_title: attr.attribute_key.label || attr.attribute_key.title,
-                key: attr.attribute_key, // full obj
-                values: []
-            };
-        }
-        groups[keyId].values.push({
-            id: attr.id,
-            value: attr.value
-        });
-    });
-    return Object.values(groups);
-}
-
-// Local utility for accessibility
-const VisuallyHidden = ({ children }: { children: React.ReactNode }) => <span className="sr-only">{children}</span>
-
-// Helper to check if a key has remaining options
-const getKeyStatus = (key: AttributeKey | undefined, usedValues: AttributeValue[]) => {
-    if (!key) return { hasMore: false }
-
-    const usedCount = usedValues.filter(v => v.attribute_key.id === key.id).length
-
-
-    // Total available = entities + (options that aren't yet entities)
-    // Actually simpler: if used count < (unique values in entities + unique options), there's more.
-    // Heuristic: If there are options defined, assume there might be more unless we used them all.
-    // For now, let's just sum specific values + distinct options.
-
-    const distinctOptions = new Set([
-        ...(key.values?.map(v => v.value) || []),
-        ...(key.options || [])
-    ])
-
-    return { hasMore: distinctOptions.size > usedCount }
-}
-
 export const ManageAttributesModal = ({
     open,
     onOpenChange,
-    productId,
     currentAttributes,
     initialVariantKeys,
     onSaveAtomic
-}: ManageAttributesModalProps) => {
-    const queryClient = useQueryClient()
-
-    // State: Selected Attributes (Flat List)
+}: Omit<ManageAttributesModalProps, 'productId'>) => {
+    // State
     const [tempAttributes, setTempAttributes] = useState<AttributeValue[]>([])
-
-    // State: Variant Flags (Map KeyId -> Boolean)
     const [variantFlags, setVariantFlags] = useState<Record<string, boolean>>({})
+    const [isSaving, setIsSaving] = useState(false)
+    const [newKeyId, setNewKeyId] = useState<string>("")
+    const [newValueId, setNewValueId] = useState<string>("")
 
-    // Fetch all available keys
+    // Fetch all attribute keys
     const { data: allKeysData } = useQuery({
         queryKey: ["attribute-keys"],
         queryFn: async () => {
@@ -101,11 +61,11 @@ export const ManageAttributesModal = ({
     })
     const allKeys: AttributeKey[] = allKeysData?.attribute_keys || []
 
+    // Initialize state when modal opens
     useEffect(() => {
         if (open) {
             setTempAttributes(currentAttributes)
 
-            // Initialize flags from props
             const initialFlags: Record<string, boolean> = {}
             if (initialVariantKeys) {
                 initialVariantKeys.forEach(k => initialFlags[k] = true)
@@ -114,496 +74,244 @@ export const ManageAttributesModal = ({
         }
     }, [open, currentAttributes, initialVariantKeys])
 
-    const [isSaving, setIsSaving] = useState(false)
+    // Use extracted hooks
+    const { handleSaveWithConfirmation, confirmationState, closeConfirmation } = useConfirmation(initialVariantKeys, allKeys)
+    const { addAttribute, removeAttribute, toggleVariant } = useAttributeActions(
+        tempAttributes,
+        setTempAttributes,
+        variantFlags,
+        setVariantFlags
+    )
 
-    // Local state for "Add New"
-    const [newKeyId, setNewKeyId] = useState<string>("")
-    const [newValueId, setNewValueId] = useState<string>("")
-    const [isCreatingValue, setIsCreatingValue] = useState(false)
-    const [newValueStr, setNewValueStr] = useState("")
+    // Group attributes for display
+    const groupedAttributes = useMemo(() => {
+        return groupAttributesByKey(tempAttributes)
+    }, [tempAttributes])
 
-    // Searchable Select State
-    const [keySearchQuery, setKeySearchQuery] = useState("")
-    const [isKeySelectOpen, setIsKeySelectOpen] = useState(false)
-
-    const handleAdd = async () => {
-        if (!newKeyId) return
-
-        let finalValueId = newValueId
-        let finalValueStr = ""
-        let finalKey = allKeys.find(k => k.id === newKeyId)
-
-        if (isCreatingValue && newValueStr) {
+    // Handle save with confirmation
+    const handleSave = async () => {
+        const proceedWithSave = async () => {
+            setIsSaving(true)
             try {
-                const res = await fetch(`/admin/attributes/${newKeyId}/values`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ value: newValueStr })
-                })
-                const data = await res.json()
-                if (data.attribute_value) {
-                    finalValueId = data.attribute_value.id
-                    finalValueStr = data.attribute_value.value
-                    queryClient.invalidateQueries({ queryKey: ["attribute-keys"] })
-                }
-            } catch (e) {
-                toast.error("Failed to create value")
-                return
-            }
-        } else if (finalValueId) {
-            // Check if it's a raw OPTION selection
-            if (finalValueId.startsWith("OPTION:")) {
-                const rawVal = finalValueId.replace("OPTION:", "")
-                // Create it on the fly
-                try {
-                    const res = await fetch(`/admin/attributes/${newKeyId}/values`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ value: rawVal })
-                    })
-                    const data = await res.json()
-                    if (data.attribute_value) {
-                        finalValueId = data.attribute_value.id
-                        finalValueStr = data.attribute_value.value
-                        queryClient.invalidateQueries({ queryKey: ["attribute-keys"] })
-                    } else {
-                        throw new Error("No value returned")
-                    }
-                } catch (e) {
-                    toast.error(`Failed to create value "${rawVal}"`)
-                    return
-                }
-            } else {
-                // Existing entity
-                const val = finalKey?.values.find(v => v.id === finalValueId)
-                finalValueStr = val?.value || ""
+                await onSaveAtomic(tempAttributes, variantFlags)
+                toast.success("Attributes saved successfully")
+                onOpenChange(false)
+            } catch (error) {
+                console.error("Save failed:", error)
+                toast.error("Failed to save attributes")
+            } finally {
+                setIsSaving(false)
             }
         }
 
-        if (finalValueId && finalKey) {
-            const newEntry: AttributeValue = {
-                id: finalValueId,
-                value: finalValueStr,
-                attribute_key: {
-                    id: finalKey.id,
-                    label: finalKey.label,
-                    handle: finalKey.handle
-                }
+        await handleSaveWithConfirmation(variantFlags, proceedWithSave)
+    }
+
+    // Handle add new attribute
+    const handleAddNew = () => {
+        if (!newKeyId || !newValueId) return
+
+        const key = allKeys.find(k => k.id === newKeyId)
+        const value = key?.values.find(v => v.id === newValueId)
+
+        if (!key || !value) return
+
+        const newAttr: AttributeValue = {
+            id: value.id,
+            value: value.value,
+            attribute_key: {
+                id: key.id,
+                label: key.label,
+                handle: key.handle
             }
-            setTempAttributes(prev => [...prev, newEntry])
-
-            // Reset inputs
-            setNewKeyId("")
-            setNewValueId("")
-            setNewValueStr("")
-            setIsCreatingValue(false)
         }
+
+        addAttribute(newAttr)
+        setNewKeyId("")
+        setNewValueId("")
     }
 
-    const handleRemoveValue = (id: string) => {
-        setTempAttributes(prev => prev.filter(a => a.id !== id))
-    }
+    // Get available values for selected key
+    const availableValuesForNewKey = useMemo(() => {
+        if (!newKeyId) return []
 
-    const handleRemoveGroup = (keyId: string) => {
-        setTempAttributes(prev => prev.filter(a => a.attribute_key.id !== keyId))
-        // Optionally unset variant flag? No, keep it preferred.
-    }
+        const key = allKeys.find(k => k.id === newKeyId)
+        if (!key) return []
 
-    const toggleVariant = (keyId: string) => {
-        setVariantFlags(prev => ({
-            ...prev,
-            [keyId]: !prev[keyId]
-        }))
-    }
+        const usedIds = tempAttributes
+            .filter(a => a.attribute_key.id === newKeyId)
+            .map(a => a.id)
 
+        return key.values.filter(v => !usedIds.includes(v.id))
+    }, [newKeyId, allKeys, tempAttributes])
 
-
-    const confirmSave = async () => {
-        setIsSaving(true)
-        try {
-            await onSaveAtomic(tempAttributes, variantFlags)
-            toast.success("Attributes saved successfully")
-        } catch (e) {
-            toast.error("Failed to save")
-        } finally {
-            setIsSaving(false)
-        }
-    }
-
-    const handleSync = async (attributeKeyId: string) => {
-        const toastId = toast.loading("Syncing variants...")
-        try {
-            // Retrieve productId from somewhere? It's missing in props usage but needed for API.
-            // Ah, we commented it out line 81. I need to uncomment it or use props.
-
-            // Wait, we need the productId to call the API: /admin/products/[id]/sync-variants
-            // The prop `productId` is passed to the component but I commented it out in the previous read?
-            // Let's check line 81. It was defined in props type but commented in destructuring?
-            // "productId, // Unused but kept..."
-            // I need to use it now.
-            // Assuming I can access `productId` from scope if I uncomment it in next chunk.
-
-            await fetch(`/admin/products/${productId}/sync-variants`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ attribute_key_id: attributeKeyId })
-            })
-
-            toast.dismiss(toastId)
-            toast.success("Variants synced!")
-            // Optionally close or refresh?
-        } catch (e) {
-            toast.dismiss(toastId)
-            toast.error("Sync failed")
-        }
-    }
-
-    const selectedKey = allKeys.find(k => k.id === newKeyId)
-    const groupedDisplay = groupAttrs(tempAttributes)
-
-    // Calculate Available Keys (FILTERING LOGIC)
-    // We filter keys that are NOT present in the tempAttributes list at all?
-    // OR we filter keys that have NO remaining values?
-    // Plan says: "Hide keys from the Add dropdown if they are already in the list."
-    // But we need to allow "Inline Add" which re-selects it.
-    // Refined Logic: Dropdown shows unused keys. Specific key is forced when clicking Inline Add.
-
-    const usedKeyIds = new Set(tempAttributes.map(a => a.attribute_key.id))
-    // If newKeyId is set (manually or via quick add), we MUST include it even if used
-    const availableKeys = allKeys.filter(k => !usedKeyIds.has(k.id) || k.id === newKeyId)
-
-    const filteredKeys = useMemo(() => {
-        if (!keySearchQuery) return availableKeys
-        return availableKeys.filter(k => k.label.toLowerCase().includes(keySearchQuery.toLowerCase()))
-    }, [availableKeys, keySearchQuery])
+    // Get unused keys for "Add New" dropdown
+    const unusedKeys = useMemo(() => {
+        const usedKeyIds = new Set(tempAttributes.map(a => a.attribute_key.id))
+        return allKeys.filter(k => {
+            if (usedKeyIds.has(k.id)) {
+                // Check if this key has more available values
+                const availability = getKeyAvailability(k, tempAttributes)
+                return availability.hasMore
+            }
+            return true
+        })
+    }, [allKeys, tempAttributes])
 
     return (
         <FocusModal open={open} onOpenChange={onOpenChange}>
-            <FocusModal.Content>
-                {/* Visual Title is inside Body, but Radix needs an Accessible Title in the Content context */}
-                <VisuallyHidden>
-                    <FocusModal.Title>Manage Attributes</FocusModal.Title>
-                    <FocusModal.Description>
-                        Interface to add, edit, or remove attributes and variant settings for this product.
-                    </FocusModal.Description>
-                </VisuallyHidden>
-
+            <FocusModal.Content className="max-w-[66vw] mx-auto">
                 <FocusModal.Header>
-                    <div className="flex w-full justify-between px-4">
-                        <div />
-                        <Button onClick={confirmSave} isLoading={isSaving}>Save</Button>
+                    <div className="flex items-center justify-between gap-4">
+                        <Heading>Manage Product Attributes</Heading>
+                        <Button onClick={handleSave} isLoading={isSaving}>
+                            Save
+                        </Button>
                     </div>
                 </FocusModal.Header>
-                <FocusModal.Body className="flex flex-col items-center py-12 px-4 max-w-3xl mx-auto w-full overflow-y-auto">
-                    <Heading level="h2" className="mb-6">Manage Attributes</Heading>
 
-                    <div className="w-full flex flex-col gap-8">
-
-                        {/* 1. Add New Section (Moved to TOP) */}
-                        <div className="p-4 bg-ui-bg-subtle rounded-lg flex gap-3 items-end border">
-                            <div className="flex flex-col gap-2 w-1/3">
-                                <Label size="small">Attribute Key</Label>
-                                <Popover open={isKeySelectOpen} onOpenChange={setIsKeySelectOpen}>
-                                    <Popover.Trigger asChild>
-                                        <Button
-                                            variant="secondary"
-                                            className="w-full justify-between"
-                                            id="add-attribute-select"
-                                        >
-                                            {selectedKey ? selectedKey.label : "Select Attribute"}
-                                            <ChevronDown className="text-ui-fg-muted" />
-                                        </Button>
-                                    </Popover.Trigger>
-                                    <Popover.Content className="p-0 w-[300px] overflow-hidden">
-                                        <div className="p-2 border-b">
-                                            <Input
-                                                placeholder="Search attributes..."
-                                                value={keySearchQuery}
-                                                onChange={(e) => setKeySearchQuery(e.target.value)}
-                                                autoFocus
-                                                className="border-none shadow-none focus-visible:ring-0"
-                                            />
-                                        </div>
-                                        <div className="max-h-[200px] overflow-y-auto p-1">
-                                            {filteredKeys.map(k => (
-                                                <div
-                                                    key={k.id}
-                                                    className={clx(
-                                                        "flex items-center justify-between px-2 py-1.5 rounded-md cursor-pointer hover:bg-ui-bg-base-hover text-small",
-                                                        newKeyId === k.id && "bg-ui-bg-base-pressed"
-                                                    )}
-                                                    onClick={() => {
-                                                        setNewKeyId(k.id)
-                                                        setIsKeySelectOpen(false)
-                                                        setKeySearchQuery("")
-                                                    }}
-                                                >
-                                                    {k.label}
-                                                    {newKeyId === k.id && <Check className="text-ui-fg-interactive" />}
-                                                </div>
-                                            ))}
-                                            {filteredKeys.length === 0 && (
-                                                <div className="px-2 py-2 text-ui-fg-muted text-small text-center">
-                                                    No results found
-                                                </div>
-                                            )}
-                                        </div>
-                                    </Popover.Content>
-                                </Popover>
+                <FocusModal.Body className="overflow-y-auto max-h-[calc(100vh-200px)] px-6 py-4">
+                    <div className="flex flex-col gap-4">
+                        {/* Add New Attribute Section */}
+                        <div className="flex gap-2 items-end border-b pb-4">
+                            <div className="flex-1">
+                                <Label>Attribute</Label>
+                                <Select
+                                    value={newKeyId}
+                                    onValueChange={setNewKeyId}
+                                >
+                                    <Select.Trigger>
+                                        <Select.Value placeholder="Select attribute..." />
+                                    </Select.Trigger>
+                                    <Select.Content>
+                                        {unusedKeys.map(key => (
+                                            <Select.Item key={key.id} value={key.id}>
+                                                {key.label}
+                                            </Select.Item>
+                                        ))}
+                                    </Select.Content>
+                                </Select>
                             </div>
 
-                            <div className="flex flex-col gap-2 w-1/3">
-                                <Label size="small">Value</Label>
-                                {isCreatingValue ? (
-                                    <div className="flex gap-1">
-                                        <Input
-                                            placeholder="New Value..."
-                                            value={newValueStr}
-                                            onChange={(e) => setNewValueStr(e.target.value)}
-                                            autoFocus
-                                        />
-                                        <IconButton size="small" onClick={() => setIsCreatingValue(false)}>
-                                            <XMark />
-                                        </IconButton>
-                                    </div>
-                                ) : (
-                                    <Select
-                                        value={newValueId}
-                                        onValueChange={(val) => {
-                                            if (val === "CREATE_NEW") {
-                                                setIsCreatingValue(true)
-                                                setNewValueId("")
-                                            } else {
-                                                setNewValueId(val)
-                                            }
-                                        }}
-                                        disabled={!newKeyId}
-                                    >
-                                        <Select.Trigger>
-                                            <Select.Value placeholder="Select Value" />
-                                        </Select.Trigger>
-                                        <Select.Content>
-                                            {(() => {
-                                                const existingEntityValues = selectedKey?.values || []
-                                                const existingEntityValueStrings = new Set(existingEntityValues.map(v => v.value))
-
-                                                // Filter out already selected values for this key
-                                                const filteredEntities = existingEntityValues.filter(v => !tempAttributes.some(attr => attr.id === v.id))
-
-                                                // Filter options:
-                                                // 1. Must not match an existing entity's value (mapped above)
-                                                // 2. Must not be currently selected (as a temp attribute)
-                                                const availableOptions = (selectedKey?.options || [])
-                                                    .filter(opt => !existingEntityValueStrings.has(opt))
-                                                    .filter(opt => !tempAttributes.some(a => a.value === opt && a.attribute_key.id === selectedKey?.id))
-
-                                                return (
-                                                    <>
-                                                        {filteredEntities.map((v: any) => (
-                                                            <Select.Item key={v.id} value={v.id}>{v.value}</Select.Item>
-                                                        ))}
-                                                        {availableOptions.map((opt: string) => (
-                                                            <Select.Item key={`opt-${opt}`} value={`OPTION:${opt}`}>{opt}</Select.Item>
-                                                        ))}
-                                                    </>
-                                                )
-                                            })()}
-                                            <Select.Separator />
-                                            <Select.Item value="CREATE_NEW">
-                                                <span className="text-ui-fg-interactive">+ Create New</span>
+                            <div className="flex-1">
+                                <Label>Value</Label>
+                                <Select
+                                    value={newValueId}
+                                    onValueChange={setNewValueId}
+                                    disabled={!newKeyId}
+                                >
+                                    <Select.Trigger>
+                                        <Select.Value placeholder="Select value..." />
+                                    </Select.Trigger>
+                                    <Select.Content>
+                                        {availableValuesForNewKey.map(val => (
+                                            <Select.Item key={val.id} value={val.id}>
+                                                {val.value}
                                             </Select.Item>
-                                        </Select.Content>
-                                    </Select>
-                                )}
+                                        ))}
+                                    </Select.Content>
+                                </Select>
                             </div>
 
                             <Button
+                                onClick={handleAddNew}
+                                disabled={!newKeyId || !newValueId}
                                 variant="secondary"
-                                onClick={handleAdd}
-                                disabled={!newKeyId || (!newValueId && !newValueStr)}
                             >
                                 <Plus /> Add
                             </Button>
                         </div>
 
-                        <div className="w-full border-b border-ui-border-base" />
-
-                        {/* 2. List Existing (Moved to BOTTOM) */}
-                        <div className="border rounded-lg overflow-hidden">
+                        {/* Attributes Table */}
+                        <div>
                             <Table>
                                 <Table.Header>
                                     <Table.Row>
                                         <Table.HeaderCell>Attribute</Table.HeaderCell>
                                         <Table.HeaderCell>Values</Table.HeaderCell>
-                                        <Table.HeaderCell>Use as Variant</Table.HeaderCell>
-                                        <Table.HeaderCell className="text-right">Action</Table.HeaderCell>
+                                        <Table.HeaderCell>Variant?</Table.HeaderCell>
+                                        <Table.HeaderCell></Table.HeaderCell>
                                     </Table.Row>
                                 </Table.Header>
                                 <Table.Body>
-                                    {groupedDisplay.map((group: any) => {
-                                        // Check if this group has more available values
-                                        const { hasMore } = getKeyStatus(
-                                            allKeys.find(k => k.id === group.key_id) || group.key,
-                                            tempAttributes
-                                        )
+                                    {groupedAttributes.map((group: any) => {
+                                        const keyId = group.key_id
+                                        const showToggle = shouldShowVariantToggle(keyId, tempAttributes)
+                                        const isVariant = variantFlags[keyId] || false
 
                                         return (
-                                            <Table.Row key={group.key_id}>
+                                            <Table.Row key={keyId}>
                                                 <Table.Cell>
                                                     <div className="flex items-center gap-2">
                                                         <Text weight="plus">{group.key_title}</Text>
+                                                        {isVariant && (
+                                                            <Badge color="purple" size="small">
+                                                                Variant
+                                                            </Badge>
+                                                        )}
                                                     </div>
                                                 </Table.Cell>
                                                 <Table.Cell>
-                                                    <div className="flex gap-2 flex-wrap items-center">
+                                                    <div className="flex gap-1 flex-wrap">
                                                         {group.values.map((val: any) => (
-                                                            <div key={val.id} className="relative group">
-                                                                <Badge>{val.value}</Badge>
-                                                                <div
-                                                                    className="absolute -top-2 -right-2 hidden group-hover:flex bg-ui-bg-base rounded-full shadow cursor-pointer p-0.5"
-                                                                    onClick={() => handleRemoveValue(val.id)}
+                                                            <div
+                                                                key={val.id}
+                                                                className="inline-flex items-center gap-1 px-2 py-1 bg-ui-bg-subtle rounded-md text-sm"
+                                                            >
+                                                                <span>{val.value}</span>
+                                                                <button
+                                                                    onClick={() => removeAttribute(val.id)}
+                                                                    className="hover:bg-ui-bg-subtle-hover rounded p-0.5 transition-colors"
+                                                                    type="button"
                                                                 >
-                                                                    <XMark className="w-3 h-3 text-ui-fg-error" />
-                                                                </div>
+                                                                    <XMark className="w-3 h-3" />
+                                                                </button>
                                                             </div>
                                                         ))}
-                                                        {hasMore && (
-                                                            <DropdownMenu>
-                                                                <DropdownMenu.Trigger asChild>
-                                                                    <IconButton
-                                                                        size="small"
-                                                                        variant="transparent"
-                                                                        className="text-ui-fg-interactive hover:bg-ui-bg-base-hover"
-                                                                    >
-                                                                        <Plus />
-                                                                    </IconButton>
-                                                                </DropdownMenu.Trigger>
-                                                                <DropdownMenu.Content>
-                                                                    {(() => {
-                                                                        const keyData = allKeys.find(k => k.id === group.key_id) || group.key
-                                                                        const usedValueIds = tempAttributes.filter(a => a.attribute_key.id === group.key_id).map(a => a.id)
-                                                                        // 1. Existing Real Values
-                                                                        const availableValues = keyData?.values?.filter((v: any) => !usedValueIds.includes(v.id)) || []
-
-                                                                        // 2. Options (Strings) that don't have a Value entity yet
-                                                                        // We filter out options that match the string value of any EXISTING available value or USED value
-                                                                        const existingValueStrings = new Set([
-                                                                            ...(keyData?.values?.map((v: any) => v.value) || []),
-                                                                            ...tempAttributes.filter(a => a.attribute_key.id === group.key_id).map(a => a.value)
-                                                                        ])
-
-                                                                        const availableOptions = (keyData?.options || [])
-                                                                            .filter((opt: string) => !existingValueStrings.has(opt))
-
-                                                                        return (
-                                                                            <>
-                                                                                {availableValues.map((v: any) => (
-                                                                                    <DropdownMenu.Item
-                                                                                        key={v.id}
-                                                                                        onClick={() => {
-                                                                                            const newEntry = {
-                                                                                                id: v.id,
-                                                                                                value: v.value,
-                                                                                                attribute_key: {
-                                                                                                    id: keyData.id,
-                                                                                                    label: keyData.label,
-                                                                                                    handle: keyData.handle
-                                                                                                }
-                                                                                            }
-                                                                                            setTempAttributes(prev => [...prev, newEntry])
-                                                                                        }}
-                                                                                    >
-                                                                                        {v.value}
-                                                                                    </DropdownMenu.Item>
-                                                                                ))}
-                                                                                {availableOptions.map((opt: string) => (
-                                                                                    <DropdownMenu.Item
-                                                                                        key={`opt-${opt}`}
-                                                                                        onClick={async () => {
-                                                                                            // Create on the fly
-                                                                                            try {
-                                                                                                const res = await fetch(`/admin/attributes/${keyData.id}/values`, {
-                                                                                                    method: "POST",
-                                                                                                    headers: { "Content-Type": "application/json" },
-                                                                                                    body: JSON.stringify({ value: opt })
-                                                                                                })
-                                                                                                const data = await res.json()
-                                                                                                if (data.attribute_value) {
-                                                                                                    const newEntry = {
-                                                                                                        id: data.attribute_value.id,
-                                                                                                        value: data.attribute_value.value,
-                                                                                                        attribute_key: {
-                                                                                                            id: keyData.id,
-                                                                                                            label: keyData.label,
-                                                                                                            handle: keyData.handle
-                                                                                                        }
-                                                                                                    }
-                                                                                                    setTempAttributes(prev => [...prev, newEntry])
-                                                                                                    queryClient.invalidateQueries({ queryKey: ["attribute-keys"] })
-                                                                                                }
-                                                                                            } catch (e) {
-                                                                                                toast.error(`Failed to create value "${opt}"`)
-                                                                                            }
-                                                                                        }}
-                                                                                    >
-                                                                                        {opt}
-                                                                                    </DropdownMenu.Item>
-                                                                                ))}
-                                                                            </>
-                                                                        )
-                                                                    })()}
-                                                                </DropdownMenu.Content>
-                                                            </DropdownMenu>
-                                                        )}
                                                     </div>
                                                 </Table.Cell>
                                                 <Table.Cell>
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="flex items-center gap-2">
+                                                    {showToggle ? (
+                                                        <div className="flex items-center">
                                                             <Switch
-                                                                checked={!!variantFlags[group.key_id]}
-                                                                onCheckedChange={() => toggleVariant(group.key_id)}
+                                                                checked={isVariant}
+                                                                onCheckedChange={(checked) => {
+                                                                    toggleVariant(keyId, checked)
+                                                                }}
+                                                                className="scale-150"
                                                             />
-                                                            <Label>{variantFlags[group.key_id] ? "Yes" : "No"}</Label>
                                                         </div>
-
-                                                        {/* Sync Button - Only show if marked as Variant */}
-                                                        {variantFlags[group.key_id] && (
-                                                            <Button
-                                                                size="small"
-                                                                variant="transparent"
-                                                                className="text-ui-fg-muted hover:text-ui-fg-interactive"
-                                                                onClick={() => handleSync(group.key_id)}
-                                                                title="Sync Variations (Link by Title)"
-                                                            >
-                                                                <ArrowPath />
-                                                                <span className="sr-only">Sync</span>
-                                                            </Button>
-                                                        )}
-                                                    </div>
+                                                    ) : (
+                                                        <Text size="small" className="text-ui-fg-muted">
+                                                            Need 2+ values
+                                                        </Text>
+                                                    )}
                                                 </Table.Cell>
-                                                <Table.Cell className="text-right">
-                                                    <IconButton variant="transparent" onClick={() => handleRemoveGroup(group.key_id)}>
-                                                        <Trash className="text-ui-fg-muted hover:text-ui-fg-error" />
-                                                    </IconButton>
+                                                <Table.Cell>
+                                                    <span className="text-ui-fg-muted">
+                                                        {group.values.length} value(s)
+                                                    </span>
                                                 </Table.Cell>
                                             </Table.Row>
                                         )
                                     })}
-                                    {groupedDisplay.length === 0 && (
-                                        <Table.Row>
-                                            {/* @ts-expect-error colSpan valid in DOM but missing in Table.Cell types */}
-                                            <Table.Cell colSpan={4} className="text-center text-ui-fg-muted py-8">
-                                                No attributes added. Add one above.
-                                            </Table.Cell>
-                                        </Table.Row>
-                                    )}
                                 </Table.Body>
                             </Table>
                         </div>
                     </div>
                 </FocusModal.Body>
             </FocusModal.Content>
+
+            {/* Confirmation Dialog */}
+            {confirmationState.onConfirm && (
+                <ConfirmationDialog
+                    open={confirmationState.isOpen}
+                    onOpenChange={closeConfirmation}
+                    title={confirmationState.title}
+                    description={confirmationState.description}
+                    onConfirm={confirmationState.onConfirm}
+                />
+            )}
         </FocusModal>
     )
 }

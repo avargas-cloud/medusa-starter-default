@@ -1,0 +1,11 @@
+/**
+ * Hide Advanced Products from Extensions section
+ * 
+ * The native "Products" button (well positioned) is redirected via JS
+ * This CSS hides our duplicate "Advanced Products" in Extensions
+ */
+
+/* Hide the Advanced Products link in Extensions section */
+aside a[href="/app/products-advance"] {
+    display: none !important;
+}

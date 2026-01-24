@@ -2,7 +2,7 @@
 import { defineWidgetConfig } from "@medusajs/admin-sdk"
 import { DetailWidgetProps, AdminProduct } from "@medusajs/framework/types"
 import { Container, Heading, Table, Badge, Text, Button } from "@medusajs/ui"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { ManageAttributesModal } from "../components/manage-attributes-modal"
 import { sdk } from "../../lib/sdk"
@@ -35,6 +35,7 @@ const groupAttributesByKey = (flatAttributes: any[], variantKeys: string[] = [])
 };
 
 const ProductAttributesWidget = ({ data: initialProduct }: DetailWidgetProps<AdminProduct>) => {
+    const queryClient = useQueryClient()
 
     // 1. Fetch Attributes using Custom API (Robust)
     const { data: customData, isLoading, refetch } = useQuery({
@@ -51,7 +52,7 @@ const ProductAttributesWidget = ({ data: initialProduct }: DetailWidgetProps<Adm
 
     // 2. Fetch Product Metadata to know which keys are Variants
     // We can rely on initialProduct, but a fresh fetch is safer for "Atomic" truth
-    const { data: productData } = useQuery({
+    const { data: productData, refetch: refetchProduct } = useQuery({
         queryFn: async () => {
             return sdk.admin.product.retrieve(initialProduct.id)
         },
@@ -62,8 +63,16 @@ const ProductAttributesWidget = ({ data: initialProduct }: DetailWidgetProps<Adm
 
     const [isManageModalOpen, setIsManageModalOpen] = useState(false)
 
-    // Calculate Groups for Display
+    // Calculate Groups for Display & Sort (Variants first, then alphabetical)
     const groupedAttributes = groupAttributesByKey(attributes, variantKeys)
+        .sort((a, b) => {
+            // First: Sort by variant status (variants first)
+            if (a.is_variant && !b.is_variant) return -1
+            if (!a.is_variant && b.is_variant) return 1
+
+            // Then: Sort alphabetically by key_title
+            return a.key_title.localeCompare(b.key_title)
+        })
 
     const handleSave = async (selectedAttributes: any[], variantFlags: Record<string, boolean>) => {
         // 1. Flatten selected values (Links)
@@ -83,11 +92,59 @@ const ProductAttributesWidget = ({ data: initialProduct }: DetailWidgetProps<Adm
                 }
             })
 
-            await refetch() // Reload attributes
+            // COMPREHENSIVE INVALIDATION: Refresh ALL related widgets
+            console.log("🔄 Invalidating all product-related queries...")
+
+            // 1. Main product query
+            await queryClient.invalidateQueries({
+                queryKey: ['product', initialProduct.id]
+            })
+
+            // 2. Product with relations (includes options, variants)
+            await queryClient.invalidateQueries({
+                queryKey: ['products', initialProduct.id]
+            })
+
+            // 3. Custom attributes query
+            await queryClient.invalidateQueries({
+                queryKey: ['product', initialProduct.id, 'custom-attributes']
+            })
+
+            // 4. Product options (for Options widget)
+            await queryClient.invalidateQueries({
+                queryKey: ['product_options']
+            })
+
+            // 5. Product variants (for Variants widget)
+            await queryClient.invalidateQueries({
+                queryKey: ['product_variants']
+            })
+
+            // 6. Invalidate all queries for this product ID
+            await queryClient.invalidateQueries({
+                predicate: (query) => {
+                    const key = query.queryKey
+                    return Array.isArray(key) && key.includes(initialProduct.id)
+                }
+            })
+
+            console.log("✅ All queries invalidated")
+
+            // 7. FORCE REFETCH to apply sorting with fresh data
+            console.log("🔄 Force refetching attributes AND product metadata...")
+            await Promise.all([
+                refetch(),           // Refetch attributes
+                refetchProduct()     // Refetch product metadata (for variant_keys)
+            ])
+
+            console.log("✅ UI fully refreshed with sorted attributes and variant badges")
+
             setIsManageModalOpen(false)
 
         } catch (e) {
             console.error("Save Failed:", e)
+            // Don't close modal on error
+            throw e // Re-throw to show error in modal
         }
     }
 
@@ -152,7 +209,6 @@ const ProductAttributesWidget = ({ data: initialProduct }: DetailWidgetProps<Adm
                 <ManageAttributesModal
                     open={isManageModalOpen}
                     onOpenChange={setIsManageModalOpen}
-                    productId={initialProduct.id}
                     currentAttributes={attributes}
                     initialVariantKeys={variantKeys}
                     onSaveAtomic={handleSave}

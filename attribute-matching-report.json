@@ -1,0 +1,3755 @@
+[
+  {
+    "productId": "prod_2-1-2-led-under-cabinet-light-silver-frame-3w",
+    "productTitle": "2 1/2\" LED Under Cabinet Light - Silver Frame, 3W",
+    "productOption": {
+      "id": "opt_2-1-2-led-under-cabinet-light-silver-frame-3w_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_2-1-2-led-under-cabinet-light-silver-frame-3w_8187",
+        "title": "3000K",
+        "sku": "ECLDL-2R3WS30K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_2-1-2-led-under-cabinet-light-silver-frame-3w_8188",
+        "title": "6000K",
+        "sku": "ECLDL-2R3WS60K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_2-1-2-led-under-cabinet-light-white-frame-3w",
+    "productTitle": "2 1/2\" LED Under Cabinet Light - White Frame, 3W",
+    "productOption": {
+      "id": "opt_2-1-2-led-under-cabinet-light-white-frame-3w_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_2-1-2-led-under-cabinet-light-white-frame-3w_8191",
+        "title": "6000K",
+        "sku": "ECLDL-2R3WW60K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_2-1-2-led-under-cabinet-light-white-frame-3w_8190",
+        "title": "3000K",
+        "sku": "ECLDL-2R3WW30K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_2-3-4-led-under-cabinet-square-light-silver-frame-3w",
+    "productTitle": "2 3/4\" LED Under Cabinet Square Light Silver Frame, 3W",
+    "productOption": {
+      "id": "opt_2-3-4-led-under-cabinet-square-light-silver-frame-3w_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_2-3-4-led-under-cabinet-square-light-silver-frame-3w_8193",
+        "title": "3000K",
+        "sku": "ECLDL-2S3WS30K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_2-3-4-led-under-cabinet-square-light-silver-frame-3w_8194",
+        "title": "6000K",
+        "sku": "ECLDL-2S3WS60K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_3-1-2-led-dimmable-down-light-silver-frame-7w",
+    "productTitle": "3 1/2\" LED Dimmable Down Light - Silver Frame, 7W",
+    "productOption": {
+      "id": "opt_3-1-2-led-dimmable-down-light-silver-frame-7w_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_3-1-2-led-dimmable-down-light-silver-frame-7w_8200",
+        "title": "6000K",
+        "sku": "ECLDL-3R7WS60K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_3-1-2-led-dimmable-down-light-silver-frame-7w_8199",
+        "title": "3000K",
+        "sku": "ECLDL-3R7WS30K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_3-1-2-led-dimmable-down-light-white-frame-7w",
+    "productTitle": "3 1/2\" LED Dimmable Down Light - White Frame, 7W",
+    "productOption": {
+      "id": "opt_3-1-2-led-dimmable-down-light-white-frame-7w_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_3-1-2-led-dimmable-down-light-white-frame-7w_8202",
+        "title": "3000K",
+        "sku": "ECLDL-3R7WW30K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_3-1-2-led-dimmable-down-light-white-frame-7w_8203",
+        "title": "6000K",
+        "sku": "ECLDL-3R7WW60K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_4-ft-hybrid-led-tube-18w-etl-listed",
+    "productTitle": "4 ft Hybrid LED Tube, 18W",
+    "productOption": {
+      "id": "opt_4-ft-hybrid-led-tube-18w-etl-listed_Lighting_Cover",
+      "title": "Lighting Cover"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_4-ft-hybrid-led-tube-18w-etl-listed_8279",
+        "title": "Frosted",
+        "sku": "ETB-AHB4FC-5K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_4-ft-hybrid-led-tube-18w-etl-listed_8280",
+        "title": "Clear",
+        "sku": "ETB-AHB4CC-5K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_65ft-ul-smd2835-led-strip-2400-single-color-chips-bright-output",
+    "productTitle": "65FT UL SMD2835 LED Strip 2400 Single Color Chips, Bright Output",
+    "productOption": {
+      "id": "opt_65ft-ul-smd2835-led-strip-2400-single-color-chips-bright-output_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_65ft-ul-smd2835-led-strip-2400-single-color-chips-bright-output_14806",
+        "title": "3000K",
+        "sku": "ESPS1L4N96W1030",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_65ft-ul-smd2835-led-strip-2400-single-color-chips-bright-output_14807",
+        "title": "4000K",
+        "sku": "ESPS1L4N96W1040",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_65ft-ul-smd2835-led-strip-2400-single-color-chips-bright-output_14809",
+        "title": "6000K",
+        "sku": "ESPS1L4N96W1060",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_8-ft-led-tube-fa8-base-36w",
+    "productTitle": "8 ft LED Tube FA8 Base, 36W",
+    "productOption": {
+      "id": "opt_8-ft-led-tube-fa8-base-36w_Lighting_Cover",
+      "title": "Lighting Cover"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_8-ft-led-tube-fa8-base-36w_8277",
+        "title": "Clear",
+        "sku": "ETB-A2S8CC-5K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_8-ft-led-tube-fa8-base-36w_8276",
+        "title": "Frosted",
+        "sku": "ETB-A2S8FC-5K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-0-10v-paddle-dimmer",
+    "productTitle": "adorne® 0-10V Paddle™ Dimmer",
+    "productOption": {
+      "id": "opt_adorne-0-10v-paddle-dimmer_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-0-10v-paddle-dimmer_10051",
+        "title": "White",
+        "sku": "LEG-ADPD4FBL3P2W4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-0-10v-paddle-dimmer_10053",
+        "title": "Graphite",
+        "sku": "LEG-ADPD4FBL3P2G4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-0-10v-paddle-dimmer_10052",
+        "title": "Magnesium",
+        "sku": "LEG-ADPD4FBL3P2M4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-0-10v-softap-dimmer",
+    "productTitle": "adorne® 0-10V sofTap™ Dimmer",
+    "productOption": {
+      "id": "opt_adorne-0-10v-softap-dimmer_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-0-10v-softap-dimmer_10064",
+        "title": "White",
+        "sku": "LEG-ADTP4FBL3PW4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-0-10v-softap-dimmer_10066",
+        "title": "Graphite",
+        "sku": "LEG-ADTP4FBL3PG4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-0-10v-softap-dimmer_10065",
+        "title": "Magnesium",
+        "sku": "LEG-ADTP4FBL3PM4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-0-10v-touch-dimmer",
+    "productTitle": "adorne® 0-10V Touch™ Dimmer",
+    "productOption": {
+      "id": "opt_adorne-0-10v-touch-dimmer_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-0-10v-touch-dimmer_10079",
+        "title": "White",
+        "sku": "LEG-ADTH4FBL3PW4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-0-10v-touch-dimmer_10081",
+        "title": "Graphite",
+        "sku": "LEG-ADTH4FBL3PG4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-0-10v-touch-dimmer_10080",
+        "title": "Magnesium",
+        "sku": "LEG-ADTH4FBL3PM4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-15a-one-gang-pop-out-outlet",
+    "productTitle": "adorne® 15A One-Gang Pop-Out™ Outlet",
+    "productOption": {
+      "id": "opt_adorne-15a-one-gang-pop-out-outlet_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-15a-one-gang-pop-out-outlet_10131",
+        "title": "Graphite",
+        "sku": "LEG-ARPTR151GG2",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-15a-one-gang-pop-out-outlet_10130",
+        "title": "Magnesium",
+        "sku": "LEG-ARPTR151GM2",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-15a-one-gang-pop-out-outlet_10129",
+        "title": "White",
+        "sku": "LEG-ARPTR151GW2",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-15a-outlet",
+    "productTitle": "adorne® 15A Outlet",
+    "productOption": {
+      "id": "opt_adorne-15a-outlet_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-15a-outlet_10085",
+        "title": "Magnesium",
+        "sku": "LEG-ARTR152M4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-15a-outlet_10084",
+        "title": "White",
+        "sku": "LEG-ARTR152W4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-15a-outlet_10086",
+        "title": "Graphite",
+        "sku": "LEG-ARTR152G4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-15a-outlet-plus-size",
+    "productTitle": "adorne® 15A Outlet - Plus-Size",
+    "productOption": {
+      "id": "opt_adorne-15a-outlet-plus-size_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-15a-outlet-plus-size_10120",
+        "title": "Graphite",
+        "sku": "LEG-ARTR153G4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-15a-outlet-plus-size_10118",
+        "title": "White",
+        "sku": "LEG-ARTR153W4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-15a-outlet-plus-size_10119",
+        "title": "Magnesium",
+        "sku": "LEG-ARTR153M4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-15a-paddle-switch",
+    "productTitle": "adorne® 15A Paddle™ Switch",
+    "productOption": {
+      "id": "opt_adorne-15a-paddle-switch_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-15a-paddle-switch_9961",
+        "title": "Magnesium",
+        "sku": "LEG-ASPD1532M4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-15a-paddle-switch_9960",
+        "title": "White",
+        "sku": "LEG-ASPD1532W4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-15a-paddle-switch_9962",
+        "title": "Graphite",
+        "sku": "LEG-ASPD1532G4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-15a-tamper-resistant-self-test-gfci-outlet",
+    "productTitle": "adorne® 15A Tamper-Resistant Self-Test GFCI Outlet",
+    "productOption": {
+      "id": "opt_adorne-15a-tamper-resistant-self-test-gfci-outlet_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-15a-tamper-resistant-self-test-gfci-outlet_10156",
+        "title": "Graphite",
+        "sku": "LEG-AGFTR2152G4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-15a-tamper-resistant-self-test-gfci-outlet_10155",
+        "title": "Magnesium",
+        "sku": "LEG-AGFTR2152M4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-15a-tamper-resistant-self-test-gfci-outlet_10154",
+        "title": "White",
+        "sku": "LEG-AGFTR2152W4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-15a-tamper-resistant-self-test-gfci-outlet-plus-size",
+    "productTitle": "adorne® 15A Tamper-Resistant Self-Test GFCI Outlet - Plus-Size",
+    "productOption": {
+      "id": "opt_adorne-15a-tamper-resistant-self-test-gfci-outlet-plus-size_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-15a-tamper-resistant-self-test-gfci-outlet-plus-size_10178",
+        "title": "Graphite",
+        "sku": "LEG-AGFTR2153G4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-15a-tamper-resistant-self-test-gfci-outlet-plus-size_10177",
+        "title": "Magnesium",
+        "sku": "LEG-AGFTR2153M4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-15a-tamper-resistant-self-test-gfci-outlet-plus-size_10176",
+        "title": "White",
+        "sku": "LEG-AGFTR2153W4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-15a-two-gang-pop-out-outlet",
+    "productTitle": "adorne® 15A Two-Gang Pop-Out™ Outlet",
+    "productOption": {
+      "id": "opt_adorne-15a-two-gang-pop-out-outlet_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-15a-two-gang-pop-out-outlet_10142",
+        "title": "White",
+        "sku": "LEG-ARPTR152GW2",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-15a-two-gang-pop-out-outlet_10144",
+        "title": "Graphite",
+        "sku": "LEG-ARPTR152GG2",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-15a-two-gang-pop-out-outlet_10143",
+        "title": "Magnesium",
+        "sku": "LEG-ARPTR152GM2",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-1-port-frame",
+    "productTitle": "adorne® 1-Port Frame",
+    "productOption": {
+      "id": "opt_adorne-1-port-frame_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-1-port-frame_10260",
+        "title": "Graphite",
+        "sku": "LEG-AC1PFG1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-1-port-frame_10255",
+        "title": "Magnesium",
+        "sku": "LEG-AC1PFM1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-1-port-frame_10254",
+        "title": "White",
+        "sku": "LEG-AC1PFW1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-20a-4-way-paddle-switch",
+    "productTitle": "adorne® 20A 4-Way Paddle™ Switch",
+    "productOption": {
+      "id": "opt_adorne-20a-4-way-paddle-switch_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-20a-4-way-paddle-switch_9968",
+        "title": "White",
+        "sku": "LEG-ASPD2042W4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-20a-4-way-paddle-switch_9969",
+        "title": "Magnesium",
+        "sku": "LEG-ASPD2042M4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-20a-4-way-paddle-switch_9970",
+        "title": "Graphite",
+        "sku": "LEG-ASPD2042G4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-20a-outlet",
+    "productTitle": "adorne® 20A Outlet",
+    "productOption": {
+      "id": "opt_adorne-20a-outlet_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-20a-outlet_10109",
+        "title": "Graphite",
+        "sku": "LEG-ARTR202G4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-20a-outlet_10107",
+        "title": "White",
+        "sku": "LEG-ARTR202W4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-20a-outlet_10108",
+        "title": "Magnesium",
+        "sku": "LEG-ARTR202M4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-20a-tamper-resistant-self-test-gfci-outlet",
+    "productTitle": "adorne® 20A Tamper-Resistant Self-Test GFCI Outlet",
+    "productOption": {
+      "id": "opt_adorne-20a-tamper-resistant-self-test-gfci-outlet_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-20a-tamper-resistant-self-test-gfci-outlet_10165",
+        "title": "White",
+        "sku": "LEG-AGFTR2202W4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-20a-tamper-resistant-self-test-gfci-outlet_10167",
+        "title": "Graphite",
+        "sku": "LEG-AGFTR2202G4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-20a-tamper-resistant-self-test-gfci-outlet_10166",
+        "title": "Magnesium",
+        "sku": "LEG-AGFTR2202M4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-2-port-frame",
+    "productTitle": "adorne® 2-Port Frame",
+    "productOption": {
+      "id": "opt_adorne-2-port-frame_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-2-port-frame_10265",
+        "title": "Magnesium",
+        "sku": "LEG-AC2PFM1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-2-port-frame_10264",
+        "title": "White",
+        "sku": "LEG-AC2PFW1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-450w-cfl-led-paddle-dimmer",
+    "productTitle": "adorne® 450W CFL/LED Paddle™ Dimmer",
+    "productOption": {
+      "id": "opt_adorne-450w-cfl-led-paddle-dimmer_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-450w-cfl-led-paddle-dimmer_10001",
+        "title": "Magnesium",
+        "sku": "LEG-ADPD453LM2",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-450w-cfl-led-paddle-dimmer_10002",
+        "title": "Graphite",
+        "sku": "LEG-ADPD453LG2",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-450w-cfl-led-paddle-dimmer_10000",
+        "title": "White",
+        "sku": "LEG-ADPD453LW2",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-4-port-frame",
+    "productTitle": "adorne® 4-Port Frame",
+    "productOption": {
+      "id": "opt_adorne-4-port-frame_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-4-port-frame_10274",
+        "title": "Magnesium",
+        "sku": "LEG-AC4PFM1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-4-port-frame_10273",
+        "title": "White",
+        "sku": "LEG-AC4PFW1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-700w-softap-tru-universal-dimmer",
+    "productTitle": "adorne® 700W sofTap™ Tru-Universal Dimmer",
+    "productOption": {
+      "id": "opt_adorne-700w-softap-tru-universal-dimmer_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-700w-softap-tru-universal-dimmer_10027",
+        "title": "Magnesium",
+        "sku": "LEG-ADTP703TUM4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-700w-softap-tru-universal-dimmer_10028",
+        "title": "Graphite",
+        "sku": "LEG-ADTP703TUG4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-700w-softap-tru-universal-dimmer_10026",
+        "title": "White",
+        "sku": "LEG-ADTP703TUW4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-blank-half-size",
+    "productTitle": "adorne® Blank - Half-Size",
+    "productOption": {
+      "id": "opt_adorne-blank-half-size_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-blank-half-size_10198",
+        "title": "Magnesium",
+        "sku": "LEG-AABK1M4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-blank-half-size_10199",
+        "title": "Graphite",
+        "sku": "LEG-AABK1G4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-blank-half-size_10197",
+        "title": "White",
+        "sku": "LEG-AABK1W4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-blank-keystone-insert",
+    "productTitle": "adorne® Blank Keystone Insert",
+    "productOption": {
+      "id": "opt_adorne-blank-keystone-insert_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-blank-keystone-insert_10242",
+        "title": "Magnesium",
+        "sku": "LEG-ACBLKM4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-blank-keystone-insert_10241",
+        "title": "White",
+        "sku": "LEG-ACBLKW4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-cat-6-rj45-data-insert",
+    "productTitle": "adorne® Cat 6 RJ45 Data Insert",
+    "productOption": {
+      "id": "opt_adorne-cat-6-rj45-data-insert_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-cat-6-rj45-data-insert_10225",
+        "title": "White",
+        "sku": "LEG-AC6RJ45W1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-cat-6-rj45-data-insert_10231",
+        "title": "Graphite",
+        "sku": "LEG-AC6RJ45G1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-cat-6-rj45-data-insert_10226",
+        "title": "Magnesium",
+        "sku": "LEG-AC6RJ45M1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-dual-usb-outlet",
+    "productTitle": "adorne® Dual-USB Outlet",
+    "productOption": {
+      "id": "opt_adorne-dual-usb-outlet_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-dual-usb-outlet_10208",
+        "title": "Magnesium",
+        "sku": "LEG-ARTRUSB153M4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-dual-usb-outlet_10209",
+        "title": "Graphite",
+        "sku": "LEG-ARTRUSB153G4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-dual-usb-outlet_10207",
+        "title": "White",
+        "sku": "LEG-ARTRUSB153W4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-five-gang-screwless-wall-plate",
+    "productTitle": "adorne® Five-Gang Screwless Wall Plate",
+    "productOption": {
+      "id": "opt_adorne-five-gang-screwless-wall-plate_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-five-gang-screwless-wall-plate_10554",
+        "title": "White on White",
+        "sku": "LEG-AWP5GWHW1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-five-gang-screwless-wall-plate_10553",
+        "title": "Bronze",
+        "sku": "LEG-AWP5GBR1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-five-gang-screwless-wall-plate_10552",
+        "title": "Titanium",
+        "sku": "LEG-AWP5GTM1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-five-gang-screwless-wall-plate_10551",
+        "title": "Graphite",
+        "sku": "LEG-AWP5GGR1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-five-gang-screwless-wall-plate_10550",
+        "title": "Magnesium",
+        "sku": "LEG-AWP5GMG1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-five-gang-screwless-wall-plate_10549",
+        "title": "Gloss White",
+        "sku": "LEG-AWP5GWH1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-four-gang-screwless-wall-plate",
+    "productTitle": "adorne® Four-Gang Screwless Wall Plate",
+    "productOption": {
+      "id": "opt_adorne-four-gang-screwless-wall-plate_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-four-gang-screwless-wall-plate_10544",
+        "title": "White on White",
+        "sku": "LEG-AWP4GWHW4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-four-gang-screwless-wall-plate_10543",
+        "title": "Brushed Stainless Steel",
+        "sku": "LEG-AWM4GMS4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-four-gang-screwless-wall-plate_10542",
+        "title": "Bronze",
+        "sku": "LEG-AWP4GBR4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-four-gang-screwless-wall-plate_10541",
+        "title": "Titanium",
+        "sku": "LEG-AWP4GTM4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-four-gang-screwless-wall-plate_10540",
+        "title": "Mirror White",
+        "sku": "LEG-AWM4GMW4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-four-gang-screwless-wall-plate_10539",
+        "title": "Graphite",
+        "sku": "LEG-AWP4GGR4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-four-gang-screwless-wall-plate_10538",
+        "title": "Magnesium",
+        "sku": "LEG-AWP4GMG4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-four-gang-screwless-wall-plate_10537",
+        "title": "Gloss White",
+        "sku": "LEG-AWP4GWH4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-in-wall-cable-access-port",
+    "productTitle": "adorne® In-Wall Cable Access Port",
+    "productOption": {
+      "id": "opt_adorne-in-wall-cable-access-port_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-in-wall-cable-access-port_10249",
+        "title": "Magnesium",
+        "sku": "LEG-ACBRSTPM1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-in-wall-cable-access-port_10248",
+        "title": "White",
+        "sku": "LEG-ACBRSTPW1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-netatmo-gateway",
+    "productTitle": "adorne® Netatmo Smart Gateway",
+    "productOption": {
+      "id": "opt_adorne-netatmo-gateway_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-netatmo-gateway_13695",
+        "title": "Graphite",
+        "sku": "LEG-WNAH1G1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-netatmo-gateway_13696",
+        "title": "Magnesium",
+        "sku": "LEG-WNAH1M1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-netatmo-gateway_13697",
+        "title": "White",
+        "sku": "LEG-WNAH1W1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-one-gang-plus-screwless-wall-plate",
+    "productTitle": "adorne® One-Gang-Plus Screwless Wall Plate",
+    "productOption": {
+      "id": "opt_adorne-one-gang-plus-screwless-wall-plate_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-one-gang-plus-screwless-wall-plate_10435",
+        "title": "Mirror White",
+        "sku": "LEG-AWM1G3MW4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-one-gang-plus-screwless-wall-plate_10527",
+        "title": "White on White",
+        "sku": "LEG-AWP1G3WHW4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-one-gang-plus-screwless-wall-plate_10438",
+        "title": "Brushed Stainless Steel",
+        "sku": "LEG-AWM1G3MS4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-one-gang-plus-screwless-wall-plate_10437",
+        "title": "Bronze",
+        "sku": "LEG-AWP1G3BR4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-one-gang-plus-screwless-wall-plate_10436",
+        "title": "Titanium",
+        "sku": "LEG-AWP1G3TM4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-one-gang-plus-screwless-wall-plate_10434",
+        "title": "Graphite",
+        "sku": "LEG-AWP1G3GR4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-one-gang-plus-screwless-wall-plate_10433",
+        "title": "Magnesium",
+        "sku": "LEG-AWP1G3MG4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-one-gang-plus-screwless-wall-plate_10432",
+        "title": "Gloss White",
+        "sku": "LEG-AWP1G3WH4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-one-gang-screwless-wall-plate",
+    "productTitle": "adorne® One-Gang Screwless Wall Plate",
+    "productOption": {
+      "id": "opt_adorne-one-gang-screwless-wall-plate_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-one-gang-screwless-wall-plate_10346",
+        "title": "Gloss White",
+        "sku": "LEG-AWP1G2WH6",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-one-gang-screwless-wall-plate_10510",
+        "title": "White on White",
+        "sku": "LEG-AWP1G2WHW10",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-one-gang-screwless-wall-plate_10325",
+        "title": "Titanium",
+        "sku": "LEG-AWP1G2TM6",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-one-gang-screwless-wall-plate_10326",
+        "title": "Bronze",
+        "sku": "LEG-AWP1G2BR6",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-one-gang-screwless-wall-plate_10343",
+        "title": "Mirror White",
+        "sku": "LEG-AWM1G2MW4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-one-gang-screwless-wall-plate_10327",
+        "title": "Brushed Stainless Steel",
+        "sku": "LEG-AWM1G2MS4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-one-gang-screwless-wall-plate_10345",
+        "title": "Magnesium",
+        "sku": "LEG-AWP1G2MG6",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-one-gang-screwless-wall-plate_10344",
+        "title": "Graphite",
+        "sku": "LEG-AWP1G2GR6",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-paddle-switch-half-size",
+    "productTitle": "adorne® Paddle™ Switch - Half-Size",
+    "productOption": {
+      "id": "opt_adorne-paddle-switch-half-size_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-paddle-switch-half-size_9952",
+        "title": "White",
+        "sku": "LEG-ASPD1531W4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-paddle-switch-half-size_9947",
+        "title": "Graphite",
+        "sku": "LEG-ASPD1531G4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-paddle-switch-half-size_9951",
+        "title": "Magnesium",
+        "sku": "LEG-ASPD1531M4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-rj25-phone-jack",
+    "productTitle": "adorne® RJ25 Phone Jack",
+    "productOption": {
+      "id": "opt_adorne-rj25-phone-jack_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-rj25-phone-jack_10219",
+        "title": "Magnesium",
+        "sku": "LEG-ACRJ25M1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-rj25-phone-jack_10218",
+        "title": "White",
+        "sku": "LEG-ACRJ25W1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-six-gang-screwless-wall-plate",
+    "productTitle": "adorne® Six-Gang Screwless Wall Plate",
+    "productOption": {
+      "id": "opt_adorne-six-gang-screwless-wall-plate_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-six-gang-screwless-wall-plate_10563",
+        "title": "Bronze",
+        "sku": "LEG-AWP6GBR1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-six-gang-screwless-wall-plate_10564",
+        "title": "White on White",
+        "sku": "LEG-AWP6GWHW1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-six-gang-screwless-wall-plate_10562",
+        "title": "Titanium",
+        "sku": "LEG-AWP6GTM1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-six-gang-screwless-wall-plate_10561",
+        "title": "Graphite",
+        "sku": "LEG-AWP6GGR1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-six-gang-screwless-wall-plate_10560",
+        "title": "Magnesium",
+        "sku": "LEG-AWP6GMG1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-six-gang-screwless-wall-plate_10559",
+        "title": "Gloss White",
+        "sku": "LEG-AWP6GWH1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-softap-netatmo-ready-master-switch",
+    "productTitle": "sofTap™ Master Switch, Wireless Control with Netatmo",
+    "productOption": {
+      "id": "opt_adorne-softap-netatmo-ready-master-switch_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-softap-netatmo-ready-master-switch_10646",
+        "title": "Graphite",
+        "sku": "LEG-WNAL10G1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-softap-netatmo-ready-master-switch_10645",
+        "title": "Magnesium",
+        "sku": "LEG-WNAL10M1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-softap-netatmo-ready-master-switch_10644",
+        "title": "White",
+        "sku": "LEG-WNAL10W1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-softap-netatmo-ready-master-tru-universal-dimmer",
+    "productTitle": "sofTap™ Master Dimmer, Wireless Control with Netatmo",
+    "productOption": {
+      "id": "opt_adorne-softap-netatmo-ready-master-tru-universal-dimmer_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-softap-netatmo-ready-master-tru-universal-dimmer_10686",
+        "title": "Magnesium",
+        "sku": "LEG-WNAL50M1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-softap-netatmo-ready-master-tru-universal-dimmer_10685",
+        "title": "White",
+        "sku": "LEG-WNAL50W1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-softap-netatmo-ready-master-tru-universal-dimmer_10687",
+        "title": "Graphite",
+        "sku": "LEG-WNAL50G1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-softap-netatmo-ready-remote-switch",
+    "productTitle": "sofTap™ Switch, Wireless Control with Netatmo, Battery Powered",
+    "productOption": {
+      "id": "opt_adorne-softap-netatmo-ready-remote-switch_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-softap-netatmo-ready-remote-switch_10652",
+        "title": "White",
+        "sku": "LEG-WNAL23W1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-softap-netatmo-ready-remote-switch_10654",
+        "title": "Graphite",
+        "sku": "LEG-WNAL23G1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-softap-netatmo-ready-remote-switch_10653",
+        "title": "Magnesium",
+        "sku": "LEG-WNAL23M1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-softap-netatmo-ready-wireless-dimmer",
+    "productTitle": "sofTap™ Dimmer, Wireless Control with Netatmo, Battery Powered",
+    "productOption": {
+      "id": "opt_adorne-softap-netatmo-ready-wireless-dimmer_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-softap-netatmo-ready-wireless-dimmer_10698",
+        "title": "Graphite",
+        "sku": "LEG-WNAL63G1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-softap-netatmo-ready-wireless-dimmer_10696",
+        "title": "White",
+        "sku": "LEG-WNAL63W1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-softap-netatmo-ready-wireless-dimmer_10697",
+        "title": "Magnesium",
+        "sku": "LEG-WNAL63M1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-softap-switch",
+    "productTitle": "adorne® sofTap™ Switch",
+    "productOption": {
+      "id": "opt_adorne-softap-switch_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-softap-switch_9983",
+        "title": "White",
+        "sku": "LEG-ASTP1532W4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-softap-switch_9984",
+        "title": "Magnesium",
+        "sku": "LEG-ASTP1532M4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-softap-switch_9985",
+        "title": "Graphite",
+        "sku": "LEG-ASTP1532G4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-three-gang-screwless-wall-plate",
+    "productTitle": "adorne® Three-Gang Screwless Wall Plate",
+    "productOption": {
+      "id": "opt_adorne-three-gang-screwless-wall-plate_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-three-gang-screwless-wall-plate_10465",
+        "title": "Magnesium",
+        "sku": "LEG-AWP3GMG4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-three-gang-screwless-wall-plate_10533",
+        "title": "White on White",
+        "sku": "LEG-AWP3GWHW4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-three-gang-screwless-wall-plate_10470",
+        "title": "Brushed Stainless Steel",
+        "sku": "LEG-AWM3GMS4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-three-gang-screwless-wall-plate_10469",
+        "title": "Bronze",
+        "sku": "LEG-AWP3GBR4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-three-gang-screwless-wall-plate_10468",
+        "title": "Titanium",
+        "sku": "LEG-AWP3GTM4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-three-gang-screwless-wall-plate_10467",
+        "title": "Mirror White",
+        "sku": "LEG-AWM3GMW4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-three-gang-screwless-wall-plate_10466",
+        "title": "Graphite",
+        "sku": "LEG-AWP3GGR4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-three-gang-screwless-wall-plate_10464",
+        "title": "Gloss White",
+        "sku": "LEG-AWP3GWH4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-touch-switch",
+    "productTitle": "adorne® Touch™ Switch",
+    "productOption": {
+      "id": "opt_adorne-touch-switch_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-touch-switch_9991",
+        "title": "White",
+        "sku": "LEG-ASTH1532W2",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-touch-switch_9993",
+        "title": "Graphite",
+        "sku": "LEG-ASTH1532G2",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-touch-switch_9992",
+        "title": "Magnesium",
+        "sku": "LEG-ASTH1532M2",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-touch-tru-universal-dimmer",
+    "productTitle": "adorne® Touch Tru-Universal Dimmer",
+    "productOption": {
+      "id": "opt_adorne-touch-tru-universal-dimmer_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-touch-tru-universal-dimmer_10039",
+        "title": "White",
+        "sku": "LEG-ADTH703TUW4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-touch-tru-universal-dimmer_10041",
+        "title": "Graphite",
+        "sku": "LEG-ADTH703TUG4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-touch-tru-universal-dimmer_10040",
+        "title": "Magnesium",
+        "sku": "LEG-ADTH703TUM4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-two-gang-screwless-wall-plate",
+    "productTitle": "adorne® Two-Gang Screwless Wall Plate",
+    "productOption": {
+      "id": "opt_adorne-two-gang-screwless-wall-plate_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-two-gang-screwless-wall-plate_10446",
+        "title": "Titanium",
+        "sku": "LEG-AWP2GTM4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-two-gang-screwless-wall-plate_10447",
+        "title": "Bronze",
+        "sku": "LEG-AWP2GBR4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-two-gang-screwless-wall-plate_10443",
+        "title": "Magnesium",
+        "sku": "LEG-AWP2GMG4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-two-gang-screwless-wall-plate_10444",
+        "title": "Graphite",
+        "sku": "LEG-AWP2GGR4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-two-gang-screwless-wall-plate_10445",
+        "title": "Mirror White",
+        "sku": "LEG-AWM2GMW4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-two-gang-screwless-wall-plate_10448",
+        "title": "Brushed Stainless Steel",
+        "sku": "LEG-AWM2GMS4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-two-gang-screwless-wall-plate_10532",
+        "title": "White on White",
+        "sku": "LEG-AWP2GWHW10",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-two-gang-screwless-wall-plate_10442",
+        "title": "Gloss White",
+        "sku": "LEG-AWP2GWH4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-usb-outlet-half-size",
+    "productTitle": "adorne® USB Outlet - Half-Size",
+    "productOption": {
+      "id": "opt_adorne-usb-outlet-half-size_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-usb-outlet-half-size_10186",
+        "title": "White",
+        "sku": "LEG-ARUSBW4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-usb-outlet-half-size_10187",
+        "title": "Magnesium",
+        "sku": "LEG-ARUSBM4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-usb-outlet-half-size_10188",
+        "title": "Graphite",
+        "sku": "LEG-ARUSBG4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-video-f-connector",
+    "productTitle": "adorne® Video F-Connector",
+    "productOption": {
+      "id": "opt_adorne-video-f-connector_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-video-f-connector_10234",
+        "title": "Magnesium",
+        "sku": "LEG-ACNRFCM1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-video-f-connector_10233",
+        "title": "White",
+        "sku": "LEG-ACNRFCW1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-video-f-connector_10235",
+        "title": "Graphite",
+        "sku": "LEG-ACNRFCG1",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_adorne-whisper-switch",
+    "productTitle": "adorne® Whisper™ Switch",
+    "productOption": {
+      "id": "opt_adorne-whisper-switch_Color",
+      "title": "Color"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_adorne-whisper-switch_9974",
+        "title": "White",
+        "sku": "LEG-ASWR1532W4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-whisper-switch_9975",
+        "title": "Magnesium",
+        "sku": "LEG-ASWR1532M4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_adorne-whisper-switch_9976",
+        "title": "Graphite",
+        "sku": "LEG-ASWR1532G4",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_fld2-led-bullet-light-with-knuckle-base-15w-100-277v-v2",
+    "productTitle": "FLD2 LED Bullet Light with Knuckle Base, 15W, 100-277V, NEW",
+    "productOption": {
+      "id": "opt_fld2-led-bullet-light-with-knuckle-base-15w-100-277v-v2_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_fld2-led-bullet-light-with-knuckle-base-15w-100-277v-v2_12443",
+        "title": "3000K",
+        "sku": "WE-FLD2-15W30KKN",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_fld2-led-bullet-light-with-knuckle-base-15w-100-277v-v2_12444",
+        "title": "5000K",
+        "sku": "WE-FLD2-15W50KKN",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed",
+    "productTitle": "FLD2 LED Bullet Light with Knuckle Base, 15W, 100-277V",
+    "productOption": {
+      "id": "opt_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed_8332",
+        "title": "3000K",
+        "sku": "WE-FLD2-15WW-KN",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed_8333",
+        "title": "5000K",
+        "sku": "WE-FLD2-15CW-KN",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed-2",
+    "productTitle": "FLD2 LED Bullet Light with Knuckle Base, 28W, 120-277V",
+    "productOption": {
+      "id": "opt_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed-2_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed-2_8336",
+        "title": "5000K",
+        "sku": "WE-FLD2-28-CW-KN",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed-2_8335",
+        "title": "3000K",
+        "sku": "WE-FLD2-28-WW-KN",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_fls-led-bullet-light-with-knuckle-base-10w-etl-listed",
+    "productTitle": "FLS LED Bullet Light with Knuckle Base, 10W, 120V",
+    "productOption": {
+      "id": "opt_fls-led-bullet-light-with-knuckle-base-10w-etl-listed_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_fls-led-bullet-light-with-knuckle-base-10w-etl-listed_8338",
+        "title": "3000K",
+        "sku": "WE-FLS-10W30K-BR",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_fls-led-bullet-light-with-knuckle-base-10w-etl-listed_8339",
+        "title": "5000K",
+        "sku": "WE-FLS-10W50K-BR",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_flv12-led-bullet-light-with-skype-12w-ul-listed-12v",
+    "productTitle": "FLV12 LED Bullet Light with Skype, 12W, 12V",
+    "productOption": {
+      "id": "opt_flv12-led-bullet-light-with-skype-12w-ul-listed-12v_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_flv12-led-bullet-light-with-skype-12w-ul-listed-12v_8341",
+        "title": "3000K",
+        "sku": "WE-FLV12-12W-30K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_flv12-led-bullet-light-with-skype-12w-ul-listed-12v_8342",
+        "title": "5000K",
+        "sku": "WE-FLV12-12W-50K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_flv12-led-flood-light-with-skype-12w-12v",
+    "productTitle": "FLV12 LED Flood Light with Skype, 12W, 12V",
+    "productOption": {
+      "id": "opt_flv12-led-flood-light-with-skype-12w-12v_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_flv12-led-flood-light-with-skype-12w-12v_12465",
+        "title": "5000K",
+        "sku": "WE-LF4-12V12W50K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_flv12-led-flood-light-with-skype-12w-12v_12464",
+        "title": "3000K",
+        "sku": "WE-LF4-12V12W30K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_led-a19-bulb-270-dimmable-10w-ul-listed",
+    "productTitle": "LED A19 Bulb 105°, Dimmable 9W UL Listed",
+    "productOption": {
+      "id": "opt_led-a19-bulb-270-dimmable-10w-ul-listed_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_led-a19-bulb-270-dimmable-10w-ul-listed_8307",
+        "title": "3000K",
+        "sku": "SUN-88390",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-a19-bulb-270-dimmable-10w-ul-listed_8309",
+        "title": "6500K",
+        "sku": "SUN-80594",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-a19-bulb-270-dimmable-10w-ul-listed_8308",
+        "title": "5000K",
+        "sku": "SUN-80693",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_led-a19-bulb-270-dimmable-15w-ul-listed",
+    "productTitle": "LED A21 Bulb 105°, Dimmable 14W UL Listed",
+    "productOption": {
+      "id": "opt_led-a19-bulb-270-dimmable-15w-ul-listed_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_led-a19-bulb-270-dimmable-15w-ul-listed_8311",
+        "title": "3000K",
+        "sku": "SUN-80803",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-a19-bulb-270-dimmable-15w-ul-listed_8312",
+        "title": "5000K",
+        "sku": "SUN-80725",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-a19-bulb-270-dimmable-15w-ul-listed_8313",
+        "title": "6500K",
+        "sku": "SUN-80599",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_led-cob-mr16-with-gu5-3-base-7w",
+    "productTitle": "LED COB MR16 with GU5.3 base, 7W",
+    "productOption": {
+      "id": "opt_led-cob-mr16-with-gu5-3-base-7w_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_led-cob-mr16-with-gu5-3-base-7w_8319",
+        "title": "3000K",
+        "sku": "SUN-81119",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-cob-mr16-with-gu5-3-base-7w_19281",
+        "title": "5000K",
+        "sku": "SUN-81121",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-cob-mr16-with-gu5-3-base-7w_11544",
+        "title": "4000K",
+        "sku": "SUN-81120",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-cob-mr16-with-gu5-3-base-7w_8320",
+        "title": "5000K",
+        "sku": "SUN- 81121",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_led-dimmable-g9-3-5w",
+    "productTitle": "LED Dimmable G9, 3.5W",
+    "productOption": {
+      "id": "opt_led-dimmable-g9-3-5w_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_led-dimmable-g9-3-5w_8174",
+        "title": "3000K",
+        "sku": "EBU-G9D3.5W30K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-dimmable-g9-3-5w_8175",
+        "title": "6000K",
+        "sku": "EBU-G9D3.5W60K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_led-filament-candle-bulb-with-flame-tip-3-5w",
+    "productTitle": "LED Filament Candle Bulb with Flame Tip, 3.5W",
+    "productOption": {
+      "id": "opt_led-filament-candle-bulb-with-flame-tip-3-5w_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_led-filament-candle-bulb-with-flame-tip-3-5w_8165",
+        "title": "3000K",
+        "sku": "EBU-CLFT3.5W30K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-filament-candle-bulb-with-flame-tip-3-5w_8166",
+        "title": "6000K",
+        "sku": "EBU-CLFT3.5W60K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_led-filament-candle-bulb-with-torpedo-shape-3-5w",
+    "productTitle": "LED Filament Candle Bulb with Torpedo Shape, 3.5W",
+    "productOption": {
+      "id": "opt_led-filament-candle-bulb-with-torpedo-shape-3-5w_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_led-filament-candle-bulb-with-torpedo-shape-3-5w_8168",
+        "title": "3000K",
+        "sku": "EBU-CLTO3.5W30K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-filament-candle-bulb-with-torpedo-shape-3-5w_8169",
+        "title": "6000K",
+        "sku": "EBU-CLTO3.5W60K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_led-g4-compatible-with-ac-dc-1-5w",
+    "productTitle": "LED G4 compatible with AC/DC, 1.5W",
+    "productOption": {
+      "id": "opt_led-g4-compatible-with-ac-dc-1-5w_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_led-g4-compatible-with-ac-dc-1-5w_10593",
+        "title": "3000K",
+        "sku": "EBU-G4ND1.5W30K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-g4-compatible-with-ac-dc-1-5w_10594",
+        "title": "6000K",
+        "sku": "EBU-G4ND1.5W60K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_led-inground-light-with-half-round-light-shape",
+    "productTitle": "LED Inground Light with Half Round Light Shape",
+    "productOption": {
+      "id": "opt_led-inground-light-with-half-round-light-shape_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_led-inground-light-with-half-round-light-shape_8158",
+        "title": "3000K",
+        "sku": "E01SLIL001",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-inground-light-with-half-round-light-shape_8159",
+        "title": "6000K",
+        "sku": "E01SLIL002",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_led-module-sheet-24vdc",
+    "productTitle": "LED Module Sheet, 24VDC",
+    "productOption": {
+      "id": "opt_led-module-sheet-24vdc_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_led-module-sheet-24vdc_8252",
+        "title": "6000K",
+        "sku": "EMSH4V160D15W60",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-module-sheet-24vdc_8251",
+        "title": "3000K",
+        "sku": "EMSH4V160D15W30",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_led-mr16-with-gu10-base-7w",
+    "productTitle": "LED MR16 with GU10 Base, 6.5W",
+    "productOption": {
+      "id": "opt_led-mr16-with-gu10-base-7w_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_led-mr16-with-gu10-base-7w_8316",
+        "title": "5000K",
+        "sku": "SUN-80532",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-mr16-with-gu10-base-7w_8315",
+        "title": "3000K",
+        "sku": "SUN-80531",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-mr16-with-gu10-base-7w_8317",
+        "title": "6500K",
+        "sku": "SUN-80533",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_led-par20-light-white-frame-6w-dimmable",
+    "productTitle": "LED Par20 Light White Frame, 7W Dimmable",
+    "productOption": {
+      "id": "opt_led-par20-light-white-frame-6w-dimmable_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_led-par20-light-white-frame-6w-dimmable_8322",
+        "title": "3000K",
+        "sku": "SUN-89204",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-par20-light-white-frame-6w-dimmable_11545",
+        "title": "4000K",
+        "sku": "SUN-89205",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-par20-light-white-frame-6w-dimmable_8323",
+        "title": "5000K",
+        "sku": "SUN-89206",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_led-par30-light-white-frame-10w-dimmable",
+    "productTitle": "LED Par30 Light White Frame, 10W Dimmable",
+    "productOption": {
+      "id": "opt_led-par30-light-white-frame-10w-dimmable_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_led-par30-light-white-frame-10w-dimmable_8325",
+        "title": "3000K",
+        "sku": "SUN-80895",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-par30-light-white-frame-10w-dimmable_11546",
+        "title": "4000K",
+        "sku": "SUN-80896",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-par30-light-white-frame-10w-dimmable_8326",
+        "title": "5000K",
+        "sku": "SUN- 80897",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-par30-light-white-frame-10w-dimmable_19267",
+        "title": "5000K",
+        "sku": "SUN-80897",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_led-par38-light-white-frame-18w-dimmable",
+    "productTitle": "LED Par38 Light White Frame, 18W Dimmable",
+    "productOption": {
+      "id": "opt_led-par38-light-white-frame-18w-dimmable_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_led-par38-light-white-frame-18w-dimmable_8329",
+        "title": "5000K",
+        "sku": "SUN-88396",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-par38-light-white-frame-18w-dimmable_11547",
+        "title": "4000K",
+        "sku": "SUN-88397",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-par38-light-white-frame-18w-dimmable_8328",
+        "title": "3000K",
+        "sku": "SUN-88395",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-par38-light-white-frame-18w-dimmable_8330",
+        "title": "6500K",
+        "sku": "SUN-88398",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_led-round-inground-light-stainless-steel",
+    "productTitle": "LED Round Inground Light Stainless Steel",
+    "productOption": {
+      "id": "opt_led-round-inground-light-stainless-steel_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_led-round-inground-light-stainless-steel_8162",
+        "title": "6000K",
+        "sku": "E01SLIL004",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-round-inground-light-stainless-steel_8161",
+        "title": "3000K",
+        "sku": "E01SLIL003",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_led-strips-narrow-2400led-4mm",
+    "productTitle": "UL SMD2216 LED Strip 1200 Single Color Chips, Narrow (4mm/0.16\")",
+    "productOption": {
+      "id": "opt_led-strips-narrow-2400led-4mm_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_led-strips-narrow-2400led-4mm_14988",
+        "title": "3000K",
+        "sku": "ESPS9R4N50W0430",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-strips-narrow-2400led-4mm_14989",
+        "title": "6000K",
+        "sku": "ESPS9R4N50W0460",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_led-strips-narrow-2400led-4mm_14990",
+        "title": "4000K",
+        "sku": "ESPS9R4N50W0440",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_lf-led-bullet-light-with-spike-6w-12v-etl-listed",
+    "productTitle": "LF LED Bullet Light with Spike, 6W, 12V",
+    "productOption": {
+      "id": "opt_lf-led-bullet-light-with-spike-6w-12v-etl-listed_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_lf-led-bullet-light-with-spike-6w-12v-etl-listed_8345",
+        "title": "5000K",
+        "sku": "WE-LF12-6W50K-KN",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_lf-led-bullet-light-with-spike-6w-12v-etl-listed_8344",
+        "title": "3000K",
+        "sku": "WE-LF12-6W30K-KN",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_lfx-led-floodlight-with-knuckle-base-15w-20w-30w-50w-ul-listed",
+    "productTitle": "LFX LED Floodlight with Knuckle base, 15W/20W/30W/50W, 120-277V",
+    "productOption": {
+      "id": "opt_lfx-led-floodlight-with-knuckle-base-15w-20w-30w-50w-ul-listed_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_lfx-led-floodlight-with-knuckle-base-15w-20w-30w-50w-ul-listed_11549",
+        "title": "3000K",
+        "sku": "WE-LFXMD50W3K-KN",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_lfx-led-floodlight-with-knuckle-base-15w-20w-30w-50w-ul-listed_11550",
+        "title": "5000K",
+        "sku": "WE-LFXMD50W5K-KN",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_lfx-led-floodlight-with-knuckle-base-15w-ul-listed",
+    "productTitle": "LFX LED Floodlight with Knuckle Base, 15W, 120-277V",
+    "productOption": {
+      "id": "opt_lfx-led-floodlight-with-knuckle-base-15w-ul-listed_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_lfx-led-floodlight-with-knuckle-base-15w-ul-listed_8347",
+        "title": "3000K",
+        "sku": "WE-LFXXS15W3K-KN",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_lfx-led-floodlight-with-knuckle-base-15w-ul-listed_8348",
+        "title": "5000K",
+        "sku": "WE-LFXXS15W5K-KN",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_lfx-led-floodlight-with-trunnion-base-50w-ul-listed",
+    "productTitle": "LFX LED Floodlight with Trunnion Base, 15W/20W/30W/50W, 120-277V",
+    "productOption": {
+      "id": "opt_lfx-led-floodlight-with-trunnion-base-50w-ul-listed_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_lfx-led-floodlight-with-trunnion-base-50w-ul-listed_11551",
+        "title": "5000K",
+        "sku": "WE-LFXMD50W5K-TR",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_lfx-led-floodlight-with-trunnion-base-50w-ul-listed_11552",
+        "title": "3000K",
+        "sku": "WE-LFXMD50W3K-TR",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_ul-cob-led-strip-single-bright-output-high-density-2400-leds",
+    "productTitle": "UL COB LED Strip Single Color, Bright Output, High Density 2400 LEDs",
+    "productOption": {
+      "id": "opt_ul-cob-led-strip-single-bright-output-high-density-2400-leds_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_ul-cob-led-strip-single-bright-output-high-density-2400-leds_14797",
+        "title": "6000K",
+        "sku": "SUP-C2R4N50W0860",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_ul-cob-led-strip-single-bright-output-high-density-2400-leds_14795",
+        "title": "4000K",
+        "sku": "SUP-2R4N95W1040",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_ul-cob-led-strip-single-bright-output-high-density-2400-leds_14794",
+        "title": "3000K",
+        "sku": "SUP-2R4N95W1030",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_ul-freecut-cob-led-strip-single-color-bright-output",
+    "productTitle": "UL FREECUT COB LED Strip Single Color, Bright Output",
+    "productOption": {
+      "id": "opt_01KFRNPMFJC2EZSZ83DFYSJPA5",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_01KFRNPMS8571FDJZRZ3RRMYYK",
+        "title": "4000K",
+        "sku": "ESPFC4R4N50W0840",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_01KFRNPMS8H6Q824NX5RDHNEZA",
+        "title": "6000K",
+        "sku": "ESPFC4R4N50W0860",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_01KFRNPMS8K91A2HQ49W5JRB88",
+        "title": "3000K",
+        "sku": "ESPFC4R4N50W0830test11",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  },
+  {
+    "productId": "prod_ul-smd2835-led-strip-300-side-bendable-single-color-chips-bright-output",
+    "productTitle": "UL SMD2835 LED Strip 300 Side Bendable Single Color Chips, Bright Output",
+    "productOption": {
+      "id": "opt_ul-smd2835-led-strip-300-side-bendable-single-color-chips-bright-output_Color_Options",
+      "title": "Color Options"
+    },
+    "attributeMatch": {
+      "found": true,
+      "attributeId": "01KFK5MVBRXBWWXJERRNXGQX88",
+      "attributeHandle": "test-material"
+    },
+    "variants": [
+      {
+        "id": "variant_ul-smd2835-led-strip-300-side-bendable-single-color-chips-bright-output_8270",
+        "title": "6000K",
+        "sku": "ESP2V2-S20-0660K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      },
+      {
+        "id": "variant_ul-smd2835-led-strip-300-side-bendable-single-color-chips-bright-output_8269",
+        "title": "3000K",
+        "sku": "ESP2V2-S20-0630K",
+        "valueMatch": {
+          "found": true,
+          "valueId": "01KFMBJ87812TNXJS5R1MHG8X2",
+          "exactMatch": false
+        }
+      }
+    ],
+    "canAutoLink": true,
+    "needsManualReview": false
+  }
+]
