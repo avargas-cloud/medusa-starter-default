@@ -31,11 +31,14 @@
     "@medusajs/cli": "2.12.5",
     "@medusajs/file-s3": "2.12.5",
     "@medusajs/framework": "2.12.5",
+    "@medusajs/icons": "^2.13.0",
     "@medusajs/js-sdk": "^2.13.0",
     "@medusajs/medusa": "2.12.5",
+    "@medusajs/ui": "^4.1.0",
     "@types/pg": "^8.16.0",
     "@woocommerce/woocommerce-rest-api": "^1.0.2",
     "dotenv": "^17.2.3",
+    "multer": "^2.0.2",
     "typeorm": "^0.3.16"
   },
   "devDependencies": {
@@ -43,6 +46,7 @@
     "@swc/core": "^1.7.28",
     "@swc/jest": "^0.2.36",
     "@types/jest": "^29.5.13",
+    "@types/multer": "^2.0.0",
     "@types/node": "^20.12.11",
     "@types/react": "^18.3.2",
     "@types/react-dom": "^18.2.25",

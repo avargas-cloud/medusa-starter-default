@@ -7,6 +7,8 @@ export const GET = async (
 ) => {
     try {
         const prefix = (req.query.prefix as string) || ""
+        const continuationToken = (req.query.continuationToken as string) || undefined
+        const searchQuery = (req.query.search as string) || ""
 
         // Create S3 client directly using environment variables
         const s3Client = new S3Client({
@@ -21,12 +23,62 @@ export const GET = async (
 
         const bucket = process.env.MINIO_BUCKET || "medusa-media"
 
-        // List objects from S3/MinIO with delimiter to get folders
+        // If searching, fetch all items (no pagination) and filter
+        if (searchQuery) {
+            const allFiles: any[] = []
+            let nextToken: string | undefined = undefined
+            
+            // Fetch all pages
+            do {
+                const command = new ListObjectsV2Command({
+                    Bucket: bucket,
+                    Prefix: prefix,
+                    Delimiter: "/",
+                    MaxKeys: 1000,
+                    ContinuationToken: nextToken,
+                })
+                
+                const response = await s3Client.send(command)
+                
+                // Add files
+                if (response.Contents) {
+                    allFiles.push(...response.Contents.filter(item => item.Key !== prefix))
+                }
+                
+                nextToken = response.NextContinuationToken
+            } while (nextToken)
+            
+            // Filter by search query
+            const searchLower = searchQuery.toLowerCase()
+            const filteredFiles = allFiles
+                .filter(item => item.Key?.toLowerCase().includes(searchLower))
+                .map((item) => ({
+                    id: item.Key,
+                    url: `${process.env.MINIO_ENDPOINT}/${bucket}/${item.Key}`,
+                    name: item.Key?.replace(prefix, "") || "",
+                    key: item.Key,
+                    size: item.Size,
+                    type: "file" as const,
+                    last_modified: item.LastModified,
+                }))
+            
+            return res.json({
+                folders: [],
+                files: filteredFiles,
+                prefix,
+                count: filteredFiles.length,
+                isTruncated: false,
+                nextContinuationToken: null,
+            })
+        }
+
+        // Normal pagination (no search)
         const command = new ListObjectsV2Command({
             Bucket: bucket,
             Prefix: prefix,
-            Delimiter: "/", // This makes S3 return CommonPrefixes (folders)
+            Delimiter: "/",
             MaxKeys: 100,
+            ContinuationToken: continuationToken,
         })
 
         const response = await s3Client.send(command)
@@ -56,7 +108,9 @@ export const GET = async (
             folders,
             files,
             prefix,
-            count: folders.length + files.length
+            count: folders.length + files.length,
+            isTruncated: response.IsTruncated || false,
+            nextContinuationToken: response.NextContinuationToken || null,
         })
     } catch (error) {
         console.error("Media library error:", error)
@@ -65,7 +119,9 @@ export const GET = async (
             error: error.message,
             folders: [],
             files: [],
-            count: 0
+            count: 0,
+            isTruncated: false,
+            nextContinuationToken: null,
         })
     }
 }
