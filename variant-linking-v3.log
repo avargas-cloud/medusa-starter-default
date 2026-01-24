@@ -1,0 +1,882 @@
+[32minfo[39m:    Executing script at ./src/scripts/link-orphaned-variants-v3.ts...
+[32minfo[39m:    No link to load from /home/alejo/medusa-starter-default/node_modules/@medusajs/draft-order/.medusa/server/src/links. skipped.
+[32minfo[39m:    Connection to Redis in module 'event-bus-redis' established
+[32minfo[39m:    Connection to Redis in module 'cache-redis' established
+[32minfo[39m:    Connection to Redis in "locking-redis" provider established
+[32minfo[39m:    [Workflow-engine-redis] Connection to Redis in module 'workflow-engine-redis' established
+[32minfo[39m:    [Workflow-engine-redis] Connection to Redis PubSub in module 'workflow-engine-redis' established
+[32minfo[39m:    No workflow to load from /home/alejo/medusa-starter-default/node_modules/@medusajs/draft-order/.medusa/server/src/workflows. skipped.
+[32minfo[39m:    No subscriber to load from /home/alejo/medusa-starter-default/node_modules/@medusajs/draft-order/.medusa/server/src/subscribers. skipped.
+🔗 Linking Orphaned Variants (V3 - 3-Phase Approach)...
+
+📚 Loaded 125 Attribute Keys
+
+📦 Processing 80 Multi-Variant Products
+
+
+======================================================================
+📦 Processing: 2 1/2" LED Under Cabinet Light - Silver Frame, 3W
+   ID: prod_2-1-2-led-under-cabinet-light-silver-frame-3w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: 2 1/2" LED Under Cabinet Light - White Frame, 3W
+   ID: prod_2-1-2-led-under-cabinet-light-white-frame-3w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: 2 3/4" LED Under Cabinet Square Light Silver Frame, 3W
+   ID: prod_2-3-4-led-under-cabinet-square-light-silver-frame-3w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: 3 1/2" LED Dimmable Down Light - Silver Frame, 7W
+   ID: prod_3-1-2-led-dimmable-down-light-silver-frame-7w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: 3 1/2" LED Dimmable Down Light - White Frame, 7W
+   ID: prod_3-1-2-led-dimmable-down-light-white-frame-7w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: 4 ft Hybrid LED Tube, 18W
+   ID: prod_4-ft-hybrid-led-tube-18w-etl-listed
+
+   🎛️  Option: "Lighting Cover"
+      ✅ Matched to Attribute: "Lighting Cover"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: 65FT UL SMD2835 LED Strip 2400 Single Color Chips, Bright Output
+   ID: prod_65ft-ul-smd2835-led-strip-2400-single-color-chips-bright-output
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: 8 ft LED Tube FA8 Base, 36W
+   ID: prod_8-ft-led-tube-fa8-base-36w
+
+   🎛️  Option: "Lighting Cover"
+      ✅ Matched to Attribute: "Lighting Cover"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: adorne® 0-10V Paddle™ Dimmer
+   ID: prod_adorne-0-10v-paddle-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: adorne® 0-10V sofTap™ Dimmer
+   ID: prod_adorne-0-10v-softap-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: adorne® 0-10V Touch™ Dimmer
+   ID: prod_adorne-0-10v-touch-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: adorne® 15A One-Gang Pop-Out™ Outlet
+   ID: prod_adorne-15a-one-gang-pop-out-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: adorne® 15A Outlet
+   ID: prod_adorne-15a-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: adorne® 15A Outlet - Plus-Size
+   ID: prod_adorne-15a-outlet-plus-size
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Graphite
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® 15A Paddle™ Switch
+   ID: prod_adorne-15a-paddle-switch
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: White
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® 15A Tamper-Resistant Self-Test GFCI Outlet
+   ID: prod_adorne-15a-tamper-resistant-self-test-gfci-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Graphite
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® 15A Tamper-Resistant Self-Test GFCI Outlet - Plus-Size
+   ID: prod_adorne-15a-tamper-resistant-self-test-gfci-outlet-plus-size
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: White
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® 15A Two-Gang Pop-Out™ Outlet
+   ID: prod_adorne-15a-two-gang-pop-out-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: White
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® 1-Port Frame
+   ID: prod_adorne-1-port-frame
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Graphite
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® 20A 4-Way Paddle™ Switch
+   ID: prod_adorne-20a-4-way-paddle-switch
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: White
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® 20A Outlet
+   ID: prod_adorne-20a-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Magnesium
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® 20A Tamper-Resistant Self-Test GFCI Outlet
+   ID: prod_adorne-20a-tamper-resistant-self-test-gfci-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: White
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® 2-Port Frame
+   ID: prod_adorne-2-port-frame
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: adorne® 450W CFL/LED Paddle™ Dimmer
+   ID: prod_adorne-450w-cfl-led-paddle-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: White
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® 4-Port Frame
+   ID: prod_adorne-4-port-frame
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: adorne® 700W sofTap™ Tru-Universal Dimmer
+   ID: prod_adorne-700w-softap-tru-universal-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: White
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® Blank - Half-Size
+   ID: prod_adorne-blank-half-size
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Graphite
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® Blank Keystone Insert
+   ID: prod_adorne-blank-keystone-insert
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: adorne® Cat 6 RJ45 Data Insert
+   ID: prod_adorne-cat-6-rj45-data-insert
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Graphite
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® Dual-USB Outlet
+   ID: prod_adorne-dual-usb-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Graphite
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® Five-Gang Screwless Wall Plate
+   ID: prod_adorne-five-gang-screwless-wall-plate
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 4 new option values: Graphite, Bronze, White on White, Titanium
+      ✅ Option values created
+
+      🔗 Linking 4 variants...
+      ✅ Linked 4 variants
+
+======================================================================
+📦 Processing: adorne® Four-Gang Screwless Wall Plate
+   ID: prod_adorne-four-gang-screwless-wall-plate
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 6 new option values: Magnesium, Bronze, Brushed Stainless Steel, Gloss White, Graphite, Mirror White
+      ✅ Option values created
+
+      🔗 Linking 6 variants...
+      ✅ Linked 6 variants
+
+======================================================================
+📦 Processing: adorne® In-Wall Cable Access Port
+   ID: prod_adorne-in-wall-cable-access-port
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: adorne® Netatmo Smart Gateway
+   ID: prod_adorne-netatmo-gateway
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: White
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® One-Gang-Plus Screwless Wall Plate
+   ID: prod_adorne-one-gang-plus-screwless-wall-plate
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 6 new option values: Bronze, White on White, Gloss White, Magnesium, Titanium, Graphite
+      ✅ Option values created
+
+      🔗 Linking 6 variants...
+      ✅ Linked 6 variants
+
+======================================================================
+📦 Processing: adorne® One-Gang Screwless Wall Plate
+   ID: prod_adorne-one-gang-screwless-wall-plate
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 6 new option values: Bronze, White on White, Mirror White, Graphite, Magnesium, Gloss White
+      ✅ Option values created
+
+      🔗 Linking 6 variants...
+      ✅ Linked 6 variants
+
+======================================================================
+📦 Processing: adorne® Paddle™ Switch - Half-Size
+   ID: prod_adorne-paddle-switch-half-size
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Magnesium
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® RJ25 Phone Jack
+   ID: prod_adorne-rj25-phone-jack
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: adorne® Six-Gang Screwless Wall Plate
+   ID: prod_adorne-six-gang-screwless-wall-plate
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 4 new option values: Bronze, Gloss White, Graphite, Titanium
+      ✅ Option values created
+
+      🔗 Linking 4 variants...
+      ✅ Linked 4 variants
+
+======================================================================
+📦 Processing: sofTap™ Master Switch, Wireless Control with Netatmo
+   ID: prod_adorne-softap-netatmo-ready-master-switch
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Magnesium
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: sofTap™ Master Dimmer, Wireless Control with Netatmo
+   ID: prod_adorne-softap-netatmo-ready-master-tru-universal-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Graphite
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: sofTap™ Switch, Wireless Control with Netatmo, Battery Powered
+   ID: prod_adorne-softap-netatmo-ready-remote-switch
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Graphite
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: sofTap™ Dimmer, Wireless Control with Netatmo, Battery Powered
+   ID: prod_adorne-softap-netatmo-ready-wireless-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Magnesium
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® sofTap™ Switch
+   ID: prod_adorne-softap-switch
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: White
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® Three-Gang Screwless Wall Plate
+   ID: prod_adorne-three-gang-screwless-wall-plate
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 6 new option values: Gloss White, White on White, Graphite, Titanium, Mirror White, Brushed Stainless Steel
+      ✅ Option values created
+
+      🔗 Linking 6 variants...
+      ✅ Linked 6 variants
+
+======================================================================
+📦 Processing: adorne® Touch™ Switch
+   ID: prod_adorne-touch-switch
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Graphite
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® Touch Tru-Universal Dimmer
+   ID: prod_adorne-touch-tru-universal-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Graphite
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® Two-Gang Screwless Wall Plate
+   ID: prod_adorne-two-gang-screwless-wall-plate
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 6 new option values: Gloss White, Mirror White, Magnesium, Graphite, Titanium, White on White
+      ✅ Option values created
+
+      🔗 Linking 6 variants...
+      ✅ Linked 6 variants
+
+======================================================================
+📦 Processing: adorne® USB Outlet - Half-Size
+   ID: prod_adorne-usb-outlet-half-size
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Graphite
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® Video F-Connector
+   ID: prod_adorne-video-f-connector
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: Magnesium
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: adorne® Whisper™ Switch
+   ID: prod_adorne-whisper-switch
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color"
+
+      📝 Creating 1 new option values: White
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: FLD2 LED Bullet Light with Knuckle Base, 15W, 100-277V, NEW
+   ID: prod_fld2-led-bullet-light-with-knuckle-base-15w-100-277v-v2
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: FLD2 LED Bullet Light with Knuckle Base, 15W, 100-277V
+   ID: prod_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: FLD2 LED Bullet Light with Knuckle Base, 28W, 120-277V
+   ID: prod_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed-2
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: FLS LED Bullet Light with Knuckle Base, 10W, 120V
+   ID: prod_fls-led-bullet-light-with-knuckle-base-10w-etl-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: FLV12 LED Bullet Light with Skype, 12W, 12V
+   ID: prod_flv12-led-bullet-light-with-skype-12w-ul-listed-12v
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: FLV12 LED Flood Light with Skype, 12W, 12V
+   ID: prod_flv12-led-flood-light-with-skype-12w-12v
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: LED A19 Bulb 105°, Dimmable 9W UL Listed
+   ID: prod_led-a19-bulb-270-dimmable-10w-ul-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+
+      📝 Creating 1 new option values: 3000K
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: LED A21 Bulb 105°, Dimmable 14W UL Listed
+   ID: prod_led-a19-bulb-270-dimmable-15w-ul-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+
+      📝 Creating 1 new option values: 5000K
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: LED COB MR16 with GU5.3 base, 7W
+   ID: prod_led-cob-mr16-with-gu5-3-base-7w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+
+      📝 Creating 1 new option values: 4000K
+      ✅ Option values created
+
+      🔗 Linking 2 variants...
+   ❌ Error: Variant (5000K) with provided options already exists.
+
+======================================================================
+📦 Processing: LED Dimmable G9, 3.5W
+   ID: prod_led-dimmable-g9-3-5w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: LED Filament Candle Bulb with Flame Tip, 3.5W
+   ID: prod_led-filament-candle-bulb-with-flame-tip-3-5w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: LED Filament Candle Bulb with Torpedo Shape, 3.5W
+   ID: prod_led-filament-candle-bulb-with-torpedo-shape-3-5w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: LED G4 compatible with AC/DC, 1.5W
+   ID: prod_led-g4-compatible-with-ac-dc-1-5w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: LED Inground Light with Half Round Light Shape
+   ID: prod_led-inground-light-with-half-round-light-shape
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: LED Module Sheet, 24VDC
+   ID: prod_led-module-sheet-24vdc
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: LED MR16 with GU10 Base, 6.5W
+   ID: prod_led-mr16-with-gu10-base-7w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+
+      📝 Creating 1 new option values: 5000K
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: LED Par20 Light White Frame, 7W Dimmable
+   ID: prod_led-par20-light-white-frame-6w-dimmable
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+
+      📝 Creating 1 new option values: 4000K
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: LED Par30 Light White Frame, 10W Dimmable
+   ID: prod_led-par30-light-white-frame-10w-dimmable
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+
+      📝 Creating 2 new option values: 4000K, 3000K
+      ✅ Option values created
+
+      🔗 Linking 3 variants...
+   ❌ Error: Variant (5000K) with provided options already exists.
+
+======================================================================
+📦 Processing: LED Par38 Light White Frame, 18W Dimmable
+   ID: prod_led-par38-light-white-frame-18w-dimmable
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+
+      📝 Creating 2 new option values: 3000K, 5000K
+      ✅ Option values created
+
+      🔗 Linking 2 variants...
+      ✅ Linked 2 variants
+
+======================================================================
+📦 Processing: LED Round Inground Light Stainless Steel
+   ID: prod_led-round-inground-light-stainless-steel
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: UL SMD2216 LED Strip 1200 Single Color Chips, Narrow (4mm/0.16")
+   ID: prod_led-strips-narrow-2400led-4mm
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+
+      📝 Creating 1 new option values: 6000K
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: LED Wall Washer with Independent & DMX Mode, 40W
+   ID: prod_led-wall-washer-with-independent-dmx-mode-40w
+   ⏭️  SKIP: No product options defined
+
+======================================================================
+📦 Processing: LF LED Bullet Light with Spike, 6W, 12V
+   ID: prod_lf-led-bullet-light-with-spike-6w-12v-etl-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: LFX LED Floodlight with Knuckle base, 15W/20W/30W/50W, 120-277V
+   ID: prod_lfx-led-floodlight-with-knuckle-base-15w-20w-30w-50w-ul-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: LFX LED Floodlight with Knuckle Base, 15W, 120-277V
+   ID: prod_lfx-led-floodlight-with-knuckle-base-15w-ul-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: LFX LED Floodlight with Trunnion Base, 15W/20W/30W/50W, 120-277V
+   ID: prod_lfx-led-floodlight-with-trunnion-base-50w-ul-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: UL COB LED Strip Single Color, Bright Output, High Density 2400 LEDs
+   ID: prod_ul-cob-led-strip-single-bright-output-high-density-2400-leds
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+
+      📝 Creating 1 new option values: 3000K
+      ✅ Option values created
+
+      🔗 Linking 1 variants...
+      ✅ Linked 1 variants
+
+======================================================================
+📦 Processing: UL FREECUT COB LED Strip Single Color, Bright Output
+   ID: prod_ul-freecut-cob-led-strip-single-color-bright-output
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+======================================================================
+📦 Processing: UL SMD2835 LED Strip 300 Side Bendable Single Color Chips, Bright Output
+   ID: prod_ul-smd2835-led-strip-300-side-bendable-single-color-chips-bright-output
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options"
+      ℹ️  All variants already linked
+
+
+======================================================================
+📊 MIGRATION SUMMARY
+======================================================================
+Total Products: 80
+Successfully Processed: 77
+Variants Linked: 75
+Skipped: 1
+Errors: 2
+
+❌ ERRORS:
+   prod_led-cob-mr16-with-gu5-3-base-7w: Variant (5000K) with provided options already exists.
+   prod_led-par30-light-white-frame-10w-dimmable: Variant (5000K) with provided options already exists.
+
+⏭️  SKIPPED:
+   prod_led-wall-washer-with-independent-dmx-mode-40w: No product options
+
+💾 Report saved to: ./variant-linking-v3-report.json
+[32minfo[39m:    Finished executing script.

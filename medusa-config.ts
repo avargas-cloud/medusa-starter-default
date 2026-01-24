@@ -83,5 +83,60 @@ module.exports = defineConfig({
         ],
       },
     },
+    {
+      resolve: "@rokmohar/medusa-plugin-meilisearch",
+      options: {
+        config: {
+          host: process.env.MEILISEARCH_HOST || "http://localhost:7700",
+          apiKey: process.env.MEILISEARCH_API_KEY || "masterKey",
+        },
+        settings: {
+          products: {
+            indexSettings: {
+              searchableAttributes: [
+                "title",
+                "description",
+                "handle",
+                "variant_sku",
+                "metadata_material",
+                "metadata_category"
+              ],
+              displayedAttributes: [
+                "id",
+                "title",
+                "handle",
+                "thumbnail",
+                "variant_sku",
+                "metadata"
+              ],
+              typoTolerance: {
+                enabled: true,
+                minWordSizeForTypos: {
+                  oneTypo: 7,
+                  twoTypos: 10,
+                },
+              },
+            },
+            primaryKey: "id",
+            // Transformer: Flatten variant SKUs and metadata for searchability
+            transformer: (product: any) => {
+              return {
+                id: product.id,
+                title: product.title,
+                description: product.description,
+                handle: product.handle,
+                thumbnail: product.thumbnail,
+                // KEY: Extract all variant SKUs into flat array
+                variant_sku: product.variants?.map((v: any) => v.sku).filter(Boolean) || [],
+                // Index metadata for advanced filtering
+                metadata: product.metadata || {},
+                metadata_material: product.metadata?.material || null,
+                metadata_category: product.metadata?.category || null,
+              }
+            }
+          },
+        },
+      },
+    },
   ]
 })

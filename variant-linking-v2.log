@@ -1,0 +1,2388 @@
+[32minfo[39m:    Executing script at ./src/scripts/link-orphaned-variants.ts...
+[32minfo[39m:    No link to load from /home/alejo/medusa-starter-default/node_modules/@medusajs/draft-order/.medusa/server/src/links. skipped.
+[32minfo[39m:    Connection to Redis in module 'event-bus-redis' established
+[32minfo[39m:    Connection to Redis in module 'cache-redis' established
+[32minfo[39m:    Connection to Redis in "locking-redis" provider established
+[32minfo[39m:    [Workflow-engine-redis] Connection to Redis in module 'workflow-engine-redis' established
+[32minfo[39m:    [Workflow-engine-redis] Connection to Redis PubSub in module 'workflow-engine-redis' established
+[32minfo[39m:    No workflow to load from /home/alejo/medusa-starter-default/node_modules/@medusajs/draft-order/.medusa/server/src/workflows. skipped.
+[32minfo[39m:    No subscriber to load from /home/alejo/medusa-starter-default/node_modules/@medusajs/draft-order/.medusa/server/src/subscribers. skipped.
+🔗 Linking Orphaned Variants to Existing Attributes...
+
+📚 Loaded 125 Attribute Keys
+
+📦 Processing 80 Multi-Variant Products
+
+
+======================================================================
+📦 Processing: 2 1/2" LED Under Cabinet Light - Silver Frame, 3W
+   ID: prod_2-1-2-led-under-cabinet-light-silver-frame-3w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_2-1-2-led-under-cabinet-light-silver-frame-3w_8187
+         SKU: ECLDL-2R3WS30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "6000K"
+         ID: variant_2-1-2-led-under-cabinet-light-silver-frame-3w_8188
+         SKU: ECLDL-2R3WS60K
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: 2 1/2" LED Under Cabinet Light - White Frame, 3W
+   ID: prod_2-1-2-led-under-cabinet-light-white-frame-3w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_2-1-2-led-under-cabinet-light-white-frame-3w_8190
+         SKU: ECLDL-2R3WW30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "6000K"
+         ID: variant_2-1-2-led-under-cabinet-light-white-frame-3w_8191
+         SKU: ECLDL-2R3WW60K
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: 2 3/4" LED Under Cabinet Square Light Silver Frame, 3W
+   ID: prod_2-3-4-led-under-cabinet-square-light-silver-frame-3w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "6000K"
+         ID: variant_2-3-4-led-under-cabinet-square-light-silver-frame-3w_8194
+         SKU: ECLDL-2S3WS60K
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "3000K"
+         ID: variant_2-3-4-led-under-cabinet-square-light-silver-frame-3w_8193
+         SKU: ECLDL-2S3WS30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: 3 1/2" LED Dimmable Down Light - Silver Frame, 7W
+   ID: prod_3-1-2-led-dimmable-down-light-silver-frame-7w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_3-1-2-led-dimmable-down-light-silver-frame-7w_8199
+         SKU: ECLDL-3R7WS30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "6000K"
+         ID: variant_3-1-2-led-dimmable-down-light-silver-frame-7w_8200
+         SKU: ECLDL-3R7WS60K
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: 3 1/2" LED Dimmable Down Light - White Frame, 7W
+   ID: prod_3-1-2-led-dimmable-down-light-white-frame-7w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "6000K"
+         ID: variant_3-1-2-led-dimmable-down-light-white-frame-7w_8203
+         SKU: ECLDL-3R7WW60K
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "3000K"
+         ID: variant_3-1-2-led-dimmable-down-light-white-frame-7w_8202
+         SKU: ECLDL-3R7WW30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: 4 ft Hybrid LED Tube, 18W
+   ID: prod_4-ft-hybrid-led-tube-18w-etl-listed
+
+   🎛️  Option: "Lighting Cover"
+      ✅ Matched to Attribute: "Lighting Cover" (01KFK5VQGSM8BA2MF4HXCF6SE6)
+      📊 Available Values: 3
+
+      🏷️  Variant: "Clear"
+         ID: variant_4-ft-hybrid-led-tube-18w-etl-listed_8280
+         SKU: ETB-AHB4CC-5K
+         ✅ Matched to Value: "Clear" (01KFKPH3FSMKG121JMYG29B3TR)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Frosted"
+         ID: variant_4-ft-hybrid-led-tube-18w-etl-listed_8279
+         SKU: ETB-AHB4FC-5K
+         ✅ Matched to Value: "Frosted" (01KFKPF994QW0YV3TE67DBJED2)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: 65FT UL SMD2835 LED Strip 2400 Single Color Chips, Bright Output
+   ID: prod_65ft-ul-smd2835-led-strip-2400-single-color-chips-bright-output
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "6000K"
+         ID: variant_65ft-ul-smd2835-led-strip-2400-single-color-chips-bright-output_14809
+         SKU: ESPS1L4N96W1060
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "4000K"
+         ID: variant_65ft-ul-smd2835-led-strip-2400-single-color-chips-bright-output_14807
+         SKU: ESPS1L4N96W1040
+         ✅ Matched to Value: "4000K" (01KFKPF7ZH3H3BX6FT1941PZ0G)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "3000K"
+         ID: variant_65ft-ul-smd2835-led-strip-2400-single-color-chips-bright-output_14806
+         SKU: ESPS1L4N96W1030
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: 8 ft LED Tube FA8 Base, 36W
+   ID: prod_8-ft-led-tube-fa8-base-36w
+
+   🎛️  Option: "Lighting Cover"
+      ✅ Matched to Attribute: "Lighting Cover" (01KFK5VQGSM8BA2MF4HXCF6SE6)
+      📊 Available Values: 3
+
+      🏷️  Variant: "Clear"
+         ID: variant_8-ft-led-tube-fa8-base-36w_8277
+         SKU: ETB-A2S8CC-5K
+         ✅ Matched to Value: "Clear" (01KFKPH3FSMKG121JMYG29B3TR)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Frosted"
+         ID: variant_8-ft-led-tube-fa8-base-36w_8276
+         SKU: ETB-A2S8FC-5K
+         ✅ Matched to Value: "Frosted" (01KFKPF994QW0YV3TE67DBJED2)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® 0-10V Paddle™ Dimmer
+   ID: prod_adorne-0-10v-paddle-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-0-10v-paddle-dimmer_10053
+         SKU: LEG-ADPD4FBL3P2G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-0-10v-paddle-dimmer_10052
+         SKU: LEG-ADPD4FBL3P2M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-0-10v-paddle-dimmer_10051
+         SKU: LEG-ADPD4FBL3P2W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® 0-10V sofTap™ Dimmer
+   ID: prod_adorne-0-10v-softap-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-0-10v-softap-dimmer_10065
+         SKU: LEG-ADTP4FBL3PM4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-0-10v-softap-dimmer_10066
+         SKU: LEG-ADTP4FBL3PG4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-0-10v-softap-dimmer_10064
+         SKU: LEG-ADTP4FBL3PW4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® 0-10V Touch™ Dimmer
+   ID: prod_adorne-0-10v-touch-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-0-10v-touch-dimmer_10080
+         SKU: LEG-ADTH4FBL3PM4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-0-10v-touch-dimmer_10079
+         SKU: LEG-ADTH4FBL3PW4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-0-10v-touch-dimmer_10081
+         SKU: LEG-ADTH4FBL3PG4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® 15A One-Gang Pop-Out™ Outlet
+   ID: prod_adorne-15a-one-gang-pop-out-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-15a-one-gang-pop-out-outlet_10129
+         SKU: LEG-ARPTR151GW2
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-15a-one-gang-pop-out-outlet_10131
+         SKU: LEG-ARPTR151GG2
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-15a-one-gang-pop-out-outlet_10130
+         SKU: LEG-ARPTR151GM2
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® 15A Outlet
+   ID: prod_adorne-15a-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-15a-outlet_10086
+         SKU: LEG-ARTR152G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-15a-outlet_10084
+         SKU: LEG-ARTR152W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-15a-outlet_10085
+         SKU: LEG-ARTR152M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® 15A Outlet - Plus-Size
+   ID: prod_adorne-15a-outlet-plus-size
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-15a-outlet-plus-size_10120
+         SKU: LEG-ARTR153G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-15a-outlet-plus-size_10118
+         SKU: LEG-ARTR153W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-15a-outlet-plus-size_10119
+         SKU: LEG-ARTR153M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® 15A Paddle™ Switch
+   ID: prod_adorne-15a-paddle-switch
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-15a-paddle-switch_9961
+         SKU: LEG-ASPD1532M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-15a-paddle-switch_9960
+         SKU: LEG-ASPD1532W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-15a-paddle-switch_9962
+         SKU: LEG-ASPD1532G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® 15A Tamper-Resistant Self-Test GFCI Outlet
+   ID: prod_adorne-15a-tamper-resistant-self-test-gfci-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-15a-tamper-resistant-self-test-gfci-outlet_10154
+         SKU: LEG-AGFTR2152W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-15a-tamper-resistant-self-test-gfci-outlet_10156
+         SKU: LEG-AGFTR2152G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-15a-tamper-resistant-self-test-gfci-outlet_10155
+         SKU: LEG-AGFTR2152M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® 15A Tamper-Resistant Self-Test GFCI Outlet - Plus-Size
+   ID: prod_adorne-15a-tamper-resistant-self-test-gfci-outlet-plus-size
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-15a-tamper-resistant-self-test-gfci-outlet-plus-size_10177
+         SKU: LEG-AGFTR2153M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-15a-tamper-resistant-self-test-gfci-outlet-plus-size_10176
+         SKU: LEG-AGFTR2153W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-15a-tamper-resistant-self-test-gfci-outlet-plus-size_10178
+         SKU: LEG-AGFTR2153G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® 15A Two-Gang Pop-Out™ Outlet
+   ID: prod_adorne-15a-two-gang-pop-out-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-15a-two-gang-pop-out-outlet_10143
+         SKU: LEG-ARPTR152GM2
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-15a-two-gang-pop-out-outlet_10142
+         SKU: LEG-ARPTR152GW2
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-15a-two-gang-pop-out-outlet_10144
+         SKU: LEG-ARPTR152GG2
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® 1-Port Frame
+   ID: prod_adorne-1-port-frame
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-1-port-frame_10260
+         SKU: LEG-AC1PFG1
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-1-port-frame_10254
+         SKU: LEG-AC1PFW1
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-1-port-frame_10255
+         SKU: LEG-AC1PFM1
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® 20A 4-Way Paddle™ Switch
+   ID: prod_adorne-20a-4-way-paddle-switch
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-20a-4-way-paddle-switch_9968
+         SKU: LEG-ASPD2042W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-20a-4-way-paddle-switch_9970
+         SKU: LEG-ASPD2042G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-20a-4-way-paddle-switch_9969
+         SKU: LEG-ASPD2042M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® 20A Outlet
+   ID: prod_adorne-20a-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-20a-outlet_10108
+         SKU: LEG-ARTR202M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-20a-outlet_10107
+         SKU: LEG-ARTR202W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-20a-outlet_10109
+         SKU: LEG-ARTR202G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® 20A Tamper-Resistant Self-Test GFCI Outlet
+   ID: prod_adorne-20a-tamper-resistant-self-test-gfci-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-20a-tamper-resistant-self-test-gfci-outlet_10166
+         SKU: LEG-AGFTR2202M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-20a-tamper-resistant-self-test-gfci-outlet_10165
+         SKU: LEG-AGFTR2202W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-20a-tamper-resistant-self-test-gfci-outlet_10167
+         SKU: LEG-AGFTR2202G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® 2-Port Frame
+   ID: prod_adorne-2-port-frame
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-2-port-frame_10264
+         SKU: LEG-AC2PFW1
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-2-port-frame_10265
+         SKU: LEG-AC2PFM1
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® 450W CFL/LED Paddle™ Dimmer
+   ID: prod_adorne-450w-cfl-led-paddle-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-450w-cfl-led-paddle-dimmer_10001
+         SKU: LEG-ADPD453LM2
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-450w-cfl-led-paddle-dimmer_10000
+         SKU: LEG-ADPD453LW2
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-450w-cfl-led-paddle-dimmer_10002
+         SKU: LEG-ADPD453LG2
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® 4-Port Frame
+   ID: prod_adorne-4-port-frame
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-4-port-frame_10273
+         SKU: LEG-AC4PFW1
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-4-port-frame_10274
+         SKU: LEG-AC4PFM1
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® 700W sofTap™ Tru-Universal Dimmer
+   ID: prod_adorne-700w-softap-tru-universal-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-700w-softap-tru-universal-dimmer_10026
+         SKU: LEG-ADTP703TUW4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-700w-softap-tru-universal-dimmer_10028
+         SKU: LEG-ADTP703TUG4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-700w-softap-tru-universal-dimmer_10027
+         SKU: LEG-ADTP703TUM4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® Blank - Half-Size
+   ID: prod_adorne-blank-half-size
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-blank-half-size_10199
+         SKU: LEG-AABK1G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-blank-half-size_10198
+         SKU: LEG-AABK1M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-blank-half-size_10197
+         SKU: LEG-AABK1W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® Blank Keystone Insert
+   ID: prod_adorne-blank-keystone-insert
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-blank-keystone-insert_10242
+         SKU: LEG-ACBLKM4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-blank-keystone-insert_10241
+         SKU: LEG-ACBLKW4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® Cat 6 RJ45 Data Insert
+   ID: prod_adorne-cat-6-rj45-data-insert
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-cat-6-rj45-data-insert_10225
+         SKU: LEG-AC6RJ45W1
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-cat-6-rj45-data-insert_10231
+         SKU: LEG-AC6RJ45G1
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-cat-6-rj45-data-insert_10226
+         SKU: LEG-AC6RJ45M1
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® Dual-USB Outlet
+   ID: prod_adorne-dual-usb-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-dual-usb-outlet_10208
+         SKU: LEG-ARTRUSB153M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-dual-usb-outlet_10209
+         SKU: LEG-ARTRUSB153G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-dual-usb-outlet_10207
+         SKU: LEG-ARTRUSB153W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® Five-Gang Screwless Wall Plate
+   ID: prod_adorne-five-gang-screwless-wall-plate
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-five-gang-screwless-wall-plate_10551
+         SKU: LEG-AWP5GGR1
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White on White"
+         ID: variant_adorne-five-gang-screwless-wall-plate_10554
+         SKU: LEG-AWP5GWHW1
+         ✅ Matched to Value: "White on White" (01KFKQ06ADPCWE300ZW5XCN9YZ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Titanium"
+         ID: variant_adorne-five-gang-screwless-wall-plate_10552
+         SKU: LEG-AWP5GTM1
+         ✅ Matched to Value: "Titanium" (01KFKQ0642HQRKQCM76BA1QY8Z)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Gloss White"
+         ID: variant_adorne-five-gang-screwless-wall-plate_10549
+         SKU: LEG-AWP5GWH1
+         ✅ Matched to Value: "Gloss White" (01KFKQ05TDB2X98B75M1VF4KXF)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Bronze"
+         ID: variant_adorne-five-gang-screwless-wall-plate_10553
+         SKU: LEG-AWP5GBR1
+         ✅ Matched to Value: "Bronze" (01KFKQ05M28BM648CRZRCPHJ56)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-five-gang-screwless-wall-plate_10550
+         SKU: LEG-AWP5GMG1
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® Four-Gang Screwless Wall Plate
+   ID: prod_adorne-four-gang-screwless-wall-plate
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "White on White"
+         ID: variant_adorne-four-gang-screwless-wall-plate_10544
+         SKU: LEG-AWP4GWHW4
+         ✅ Matched to Value: "White on White" (01KFKQ06ADPCWE300ZW5XCN9YZ)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-four-gang-screwless-wall-plate_10539
+         SKU: LEG-AWP4GGR4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-four-gang-screwless-wall-plate_10538
+         SKU: LEG-AWP4GMG4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Gloss White"
+         ID: variant_adorne-four-gang-screwless-wall-plate_10537
+         SKU: LEG-AWP4GWH4
+         ✅ Matched to Value: "Gloss White" (01KFKQ05TDB2X98B75M1VF4KXF)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Mirror White"
+         ID: variant_adorne-four-gang-screwless-wall-plate_10540
+         SKU: LEG-AWM4GMW4
+         ✅ Matched to Value: "Mirror White" (01KFKQ0ARSXFA4EHRYVXV1JKF6)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Bronze"
+         ID: variant_adorne-four-gang-screwless-wall-plate_10542
+         SKU: LEG-AWP4GBR4
+         ✅ Matched to Value: "Bronze" (01KFKQ05M28BM648CRZRCPHJ56)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Brushed Stainless Steel"
+         ID: variant_adorne-four-gang-screwless-wall-plate_10543
+         SKU: LEG-AWM4GMS4
+         ✅ Matched to Value: "Brushed Stainless Steel" (01KFKQ0ADETT8PNM2YXT62TBDM)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Titanium"
+         ID: variant_adorne-four-gang-screwless-wall-plate_10541
+         SKU: LEG-AWP4GTM4
+         ✅ Matched to Value: "Titanium" (01KFKQ0642HQRKQCM76BA1QY8Z)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® In-Wall Cable Access Port
+   ID: prod_adorne-in-wall-cable-access-port
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-in-wall-cable-access-port_10249
+         SKU: LEG-ACBRSTPM1
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-in-wall-cable-access-port_10248
+         SKU: LEG-ACBRSTPW1
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® Netatmo Smart Gateway
+   ID: prod_adorne-netatmo-gateway
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-netatmo-gateway_13695
+         SKU: LEG-WNAH1G1
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-netatmo-gateway_13697
+         SKU: LEG-WNAH1W1
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-netatmo-gateway_13696
+         SKU: LEG-WNAH1M1
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® One-Gang-Plus Screwless Wall Plate
+   ID: prod_adorne-one-gang-plus-screwless-wall-plate
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-one-gang-plus-screwless-wall-plate_10433
+         SKU: LEG-AWP1G3MG4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-one-gang-plus-screwless-wall-plate_10434
+         SKU: LEG-AWP1G3GR4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Titanium"
+         ID: variant_adorne-one-gang-plus-screwless-wall-plate_10436
+         SKU: LEG-AWP1G3TM4
+         ✅ Matched to Value: "Titanium" (01KFKQ0642HQRKQCM76BA1QY8Z)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Brushed Stainless Steel"
+         ID: variant_adorne-one-gang-plus-screwless-wall-plate_10438
+         SKU: LEG-AWM1G3MS4
+         ✅ Matched to Value: "Brushed Stainless Steel" (01KFKQ0ADETT8PNM2YXT62TBDM)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "White on White"
+         ID: variant_adorne-one-gang-plus-screwless-wall-plate_10527
+         SKU: LEG-AWP1G3WHW4
+         ✅ Matched to Value: "White on White" (01KFKQ06ADPCWE300ZW5XCN9YZ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Gloss White"
+         ID: variant_adorne-one-gang-plus-screwless-wall-plate_10432
+         SKU: LEG-AWP1G3WH4
+         ✅ Matched to Value: "Gloss White" (01KFKQ05TDB2X98B75M1VF4KXF)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Bronze"
+         ID: variant_adorne-one-gang-plus-screwless-wall-plate_10437
+         SKU: LEG-AWP1G3BR4
+         ✅ Matched to Value: "Bronze" (01KFKQ05M28BM648CRZRCPHJ56)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Mirror White"
+         ID: variant_adorne-one-gang-plus-screwless-wall-plate_10435
+         SKU: LEG-AWM1G3MW4
+         ✅ Matched to Value: "Mirror White" (01KFKQ0ARSXFA4EHRYVXV1JKF6)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® One-Gang Screwless Wall Plate
+   ID: prod_adorne-one-gang-screwless-wall-plate
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-one-gang-screwless-wall-plate_10344
+         SKU: LEG-AWP1G2GR6
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Titanium"
+         ID: variant_adorne-one-gang-screwless-wall-plate_10325
+         SKU: LEG-AWP1G2TM6
+         ✅ Matched to Value: "Titanium" (01KFKQ0642HQRKQCM76BA1QY8Z)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Gloss White"
+         ID: variant_adorne-one-gang-screwless-wall-plate_10346
+         SKU: LEG-AWP1G2WH6
+         ✅ Matched to Value: "Gloss White" (01KFKQ05TDB2X98B75M1VF4KXF)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White on White"
+         ID: variant_adorne-one-gang-screwless-wall-plate_10510
+         SKU: LEG-AWP1G2WHW10
+         ✅ Matched to Value: "White on White" (01KFKQ06ADPCWE300ZW5XCN9YZ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-one-gang-screwless-wall-plate_10345
+         SKU: LEG-AWP1G2MG6
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Bronze"
+         ID: variant_adorne-one-gang-screwless-wall-plate_10326
+         SKU: LEG-AWP1G2BR6
+         ✅ Matched to Value: "Bronze" (01KFKQ05M28BM648CRZRCPHJ56)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Mirror White"
+         ID: variant_adorne-one-gang-screwless-wall-plate_10343
+         SKU: LEG-AWM1G2MW4
+         ✅ Matched to Value: "Mirror White" (01KFKQ0ARSXFA4EHRYVXV1JKF6)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Brushed Stainless Steel"
+         ID: variant_adorne-one-gang-screwless-wall-plate_10327
+         SKU: LEG-AWM1G2MS4
+         ✅ Matched to Value: "Brushed Stainless Steel" (01KFKQ0ADETT8PNM2YXT62TBDM)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® Paddle™ Switch - Half-Size
+   ID: prod_adorne-paddle-switch-half-size
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-paddle-switch-half-size_9952
+         SKU: LEG-ASPD1531W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-paddle-switch-half-size_9951
+         SKU: LEG-ASPD1531M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-paddle-switch-half-size_9947
+         SKU: LEG-ASPD1531G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® RJ25 Phone Jack
+   ID: prod_adorne-rj25-phone-jack
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-rj25-phone-jack_10218
+         SKU: LEG-ACRJ25W1
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-rj25-phone-jack_10219
+         SKU: LEG-ACRJ25M1
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® Six-Gang Screwless Wall Plate
+   ID: prod_adorne-six-gang-screwless-wall-plate
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Bronze"
+         ID: variant_adorne-six-gang-screwless-wall-plate_10563
+         SKU: LEG-AWP6GBR1
+         ✅ Matched to Value: "Bronze" (01KFKQ05M28BM648CRZRCPHJ56)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Gloss White"
+         ID: variant_adorne-six-gang-screwless-wall-plate_10559
+         SKU: LEG-AWP6GWH1
+         ✅ Matched to Value: "Gloss White" (01KFKQ05TDB2X98B75M1VF4KXF)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-six-gang-screwless-wall-plate_10561
+         SKU: LEG-AWP6GGR1
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Titanium"
+         ID: variant_adorne-six-gang-screwless-wall-plate_10562
+         SKU: LEG-AWP6GTM1
+         ✅ Matched to Value: "Titanium" (01KFKQ0642HQRKQCM76BA1QY8Z)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-six-gang-screwless-wall-plate_10560
+         SKU: LEG-AWP6GMG1
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White on White"
+         ID: variant_adorne-six-gang-screwless-wall-plate_10564
+         SKU: LEG-AWP6GWHW1
+         ✅ Matched to Value: "White on White" (01KFKQ06ADPCWE300ZW5XCN9YZ)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: sofTap™ Master Switch, Wireless Control with Netatmo
+   ID: prod_adorne-softap-netatmo-ready-master-switch
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-softap-netatmo-ready-master-switch_10646
+         SKU: LEG-WNAL10G1
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-softap-netatmo-ready-master-switch_10645
+         SKU: LEG-WNAL10M1
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-softap-netatmo-ready-master-switch_10644
+         SKU: LEG-WNAL10W1
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: sofTap™ Master Dimmer, Wireless Control with Netatmo
+   ID: prod_adorne-softap-netatmo-ready-master-tru-universal-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-softap-netatmo-ready-master-tru-universal-dimmer_10687
+         SKU: LEG-WNAL50G1
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-softap-netatmo-ready-master-tru-universal-dimmer_10686
+         SKU: LEG-WNAL50M1
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-softap-netatmo-ready-master-tru-universal-dimmer_10685
+         SKU: LEG-WNAL50W1
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: sofTap™ Switch, Wireless Control with Netatmo, Battery Powered
+   ID: prod_adorne-softap-netatmo-ready-remote-switch
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-softap-netatmo-ready-remote-switch_10653
+         SKU: LEG-WNAL23M1
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-softap-netatmo-ready-remote-switch_10654
+         SKU: LEG-WNAL23G1
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-softap-netatmo-ready-remote-switch_10652
+         SKU: LEG-WNAL23W1
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: sofTap™ Dimmer, Wireless Control with Netatmo, Battery Powered
+   ID: prod_adorne-softap-netatmo-ready-wireless-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-softap-netatmo-ready-wireless-dimmer_10697
+         SKU: LEG-WNAL63M1
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-softap-netatmo-ready-wireless-dimmer_10696
+         SKU: LEG-WNAL63W1
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-softap-netatmo-ready-wireless-dimmer_10698
+         SKU: LEG-WNAL63G1
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® sofTap™ Switch
+   ID: prod_adorne-softap-switch
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-softap-switch_9983
+         SKU: LEG-ASTP1532W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-softap-switch_9984
+         SKU: LEG-ASTP1532M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-softap-switch_9985
+         SKU: LEG-ASTP1532G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® Three-Gang Screwless Wall Plate
+   ID: prod_adorne-three-gang-screwless-wall-plate
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-three-gang-screwless-wall-plate_10466
+         SKU: LEG-AWP3GGR4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Titanium"
+         ID: variant_adorne-three-gang-screwless-wall-plate_10468
+         SKU: LEG-AWP3GTM4
+         ✅ Matched to Value: "Titanium" (01KFKQ0642HQRKQCM76BA1QY8Z)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Mirror White"
+         ID: variant_adorne-three-gang-screwless-wall-plate_10467
+         SKU: LEG-AWM3GMW4
+         ✅ Matched to Value: "Mirror White" (01KFKQ0ARSXFA4EHRYVXV1JKF6)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White on White"
+         ID: variant_adorne-three-gang-screwless-wall-plate_10533
+         SKU: LEG-AWP3GWHW4
+         ✅ Matched to Value: "White on White" (01KFKQ06ADPCWE300ZW5XCN9YZ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Gloss White"
+         ID: variant_adorne-three-gang-screwless-wall-plate_10464
+         SKU: LEG-AWP3GWH4
+         ✅ Matched to Value: "Gloss White" (01KFKQ05TDB2X98B75M1VF4KXF)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Brushed Stainless Steel"
+         ID: variant_adorne-three-gang-screwless-wall-plate_10470
+         SKU: LEG-AWM3GMS4
+         ✅ Matched to Value: "Brushed Stainless Steel" (01KFKQ0ADETT8PNM2YXT62TBDM)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-three-gang-screwless-wall-plate_10465
+         SKU: LEG-AWP3GMG4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Bronze"
+         ID: variant_adorne-three-gang-screwless-wall-plate_10469
+         SKU: LEG-AWP3GBR4
+         ✅ Matched to Value: "Bronze" (01KFKQ05M28BM648CRZRCPHJ56)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® Touch™ Switch
+   ID: prod_adorne-touch-switch
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-touch-switch_9993
+         SKU: LEG-ASTH1532G2
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-touch-switch_9992
+         SKU: LEG-ASTH1532M2
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-touch-switch_9991
+         SKU: LEG-ASTH1532W2
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: adorne® Touch Tru-Universal Dimmer
+   ID: prod_adorne-touch-tru-universal-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-touch-tru-universal-dimmer_10040
+         SKU: LEG-ADTH703TUM4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-touch-tru-universal-dimmer_10041
+         SKU: LEG-ADTH703TUG4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-touch-tru-universal-dimmer_10039
+         SKU: LEG-ADTH703TUW4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® Two-Gang Screwless Wall Plate
+   ID: prod_adorne-two-gang-screwless-wall-plate
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-two-gang-screwless-wall-plate_10443
+         SKU: LEG-AWP2GMG4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Mirror White"
+         ID: variant_adorne-two-gang-screwless-wall-plate_10445
+         SKU: LEG-AWM2GMW4
+         ✅ Matched to Value: "Mirror White" (01KFKQ0ARSXFA4EHRYVXV1JKF6)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Gloss White"
+         ID: variant_adorne-two-gang-screwless-wall-plate_10442
+         SKU: LEG-AWP2GWH4
+         ✅ Matched to Value: "Gloss White" (01KFKQ05TDB2X98B75M1VF4KXF)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Titanium"
+         ID: variant_adorne-two-gang-screwless-wall-plate_10446
+         SKU: LEG-AWP2GTM4
+         ✅ Matched to Value: "Titanium" (01KFKQ0642HQRKQCM76BA1QY8Z)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-two-gang-screwless-wall-plate_10444
+         SKU: LEG-AWP2GGR4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Brushed Stainless Steel"
+         ID: variant_adorne-two-gang-screwless-wall-plate_10448
+         SKU: LEG-AWM2GMS4
+         ✅ Matched to Value: "Brushed Stainless Steel" (01KFKQ0ADETT8PNM2YXT62TBDM)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "White on White"
+         ID: variant_adorne-two-gang-screwless-wall-plate_10532
+         SKU: LEG-AWP2GWHW10
+         ✅ Matched to Value: "White on White" (01KFKQ06ADPCWE300ZW5XCN9YZ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Bronze"
+         ID: variant_adorne-two-gang-screwless-wall-plate_10447
+         SKU: LEG-AWP2GBR4
+         ✅ Matched to Value: "Bronze" (01KFKQ05M28BM648CRZRCPHJ56)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® USB Outlet - Half-Size
+   ID: prod_adorne-usb-outlet-half-size
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-usb-outlet-half-size_10188
+         SKU: LEG-ARUSBG4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-usb-outlet-half-size_10187
+         SKU: LEG-ARUSBM4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-usb-outlet-half-size_10186
+         SKU: LEG-ARUSBW4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® Video F-Connector
+   ID: prod_adorne-video-f-connector
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-video-f-connector_10235
+         SKU: LEG-ACNRFCG1
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-video-f-connector_10234
+         SKU: LEG-ACNRFCM1
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-video-f-connector_10233
+         SKU: LEG-ACNRFCW1
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® Whisper™ Switch
+   ID: prod_adorne-whisper-switch
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-whisper-switch_9974
+         SKU: LEG-ASWR1532W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-whisper-switch_9976
+         SKU: LEG-ASWR1532G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-whisper-switch_9975
+         SKU: LEG-ASWR1532M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: FLD2 LED Bullet Light with Knuckle Base, 15W, 100-277V, NEW
+   ID: prod_fld2-led-bullet-light-with-knuckle-base-15w-100-277v-v2
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "5000K"
+         ID: variant_fld2-led-bullet-light-with-knuckle-base-15w-100-277v-v2_12444
+         SKU: WE-FLD2-15W50KKN
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "3000K"
+         ID: variant_fld2-led-bullet-light-with-knuckle-base-15w-100-277v-v2_12443
+         SKU: WE-FLD2-15W30KKN
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: FLD2 LED Bullet Light with Knuckle Base, 15W, 100-277V
+   ID: prod_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed_8332
+         SKU: WE-FLD2-15WW-KN
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "5000K"
+         ID: variant_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed_8333
+         SKU: WE-FLD2-15CW-KN
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: FLD2 LED Bullet Light with Knuckle Base, 28W, 120-277V
+   ID: prod_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed-2
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "5000K"
+         ID: variant_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed-2_8336
+         SKU: WE-FLD2-28-CW-KN
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "3000K"
+         ID: variant_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed-2_8335
+         SKU: WE-FLD2-28-WW-KN
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: FLS LED Bullet Light with Knuckle Base, 10W, 120V
+   ID: prod_fls-led-bullet-light-with-knuckle-base-10w-etl-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_fls-led-bullet-light-with-knuckle-base-10w-etl-listed_8338
+         SKU: WE-FLS-10W30K-BR
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "5000K"
+         ID: variant_fls-led-bullet-light-with-knuckle-base-10w-etl-listed_8339
+         SKU: WE-FLS-10W50K-BR
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: FLV12 LED Bullet Light with Skype, 12W, 12V
+   ID: prod_flv12-led-bullet-light-with-skype-12w-ul-listed-12v
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "5000K"
+         ID: variant_flv12-led-bullet-light-with-skype-12w-ul-listed-12v_8342
+         SKU: WE-FLV12-12W-50K
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "3000K"
+         ID: variant_flv12-led-bullet-light-with-skype-12w-ul-listed-12v_8341
+         SKU: WE-FLV12-12W-30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: FLV12 LED Flood Light with Skype, 12W, 12V
+   ID: prod_flv12-led-flood-light-with-skype-12w-12v
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "5000K"
+         ID: variant_flv12-led-flood-light-with-skype-12w-12v_12465
+         SKU: WE-LF4-12V12W50K
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "3000K"
+         ID: variant_flv12-led-flood-light-with-skype-12w-12v_12464
+         SKU: WE-LF4-12V12W30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: LED A19 Bulb 105°, Dimmable 9W UL Listed
+   ID: prod_led-a19-bulb-270-dimmable-10w-ul-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_led-a19-bulb-270-dimmable-10w-ul-listed_8307
+         SKU: SUN-88390
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "5000K"
+         ID: variant_led-a19-bulb-270-dimmable-10w-ul-listed_8308
+         SKU: SUN-80693
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "6500K"
+         ID: variant_led-a19-bulb-270-dimmable-10w-ul-listed_8309
+         SKU: SUN-80594
+         ✅ Matched to Value: "6500K" (01KFKQ62ESNP8BZ8EBMA3G2PWK)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: LED A21 Bulb 105°, Dimmable 14W UL Listed
+   ID: prod_led-a19-bulb-270-dimmable-15w-ul-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_led-a19-bulb-270-dimmable-15w-ul-listed_8311
+         SKU: SUN-80803
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "5000K"
+         ID: variant_led-a19-bulb-270-dimmable-15w-ul-listed_8312
+         SKU: SUN-80725
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "6500K"
+         ID: variant_led-a19-bulb-270-dimmable-15w-ul-listed_8313
+         SKU: SUN-80599
+         ✅ Matched to Value: "6500K" (01KFKQ62ESNP8BZ8EBMA3G2PWK)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: LED COB MR16 with GU5.3 base, 7W
+   ID: prod_led-cob-mr16-with-gu5-3-base-7w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "5000K"
+         ID: variant_led-cob-mr16-with-gu5-3-base-7w_19281
+         SKU: SUN-81121
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "3000K"
+         ID: variant_led-cob-mr16-with-gu5-3-base-7w_8319
+         SKU: SUN-81119
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "4000K"
+         ID: variant_led-cob-mr16-with-gu5-3-base-7w_11544
+         SKU: SUN-81120
+         ✅ Matched to Value: "4000K" (01KFKPF7ZH3H3BX6FT1941PZ0G)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "5000K"
+         ID: variant_led-cob-mr16-with-gu5-3-base-7w_8320
+         SKU: SUN- 81121
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: LED Dimmable G9, 3.5W
+   ID: prod_led-dimmable-g9-3-5w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "6000K"
+         ID: variant_led-dimmable-g9-3-5w_8175
+         SKU: EBU-G9D3.5W60K
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "3000K"
+         ID: variant_led-dimmable-g9-3-5w_8174
+         SKU: EBU-G9D3.5W30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: LED Filament Candle Bulb with Flame Tip, 3.5W
+   ID: prod_led-filament-candle-bulb-with-flame-tip-3-5w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_led-filament-candle-bulb-with-flame-tip-3-5w_8165
+         SKU: EBU-CLFT3.5W30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "6000K"
+         ID: variant_led-filament-candle-bulb-with-flame-tip-3-5w_8166
+         SKU: EBU-CLFT3.5W60K
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: LED Filament Candle Bulb with Torpedo Shape, 3.5W
+   ID: prod_led-filament-candle-bulb-with-torpedo-shape-3-5w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_led-filament-candle-bulb-with-torpedo-shape-3-5w_8168
+         SKU: EBU-CLTO3.5W30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "6000K"
+         ID: variant_led-filament-candle-bulb-with-torpedo-shape-3-5w_8169
+         SKU: EBU-CLTO3.5W60K
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: LED G4 compatible with AC/DC, 1.5W
+   ID: prod_led-g4-compatible-with-ac-dc-1-5w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_led-g4-compatible-with-ac-dc-1-5w_10593
+         SKU: EBU-G4ND1.5W30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "6000K"
+         ID: variant_led-g4-compatible-with-ac-dc-1-5w_10594
+         SKU: EBU-G4ND1.5W60K
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: LED Inground Light with Half Round Light Shape
+   ID: prod_led-inground-light-with-half-round-light-shape
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_led-inground-light-with-half-round-light-shape_8158
+         SKU: E01SLIL001
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "6000K"
+         ID: variant_led-inground-light-with-half-round-light-shape_8159
+         SKU: E01SLIL002
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: LED Module Sheet, 24VDC
+   ID: prod_led-module-sheet-24vdc
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "6000K"
+         ID: variant_led-module-sheet-24vdc_8252
+         SKU: EMSH4V160D15W60
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "3000K"
+         ID: variant_led-module-sheet-24vdc_8251
+         SKU: EMSH4V160D15W30
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: LED MR16 with GU10 Base, 6.5W
+   ID: prod_led-mr16-with-gu10-base-7w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "6500K"
+         ID: variant_led-mr16-with-gu10-base-7w_8317
+         SKU: SUN-80533
+         ✅ Matched to Value: "6500K" (01KFKQ62ESNP8BZ8EBMA3G2PWK)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "5000K"
+         ID: variant_led-mr16-with-gu10-base-7w_8316
+         SKU: SUN-80532
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "3000K"
+         ID: variant_led-mr16-with-gu10-base-7w_8315
+         SKU: SUN-80531
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: LED Par20 Light White Frame, 7W Dimmable
+   ID: prod_led-par20-light-white-frame-6w-dimmable
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "4000K"
+         ID: variant_led-par20-light-white-frame-6w-dimmable_11545
+         SKU: SUN-89205
+         ✅ Matched to Value: "4000K" (01KFKPF7ZH3H3BX6FT1941PZ0G)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "5000K"
+         ID: variant_led-par20-light-white-frame-6w-dimmable_8323
+         SKU: SUN-89206
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "3000K"
+         ID: variant_led-par20-light-white-frame-6w-dimmable_8322
+         SKU: SUN-89204
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: LED Par30 Light White Frame, 10W Dimmable
+   ID: prod_led-par30-light-white-frame-10w-dimmable
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "5000K"
+         ID: variant_led-par30-light-white-frame-10w-dimmable_8326
+         SKU: SUN- 80897
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ✅ Option value exists: optval_01KFRZYMJBTP340MK43WW90G1Z
+   ❌ Error processing product: Variant (5000K) with provided options already exists.
+
+======================================================================
+📦 Processing: LED Par38 Light White Frame, 18W Dimmable
+   ID: prod_led-par38-light-white-frame-18w-dimmable
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "4000K"
+         ID: variant_led-par38-light-white-frame-18w-dimmable_11547
+         SKU: SUN-88397
+         ✅ Matched to Value: "4000K" (01KFKPF7ZH3H3BX6FT1941PZ0G)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "3000K"
+         ID: variant_led-par38-light-white-frame-18w-dimmable_8328
+         SKU: SUN-88395
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "5000K"
+         ID: variant_led-par38-light-white-frame-18w-dimmable_8329
+         SKU: SUN-88396
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "6500K"
+         ID: variant_led-par38-light-white-frame-18w-dimmable_8330
+         SKU: SUN-88398
+         ✅ Matched to Value: "6500K" (01KFKQ62ESNP8BZ8EBMA3G2PWK)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: LED Round Inground Light Stainless Steel
+   ID: prod_led-round-inground-light-stainless-steel
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_led-round-inground-light-stainless-steel_8161
+         SKU: E01SLIL003
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "6000K"
+         ID: variant_led-round-inground-light-stainless-steel_8162
+         SKU: E01SLIL004
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: UL SMD2216 LED Strip 1200 Single Color Chips, Narrow (4mm/0.16")
+   ID: prod_led-strips-narrow-2400led-4mm
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "6000K"
+         ID: variant_led-strips-narrow-2400led-4mm_14989
+         SKU: ESPS9R4N50W0460
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "4000K"
+         ID: variant_led-strips-narrow-2400led-4mm_14990
+         SKU: ESPS9R4N50W0440
+         ✅ Matched to Value: "4000K" (01KFKPF7ZH3H3BX6FT1941PZ0G)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "3000K"
+         ID: variant_led-strips-narrow-2400led-4mm_14988
+         SKU: ESPS9R4N50W0430
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: LED Wall Washer with Independent & DMX Mode, 40W
+   ID: prod_led-wall-washer-with-independent-dmx-mode-40w
+   ⏭️  SKIP: No product options defined
+
+======================================================================
+📦 Processing: LF LED Bullet Light with Spike, 6W, 12V
+   ID: prod_lf-led-bullet-light-with-spike-6w-12v-etl-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_lf-led-bullet-light-with-spike-6w-12v-etl-listed_8344
+         SKU: WE-LF12-6W30K-KN
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "5000K"
+         ID: variant_lf-led-bullet-light-with-spike-6w-12v-etl-listed_8345
+         SKU: WE-LF12-6W50K-KN
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: LFX LED Floodlight with Knuckle base, 15W/20W/30W/50W, 120-277V
+   ID: prod_lfx-led-floodlight-with-knuckle-base-15w-20w-30w-50w-ul-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "5000K"
+         ID: variant_lfx-led-floodlight-with-knuckle-base-15w-20w-30w-50w-ul-listed_11550
+         SKU: WE-LFXMD50W5K-KN
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "3000K"
+         ID: variant_lfx-led-floodlight-with-knuckle-base-15w-20w-30w-50w-ul-listed_11549
+         SKU: WE-LFXMD50W3K-KN
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: LFX LED Floodlight with Knuckle Base, 15W, 120-277V
+   ID: prod_lfx-led-floodlight-with-knuckle-base-15w-ul-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_lfx-led-floodlight-with-knuckle-base-15w-ul-listed_8347
+         SKU: WE-LFXXS15W3K-KN
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "5000K"
+         ID: variant_lfx-led-floodlight-with-knuckle-base-15w-ul-listed_8348
+         SKU: WE-LFXXS15W5K-KN
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: LFX LED Floodlight with Trunnion Base, 15W/20W/30W/50W, 120-277V
+   ID: prod_lfx-led-floodlight-with-trunnion-base-50w-ul-listed
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "5000K"
+         ID: variant_lfx-led-floodlight-with-trunnion-base-50w-ul-listed_11551
+         SKU: WE-LFXMD50W5K-TR
+         ✅ Matched to Value: "5000K" (01KFKPF85XFY3BRTXC2QQC993C)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "3000K"
+         ID: variant_lfx-led-floodlight-with-trunnion-base-50w-ul-listed_11552
+         SKU: WE-LFXMD50W3K-TR
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: UL COB LED Strip Single Color, Bright Output, High Density 2400 LEDs
+   ID: prod_ul-cob-led-strip-single-bright-output-high-density-2400-leds
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_ul-cob-led-strip-single-bright-output-high-density-2400-leds_14794
+         SKU: SUP-2R4N95W1030
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "6000K"
+         ID: variant_ul-cob-led-strip-single-bright-output-high-density-2400-leds_14797
+         SKU: SUP-C2R4N50W0860
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "4000K"
+         ID: variant_ul-cob-led-strip-single-bright-output-high-density-2400-leds_14795
+         SKU: SUP-2R4N95W1040
+         ✅ Matched to Value: "4000K" (01KFKPF7ZH3H3BX6FT1941PZ0G)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: UL FREECUT COB LED Strip Single Color, Bright Output
+   ID: prod_ul-freecut-cob-led-strip-single-color-bright-output
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_01KFRNPMS8K91A2HQ49W5JRB88
+         SKU: ESPFC4R4N50W0830test11
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "6000K"
+         ID: variant_01KFRNPMS8H6Q824NX5RDHNEZA
+         SKU: ESPFC4R4N50W0860
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "4000K"
+         ID: variant_01KFRNPMS8571FDJZRZ3RRMYYK
+         SKU: ESPFC4R4N50W0840
+         ✅ Matched to Value: "4000K" (01KFKPF7ZH3H3BX6FT1941PZ0G)
+         ⏭️  Variant already has correct option value, skipping
+
+======================================================================
+📦 Processing: UL SMD2835 LED Strip 300 Side Bendable Single Color Chips, Bright Output
+   ID: prod_ul-smd2835-led-strip-300-side-bendable-single-color-chips-bright-output
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "6000K"
+         ID: variant_ul-smd2835-led-strip-300-side-bendable-single-color-chips-bright-output_8270
+         SKU: ESP2V2-S20-0660K
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         ⏭️  Variant already has correct option value, skipping
+
+      🏷️  Variant: "3000K"
+         ID: variant_ul-smd2835-led-strip-300-side-bendable-single-color-chips-bright-output_8269
+         SKU: ESP2V2-S20-0630K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+
+======================================================================
+📊 MIGRATION SUMMARY
+======================================================================
+Total Products: 80
+Successfully Processed: 78
+Variants Linked: 144
+Skipped: 1
+Errors: 1
+
+❌ ERRORS:
+   prod_led-par30-light-white-frame-10w-dimmable: Variant (5000K) with provided options already exists.
+
+⏭️  SKIPPED:
+   prod_led-wall-washer-with-independent-dmx-mode-40w: No product options
+
+💾 Report saved to: ./variant-linking-report.json
+[32minfo[39m:    Finished executing script.

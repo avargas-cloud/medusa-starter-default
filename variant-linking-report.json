@@ -1,0 +1,17 @@
+{
+  "totalProducts": 80,
+  "productsProcessed": 78,
+  "variantsLinked": 144,
+  "errors": [
+    {
+      "productId": "prod_led-par30-light-white-frame-10w-dimmable",
+      "error": "Variant (5000K) with provided options already exists."
+    }
+  ],
+  "skipped": [
+    {
+      "productId": "prod_led-wall-washer-with-independent-dmx-mode-40w",
+      "reason": "No product options"
+    }
+  ]
+}

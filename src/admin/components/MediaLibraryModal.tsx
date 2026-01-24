@@ -1,6 +1,6 @@
 import { Drawer, Input, Button } from "@medusajs/ui"
 import { Photo, MagnifyingGlass } from "@medusajs/icons"
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { BASE_URL } from "../../lib/sdk"
 

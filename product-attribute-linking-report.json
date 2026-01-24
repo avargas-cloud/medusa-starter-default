@@ -1,0 +1,324 @@
+{
+  "totalProducts": 80,
+  "productsProcessed": 0,
+  "attributeValuesLinked": 0,
+  "variantKeysMarked": 0,
+  "errors": [
+    {
+      "productId": "prod_2-1-2-led-under-cabinet-light-silver-frame-3w",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_2-1-2-led-under-cabinet-light-white-frame-3w",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_2-3-4-led-under-cabinet-square-light-silver-frame-3w",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_3-1-2-led-dimmable-down-light-silver-frame-7w",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_3-1-2-led-dimmable-down-light-white-frame-7w",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_4-ft-hybrid-led-tube-18w-etl-listed",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_65ft-ul-smd2835-led-strip-2400-single-color-chips-bright-output",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_8-ft-led-tube-fa8-base-36w",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-0-10v-paddle-dimmer",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-0-10v-softap-dimmer",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-0-10v-touch-dimmer",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-15a-one-gang-pop-out-outlet",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-15a-outlet",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-15a-outlet-plus-size",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-15a-paddle-switch",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-15a-tamper-resistant-self-test-gfci-outlet",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-15a-tamper-resistant-self-test-gfci-outlet-plus-size",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-15a-two-gang-pop-out-outlet",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-1-port-frame",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-20a-4-way-paddle-switch",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-20a-outlet",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-20a-tamper-resistant-self-test-gfci-outlet",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-2-port-frame",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-450w-cfl-led-paddle-dimmer",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-4-port-frame",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-700w-softap-tru-universal-dimmer",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-blank-half-size",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-blank-keystone-insert",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-cat-6-rj45-data-insert",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-dual-usb-outlet",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-five-gang-screwless-wall-plate",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-four-gang-screwless-wall-plate",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-in-wall-cable-access-port",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-netatmo-gateway",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-one-gang-plus-screwless-wall-plate",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-one-gang-screwless-wall-plate",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-paddle-switch-half-size",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-rj25-phone-jack",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-six-gang-screwless-wall-plate",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-softap-netatmo-ready-master-switch",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-softap-netatmo-ready-master-tru-universal-dimmer",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-softap-netatmo-ready-remote-switch",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-softap-netatmo-ready-wireless-dimmer",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-softap-switch",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-three-gang-screwless-wall-plate",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-touch-switch",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-touch-tru-universal-dimmer",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-two-gang-screwless-wall-plate",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-usb-outlet-half-size",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-video-f-connector",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_adorne-whisper-switch",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_fld2-led-bullet-light-with-knuckle-base-15w-100-277v-v2",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_fld2-led-bullet-light-with-knuckle-base-28w-ul-listed-2",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_fls-led-bullet-light-with-knuckle-base-10w-etl-listed",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_flv12-led-bullet-light-with-skype-12w-ul-listed-12v",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_flv12-led-flood-light-with-skype-12w-12v",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_led-a19-bulb-270-dimmable-10w-ul-listed",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_led-a19-bulb-270-dimmable-15w-ul-listed",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_led-cob-mr16-with-gu5-3-base-7w",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_led-dimmable-g9-3-5w",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_led-filament-candle-bulb-with-flame-tip-3-5w",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_led-filament-candle-bulb-with-torpedo-shape-3-5w",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_led-g4-compatible-with-ac-dc-1-5w",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_led-inground-light-with-half-round-light-shape",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_led-module-sheet-24vdc",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_led-mr16-with-gu10-base-7w",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_led-par20-light-white-frame-6w-dimmable",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_led-par30-light-white-frame-10w-dimmable",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_led-par38-light-white-frame-18w-dimmable",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_led-round-inground-light-stainless-steel",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_led-strips-narrow-2400led-4mm",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_lf-led-bullet-light-with-spike-6w-12v-etl-listed",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_lfx-led-floodlight-with-knuckle-base-15w-20w-30w-50w-ul-listed",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_lfx-led-floodlight-with-knuckle-base-15w-ul-listed",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_lfx-led-floodlight-with-trunnion-base-50w-ul-listed",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_ul-cob-led-strip-single-bright-output-high-density-2400-leds",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_ul-freecut-cob-led-strip-single-color-bright-output",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    },
+    {
+      "productId": "prod_ul-smd2835-led-strip-300-side-bendable-single-color-chips-bright-output",
+      "error": "Cannot read properties of undefined (reading 'run')"
+    }
+  ]
+}

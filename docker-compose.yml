@@ -1,0 +1,22 @@
+services:
+  meilisearch:
+    image: getmeili/meilisearch:v1.6
+    container_name: medusa-meilisearch
+    ports:
+      - "7700:7700"
+    environment:
+      MEILI_MASTER_KEY: ${MEILISEARCH_API_KEY:-masterKey}
+      MEILI_ENV: ${MEILI_ENV:-development}
+    volumes:
+      - meilisearch_data:/meili_data
+    restart: unless-stopped
+    networks:
+      - medusa-network
+
+networks:
+  medusa-network:
+    driver: bridge
+
+volumes:
+  meilisearch_data:
+    driver: local

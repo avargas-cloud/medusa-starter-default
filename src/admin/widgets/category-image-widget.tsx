@@ -4,7 +4,7 @@ import { DetailWidgetProps, AdminProductCategory } from "@medusajs/framework/typ
 import { Trash, Photo, CloudArrowUp, MagnifyingGlass } from "@medusajs/icons"
 import { useState, useRef, useEffect } from "react"
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query"
-import { BASE_URL, sdk } from "../../lib/sdk"
+import { BASE_URL } from "../../lib/sdk"
 
 const MediaLibraryModal = ({
     open,
@@ -229,10 +229,10 @@ const CategoryImageWidget = ({
 
     const category = data as AdminProductCategory & { thumbnail?: string | null }
     const initialThumbnail = category.thumbnail || (category.metadata?.thumbnail as string)
-    
+
     // Local state to track current thumbnail for immediate UI updates
     const [currentThumbnail, setCurrentThumbnail] = useState<string | null | undefined>(initialThumbnail)
-    
+
     // Sync with props when category data changes
     useEffect(() => {
         setCurrentThumbnail(initialThumbnail)
@@ -268,7 +268,7 @@ const CategoryImageWidget = ({
         if (!file) return
 
         setUploading(true)
-        
+
         try {
             // Use direct fetch with x-upload-context header instead of SDK
             const formData = new FormData()

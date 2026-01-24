@@ -1,0 +1,11 @@
+{
+  "totalProducts": 80,
+  "totalVariants": 239,
+  "orphanedVariants": [],
+  "productsWithIssues": 0,
+  "summary": {
+    "variantsWithNoOptions": 0,
+    "variantsWithMismatchedOptions": 0,
+    "variantsWithEmptyOptionValues": 0
+  }
+}

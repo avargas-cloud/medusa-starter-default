@@ -1,0 +1,470 @@
+[32minfo[39m:    Executing script at ./src/scripts/link-orphaned-variants.ts...
+[32minfo[39m:    No link to load from /home/alejo/medusa-starter-default/node_modules/@medusajs/draft-order/.medusa/server/src/links. skipped.
+[32minfo[39m:    Connection to Redis in module 'event-bus-redis' established
+[32minfo[39m:    Connection to Redis in module 'cache-redis' established
+[32minfo[39m:    Connection to Redis in "locking-redis" provider established
+[32minfo[39m:    [Workflow-engine-redis] Connection to Redis in module 'workflow-engine-redis' established
+[32minfo[39m:    [Workflow-engine-redis] Connection to Redis PubSub in module 'workflow-engine-redis' established
+[32minfo[39m:    No workflow to load from /home/alejo/medusa-starter-default/node_modules/@medusajs/draft-order/.medusa/server/src/workflows. skipped.
+[32minfo[39m:    No subscriber to load from /home/alejo/medusa-starter-default/node_modules/@medusajs/draft-order/.medusa/server/src/subscribers. skipped.
+🔗 Linking Orphaned Variants to Existing Attributes...
+
+📚 Loaded 125 Attribute Keys
+
+📦 Processing 80 Multi-Variant Products
+
+
+======================================================================
+📦 Processing: 2 1/2" LED Under Cabinet Light - Silver Frame, 3W
+   ID: prod_2-1-2-led-under-cabinet-light-silver-frame-3w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_2-1-2-led-under-cabinet-light-silver-frame-3w_8187
+         SKU: ECLDL-2R3WS30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "6000K"
+         ID: variant_2-1-2-led-under-cabinet-light-silver-frame-3w_8188
+         SKU: ECLDL-2R3WS60K
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: 2 1/2" LED Under Cabinet Light - White Frame, 3W
+   ID: prod_2-1-2-led-under-cabinet-light-white-frame-3w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_2-1-2-led-under-cabinet-light-white-frame-3w_8190
+         SKU: ECLDL-2R3WW30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "6000K"
+         ID: variant_2-1-2-led-under-cabinet-light-white-frame-3w_8191
+         SKU: ECLDL-2R3WW60K
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: 2 3/4" LED Under Cabinet Square Light Silver Frame, 3W
+   ID: prod_2-3-4-led-under-cabinet-square-light-silver-frame-3w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_2-3-4-led-under-cabinet-square-light-silver-frame-3w_8193
+         SKU: ECLDL-2S3WS30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "6000K"
+         ID: variant_2-3-4-led-under-cabinet-square-light-silver-frame-3w_8194
+         SKU: ECLDL-2S3WS60K
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: 3 1/2" LED Dimmable Down Light - Silver Frame, 7W
+   ID: prod_3-1-2-led-dimmable-down-light-silver-frame-7w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "6000K"
+         ID: variant_3-1-2-led-dimmable-down-light-silver-frame-7w_8200
+         SKU: ECLDL-3R7WS60K
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "3000K"
+         ID: variant_3-1-2-led-dimmable-down-light-silver-frame-7w_8199
+         SKU: ECLDL-3R7WS30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: 3 1/2" LED Dimmable Down Light - White Frame, 7W
+   ID: prod_3-1-2-led-dimmable-down-light-white-frame-7w
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "3000K"
+         ID: variant_3-1-2-led-dimmable-down-light-white-frame-7w_8202
+         SKU: ECLDL-3R7WW30K
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "6000K"
+         ID: variant_3-1-2-led-dimmable-down-light-white-frame-7w_8203
+         SKU: ECLDL-3R7WW60K
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: 4 ft Hybrid LED Tube, 18W
+   ID: prod_4-ft-hybrid-led-tube-18w-etl-listed
+
+   🎛️  Option: "Lighting Cover"
+      ✅ Matched to Attribute: "Lighting Cover" (01KFK5VQGSM8BA2MF4HXCF6SE6)
+      📊 Available Values: 3
+
+      🏷️  Variant: "Frosted"
+         ID: variant_4-ft-hybrid-led-tube-18w-etl-listed_8279
+         SKU: ETB-AHB4FC-5K
+         ✅ Matched to Value: "Frosted" (01KFKPF994QW0YV3TE67DBJED2)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Clear"
+         ID: variant_4-ft-hybrid-led-tube-18w-etl-listed_8280
+         SKU: ETB-AHB4CC-5K
+         ✅ Matched to Value: "Clear" (01KFKPH3FSMKG121JMYG29B3TR)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: 65FT UL SMD2835 LED Strip 2400 Single Color Chips, Bright Output
+   ID: prod_65ft-ul-smd2835-led-strip-2400-single-color-chips-bright-output
+
+   🎛️  Option: "Color Options"
+      ✅ Matched to Attribute: "Color Options" (01KFK5SM3EDB6V3NQXGKQEZ8QM)
+      📊 Available Values: 11
+
+      🏷️  Variant: "6000K"
+         ID: variant_65ft-ul-smd2835-led-strip-2400-single-color-chips-bright-output_14809
+         SKU: ESPS1L4N96W1060
+         ✅ Matched to Value: "6000K" (01KFKPH212GD0SEE2TQTRQC1FW)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "3000K"
+         ID: variant_65ft-ul-smd2835-led-strip-2400-single-color-chips-bright-output_14806
+         SKU: ESPS1L4N96W1030
+         ✅ Matched to Value: "3000K" (01KFKPF7S54QHNK7BE02E6YN9F)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "4000K"
+         ID: variant_65ft-ul-smd2835-led-strip-2400-single-color-chips-bright-output_14807
+         SKU: ESPS1L4N96W1040
+         ✅ Matched to Value: "4000K" (01KFKPF7ZH3H3BX6FT1941PZ0G)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: 8 ft LED Tube FA8 Base, 36W
+   ID: prod_8-ft-led-tube-fa8-base-36w
+
+   🎛️  Option: "Lighting Cover"
+      ✅ Matched to Attribute: "Lighting Cover" (01KFK5VQGSM8BA2MF4HXCF6SE6)
+      📊 Available Values: 3
+
+      🏷️  Variant: "Clear"
+         ID: variant_8-ft-led-tube-fa8-base-36w_8277
+         SKU: ETB-A2S8CC-5K
+         ✅ Matched to Value: "Clear" (01KFKPH3FSMKG121JMYG29B3TR)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Frosted"
+         ID: variant_8-ft-led-tube-fa8-base-36w_8276
+         SKU: ETB-A2S8FC-5K
+         ✅ Matched to Value: "Frosted" (01KFKPF994QW0YV3TE67DBJED2)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® 0-10V Paddle™ Dimmer
+   ID: prod_adorne-0-10v-paddle-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-0-10v-paddle-dimmer_10051
+         SKU: LEG-ADPD4FBL3P2W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-0-10v-paddle-dimmer_10053
+         SKU: LEG-ADPD4FBL3P2G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-0-10v-paddle-dimmer_10052
+         SKU: LEG-ADPD4FBL3P2M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® 0-10V sofTap™ Dimmer
+   ID: prod_adorne-0-10v-softap-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-0-10v-softap-dimmer_10065
+         SKU: LEG-ADTP4FBL3PM4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-0-10v-softap-dimmer_10064
+         SKU: LEG-ADTP4FBL3PW4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-0-10v-softap-dimmer_10066
+         SKU: LEG-ADTP4FBL3PG4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® 0-10V Touch™ Dimmer
+   ID: prod_adorne-0-10v-touch-dimmer
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-0-10v-touch-dimmer_10080
+         SKU: LEG-ADTH4FBL3PM4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-0-10v-touch-dimmer_10079
+         SKU: LEG-ADTH4FBL3PW4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-0-10v-touch-dimmer_10081
+         SKU: LEG-ADTH4FBL3PG4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® 15A One-Gang Pop-Out™ Outlet
+   ID: prod_adorne-15a-one-gang-pop-out-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-15a-one-gang-pop-out-outlet_10130
+         SKU: LEG-ARPTR151GM2
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-15a-one-gang-pop-out-outlet_10129
+         SKU: LEG-ARPTR151GW2
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-15a-one-gang-pop-out-outlet_10131
+         SKU: LEG-ARPTR151GG2
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+======================================================================
+📦 Processing: adorne® 15A Outlet
+   ID: prod_adorne-15a-outlet
+
+   🎛️  Option: "Color"
+      ✅ Matched to Attribute: "Color" (01KFK5SJSHH61SS4WF02Y917HZ)
+      📊 Available Values: 9
+
+      🏷️  Variant: "White"
+         ID: variant_adorne-15a-outlet_10084
+         SKU: LEG-ARTR152W4
+         ✅ Matched to Value: "White" (01KFKPXSAY8SJXX7CAKAKP8R7R)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Graphite"
+         ID: variant_adorne-15a-outlet_10086
+         SKU: LEG-ARTR152G4
+         ✅ Matched to Value: "Graphite" (01KFKPXRXYM7XGQAKBF8TXSRHQ)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
+         ✅ Created option value and linked variant
+
+      🏷️  Variant: "Magnesium"
+         ID: variant_adorne-15a-outlet_10085
+         SKU: LEG-ARTR152M4
+         ✅ Matched to Value: "Magnesium" (01KFKPXS4F4CFGD5YH7KXXAX5X)
+         🔗 Creating product → attribute_value link...
+         ⚠️  Link error: Module to type productService and productAttributesService by keys product_id and attribute_value_id was not found. Ensure the link exists, keys are correct, and link is passed in the correct order to method 'remoteLink.create'.
+
+         ⚠️  Option value not found in product option
+         Creating option value...
