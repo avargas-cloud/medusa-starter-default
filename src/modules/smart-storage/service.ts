@@ -14,7 +14,7 @@ interface S3FileOptions {
 }
 
 class SmartStorageService extends AbstractFileProviderService {
-    static identifier = "smart-storage"
+    static identifier = "smart-s3"
 
     protected client: S3Client
     protected options: S3FileOptions
@@ -35,41 +35,83 @@ class SmartStorageService extends AbstractFileProviderService {
         })
     }
 
-    // Smart folder routing logic
+    // Smart folder routing logic using phantom prefixes
     private getTargetFolder(filename: string): string {
+        if (!filename) return "content"
         const lowerName = filename.toLowerCase()
 
-        // 1. Prefix-based logic (ideal for agent)
-        if (lowerName.startsWith("prod_") || lowerName.includes("/products/")) {
+        // Detect context prefixes for routing
+        if (lowerName.startsWith("context_products_") || lowerName.startsWith("prod_")) {
             return "products"
         }
-        if (lowerName.startsWith("cat_") || lowerName.includes("/categories/")) {
+        if (lowerName.startsWith("context_categories_") || lowerName.startsWith("cat_")) {
             return "categories"
         }
 
-        // 2. Default folder for everything else
+        // Default folder for everything else
         return "content"
     }
 
-    async upload(file: FileTypes.ProviderUploadFileDTO): Promise<FileTypes.ProviderFileResultDTO> {
-        const parsedFilename = parse(file.filename)
-        const folder = this.getTargetFolder(file.filename)
+    // Clean filename by removing phantom context prefixes
+    private getCleanFilename(filename: string): string {
+        if (!filename) return "file"
+        return filename
+            .replace(/^context_products_/i, "")
+            .replace(/^context_categories_/i, "")
+            .replace(/^prod_/i, "")
+            .replace(/^cat_/i, "")
+    }
 
-        // Generate the "Key" (full path in S3)
-        // Example: products/prod_shoes_12345.jpg
+    async upload(file: FileTypes.ProviderUploadFileDTO): Promise<FileTypes.ProviderFileResultDTO> {
+        // Use originalname or filename, whichever is available
+        const fileName = file.filename || (file as any).originalname || "file"
+        
+        // 1. Detect folder based on phantom prefix
+        const folder = this.getTargetFolder(fileName)
+        
+        console.log("🔵 [Smart Storage] Target folder:", folder)
+        
+        // 2. Clean the filename to preserve original name (SEO-friendly)
+        const cleanName = this.getCleanFilename(fileName)
+        const parsedFilename = parse(cleanName)
+
+        // 3. Generate clean key with folder routing
         const fileKey = `${folder}/${parsedFilename.name}-${Date.now()}${parsedFilename.ext}`
 
-        // Convert base64 content to Buffer
-        const buffer = Buffer.from(file.content, 'base64')
+        let content: Buffer
+        const rawContent = file.content || (file as any).rawContent || (file as any).buffer
+        
+        if (!rawContent) {
+            console.error("[Smart Storage] No content found in upload")
+            content = Buffer.from([])
+        } else if (rawContent.type === "Buffer" && Array.isArray(rawContent.data)) {
+            content = Buffer.from(rawContent.data)
+        } else if (Buffer.isBuffer(rawContent)) {
+            content = rawContent
+        } else if (typeof rawContent === "string") {
+            content = Buffer.from(rawContent, "base64")
+        } else if (rawContent && typeof (rawContent as any).read === "function") {
+            const chunks: Buffer[] = []
+            for await (const chunk of rawContent as any) {
+                chunks.push(Buffer.from(chunk))
+            }
+            content = Buffer.concat(chunks)
+        } else {
+            console.error("[Smart Storage] Unknown content type")
+            content = Buffer.from([])
+        }
 
         const command = new PutObjectCommand({
             Bucket: this.options.bucket,
             Key: fileKey,
-            Body: buffer,
+            Body: content,
             ContentType: file.mimeType,
+            ContentLength: content.length,
+            ACL: "public-read",
         })
 
         try {
+            console.log("🔵 [Smart Storage] Uploading to S3...")
             await this.client.send(command)
 
             // Build public URL

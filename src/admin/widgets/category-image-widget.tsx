@@ -2,9 +2,9 @@ import { defineWidgetConfig } from "@medusajs/admin-sdk"
 import { Container, Heading, Button, IconButton, toast, Drawer, Input } from "@medusajs/ui"
 import { DetailWidgetProps, AdminProductCategory } from "@medusajs/framework/types"
 import { Trash, Photo, CloudArrowUp, MagnifyingGlass } from "@medusajs/icons"
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect } from "react"
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query"
-import { BASE_URL } from "../../lib/sdk"
+import { BASE_URL, sdk } from "../../lib/sdk"
 
 const MediaLibraryModal = ({
     open,
@@ -17,14 +17,18 @@ const MediaLibraryModal = ({
 }) => {
     const [currentPrefix, setCurrentPrefix] = useState("")
     const [searchQuery, setSearchQuery] = useState("")
+    const [continuationToken, setContinuationToken] = useState<string | null>(null)
+    const [pageHistory, setPageHistory] = useState<(string | null)[]>([null]) // Track token history for back navigation
 
     const { data, isLoading } = useQuery({
-        queryKey: ["media_files", currentPrefix],
+        queryKey: ["media_files", currentPrefix, continuationToken, searchQuery],
         enabled: open,
         refetchOnMount: true,
         queryFn: async () => {
             const params = new URLSearchParams()
             if (currentPrefix) params.set("prefix", currentPrefix)
+            if (continuationToken) params.set("continuationToken", continuationToken)
+            if (searchQuery) params.set("search", searchQuery)
 
             const response = await fetch(`${BASE_URL}/admin/media?${params.toString()}`, {
                 headers: {
@@ -43,6 +47,8 @@ const MediaLibraryModal = ({
     const handleFolderClick = (prefix: string) => {
         setCurrentPrefix(prefix)
         setSearchQuery("")
+        setContinuationToken(null)
+        setPageHistory([null])
     }
 
     const handleBackClick = () => {
@@ -50,6 +56,24 @@ const MediaLibraryModal = ({
         parts.pop()
         setCurrentPrefix(parts.length > 0 ? parts.join("/") + "/" : "")
         setSearchQuery("")
+        setContinuationToken(null)
+        setPageHistory([null])
+    }
+
+    const handleNextPage = () => {
+        if (data?.nextContinuationToken) {
+            setPageHistory([...pageHistory, continuationToken])
+            setContinuationToken(data.nextContinuationToken)
+        }
+    }
+
+    const handlePreviousPage = () => {
+        if (pageHistory.length > 1) {
+            const newHistory = [...pageHistory]
+            newHistory.pop()
+            setPageHistory(newHistory)
+            setContinuationToken(newHistory[newHistory.length - 1])
+        }
     }
 
     const breadcrumbs = currentPrefix ? currentPrefix.split("/").filter(Boolean) : []
@@ -67,6 +91,8 @@ const MediaLibraryModal = ({
             if (!isOpen) {
                 setCurrentPrefix("")
                 setSearchQuery("")
+                setContinuationToken(null)
+                setPageHistory([null])
                 onClose()
             }
         }}>
@@ -161,6 +187,32 @@ const MediaLibraryModal = ({
                             ))}
                         </div>
                     )}
+
+                    {/* Pagination Controls */}
+                    {!searchQuery && (filteredFolders.length > 0 || filteredFiles.length > 0) && (
+                        <div className="flex justify-between items-center mt-4 pt-4 border-t border-ui-border-base">
+                            <Button
+                                onClick={handlePreviousPage}
+                                disabled={pageHistory.length <= 1}
+                                variant="secondary"
+                                size="small"
+                            >
+                                ← Previous
+                            </Button>
+                            <span className="text-sm text-ui-fg-subtle">
+                                Page {pageHistory.length}
+                                {data?.isTruncated && " of many"}
+                            </span>
+                            <Button
+                                onClick={handleNextPage}
+                                disabled={!data?.nextContinuationToken}
+                                variant="secondary"
+                                size="small"
+                            >
+                                Next →
+                            </Button>
+                        </div>
+                    )}
                 </Drawer.Body>
             </Drawer.Content>
         </Drawer>
@@ -176,7 +228,15 @@ const CategoryImageWidget = ({
     const [showMediaLibrary, setShowMediaLibrary] = useState(false)
 
     const category = data as AdminProductCategory & { thumbnail?: string | null }
-    const thumbnailUrl = category.thumbnail || (category.metadata?.thumbnail as string)
+    const initialThumbnail = category.thumbnail || (category.metadata?.thumbnail as string)
+    
+    // Local state to track current thumbnail for immediate UI updates
+    const [currentThumbnail, setCurrentThumbnail] = useState<string | null | undefined>(initialThumbnail)
+    
+    // Sync with props when category data changes
+    useEffect(() => {
+        setCurrentThumbnail(initialThumbnail)
+    }, [initialThumbnail])
 
     const updateCategory = useMutation({
         mutationFn: async (payload: { metadata: { thumbnail: string | null } }) => {
@@ -191,7 +251,9 @@ const CategoryImageWidget = ({
             if (!response.ok) throw new Error("Update failed")
             return response.json()
         },
-        onSuccess: () => {
+        onSuccess: (_, variables) => {
+            // Immediately update local state for instant UI feedback
+            setCurrentThumbnail(variables.metadata.thumbnail)
             queryClient.invalidateQueries({ queryKey: ["product_category"] })
             queryClient.invalidateQueries({ queryKey: ["product_categories"] })
             toast.success("Category updated")
@@ -206,38 +268,33 @@ const CategoryImageWidget = ({
         if (!file) return
 
         setUploading(true)
-        const formData = new FormData()
-        formData.append("files", file)
-
+        
         try {
-            const res = await fetch(`${BASE_URL}/admin/files`, {
-                method: "POST",
-                credentials: "include",
-                body: formData
-            }).then(r => r.json())
+            // Use direct fetch with x-upload-context header instead of SDK
+            const formData = new FormData()
+            formData.append("files", file)
 
-            const url = res.files?.[0]?.url
+            const response = await fetch(`${BASE_URL}/admin/uploads`, {
+                method: "POST",
+                headers: {
+                    "x-upload-context": "categories",
+                },
+                credentials: "include",
+                body: formData,
+            })
+
+            if (!response.ok) {
+                throw new Error("Upload failed")
+            }
+
+            const data = await response.json()
+            const url = data.files?.[0]?.url
             if (!url) throw new Error("No URL returned from upload")
 
             updateCategory.mutate({ metadata: { thumbnail: url } })
 
         } catch (err: any) {
-            try {
-                const legacyRes = await fetch(`${BASE_URL}/admin/uploads`, {
-                    method: "POST",
-                    credentials: "include",
-                    body: formData
-                }).then(r => r.json())
-
-                const urlLegacy = legacyRes.uploads?.[0]?.url
-                if (urlLegacy) {
-                    updateCategory.mutate({ metadata: { thumbnail: urlLegacy } })
-                    return
-                }
-                throw err
-            } catch (innerErr) {
-                toast.error("Upload failed", { description: err.message })
-            }
+            toast.error("Upload failed", { description: err.message })
         } finally {
             setUploading(false)
             if (fileInputRef.current) fileInputRef.current.value = ""
@@ -258,7 +315,7 @@ const CategoryImageWidget = ({
             <div className="flex flex-col gap-4 px-6 py-4">
                 <div className="flex items-center justify-between">
                     <Heading level="h2">Category Image</Heading>
-                    {thumbnailUrl && (
+                    {currentThumbnail && (
                         <IconButton
                             size="small"
                             variant="transparent"
@@ -271,12 +328,12 @@ const CategoryImageWidget = ({
                     )}
                 </div>
 
-                {thumbnailUrl ? (
-                    <div className="relative group rounded-lg overflow-hidden border border-ui-border-base">
+                {currentThumbnail ? (
+                    <div className="relative group rounded-lg overflow-hidden border border-ui-border-base bg-ui-bg-subtle">
                         <img
-                            src={thumbnailUrl}
+                            src={currentThumbnail}
                             alt={data.name}
-                            className="w-full h-auto object-cover max-h-[300px]"
+                            className="w-full h-auto object-contain max-h-[300px]"
                         />
                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                             <Button

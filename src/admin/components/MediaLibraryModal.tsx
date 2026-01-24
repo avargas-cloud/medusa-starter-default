@@ -1,6 +1,6 @@
 import { Drawer, Input, Button } from "@medusajs/ui"
 import { Photo, MagnifyingGlass } from "@medusajs/icons"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { BASE_URL } from "../../lib/sdk"
 
@@ -22,14 +22,18 @@ export const MediaLibraryModal = ({
     const [currentPrefix, setCurrentPrefix] = useState("")
     const [searchQuery, setSearchQuery] = useState("")
     const [selectedUrls, setSelectedUrls] = useState<string[]>([])
+    const [continuationToken, setContinuationToken] = useState<string | null>(null)
+    const [pageHistory, setPageHistory] = useState<(string | null)[]>([null])
 
     const { data, isLoading } = useQuery({
-        queryKey: ["media_files", currentPrefix],
+        queryKey: ["media_files", currentPrefix, continuationToken, searchQuery],
         enabled: open,
         refetchOnMount: true,
         queryFn: async () => {
             const params = new URLSearchParams()
             if (currentPrefix) params.set("prefix", currentPrefix)
+            if (continuationToken) params.set("continuationToken", continuationToken)
+            if (searchQuery) params.set("search", searchQuery)
 
             const response = await fetch(`${BASE_URL}/admin/media?${params.toString()}`, {
                 headers: {
@@ -48,6 +52,8 @@ export const MediaLibraryModal = ({
     const handleFolderClick = (prefix: string) => {
         setCurrentPrefix(prefix)
         setSearchQuery("")
+        setContinuationToken(null)
+        setPageHistory([null])
     }
 
     const handleBackClick = () => {
@@ -55,6 +61,24 @@ export const MediaLibraryModal = ({
         parts.pop()
         setCurrentPrefix(parts.length > 0 ? parts.join("/") + "/" : "")
         setSearchQuery("")
+        setContinuationToken(null)
+        setPageHistory([null])
+    }
+
+    const handleNextPage = () => {
+        if (data?.nextContinuationToken) {
+            setPageHistory([...pageHistory, continuationToken])
+            setContinuationToken(data.nextContinuationToken)
+        }
+    }
+
+    const handlePreviousPage = () => {
+        if (pageHistory.length > 1) {
+            const newHistory = [...pageHistory]
+            newHistory.pop()
+            setPageHistory(newHistory)
+            setContinuationToken(newHistory[newHistory.length - 1])
+        }
     }
 
     const handleFileClick = (url: string) => {
@@ -81,6 +105,8 @@ export const MediaLibraryModal = ({
         setCurrentPrefix("")
         setSearchQuery("")
         setSelectedUrls([])
+        setContinuationToken(null)
+        setPageHistory([null])
         onClose()
     }
 
@@ -198,6 +224,32 @@ export const MediaLibraryModal = ({
                                     </div>
                                 )
                             })}
+                        </div>
+                    )}
+
+                    {/* Pagination Controls */}
+                    {!searchQuery && (filteredFolders.length > 0 || filteredFiles.length > 0) && (
+                        <div className="flex justify-between items-center mt-4 pt-4 border-t border-ui-border-base">
+                            <Button
+                                onClick={handlePreviousPage}
+                                disabled={pageHistory.length <= 1}
+                                variant="secondary"
+                                size="small"
+                            >
+                                ← Previous
+                            </Button>
+                            <span className="text-sm text-ui-fg-subtle">
+                                Page {pageHistory.length}
+                                {data?.isTruncated && " of many"}
+                            </span>
+                            <Button
+                                onClick={handleNextPage}
+                                disabled={!data?.nextContinuationToken}
+                                variant="secondary"
+                                size="small"
+                            >
+                                Next →
+                            </Button>
                         </div>
                     )}
                 </Drawer.Body>
