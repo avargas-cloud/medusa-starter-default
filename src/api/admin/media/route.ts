@@ -45,7 +45,7 @@ export const GET = async (
                     allFiles.push(...response.Contents.filter(item => item.Key !== prefix))
                 }
                 
-                nextToken = response.NextContinuationToken
+                nextToken = (response as any).NextContinuationToken
             } while (nextToken)
             
             // Filter by search query
