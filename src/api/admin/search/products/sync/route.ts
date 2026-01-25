@@ -20,7 +20,7 @@ export const POST = async (
             apiKey: process.env.MEILISEARCH_API_KEY!,
         })
 
-        // Fetch all products with variants
+        // Fetch all products with variants and categories
         const { data: products } = await query.graph({
             entity: "product",
             fields: [
@@ -31,6 +31,7 @@ export const POST = async (
                 "thumbnail",
                 "status",
                 "material",
+                "categories.handle",
                 "variants.*",
                 "variants.options.*",
                 "variants.options.option.*",
@@ -44,8 +45,9 @@ export const POST = async (
             handle: product.handle,
             description: product.description || "",
             thumbnail: product.thumbnail || null,
-            status: product.status,
-            material: product.material || null,
+            status: product.status, // ✅ Publishing status
+            metadata_material: product.material || null, // ✅ Fixed field name
+            category_handles: product.categories?.map((c: any) => c.handle) || [], // ✅ Category filtering
             variant_sku: product.variants?.map((v: any) => v.sku).filter(Boolean) || [],
         }))
 

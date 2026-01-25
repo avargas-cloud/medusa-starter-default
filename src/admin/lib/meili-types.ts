@@ -22,6 +22,12 @@ export type MeiliProduct = {
     /** Thumbnail URL */
     thumbnail: string | null;
 
+    /** Product status (published/draft) */
+    status: "published" | "draft";
+
+    /** Array of category handles for filtering */
+    category_handles: string[];
+
     /** Flattened array of variant SKUs for searchability */
     variant_sku: string[];
 

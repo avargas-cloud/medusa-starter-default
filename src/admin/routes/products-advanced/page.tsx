@@ -3,19 +3,20 @@ import {
     Heading,
     Table,
     Badge,
-    StatusBadge,
     Input,
     Button,
     Text,
     Toaster,
     toast,
+    Select,
 } from "@medusajs/ui";
 import { MagnifyingGlass, TagSolid } from "@medusajs/icons";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useState, useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { meiliClient, PRODUCTS_INDEX } from "../../lib/meili-client";
 import type { MeiliProduct } from "../../lib/meili-types";
+import "../../styles/scrollbar-fix.css"; // Force scrollbar visibility
 
 /**
  * Advanced Product Search Page
@@ -36,6 +37,8 @@ const ProductSearchPage = () => {
     const navigate = useNavigate();
     const [searchQuery, setSearchQuery] = useState("");
     const [currentPage, setCurrentPage] = useState(0);
+    const [sortBy, setSortBy] = useState<string>("title:asc"); // New state for sorting
+    const [categoryFilter, setCategoryFilter] = useState<string>("all"); // New state for category
 
 
     // GLOBAL HIJACKER: Intercept native Products button clicks
@@ -99,15 +102,20 @@ const ProductSearchPage = () => {
 
     // Fetch products from MeiliSearch
     const { data, isLoading, isError, error } = useQuery({
-        queryKey: ["meili-products", searchQuery, currentPage],
+        queryKey: ["meili-products", searchQuery, currentPage, sortBy, categoryFilter],
         queryFn: async () => {
             const offset = currentPage * ITEMS_PER_PAGE;
             const index = meiliClient.index(PRODUCTS_INDEX);
+
+            // Build filter string for MeiliSearch
+            const filter = categoryFilter !== "all" ? `category_handles = "${categoryFilter}"` : undefined;
 
             const searchResults = await index.search(searchQuery || "", {
                 limit: ITEMS_PER_PAGE,
                 offset: offset,
                 attributesToHighlight: ["title", "variant_sku"],
+                sort: sortBy ? [sortBy] : undefined, // ✅ Add sorting
+                filter: filter, // ✅ Real category filtering
             });
 
             return {
@@ -132,6 +140,16 @@ const ProductSearchPage = () => {
         (e: React.ChangeEvent<HTMLInputElement>) => {
             setSearchQuery(e.target.value);
             setCurrentPage(0); // Reset to first page on new search
+        },
+        []
+    );
+
+    // Handle category quick search
+    const handleCategoryChange = useCallback(
+        (category: string) => {
+            setCategoryFilter(category);
+            // Don't modify search query, use MeiliSearch filter instead
+            setCurrentPage(0);
         },
         []
     );
@@ -167,11 +185,32 @@ const ProductSearchPage = () => {
                             Search by SKU, title, description, or handle
                         </Text>
                     </div>
+
+                    {/* Category Quick Search */}
+                    <Select value={categoryFilter} onValueChange={handleCategoryChange}>
+                        <Select.Trigger className="w-[220px]">
+                            <Select.Value placeholder="Category Quick Search" />
+                        </Select.Trigger>
+                        <Select.Content>
+                            <Select.Item value="all">All Categories</Select.Item>
+                            <Select.Item value="cables">CABLES</Select.Item>
+                            <Select.Item value="ceiling-lights">CEILING LIGHTS</Select.Item>
+                            <Select.Item value="controllers">CONTROLLERS</Select.Item>
+                            <Select.Item value="led-channels">LED Channels</Select.Item>
+                            <Select.Item value="led-drivers">LED Drivers</Select.Item>
+                            <Select.Item value="led-neon">LED NEON</Select.Item>
+                            <Select.Item value="led-strips">LED STRIPS</Select.Item>
+                            <Select.Item value="linear-lighting-accessories">LINEAR LIGHTING ACCESSORIES</Select.Item>
+                            <Select.Item value="sign-backlighting">SIGN &amp; BACKLIGHTING</Select.Item>
+                            <Select.Item value="switches-dimmers-outlets">SWITCHES, DIMMERS &amp;amp; OUTLETS</Select.Item>
+                            <Select.Item value="underground-lights">UNDERGROUND LIGHTS</Select.Item>
+                        </Select.Content>
+                    </Select>
                 </div>
 
                 {/* Search Bar */}
                 <div className="px-6 py-4 border-b bg-ui-bg-subtle">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-3">
                         <div className="flex-1 relative">
                             <Input
                                 type="search"
@@ -185,6 +224,25 @@ const ProductSearchPage = () => {
                                 <MagnifyingGlass />
                             </div>
                         </div>
+
+                        {/* Sort Dropdown */}
+                        <Select value={sortBy} onValueChange={(value) => {
+                            setSortBy(value);
+                            setCurrentPage(0); // Reset to first page
+                        }}>
+                            <Select.Trigger className="w-[180px]">
+                                <Select.Value placeholder="Sort by..." />
+                            </Select.Trigger>
+                            <Select.Content>
+                                <Select.Item value="title:asc">Title A-Z</Select.Item>
+                                <Select.Item value="title:desc">Title Z-A</Select.Item>
+                                <Select.Item value="status:asc">Status: Draft First</Select.Item>
+                                <Select.Item value="status:desc">Status: Published First</Select.Item>
+                                <Select.Item value="id:desc">Newest First</Select.Item>
+                                <Select.Item value="id:asc">Oldest First</Select.Item>
+                            </Select.Content>
+                        </Select>
+
                         {data && (
                             <Text size="small" className="text-ui-fg-subtle whitespace-nowrap">
                                 {data.totalHits} results ({data.processingTime}ms)
@@ -294,11 +352,13 @@ const ProductSearchPage = () => {
 
                                             {/* Status */}
                                             <Table.Cell>
-                                                <StatusBadge
-                                                    color={product.metadata?.status === "published" ? "green" : "grey"}
+                                                <Badge
+                                                    size="small"
+                                                    color={product.status === "published" ? "green" : "grey"}
+                                                    className="capitalize"
                                                 >
-                                                    {product.metadata?.status || "draft"}
-                                                </StatusBadge>
+                                                    {product.status}
+                                                </Badge>
                                             </Table.Cell>
                                         </Table.Row>
                                     ))

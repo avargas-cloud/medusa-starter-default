@@ -1,0 +1,32 @@
+/* Force scrollbar visibility in Select dropdowns */
+[data-radix-select-viewport] {
+    overflow-y: auto !important;
+    max-height: 300px !important;
+}
+
+/* Custom scrollbar styling - WebKit browsers (Chrome, Safari, Edge) */
+[data-radix-select-viewport]::-webkit-scrollbar {
+    width: 10px !important;
+    display: block !important;
+}
+
+[data-radix-select-viewport]::-webkit-scrollbar-track {
+    background: rgba(100, 100, 100, 0.2) !important;
+    border-radius: 10px !important;
+}
+
+[data-radix-select-viewport]::-webkit-scrollbar-thumb {
+    background: rgba(150, 150, 150, 0.6) !important;
+    border-radius: 10px !important;
+    border: 2px solid transparent !important;
+}
+
+[data-radix-select-viewport]::-webkit-scrollbar-thumb:hover {
+    background: rgba(180, 180, 180, 0.8) !important;
+}
+
+/* Firefox scrollbar */
+[data-radix-select-viewport] {
+    scrollbar-width: thin !important;
+    scrollbar-color: rgba(150, 150, 150, 0.6) rgba(100, 100, 100, 0.2) !important;
+}
