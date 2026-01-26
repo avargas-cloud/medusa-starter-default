@@ -109,40 +109,41 @@ module.exports = defineConfig({
                 "variant_sku",
                 "metadata"
               ],
-              minWordSizeForTypos: {
-                oneTypo: 7,
-                twoTypos: 10,
+              sortableAttributes: [
+                "title",
+                "id",
+                "created_at",
+                "updated_at",
+                "status"
+              ],
+              typoTolerance: {
+                enabled: true,
+                minWordSizeForTypos: {
+                  oneTypo: 7,
+                  twoTypos: 10,
+                },
               },
             },
-            // ✅ CRITICAL: Allow sorting by these fields
-            sortableAttributes: [
-              "title",
-              "id",
-              "created_at",
-              "updated_at",
-              "status"
-            ],
-          },
-          primaryKey: "id",
-          // Transformer: Flatten variant SKUs and metadata for searchability
-          transformer: (product: any) => {
-            return {
-              id: product.id,
-              title: product.title,
-              description: product.description,
-              handle: product.handle,
-              thumbnail: product.thumbnail,
-              // KEY: Extract all variant SKUs into flat array
-              variant_sku: product.variants?.map((v: any) => v.sku).filter(Boolean) || [],
-              // Index metadata for advanced filtering
-              status: product.status, // ✅ CRITICAL: Required for table
-              metadata: product.metadata || {},
-              metadata_material: product.metadata?.material || null,
-              metadata_category: product.metadata?.category || null,
+            primaryKey: "id",
+            // Transformer: Flatten variant SKUs and metadata for searchability
+            transformer: (product: any) => {
+              return {
+                id: product.id,
+                title: product.title,
+                description: product.description,
+                handle: product.handle,
+                thumbnail: product.thumbnail,
+                // KEY: Extract all variant SKUs into flat array
+                variant_sku: product.variants?.map((v: any) => v.sku).filter(Boolean) || [],
+                // Index metadata for advanced filtering
+                status: product.status, // ✅ CRITICAL: Required for table
+                metadata: product.metadata || {},
+                metadata_material: product.metadata?.material || null,
+                metadata_category: product.metadata?.category || null,
+              }
             }
-          }
+          },
         },
       },
-    },
   ]
 })
