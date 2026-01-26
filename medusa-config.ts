@@ -116,13 +116,6 @@ module.exports = defineConfig({
                 "updated_at",
                 "status"
               ],
-              typoTolerance: {
-                enabled: true,
-                minWordSizeForTypos: {
-                  oneTypo: 7,
-                  twoTypos: 10,
-                },
-              },
             },
             primaryKey: "id",
             // Transformer: Flatten variant SKUs and metadata for searchability
