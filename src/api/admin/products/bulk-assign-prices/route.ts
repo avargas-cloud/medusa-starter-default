@@ -50,7 +50,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             try {
                 // Use the admin update endpoint
                 await fetch(
-                    `http://localhost:9000/admin/products/${variant.product.id}/variants/${variant.id}`,
+                    `http://localhost:9000/admin/products/${variant.product!.id}/variants/${variant.id}`,
                     {
                         method: "POST",
                         headers: {

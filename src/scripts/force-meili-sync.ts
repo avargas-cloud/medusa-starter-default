@@ -79,7 +79,7 @@ export default async function forceMeiliSync({ container }: ExecArgs) {
 
         // Wait for indexing to complete
         logger.info("  ⏳ Waiting for indexing...")
-        await client.waitForTask(result.taskUid)
+        await (index as any).waitForTask(result.taskUid)
 
         logger.info("\n✅ SYNC COMPLETE!")
         logger.info("Refresh /app/products-advanced to see updated statuses")

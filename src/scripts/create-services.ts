@@ -78,7 +78,7 @@ export default async function createServices({ container }: any) {
 
         logger.info(`\n📋 Creating ${services.length} service(s)...`)
 
-        const createdServices = []
+        const createdServices: any[] = []
 
         for (const service of services) {
             try {
