@@ -36,23 +36,7 @@ fi
 echo "📦 Installing project dependencies..."
 yarn install
 
-# 4. Setup Local MeiliSearch (for development only)
-if [ ! -d "bin" ]; then
-    mkdir -p bin
-fi
-
-if [ ! -f "bin/meilisearch" ]; then
-    echo "🔍 Local MeiliSearch binary not found. Downloading..."
-    # Download script for Linux/Mac (adjust if Windows Git Bash needs .exe)
-    curl -L https://install.meilisearch.com | sh
-    mv meilisearch bin/meilisearch
-    chmod +x bin/meilisearch
-    echo "✅ MeiliSearch downloaded to bin/meilisearch"
-else
-    echo "✅ Local MeiliSearch binary found."
-fi
-
-# 5. Env File Setup
+# 4. Env File Setup
 if [ ! -f ".env" ]; then
     echo "📝 .env file not found."
     if [ -f ".env.template" ]; then
