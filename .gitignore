@@ -27,3 +27,9 @@ build
 
 .medusa
 _reference_upload/
+
+# Local binaries and data
+bin/
+meilisearch
+meilisearch-binary
+data.ms/
