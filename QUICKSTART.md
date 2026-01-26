@@ -24,6 +24,29 @@ git pull origin master
 
 ---
 
+## ⚙️ Configurar MeiliSearch Local vs Railway
+
+Tu `.env` apunta a Railway por defecto. Para trabajar con MeiliSearch **local**, agrega estas líneas a tu `.env`:
+
+```bash
+# Descomentar para desarrollo local:
+MEILISEARCH_HOST=http://localhost:7700
+MEILISEARCH_API_KEY=masterKey
+VITE_MEILISEARCH_HOST=http://localhost:7700
+VITE_MEILISEARCH_SEARCH_KEY=masterKey
+```
+
+O copia el template:
+```bash
+cat .env.meilisearch.local >> .env
+```
+
+**¿Cuándo cambiar?**
+- **Desarrollo local:** Usa `localhost:7700` (más rápido, offline)
+- **Testing con Railway:** Usa la URL de Railway (para probar producción)
+
+---
+
 ## Si Algo Falla
 
 ### Problema: "Port 9000 already in use"
