@@ -13,14 +13,18 @@ export default async function forceMeiliSync({ container }: ExecArgs) {
 
     logger.info("🔄 Force Syncing Products to MeiliSearch...")
 
+
     try {
         const { MeiliSearch } = await import("meilisearch")
+
+        logger.info(`  Connecting to MeiliSearch at: ${process.env.MEILISEARCH_HOST}`)
 
         // Initialize MeiliSearch
         const client = new MeiliSearch({
             host: process.env.MEILISEARCH_HOST!,
             apiKey: process.env.MEILISEARCH_API_KEY!,
         })
+
 
         // Fetch ALL products with status
         const { data: products } = await query.graph({

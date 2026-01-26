@@ -9,7 +9,7 @@ cd medusa-starter-default
 ./dev.sh
 ```
 
-**Tiempo esperado:** 3-5 minutos (primera vez con instalación de node_modules)
+**Tiempo esperado:** 2-3 minutos (primera vez con instalación de node_modules)
 
 ---
 
@@ -24,26 +24,20 @@ git pull origin master
 
 ---
 
-## ⚙️ Configurar MeiliSearch Local vs Railway
+## Arquitectura Simplificada
 
-Tu `.env` apunta a Railway por defecto. Para trabajar con MeiliSearch **local**, agrega estas líneas a tu `.env`:
+**TODO corre en Railway (nube):**
+- ✅ PostgreSQL (base de datos)
+- ✅ Redis (cache/eventos)  
+- ✅ MeiliSearch (búsqueda avanzada)
 
-```bash
-# Descomentar para desarrollo local:
-MEILISEARCH_HOST=http://localhost:7700
-MEILISEARCH_API_KEY=masterKey
-VITE_MEILISEARCH_HOST=http://localhost:7700
-VITE_MEILISEARCH_SEARCH_KEY=masterKey
-```
+**Solo local:**
+- 💻 Medusa Server (puerto 9000)
 
-O copia el template:
-```bash
-cat .env.meilisearch.local >> .env
-```
-
-**¿Cuándo cambiar?**
-- **Desarrollo local:** Usa `localhost:7700` (más rápido, offline)
-- **Testing con Railway:** Usa la URL de Railway (para probar producción)
+**Ventajas:**
+- Sin setup complicado de servicios locales
+- Mismos datos en casa/trabajo/laptop
+- Un solo comando: `./dev.sh`
 
 ---
 
@@ -61,12 +55,6 @@ yarn install
 ./dev.sh
 ```
 
-### Problema: MeiliSearch no arranca
-```bash
-rm -rf data.ms
-./dev.sh
-```
-
 ### Problema: Cambios en `package.json` o `medusa-config.ts`
 ```bash
 yarn install
@@ -78,8 +66,8 @@ pkill -9 -f "node.*medusa"
 
 ## Lo Que Hace `dev.sh` Automáticamente
 
-1. ✅ Arranca MeiliSearch local (si existe `bin/meilisearch`)
-2. ✅ Arranca Medusa Server
+1. ✅ Arranca Medusa Server
+2. ✅ Se conecta a Railway (Postgres, Redis, MeiliSearch)
 3. ✅ Recarga automáticamente si editas archivos
 4. ✅ Limpia procesos cuando haces Ctrl+C
 
@@ -89,18 +77,7 @@ pkill -9 -f "node.*medusa"
 
 - **Admin:** http://localhost:9000/app
 - **API:** http://localhost:9000
-- **MeiliSearch:** http://localhost:7700
-
----
-
-## Credenciales de Desarrollo
-
-Las credenciales están en tu `.env` file (NO committed to git).
-
-Si no tienes `.env`, copia `.env.template`:
-```bash
-cp .env.template .env
-```
+- **Railway Dashboard:** https://railway.app/project/[tu-proyecto]
 
 ---
 
@@ -110,22 +87,17 @@ cp .env.template .env
 |---------|-----------------|
 | "Cannot find module" | `yarn install` |
 | "Port in use" | `pkill -9 -f "node.*medusa"` |
-| MeiliSearch error | `rm -rf data.ms && ./dev.sh` |
 | Config cambió | `yarn install && pkill -9 -f medusa && ./dev.sh` |
 | Nada funciona | `./setup.sh` (reinstala todo) |
+| MeiliSearch error | Verifica Railway dashboard - servicio corriendo? |
 
 ---
 
-## Arquitectura Local vs Railway
+## ¿Por Qué Todo en Railway?
 
-### Local (Tu PC)
-- Postgres: Railway (nube)
-- Redis: Railway (nube)  
-- MeiliSearch: Local (`bin/meilisearch`)
-- Medusa: Local (puerto 9000)
+✅ **Simple:** Un solo comando `./dev.sh`  
+✅ **Consistente:** Mismos datos en todas las máquinas  
+✅ **Sin setup:** No necesitas instalar Postgres/Redis/MeiliSearch local  
+✅ **Portátil:** Cambias de PC y funciona igual  
 
-### Railway (Producción)
-- Postgres: Railway service
-- Redis: Railway service
-- MeiliSearch: Railway service
-- Medusa: Railway service
+La única "desventaja" es que necesitas internet, pero si necesitas la DB de Railway de todas formas, no importa.
