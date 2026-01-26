@@ -129,6 +129,7 @@ module.exports = defineConfig({
                 // KEY: Extract all variant SKUs into flat array
                 variant_sku: product.variants?.map((v: any) => v.sku).filter(Boolean) || [],
                 // Index metadata for advanced filtering
+                status: product.status, // ✅ CRITICAL: Required for table
                 metadata: product.metadata || {},
                 metadata_material: product.metadata?.material || null,
                 metadata_category: product.metadata?.category || null,

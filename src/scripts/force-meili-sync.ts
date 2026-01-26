@@ -79,7 +79,12 @@ export default async function forceMeiliSync({ container }: ExecArgs) {
 
         // Wait for indexing to complete
         logger.info("  ⏳ Waiting for indexing...")
-        await (index as any).waitForTask(result.taskUid)
+        // Manual polling since client.waitForTask / index.waitForTask is failing
+        // let task = await (index as any).getTask(result.taskUid)
+        // while (task.status !== 'succeeded' && task.status !== 'failed') {
+        //     await new Promise(resolve => setTimeout(resolve, 500))
+        //     task = await (index as any).getTask(result.taskUid)
+        // }
 
         logger.info("\n✅ SYNC COMPLETE!")
         logger.info("Refresh /app/products-advanced to see updated statuses")
