@@ -16,8 +16,15 @@ echo "🚀 Starting Development Environment..."
 
 # Clean up any old Medusa processes (safe - only kills medusa-related)
 echo "🧹 Cleaning up old Medusa processes..."
-pkill -f "medusa develop" 2>/dev/null || true
-pkill -f "nodemon.*medusa" 2>/dev/null || true
+pkill -9 -f "medusa develop" 2>/dev/null || true
+pkill -9 -f "nodemon.*medusa" 2>/dev/null || true
+
+# Also free port 9000 if anything is using it
+PORT_PID=$(lsof -ti:9000 2>/dev/null || true)
+if [ ! -z "$PORT_PID" ]; then
+    echo "   Freeing port 9000 (PID: $PORT_PID)..."
+    kill -9 $PORT_PID 2>/dev/null || true
+fi
 sleep 1
 
 echo "📡 Using Railway services (Postgres, Redis, MeiliSearch)"
