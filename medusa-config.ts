@@ -107,6 +107,7 @@ module.exports = defineConfig({
                 "handle",
                 "thumbnail",
                 "variant_sku",
+                "status",
                 "metadata"
               ],
               sortableAttributes: [

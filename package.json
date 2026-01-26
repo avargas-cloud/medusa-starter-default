@@ -4,6 +4,11 @@
   "description": "A starter for Medusa projects.",
   "author": "Medusa (https://medusajs.com)",
   "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": "DO NOT USE NPM - USE YARN INSTEAD",
+    "yarn": ">=1.22.0"
+  },
   "keywords": [
     "sqlite",
     "postgres",
@@ -64,9 +69,5 @@
     "typescript": "^5.6.2",
     "vite": "^5.4.14",
     "yalc": "1.0.0-pre.53"
-  },
-  "engines": {
-    "node": ">=20",
-    "npm": ">=10.0.0"
   }
 }
