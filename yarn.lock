@@ -1983,7 +1983,7 @@
   resolved "https://registry.yarnpkg.com/@medusajs/cart/-/cart-2.13.1.tgz#61d6681cfbb9d40d229dee564263e69a4f280fdb"
   integrity sha512-TC8kU2JQAewOVQm3xJV0L2Th+JAYOtaeW1k9q/1MmieqW+rT+0IEGwEOsa8oW27qoPBtOU243bJJTbHSK75l2A==
 
-"@medusajs/cli@^2.13.0":
+"@medusajs/cli@^2.13.1":
   version "2.13.1"
   resolved "https://registry.yarnpkg.com/@medusajs/cli/-/cli-2.13.1.tgz#eb390bf3fd5c5b41195a112657393245caaaa4cd"
   integrity sha512-tco3EmRmp4yhZZfRZyj297m4NiWV1W175/GDoBbhqsRUo4t6vlHL4DBd6S/aPQ3n2EOhYQGaRJj/51bHvWDfIg==
