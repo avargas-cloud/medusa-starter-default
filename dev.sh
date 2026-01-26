@@ -13,6 +13,13 @@ cleanup() {
 trap cleanup SIGINT
 
 echo "🚀 Starting Development Environment..."
+
+# Clean up any old Medusa processes (safe - only kills medusa-related)
+echo "🧹 Cleaning up old Medusa processes..."
+pkill -f "medusa develop" 2>/dev/null || true
+pkill -f "nodemon.*medusa" 2>/dev/null || true
+sleep 1
+
 echo "📡 Using Railway services (Postgres, Redis, MeiliSearch)"
 
 # Start Medusa with explicit nodemon config
