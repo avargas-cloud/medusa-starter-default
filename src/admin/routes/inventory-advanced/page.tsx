@@ -68,7 +68,12 @@ const InventoryPage = () => {
                     onSortChange={handleSortChange}
                     totalItems={totalHits}
                 />
-                <InventoryTable items={items} isLoading={isLoading} />
+                <InventoryTable
+                    items={items}
+                    isLoading={isLoading}
+                    sortBy={sortBy}
+                    onSortChange={handleSortChange}
+                />
                 <InventoryPagination
                     currentPage={currentPage}
                     totalPages={totalPages}
