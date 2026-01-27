@@ -29,3 +29,8 @@ export const meiliClient = new MeiliSearch({
  * Primary products index name (matches backend configuration)
  */
 export const PRODUCTS_INDEX = "products";
+
+/**
+ * Inventory items index name (matches backend configuration)
+ */
+export const INVENTORY_INDEX = "inventory";

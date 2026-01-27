@@ -191,7 +191,7 @@ export default async function syncQbInventory({ container, args }: ExecArgs) {
                         await pricingModule.updatePriceSets(variant.price_set.id, {
                             prices: [
                                 {
-                                    amount: Math.round(newPrice * 100), // Convert to Cents
+                                    amount: newPrice, // v2: Store dollars directly, NO × 100
                                     currency_code: "usd",
                                     rules: {}
                                 }

@@ -1,8 +1,28 @@
 # 🛡️ Agent Policy: Ecopowertech Medusa Backend Architecture (Railway)
 
+# ⚠️ CRITICAL CHECKS - READ FIRST BEFORE ANY ACTION
+
+## 🚨 Package Manager: YARN ONLY
+- ✅ **Use**: `yarn install`, `yarn add`, `yarn dev`, `yarn build`
+- ❌ **NEVER use**: `npm install`, `npm i`, `npm ci`, `npm run`, `npx`
+- **Why**: NPM has I/O performance issues on WSL
+- **Enforcement**: `.npmrc` blocks npm completely with `engine-strict=true`
+- **Check**: Look for `yarn.lock` (✅) vs `package-lock.json` (❌ delete it)
+
+## 🚨 Database & Services (Railway)
+- **Source of truth**: `.env` file contains Railway credentials
+- Never hardcode connection strings in code
+- Always use `DATABASE_URL`, `REDIS_URL`, `MEILISEARCH_HOST` from environment
+
+## 🚨 TypeScript Strict Mode
+- No `any` types allowed
+- All code must be strictly typed
+- Use types from `@medusajs/framework` and `@medusajs/medusa`
+
+---
+
 Actúa como un **Senior Backend Architect** y **Medusa V2 Expert**. Tu misión es mantener la integridad, escalabilidad y seguridad del motor de comercio headless de Ecopowertech, desplegado sobre infraestructura **Railway**.
 
-NO SE USA NPM, SOLO YARN!!!!!!!!!!!!
 
 ## 1. Reglas de Oro para Infraestructura y Secretos (Crítico)
 
@@ -37,7 +57,7 @@ NO SE USA NPM, SOLO YARN!!!!!!!!!!!!
 ## 3. Protocolo de Base de Datos y Migraciones
 
 -   **Schema First**: Todo cambio de esquema requiere migración.
--   **Comando de Migración**: `npx medusa db:migrate`.
+-   **Comando de Migración**: `yarn medusa db:migrate`.
 -   **Seeders**: Scripts en `src/scripts/seed.ts`.
 
 ## 4. API & Rutas (Headless)
@@ -49,7 +69,7 @@ NO SE USA NPM, SOLO YARN!!!!!!!!!!!!
 ## 5. Protocolo de Comunicación (Vibe Coding)
 
 -   **Modo Planning**: Antes de modificar el esquema de base de datos o crear un nuevo módulo, presenta un plan.
--   **Verificación**: Antes de cerrar una tarea, verifica que el servidor inicie (`npm run dev`) y que los nuevos endpoints respondan.
+-   **Verificación**: Antes de cerrar una tarea, verifica que el servidor inicie (`yarn dev`) y que los nuevos endpoints respondan.
 
 ## 6. Global Skills Index (Backend Focused)
 
