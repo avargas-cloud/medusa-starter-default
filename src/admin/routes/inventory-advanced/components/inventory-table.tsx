@@ -1,11 +1,13 @@
-import { Table, Badge, DropdownMenu, IconButton } from "@medusajs/ui"
-import { EllipsisHorizontal, PencilSquare, Trash, TagSolid } from "@medusajs/icons"
+import { Table, Badge, DropdownMenu, IconButton, clx } from "@medusajs/ui"
+import { EllipsisHorizontal, PencilSquare, Trash, TagSolid, TriangleUpMini, TriangleDownMini } from "@medusajs/icons"
 import { MeiliInventoryItem } from "../../../lib/meili-types"
 import { useNavigate } from "react-router-dom"
 
 interface InventoryTableProps {
     items: MeiliInventoryItem[]
     isLoading: boolean
+    sortBy?: string
+    onSortChange?: (sort: string) => void
 }
 
 /**
@@ -17,7 +19,7 @@ interface InventoryTableProps {
  * - Title, SKU, Reserved, Stock → Inventory Item page
  * - Price → Variant Edit page
  */
-export const InventoryTable = ({ items, isLoading }: InventoryTableProps) => {
+export const InventoryTable = ({ items, isLoading, sortBy, onSortChange }: InventoryTableProps) => {
     const navigate = useNavigate()
 
     const formatPrice = (price: number, currencyCode: string) => {
@@ -38,6 +40,39 @@ export const InventoryTable = ({ items, isLoading }: InventoryTableProps) => {
         navigate(`/products/${productId}/variants/${variantId}`)
     }
 
+    const handleHeaderClick = (column: string) => {
+        if (!onSortChange) return
+
+        // If currently sorting by this column, toggle direction
+        if (sortBy?.startsWith(column)) {
+            const direction = sortBy.endsWith('asc') ? 'desc' : 'asc'
+            onSortChange(`${column}:${direction}`)
+        } else {
+            // Default to ascending for new column
+            onSortChange(`${column}:asc`)
+        }
+    }
+
+    const SortIndicator = ({ column }: { column: string }) => {
+        if (!sortBy?.startsWith(column)) return <div className="w-4 h-4 ml-1" /> // Placeholder to prevent jump
+
+        return sortBy.endsWith('asc')
+            ? <TriangleUpMini className="w-4 h-4 ml-1 text-ui-fg-interactive" />
+            : <TriangleDownMini className="w-4 h-4 ml-1 text-ui-fg-interactive" />
+    }
+
+    const HeaderCell = ({ column, children, className }: { column: string, children: React.ReactNode, className?: string }) => (
+        <Table.HeaderCell
+            className={clx("cursor-pointer hover:bg-ui-bg-subtle-hover transition-colors select-none", className)}
+            onClick={() => handleHeaderClick(column)}
+        >
+            <div className="flex items-center">
+                {children}
+                <SortIndicator column={column} />
+            </div>
+        </Table.HeaderCell>
+    )
+
     if (isLoading) {
         return (
             <div className="flex items-center justify-center h-64">
@@ -52,11 +87,11 @@ export const InventoryTable = ({ items, isLoading }: InventoryTableProps) => {
                 <Table.Header>
                     <Table.Row>
                         <Table.HeaderCell className="w-16">Image</Table.HeaderCell>
-                        <Table.HeaderCell>Title</Table.HeaderCell>
-                        <Table.HeaderCell>SKU</Table.HeaderCell>
+                        <HeaderCell column="title">Title</HeaderCell>
+                        <HeaderCell column="sku">SKU</HeaderCell>
                         <Table.HeaderCell>Reserved</Table.HeaderCell>
-                        <Table.HeaderCell>In Stock</Table.HeaderCell>
-                        <Table.HeaderCell>Price</Table.HeaderCell>
+                        <HeaderCell column="totalStock">In Stock</HeaderCell>
+                        <HeaderCell column="price">Price</HeaderCell>
                         <Table.HeaderCell className="w-12"></Table.HeaderCell>
                     </Table.Row>
                 </Table.Header>

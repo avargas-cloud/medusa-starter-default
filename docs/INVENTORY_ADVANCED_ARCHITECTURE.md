@@ -389,7 +389,15 @@ const goToVariantEdit = (productId: string, variantId: string) => {
 - Uses `text-ui-fg-base` (grey/white) for all interactive text
 - Interactivity signaled via `cursor-pointer` and `hover:bg-ui-bg-subtle-hover`
 - Maintains professional, dense table aesthetic
+- Uses `text-ui-fg-base` (grey/white) for all interactive text
+- Interactivity signaled via `cursor-pointer` and `hover:bg-ui-bg-subtle-hover`
+- Maintains professional, dense table aesthetic
 - Consistent with Medusa Admin UI palette
+
+#### Interactive Sorting
+- **Clickable Headers**: Title, SKU, In Stock, Price.
+- **Visual Feedback**: Sort indicators (arrows) show current sort column and direction.
+- **State Sync**: Table sort state stays perfectly synchronized with the dropdown menu.
 
 ---
 
@@ -409,6 +417,22 @@ const goToVariantEdit = (productId: string, variantId: string) => {
 ```
 User Input → State Update → MeiliSearch Query → Update Results
 ```
+
+### Sorting Logic
+
+**File**: `hooks/use-inventory-search.ts`
+
+**Key Updates (Jan 27, 2026)**:
+- **Field Correction**: Switched from `stock` to `totalStock` to match MeiliSearch index attribute.
+- **Price Sorting**: Added support for `price:asc` and `price:desc`.
+- **Direction Toggle**: Implemented via clickable table headers.
+
+**Supported Sort Keys**:
+- `title` (A-Z)
+- `sku` (A-Z)
+- `totalStock` (Numeric)
+- `price` (Numeric, USD)
+
 
 ### useCategories
 

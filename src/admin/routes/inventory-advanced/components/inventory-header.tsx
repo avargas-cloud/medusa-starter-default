@@ -91,8 +91,10 @@ export const InventoryHeader = ({
                         <Select.Content>
                             <Select.Item value="title:asc">Title A-Z</Select.Item>
                             <Select.Item value="title:desc">Title Z-A</Select.Item>
-                            <Select.Item value="stock:asc">Stock: Low First</Select.Item>
-                            <Select.Item value="stock:desc">Stock: High First</Select.Item>
+                            <Select.Item value="totalStock:asc">Stock: Low First</Select.Item>
+                            <Select.Item value="totalStock:desc">Stock: High First</Select.Item>
+                            <Select.Item value="price:asc">Price: Low to High</Select.Item>
+                            <Select.Item value="price:desc">Price: High to Low</Select.Item>
                             <Select.Item value="sku:asc">SKU A-Z</Select.Item>
                             <Select.Item value="sku:desc">SKU Z-A</Select.Item>
                         </Select.Content>
@@ -104,7 +106,7 @@ export const InventoryHeader = ({
                         </Text>
                     )}
                 </div>
-            </div>
+            </div >
         </>
     )
 }
