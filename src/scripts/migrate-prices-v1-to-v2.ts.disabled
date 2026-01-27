@@ -73,13 +73,22 @@ export default async function ({ container }: ExecArgs) {
         }
 
         try {
-            // Convert: cents → dollars
+            // Convert: cents → dollars  
             const newAmount = oldAmount / 100
 
-            await pricingModule.updatePrices({
-                id: price.id,
-                amount: newAmount
+            // Update via pricingModule - use the set-level API
+            const priceSet = await pricingModule.retrievePriceSet(price.price_set_id as string, {
+                relations: ["prices"]
             })
+
+            const priceToUpdate = priceSet.prices?.find((p: any) => p.id === price.id)
+            if (priceToUpdate) {
+                await pricingModule.updatePriceSets(price.price_set_id as string, {
+                    prices: priceSet.prices?.map((p: any) =>
+                        p.id === price.id ? { ...p, amount: newAmount } : p
+                    )
+                })
+            }
 
             migrated++
 

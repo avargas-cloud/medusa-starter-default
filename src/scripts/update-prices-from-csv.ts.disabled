@@ -89,7 +89,7 @@ export default async function updatePricesFromCSV({ container }: ExecArgs) {
                 continue
             }
 
-            const currentAmount = parseInt(basePrice.amount)
+            const currentAmount = parseInt(String(basePrice.amount))
 
             if (currentAmount === correctPriceInCents) {
                 // Already correct
@@ -97,10 +97,10 @@ export default async function updatePricesFromCSV({ container }: ExecArgs) {
             }
 
             // Update price using pricingModule
-            await pricingModule.updatePrices({
+            await pricingModule.updatePrices([{
                 id: basePrice.id,
                 amount: correctPriceInCents,
-            })
+            }])
 
             updated++
             const oldDollars = (currentAmount / 100).toFixed(2)

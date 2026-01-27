@@ -32,7 +32,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 "variants.product.categories.id" // NEW: for category filtering
             ],
             // 3. Pass pagination config from frontend (limit, offset)
-            ...req.queryConfig,
+            pagination: req.queryConfig?.pagination,
         })
 
         console.log("✅ Query Graph executed, items:", inventoryItems?.length)

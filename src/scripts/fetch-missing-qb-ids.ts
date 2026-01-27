@@ -148,9 +148,8 @@ export default async function fetchMissingQbIds({ container }: ExecArgs) {
         const updates: Array<{ variant: any; qbItem: any }> = []
 
         for (const variant of variantsWithoutQbId) {
-            const sku = variant.sku.toUpperCase()
-
-            // Intentar match exacto por SKU = Name
+            const sku = variant.sku?.toUpperCase()
+            if (!sku) continue
             let qbItem = qbMap.get(sku)
 
             if (qbItem) {
