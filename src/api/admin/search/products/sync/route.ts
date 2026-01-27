@@ -32,6 +32,8 @@ export const POST = async (
                 "status",
                 "material",
                 "categories.handle",
+                "categories.parent_category.handle",
+                "categories.parent_category.parent_category.handle", // Depth 3
                 "variants.*",
                 "variants.options.*",
                 "variants.options.option.*",
@@ -39,20 +41,54 @@ export const POST = async (
         })
 
         // Transform products for MeiliSearch
-        const meiliProducts = products.map((product: any) => ({
-            id: product.id,
-            title: product.title,
-            handle: product.handle,
-            description: product.description || "",
-            thumbnail: product.thumbnail || null,
-            status: product.status, // ✅ Publishing status
-            metadata_material: product.material || null, // ✅ Fixed field name
-            category_handles: product.categories?.map((c: any) => c.handle) || [], // ✅ Category filtering
-            variant_sku: product.variants?.map((v: any) => v.sku).filter(Boolean) || [],
-        }))
+        const meiliProducts = products.map((product: any) => {
+            // Flatten all category handles (including parents)
+            const allCategoryHandles = new Set<string>()
+
+            product.categories?.forEach((c: any) => {
+                if (c.handle) allCategoryHandles.add(c.handle)
+                if (c.parent_category?.handle) allCategoryHandles.add(c.parent_category.handle)
+                if (c.parent_category?.parent_category?.handle) allCategoryHandles.add(c.parent_category.parent_category.handle)
+            })
+
+            return {
+                id: product.id,
+                title: product.title,
+                handle: product.handle,
+                description: product.description || "",
+                thumbnail: product.thumbnail || null,
+                status: product.status,
+                metadata_material: product.material || null,
+                category_handles: Array.from(allCategoryHandles), // ✅ Hierarchy support
+                variant_sku: product.variants?.map((v: any) => v.sku).filter(Boolean) || [],
+            }
+        })
 
         // Sync to MeiliSearch
         const index = client.index("products")
+
+        // CRITICAL: Update settings to allow filtering and sorting
+        await index.updateSettings({
+            filterableAttributes: [
+                "category_handles",
+                "status",
+                "id",
+                "variant_sku"
+            ],
+            sortableAttributes: [
+                "title",
+                "status",
+                "id"
+            ],
+            searchableAttributes: [
+                "title",
+                "variant_sku",
+                "handle",
+                "description",
+                "metadata_material"
+            ]
+        })
+
         const result = await index.addDocuments(meiliProducts, { primaryKey: "id" })
 
         // console.log(`✅ Synced ${meiliProducts.length} products to MeiliSearch`)
