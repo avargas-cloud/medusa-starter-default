@@ -1,0 +1,10 @@
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║   ⛔ THIS PROJECT USES YARN - NPM IS FORBIDDEN ⛔            ║
+║                                                              ║
+║   ✅ Correct: yarn install                                   ║
+║   ❌ Wrong:   npm install                                    ║
+║                                                              ║
+║   Why? NPM has I/O performance issues on WSL                ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝

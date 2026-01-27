@@ -1,0 +1,126 @@
+import { ExecArgs } from "@medusajs/framework/types"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+
+/**
+ * Migrate Prices: Medusa v1 (cents) → v2 (dollars)
+ * 
+ * v1: Stored prices in minor units (cents). $10.00 = 1000
+ * v2: Stores prices in major units (dollars). $10.00 = 10
+ * 
+ * This script divides all prices by 100 to convert from v1 to v2 format.
+ * 
+ * ⚠️ RUN ONLY ONCE - This is a one-time migration!
+ */
+
+export default async function ({ container }: ExecArgs) {
+    const pricingModule = container.resolve(Modules.PRICING)
+    const query = container.resolve(ContainerRegistrationKeys.QUERY)
+    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+
+    logger.info("\n" + "=".repeat(60))
+    logger.info("🔄 PRICE MIGRATION: v1 (cents) → v2 (dollars)")
+    logger.info("=".repeat(60) + "\n")
+
+    // Get all prices using query
+    const { data: allPrices } = await query.graph({
+        entity: "price",
+        fields: ["id", "amount", "currency_code"]
+    })
+
+    logger.info(`📊 Found ${allPrices.length} prices in database\n`)
+
+    let migrated = 0
+    let skipped = 0
+    let errors = 0
+
+    // Group by ranges for logging
+    const ranges = {
+        veryLarge: 0,  // > 100000 (likely v1 cents)
+        large: 0,      // 1000-100000
+        small: 0,      // < 1000 (likely already v2 dollars)
+    }
+
+    // Analyze first
+    logger.info("📋 Analyzing current prices...")
+    for (const price of allPrices) {
+        const amount = price.amount
+        if (amount > 100000) ranges.veryLarge++
+        else if (amount >= 1000) ranges.large++
+        else ranges.small++
+    }
+
+    logger.info(`   Very large (>$1000): ${ranges.veryLarge} prices`)
+    logger.info(`   Large ($10-$1000): ${ranges.large} prices`)
+    logger.info(`   Small (<$10): ${ranges.small} prices`)
+    logger.info("")
+
+    // Ask for confirmation
+    logger.warn("⚠️  About to migrate prices by dividing by 100")
+    logger.warn(`   This will affect ${ranges.veryLarge + ranges.large} prices`)
+    logger.warn(`   Prices < $10 will be skipped (likely already v2)`)
+    logger.info("")
+
+    // Migrate
+    logger.info("🔄 Starting migration...\n")
+
+    for (const price of allPrices) {
+        const oldAmount = price.amount
+
+        // Skip if already in v2 format (< $10 suggests already migrated)
+        if (oldAmount < 1000) {
+            skipped++
+            continue
+        }
+
+        try {
+            // Convert: cents → dollars
+            const newAmount = oldAmount / 100
+
+            await pricingModule.updatePrices({
+                id: price.id,
+                amount: newAmount
+            })
+
+            migrated++
+
+            // Log progress every 50 items
+            if (migrated % 50 === 0) {
+                logger.info(`   ✅ Migrated ${migrated} prices...`)
+            }
+
+            // Log first few for verification
+            if (migrated <= 5) {
+                logger.info(`   📝 ${price.id}: $${(oldAmount / 100).toFixed(2)} (was ${oldAmount})`)
+            }
+
+        } catch (error) {
+            errors++
+            logger.error(`   ❌ Failed to migrate ${price.id}: ${error instanceof Error ? error.message : 'Unknown error'}`)
+        }
+    }
+
+    // Summary
+    logger.info("\n" + "=".repeat(60))
+    logger.info("✅ MIGRATION COMPLETE")
+    logger.info("=".repeat(60))
+    logger.info(`Total prices found:    ${allPrices.length}`)
+    logger.info(`Migrated (÷ 100):      ${migrated}`)
+    logger.info(`Skipped (< $10):       ${skipped}`)
+    logger.info(`Errors:                ${errors}`)
+    logger.info("=".repeat(60))
+    logger.info("")
+
+    if (migrated > 0) {
+        logger.info("✅ Prices successfully migrated to v2 format (dollars)")
+        logger.info("📝 Next steps:")
+        logger.info("   1. Verify prices in Admin UI")
+        logger.info("   2. Update QuickBooks sync scripts")
+        logger.info("   3. Test QB sync with new format")
+        logger.info("")
+    }
+
+    if (errors > 0) {
+        logger.error(`⚠️  ${errors} errors occurred during migration`)
+        logger.error("   Review logs above for details")
+    }
+}

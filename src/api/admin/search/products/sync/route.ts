@@ -67,6 +67,10 @@ export const POST = async (
         // Sync to MeiliSearch
         const index = client.index("products")
 
+        // CRITICAL: Delete all existing documents to avoid stale data
+        await index.deleteAllDocuments()
+        // console.log("🗑️  Cleared existing product documents")
+
         // CRITICAL: Update settings to allow filtering and sorting
         await index.updateSettings({
             filterableAttributes: [

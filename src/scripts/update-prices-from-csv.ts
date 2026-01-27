@@ -1,0 +1,141 @@
+/**
+ * Update Prices from CSV
+ * 
+ * Reads sku.csv and updates all variant prices in Medusa v2
+ * Uses pricingModule API (the correct way for Medusa v2)
+ * 
+ * Usage: yarn medusa exec ./src/scripts/update-prices-from-csv.ts
+ */
+
+import { ExecArgs } from "@medusajs/framework/types"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import fs from 'fs'
+import path from 'path'
+
+export default async function updatePricesFromCSV({ container }: ExecArgs) {
+    const query = container.resolve(ContainerRegistrationKeys.QUERY)
+    const pricingModule = container.resolve(Modules.PRICING)
+    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+
+    logger.info("💰 Updating Prices from CSV...")
+
+    try {
+        // Read CSV
+        const csvPath = path.join(process.cwd(), 'sku.csv')
+        const csvContent = fs.readFileSync(csvPath, 'utf-8')
+        const lines = csvContent.split('\n').filter(line => line.trim())
+
+        // Parse CSV (skip header): SKU,ListID,MPN,SalesPrice,QuantityOnHand
+        const priceMap = new Map<string, number>()
+
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].replace(/\r/g, '')
+            if (!line) continue
+
+            const parts = line.split(',')
+            const sku = parts[0]?.trim()
+            const salesPrice = parts[3]?.trim()
+
+            if (!sku || !salesPrice) continue
+
+            const priceInDollars = parseFloat(salesPrice)
+            const priceInCents = Math.round(priceInDollars * 100)
+
+            priceMap.set(sku, priceInCents)
+        }
+
+        logger.info(`📋 Parsed ${priceMap.size} prices from CSV`)
+
+        // Get all variants with their price sets
+        const { data: variants } = await query.graph({
+            entity: "variant",
+            fields: ["id", "sku", "title", "price_set.id", "price_set.prices.id", "price_set.prices.amount", "price_set.prices.currency_code"],
+        })
+
+        logger.info(`🔍 Found ${variants.length} variants in database\n`)
+
+        let updated = 0
+        let skipped = 0
+        let notInCSV = 0
+        let noPriceSet = 0
+
+        for (const variant of variants) {
+            const sku = variant.sku
+            if (!sku) {
+                skipped++
+                continue
+            }
+
+            const correctPriceInCents = priceMap.get(sku)
+            if (!correctPriceInCents) {
+                notInCSV++
+                logger.warn(`⚠️  SKU not in CSV: ${sku}`)
+                continue
+            }
+
+            if (!variant.price_set) {
+                noPriceSet++
+                logger.warn(`⚠️  No price set for SKU: ${sku}`)
+                continue
+            }
+
+            // Find base price (no rules)
+            const basePrice = variant.price_set.prices?.find((p: any) =>
+                p.currency_code === 'usd' && (!p.rules || Object.keys(p.rules).length === 0)
+            )
+
+            if (!basePrice) {
+                logger.warn(`⚠️  No base USD price for SKU: ${sku}`)
+                continue
+            }
+
+            const currentAmount = parseInt(basePrice.amount)
+
+            if (currentAmount === correctPriceInCents) {
+                // Already correct
+                continue
+            }
+
+            // Update price using pricingModule
+            await pricingModule.updatePrices({
+                id: basePrice.id,
+                amount: correctPriceInCents,
+            })
+
+            updated++
+            const oldDollars = (currentAmount / 100).toFixed(2)
+            const newDollars = (correctPriceInCents / 100).toFixed(2)
+            logger.info(`✅ Updated ${sku}: $${oldDollars} → $${newDollars}`)
+
+            if (updated % 25 === 0) {
+                logger.info(`  Progress: ${updated} updated...`)
+            }
+        }
+
+        logger.info("\n" + "=".repeat(60))
+        logger.info("✅  PRICE UPDATE COMPLETE!")
+        logger.info("=".repeat(60))
+        logger.info(`✅ Updated: ${updated}`)
+        logger.info(`✓  Already correct: ${variants.length - updated - skipped - notInCSV - noPriceSet}`)
+        logger.info(`⚠️  Skipped (no SKU): ${skipped}`)
+        logger.info(`⚠️  Not in CSV: ${notInCSV}`)
+        logger.info(`⚠️  No price set: ${noPriceSet}`)
+        logger.info("=".repeat(60))
+
+        logger.info("\n📝 Next Steps:")
+        logger.info("1. Refresh /app/inventory-advanced to verify prices")
+        logger.info("2. Check a few products in detail to confirm")
+        logger.info("3. Test checkout to ensure pricing is correct")
+
+        return {
+            success: true,
+            updated,
+            total: variants.length,
+        }
+
+    } catch (error: any) {
+        logger.error(`\n❌ Error: ${error.message}`)
+        logger.error(error.stack)
+        throw error
+    }
+}

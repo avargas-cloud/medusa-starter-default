@@ -52,3 +52,45 @@ export type MeiliSearchResponse<T> = {
     offset: number;
     estimatedTotalHits: number;
 };
+
+/**
+ * Inventory Item document structure as indexed in MeiliSearch
+ * Used for inventory-advanced search and filtering
+ */
+export type MeiliInventoryItem = {
+    /** Inventory Item ID (primary key) */
+    id: string;
+
+    /** Product SKU */
+    sku: string;
+
+    /** Product/Variant title */
+    title: string;
+
+    /** Product thumbnail URL */
+    thumbnail: string | null;
+
+    /** Total stock quantity */
+    totalStock: number;
+
+    /** Reserved quantity */
+    totalReserved: number;
+
+    /** Price in dollars (v2 format) */
+    price: number;
+
+    /** Currency code */
+    currencyCode: string;
+
+    /** Variant ID for navigation */
+    variantId: string | null;
+
+    /** Product ID for navigation */
+    productId: string | null;
+
+    /** Array of category handles for filtering (includes parent hierarchy) */
+    category_handles: string[];
+
+    /** Product status */
+    status: "published" | "draft";
+};

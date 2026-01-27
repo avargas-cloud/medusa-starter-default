@@ -1,0 +1,153 @@
+import { defineRouteConfig } from "@medusajs/admin-sdk"
+import { Container, Heading, Table, Badge } from "@medusajs/ui"
+import { useQuery } from "@tanstack/react-query"
+import { FunnelIcon } from "@heroicons/react/20/solid"
+import { sdk } from "../../../lib/sdk"
+
+/**
+ * Custom Inventory Page
+ * 
+ * Adds a "Price" column after "In Stock" for quick price visibility
+ * Replaces the default inventory page at /inventory
+ */
+
+const InventoryPage = () => {
+    // Fetch all inventory items with their linked variants and prices
+    const { data, isLoading } = useQuery({
+        queryKey: ["custom-inventory-with-prices"],
+        queryFn: async () => {
+            // Using admin SDK to fetch inventory items
+            const response = await sdk.admin.inventoryItem.list({
+                limit: 100,
+                fields: "+location_levels.*, +variants.*"
+            })
+            return response
+        }
+    })
+
+    const inventoryItems = data?.inventory_items || []
+
+    // Calculate totals for each item across all locations
+    const itemsWithTotals = inventoryItems.map((item: any) => {
+        const totalStock = item.location_levels?.reduce((sum: number, level: any) => {
+            return sum + (level.stocked_quantity || 0)
+        }, 0) || 0
+
+        const totalReserved = item.location_levels?.reduce((sum: number, level: any) => {
+            return sum + (level.reserved_quantity || 0)
+        }, 0) || 0
+
+        // Get variant info (assuming 1:1 relationship for now)
+        const variant = item.variants?.[0]
+
+        return {
+            ...item,
+            totalStock,
+            totalReserved,
+            variant
+        }
+    })
+
+    // Format price from cents to dollars
+    const formatPrice = (amount?: number, currencyCode?: string) => {
+        if (!amount) return "-"
+        const dollars = amount / 100
+        const currency = currencyCode?.toUpperCase() || "USD"
+        return `${currency} $${dollars.toFixed(2)}`
+    }
+
+    return (
+        <Container>
+            <div className="flex items-center justify-between px-6 py-4">
+                <div>
+                    <Heading level="h1">Inventory</Heading>
+                    <p className="text-ui-fg-subtle text-sm">Manage your inventory items</p>
+                </div>
+                <div className="flex gap-2">
+                    <button className="flex items-center gap-2 px-3 py-2 border rounded-md hover:bg-ui-bg-subtle-hover">
+                        <FunnelIcon className="w-4 h-4" />
+                        Add Filter
+                    </button>
+                </div>
+            </div>
+
+            {isLoading ? (
+                <div className="p-8 text-center text-ui-fg-subtle">Loading inventory...</div>
+            ) : (
+                <Table>
+                    <Table.Header>
+                        <Table.Row>
+                            <Table.HeaderCell>Title</Table.HeaderCell>
+                            <Table.HeaderCell>SKU</Table.HeaderCell>
+                            <Table.HeaderCell>Reserved</Table.HeaderCell>
+                            <Table.HeaderCell>In Stock</Table.HeaderCell>
+                            <Table.HeaderCell>Price</Table.HeaderCell>
+                        </Table.Row>
+                    </Table.Header>
+                    <Table.Body>
+                        {itemsWithTotals.length === 0 ? (
+                            <Table.Row>
+                                <Table.Cell colSpan={5} className="text-center text-ui-fg-subtle">
+                                    No inventory items found
+                                </Table.Cell>
+                            </Table.Row>
+                        ) : (
+                            itemsWithTotals.map((item: any) => (
+                                <Table.Row key={item.id}>
+                                    <Table.Cell>
+                                        <div className="flex flex-col">
+                                            <span className="font-medium">{item.title || item.sku}</span>
+                                            {item.description && (
+                                                <span className="text-xs text-ui-fg-muted">{item.description}</span>
+                                            )}
+                                        </div>
+                                    </Table.Cell>
+                                    <Table.Cell>
+                                        <span className="font-mono text-sm">{item.sku}</span>
+                                    </Table.Cell>
+                                    <Table.Cell>
+                                        {item.totalReserved > 0 ? (
+                                            <Badge color="orange">{item.totalReserved}</Badge>
+                                        ) : (
+                                            <span className="text-ui-fg-muted">0</span>
+                                        )}
+                                    </Table.Cell>
+                                    <Table.Cell>
+                                        {item.totalStock > 0 ? (
+                                            <Badge color="green">{item.totalStock}</Badge>
+                                        ) : (
+                                            <Badge color="red">0</Badge>
+                                        )}
+                                    </Table.Cell>
+                                    <Table.Cell>
+                                        {item.variant?.calculated_price ? (
+                                            <span className="font-medium">
+                                                {formatPrice(
+                                                    item.variant.calculated_price.calculated_amount,
+                                                    item.variant.calculated_price.currency_code
+                                                )}
+                                            </span>
+                                        ) : (
+                                            <span className="text-ui-fg-muted">-</span>
+                                        )}
+                                    </Table.Cell>
+                                </Table.Row>
+                            ))
+                        )}
+                    </Table.Body>
+                </Table>
+            )}
+
+            <div className="px-6 py-4 text-sm text-ui-fg-subtle">
+                Showing {itemsWithTotals.length} of {itemsWithTotals.length} inventory items
+            </div>
+        </Container>
+    )
+}
+
+export const config = defineRouteConfig({
+    label: "Inventory",
+    icon: () => null,
+})
+
+export default InventoryPage
