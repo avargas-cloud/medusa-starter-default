@@ -2,9 +2,10 @@
  * Debug: Check category distribution in MeiliSearch inventory index
  */
 import "dotenv/config"
-import { MeiliSearch } from "meilisearch"
 
 async function checkCategoryDistribution() {
+    const { MeiliSearch } = await import("meilisearch")
+
     console.log("\n🔍 Checking MeiliSearch Inventory Categories...\n")
 
     const client = new MeiliSearch({

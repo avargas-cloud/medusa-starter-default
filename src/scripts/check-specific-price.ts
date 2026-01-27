@@ -39,7 +39,7 @@ export default async function checkPrice({ container }: ExecArgs) {
     logger.info(`Price Set ID: ${variant.price_set?.id}`)
     logger.info(`\nPRICE DATA:`)
     logger.info(`  Amount (cents): ${usdPrice?.amount}`)
-    logger.info(`  Amount (dollars): $${(usdPrice?.amount / 100).toFixed(2)}`)
+    logger.info(`  Amount (dollars): $${usdPrice?.amount ? (usdPrice.amount / 100).toFixed(2) : 'N/A'}`)
     logger.info(`\nEXPECTED VALUES:`)
     logger.info(`  If correct: 5675 cents = $56.75`)
     logger.info(`  If wrong (×100): 567500 cents = $5,675.00`)

@@ -33,7 +33,7 @@ export default async function fixSkuCorruption({ container }: { container: Medus
     let fixed = 0
     let skipped = 0
     let errors = 0
-    const corrupted: Array<{ variantSku: string; inventorySku: string }> = []
+    const corrupted: Array<{ variantSku: string | null; inventorySku: string | null | undefined }> = []
 
     for (const variant of variants) {
         if (!variant.inventory_items || variant.inventory_items.length === 0) {

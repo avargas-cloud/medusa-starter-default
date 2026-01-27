@@ -47,7 +47,7 @@ export default async function fixPriceMultiplier({ container }: ExecArgs) {
             continue
         }
 
-        const usdPrice = variant.price_set.prices.find(p => p.currency_code === "usd")
+        const usdPrice = variant.price_set.prices.find((p: any) => p?.currency_code === "usd")
 
         if (!usdPrice) {
             skipped++
