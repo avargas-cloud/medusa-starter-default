@@ -5,6 +5,7 @@ console.log("🔵 CWD:", process.cwd())
 loadEnv(process.env.NODE_ENV || 'development', process.cwd())
 console.log("🔵 REDIS_URL:", process.env.REDIS_URL ? "FOUND" : "MISSING")
 console.log("🔵 DATABASE_URL:", process.env.DATABASE_URL ? "FOUND" : "MISSING")
+console.log("🔵 WORKER_MODE:", process.env.WORKER_MODE || "NOT SET (will default to 'shared')")
 
 module.exports = defineConfig({
   projectConfig: {
