@@ -149,6 +149,253 @@ interface ProductVariant {
 }
 ```
 
+### Product Attributes & Attribute Sets
+
+Los productos tienen **atributos dinámicos** organizados en **grupos (Attribute Sets)**:
+
+![Product Attributes Example](/home/alejo/.gemini/antigravity/brain/00654e84-b8e4-4d68-b3b5-76d651fb93bf/uploaded_media_1769622980837.png)
+
+#### Estructura de Datos
+
+```typescript
+interface AttributeSet {
+  id: string
+  handle: string  // e.g., "electrical-characteristics"
+  title: string   // e.g., "Electrical Characteristics"
+  attributes: AttributeKey[]
+}
+
+interface AttributeKey {
+  id: string
+  handle: string  // e.g., "power-consumption"
+  label: string   // e.g., "Power Consumption"
+  options: string[] | null  // Valores permitidos (opcional)
+  attribute_set: AttributeSet  // Grupo al que pertenece
+  values: AttributeValue[]
+}
+
+interface AttributeValue {
+  id: string
+  value: string  // e.g., "50W"
+  attribute_key: AttributeKey
+}
+
+// En el producto
+interface ProductWithAttributes {
+  id: string
+  title: string
+  // ... otros campos
+  
+  // Link directo a valores de atributos
+  attribute_values: AttributeValue[]
+}
+```
+
+#### Obtener Atributos de un Producto
+
+**Opción 1: Query con expansión (RECOMENDADO)**
+
+```typescript
+const response = await fetch(
+  'http://localhost:9000/store/products/prod_123?fields=*attribute_values,*attribute_values.attribute_key,*attribute_values.attribute_key.attribute_set',
+  {
+    headers: {
+      'x-publishable-api-key': 'pk_...'
+    }
+  }
+)
+
+const { product } = await response.json()
+
+// product.attribute_values contiene:
+// [
+//   {
+//     id: "attval_1",
+//     value: "50W",
+//     attribute_key: {
+//       handle: "power-consumption",
+//       label: "Power Consumption",
+//       attribute_set: {
+//         handle: "electrical-characteristics",
+//         title: "Electrical Characteristics"
+//       }
+//     }
+//   },
+//   ...
+// ]
+```
+
+**Opción 2: Endpoint custom (más simple)**
+
+```typescript
+// Backend expone endpoint simplificado
+GET /store/products/:id/attributes
+
+// Response agrupado automáticamente
+{
+  "Electrical Characteristics": {
+    "Power Consumption": "50W",
+    "Connection": "JST Plug",
+    "Controllable By": "Any 24VDC Dimmer",
+    "Dimmable": "Yes"
+  },
+  "Lighting Characteristics": {
+    "Color Options": "3000K, 4000K, 6000K",
+    "Luminous Flux": "235-274 lm/ft",
+    "Beam Angle": "120°",
+    "Chip Type": "COB"
+  },
+  "Physical Characteristics": {
+    "PCB Finish": "White",
+    "Cuttable Length": "1 inch, Anywhere!",
+    "Length": "16.4'",
+    "Width": "0.32\""
+  }
+}
+```
+
+#### Renderizar Atributos Agrupados (UI Component)
+
+```tsx
+// AdditionalInformation.tsx
+import { AttributeValue } from '@medusajs/types'
+
+interface AttributeGroup {
+  title: string
+  attributes: Record<string, string>
+}
+
+export function AdditionalInformation({ 
+  attributeValues 
+}: { 
+  attributeValues: AttributeValue[] 
+}) {
+  // Agrupar por attribute_set
+  const grouped = attributeValues.reduce((acc, attrVal) => {
+    const setTitle = attrVal.attribute_key.attribute_set?.title || 'Other Specifications'
+    const label = attrVal.attribute_key.label
+    
+    if (!acc[setTitle]) {
+      acc[setTitle] = {}
+    }
+    acc[setTitle][label] = attrVal.value
+    
+    return acc
+  }, {} as Record<string, Record<string, string>>)
+  
+  return (
+    <div className="additional-info">
+      <h2>Additional Information</h2>
+      
+      <div className="attribute-groups">
+        {Object.entries(grouped).map(([groupTitle, attrs]) => (
+          <div key={groupTitle} className="attribute-group">
+            <h3>{groupTitle}</h3>
+            
+            <div className="attributes-grid">
+              {Object.entries(attrs).map(([label, value]) => (
+                <div key={label} className="attribute-row">
+                  <span className="attribute-label">{label}</span>
+                  <span className="attribute-value">{value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+```
+
+#### Ejemplo de CSS para Layout Similar a Screenshot
+
+```css
+.additional-info {
+  margin-top: 3rem;
+  padding: 2rem;
+  background: #0a0f1a;
+}
+
+.additional-info h2 {
+  color: white;
+  margin-bottom: 2rem;
+}
+
+.attribute-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 2rem;
+}
+
+.attribute-group {
+  background: #0f1419;
+  border-radius: 8px;
+  padding: 1.5rem;
+}
+
+.attribute-group h3 {
+  color: #3b82f6;
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  margin-bottom: 1rem;
+  font-weight: 600;
+}
+
+.attributes-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.attribute-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #1a1f2e;
+}
+
+.attribute-row:last-child {
+  border-bottom: none;
+}
+
+.attribute-label {
+  color: #9ca3af;
+  font-size: 0.875rem;
+}
+
+.attribute-value {
+  color: white;
+  font-weight: 500;
+  text-align: right;
+  font-size: 0.875rem;
+}
+```
+
+#### Búsqueda por Atributos (MeiliSearch)
+
+Los atributos están indexados en MeiliSearch:
+
+```typescript
+// Buscar productos por atributo específico
+const results = await client.index('products').search('', {
+  filter: [
+    'attributes.power-consumption = "50W"',
+    'attributes.dimmable = "Yes"'
+  ]
+})
+
+// Faceted search por atributos
+const results = await client.index('products').search('LED strip', {
+  facets: [
+    'attributes.color-options',
+    'attributes.ip-rating',
+    'attributes.chip-type'
+  ]
+})
+```
+
+
 ---
 
 ## 📦 Endpoints Principales que Usarás
