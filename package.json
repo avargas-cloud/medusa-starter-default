@@ -45,6 +45,7 @@
     "@types/pg": "^8.16.0",
     "@woocommerce/woocommerce-rest-api": "^1.0.2",
     "dotenv": "^17.2.3",
+    "glob": "^13.0.0",
     "medusa-plugin-auth": "^1.11.1",
     "meilisearch": "^0.55.0",
     "multer": "^2.0.2",
