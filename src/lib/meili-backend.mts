@@ -2,7 +2,9 @@ import { MeiliSearch } from "meilisearch"
 
 /**
  * Backend MeiliSearch Client
- * Uses MASTER KEY for write operations (not exposed to frontend)
+ * 
+ * Uses master API key for full read/write access
+ * Only use this on the server-side (never expose to frontend)
  */
 export const meiliClient = new MeiliSearch({
     host: process.env.MEILISEARCH_HOST || "",
