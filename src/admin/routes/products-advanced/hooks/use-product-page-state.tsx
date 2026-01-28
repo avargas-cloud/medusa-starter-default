@@ -1,6 +1,5 @@
-import { useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
-import type { MeiliProduct } from "../../../lib/meili-types";
+import { useState } from "react";
+// Type import removed as unused
 
 // Hooks
 import { useGlobalHijacker } from "./use-global-hijacker";
@@ -8,8 +7,6 @@ import { useCategories } from "./use-categories";
 import { useProductSearch } from "./use-product-search";
 
 export const useProductPageState = () => {
-    const navigate = useNavigate();
-
     // 1. Global Side Effects
     useGlobalHijacker();
 
@@ -42,13 +39,6 @@ export const useProductPageState = () => {
     const canGoPrevious = currentPage > 0;
     const canGoNext = currentPage < totalPages - 1;
 
-    const handleRowClick = useCallback(
-        (product: MeiliProduct) => {
-            navigate(`/products/${product.id}`);
-        },
-        [navigate]
-    );
-
     const handlePrevious = () => setCurrentPage((prev) => prev - 1);
     const handleNext = () => setCurrentPage((prev) => prev + 1);
 
@@ -74,8 +64,7 @@ export const useProductPageState = () => {
             isError,
             error,
             data,
-            searchQuery,
-            handleRowClick
+            searchQuery
         },
         paginationProps: {
             currentPage,

@@ -1,7 +1,7 @@
 import { Table, Badge, DropdownMenu, IconButton, clx } from "@medusajs/ui"
 import { EllipsisHorizontal, PencilSquare, Trash, TagSolid, TriangleUpMini, TriangleDownMini } from "@medusajs/icons"
 import { MeiliInventoryItem } from "../../../lib/meili-types"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, Link } from "react-router-dom"
 
 interface InventoryTableProps {
     items: MeiliInventoryItem[]
@@ -89,7 +89,7 @@ export const InventoryTable = ({ items, isLoading, sortBy, onSortChange }: Inven
                         <Table.HeaderCell className="w-16">Image</Table.HeaderCell>
                         <HeaderCell column="title">Title</HeaderCell>
                         <HeaderCell column="sku">SKU</HeaderCell>
-                        <Table.HeaderCell>Reserved</Table.HeaderCell>
+                        <HeaderCell column="totalReserved">Reserved</HeaderCell>
                         <HeaderCell column="totalStock">In Stock</HeaderCell>
                         <HeaderCell column="price">Price</HeaderCell>
                         <Table.HeaderCell className="w-12"></Table.HeaderCell>
@@ -126,64 +126,72 @@ export const InventoryTable = ({ items, isLoading, sortBy, onSortChange }: Inven
                                     </div>
                                 </Table.Cell>
 
-                                {/* Title - Clickable → Inventory Item */}
-                                <Table.Cell
-                                    onClick={() => goToInventoryItem(item.id)}
-                                    className="cursor-pointer hover:bg-ui-bg-subtle-hover transition-colors"
-                                >
-                                    <span className="font-medium text-ui-fg-base">
+                                {/* Title */}
+                                <Table.Cell>
+                                    <Link
+                                        to={`/inventory/${item.id}`}
+                                        className="flex items-center w-full h-full font-medium text-ui-fg-base hover:text-ui-fg-interactive transition-colors truncate"
+                                    >
                                         {item.title}
-                                    </span>
+                                    </Link>
                                 </Table.Cell>
 
-                                {/* SKU - Clickable → Inventory Item */}
-                                <Table.Cell
-                                    onClick={() => goToInventoryItem(item.id)}
-                                    className="cursor-pointer hover:bg-ui-bg-subtle-hover transition-colors"
-                                >
-                                    <span className="font-mono text-sm text-ui-fg-subtle">
+                                {/* SKU */}
+                                <Table.Cell>
+                                    <Link
+                                        to={`/inventory/${item.id}`}
+                                        className="flex items-center w-full h-full font-mono text-sm text-ui-fg-subtle hover:text-ui-fg-interactive transition-colors truncate"
+                                    >
                                         {item.sku}
-                                    </span>
+                                    </Link>
                                 </Table.Cell>
 
-                                {/* Reserved - Clickable → Inventory Item */}
-                                <Table.Cell
-                                    onClick={() => goToInventoryItem(item.id)}
-                                    className="cursor-pointer hover:bg-ui-bg-subtle-hover transition-colors"
-                                >
-                                    {item.totalReserved > 0 ? (
-                                        <span className="text-ui-fg-muted">
-                                            {item.totalReserved}
-                                        </span>
+                                {/* Reserved */}
+                                <Table.Cell>
+                                    <Link
+                                        to={`/inventory/${item.id}`}
+                                        className="flex items-center w-full h-full text-ui-fg-muted hover:text-ui-fg-interactive transition-colors"
+                                    >
+                                        {item.totalReserved > 0 ? (
+                                            item.totalReserved
+                                        ) : (
+                                            <span className="text-ui-fg-disabled">0</span>
+                                        )}
+                                    </Link>
+                                </Table.Cell>
+
+                                {/* In Stock */}
+                                <Table.Cell>
+                                    <Link
+                                        to={`/inventory/${item.id}`}
+                                        className="flex items-center w-full h-full hover:text-ui-fg-interactive transition-colors"
+                                    >
+                                        {item.totalStock > 0 ? (
+                                            <span className="text-ui-fg-base font-medium">
+                                                {item.totalStock}
+                                            </span>
+                                        ) : (
+                                            <Badge color="red" size="small">
+                                                0
+                                            </Badge>
+                                        )}
+                                    </Link>
+                                </Table.Cell>
+
+                                {/* Price - Links to Variant */}
+                                <Table.Cell>
+                                    {item.productId && item.variantId ? (
+                                        <Link
+                                            to={`/products/${item.productId}/variants/${item.variantId}`}
+                                            className="flex items-center w-full h-full font-medium text-ui-fg-base hover:text-ui-fg-interactive transition-colors"
+                                        >
+                                            {formatPrice(item.price, item.currencyCode)}
+                                        </Link>
                                     ) : (
-                                        <span className="text-ui-fg-disabled">0</span>
-                                    )}
-                                </Table.Cell>
-
-                                {/* In Stock - Clickable → Inventory Item */}
-                                <Table.Cell
-                                    onClick={() => goToInventoryItem(item.id)}
-                                    className="cursor-pointer hover:bg-ui-bg-subtle-hover transition-colors"
-                                >
-                                    {item.totalStock > 0 ? (
-                                        <span className="text-ui-fg-base font-medium">
-                                            {item.totalStock}
+                                        <span className="flex items-center w-full h-full text-ui-fg-muted">
+                                            {formatPrice(item.price, item.currencyCode)}
                                         </span>
-                                    ) : (
-                                        <Badge color="red" size="small">
-                                            0
-                                        </Badge>
                                     )}
-                                </Table.Cell>
-
-                                {/* Price - Clickable → Variant Edit */}
-                                <Table.Cell
-                                    onClick={() => goToVariantEdit(item.productId, item.variantId)}
-                                    className="cursor-pointer hover:bg-ui-bg-subtle-hover transition-colors"
-                                >
-                                    <span className="font-medium text-ui-fg-base">
-                                        {formatPrice(item.price, item.currencyCode)}
-                                    </span>
                                 </Table.Cell>
 
                                 {/* Actions (3-dot menu) */}

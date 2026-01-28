@@ -1,5 +1,7 @@
 import { Heading, Text, Input, Select } from "@medusajs/ui";
 import { MagnifyingGlass } from "@medusajs/icons";
+import { SyncStatusButton } from "../../../components/shared/sync-status-button";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface ProductSearchHeaderProps {
     searchQuery: string;
@@ -32,14 +34,21 @@ export const ProductSearchHeader = ({
     totalHits,
     processingTime
 }: ProductSearchHeaderProps) => {
+    const queryClient = useQueryClient()
     return (
         <>
             {/* Header Title & Subtitle */}
             <div className="flex items-center justify-between px-6 py-4 border-b">
                 <div>
-                    <Heading level="h1" className="text-ui-fg-base">
-                        Products
-                    </Heading>
+                    <div className="flex items-center gap-4">
+                        <Heading level="h1" className="text-ui-fg-base">
+                            Products
+                        </Heading>
+                        <SyncStatusButton
+                            entity="products"
+                            onSyncComplete={() => queryClient.invalidateQueries({ queryKey: ["meili-products"] })}
+                        />
+                    </div>
                     <Text size="small" className="text-ui-fg-subtle mt-1">
                         Search by SKU, title, description, or handle
                     </Text>

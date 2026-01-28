@@ -25,6 +25,8 @@ export const meiliClient = new MeiliSearch({
     apiKey: API_KEY,
 });
 
+console.log("[MeiliClient] Initialized with Host:", HOST ? "Set" : "Missing", "Key:", API_KEY ? "Set" : "Missing");
+
 /**
  * Primary products index name (matches backend configuration)
  */

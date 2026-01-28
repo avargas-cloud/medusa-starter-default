@@ -78,56 +78,28 @@ src/api/
 
 ## Componentes Clave
 
-### 1. API Route de Sincronización
+### 1. API Route de Sincronización (Workflow Wrapper)
 
 **Archivo:** `src/api/search/products/sync/route.ts`
 
 ```typescript
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { MeiliSearch } from "meilisearch"
+import { syncProductsWorkflow } from "../../../../../workflows/sync-products"
 
-const MEILISEARCH_HOST = process.env.MEILISEARCH_HOST || "http://127.0.0.1:7700"
-const MEILISEARCH_API_KEY = process.env.MEILISEARCH_API_KEY || ""
-const PRODUCTS_INDEX = "products"
-
-export async function POST(req: MedusaRequest, res: MedusaResponse) {
-    const meiliClient = new MeiliSearch({
-        host: MEILISEARCH_HOST,
-        apiKey: MEILISEARCH_API_KEY,
-    })
-
-    const query = req.scope.resolve("query")
-    const { data: products } = await query.graph({
-        entity: "product",
-        fields: [
-            "id",
-            "title",
-            "handle",
-            "description",
-            "thumbnail",
-            "metadata",
-            "variants.*",
-            "variants.options.*",
-        ],
-    })
-
-    const meiliProducts = products.map(flattenProductForMeili)
-    const index = meiliClient.index(PRODUCTS_INDEX)
-    await index.addDocuments(meiliProducts, { primaryKey: "id" })
-
-    res.json({
+export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+    const { result } = await syncProductsWorkflow(req.scope).run()
+    
+    return res.json({
         success: true,
-        synced: meiliProducts.length,
-        index: PRODUCTS_INDEX,
+        synced: result.synced,
+        taskUid: result.taskUid,
     })
 }
 ```
 
 **Características:**
-- Usa Medusa Query API para obtener productos con relaciones
-- Aplana estructura para búsqueda eficiente
-- Indexa SKUs de variantes como array plano
-- Retorna count de productos sincronizados
+- Wrapper ligero alrededor de `syncProductsWorkflow`.
+- Delega la lógica compleja (flattening, indexing, waiting) al Workflow.
+- Retorna el `taskUid` de MeiliSearch para referencia frontend.
 
 ---
 
@@ -138,85 +110,45 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 **Características principales:**
 
 #### A. Global Hijacker (Líneas 43-71)
+(Mismo mecanismo de intercepción de eventos con `capture: true` explicado anteriormente)
+
+#### B. Sincronización Bloqueante (Workflow-Based)
+Hemos migrado de una simple llamada API a un **Medusa Workflow** (`syncProductsWorkflow`) que asegura consistencia absoluta antes de mostrar resultados.
+
 ```typescript
-useEffect(() => {
-    const hijackProductsClick = (e: Event) => {
-        const target = e.target as HTMLElement;
-        const link = target.closest('a[href="/app/products"]');
-
-        if (link) {
-            e.preventDefault();
-            e.stopPropagation();
-            
-            // SPA navigation sin reload
-            window.history.pushState({}, '', '/app/products-advanced');
-            window.dispatchEvent(new PopStateEvent('popstate'));
-        }
-    };
-
-    document.addEventListener("click", hijackProductsClick as EventListener, true);
-    
-    return () => {
-        document.removeEventListener("click", hijackProductsClick as EventListener, true);
-    };
-}, []);
+// src/workflows/sync-products.ts
+// ...
+// BLOCKING: Wait for MeiliSearch to finish indexing before returning
+await (client as any).tasks.waitForTask(result.taskUid)
 ```
 
-**Por qué funciona:**
-- `addEventListener(..., true)` usa **event capture** → intercepta ANTES que React Router
-- `history.pushState()` cambia URL sin reload
-- `popstate` event notifica a React Router del cambio
-- Navegación SPA suave, sin pantalla blanca
+**Por qué es superior:**
+- **Atomicidad:** El frontend espera hasta que MeiliSearch ha indexado *realmente* los datos.
+- **UX:** El estado de "Loading" persiste hasta que la búsqueda es garantizada de ser exitosa.
+- **Prevención de Race Conditions:** Elimina situaciones donde la búsqueda retorna 0 resultados inmediatamente después de un sync exitoso.
 
-#### B. Prevención de Sync Duplicado (Líneas 40-42, 103-116)
-```typescript
-const hasSynced = useRef(false);
+#### C. Búsqueda MeiliSearch & Navegación Declarativa
+Reemplazamos los `onClick` imperativos por componentes `<Link>` nativos para soportar **Middle-Click** y "Abrir en nueva pestaña".
 
-useEffect(() => {
-    if (hasSynced.current) {
-        console.log("⏭️ Skipping duplicate sync (StrictMode)");
-        return;
-    }
-    
-    hasSynced.current = true;
-    setIsSyncing(true);
-    
-    syncMutation.mutate(undefined, {
-        onSettled: () => setIsSyncing(false),
-    });
-}, []);
-```
-
-**Por qué es necesario:**
-- React StrictMode monta componentes 2 veces en desarrollo
-- Sin `useRef`, sincronizaría 1.2-1.4 segundos (600ms × 2)
-- Con `useRef`, solo 600ms (1 sync)
-
-#### C. Búsqueda MeiliSearch (Líneas 118-133)
-```typescript
-const { data, isLoading } = useQuery({
-    queryKey: ["meili-products", searchQuery, currentPage],
-    queryFn: async () => {
-        const index = meiliClient.index(PRODUCTS_INDEX);
-        
-        const searchResults = await index.search(searchQuery || "", {
-            limit: ITEMS_PER_PAGE,
-            offset: currentPage * ITEMS_PER_PAGE,
-            attributesToHighlight: ["title", "variant_sku"],
-        });
-        
-        return {
-            hits: searchResults.hits,
-            totalHits: searchResults.estimatedTotalHits,
-        };
-    },
-});
+```tsx
+// src/admin/routes/products-advanced/components/product-table.tsx
+<Table.Cell>
+    <Link 
+        to={`/products/${product.id}`}
+        className="flex items-center w-full h-full font-medium text-ui-fg-base hover:text-ui-fg-interactive transition-colors"
+    >
+        <div className="flex flex-col">
+            <span>{product.title}</span>
+        </div>
+    </Link>
+</Table.Cell>
 ```
 
 **Ventajas:**
-- Búsqueda instantánea (typo tolerance, fuzzy matching)
-- Paginación integrada
-- Cache automático con React Query
+- **Navegación Nativa:** Soporta `Ctrl+Click` / Middle-Click.
+- **Accesibilidad:** Los lectores de pantalla reconocen enlaces reales.
+- **Alineación Vertical:** Uso de `flex items-center` para corregir offsets visuales.
+- **Búsqueda Instantánea:** Mantiene las ventajas de typo tolerance y fuzzy matching.
 
 ---
 

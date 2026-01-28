@@ -1,5 +1,7 @@
 import { Heading, Text, Input, Select } from "@medusajs/ui"
 import { MagnifyingGlass } from "@medusajs/icons"
+import { SyncStatusButton } from "../../../components/shared/sync-status-button"
+import { useQueryClient } from "@tanstack/react-query"
 
 interface InventoryHeaderProps {
     searchQuery: string
@@ -31,14 +33,22 @@ export const InventoryHeader = ({
     onSortChange,
     totalItems,
 }: InventoryHeaderProps) => {
+    const queryClient = useQueryClient()
     return (
         <>
             {/* Header Title & Category Filter */}
             <div className="flex items-center justify-between px-6 py-4 border-b">
                 <div>
-                    <Heading level="h1" className="text-ui-fg-base">
-                        Inventory
-                    </Heading>
+                    <div className="flex items-center gap-4">
+                        <Heading level="h1" className="text-ui-fg-base">
+                            Inventory
+                        </Heading>
+                        <SyncStatusButton
+                            entity="products"
+                            label="Check Inventory Sync"
+                            onSyncComplete={() => queryClient.invalidateQueries({ queryKey: ["meili-inventory"] })}
+                        />
+                    </div>
                     <Text size="small" className="text-ui-fg-subtle mt-1">
                         Manage your inventory items with prices
                     </Text>
@@ -54,7 +64,7 @@ export const InventoryHeader = ({
                         <Select.Trigger>
                             <Select.Value placeholder="Select Category..." />
                         </Select.Trigger>
-                        <Select.Content>
+                        <Select.Content className="max-h-[300px]">
                             <Select.Item value="all">All Categories</Select.Item>
                             {categories?.map((c: any) => (
                                 <Select.Item key={c.id} value={c.handle}>
@@ -88,11 +98,13 @@ export const InventoryHeader = ({
                         <Select.Trigger className="w-[180px]">
                             <Select.Value placeholder="Sort by..." />
                         </Select.Trigger>
-                        <Select.Content>
+                        <Select.Content className="max-h-[300px]">
                             <Select.Item value="title:asc">Title A-Z</Select.Item>
                             <Select.Item value="title:desc">Title Z-A</Select.Item>
                             <Select.Item value="totalStock:asc">Stock: Low First</Select.Item>
                             <Select.Item value="totalStock:desc">Stock: High First</Select.Item>
+                            <Select.Item value="totalReserved:asc">Reserved: Low First</Select.Item>
+                            <Select.Item value="totalReserved:desc">Reserved: High First</Select.Item>
                             <Select.Item value="price:asc">Price: Low to High</Select.Item>
                             <Select.Item value="price:desc">Price: High to Low</Select.Item>
                             <Select.Item value="sku:asc">SKU A-Z</Select.Item>

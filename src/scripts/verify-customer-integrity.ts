@@ -76,6 +76,8 @@ export default async function verifyCustomerIntegrity({ container }: ExecArgs) {
 
         // Check Logic: Wholesale Price Level should be in Wholesale Group
         if (qbPriceLevel) {
+            // Normalized check: "Standard" and "Distributor" should no longer exist in DB metadata
+            // But if they do (during transition), mapped them logicly:
             const isWholesaleLevel = ["Wholesale", "Distributor"].includes(qbPriceLevel)
             const isRetailLevel = ["Retail", "Standard"].includes(qbPriceLevel)
 
