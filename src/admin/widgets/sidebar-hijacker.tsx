@@ -3,7 +3,7 @@ import { useEffect } from "react"
 
 /**
  * Install global hijacker immediately on script load (not waiting for React)
- * Hijacks both Products and Inventory sidebar buttons
+ * Hijacks Products, Inventory, and Customers sidebar buttons
  */
 if (typeof window !== 'undefined' && !(window as any).__hijackerInstalled) {
     const hijackClick = (e: MouseEvent) => {
@@ -28,6 +28,16 @@ if (typeof window !== 'undefined' && !(window as any).__hijackerInstalled) {
             window.dispatchEvent(new PopStateEvent('popstate'))
             return
         }
+
+        // Hijack Customers
+        const customersLink = target.closest('a[href="/app/customers"]') as HTMLAnchorElement
+        if (customersLink) {
+            e.preventDefault()
+            e.stopPropagation()
+            window.history.pushState({}, '', '/app/customers-advanced')
+            window.dispatchEvent(new PopStateEvent('popstate'))
+            return
+        }
     }
 
     // Listen with capture to intercept BEFORE React Router
@@ -47,7 +57,7 @@ const GlobalHijacker = () => {
 }
 
 export const config = defineWidgetConfig({
-    zone: "product.details.before",
+    zone: "order.details.before",
 })
 
 export default GlobalHijacker

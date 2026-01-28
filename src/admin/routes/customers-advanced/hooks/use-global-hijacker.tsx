@@ -15,7 +15,6 @@ export const useGlobalHijacker = () => {
                 e.preventDefault();
                 e.stopPropagation();
 
-                console.log("🕵️ Hijack Triggered: Redirecting to /app/customers-advanced");
                 // Use History API for SPA navigation (no reload)
                 window.history.pushState({}, '', '/app/customers-advanced');
 

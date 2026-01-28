@@ -59,15 +59,20 @@ export const POST = async (
         console.log(`🔍 [Sync Check] DB Count: ${dbCount} | Meili Count: ${meiliCount}`)
         console.log(`🔍 [Sync Check] DB Last Upd: ${dbLastUpdate.toISOString()} | Meili: ${meiliLastUpdate.toISOString()}`)
 
-        // 3. Compare (Tolerance of 2 seconds for clock drift)
-        const isCountSync = Math.abs(dbCount - meiliCount) === 0
-        // 4. Time Check (2s tolerance)
-        const isTimeSync = Math.abs(dbLastUpdate.getTime() - meiliLastUpdate.getTime()) < 2000
 
-        console.log(`🔍 [Sync Check] DB: ${dbCount}, Last: ${dbLastUpdate.toISOString()} | Meili: ${meiliCount}, Last: ${meiliLastUpdate.toISOString()}`)
+        // 3. Check if sync is needed
+        // Count must match
+        const isCountSync = dbCount === meiliCount
+
+        // MeiliSearch should be at least as recent as DB (with 5s tolerance for processing time)
+        const timeDiff = dbLastUpdate.getTime() - meiliLastUpdate.getTime()
+        const isTimeSync = timeDiff <= 5000 // MeiliSearch can be up to 5s behind
+
+        console.log(`🔍[Sync Status] Count Match: ${isCountSync}, Time Diff: ${timeDiff}ms, Time Sync: ${isTimeSync}`)
 
         if (isCountSync && isTimeSync) {
             // Already synced
+            console.log(`✅[Sync Check] Already in sync!`)
             return res.json({
                 success: true,
                 synced: 0,
@@ -77,6 +82,7 @@ export const POST = async (
         }
 
         // 4. Trigger Sync
+        console.log(`⚠️[Sync Check] Out of sync, triggering workflow...`)
         const { result } = await syncProductsWorkflow(req.scope).run()
 
         return res.json({
