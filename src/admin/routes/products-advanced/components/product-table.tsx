@@ -1,4 +1,5 @@
 import { Table, Text, Badge } from "@medusajs/ui";
+import { Link } from "react-router-dom";
 import { TagSolid } from "@medusajs/icons";
 import type { MeiliProduct } from "../../../lib/meili-types";
 
@@ -8,7 +9,6 @@ interface ProductTableProps {
     error: any;
     data: any;
     searchQuery: string;
-    handleRowClick: (product: MeiliProduct) => void;
 }
 
 export const ProductTable = ({
@@ -16,8 +16,7 @@ export const ProductTable = ({
     isError,
     error,
     data,
-    searchQuery,
-    handleRowClick
+    searchQuery
 }: ProductTableProps) => {
     return (
         <div className="flex-1 overflow-auto">
@@ -61,8 +60,7 @@ export const ProductTable = ({
                             data?.hits.map((product: MeiliProduct) => (
                                 <Table.Row
                                     key={product.id}
-                                    onClick={() => handleRowClick(product)}
-                                    className="cursor-pointer hover:bg-ui-bg-subtle-hover transition-colors"
+                                    className="hover:bg-ui-bg-subtle-hover transition-colors"
                                 >
                                     {/* Thumbnail */}
                                     <Table.Cell>
@@ -81,59 +79,82 @@ export const ProductTable = ({
 
                                     {/* Title */}
                                     <Table.Cell>
-                                        <Text weight="plus" className="text-ui-fg-base">
-                                            {product.title}
-                                        </Text>
+                                        <Link
+                                            to={`/products/${product.id}`}
+                                            className="flex items-center w-full h-full font-medium text-ui-fg-base hover:text-ui-fg-interactive transition-colors"
+                                        >
+                                            <div className="flex flex-col">
+                                                <span>{product.title}</span>
+                                            </div>
+                                        </Link>
                                     </Table.Cell>
 
                                     {/* Handle */}
                                     <Table.Cell>
-                                        <Text size="small" className="text-ui-fg-subtle font-mono">
+                                        <Link
+                                            to={`/products/${product.id}`}
+                                            className="flex items-center w-full h-full text-ui-fg-subtle font-mono text-xs hover:text-ui-fg-interactive transition-colors"
+                                        >
                                             {product.handle}
-                                        </Text>
+                                        </Link>
                                     </Table.Cell>
 
                                     {/* Variant SKUs */}
                                     <Table.Cell>
-                                        <div className="flex gap-1 flex-wrap max-w-[250px]">
-                                            {product.variant_sku?.slice(0, 3).map((sku: string, idx: number) => (
-                                                <Badge key={idx} size="small" className="font-mono">
-                                                    {sku}
-                                                </Badge>
-                                            ))}
-                                            {product.variant_sku?.length > 3 && (
-                                                <Badge size="small" className="bg-ui-bg-subtle">
-                                                    +{product.variant_sku.length - 3}
-                                                </Badge>
-                                            )}
-                                        </div>
+                                        <Link
+                                            to={`/products/${product.id}`}
+                                            className="flex items-center w-full h-full hover:text-ui-fg-interactive transition-colors"
+                                        >
+                                            <div className="flex gap-1 flex-wrap max-w-[250px]">
+                                                {product.variant_sku?.slice(0, 3).map((sku: string, idx: number) => (
+                                                    <Badge key={idx} size="small" className="font-mono">
+                                                        {sku}
+                                                    </Badge>
+                                                ))}
+                                                {product.variant_sku?.length > 3 && (
+                                                    <Badge size="small" className="bg-ui-bg-subtle">
+                                                        +{product.variant_sku.length - 3}
+                                                    </Badge>
+                                                )}
+                                            </div>
+                                        </Link>
                                     </Table.Cell>
 
                                     {/* Material */}
                                     <Table.Cell>
-                                        {product.metadata_material && (
-                                            <Badge size="small">
-                                                {product.metadata_material}
-                                            </Badge>
-                                        )}
+                                        <Link
+                                            to={`/products/${product.id}`}
+                                            className="flex items-center w-full h-full hover:text-ui-fg-interactive transition-colors"
+                                        >
+                                            {product.metadata_material && (
+                                                <Badge size="small">
+                                                    {product.metadata_material}
+                                                </Badge>
+                                            )}
+                                        </Link>
                                     </Table.Cell>
 
                                     {/* Status */}
                                     <Table.Cell>
-                                        <Badge
-                                            size="small"
-                                            color={product.status === "published" ? "green" : "grey"}
-                                            className="capitalize"
+                                        <Link
+                                            to={`/products/${product.id}`}
+                                            className="flex items-center w-full h-full hover:text-ui-fg-interactive transition-colors"
                                         >
-                                            {product.status}
-                                        </Badge>
+                                            <Badge
+                                                size="small"
+                                                color={product.status === "published" ? "green" : "grey"}
+                                                className="capitalize"
+                                            >
+                                                {product.status}
+                                            </Badge>
+                                        </Link>
                                     </Table.Cell>
                                 </Table.Row>
                             ))
                         )}
                     </Table.Body>
-                </Table>
+                </Table >
             )}
-        </div>
+        </div >
     );
 };

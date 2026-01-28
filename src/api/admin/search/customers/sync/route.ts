@@ -1,10 +1,10 @@
-import { syncProductsWorkflow } from "../../../../../workflows/sync-products"
+import { syncCustomersWorkflow } from "../../../../../workflows/sync-customers"
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 
 /**
- * POST /admin/search/products/sync
+ * POST /admin/search/customers/sync
  * 
- * Synchronize all products to MeiliSearch index
+ * Synchronize all customers to MeiliSearch index
  * Called automatically when Advanced Search page loads
  */
 export const POST = async (
@@ -12,7 +12,8 @@ export const POST = async (
     res: MedusaResponse
 ) => {
     try {
-        const productModule = req.scope.resolve("product")
+        const customerModule = req.scope.resolve("customer")
+        const query = req.scope.resolve("query")
         const { MeiliSearch } = await import("meilisearch")
 
         // 1. Get MeiliSearch Stats
@@ -20,54 +21,50 @@ export const POST = async (
             host: process.env.MEILISEARCH_HOST!,
             apiKey: process.env.MEILISEARCH_API_KEY!,
         })
-        const index = client.index("products")
+        const index = client.index("customers")
         let meiliLastUpdate = new Date(0)
         let meiliCount = 0
 
         try {
             const stats = await index.getStats()
             meiliCount = stats.numberOfDocuments
-            // MeiliSearch doesn't always expose "last updated" in getStats directly in all versions, 
-            // but we can try getTask or just assume if counts differ. 
-            // Actually, querying the latest 'updated_at' from Meili is more reliable.
+
             const latestMeili = await index.search("", {
                 limit: 1,
                 sort: ["updated_at:desc"],
                 attributesToRetrieve: ["updated_at"]
             })
+
             if (latestMeili.hits.length > 0) {
-                // Meili stores as unix timestamp (number)
                 const val = latestMeili.hits[0].updated_at
                 if (val) meiliLastUpdate = new Date(val)
             }
-        } catch (e) {
-            // Index might not exist
-        }
+        } catch (e) { }
 
         // 2. Get DB Stats
-        const [latestProduct] = await productModule.listProducts({}, {
+        // Use query graph or module. Customer module `listAndCountCustomers`
+        const [_, dbCount] = await customerModule.listAndCountCustomers({}, { select: ["id"], take: 0 })
+
+        // Check latest customer
+        const [latestCustomer] = await customerModule.listCustomers({}, {
             select: ["updated_at"],
             order: { updated_at: "DESC" },
             take: 1
         })
+        const dbLastDate = latestCustomer ? new Date(latestCustomer.updated_at) : new Date(0)
 
-        // Count products
-        const [_, dbCount] = await productModule.listAndCountProducts({}, { select: ["id"], take: 0 })
+        console.log(`🔍 [Customer Sync Check] DB: ${dbCount} | Meili: ${meiliCount}`)
 
-        const dbLastUpdate = latestProduct ? new Date(latestProduct.updated_at) : new Date()
-
-        console.log(`🔍 [Sync Check] DB Count: ${dbCount} | Meili Count: ${meiliCount}`)
-        console.log(`🔍 [Sync Check] DB Last Upd: ${dbLastUpdate.toISOString()} | Meili: ${meiliLastUpdate.toISOString()}`)
-
-        // 3. Compare (Tolerance of 2 seconds for clock drift)
+        // 3. Compare (Count exact match)
+        // 3. Compare (Count & Timestamp)
         const isCountSync = Math.abs(dbCount - meiliCount) === 0
-        // 4. Time Check (2s tolerance)
-        const isTimeSync = Math.abs(dbLastUpdate.getTime() - meiliLastUpdate.getTime()) < 2000
 
-        console.log(`🔍 [Sync Check] DB: ${dbCount}, Last: ${dbLastUpdate.toISOString()} | Meili: ${meiliCount}, Last: ${meiliLastUpdate.toISOString()}`)
+        // 4. Time Check
+        const isTimeSync = Math.abs(dbLastDate.getTime() - meiliLastUpdate.getTime()) < 2000 // 2s tolerance
 
-        if (isCountSync && isTimeSync) {
-            // Already synced
+        console.log(`🔍 [Customer Sync Check] DB: ${dbCount}, Last: ${dbLastDate.toISOString()} | Meili: ${meiliCount}, Last: ${meiliLastUpdate.toISOString()}`)
+
+        if (isCountSync && isTimeSync && dbCount > 0) {
             return res.json({
                 success: true,
                 synced: 0,
@@ -76,14 +73,13 @@ export const POST = async (
             })
         }
 
-        // 4. Trigger Sync
-        const { result } = await syncProductsWorkflow(req.scope).run()
+        const { result } = await syncCustomersWorkflow(req.scope).run()
 
-        return res.json({
+        res.json({
             success: true,
-            synced: result.synced,
+            message: "Synced Now",
             status: "synced_now",
-            message: "Synced Now"
+            synced: result.synced,
         })
     } catch (error: any) {
         console.error("[MeiliSearch Sync Error]:", error.message)

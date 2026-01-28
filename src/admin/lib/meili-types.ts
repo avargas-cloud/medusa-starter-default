@@ -94,3 +94,27 @@ export type MeiliInventoryItem = {
     /** Product status */
     status: "published" | "draft";
 };
+
+/**
+ * Customer document structure as indexed in MeiliSearch
+ */
+export type MeiliCustomer = {
+    id: string;
+    email: string;
+    first_name: string | null;
+    last_name: string | null;
+    company_name: string;
+    phone: string | null;
+    has_account: boolean;
+    created_at: number; // timestamp
+
+    // QuickBooks Metadata
+    list_id: string;
+    price_level: string;
+    customer_type: string;
+
+    // Groups
+    groups: string[];
+};
+
+export const CUSTOMERS_INDEX = "customers";

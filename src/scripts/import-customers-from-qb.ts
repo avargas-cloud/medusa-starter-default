@@ -185,7 +185,9 @@ export default async function importCustomersFromQB({ container }: ExecArgs) {
                         metadata: {
                             qb_list_id: qbCustomer.ListID,
                             qb_customer_type: qbCustomer.CustomerType,
-                            qb_price_level: qbCustomer.PriceLevel,
+                            // Map Metadata Price Level as requested: Standard->Retail, Distributor->Wholesale
+                            qb_price_level: qbCustomer.PriceLevel === "Standard" ? "Retail" :
+                                (qbCustomer.PriceLevel === "Distributor" ? "Wholesale" : qbCustomer.PriceLevel),
                             qb_original_email: isDummyEmail ? qbCustomer.Email || '' : customerEmail,
                             email_is_placeholder: isDummyEmail,
                             alt_emails: altEmails.length > 0 ? altEmails.join(', ') : undefined,
