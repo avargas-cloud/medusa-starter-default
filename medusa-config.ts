@@ -1,11 +1,18 @@
 import { loadEnv, defineConfig } from '@medusajs/framework/utils'
 
+console.log("🔵 Loading medusa-config.ts")
+console.log("🔵 CWD:", process.cwd())
 loadEnv(process.env.NODE_ENV || 'development', process.cwd())
+console.log("🔵 REDIS_URL:", process.env.REDIS_URL ? "FOUND" : "MISSING")
+console.log("🔵 DATABASE_URL:", process.env.DATABASE_URL ? "FOUND" : "MISSING")
 
 module.exports = defineConfig({
   projectConfig: {
     databaseUrl: process.env.DATABASE_URL,
     redisUrl: process.env.REDIS_URL,
+    // CRITICAL: Enable subscribers by setting workerMode to 'shared'
+    // Without this, subscribers will NOT load (even if code is correct)
+    workerMode: (process.env.WORKER_MODE || "shared") as "shared" | "worker" | "server",
     http: {
       storeCors: process.env.STORE_CORS!,
       adminCors: process.env.ADMIN_CORS!,
@@ -108,7 +115,9 @@ module.exports = defineConfig({
                 "thumbnail",
                 "variant_sku",
                 "status",
-                "metadata"
+                "metadata",
+                "updated_at",
+                "created_at"
               ],
               sortableAttributes: [
                 "title",
@@ -134,6 +143,9 @@ module.exports = defineConfig({
                 metadata: product.metadata || {},
                 metadata_material: product.metadata?.material || null,
                 metadata_category: product.metadata?.category || null,
+                // ✅ CRITICAL: Timestamps for O(1) sync staleness detection
+                updated_at: new Date(product.updated_at).getTime(),
+                created_at: new Date(product.created_at).getTime(),
               }
             }
           },
