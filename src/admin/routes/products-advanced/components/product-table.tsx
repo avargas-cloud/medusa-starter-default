@@ -36,7 +36,6 @@ export const ProductTable = ({
                             <Table.HeaderCell>Title</Table.HeaderCell>
                             <Table.HeaderCell>Handle</Table.HeaderCell>
                             <Table.HeaderCell>SKUs</Table.HeaderCell>
-                            <Table.HeaderCell className="w-32">Material</Table.HeaderCell>
                             <Table.HeaderCell className="w-32">Status</Table.HeaderCell>
                         </Table.Row>
                     </Table.Header>
@@ -117,20 +116,6 @@ export const ProductTable = ({
                                                     </Badge>
                                                 )}
                                             </div>
-                                        </Link>
-                                    </Table.Cell>
-
-                                    {/* Material */}
-                                    <Table.Cell>
-                                        <Link
-                                            to={`/products/${product.id}`}
-                                            className="flex items-center w-full h-full hover:text-ui-fg-interactive transition-colors"
-                                        >
-                                            {product.metadata_material && (
-                                                <Badge size="small">
-                                                    {product.metadata_material}
-                                                </Badge>
-                                            )}
                                         </Link>
                                     </Table.Cell>
 

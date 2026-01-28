@@ -95,6 +95,8 @@ export const useCustomerSearch = ({
             };
         },
         placeholderData: (previousData) => previousData,
+        staleTime: 5000, // Consider data stale after 5 seconds
+        refetchOnWindowFocus: true, // Auto-refetch when user returns to tab
         // enabled: true, // Always enable query to allow filters to work even if sync is slow
     });
 

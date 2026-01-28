@@ -1,14 +1,30 @@
+import { Container, Toaster, Table } from "@medusajs/ui";
+import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import "../../styles/scrollbar-fix.css";
+
+// Logic
 import { useCustomerPageState } from "./hooks/use-customer-page-state";
+
+// Components
 import { CustomerHeader } from "./components/customer-header";
 import { CustomerTable } from "./components/customer-table";
-import { Toaster, Table, Container } from "@medusajs/ui";
 
-const CustomerAdvancedPage = () => {
+/**
+ * Customers Advanced Search Page
+ */
+const CustomerSearchPage = () => {
+    const queryClient = useQueryClient();
     const {
         headerProps,
         tableProps,
         paginationProps
     } = useCustomerPageState();
+
+    // Invalidate cache when mounting to ensure fresh data after edits
+    useEffect(() => {
+        queryClient.invalidateQueries({ queryKey: ["meili-customers"] });
+    }, [queryClient]);
 
     return (
         <>
@@ -40,4 +56,4 @@ const CustomerAdvancedPage = () => {
     );
 };
 
-export default CustomerAdvancedPage;
+export default CustomerSearchPage;

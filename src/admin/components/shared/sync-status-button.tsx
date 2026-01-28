@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button, clx } from "@medusajs/ui"
 import { ArrowPath, CheckCircle, ExclamationCircle } from "@medusajs/icons"
 
@@ -13,6 +13,12 @@ interface SyncStatusButtonProps {
 export const SyncStatusButton = ({ entity, label = "Check Sync", onSyncComplete }: SyncStatusButtonProps) => {
     const [status, setStatus] = useState<SyncStatus>("idle")
     const [message, setMessage] = useState<string>("")
+
+    // Reset state when component re-mounts (fixes stale state issue)
+    useEffect(() => {
+        setStatus("idle")
+        setMessage("")
+    }, [])
 
     const handleSync = async () => {
         setStatus("loading")

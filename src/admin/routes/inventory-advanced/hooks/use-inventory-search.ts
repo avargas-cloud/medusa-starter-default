@@ -76,6 +76,8 @@ export const useInventorySearch = ({
             };
         },
         placeholderData: (previousData) => previousData,
+        staleTime: 5000, // Consider data stale after 5 seconds
+        refetchOnWindowFocus: true, // Auto-refetch when user returns to tab
     });
 
     return {
