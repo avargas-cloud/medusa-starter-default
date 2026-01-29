@@ -7,9 +7,10 @@ import {
     Button,
     Checkbox,
 } from "@medusajs/ui"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { CategoryTreeNode } from "../../components/filters/CategoryTreeNode"
 import { ActiveFiltersSection } from "../../components/filters/ActiveFiltersSection"
+import { AvailableFiltersSection } from "../../components/filters/AvailableFiltersSection"
 import { useFiltersData } from "../../hooks/useFiltersData"
 import { useCategoryConfig } from "../../hooks/useCategoryConfig"
 
@@ -36,6 +37,7 @@ export default function FiltersPage() {
         overrideInheritance,
         setOverrideInheritance,
         activeFilters,
+        setActiveFilters,
         handleToggleFilter,
         handleDragEnd,
         handleSave,
@@ -50,6 +52,13 @@ export default function FiltersPage() {
     }
 
     const rootCategories = buildTree(null)
+
+    // ⭐ Auto-select first root category on load
+    useEffect(() => {
+        if (!selectedCategoryId && rootCategories.length > 0) {
+            setSelectedCategoryId(rootCategories[0].id)
+        }
+    }, [rootCategories, selectedCategoryId])
 
     // Get children for a category
     const getChildren = (categoryId: string) => {
@@ -124,15 +133,47 @@ export default function FiltersPage() {
                     ) : (
                         <>
                             {/* STICKY Header */}
-                            <div className="sticky top-0 bg-ui-bg-base border-b border-ui-border-base p-6 pb-4 z-10">
-                                <Heading level="h2">{selectedCategory?.name}</Heading>
-                                <Text className="text-ui-fg-subtle text-sm mt-1">
-                                    {selectedCategory?.handle}
-                                </Text>
+                            <div className="sticky top-0 bg-ui-bg-base border-b border-ui-border-base px-5 py-3 z-10">
+                                <div className="flex items-start justify-between">
+                                    <div className="flex-1">
+                                        <Heading level="h2" className="text-lg">{selectedCategory?.name}</Heading>
+                                        <Text className="text-ui-fg-subtle text-xs mt-0.5">
+                                            {selectedCategory?.handle}
+                                        </Text>
+                                    </div>
+
+                                    {/* Save Button - Moved to header */}
+                                    <Button
+                                        variant="primary"
+                                        onClick={handleSave}
+                                        isLoading={isSaving}
+                                        size="small"
+                                    >
+                                        Save Configuration
+                                    </Button>
+                                </div>
+
+                                {/* ⭐ OVERRIDE TOGGLE - Moved here */}
+                                <div className="border border-ui-border-base rounded-lg p-2.5 bg-ui-bg-subtle mt-3">
+                                    <label className="flex items-start gap-2.5 cursor-pointer">
+                                        <Checkbox
+                                            checked={overrideInheritance}
+                                            onCheckedChange={(checked) =>
+                                                setOverrideInheritance(checked as boolean)
+                                            }
+                                        />
+                                        <div>
+                                            <Text weight="plus" size="small">Override parent category filters</Text>
+                                            <Text size="xsmall" className="text-ui-fg-subtle mt-0.5">
+                                                Uncheck to inherit filters from parent category
+                                            </Text>
+                                        </div>
+                                    </label>
+                                </div>
                             </div>
 
                             {/* Scrollable content */}
-                            <div className="flex-1 overflow-y-auto p-6 pt-4">
+                            <div className="flex-1 overflow-y-auto px-5 py-3">
 
                                 {/* ⭐ ACTIVE FILTERS - Drag & Drop */}
                                 <ActiveFiltersSection
@@ -142,102 +183,18 @@ export default function FiltersPage() {
                                     onRemoveFilter={handleToggleFilter}
                                 />
 
-                                {/* Override Toggle */}
-                                <div className="border border-ui-border-base rounded-lg p-4 bg-ui-bg-subtle">
-                                    <label className="flex items-start gap-3 cursor-pointer">
-                                        <Checkbox
-                                            checked={overrideInheritance}
-                                            onCheckedChange={(checked) =>
-                                                setOverrideInheritance(checked as boolean)
-                                            }
-                                        />
-                                        <div>
-                                            <Text weight="plus">Override parent category filters</Text>
-                                            <Text size="small" className="text-ui-fg-subtle mt-1">
-                                                Uncheck to inherit filters from parent category
-                                            </Text>
-                                        </div>
-                                    </label>
-                                </div>
-
-                                {/* Filter List */}
-                                <div>
-                                    <Text weight="plus" className="mb-3">
-                                        Available Filters
-                                    </Text>
-
-                                    {(() => {
-                                        // Filter attributes by available_attributes from category metadata
-                                        const availableAttrIds = selectedCategory?.metadata?.available_attributes
-
-                                        // ⭐ Distinguish between undefined (not synced yet) and [] (synced but empty)
-                                        const filteredAttributes = availableAttrIds === undefined
-                                            ? attributes  // Not synced yet: show all
-                                            : attributes.filter(attr => availableAttrIds.includes(attr.id))  // Synced: filter
-
-                                        if (attributes.length === 0) {
-                                            return (
-                                                <Text className="text-ui-fg-muted italic">
-                                                    No attributes defined in system
-                                                </Text>
-                                            )
-                                        }
-
-                                        if (filteredAttributes.length === 0 && (availableAttrIds?.length === 0 || availableAttrIds === undefined)) {
-                                            return (
-                                                <div className="border border-ui-border-base rounded-lg p-4 bg-ui-bg-subtle">
-                                                    <Text className="text-ui-fg-muted italic text-center">
-                                                        No attributes configured on products yet
-                                                    </Text>
-                                                    <Text size="small" className="text-ui-fg-subtle text-center mt-2">
-                                                        Products exist in this category, but they don't have <code>metadata.attributes</code> defined
-                                                    </Text>
-                                                </div>
-                                            )
-                                        }
-
-                                        return (
-                                            <div>
-                                                {(availableAttrIds?.length ?? 0) > 0 && (
-                                                    <Text size="small" className="text-ui-fg-subtle mb-2">
-                                                        Showing {filteredAttributes.length} attribute{filteredAttributes.length !== 1 ? 's' : ''} used in this category
-                                                    </Text>
-                                                )}
-                                                <div className="border border-ui-border-base rounded-lg divide-y divide-ui-border-base">
-                                                    {filteredAttributes.map((attr) => (
-                                                        <label
-                                                            key={attr.id}
-                                                            className="flex items-center gap-3 p-3 hover:bg-ui-bg-subtle cursor-pointer"
-                                                        >
-                                                            <Checkbox
-                                                                checked={activeFilters.has(attr.id)}
-                                                                onCheckedChange={() => handleToggleFilter(attr.id)}
-                                                                disabled={!overrideInheritance}
-                                                            />
-                                                            <div className="flex-1">
-                                                                <Text size="small">{attr.label}</Text>
-                                                                <Text size="xsmall" className="text-ui-fg-subtle">
-                                                                    {attr.handle}
-                                                                </Text>
-                                                            </div>
-                                                        </label>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )
-                                    })()}
-                                </div>
-
-                                {/* Save Button */}
-                                <div className="flex justify-end pt-4 border-t border-ui-border-base">
-                                    <Button
-                                        variant="primary"
-                                        onClick={handleSave}
-                                        isLoading={isSaving}
-                                    >
-                                        Save Configuration
-                                    </Button>
-                                </div>
+                                {/* Available Filters Section */}
+                                <AvailableFiltersSection
+                                    selectedCategory={selectedCategory}
+                                    attributes={attributes}
+                                    activeFilters={activeFilters}
+                                    onAddToActive={(selectedIds) => {
+                                        const newFilters = new Set(activeFilters)
+                                        selectedIds.forEach(id => newFilters.add(id))
+                                        setActiveFilters(newFilters)
+                                    }}
+                                    overrideInheritance={overrideInheritance}
+                                />
                             </div>
                         </>
                     )}

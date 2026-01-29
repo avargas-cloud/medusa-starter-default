@@ -46,43 +46,37 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
     }, [selectedCategoryId])  // ⭐ Only re-run when category selection changes, not when categories array changes
 
     // Save mutation
+    // ⭐ Save mutation - Generates filters JSON and saves to metadata
     const saveMutation = useMutation({
         mutationFn: async () => {
             if (!selectedCategoryId) throw new Error("No category selected")
 
-            const category = categories.find((c) => c.id === selectedCategoryId)
-            if (!category) throw new Error("Category not found")
-
-            const res = await fetch(`/admin/product-categories/${selectedCategoryId}`, {
+            // Call generate-filters endpoint
+            const res = await fetch(`/admin/product-categories/${selectedCategoryId}/generate-filters`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                 },
                 credentials: "include",
                 body: JSON.stringify({
-                    metadata: {
-                        ...category.metadata,
-                        filter_config: {
-                            override_inheritance: overrideInheritance,
-                            active_filters: Array.from(activeFilters).map((attribute_id, index) => ({
-                                attribute_id,
-                                order: index,
-                                type: 'checkbox'
-                            })),
-                        },
-                    },
+                    active_filters: Array.from(activeFilters),
+                    override_inheritance: overrideInheritance,
                 }),
             })
 
-            if (!res.ok) throw new Error("Failed to save configuration")
+            if (!res.ok) {
+                const error = await res.json()
+                throw new Error(error.message || "Failed to generate filters")
+            }
+
             return res.json()
         },
-        onSuccess: () => {
-            toast.success("Filter configuration saved")
+        onSuccess: (data) => {
+            toast.success(`Filters generated: ${data.filters_generated} filters for ${data.total_products} products`)
             queryClient.invalidateQueries({ queryKey: ["product_categories"] })
         },
         onError: (err) => {
-            toast.error("Failed to save", { description: (err as Error).message })
+            toast.error("Failed to generate filters", { description: (err as Error).message })
         },
     })
 
@@ -117,6 +111,7 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
         overrideInheritance,
         setOverrideInheritance,
         activeFilters,
+        setActiveFilters, // ⭐ Export for bulk operations like Select All
         handleToggleFilter,
         handleDragEnd,
         handleSave,

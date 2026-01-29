@@ -40,8 +40,10 @@ export function SortableFilterItem({ id, label, handle, onRemove }: SortableFilt
                 <EllipsisVertical className="text-ui-fg-muted" />
             </button>
             <div className="flex-1">
-                <Text weight="plus" size="small">{label}</Text>
-                <Text size="xsmall" className="text-ui-fg-subtle">{handle}</Text>
+                <Text weight="plus" size="small">
+                    {label}{" "}
+                    <span className="text-ui-fg-subtle font-normal">({handle})</span>
+                </Text>
             </div>
             <button
                 onClick={onRemove}

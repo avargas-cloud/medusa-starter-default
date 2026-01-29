@@ -181,22 +181,24 @@ const ProductAttributesWidget = ({ data: initialProduct }: DetailWidgetProps<Adm
                     ) : (
                         groupedAttributes.map((group: any) => (
                             <Table.Row key={group.key_id}>
-                                <Table.Cell>
-                                    <Text weight="plus">{group.key_title}</Text>
-                                    <Text size="small" className="text-ui-fg-muted">{group.handle}</Text>
+                                <Table.Cell style={{ paddingTop: '4px', paddingBottom: '4px' }}>
+                                    <div className="flex items-baseline gap-1.5">
+                                        <Text weight="plus" size="small">{group.key_title}</Text>
+                                        <Text size="xsmall" className="text-ui-fg-muted">({group.handle})</Text>
+                                    </div>
                                 </Table.Cell>
-                                <Table.Cell>
-                                    <div className="flex gap-2 flex-wrap">
+                                <Table.Cell style={{ paddingTop: '4px', paddingBottom: '4px' }}>
+                                    <div className="flex gap-1 flex-wrap">
                                         {group.values.map((val: any) => (
-                                            <Badge key={val.id}>{val.value}</Badge>
+                                            <Badge key={val.id} size="xsmall">{val.value}</Badge>
                                         ))}
                                     </div>
                                 </Table.Cell>
-                                <Table.Cell>
+                                <Table.Cell style={{ paddingTop: '4px', paddingBottom: '4px' }}>
                                     {group.is_variant ? (
-                                        <Badge color="purple">Variant</Badge>
+                                        <Badge color="purple" size="xsmall">Variant</Badge>
                                     ) : (
-                                        <Text size="small" className="text-ui-fg-muted">-</Text>
+                                        <Text size="xsmall" className="text-ui-fg-muted">-</Text>
                                     )}
                                 </Table.Cell>
                             </Table.Row>

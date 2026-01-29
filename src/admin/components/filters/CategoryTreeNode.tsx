@@ -33,7 +33,7 @@ export function CategoryTreeNode({
     hasConfig,
     level = 0,
 }: CategoryTreeNodeProps) {
-    const [isExpanded, setIsExpanded] = useState(false)
+    const [isExpanded, setIsExpanded] = useState(level === 0) // ⭐ First level expanded by default
 
     const children = getChildren(category.id)
     const hasChildren = children.length > 0
