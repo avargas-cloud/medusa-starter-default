@@ -32,28 +32,29 @@ module.exports = defineConfig({
   },
   plugins: [
     // Google OAuth Authentication
-    {
-      resolve: "medusa-plugin-auth",
-      options: {
-        strict: "store",  // Only for store (customers), not admin
-        google: {
-          clientID: process.env.GOOGLE_CLIENT_ID!,
-          clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-          store: {
-            callbackUrl: `${process.env.MEDUSA_BACKEND_URL}/store/auth/google/callback`,
-            successRedirect: `${process.env.STOREFRONT_URL}/account`,
-            failureRedirect: `${process.env.STOREFRONT_URL}/login`,
-            expiresIn: 7 * 24 * 3600 * 1000,  // 7 days
-          },
-          admin: {
-            // Admin OAuth disabled - use email/password for staff
-            callbackUrl: `${process.env.MEDUSA_BACKEND_URL}/admin/auth/google/callback`,
-            successRedirect: `${process.env.MEDUSA_BACKEND_URL}/app`,
-            failureRedirect: `${process.env.MEDUSA_BACKEND_URL}/app/login`,
-          },
-        },
-      },
-    },
+    // TEMPORARILY DISABLED: Plugin causing build errors
+    // {
+    //   resolve: "medusa-plugin-auth",
+    //   options: {
+    //     strict: "store",  // Only for store (customers), not admin
+    //     google: {
+    //       clientID: process.env.GOOGLE_CLIENT_ID!,
+    //       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    //       store: {
+    //         callbackUrl: `${process.env.MEDUSA_BACKEND_URL}/store/auth/google/callback`,
+    //         successRedirect: `${process.env.STOREFRONT_URL}/account`,
+    //         failureRedirect: `${process.env.STOREFRONT_URL}/login`,
+    //         expiresIn: 7 * 24 * 3600 * 1000,  // 7 days
+    //       },
+    //       admin: {
+    //         // Admin OAuth disabled - use email/password for staff
+    //         callbackUrl: `${process.env.MEDUSA_BACKEND_URL}/admin/auth/google/callback`,
+    //         successRedirect: `${process.env.MEDUSA_BACKEND_URL}/app`,
+    //         failureRedirect: `${process.env.MEDUSA_BACKEND_URL}/app/login`,
+    //       },
+    //     },
+    //   },
+    // },
   ],
   modules: [
     {
