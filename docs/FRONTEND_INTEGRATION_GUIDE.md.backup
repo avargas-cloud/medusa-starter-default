@@ -162,37 +162,95 @@ interface ProductVariant {
 }
 ```
 
-
 ### Descripciones de Producto
 
-Los productos tienen dos tipos de descripción:
+Los productos tienen **dos tipos de descripción**:
 
-**1. Descripción Corta** → `product.description`  
-**2. Descripción Larga** → `product.metadata.long_description` (contiene HTML)
+#### 1. **Descripción Corta** (`product.description`)
+- Campo estándar de Medusa
+- Texto plano (sin HTML)
+- Ideal para: Listados, cards, meta descriptions
 
 ```typescript
-// Obtener producto
 const { product } = await medusa.store.product.retrieve(id)
 
-// Descripción larga
-const longDesc = product.metadata?.long_description as string
+// Usar en meta tags
+<meta name="description" content={product.description} />
 
-// Renderizar
-<div dangerouslySetInnerHTML={{ __html: longDesc }} />
+// O en card de producto
+<p className="product-summary">{product.description}</p>
 ```
 
-**Sanitización (opcional):**
+#### 2. **Descripción Larga** (`product.metadata.long_description`)
+- Campo personalizado en metadata
+- Contiene **HTML** (puede tener `<p>`, `<ul>`, etc.)
+- Ideal para: Página de detalle del producto
+
+```typescript
+const { product } = await medusa.store.product.retrieve(id)
+
+// Acceder a long description
+const longDesc = product.metadata?.long_description as string | undefined
+
+// Renderizar con dangerouslySetInnerHTML (Next.js/React)
+{longDesc && (
+  <div 
+    className="product-long-description"
+    dangerouslySetInnerHTML={{ __html: longDesc }}
+  />
+)}
+```
+
+#### Ejemplo Completo (Página de Producto)
+
+```tsx
+// app/products/[handle]/page.tsx
+export default async function ProductPage({ params }) {
+  const { product } = await medusa.store.product.retrieve(params.id)
+  const longDescription = product.metadata?.long_description as string
+
+  return (
+    <div className="product-page">
+      {/* Header con descripción corta */}
+      <section className="product-header">
+        <h1>{product.title}</h1>
+        <p className="text-gray-600">{product.description}</p>
+      </section>
+
+      {/* Descripción larga (HTML) */}
+      {longDescription && (
+        <section className="product-details">
+          <h2>Product Details</h2>
+          <div 
+            className="prose max-w-none"
+            dangerouslySetInnerHTML={{ __html: longDescription }}
+          />
+        </section>
+      )}
+    </div>
+  )
+}
+```
+
+#### ⚠️ Importante: Sanitización HTML
+
+Si no confías en el contenido HTML, usa una librería sanitizadora:
+
 ```bash
-npm install dompurify @types/dompurify
+npm install dompurify
+npm install --save-dev @types/dompurify
 ```
 
 ```typescript
 import DOMPurify from 'dompurify'
+
+const longDesc = product.metadata?.long_description as string
 const cleanHTML = DOMPurify.sanitize(longDesc)
+
+<div dangerouslySetInnerHTML={{ __html: cleanHTML }} />
 ```
 
 ---
-
 
 ### Main Category & Breadcrumbs
 

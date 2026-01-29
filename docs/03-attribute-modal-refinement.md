@@ -77,5 +77,62 @@ While the UI looked great, saving data revealed a chain of deep backend configur
 
 ---
 
+---
+
+## 4. Display Metadata Enhancement (2026)
+
+### Overview
+Product attributes have been enhanced with **display metadata fields** to support dynamic, frontend-driven filter rendering without hardcoding UI configurations.
+
+### New Fields Added to AttributeKey Model
+
+| Field | Type | Purpose | Example |
+|-------|------|---------|---------|
+| `display_name` | string (nullable) | Override for frontend display | "Color Temperature" |
+| `description` | string (nullable) | Helper text for filter UI | "Select the white color temperature..." |
+| `filter_type` | string (nullable) | UI component type | "checkbox", "range", "toggle", "color-swatch" |
+| `filter_order` | number (nullable) | Sort order in filter panel | 1, 2, 3... |
+| `icon` | string (nullable) | Icon identifier | "thermometer", "bolt", "ruler" |
+| `unit` | string (nullable) | Display unit | "K", "V", "W", "mm" |
+
+### Admin UI Integration
+
+**Create Modal** (`create-attribute-modal.tsx`):
+- Added "Display Configuration" section with all new fields
+- Fields are optional - form works with or without metadata
+- Filter Type dropdown with predefined options
+
+**Detail Page** (`/attributes/[id]/page.tsx`):
+- New "Display Configuration" section for editing metadata
+- "Save Metadata" button for updating display fields
+- Grid layout for organized input
+
+### Store API Enhancement
+The `/store/categories/:id/filters` endpoint now returns enriched metadata:
+```json
+{
+  "filters": [{
+    "display_name": "Color Temperature",
+    "description": "Select the white color...",
+    "filter_type": "color-swatch",
+    "icon": "thermometer",
+    "unit": "K",
+    "order": 1,
+    "values": ["2700K", "3000K", "4000K"]
+  }]
+}
+```
+
+**Fallback Logic**: All new fields use fallbacks for backward compatibility:
+- `display_name || label`
+- `filter_type || 'checkbox'`
+- `icon || null`
+
+### Migration
+- **Migration**: `Migration20260129194325.ts` (adds 6 nullable columns)
+- **Backward Compatible**: All fields nullable, existing attributes work unchanged
+
+---
+
 > [!TIP]
 > **For Future Reference**: When defining Links in Medusa v2, always remember to verify the `isList: true` property if the relationship is Many-to-Many (e.g., Tags, Categories, Attributes). Without it, the system defaults to strict constraints.

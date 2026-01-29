@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Container, Heading, Button, Table, IconButton, usePrompt, toast, Input, Label, Badge } from "@medusajs/ui"
+import { Container, Heading, Button, Table, IconButton, usePrompt, toast, Input, Label, Badge, Textarea, Select, Text as TextUI } from "@medusajs/ui"
 import { Trash, ArrowLeftMini, Plus, PencilSquare, Check } from "@medusajs/icons"
 import { useState, useEffect } from "react"
 
@@ -15,6 +15,17 @@ const AttributeDetailPage = () => {
     const [editTitle, setEditTitle] = useState("")
     const [newValue, setNewValue] = useState("")
 
+    // Display metadata state
+    const [displayName, setDisplayName] = useState("")
+    const [description, setDescription] = useState("")
+    const [filterType, setFilterType] = useState("checkbox")
+    const [icon, setIcon] = useState("")
+    const [unit, setUnit] = useState("")
+    const [filterOrder, setFilterOrder] = useState("")
+
+    // Local options state (not saved until "Save" is clicked)
+    const [localOptions, setLocalOptions] = useState<string[]>([])
+
     // FETCH
     const { data, isLoading } = useQuery({
         queryKey: ["attribute", id],
@@ -26,19 +37,36 @@ const AttributeDetailPage = () => {
     })
 
     const attribute = data?.attribute
+    const productCount = data?.product_count || 0
 
     // SYNC STATE
     useEffect(() => {
         if (attribute) {
             setEditTitle(attribute.label)
+            setDisplayName(attribute.display_name || "")
+            setDescription(attribute.description || "")
+            setFilterType(attribute.filter_type || "checkbox")
+            setIcon(attribute.icon || "")
+            setUnit(attribute.unit || "")
+            setFilterOrder(attribute.filter_order?.toString() || "")
+            setLocalOptions(attribute.options || [])
         }
     }, [attribute])
 
     // UPDATE MUTATION
     const updateAttribute = useMutation({
-        mutationFn: async (payload: { label?: string; options?: string[] }) => {
+        mutationFn: async (payload: {
+            label?: string;
+            options?: string[];
+            display_name?: string | null;
+            description?: string | null;
+            filter_type?: string | null;
+            icon?: string | null;
+            unit?: string | null;
+            filter_order?: number | null;
+        }) => {
             const res = await fetch(`/admin/attributes/${id}`, {
-                method: "POST", // using POST as implemented
+                method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload)
             })
@@ -77,64 +105,66 @@ const AttributeDetailPage = () => {
         updateAttribute.mutate({ label: editTitle })
     }
 
-    // RENAME VALUE HANDLER
-    const handleRenameValue = (oldVal: string, newVal: string) => {
-        if (!attribute || !newVal.trim() || oldVal === newVal) return
-
-        const currentOptions = attribute.options || []
-
-        // Check duplicate
-        if (currentOptions.includes(newVal.trim())) {
-            toast.error("Value already exists")
-            return
-        }
-
-        const newOptions = currentOptions.map((o: string) => o === oldVal ? newVal.trim() : o)
-
+    // UNIFIED SAVE HANDLER - saves metadata + options
+    const handleSave = () => {
         updateAttribute.mutate({
             label: attribute.label,
-            options: newOptions
+            options: localOptions,
+            display_name: displayName || null,
+            description: description || null,
+            filter_type: filterType || null,
+            icon: icon || null,
+            unit: unit || null,
+            filter_order: filterOrder ? parseInt(filterOrder) : null
         })
     }
 
-    // Check duplicate logic for adding
-    const handleAddValue = () => {
-        if (!newValue.trim() || !attribute) return
-        const currentOptions = attribute.options || []
-        if (currentOptions.includes(newValue.trim())) {
+    // RENAME VALUE HANDLER (local only)
+    const handleRenameValue = (oldVal: string, newVal: string) => {
+        if (!newVal.trim() || oldVal === newVal) return
+
+        // Check duplicate
+        if (localOptions.includes(newVal.trim())) {
             toast.error("Value already exists")
             return
         }
-        updateAttribute.mutate({
-            label: attribute.label,
-            options: [...currentOptions, newValue.trim()]
-        })
+
+        const updated = localOptions.map(o => o === oldVal ? newVal.trim() : o)
+        setLocalOptions(updated)
+    }
+
+    // ADD VALUE HANDLER (local only)
+    const handleAddValue = () => {
+        if (!newValue.trim()) return
+
+        if (localOptions.includes(newValue.trim())) {
+            toast.error("Value already exists")
+            return
+        }
+
+        setLocalOptions([...localOptions, newValue.trim()])
+        setNewValue("") // Clear input after adding
     }
 
     const handleDeleteValue = async (valToDelete: string) => {
-        if (!attribute) return
-
         const confirmed = await prompt({
             title: "Delete Value?",
-            description: `Are you sure you want to delete "${valToDelete}"? This cannot be undone.`,
-            confirmText: "Delete",
+            description: `Remove "${valToDelete}"? Changes will be saved when you click Save.`,
+            confirmText: "Remove",
             variant: "danger"
         })
 
         if (!confirmed) return
 
-        const currentOptions = attribute.options || []
-        const newOptions = currentOptions.filter((o: string) => o !== valToDelete)
-        updateAttribute.mutate({
-            label: attribute.label,
-            options: newOptions
-        })
+        setLocalOptions(localOptions.filter(o => o !== valToDelete))
     }
 
     const handleDeleteAttribute = async () => {
         const confirmed = await prompt({
             title: "Delete Attribute?",
-            description: "Irreversible action.",
+            description: productCount > 0
+                ? `This attribute is currently used by ${productCount} product${productCount === 1 ? '' : 's'}. Deleting it will remove this attribute from all products. This action is irreversible.`
+                : "This will permanently delete this attribute. This action is irreversible.",
             confirmText: "Delete",
             variant: "danger"
         })
@@ -204,6 +234,100 @@ const AttributeDetailPage = () => {
 
                     <div className="w-full h-px bg-ui-border-base" />
 
+                    {/* DISPLAY CONFIGURATION SECTION */}
+                    <div className="flex flex-col gap-4">
+                        <div className="flex items-center justify-between">
+                            <Heading level="h2">Display Configuration</Heading>
+                            <Button variant="secondary" size="small" onClick={handleSave}>
+                                Save
+                            </Button>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="flex flex-col gap-2">
+                                <Label htmlFor="display_name">Display Name</Label>
+                                <Input
+                                    id="display_name"
+                                    placeholder="e.g. Color Temperature"
+                                    value={displayName}
+                                    onChange={(e) => setDisplayName(e.target.value)}
+                                />
+                                <TextUI size="small" className="text-ui-fg-muted">
+                                    Override for frontend. If empty, uses Attribute Name.
+                                </TextUI>
+                            </div>
+
+                            <div className="flex flex-col gap-2">
+                                <Label htmlFor="filter_type">Filter Type</Label>
+                                <Select value={filterType} onValueChange={setFilterType}>
+                                    <Select.Trigger id="filter_type">
+                                        <Select.Value />
+                                    </Select.Trigger>
+                                    <Select.Content>
+                                        <Select.Item value="checkbox">Checkbox</Select.Item>
+                                        <Select.Item value="range">Range</Select.Item>
+                                        <Select.Item value="toggle">Toggle</Select.Item>
+                                        <Select.Item value="dropdown">Dropdown</Select.Item>
+                                        <Select.Item value="color-swatch">Color Swatch</Select.Item>
+                                    </Select.Content>
+                                </Select>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col gap-2">
+                            <Label htmlFor="description">Description</Label>
+                            <Textarea
+                                id="description"
+                                placeholder="e.g. Select the white color temperature for your LED strip"
+                                value={description}
+                                onChange={(e) => setDescription(e.target.value)}
+                                rows={2}
+                            />
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="flex flex-col gap-2">
+                                <Label htmlFor="icon">Icon</Label>
+                                <Input
+                                    id="icon"
+                                    placeholder="thermometer"
+                                    value={icon}
+                                    onChange={(e) => setIcon(e.target.value)}
+                                />
+                                <TextUI size="small" className="text-ui-fg-muted">
+                                    e.g. thermometer, bolt, ruler
+                                </TextUI>
+                            </div>
+
+                            <div className="flex flex-col gap-2">
+                                <Label htmlFor="unit">Unit</Label>
+                                <Input
+                                    id="unit"
+                                    placeholder="K"
+                                    value={unit}
+                                    onChange={(e) => setUnit(e.target.value)}
+                                />
+                                <TextUI size="small" className="text-ui-fg-muted">
+                                    e.g. K, V, W, mm
+                                </TextUI>
+                            </div>
+
+                            <div className="flex flex-col gap-2">
+                                <Label htmlFor="filter_order">Display Order</Label>
+                                <Input
+                                    id="filter_order"
+                                    type="number"
+                                    placeholder="1"
+                                    value={filterOrder}
+                                    onChange={(e) => setFilterOrder(e.target.value)}
+                                    min="0"
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="w-full h-px bg-ui-border-base" />
+
                     {/* VALUES MANAGEMENT */}
                     <div className="flex flex-col gap-6">
                         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
@@ -233,8 +357,8 @@ const AttributeDetailPage = () => {
                                     </Table.Row>
                                 </Table.Header>
                                 <Table.Body>
-                                    {attribute.options && attribute.options.length > 0 ? (
-                                        attribute.options.map((val: string, idx: number) => (
+                                    {localOptions && localOptions.length > 0 ? (
+                                        localOptions.map((val: string, idx: number) => (
                                             <ValueRow
                                                 key={idx}
                                                 value={val}
