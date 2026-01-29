@@ -35,6 +35,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@medusajs/admin-sdk": "^2.13.0",
     "@medusajs/cli": "^2.13.1",
+    "@medusajs/draft-order": "^2.13.1",
     "@medusajs/file-s3": "^2.13.0",
     "@medusajs/framework": "^2.13.0",
     "@medusajs/icons": "^2.13.0",
