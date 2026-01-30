@@ -8,11 +8,14 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     console.log(`🔧 [SYNC-ATTRS] Starting sync for category ${categoryId}`)
 
     try {
-        // 1. Fetch ALL products with categories (M2M relationship)
-        const allProducts = await productModule.listProducts({}, {
-            relations: ["categories"],
-            take: 10000
-        })
+        // 1. Fetch ALL PUBLISHED products with categories (M2M relationship)
+        const allProducts = await productModule.listProducts(
+            { status: ["published"] },  // ⭐ ONLY PUBLISHED PRODUCTS
+            {
+                relations: ["categories"],
+                take: 10000
+            }
+        )
 
         // 2. Filter client-side for this category
         const products = allProducts.filter(p =>

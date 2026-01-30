@@ -10,20 +10,22 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     const { id } = req.params
 
     try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const productCategoryModuleService: any = req.scope.resolve(
-            "productCategoryModuleService"
-        )
+        const queryService = req.scope.resolve("query")
 
-        const category = await productCategoryModuleService.retrieveProductCategory(id, {
-            select: ["id", "name", "handle", "metadata", "parent_category_id"],
+        // Get category using query service
+        const categoryResult: any = await queryService.graph({
+            entity: "product_category",
+            fields: ["id", "name", "handle", "metadata", "parent_category_id"],
+            filters: { id },
         })
 
-        if (!category) {
+        if (!categoryResult?.data || categoryResult.data.length === 0) {
             return res.status(404).json({
                 error: "Category not found",
             })
         }
+
+        const category = categoryResult.data[0]
 
         // Helper function to get filters with inheritance
         const getFiltersWithInheritance = async (categoryId: string, visited = new Set<string>()): Promise<Array<{ attribute_id: string, order: number, type?: string }>> => {
@@ -33,12 +35,15 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             }
             visited.add(categoryId)
 
-            const cat = await productCategoryModuleService.retrieveProductCategory(categoryId, {
-                select: ["id", "metadata", "parent_category_id"],
+            const catResult: any = await queryService.graph({
+                entity: "product_category",
+                fields: ["id", "metadata", "parent_category_id"],
+                filters: { id: categoryId },
             })
 
-            if (!cat) return []
+            if (!catResult?.data || catResult.data.length === 0) return []
 
+            const cat = catResult.data[0]
             const config = cat.metadata?.filter_config
 
             // If override_inheritance is true, use this category's filters

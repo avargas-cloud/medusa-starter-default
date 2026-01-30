@@ -101,7 +101,7 @@ export async function generateFiltersForCategory(
         }
     }
 
-    // 2. Fetch products in this category (just IDs)
+    // 2. Fetch products in this category (just IDs) - ONLY PUBLISHED
     const products = await remoteQuery({
         entryPoint: "product",
         fields: ["id"],
@@ -110,6 +110,7 @@ export async function generateFiltersForCategory(
                 categories: {
                     id: [categoryId],
                 },
+                status: ["published"],  // ⭐ ONLY PUBLISHED PRODUCTS
             },
         },
     })
