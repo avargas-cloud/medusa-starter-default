@@ -14,13 +14,34 @@ type CategoryWithMetadata = {
 const CategoryPrerenderWidget = ({ data }: DetailWidgetProps<CategoryWithMetadata>) => {
     const [prerender, setPrerender] = useState<boolean>(false)
     const [isSaving, setIsSaving] = useState(false)
+    const [isLoading, setIsLoading] = useState(true)
 
-    // Initialize from metadata
+    // CRITICAL: Fetch fresh metadata on mount (bypasses Admin UI cache)
+    // Unlike sorting widgets (which open modals with fresh fetch),
+    // this widget is always visible and needs to manually fetch latest state
     useEffect(() => {
-        if (data.metadata?.prerender !== undefined) {
-            setPrerender(data.metadata.prerender === true)
+        const fetchFreshMetadata = async () => {
+            try {
+                const response = await fetch(`/admin/product-categories/${data.id}?fields=+metadata`, {
+                    credentials: "include",
+                })
+
+                if (response.ok) {
+                    const freshData = await response.json()
+                    const value = freshData.product_category?.metadata?.prerender === true
+                    setPrerender(value)
+                }
+            } catch (error) {
+                console.error("[PRE-RENDER] Failed to fetch fresh metadata:", error)
+                // Fallback to cached data if fetch fails
+                setPrerender(data.metadata?.prerender === true)
+            } finally {
+                setIsLoading(false)
+            }
         }
-    }, [data.metadata])
+
+        fetchFreshMetadata()
+    }, [data.id]) // Re-fetch when navigating to different category
 
     const handleToggle = async (checked: boolean) => {
         setPrerender(checked)
@@ -81,7 +102,7 @@ const CategoryPrerenderWidget = ({ data }: DetailWidgetProps<CategoryWithMetadat
                         id="category-prerender-toggle"
                         checked={prerender}
                         onCheckedChange={handleToggle}
-                        disabled={isSaving}
+                        disabled={isSaving || isLoading}
                     />
                 </div>
             </div>
