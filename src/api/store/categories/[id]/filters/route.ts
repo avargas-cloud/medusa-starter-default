@@ -146,6 +146,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 entity: "product",
                 fields: ["id", "metadata"],
                 filters: {
+                    // @ts-expect-error - Medusa v2 query syntax
                     categories: { id: id }  // Only products in THIS category
                 },
             })
