@@ -22,13 +22,21 @@ const CategoryPrerenderWidget = ({ data }: DetailWidgetProps<CategoryWithMetadat
     useEffect(() => {
         const fetchFreshMetadata = async () => {
             try {
-                const response = await fetch(`/admin/product-categories/${data.id}?fields=+metadata`, {
+                // Add timestamp to bypass ALL caching layers
+                const timestamp = Date.now()
+                const response = await fetch(`/admin/product-categories/${data.id}?fields=+metadata&_t=${timestamp}`, {
                     credentials: "include",
+                    cache: "no-store",  // Force fresh fetch, no cache
+                    headers: {
+                        "Cache-Control": "no-cache, no-store, must-revalidate",
+                        "Pragma": "no-cache",
+                    }
                 })
 
                 if (response.ok) {
                     const freshData = await response.json()
                     const value = freshData.product_category?.metadata?.prerender === true
+                    console.log(`[PRE-RENDER] Fresh fetch for ${data.id}: prerender=${value}`)
                     setPrerender(value)
                 }
             } catch (error) {
