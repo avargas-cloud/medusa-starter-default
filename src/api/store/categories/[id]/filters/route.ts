@@ -146,7 +146,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 entity: "product",
                 fields: ["id", "metadata"],
                 filters: {
-                    categories: { id: [id] }  // Only products in THIS category
+                    category_id: id  // Only products in THIS category
                 },
             })
 
@@ -175,14 +175,14 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                     if (!attributes) return
 
                     // Get the value of this attribute for this product
-                    const productValue = attributes[filter.name] // Use handle as key
+                    const productValue = attributes[filter.attribute] // Use handle as key
                     
                     if (productValue && valueCounts.hasOwnProperty(productValue)) {
                         valueCounts[productValue]++
                     }
                 })
 
-                console.log(`  Filter "${filter.name}":`, valueCounts)
+                console.log(`  Filter "${filter.attribute}":`, valueCounts)
 
                 // Transform values array to include counts
                 return {
