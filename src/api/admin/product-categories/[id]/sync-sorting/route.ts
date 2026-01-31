@@ -100,9 +100,11 @@ export async function POST(
 
         // 8. ✅ Update using KNEX (per QUERY_PATTERNS_REFERENCE.md)
         // PRESERVE all other metadata fields (avoids metadata spread bug)
+        const existingSortingConfig = category.metadata?.sorting_config || {}
         const newMetadata = {
             ...category.metadata,
             sorting_config: {
+                ...existingSortingConfig,  // CRITICAL: Preserve prerender and other fields
                 subcategory_order: cleanedSubcategoryOrder,
                 product_order: cleanedProductOrder
             }
