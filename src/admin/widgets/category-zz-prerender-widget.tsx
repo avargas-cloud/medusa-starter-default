@@ -53,8 +53,7 @@ const CategoryPrerenderWidget = ({ data }: DetailWidgetProps<CategoryWithMetadat
 
             console.log(`[PRE-RENDER] Updated category ${data.id}: prerender=${checked}`)
 
-            // Refresh page to show updated data
-            window.location.reload()
+            // State already updated via setPrerender() - no refresh needed!
         } catch (error) {
             console.error("[PRE-RENDER] Failed to update:", error)
             // Revert on error
