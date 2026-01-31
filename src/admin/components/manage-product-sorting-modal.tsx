@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { Button, Heading, Text } from "@medusajs/ui"
 import { XMark } from "@medusajs/icons"
 import {
@@ -32,17 +32,16 @@ export const ManageProductSortingModal = ({
     categoryId,
     categoryName,
 }: ManageProductSortingModalProps) => {
+    const [currentConfig, setCurrentConfig] = useState<{
+        subcategory_order: string[]
+        product_order: string[]
+    } | undefined>(undefined)
+
     // Use existing hooks - SAME logic as /app/sorting page
     const {
         products,
         isLoading,
     } = useSortingData(categoryId)
-
-    // Get current sorting config from first category
-    const currentConfig = products.length > 0 ? {
-        subcategory_order: [],
-        product_order: [],
-    } : undefined
 
     const {
         productOrder,
@@ -60,14 +59,50 @@ export const ManageProductSortingModal = ({
         })
     )
 
-    // Initialize product order when modal opens
+    // Load existing sorting config when modal opens
     useEffect(() => {
-        if (open && products.length > 0) {
-            // For now, just use product IDs in current order
-            const allProductIds = products.map((p) => p.id)
-            setProductOrder(allProductIds)
+        if (open && categoryId) {
+            const loadConfig = async () => {
+                try {
+                    const res = await fetch(
+                        `/admin/product-categories/${categoryId}?fields=+metadata`,
+                        { credentials: "include" }
+                    )
+                    const data = await res.json()
+                    const config = data.product_category?.metadata?.sorting_config || {
+                        subcategory_order: [],
+                        product_order: [],
+                    }
+                    setCurrentConfig(config)
+                } catch (error) {
+                    console.error("Failed to load sorting config:", error)
+                    setCurrentConfig({
+                        subcategory_order: [],
+                        product_order: [],
+                    })
+                }
+            }
+            loadConfig()
         }
-    }, [open, products])
+    }, [open, categoryId])
+
+    // Initialize product order when modal opens AND we have both products and config
+    useEffect(() => {
+        if (open && products.length > 0 && currentConfig) {
+            const existingOrder = currentConfig.product_order || []
+            const allProductIds = products.map((p) => p.id)
+
+            // PRESERVE existing order, append new products at end
+            const preservedOrder = existingOrder.filter((id: string) =>
+                allProductIds.includes(id)
+            )
+            const newProducts = allProductIds.filter(
+                (id) => !existingOrder.includes(id)
+            )
+
+            setProductOrder([...preservedOrder, ...newProducts])
+        }
+    }, [open, products, currentConfig])
 
     const handleDragEnd = (event: any) => {
         const { active, over } = event
