@@ -107,12 +107,19 @@ export function useCategorySorting(categoryId?: string, initialConfig?: SortingC
             }
 
             // STEP 3: Save metadata (BACKUP only, rank is primary)
-            // We keep this for backwards compatibility and as backup
+            // CRITICAL: Preserve existing order arrays to prevent data loss
+            const existingSortingConfig = existingMetadata.sorting_config || {}
             const updatedMetadata = {
                 ...existingMetadata,
                 sorting_config: {
-                    subcategory_order: subcategoryOrder,  // BACKUP
-                    product_order: productOrder,          // PRIMARY (products still use metadata)
+                    // Preserve existing subcategory_order if not modified (empty array means not touched)
+                    subcategory_order: subcategoryOrder.length > 0
+                        ? subcategoryOrder
+                        : (existingSortingConfig.subcategory_order || []),
+                    // Preserve existing product_order if not modified (empty array means not touched)
+                    product_order: productOrder.length > 0
+                        ? productOrder
+                        : (existingSortingConfig.product_order || []),
                 },
             }
 
