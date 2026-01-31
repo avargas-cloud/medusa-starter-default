@@ -129,7 +129,9 @@ export const ManageSubcategorySortingModal = ({
     const handleSave = async () => {
         const success = await saveSorting()
         if (success) {
-            // Close modal - state is already updated, no refresh needed!
+            // Reset config to force fresh load next time modal opens
+            setCurrentConfig(undefined)
+            // Close modal
             onOpenChange(false)
         }
     }
