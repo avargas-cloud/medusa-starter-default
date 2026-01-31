@@ -1,135 +1,163 @@
-import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 
-export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+/**
+ * SYNC ATTRIBUTES ENDPOINT V2
+ * 
+ * Auto-called by middleware when products are updated.
+ * Reconciles available_filters for a single category using nuclear sync logic.
+ * 
+ * ✅ Uses Knex for direct metadata updates (per QUERY_PATTERNS_REFERENCE.md)
+ * ✅ Preserves all other metadata fields (critical for metadata spread bug fix)
+ * ✅ Recursive scanning of descendant categories
+ */
+export async function POST(
+    req: MedusaRequest,
+    res: MedusaResponse
+) {
     const { id: categoryId } = req.params
     const query = req.scope.resolve("query")
-    const productModule = req.scope.resolve("product")
-
-    console.log(`🔧 [SYNC-ATTRS] Starting sync for category ${categoryId}`)
+    const knex = req.scope.resolve("__pg_connection__")
 
     try {
-        // 1. Fetch ALL PUBLISHED products with categories (M2M relationship)
-        const allProducts = await productModule.listProducts(
-            { status: ["published"] },  // ⭐ ONLY PUBLISHED PRODUCTS
-            {
-                relations: ["categories"],
-                take: 10000
-            }
-        )
+        // 1. Get category with metadata
+        const { data: categories } = await query.graph({
+            entity: "product_category",
+            fields: ["id", "name", "metadata", "parent_category_id"],
+            filters: { id: categoryId }
+        })
 
-        // 2. Filter client-side for this category
-        const products = allProducts.filter(p =>
-            p.categories?.some((cat: any) => cat.id === categoryId)
-        )
-
-        console.log(`🔧 [SYNC-ATTRS] Found ${products.length} products in category ${categoryId}`)
-
-        // ⭐ ALWAYS update metadata, even if 0 products (sets [] to prevent showing all attrs)
-        if (products.length === 0) {
-            await updateCategoryMetadata(categoryId, [], req)
-            console.log(`✅ [SYNC-ATTRS] Category ${categoryId} has no products - set available_attributes to []`)
-            return res.json({ success: true, attributeCount: 0, productCount: 0 })
+        if (!categories || categories.length === 0) {
+            return res.status(404).json({ error: "Category not found" })
         }
 
-        // 3. Extract attribute KEYS from Link table
-        const productIds = products.map(p => p.id)
-        const uniqueAttrKeys = new Set<string>()
+        const category = categories[0]
 
-        for (const productId of productIds) {
-            try {
-                // Query the Link table (product_attribute_value)
-                const { data: links } = await query.graph({
-                    entity: "product_attribute_value",
-                    fields: ["attribute_value_id"],
-                    filters: { product_id: productId }
-                })
+        // 2. Get all descendant categories (recursive scan)
+        const { data: allCategories } = await query.graph({
+            entity: "product_category",
+            fields: ["id", "parent_category_id"],
+            filters: {}
+        })
 
-                if (links && links.length > 0) {
-                    // Get the values to extract their keys
-                    const valueIds = links.map((l: any) => l.attribute_value_id)
-
-                    const { data: values } = await query.graph({
-                        entity: "attribute_value",
-                        fields: ["attribute_key.id"],
-                        filters: { id: valueIds }
-                    })
-
-                    values.forEach((val: any) => {
-                        if (val.attribute_key?.id) {
-                            uniqueAttrKeys.add(val.attribute_key.id)
-                        }
-                    })
+        function getDescendants(catId: string): string[] {
+            const descendants: string[] = []
+            for (const cat of allCategories) {
+                if (cat.parent_category_id === catId) {
+                    descendants.push(cat.id)
+                    descendants.push(...getDescendants(cat.id))
                 }
-            } catch (error: any) {
-                console.error(`   ⚠️ Error fetching attributes for product ${productId}:`, error.message)
-                // Continue even if one product fails
+            }
+            return descendants
+        }
+
+        const categoryIdsToScan = [categoryId, ...getDescendants(categoryId)]
+
+        // 3. Query attributes from products (relational table, NOT metadata)
+        // ⭐ Uses KNEX for reliability (per QUERY_PATTERNS_REFERENCE.md)
+        const attributesResult = await knex.raw(`
+            SELECT DISTINCT av.attribute_key_id
+            FROM product_product_productattributes_attribute_value ppav
+            INNER JOIN attribute_value av ON ppav.attribute_value_id = av.id
+            INNER JOIN product_category_product pcp ON ppav.product_id = pcp.product_id
+            WHERE pcp.product_category_id = ANY(?::text[])
+              AND ppav.deleted_at IS NULL
+              AND av.deleted_at IS NULL
+        `, [categoryIdsToScan])
+
+        const attributeKeyIds = attributesResult.rows.map((row: any) => row.attribute_key_id)
+
+        console.log(`[SYNC-ATTRIBUTES] Category ${categoryId}:`)
+        console.log(`  - Scanned ${categoryIdsToScan.length} categories`)
+        console.log(`  - Found ${attributeKeyIds.length} attribute keys`)
+        console.log(`  - Attribute IDs:`, attributeKeyIds.slice(0, 5))
+
+        // 4. Reconcile with existing filter_config
+        const existingMetadata = category.metadata || {}
+        const existingConfig = (existingMetadata.filter_config || {}) as {
+            available_filters?: (string | { attribute_id: string; order: number; type: string })[]
+            active_filters?: (string | { attribute_id: string; order: number; type: string })[]
+            override_inheritance?: boolean
+        }
+
+        console.log(`  - Existing available: ${existingConfig.available_filters?.length || 0}`)
+        console.log(`  - Existing active: ${existingConfig.active_filters?.length || 0}`)
+
+        const existingAvailable = existingConfig.available_filters || []
+        const existingActive = existingConfig.active_filters || []
+
+        // Parse to IDs
+        const existingAvailableIds = new Set(
+            existingAvailable.map((f: any) => typeof f === 'string' ? f : f.attribute_id)
+        )
+        const existingActiveIds = new Set(
+            existingActive.map((f: any) => typeof f === 'string' ? f : f.attribute_id)
+        )
+
+        const currentAttrIds = new Set(attributeKeyIds)
+
+        // 5. Reconcile available_filters
+        const reconciledAvailable = existingAvailable.filter((f: any) => {
+            const id = typeof f === 'string' ? f : f.attribute_id
+            return currentAttrIds.has(id)
+        })
+
+        // Add new attributes
+        attributeKeyIds.forEach((attrId: string) => {
+            if (!existingAvailableIds.has(attrId)) {
+                reconciledAvailable.push({
+                    attribute_id: attrId,
+                    order: reconciledAvailable.length,
+                    type: 'checkbox'
+                })
+            }
+        })
+
+        // 6. Reconcile active_filters (remove if no longer exist)
+        const reconciledActive = existingActive.filter((f: any) => {
+            const id = typeof f === 'string' ? f : f.attribute_id
+            return currentAttrIds.has(id)
+        })
+
+        // 7. Build new metadata (PRESERVE all other fields - critical for metadata spread bug)
+        const newMetadata = {
+            ...existingMetadata,
+            filter_config: {
+                override_inheritance: existingConfig.override_inheritance ?? false,
+                available_filters: reconciledAvailable,
+                active_filters: reconciledActive
             }
         }
 
-        const attributeKeysArray = Array.from(uniqueAttrKeys)
-        console.log(`🔧 [SYNC-ATTRS] Extracted ${attributeKeysArray.length} unique attribute keys`)
+        // 8. ✅ Update using KNEX (per QUERY_PATTERNS_REFERENCE.md - correct pattern)
+        await knex("product_category")
+            .where({ id: categoryId })
+            .update({
+                metadata: JSON.stringify(newMetadata),
+                updated_at: new Date()
+            })
 
-        // 4. Update category metadata via HTTP (most reliable in Medusa v2)
-        await updateCategoryMetadata(categoryId, attributeKeysArray, req)
+        const added = attributeKeyIds.filter((id: string) => !existingAvailableIds.has(id)).length
+        const removed = Array.from(existingAvailableIds).filter(id => !currentAttrIds.has(id)).length
 
-        console.log(`✅ [SYNC-ATTRS] Updated category ${categoryId} with ${attributeKeysArray.length} attributes from ${products.length} products`)
+        console.log(`  - Reconciled available: ${reconciledAvailable.length}`)
+        console.log(`  - Added: ${added}, Removed: ${removed}`)
 
-        return res.json({
+        res.json({
             success: true,
-            productCount: products.length,
-            attributeCount: attributeKeysArray.length
+            categoryId,
+            categoryName: category.name,
+            scannedCategories: categoryIdsToScan.length,
+            filterCount: reconciledAvailable.length,
+            activeCount: reconciledActive.length,
+            added,
+            removed
         })
 
     } catch (error: any) {
-        console.error(`❌ [SYNC-ATTRS] Error:`, error.message)
-        return res.status(500).json({
+        console.error("[SYNC-ATTRIBUTES] Error:", error)
+        res.status(500).json({
             error: "Failed to sync attributes",
             message: error.message
         })
-    }
-}
-
-/**
- * Update category metadata via HTTP
- */
-async function updateCategoryMetadata(
-    categoryId: string,
-    attributeKeys: string[],
-    req: MedusaRequest
-): Promise<void> {
-    const basePath = process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
-
-    // Fetch current category
-    const categoryResponse = await fetch(`${basePath}/admin/product-categories/${categoryId}`, {
-        headers: {
-            "Cookie": req.headers.cookie || "",
-            "Authorization": req.headers.authorization || ""
-        }
-    })
-
-    if (!categoryResponse.ok) {
-        throw new Error(`Failed to fetch category: ${categoryResponse.status}`)
-    }
-
-    const { product_category } = await categoryResponse.json()
-
-    // Update with new available_attributes
-    const updateResponse = await fetch(`${basePath}/admin/product-categories/${categoryId}`, {
-        method: "POST",
-        headers: {
-            "Cookie": req.headers.cookie || "",
-            "Authorization": req.headers.authorization || "",
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-            metadata: {
-                ...product_category.metadata,
-                available_attributes: attributeKeys
-            }
-        })
-    })
-
-    if (!updateResponse.ok) {
-        throw new Error(`Failed to update category: ${updateResponse.status}`)
     }
 }
