@@ -144,7 +144,12 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
             const productsResult: any = await queryService.graph({
                 entity: "product",
-                fields: ["id", "metadata"],
+                fields: [
+                    "id",
+                    "attribute_values.value",
+                    "attribute_values.attribute_key.handle",
+                    "attribute_values.attribute_key.label"
+                ],
                 filters: {
                     // @ts-expect-error - Medusa v2 query syntax
                     categories: { id: id }  // Only products in THIS category
@@ -176,20 +181,22 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 })
 
                 console.log(`\n🔍 Processing filter: ${filter.name} (${filter.attribute})`)
-                console.log(`  Looking for key: "${filter.name}" in product metadata.attributes`)
+                console.log(`  Looking for handle: "${filter.name}" in product.attribute_values`)
                 console.log(`  Possible options:`, originalOptions.slice(0, 5))
 
                 // Count products that have this attribute
                 products.forEach((product: any) => {
-                    const attributes = product.metadata?.attributes
-                    if (!attributes) return
+                    const attributeValues = product.attribute_values || []
 
-                    // Get the option value of this attribute for this product
-                    // Use filter.name (handle) as key, NOT filter.attribute (label)
-                    const productOption = attributes[filter.name]
+                    // Find the attribute value that matches this filter's handle
+                    const matchingAttr = attributeValues.find(
+                        (av: any) => av.attribute_key?.handle === filter.name
+                    )
 
-                    if (productOption) {
-                        console.log(`    ✓ Product has ${filter.name} = "${productOption}"`)
+                    if (matchingAttr) {
+                        const productOption = matchingAttr.value
+                        console.log(`    ✓ Product ID ${product.id}: ${filter.name} = "${productOption}"`)
+
                         if (optionCounts.hasOwnProperty(productOption)) {
                             optionCounts[productOption]++
                         } else {
