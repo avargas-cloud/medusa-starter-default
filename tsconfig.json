@@ -32,7 +32,7 @@
     ".medusa/admin",
     ".cache",
     "docs",
-    "src/scripts/_archive",
+    "src/scripts",
     "**/*.md"
   ]
 }
