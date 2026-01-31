@@ -1,0 +1,657 @@
+[dotenv@17.2.3] injecting env (24) from .env -- tip: 🛠️  run anywhere with `dotenvx run -- yourcommand`
+✅ Connected to database
+
+🚀 Starting NUCLEAR FILTER SYNC V2...
+
+📋 Found 126 categories
+
+
+📂 Processing: 0-10V LED DRIVERS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 17 unique attributes
+   ✅ Updated filter_config with 17 active filters
+
+📂 Processing: 120V OUTDOOR
+   └─ Scanning 4 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: ACCESSORIES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: ACCESSORIES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: ACCESSORIES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: ACCESSORIES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: ACCESSORIES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 12 unique attributes
+   ✅ Updated filter_config with 12 active filters
+
+📂 Processing: ACCESSORIES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 8 unique attributes
+   ✅ Updated filter_config with 8 active filters
+
+📂 Processing: ACCESSORIES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: ACCESSORIES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 9 unique attributes
+   ✅ Updated filter_config with 9 active filters
+
+📂 Processing: ACCESSORIES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: ADJUSTABLE COLOR TEMPERATURE LED STRIP
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 19 unique attributes
+   ✅ Updated filter_config with 19 active filters
+
+📂 Processing: ADORNE COLLECTION
+   └─ Scanning 11 categories (self + children)
+   🏷️  Found 39 unique attributes
+   ✅ Updated filter_config with 39 active filters
+
+📂 Processing: AMPLIFIERS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 15 unique attributes
+   ✅ Updated filter_config with 15 active filters
+
+📂 Processing: ANGULAR
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 17 unique attributes
+   ✅ Updated filter_config with 17 active filters
+
+📂 Processing: APP CONTROL
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 23 unique attributes
+   ✅ Updated filter_config with 23 active filters
+
+📂 Processing: APP CONTROL
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 21 unique attributes
+   ✅ Updated filter_config with 21 active filters
+
+📂 Processing: Backlighting
+   └─ Scanning 5 categories (self + children)
+   🏷️  Found 25 unique attributes
+   ✅ Updated filter_config with 25 active filters
+
+📂 Processing: BY CATEGORIES
+   └─ Scanning 126 categories (self + children)
+   🏷️  Found 106 unique attributes
+   ✅ Updated filter_config with 106 active filters
+
+📂 Processing: CABLE CONNECTORS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 8 unique attributes
+   ✅ Updated filter_config with 8 active filters
+
+📂 Processing: CABLE MODELS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 7 unique attributes
+   ✅ Updated filter_config with 7 active filters
+
+📂 Processing: Cables
+   └─ Scanning 4 categories (self + children)
+   🏷️  Found 10 unique attributes
+   ✅ Updated filter_config with 10 active filters
+
+📂 Processing: CAN-FREE RECESSED LIGHTS
+   └─ Scanning 3 categories (self + children)
+   🏷️  Found 30 unique attributes
+   ✅ Updated filter_config with 30 active filters
+
+📂 Processing: CASETTA
+   └─ Scanning 9 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: Ceiling Lights
+   └─ Scanning 14 categories (self + children)
+   🏷️  Found 35 unique attributes
+   ✅ Updated filter_config with 35 active filters
+
+📂 Processing: CONSTANT VOLTAGE
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 22 unique attributes
+   ✅ Updated filter_config with 22 active filters
+
+📂 Processing: Control Units
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 9 unique attributes
+   ✅ Updated filter_config with 9 active filters
+
+📂 Processing: CONTROL UNITS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: CONTROL UNITS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: CONTROL UNITS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: DIMMABLE
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 22 unique attributes
+   ✅ Updated filter_config with 22 active filters
+
+📂 Processing: DIMMERS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 24 unique attributes
+   ✅ Updated filter_config with 24 active filters
+
+📂 Processing: DIMMERS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: DIMMERS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: DMX
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 16 unique attributes
+   ✅ Updated filter_config with 16 active filters
+
+📂 Processing: ENCLOSED UNITS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 12 unique attributes
+   ✅ Updated filter_config with 12 active filters
+
+📂 Processing: FLUSH MOUNT FIXTURES
+   └─ Scanning 3 categories (self + children)
+   🏷️  Found 22 unique attributes
+   ✅ Updated filter_config with 22 active filters
+
+📂 Processing: FOR MULTI COLOR LED STRIPS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: FOR SINGLE COLOR LED STRIPS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 8 unique attributes
+   ✅ Updated filter_config with 8 active filters
+
+📂 Processing: HAND HELD REMOTE CONTROL
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 21 unique attributes
+   ✅ Updated filter_config with 21 active filters
+
+📂 Processing: HAND HELD REMOTE CONTROL
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 25 unique attributes
+   ✅ Updated filter_config with 25 active filters
+
+📂 Processing: INDOOR
+   └─ Scanning 4 categories (self + children)
+   🏷️  Found 36 unique attributes
+   ✅ Updated filter_config with 36 active filters
+
+📂 Processing: KEYSTONES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: KEYSTONES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: KEYSTONES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: KEYSTONES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: KEYSTONES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 14 unique attributes
+   ✅ Updated filter_config with 14 active filters
+
+📂 Processing: LED BACKLIGHT SHEETS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 17 unique attributes
+   ✅ Updated filter_config with 17 active filters
+
+📂 Processing: LED Channels
+   └─ Scanning 7 categories (self + children)
+   🏷️  Found 19 unique attributes
+   ✅ Updated filter_config with 19 active filters
+
+📂 Processing: LED Controllers
+   └─ Scanning 14 categories (self + children)
+   🏷️  Found 56 unique attributes
+   ✅ Updated filter_config with 56 active filters
+
+📂 Processing: LED Drivers
+   └─ Scanning 7 categories (self + children)
+   🏷️  Found 27 unique attributes
+   ✅ Updated filter_config with 27 active filters
+
+📂 Processing: LED EDGE LIGHTS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: LED MODULES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 22 unique attributes
+   ✅ Updated filter_config with 22 active filters
+
+📂 Processing: LED Neon
+   └─ Scanning 4 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: LED Strips
+   └─ Scanning 18 categories (self + children)
+   🏷️  Found 36 unique attributes
+   ✅ Updated filter_config with 36 active filters
+
+📂 Processing: LEGRAND
+   └─ Scanning 22 categories (self + children)
+   🏷️  Found 39 unique attributes
+   ✅ Updated filter_config with 39 active filters
+
+📂 Processing: Linear Lighting Accessories
+   └─ Scanning 3 categories (self + children)
+   🏷️  Found 8 unique attributes
+   ✅ Updated filter_config with 8 active filters
+
+📂 Processing: LOW VOLTAGE DIMMERS
+   └─ Scanning 3 categories (self + children)
+   🏷️  Found 22 unique attributes
+   ✅ Updated filter_config with 22 active filters
+
+📂 Processing: LUTRON
+   └─ Scanning 25 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: MAESTRO
+   └─ Scanning 6 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: MULTICOLOR
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: MULTICOLOR
+   └─ Scanning 3 categories (self + children)
+   🏷️  Found 25 unique attributes
+   ✅ Updated filter_config with 25 active filters
+
+📂 Processing: MULTICOLOR
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 17 unique attributes
+   ✅ Updated filter_config with 17 active filters
+
+📂 Processing: MULTICOLOR
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: MULTICOLOR
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 21 unique attributes
+   ✅ Updated filter_config with 21 active filters
+
+📂 Processing: MULTICOLOR-DEFAULT
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 42 unique attributes
+   ✅ Updated filter_config with 42 active filters
+
+📂 Processing: NARROW LED STRIP
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 14 unique attributes
+   ✅ Updated filter_config with 14 active filters
+
+📂 Processing: NEW CONSTRUCTION
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 9 unique attributes
+   ✅ Updated filter_config with 9 active filters
+
+📂 Processing: OUTDOOR
+   └─ Scanning 4 categories (self + children)
+   🏷️  Found 21 unique attributes
+   ✅ Updated filter_config with 21 active filters
+
+📂 Processing: OUTLETS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: OUTLETS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: OUTLETS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: OUTLETS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 24 unique attributes
+   ✅ Updated filter_config with 24 active filters
+
+📂 Processing: OUTLETS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: PICO REMOTES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: PICO REMOTES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: POWER CORDS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 3 unique attributes
+   ✅ Updated filter_config with 3 active filters
+
+📂 Processing: PUCK LIGHTS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: RADIANT COLLECTION
+   └─ Scanning 10 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: RADIO 2 SELECT
+   └─ Scanning 9 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: RECESSED HOUSING
+   └─ Scanning 3 categories (self + children)
+   🏷️  Found 9 unique attributes
+   ✅ Updated filter_config with 9 active filters
+
+📂 Processing: RECESSED MOUNTED
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 15 unique attributes
+   ✅ Updated filter_config with 15 active filters
+
+📂 Processing: REMODELING
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 9 unique attributes
+   ✅ Updated filter_config with 9 active filters
+
+📂 Processing: RETROFIT RECESSED DOWNLIGHTS
+   └─ Scanning 3 categories (self + children)
+   🏷️  Found 29 unique attributes
+   ✅ Updated filter_config with 29 active filters
+
+📂 Processing: RGB CONTROLLERS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 18 unique attributes
+   ✅ Updated filter_config with 18 active filters
+
+📂 Processing: RGB LED STRIPS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 20 unique attributes
+   ✅ Updated filter_config with 20 active filters
+
+📂 Processing: RGBW CONTROLLERS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 12 unique attributes
+   ✅ Updated filter_config with 12 active filters
+
+📂 Processing: RGBW LED STRIP
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 14 unique attributes
+   ✅ Updated filter_config with 14 active filters
+
+📂 Processing: ROUND UNITS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 21 unique attributes
+   ✅ Updated filter_config with 21 active filters
+
+📂 Processing: ROUND UNITS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 29 unique attributes
+   ✅ Updated filter_config with 29 active filters
+
+📂 Processing: ROUND UNITS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 29 unique attributes
+   ✅ Updated filter_config with 29 active filters
+
+📂 Processing: SINGLE COLOR
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: SINGLE COLOR
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: SINGLE COLOR
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 31 unique attributes
+   ✅ Updated filter_config with 31 active filters
+
+📂 Processing: SINGLE COLOR
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: SMART DIMMERS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: SMART DIMMERS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 23 unique attributes
+   ✅ Updated filter_config with 23 active filters
+
+📂 Processing: SMART DIMMERS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: SMART OUTLETS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: SMART SWITCHES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: SMART SWITCHES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: SMART SWITCHES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 18 unique attributes
+   ✅ Updated filter_config with 18 active filters
+
+📂 Processing: SMART SWITCHES &amp; DIMMERS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: SQUARE UNITS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 28 unique attributes
+   ✅ Updated filter_config with 28 active filters
+
+📂 Processing: SQUARE UNITS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 27 unique attributes
+   ✅ Updated filter_config with 27 active filters
+
+📂 Processing: SQUARE UNITS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 22 unique attributes
+   ✅ Updated filter_config with 22 active filters
+
+📂 Processing: STAIR LIGHTING CONTROL
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 14 unique attributes
+   ✅ Updated filter_config with 14 active filters
+
+📂 Processing: SURFACED MOUNTED
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 18 unique attributes
+   ✅ Updated filter_config with 18 active filters
+
+📂 Processing: SUSPENDED PROFILES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: SWITCHES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: SWITCHES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: SWITCHES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 25 unique attributes
+   ✅ Updated filter_config with 25 active filters
+
+📂 Processing: Switches, Dimmers & Outlets
+   └─ Scanning 48 categories (self + children)
+   🏷️  Found 39 unique attributes
+   ✅ Updated filter_config with 39 active filters
+
+📂 Processing: TRIMLESS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 15 unique attributes
+   ✅ Updated filter_config with 15 active filters
+
+📂 Processing: TUNABLE CONTROLLER
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 18 unique attributes
+   ✅ Updated filter_config with 18 active filters
+
+📂 Processing: Underground Lights
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 19 unique attributes
+   ✅ Updated filter_config with 19 active filters
+
+📂 Processing: WALL PLATES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: WALL PLATES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 14 unique attributes
+   ✅ Updated filter_config with 14 active filters
+
+📂 Processing: WALL PLATES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: WALL PLATES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: WALL PLATES
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: WATERPROOF
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 23 unique attributes
+   ✅ Updated filter_config with 23 active filters
+
+📂 Processing: WHITE LED STRIPS
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 31 unique attributes
+   ✅ Updated filter_config with 31 active filters
+
+📂 Processing: WI-FI DIRECT
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+📂 Processing: WI-FI READY SYSTEM
+   └─ Scanning 5 categories (self + children)
+   🏷️  Found 26 unique attributes
+   ✅ Updated filter_config with 26 active filters
+
+📂 Processing: WI-FI READY SYSTEM
+   └─ Scanning 1 categories (self + children)
+   🏷️  Found 0 unique attributes
+   ⏭️  No attributes found, skipping
+
+
+🎉 NUCLEAR SYNC PHASE 1 COMPLETE!
+   ✅ Processed: 75 categories
+   ⏭️  Skipped (no attributes): 51
+   📊 Total: 126
+
+📝 Next: Calling /generate-filters for each category to build 'filters' metadata...
+   This will take a moment...
+
+⚠️  Failed to generate filters for: BY CATEGORIES (401)
+
+
+🎊 NUCLEAR SYNC COMPLETE!
+   ✅ Generated filters: 0 categories
+   ❌ Failed: 1
+   ⏭️  Skipped (no config): 51
+
+✨ All done! Filters system is now fully synced.
+

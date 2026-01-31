@@ -11,7 +11,8 @@ interface Category {
         available_attributes?: string[]
         filter_config?: {
             override_inheritance: boolean
-            active_filters: string[]
+            available_filters?: string[] | Array<{ attribute_id: string; order: number; type: string }>
+            active_filters: string[] | Array<{ attribute_id: string; order: number; type: string }>
         }
     }
 }

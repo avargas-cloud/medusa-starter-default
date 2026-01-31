@@ -83,10 +83,23 @@ export const ManageAttributesModal = ({
         setVariantFlags
     )
 
-    // Group attributes for display
+    // Group attributes for display (VARIANTS FIRST, THEN ALPHABETICALLY)
     const groupedAttributes = useMemo(() => {
-        return groupAttributesByKey(tempAttributes)
-    }, [tempAttributes])
+        const grouped = groupAttributesByKey(tempAttributes)
+
+        // Sort: Variant attributes first, then alphabetically within each group
+        return grouped.sort((a, b) => {
+            const aIsVariant = variantFlags[a.key_id] || false
+            const bIsVariant = variantFlags[b.key_id] || false
+
+            // If one is variant and other isn't, variant comes first
+            if (aIsVariant && !bIsVariant) return -1
+            if (!aIsVariant && bIsVariant) return 1
+
+            // Both same variant status, sort alphabetically
+            return a.key_title.localeCompare(b.key_title)
+        })
+    }, [tempAttributes, variantFlags])
 
     // Handle save with confirmation
     const handleSave = async () => {
@@ -170,8 +183,8 @@ export const ManageAttributesModal = ({
                     </div>
                 </FocusModal.Header>
 
-                <FocusModal.Body className="overflow-y-auto max-h-[calc(100vh-200px)] px-6 py-4">
-                    <div className="flex flex-col gap-4">
+                <FocusModal.Body className="overflow-y-auto max-h-[calc(100vh-140px)] px-6 pt-2 pb-0">
+                    <div className="flex flex-col gap-3">
                         {/* Add New Attribute Section */}
                         <div className="flex gap-2 items-end border-b pb-4">
                             <div className="flex-1">
@@ -252,7 +265,7 @@ export const ManageAttributesModal = ({
                                                     </div>
                                                 </Table.Cell>
                                                 <Table.Cell>
-                                                    <div className="flex gap-1 flex-wrap">
+                                                    <div className="flex gap-1 flex-wrap items-center">
                                                         {group.values.map((val: any) => (
                                                             <div
                                                                 key={val.id}
@@ -268,6 +281,55 @@ export const ManageAttributesModal = ({
                                                                 </button>
                                                             </div>
                                                         ))}
+                                                        {(() => {
+                                                            const keyData = allKeys.find(k => k.id === keyId)
+                                                            if (!keyData) return null
+
+                                                            const usedValueIds = group.values.map((v: any) => v.id)
+                                                            const availableValues = keyData.values.filter(v => !usedValueIds.includes(v.id))
+
+                                                            if (availableValues.length === 0) return null
+
+                                                            return (
+                                                                <div className="relative inline-block">
+                                                                    <select
+                                                                        value=""
+                                                                        onChange={(e) => {
+                                                                            const valueId = e.target.value
+                                                                            if (!valueId) return
+
+                                                                            const value = availableValues.find(v => v.id === valueId)
+                                                                            if (!value) return
+
+                                                                            const newAttr: AttributeValue = {
+                                                                                id: value.id,
+                                                                                value: value.value,
+                                                                                attribute_key: {
+                                                                                    id: keyData.id,
+                                                                                    label: keyData.label,
+                                                                                    handle: keyData.handle
+                                                                                }
+                                                                            }
+                                                                            addAttribute(newAttr)
+                                                                            e.target.value = ""
+                                                                        }}
+                                                                        className="h-7 w-7 appearance-none cursor-pointer bg-ui-bg-subtle hover:bg-ui-bg-subtle-hover rounded border border-ui-border-base transition-colors text-ui-fg-base"
+                                                                        style={{
+                                                                            backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath fill='%23666' d='M8 3v10M3 8h10' stroke='%23666' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")`,
+                                                                            backgroundRepeat: 'no-repeat',
+                                                                            backgroundPosition: 'center'
+                                                                        }}
+                                                                    >
+                                                                        <option value="" disabled hidden></option>
+                                                                        {availableValues.map(val => (
+                                                                            <option key={val.id} value={val.id}>
+                                                                                {val.value}
+                                                                            </option>
+                                                                        ))}
+                                                                    </select>
+                                                                </div>
+                                                            )
+                                                        })()}
                                                     </div>
                                                 </Table.Cell>
                                                 <Table.Cell>

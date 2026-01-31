@@ -75,6 +75,11 @@ const ProductAttributesWidget = ({ data: initialProduct }: DetailWidgetProps<Adm
         })
 
     const handleSave = async (selectedAttributes: any[], variantFlags: Record<string, boolean>) => {
+        console.log("🔥 [WIDGET] Modal is sending:", {
+            count: selectedAttributes.length,
+            attributes: selectedAttributes.map(a => `${a.attribute_key.handle}: ${a.value}`)
+        })
+
         // 1. Flatten selected values (Links)
         const valueIds = selectedAttributes.map(a => a.id)
 

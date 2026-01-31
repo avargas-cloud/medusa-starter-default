@@ -7,16 +7,20 @@ import { PRODUCT_ATTRIBUTES_MODULE } from "../../../../../modules/product-attrib
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     const query = req.scope.resolve("query")
+    const knex = req.scope.resolve("__pg_connection__")
     const { id } = req.params
 
     try {
-        const { data: links } = await query.graph({
-            entity: "product_attribute_value",
-            fields: ["attribute_value_id"],
-            filters: { product_id: id }
-        })
+        // Use RAW SQL to avoid query.graph caching issues
+        // This ensures we get the LATEST data immediately after workflow completes
+        const links = await knex("product_product_productattributes_attribute_value")
+            .select("attribute_value_id")
+            .where("product_id", id)
+            .whereNull("deleted_at")  // ✅ Filter out soft-deleted links
 
         const ids = links.map((l: any) => l.attribute_value_id)
+
+        console.log(`📊 [API GET] Product ${id}: Found ${ids.length} attribute links`)
 
         if (ids.length === 0) {
             return res.json({ attributes: [] })
@@ -33,6 +37,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             ],
             filters: { id: ids }
         })
+
+        console.log(`✅ [API GET] Returning ${attributes.length} attributes`)
 
         res.json({ attributes })
     } catch (error) {
@@ -63,17 +69,30 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         console.log("   Previous:", previousVariantKeys)
         console.log("   New:", variant_keys)
 
+
         // Step 1: Update attributes and metadata
-        await updateProductAttributesWorkflow(req.scope).run({
-            input: {
-                productId,
-                valueIds: value_ids || [],
-                variantKeys: variant_keys || [],
-            }
-        })
+        try {
+            console.log("   🔄 Executing updateProductAttributesWorkflow...")
+            await updateProductAttributesWorkflow(req.scope).run({
+                input: {
+                    productId,
+                    valueIds: value_ids || [],
+                    variantKeys: variant_keys || [],
+                }
+            })
+            console.log("   ✅ Workflow completed successfully")
+        } catch (workflowError: any) {
+            console.error("   💥 WORKFLOW ERROR:", {
+                message: workflowError.message,
+                stack: workflowError.stack,
+                details: workflowError
+            })
+            throw workflowError
+        }
 
         const newKeys = variant_keys || []
         const removedKeys = previousVariantKeys.filter(k => !newKeys.includes(k))
+        const addedKeys = newKeys.filter(k => !previousVariantKeys.includes(k))
 
         // Step 2: Cleanup removed variant attributes using Safe Deletion Workflow
         if (removedKeys.length > 0) {
@@ -137,9 +156,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
             }
         }
 
-        // Step 3: Generate variants for NEW keys
-        if (newKeys.length > 0) {
-            console.log("   🎨 Generating variants...")
+        // Step 3: Generate variants for NEWLY ADDED keys only
+        if (addedKeys.length > 0) {
+            console.log(`   🎨 Generating variants for ${addedKeys.length} new key(s)...`)
 
             // Fetch attributes
             const { data: links } = await query.graph({
@@ -160,8 +179,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
                 relations: ["options", "variants"]
             })
 
-            // Build variant attributes
-            const variantAttributes = newKeys.map(keyId => ({
+            // Build variant attributes for NEWLY ADDED keys only
+            const variantAttributes = addedKeys.map(keyId => ({
                 keyId,
                 label: attributes.find(a => a.attribute_key.id === keyId)?.attribute_key?.label || "Unknown",
                 values: attributes.filter(a => a.attribute_key.id === keyId)
@@ -202,23 +221,59 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
                 })
             }
 
-            // Create variants
-            const variantsToCreate = combinations.map(combo => ({
-                product_id: productId,
-                title: combo.map(v => v.value).join(" / "),
-                options: combo.reduce((acc, v) => {
-                    acc[v.attribute_key.label] = v.value
-                    return acc
-                }, {} as Record<string, string>),
-                metadata: {
-                    managed_by: "attributes",
-                    variation: combo.map(v => slugify(v.value)).join("-")
-                },
-                manage_inventory: false
-            }))
+            // Create variants (skip duplicates)
+            const existingVariants = productWithOptions.variants || []
+
+            const variantsToCreate = combinations
+                .map(combo => {
+                    const optionsMap = combo.reduce((acc, v) => {
+                        acc[v.attribute_key.label] = v.value
+                        return acc
+                    }, {} as Record<string, string>)
+
+                    // Check if variant with these exact options already exists
+                    const isDuplicate = existingVariants.some(variant => {
+                        if (!variant.options || variant.options.length === 0) return false
+
+                        // Compare all option values
+                        const variantOptions = variant.options.reduce((acc, opt) => {
+                            acc[opt.option?.title || ''] = opt.value
+                            return acc
+                        }, {} as Record<string, string>)
+
+                        return Object.keys(optionsMap).every(key =>
+                            variantOptions[key] === optionsMap[key]
+                        )
+                    })
+
+                    if (isDuplicate) {
+                        console.log(`   ⏭️  Skipping duplicate: ${combo.map(v => v.value).join(" / ")}`)
+                        return null
+                    }
+
+                    return {
+                        product_id: productId,
+                        title: combo.map(v => v.value).join(" / "),
+                        options: optionsMap,
+                        metadata: {
+                            managed_by: "attributes",
+                            variation: combo.map(v => slugify(v.value)).join("-")
+                        },
+                        manage_inventory: false
+                    }
+                })
+                .filter(v => v !== null) // Remove duplicates
+
+            if (variantsToCreate.length === 0) {
+                console.log(`   ℹ️  All variants already exist, skipping creation`)
+                return res.json({
+                    message: "Attributes updated successfully (no new variants needed)",
+                    variantsCreated: 0
+                })
+            }
 
             const newVariants = await productService.createProductVariants(variantsToCreate)
-            console.log(`   ✅ Created ${newVariants.length} variants`)
+            console.log(`   ✅ Created ${newVariants.length} new variants (skipped ${combinations.length - newVariants.length} duplicates)`)
 
             // Create prices
             for (const variant of newVariants) {

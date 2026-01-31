@@ -72,14 +72,14 @@ export function useCategorySorting(categoryId?: string, initialConfig?: SortingC
             const categoryData = await fetchResponse.json()
             const existingMetadata = categoryData.product_category?.metadata || {}
 
-            console.log("[SAVE DEBUG] About to save:")
-            console.log("[SAVE DEBUG] subcategoryOrder:", subcategoryOrder)
-            console.log("[SAVE DEBUG] productOrder:", productOrder)
+            // console.log("[SAVE DEBUG] About to save:")
+            // console.log("[SAVE DEBUG] subcategoryOrder:", subcategoryOrder)
+            // console.log("[SAVE DEBUG] productOrder:", productOrder)
 
             // STEP 2: Update rank field for each subcategory
             // This is the PRIMARY sorting method (Medusa v2 native)
             // Using 1-based ranking (1, 2, 3...) instead of 0-based
-            console.log("[SAVE DEBUG] Updating rank fields for subcategories...")
+            // console.log("[SAVE DEBUG] Updating rank fields for subcategories...")
             for (let index = 0; index < subcategoryOrder.length; index++) {
                 const subcategoryId = subcategoryOrder[index]
                 const rankValue = index + 1  // 1-based ranking
@@ -97,12 +97,12 @@ export function useCategorySorting(categoryId?: string, initialConfig?: SortingC
                     })
 
                     if (!rankResponse.ok) {
-                        console.warn(`[SAVE DEBUG] Failed to update rank for ${subcategoryId}`)
+                        // console.warn(`[SAVE DEBUG] Failed to update rank for ${subcategoryId}`)
                     } else {
-                        console.log(`[SAVE DEBUG] Updated rank for ${subcategoryId} to ${rankValue}`)
+                        // console.log(`[SAVE DEBUG] Updated rank for ${subcategoryId} to ${rankValue}`)
                     }
                 } catch (error) {
-                    console.error(`[SAVE DEBUG] Error updating rank for ${subcategoryId}:`, error)
+                    // console.error(`[SAVE DEBUG] Error updating rank for ${subcategoryId}:`, error)
                 }
             }
 
@@ -116,7 +116,7 @@ export function useCategorySorting(categoryId?: string, initialConfig?: SortingC
                 },
             }
 
-            console.log("[SAVE DEBUG] Updating metadata backup...")
+            // console.log("[SAVE DEBUG] Updating metadata backup...")
             const response = await fetch(`/admin/product-categories/${categoryId}`, {
                 method: "POST",
                 headers: {

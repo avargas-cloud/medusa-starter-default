@@ -23,27 +23,93 @@ const updateLinksStep = createStep(
 
         const currentIds = links.map((l: any) => l.attribute_value_id)
 
+
         console.log("🔍 [WORKFLOW DEBUG] Update Attributes:")
         console.log("   - Product ID:", productId)
         console.log("   - Existing Link Count:", links.length)
-        console.log("   - Current IDs:", currentIds)
-        console.log("   - Incoming Value IDs:", valueIds)
+        console.log("   - Incoming Count:", valueIds.length)
 
-        // 2. Diff
+        // 2. Fetch full attribute value details to get attribute_key information
+        const { data: existingValues } = await query.graph({
+            entity: "attribute_value",
+            fields: ["id", "attribute_key_id"],
+            filters: { id: currentIds }
+        })
+
+        const { data: incomingValues } = await query.graph({
+            entity: "attribute_value",
+            fields: ["id", "attribute_key_id"],
+            filters: { id: valueIds }
+        })
+
+        // 3. Group by attribute_key to detect which keys changed
+        const existingByKey = new Map<string, string[]>()
+        existingValues.forEach((v: any) => {
+            if (!existingByKey.has(v.attribute_key_id)) {
+                existingByKey.set(v.attribute_key_id, [])
+            }
+            existingByKey.get(v.attribute_key_id)!.push(v.id)
+        })
+
+        const incomingByKey = new Map<string, string[]>()
+        incomingValues.forEach((v: any) => {
+            if (!incomingByKey.has(v.attribute_key_id)) {
+                incomingByKey.set(v.attribute_key_id, [])
+            }
+            incomingByKey.get(v.attribute_key_id)!.push(v.id)
+        })
+
+        // 4. For each key that exists in incoming: DELETE old values ONLY if they changed
+        const toDelete: string[] = []
+        console.log(`\n🔍 Comparing ${incomingByKey.size} incoming keys vs ${existingByKey.size} existing keys`)
+        incomingByKey.forEach((newValueIds, keyId) => {
+            const oldValueIds = existingByKey.get(keyId) || []
+
+            // Compare sets - only delete if values changed
+            const newSet = new Set(newValueIds)
+            const oldSet = new Set(oldValueIds)
+            const unchanged = newSet.size === oldSet.size && [...newSet].every(id => oldSet.has(id))
+
+            console.log(`   ${keyId.slice(0, 10)}: old=${oldValueIds.length} new=${newValueIds.length} ${unchanged ? '✅' : '🔄'}`)
+
+            // If same size and all IDs match, skip (no change)
+            if (unchanged) {
+                return
+            }
+
+            // Values changed - delete ALL old values of this key
+            toDelete.push(...oldValueIds)
+        })
+
+        // 5. Also delete values from keys that are NO LONGER in the incoming set
+        existingByKey.forEach((oldValues, keyId) => {
+            if (!incomingByKey.has(keyId)) {
+                toDelete.push(...oldValues)
+            }
+        })
+
         const toCreate = valueIds.filter(id => !currentIds.includes(id))
-        const toDismiss = currentIds.filter(id => !valueIds.includes(id))
 
-        console.log("   - To Create:", toCreate)
-        console.log("   - To Dismiss:", toDismiss)
-
+        console.log(`   - To Create: ${toCreate.length} attributes`)
+        console.log(`   - To Delete: ${toDelete.length} attributes (cleaning up changed keys)`)
+        if (toDelete.length > 0) {
+            console.log("   ⚠️  WILL DELETE:", toDelete)
+        }
 
         const promises: Promise<any>[] = []
 
-        if (toDismiss.length > 0) {
-            promises.push(remoteLink.dismiss({
-                [Modules.PRODUCT]: { product_id: productId },
-                [PRODUCT_ATTRIBUTES_MODULE]: { attribute_value_id: toDismiss }
-            }))
+        if (toDelete.length > 0) {
+            // ✅ HARD DELETE using RAW SQL
+            // remoteLink.delete() is BROKEN - it deletes ALL product links regardless of IDs
+            // Using raw SQL ensures we only delete specific attribute_value_ids
+            const knex = container.resolve("__pg_connection__")
+
+            promises.push(
+                knex("product_product_productattributes_attribute_value")
+                    .where("product_id", productId)
+                    .whereIn("attribute_value_id", toDelete)
+                    .del()  // Hard delete
+            )
         }
 
         if (toCreate.length > 0) {

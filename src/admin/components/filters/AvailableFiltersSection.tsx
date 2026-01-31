@@ -1,5 +1,4 @@
-import { Text, Checkbox, Button } from "@medusajs/ui"
-import { useState } from "react"
+import { Text, Button } from "@medusajs/ui"
 
 interface AttributeKey {
     id: string
@@ -16,7 +15,8 @@ interface Category {
         available_attributes?: string[]
         filter_config?: {
             override_inheritance: boolean
-            active_filters: string[]
+            available_filters?: string[] | Array<{ attribute_id: string; order: number; type: string }>
+            active_filters: string[] | Array<{ attribute_id: string; order: number; type: string }>
         }
     }
 }
@@ -36,80 +36,50 @@ export function AvailableFiltersSection({
     onAddToActive,
     overrideInheritance,
 }: AvailableFiltersSectionProps) {
-    const [selectedForActivation, setSelectedForActivation] = useState<Set<string>>(new Set())
 
-    // Filter attributes by available_attributes from category metadata
-    const availableAttrIds = selectedCategory?.metadata?.available_attributes
+    // ⭐ Read available attributes from filter_config (populated by nuclear sync)
+    // This contains ALL attributes found in products within this category + children
+    const filterConfig = selectedCategory?.metadata?.filter_config
+    const availableAttrIds = filterConfig?.available_filters?.map((f: any) =>
+        typeof f === 'string' ? f : f.attribute_id
+    )
 
-    // ⭐ Distinguish between undefined (not synced yet) and [] (synced but empty)
-    const filteredAttributes = availableAttrIds === undefined
-        ? attributes  // Not synced yet: show all
-        : attributes.filter(attr => availableAttrIds.includes(attr.id))  // Synced: filter
+    // ⭐ ONLY show filters if they were explicitly set by nuclear sync
+    // DO NOT fallback to all attributes - that confuses users
+    const filteredAttributes = availableAttrIds
+        ? attributes.filter(attr => availableAttrIds.includes(attr.id))
+        : []  // Show empty if not synced
 
     // ⭐ Exclude already active filters (they appear in Active Filters section above)
     const inactiveAttributes = filteredAttributes.filter(attr => !activeFilters.has(attr.id))
 
-    // Check if all inactive are selected
-    const allSelected = inactiveAttributes.length > 0 &&
-        inactiveAttributes.every(attr => selectedForActivation.has(attr.id))
-
-    const handleToggleSelection = (attrId: string) => {
-        const newSet = new Set(selectedForActivation)
-        if (newSet.has(attrId)) {
-            newSet.delete(attrId)
-        } else {
-            newSet.add(attrId)
-        }
-        setSelectedForActivation(newSet)
-    }
-
-    const handleSelectAll = () => {
-        if (allSelected) {
-            setSelectedForActivation(new Set())
-        } else {
-            setSelectedForActivation(new Set(inactiveAttributes.map(a => a.id)))
-        }
-    }
-
-    const handleAddToActive = () => {
-        onAddToActive(selectedForActivation)
-        setSelectedForActivation(new Set())
+    // ⭐ Direct activation - single click like widget
+    const handleActivateFilter = (attrId: string) => {
+        if (!overrideInheritance) return
+        onAddToActive(new Set([attrId]))
     }
 
     return (
         <div>
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center justify-between mb-3">
                 <Text weight="plus" className="text-sm">
-                    Available Filters
+                    Available Filters ({inactiveAttributes.length})
                 </Text>
-                <Button
-                    variant="transparent"
-                    size="small"
-                    onClick={handleSelectAll}
-                    disabled={!overrideInheritance}
-                >
-                    {allSelected ? "Deselect All" : "Select All"}
-                </Button>
             </div>
-
-            {/* ⭐ Add to Active button */}
-            {selectedForActivation.size > 0 && (
-                <Button
-                    variant="primary"
-                    size="small"
-                    className="w-full mb-2"
-                    onClick={handleAddToActive}
-                    disabled={!overrideInheritance}
-                >
-                    Add {selectedForActivation.size} to Active Filters →
-                </Button>
-            )}
 
             {(() => {
                 if (attributes.length === 0) {
                     return (
                         <Text className="text-ui-fg-muted italic text-sm">
                             No attributes defined in system
+                        </Text>
+                    )
+                }
+
+                if (filteredAttributes.length === 0) {
+                    return (
+                        <Text className="text-ui-fg-muted italic text-sm">
+                            No attributes found in this category's products
                         </Text>
                     )
                 }
@@ -137,31 +107,50 @@ export function AvailableFiltersSection({
 
                 return (
                     <div>
-                        {(availableAttrIds?.length ?? 0) > 0 && (
-                            <Text size="xsmall" className="text-ui-fg-subtle mb-1.5">
-                                Showing {inactiveAttributes.length} attribute{inactiveAttributes.length !== 1 ? 's' : ''} available
-                            </Text>
-                        )}
-                        <div className="border border-ui-border-base rounded-lg divide-y divide-ui-border-base">
+                        <Text size="xsmall" className="text-ui-fg-subtle mb-1.5">
+                            Alphabetical order • Click + to activate
+                        </Text>
+                        <div className="border border-ui-border-base rounded-lg divide-y divide-ui-border-base overflow-hidden bg-ui-bg-subtle">
                             {inactiveAttributes.map((attr) => (
-                                <label
+                                <div
                                     key={attr.id}
-                                    className="flex items-center gap-2.5 p-2.5 hover:bg-ui-bg-subtle cursor-pointer"
+                                    className="flex items-center gap-3 p-3 hover:bg-ui-bg-base-hover transition-colors"
                                 >
-                                    <Checkbox
-                                        checked={selectedForActivation.has(attr.id)}
-                                        onCheckedChange={() => handleToggleSelection(attr.id)}
-                                        disabled={!overrideInheritance}
-                                    />
                                     <div className="flex-1">
                                         <Text size="small">
                                             {attr.label}{" "}
                                             <span className="text-ui-fg-subtle">({attr.handle})</span>
                                         </Text>
                                     </div>
-                                </label>
+                                    <Button
+                                        size="small"
+                                        variant="secondary"
+                                        disabled={!overrideInheritance}
+                                        onClick={() => handleActivateFilter(attr.id)}
+                                    >
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            width="16"
+                                            height="16"
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            strokeWidth="2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                        >
+                                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                                        </svg>
+                                    </Button>
+                                </div>
                             ))}
                         </div>
+                        {!overrideInheritance && (
+                            <Text className="text-ui-fg-muted text-xs mt-2">
+                                Enable "Override parent category filters" to activate filters
+                            </Text>
+                        )}
                     </div>
                 )
             })()}

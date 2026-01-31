@@ -102,7 +102,160 @@ Para asegurar la máxima calidad y coherencia en cada iteración, el agente **DE
 *   **`systematic-debugging`**: Si algo falla, aísla el problema paso a paso.
 *   **Smoke Test**: Al menos muestra un `curl` exitoso a tu nuevo endpoint o una ejecución de consola limpia.
 
-## 8. Consultas a la Base de Datos
+## 8. Running Standalone Scripts and Database Queries
+
+### TypeScript Scripts with npx
+
+When you need to run one-off TypeScript scripts (migrations, data fixes, audits), use `npx tsx` to execute them directly without compilation:
+
+**Standard Pattern:**
+```bash
+npx -y tsx script-name.ts
+```
+
+**With Environment Variables:**
+```bash
+DATABASE_URL="your-connection-string" npx -y tsx script-name.ts
+```
+
+**Important Notes:**
+- ✅ **Use `npx tsx`** - NOT `yarn` or `node` (TypeScript won't execute)
+- ✅ **Always use `-y` flag** - Auto-accepts the package installation prompt
+- ✅ **Scripts should `import dotenv from 'dotenv'` and call `dotenv.config()`**
+- ✅ **Scripts must use ESM syntax** (`import/export`, not `require`)
+
+### Direct PostgreSQL Queries
+
+For database inspection, data verification, or quick fixes, create TypeScript scripts with `pg` client:
+
+**Template:**
+```typescript
+#!/usr/bin/env tsx
+import { Client } from 'pg';
+import dotenv from 'dotenv';
+dotenv.config();
+
+async function queryDatabase() {
+    const client = new Client({
+        connectionString: process.env.DATABASE_URL
+    });
+    
+    try {
+        await client.connect();
+        console.log('✅ Connected to database\n');
+        
+        const result = await client.query(`
+            SELECT id, name, metadata
+            FROM product_category
+            WHERE handle = $1
+        `, ['led-strips']);
+        
+        console.log('Results:', result.rows);
+        
+    } catch (error) {
+        console.error('❌ Query failed:', error);
+        throw error;
+    } finally {
+        await client.end();
+    }
+}
+
+queryDatabase();
+```
+
+**Best Practices:**
+- ✅ Always use parameterized queries (`$1`, `$2`) to prevent SQL injection
+- ✅ Wrap in try/catch/finally for proper error handling
+- ✅ Always call `client.end()` in finally block
+- ✅ Use `BEGIN`/`COMMIT`/`ROLLBACK` for data modifications
+- ✅ Log clearly with emojis for easy scanning (✅ ❌ 📋 🎉)
+
+### Schema Inspection Queries
+
+```typescript
+// Check table structure
+const schema = await client.query(`
+    SELECT column_name, data_type 
+    FROM information_schema.columns 
+    WHERE table_name = 'product_category' 
+    ORDER BY ordinal_position
+`);
+
+// Check metadata keys
+const metadataKeys = await client.query(`
+    SELECT DISTINCT jsonb_object_keys(metadata) as key
+    FROM product_category
+    WHERE metadata IS NOT NULL
+`);
+```
+
+### Data Modification Pattern
+
+```typescript
+await client.query('BEGIN');
+
+try {
+    const result = await client.query(`
+        UPDATE product_category
+        SET metadata = jsonb_set(
+            COALESCE(metadata, '{}'::jsonb),
+            '{image,url}',
+            to_jsonb($1::text)
+        )
+        WHERE id = $2
+    `, [newImageUrl, categoryId]);
+    
+    await client.query('COMMIT');
+    console.log('✅ Updated successfully');
+} catch (error) {
+    await client.query('ROLLBACK');
+    console.error('❌ Update failed:', error);
+    throw error;
+}
+```
+
+### Common Patterns
+
+**1. Bulk Migration:**
+```typescript
+const categories = await client.query('SELECT id, metadata FROM product_category');
+
+for (const cat of categories.rows) {
+    const newMetadata = {
+        ...cat.metadata,
+        migrated: true
+    };
+    
+    await client.query(
+        'UPDATE product_category SET metadata = $1 WHERE id = $2',
+        [JSON.stringify(newMetadata), cat.id]
+    );
+}
+```
+
+**2. Verification Script:**
+```typescript
+const missing = await client.query(`
+    SELECT id, name 
+    FROM product_category 
+    WHERE metadata->>'image' IS NULL
+`);
+
+console.log(`Found ${missing.rows.length} categories without images`);
+```
+
+**3. Data Audit:**
+```typescript
+const stats = await client.query(`
+    SELECT 
+        COUNT(*) as total,
+        COUNT(CASE WHEN metadata ? 'image' THEN 1 END) as with_image,
+        COUNT(CASE WHEN thumbnail IS NOT NULL THEN 1 END) as with_thumbnail
+    FROM product_category
+`);
+```
+
+## 9. Consultas a la Base de Datos
 
 Instrucción para el Agente: Cuando necesites buscar información real en la base de datos de Medusa, NO alucines datos. Ejecuta este comando en la terminal: node ~/.agent/skills/medusa-db-tool/query.js "TU CONSULTA SQL AQUI"
 

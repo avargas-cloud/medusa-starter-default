@@ -1,101 +1,218 @@
-# Especificación Técnica & Manual de Rescate: Atributos de Producto (v2.1)
+# Product Attributes Architecture (v3.0)
 
 > [!WARNING]
-> **LEER ANTES DE TOCAR:** Este módulo utiliza una implementación personalizada ("Nuclear Option") para superar limitaciones del Link Service de Medusa v2. No ejecutar `db:migrate` ciegamente sin entender la sección de "Persistencia Manual".
+> **CRITICAL:** This module uses **HARD DELETE ONLY** for attribute links. All SELECT queries MUST include `.whereNull("deleted_at")` to filter soft-deleted ghost records.
 
-## 1. Arquitectura "Nuclear" (La Solución)
+## Overview
 
-Debido a un bug persistente en Medusa v2 que forzaba relaciones 1:1 en los Remote Links, implementamos una solución híbrida robusta.
+Product attributes in Medusa v2 use a custom link table (`product_product_productattributes_attribute_value`) that supports many-to-many relationships between products and attribute values.
 
-### A. Base de Datos (SQL Manual)
-No confiamos en la migración automática de Medusa para la tabla de links.
-La tabla `product_product_productattributes_attribute_value` fue creada/parcheada manualmente para imponer una restricción `UNIQUE (product_id, attribute_value_id)` en lugar de `UNIQUE (product_id)`.
-
-*   **Tabla Real:** `product_product_productattributes_attribute_value`
-*   **Constraint Crítico:** `UNIQUE ("product_id", "attribute_value_id")`
-*   **Script de Rescate:** `src/scripts/force-create-link-table.js` (Ejecutar esto si la tabla desaparece o se corrompe).
-
-### B. Workflow Atómico (Backend)
-Para garantizar consistencia, no guardamos links y metadata por separado. Usamos un workflow unificado.
-
-*   **Archivo:** `src/workflows/product-attributes/update-product-attributes.ts`
-*   **Entrada:**
-    ```typescript
-    {
-      productId: string,
-      valueIds: string[],      // IDs de los valores (Links)
-      variantKeys: string[]    // IDs de los Keys que son Switches (Metadata)
-    }
-    ```
-*   **Lógica:**
-    1.  `update-links`: Sincroniza los links.
-    2.  `update-product-metadata`: Actualiza `product.metadata.variant_attributes`.
-
-### C. Widget Atómico (Frontend)
-El Widget (`product-attributes-widget.tsx`) agrupa visualmente los atributos y envía un **payload único** al guardar.
-
-*   **Endpoint:** `POST /admin/products/[id]/attributes`
-*   **Payload:** `{ value_ids: [...], variant_keys: [...] }`
-*   **Visualización:** Agrupa por `AttributeKey`. Si un atributo se marca como "Variant", el frontend lo sabe leyendo `product.metadata`.
+**Key Principle:** We use **raw SQL** for critical operations to bypass Medusa's caching and soft-delete issues.
 
 ---
 
-## 2. Manual de Rescate (Troubleshooting)
+## Architecture Components
 
-### Escenario A: "Los atributos desaparecieron del Admin"
-**Diagnóstico:** Probablemente la base de datos se reinició o Medusa intentó una migración automática que borró la tabla.
+### 1. Database Schema
 
-**Solución 1 (Verificación):**
-Ejecuta el script de auditoría:
-```bash
-npx medusa exec ./src/scripts/verify-db-count.ts
+**Link Table:** `product_product_productattributes_attribute_value`
+
+```sql
+CREATE TABLE product_product_productattributes_attribute_value (
+  product_id VARCHAR NOT NULL,
+  attribute_value_id VARCHAR NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  deleted_at TIMESTAMP NULL,  -- ⚠️ ALWAYS filter this!
+  UNIQUE (product_id, attribute_value_id)
+);
 ```
-*   Si dice `0 links`, la data se borró.
-*   Si dice `N links` pero no se ven, falla la API (ver Escenario B).
 
-**Solución 2 (Reconstrucción de Tabla):**
-Si la tabla da error de "Relation does not exist":
-```bash
-node src/scripts/force-create-link-table.js
+**Critical Constraint:** `UNIQUE (product_id, attribute_value_id)` allows multiple attributes per product.
+
+---
+
+### 2. Hard Delete Policy
+
+> [!IMPORTANT]
+> **NO SOFT DELETES** - We use hard deletes to prevent ghost data:
+> - Workflow updates: Raw SQL `.del()`
+> - Category filters: Filter with `.whereNull("deleted_at")`
+> - GET endpoints: Filter with `.whereNull("deleted_at")`
+
+**Why?**
+Medusa's `remoteLink.delete()` creates soft-deleted records that pollute queries and cause duplicate/stale data in the UI.
+
+---
+
+### 3. Core Files
+
+| File | Purpose | Delete Strategy |
+|------|---------|----------------|
+| `src/workflows/product-attributes/update-product-attributes.ts` | Update product attributes | **HARD DELETE** via raw SQL |
+| `src/api/admin/products/[id]/attributes/route.ts` | GET product attributes | Filter soft-deletes `.whereNull()` |
+| `src/modules/category-filters/utils/filter-generator.ts` | Generate category filters | Filter soft-deletes `.whereNull()` |
+
+---
+
+## Critical Code Patterns
+
+### ✅ Correct: Hard Delete in Workflow
+
+```typescript
+// ✅ HARD DELETE using RAW SQL
+const knex = container.resolve("__pg_connection__")
+
+promises.push(
+    knex("product_product_productattributes_attribute_value")
+        .where("product_id", productId)
+        .whereIn("attribute_value_id", toDelete)  // Only specific IDs
+        .del()  // ← HARD DELETE
+)
 ```
-Esto recreará la tabla con la estructura correcta (1:N permisiva).
 
-**Solución 3 (Repoblar Datos):**
-Si tienes los datos en JSON original (WooCommerce):
-```bash
-npx medusa exec ./src/scripts/migrate-product-attributes.ts
+### ✅ Correct: Filter Soft-Deletes in SELECT
+
+```typescript
+// ✅ GET endpoint - filter soft-deletes
+const links = await knex("product_product_productattributes_attribute_value")
+    .select("attribute_value_id")
+    .where("product_id", id)
+    .whereNull("deleted_at")  // ✅ CRITICAL
 ```
-Este script usa inyección SQL directa para saltarse bloqueos de aplicación.
+
+### ❌ Incorrect: Using remoteLink.delete()
+
+```typescript
+// ❌ NEVER USE - creates soft-deleted ghost records
+await remoteLink.delete({
+    [Modules.PRODUCT]: { product_id: productId },
+    [PRODUCT_ATTRIBUTES_MODULE]: { attribute_value_id: valueIds }
+})
+```
 
 ---
 
-### Escenario B: "Error al Guardar" (Toast Rojo)
+## Workflow Logic
 
-**Verificar:**
-1.  Revisar logs de terminal. ¿Dice `Duplicate key value violates unique constraint`?
-    *   Significa que intentas guardar lo mismo dos veces. (No debería pasar con el UI actual).
-2.  Revisar `update-product-attributes.ts`. Asegurar que los pasos están exportados y registrados.
+### Update Attributes Workflow
+
+**File:** `src/workflows/product-attributes/update-product-attributes.ts`
+
+**Steps:**
+
+1. **Fetch existing links** (filtered for soft-deletes)
+2. **Compare** old vs new attribute sets
+3. **Delete changed attributes** via raw SQL hard delete
+4. **Create new links** via `remoteLink.create()`
+5. **Update product metadata** for variant switches
+
+**Key Feature:** Only modifies attributes whose values actually changed - other attributes remain untouched.
+
+```typescript
+// Compare sets - only delete if values changed
+const newSet = new Set(newValueIds)
+const oldSet = new Set(oldValueIds)
+const unchanged = newSet.size === oldSet.size && [...newSet].every(id => oldSet.has(id))
+
+if (unchanged) {
+    return  // Skip - no change
+}
+
+// Hard delete old values
+await knex("product_product_productattributes_attribute_value")
+    .where("product_id", productId)
+    .whereIn("attribute_value_id", oldValueIds)
+    .del()
+
+// Create new values
+await remoteLink.create([...])
+```
 
 ---
 
-### Escenario C: "Vuelven a ser solo 1 por producto"
+## Troubleshooting
 
-**Diagnóstico:** Medusa v2 regeneró la migración automática y sobreescribió nuestra tabla manual.
+### Issue: Attributes show duplicate/ghost values
 
-**Solución:**
-1.  Ejecutar `src/scripts/drop-link-table.js` (Limpieza).
-2.  Ejecutar `src/scripts/force-create-link-table.js` (Reconstrucción Nuclear).
-3.  Ejecutar migración de datos de nuevo.
+**Cause:** Soft-deleted links not filtered in queries
+
+**Solution:**
+1. Run cleanup script:
+   ```bash
+   npx medusa exec src/scripts/cleanup-all-soft-deletes.ts
+   ```
+2. Verify all SELECT queries include `.whereNull("deleted_at")`
 
 ---
 
-## 3. Referencia de Archivos Críticos
+### Issue: Category filters show wrong values
 
-| Archivo | Propósito | Nivel de Riesgo |
-|---------|-----------|-----------------|
-| `src/scripts/force-create-link-table.js` | Crea la tabla SQL raw | 🔴 Alto (DANGER) |
-| `src/scripts/migrate-product-attributes.ts` | Inserta datos masivos vía SQL | 🟠 Medio |
-| `src/workflows/product-attributes/update-product-attributes.ts` | Lógica de negocio (Links + Meta) | 🟢 Seguro |
-| `src/admin/widgets/product-attributes-widget.tsx` | UI Principal | 🟢 Seguro |
+**Cause:** Filter generator reading soft-deleted links
 
-**Generado:** 22 Enero 2026 - Sesión de Reparación de Arquitectura.
+**Solution:**
+1. Clean up soft-deletes (see above)
+2. Regenerate filters:
+   ```bash
+   # Single category (fast)
+   npx medusa exec src/scripts/quick-fix-white-leds.ts
+   
+   # All categories (slow for large catalogs)
+   npx medusa exec src/scripts/mass-sync-all-filters.ts
+   ```
+
+---
+
+### Issue: Workflow deletes ALL product attributes
+
+**Cause:** Using `remoteLink.delete()` with filters instead of raw SQL
+
+**Fix:** See "Correct: Hard Delete in Workflow" pattern above
+
+---
+
+## Verification Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `src/scripts/debug-power-consumption.ts` | Check specific attribute values for a product |
+| `src/scripts/count-links.ts` | Ground truth count of attribute links |
+| `src/scripts/check-soft-deletes.ts` | Find soft-deleted ghost links |
+| `src/scripts/cleanup-all-soft-deletes.ts` | **HARD DELETE** all soft-deleted links |
+| `src/scripts/verify-category-filters.ts` | Verify filter metadata matches actual data |
+
+---
+
+## Migration Notes
+
+### If Upgrading from v2.1
+
+The key changes in v3.0:
+
+1. **Workflow now uses HARD DELETE** - Changed from `remoteLink.delete()` to raw SQL `.del()`
+2. **All SELECT queries filter soft-deletes** - Added `.whereNull("deleted_at")` everywhere
+3. **Cleanup script available** - Can remove accumulated ghost data
+4. **Filter generation fixed** - No longer shows stale/deleted attribute values
+
+**Action Required:**
+```bash
+# 1. Clean existing ghost data
+npx medusa exec src/scripts/cleanup-all-soft-deletes.ts
+
+# 2. Regenerate category filters
+npx medusa exec src/scripts/mass-sync-all-filters.ts
+```
+
+---
+
+## References
+
+| Doc | Topic |
+|-----|-------|
+| [CATEGORY_FILTERS.md](file:///home/alejo/medusa-starter-default/docs/CATEGORY_FILTERS.md) | Category filter generation |
+| [QUERY_PATTERNS_REFERENCE.md](file:///home/alejo/medusa-starter-default/docs/QUERY_PATTERNS_REFERENCE.md) | Database query patterns |
+
+---
+
+**Last Updated:** 2026-01-30  
+**Version:** 3.0 (Hard Delete + Soft-Delete Filtering)

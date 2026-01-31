@@ -70,12 +70,73 @@ While the UI looked great, saving data revealed a chain of deep backend configur
 | File | Change |
 | :--- | :--- |
 | `src/admin/components/manage-attributes-modal.tsx` | UI Overhaul, Searchable Select, Inline Add |
-| `src/api/admin/products/[id]/attributes/route.ts` | Enhanced Error Logging |
-| `src/workflows/product-attributes/update-product-attributes.ts` | **Reverted** to correct FK use (`product_id`), Added Debug Logs |
+| `src/api/admin/products/[id]/attributes/route.ts` | Enhanced Error Logging, **Soft-Delete Filtering** |
+| `src/workflows/product-attributes/update-product-attributes.ts` | **Hard Delete Implementation**, Correct FK use (`product_id`), Debug Logs |
 | `src/links/product-attribute-link.ts` | **CRITICAL Fix**: Enabled Many-to-Many (`isList: true`) |
 | `src/api/admin/attributes/[id]/values/route.ts` | **NEW**: Route for on-the-fly value creation |
+| `src/modules/category-filters/utils/filter-generator.ts` | **Soft-Delete Filtering** in filter generation |
 
 ---
+
+## 5. Hard Delete Policy & Soft-Delete Filtering (2026-01-30)
+
+### Critical Update: No More Ghost Data
+
+**Problem**: Medusa's `remoteLink.delete()` creates soft-deleted records (`deleted_at` timestamp) that polluted queries, causing:
+- ❌ Duplicate attribute values in UI
+- ❌ Stale data in category filters
+- ❌ Ghost values from deleted products
+
+**Solution**: Two-pronged approach:
+
+#### A. Hard Delete in Workflow
+
+Replaced `remoteLink.delete()` with raw SQL hard delete:
+
+```typescript
+// ✅ CORRECT - Hard delete using raw SQL
+const knex = container.resolve("__pg_connection__")
+
+await knex("product_product_productattributes_attribute_value")
+    .where("product_id", productId)
+    .whereIn("attribute_value_id", toDelete)
+    .del()  // ← HARD DELETE
+```
+
+**Why**: Prevents accumulation of soft-deleted records that cause UI issues.
+
+#### B. Soft-Delete Filtering in All Queries
+
+All SELECT queries now filter soft-deletes:
+
+```typescript
+// ✅ GET endpoint - filter soft-deletes
+const links = await knex("product_product_productattributes_attribute_value")
+    .select("attribute_value_id")
+    .where("product_id", id)
+    .whereNull("deleted_at")  // ✅ CRITICAL
+
+// ✅ Filter generator - exclude soft-deletes
+const links = await knex("product_product_productattributes_attribute_value")
+    .whereIn("product_id", productIds)
+    .whereIn("attribute_value_id", valueIds)
+    .whereNull("deleted_at")  // ✅ CRITICAL
+```
+
+**Impact**:
+- ✅ Category filters now show only active attributes
+- ✅ Product attribute modal shows correct current values
+- ✅ No duplicate/ghost values in UI
+
+#### C. Cleanup Script
+
+Created script to remove accumulated ghost data:
+
+```bash
+npx medusa exec src/scripts/cleanup-all-soft-deletes.ts
+```
+
+Result: **964 soft-deleted links removed** from production database.
 
 ---
 

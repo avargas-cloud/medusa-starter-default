@@ -352,7 +352,16 @@ const handleFileChange = async (e) => {
     const data = await response.json()
     const url = data.files?.[0]?.url
     
-    updateCategory.mutate({ metadata: { thumbnail: url } })
+    // Fetch current metadata to preserve other fields
+    const categoryResponse = await fetch(`${BASE_URL}/admin/product-categories/${categoryId}`)
+    const existingMetadata = categoryResponse.product_category?.metadata || {}
+    
+    updateCategory.mutate({ 
+        metadata: { 
+            ...existingMetadata,
+            image: { url }  // Store in metadata.image.url
+        } 
+    })
 }
 ```
 

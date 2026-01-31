@@ -9,6 +9,7 @@ import { toast } from "@medusajs/ui"
 type CategoryWithMetadata = AdminProductCategory & {
     metadata?: {
         filter_config?: {
+            available_filters?: string[] | Array<{ attribute_id: string; order: number }>
             active_filters: string[] | Array<{ attribute_id: string; order: number }>
             override_inheritance?: boolean
         }
@@ -61,9 +62,19 @@ const CategoryFiltersWidget = ({ data }: DetailWidgetProps<CategoryWithMetadata>
     }
 
     const filterConfig = data.metadata?.filter_config
-    const availableAttributeIds = data.metadata?.available_attributes || []
 
-    // Parse active filter IDs
+    // ⭐ Parse AVAILABLE attribute IDs (all attributes found in category products)
+    let availableAttrIds: string[] = []
+    if (filterConfig?.available_filters) {
+        const first = filterConfig.available_filters[0]
+        if (typeof first === "string") {
+            availableAttrIds = filterConfig.available_filters as string[]
+        } else if (typeof first === "object" && (first as any).attribute_id) {
+            availableAttrIds = (filterConfig.available_filters as Array<{ attribute_id: string }>).map(f => f.attribute_id)
+        }
+    }
+
+    // ⭐ Parse MANUALLY ACTIVATED filter IDs
     let activeFilterIds: string[] = []
     if (filterConfig?.active_filters) {
         const first = filterConfig.active_filters[0]
@@ -77,20 +88,21 @@ const CategoryFiltersWidget = ({ data }: DetailWidgetProps<CategoryWithMetadata>
     const overrideInheritance = filterConfig?.override_inheritance ?? false
 
     // Filter attributes
-    console.log("[WIDGET] All attributes:", attributes.length, attributes.map(a => ({ id: a.id, label: a.label })))
-    console.log("[WIDGET] Active filter IDs:", activeFilterIds)
-    console.log("[WIDGET] Available attribute IDs:", availableAttributeIds)
+    console.log("[WIDGET] All system attributes:", attributes.length)
+    console.log("[WIDGET] Available in category:", availableAttrIds.length)
+    console.log("[WIDGET] Manually activated:", activeFilterIds.length)
+    console.log("[WIDGET] Override inheritance:", overrideInheritance)
 
     const activeAttrs = attributes.filter(attr => activeFilterIds.includes(attr.id))
-    console.log("[WIDGET] Active attrs found:", activeAttrs.length, activeAttrs.map(a => a.label))
 
-    const availableAttrs = attributes.filter(attr => availableAttributeIds.includes(attr.id))
-    console.log("[WIDGET] Available attrs found:", availableAttrs.length)
+    // ⭐ Available attributes = curated list from nuclear sync (NOT all system attrs)
+    const availableAttrs = availableAttrIds.length > 0
+        ? attributes.filter(attr => availableAttrIds.includes(attr.id))
+        : attributes  // Fallback to all if not synced yet
 
-    const inactiveAttrs = attributes.filter(attr => !activeFilterIds.includes(attr.id))
-    console.log("[WIDGET] Inactive attrs found:", inactiveAttrs.length)
+    const inactiveAttrs = availableAttrs.filter(attr => !activeFilterIds.includes(attr.id))
 
-    const hasFilters = activeFilterIds.length > 0 || availableAttributeIds.length > 0
+    const hasFilters = availableAttrIds.length > 0
 
     const handleSave = async (newActiveIds: string[], newOverride: boolean) => {
         try {
@@ -148,7 +160,7 @@ const CategoryFiltersWidget = ({ data }: DetailWidgetProps<CategoryWithMetadata>
                     categoryId={data.id}
                     categoryName={data.name}
                     activeFilterIds={activeFilterIds}
-                    availableAttributes={attributes}
+                    availableAttributes={availableAttrs}  // ⭐ Use curated list
                     overrideInheritance={overrideInheritance}
                     onSave={handleSave}
                 />
@@ -179,7 +191,7 @@ const CategoryFiltersWidget = ({ data }: DetailWidgetProps<CategoryWithMetadata>
                             <Text weight="plus" size="small">Active Filters</Text>
                             <Badge size="small" color="green">{activeFilterIds.length}</Badge>
                         </div>
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex flex-wrap gap-2 pl-1">  {/* ⭐ Added pl-1 for spacing */}
                             {activeAttrs.map(attr => (
                                 <Badge key={attr.id} size="small" color="blue">
                                     {attr.label}
@@ -189,21 +201,21 @@ const CategoryFiltersWidget = ({ data }: DetailWidgetProps<CategoryWithMetadata>
                     </div>
                 )}
 
-                {/* Inactive Filters */}
+                {/* Available Filters (not active yet) */}
                 {inactiveAttrs.length > 0 && (
                     <div className="px-6 py-4">
                         <div className="flex items-center gap-2 mb-3">
-                            <Text weight="plus" size="small">Inactive Filters</Text>
+                            <Text weight="plus" size="small">Available Filters</Text>  {/* ⭐ Changed from Inactive */}
                             <Badge size="small" color="grey">{inactiveAttrs.length}</Badge>
                         </div>
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex flex-wrap gap-2 pl-1">  {/* ⭐ Added pl-1 for spacing */}
                             {inactiveAttrs.map(attr => (
                                 <Badge key={attr.id} size="small" color="grey">
                                     {attr.label}
                                 </Badge>
                             ))}
                         </div>
-                        <Text className="text-ui-fg-muted text-xs mt-3">
+                        <Text className="text-ui-fg-muted text-xs mt-3 pl-1">  {/* ⭐ Added pl-1 */}
                             Click "Edit" to activate these filters
                         </Text>
                     </div>
@@ -216,7 +228,7 @@ const CategoryFiltersWidget = ({ data }: DetailWidgetProps<CategoryWithMetadata>
                 categoryId={data.id}
                 categoryName={data.name}
                 activeFilterIds={activeFilterIds}
-                availableAttributes={attributes}
+                availableAttributes={availableAttrs}  // ⭐ Use curated list
                 overrideInheritance={overrideInheritance}
                 onSave={handleSave}
             />

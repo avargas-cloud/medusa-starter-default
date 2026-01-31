@@ -66,10 +66,10 @@ export async function POST(
 
         const attributeKeyIds = attributesResult.rows.map((row: any) => row.attribute_key_id)
 
-        console.log(`[SYNC-ATTRIBUTES] Category ${categoryId}:`)
-        console.log(`  - Scanned ${categoryIdsToScan.length} categories`)
-        console.log(`  - Found ${attributeKeyIds.length} attribute keys`)
-        console.log(`  - Attribute IDs:`, attributeKeyIds.slice(0, 5))
+        // console.log(`[SYNC-ATTRIBUTES] Category ${categoryId}:`)
+        // console.log(`  - Scanned ${categoryIdsToScan.length} categories`)
+        // console.log(`  - Found ${attributeKeyIds.length} attribute keys`)
+        // console.log(`  - Attribute IDs:`, attributeKeyIds.slice(0, 5))
 
         // 4. Reconcile with existing filter_config
         const existingMetadata = category.metadata || {}
@@ -79,8 +79,8 @@ export async function POST(
             override_inheritance?: boolean
         }
 
-        console.log(`  - Existing available: ${existingConfig.available_filters?.length || 0}`)
-        console.log(`  - Existing active: ${existingConfig.active_filters?.length || 0}`)
+        // console.log(`  - Existing available: ${existingConfig.available_filters?.length || 0}`)
+        // console.log(`  - Existing active: ${existingConfig.active_filters?.length || 0}`)
 
         const existingAvailable = existingConfig.available_filters || []
         const existingActive = existingConfig.active_filters || []
@@ -139,8 +139,8 @@ export async function POST(
         const added = attributeKeyIds.filter((id: string) => !existingAvailableIds.has(id)).length
         const removed = Array.from(existingAvailableIds).filter(id => !currentAttrIds.has(id)).length
 
-        console.log(`  - Reconciled available: ${reconciledAvailable.length}`)
-        console.log(`  - Added: ${added}, Removed: ${removed}`)
+        // console.log(`  - Reconciled available: ${reconciledAvailable.length}`)
+        // console.log(`  - Added: ${added}, Removed: ${removed}`)
 
         res.json({
             success: true,

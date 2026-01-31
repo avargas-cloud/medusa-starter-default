@@ -13,7 +13,8 @@ interface Category {
         available_attributes?: string[]
         filter_config?: {
             override_inheritance: boolean
-            active_filters: string[]
+            available_filters?: string[] | Array<{ attribute_id: string; order: number; type: string }>
+            active_filters: string[] | Array<{ attribute_id: string; order: number; type: string }>
         }
     }
 }
@@ -22,12 +23,14 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
     const queryClient = useQueryClient()
     const [overrideInheritance, setOverrideInheritance] = useState(false)
     const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set())
+    const [newlyAddedIds, setNewlyAddedIds] = useState<Set<string>>(new Set())
 
     // Load configuration when category is selected
     useEffect(() => {
         if (!selectedCategoryId) {
             setOverrideInheritance(false)
             setActiveFilters(new Set())
+            setNewlyAddedIds(new Set())
             return
         }
 
@@ -37,8 +40,21 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
         const config = category.metadata?.filter_config
 
         if (config) {
-            setOverrideInheritance(config.override_inheritance)
-            setActiveFilters(new Set(config.active_filters || []))
+            setOverrideInheritance(config.override_inheritance ?? false)
+
+            // ⭐ Parse active_filters (can be string[] or object[])
+            let activeIds: string[] = []
+            if (config.active_filters && config.active_filters.length > 0) {
+                const first = config.active_filters[0]
+                if (typeof first === "string") {
+                    activeIds = config.active_filters as string[]
+                } else if (typeof first === "object" && first && 'attribute_id' in first) {
+                    activeIds = config.active_filters.map(f =>
+                        typeof f === 'string' ? f : (f as { attribute_id: string }).attribute_id
+                    )
+                }
+            }
+            setActiveFilters(new Set(activeIds))
         } else {
             setOverrideInheritance(false)
             setActiveFilters(new Set())
@@ -52,6 +68,7 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
             if (!selectedCategoryId) throw new Error("No category selected")
 
             // Call generate-filters endpoint
+            const activeFiltersArray = Array.from(activeFilters)
             const res = await fetch(`/admin/product-categories/${selectedCategoryId}/generate-filters`, {
                 method: "POST",
                 headers: {
@@ -59,7 +76,11 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
                 },
                 credentials: "include",
                 body: JSON.stringify({
-                    active_filters: Array.from(activeFilters),
+                    active_filters: activeFiltersArray.map((attrId, index) => ({
+                        attribute_id: attrId,
+                        order: index,
+                        type: 'checkbox'
+                    })),
                     override_inheritance: overrideInheritance,
                 }),
             })
@@ -74,6 +95,7 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
         onSuccess: (data) => {
             toast.success(`Filters generated: ${data.filters_generated} filters for ${data.total_products} products`)
             queryClient.invalidateQueries({ queryKey: ["product_categories"] })
+            setNewlyAddedIds(new Set()) // Clear after save
         },
         onError: (err) => {
             toast.error("Failed to generate filters", { description: (err as Error).message })
@@ -81,13 +103,27 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
     })
 
     const handleToggleFilter = (attributeId: string) => {
+        console.log('🔍 handleToggleFilter called with:', attributeId)
+        console.log('   Current activeFilters:', Array.from(activeFilters))
+
         const newSet = new Set(activeFilters)
         if (newSet.has(attributeId)) {
+            // Removing
+            console.log('   ➖ Removing from active')
             newSet.delete(attributeId)
+            setNewlyAddedIds(prev => {
+                const updated = new Set(prev)
+                updated.delete(attributeId)
+                return updated
+            })
         } else {
+            // Adding - mark as new
+            console.log('   ➕ Adding to active')
             newSet.add(attributeId)
+            setNewlyAddedIds(prev => new Set(prev).add(attributeId))
         }
         setActiveFilters(newSet)
+        console.log('   New activeFilters:', Array.from(newSet))
     }
 
     const handleDragEnd = (event: DragEndEvent) => {
@@ -112,6 +148,8 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
         setOverrideInheritance,
         activeFilters,
         setActiveFilters, // ⭐ Export for bulk operations like Select All
+        newlyAddedIds, // ⭐ Export for "New" badges
+        setNewlyAddedIds, // ⭐ Export so page can update when adding filters
         handleToggleFilter,
         handleDragEnd,
         handleSave,

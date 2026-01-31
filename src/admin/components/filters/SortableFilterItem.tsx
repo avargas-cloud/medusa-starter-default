@@ -1,5 +1,5 @@
-import { XMark, EllipsisVertical } from "@medusajs/icons"
-import { Text } from "@medusajs/ui"
+import { XMark } from "@medusajs/icons"
+import { Text, Button, Badge } from "@medusajs/ui"
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 
@@ -7,10 +7,11 @@ interface SortableFilterItemProps {
     id: string
     label: string
     handle: string
+    isNew?: boolean
     onRemove: () => void
 }
 
-export function SortableFilterItem({ id, label, handle, onRemove }: SortableFilterItemProps) {
+export function SortableFilterItem({ id, label, handle, isNew, onRemove }: SortableFilterItemProps) {
     const {
         attributes,
         listeners,
@@ -30,27 +31,33 @@ export function SortableFilterItem({ id, label, handle, onRemove }: SortableFilt
         <div
             ref={setNodeRef}
             style={style}
-            className="flex items-center gap-2 px-3 py-2 bg-ui-bg-subtle border border-ui-border-base rounded-lg hover:bg-ui-bg-subtle-hover"
+            className={`flex items-center gap-3 p-3 rounded border cursor-move hover:bg-ui-bg-base-hover ${isNew
+                ? "bg-ui-bg-warning-subtle border-ui-border-warning"
+                : "bg-ui-bg-base border-ui-border-base"
+                }`}
+            {...attributes}
+            {...listeners}
         >
-            <button
-                {...attributes}
-                {...listeners}
-                className="cursor-grab active:cursor-grabbing p-1 hover:bg-ui-bg-base rounded"
-            >
-                <EllipsisVertical className="text-ui-fg-muted" />
-            </button>
             <div className="flex-1">
-                <Text weight="plus" size="small">
-                    {label}{" "}
-                    <span className="text-ui-fg-subtle font-normal">({handle})</span>
-                </Text>
+                <Text size="small" weight="plus">{label}</Text>
+                <Text className="text-ui-fg-muted text-xs">{handle}</Text>
             </div>
-            <button
-                onClick={onRemove}
-                className="p-1 hover:bg-ui-bg-base rounded text-ui-fg-muted hover:text-ui-fg-base"
+            {isNew && (
+                <Badge size="small" color="orange">
+                    New
+                </Badge>
+            )}
+            <Button
+                size="small"
+                variant="transparent"
+                onPointerDown={(e) => {
+                    e.stopPropagation() // ⭐ Prevent drag handler
+                    console.log('🗑️ Remove button clicked for:', id, label)
+                    onRemove()
+                }}
             >
                 <XMark />
-            </button>
+            </Button>
         </div>
     )
 }

@@ -1,6 +1,38 @@
 // Filter generator for category filters
 // Uses link table product_product_productattributes_attribute_value
 
+/**
+ * Recursively fetch all descendant category IDs for a given parent category
+ */
+async function getAllDescendantCategoryIds(
+    categoryId: string,
+    remoteQuery: any
+): Promise<string[]> {
+    const visited = new Set<string>()
+    const descendants: string[] = []
+
+    async function traverse(parentId: string) {
+        if (visited.has(parentId)) return
+        visited.add(parentId)
+
+        const children = await remoteQuery({
+            entryPoint: "product_category",
+            fields: ["id"],
+            variables: {
+                filters: { parent_category_id: parentId }
+            }
+        })
+
+        for (const child of children || []) {
+            descendants.push(child.id)
+            await traverse(child.id)
+        }
+    }
+
+    await traverse(categoryId)
+    return descendants
+}
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -101,24 +133,31 @@ export async function generateFiltersForCategory(
         }
     }
 
-    // 2. Fetch products in this category (just IDs) - ONLY PUBLISHED
-    const products = await remoteQuery({
+    // 2. Get all descendant category IDs (recursive)
+    const descendantIds = await getAllDescendantCategoryIds(categoryId, remoteQuery)
+    const allCategoryIds = [categoryId, ...descendantIds]
+    console.log(`[FILTER-GEN] Including ${descendantIds.length} descendant categories`)
+
+    // 3. Fetch ALL PUBLISHED products with categories
+    const allProducts = await remoteQuery({
         entryPoint: "product",
-        fields: ["id"],
+        fields: ["id", "categories.id"],
         variables: {
             filters: {
-                categories: {
-                    id: [categoryId],
-                },
-                status: ["published"],  // ⭐ ONLY PUBLISHED PRODUCTS
-            },
-        },
+                status: ["published"]  // ⭐ ONLY PUBLISHED PRODUCTS
+            }
+        }
     })
+
+    // 4. Filter client-side for THIS category OR any descendant
+    const products = allProducts.filter((p: any) =>
+        p.categories?.some((cat: any) => allCategoryIds.includes(cat.id))
+    )
 
     const productIds = products?.map((p: any) => p.id) || []
     const totalProducts = productIds.length
 
-    console.log(`[FILTER-GEN] Found ${totalProducts} products in category`)
+    console.log(`[FILTER-GEN] Found ${totalProducts} published products in category ${categoryId} (including ${descendantIds.length} descendants)`)
 
     if (totalProducts === 0) {
         console.log(`[FILTER-GEN] No products in category, returning empty filters`)
@@ -249,10 +288,12 @@ async function generateCheckboxFilter(
         console.log(`[FILTER-GEN]       → Querying links for ${productIds.length} products x ${valueIds.length} values`)
 
         // Query the manual link table directly with SQL
+        // ✅ CRITICAL: Filter out soft-deleted links
         const links = await knex("product_product_productattributes_attribute_value")
             .select("product_id", "attribute_value_id")
             .whereIn("product_id", productIds)
             .whereIn("attribute_value_id", valueIds)
+            .whereNull("deleted_at")  // ✅ Exclude soft-deleted links
 
         console.log(`[FILTER-GEN]       → Found ${links?.length || 0} product-attribute links`)
 

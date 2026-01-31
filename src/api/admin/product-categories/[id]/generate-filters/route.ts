@@ -1,10 +1,10 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { generateFiltersForCategory } from "../../../../../modules/category-filters/utils/filter-generator"
+import { generateFiltersForCategory } from "./generator"
 
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     const { id: categoryId } = req.params
     const { active_filters, override_inheritance } = req.body as {
-        active_filters: string[]
+        active_filters: (string | { attribute_id: string; order?: number; type?: string })[]
         override_inheritance: boolean
     }
 
@@ -12,10 +12,15 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         const remoteQuery = req.scope.resolve("remoteQuery")
         const knex = req.scope.resolve("__pg_connection__")
 
+        // ⭐ Normalize active_filters to string[] for generator
+        const normalizedFilters = active_filters.map(f =>
+            typeof f === 'string' ? f : f.attribute_id
+        )
+
         // Generate filters JSON
         const filtersData = await generateFiltersForCategory(
             categoryId,
-            active_filters,
+            normalizedFilters,
             remoteQuery,
             knex
         )
@@ -35,24 +40,74 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
         const category = result.data[0]
 
+        console.log(`🔍 [SAVE ${categoryId}] Category fetched:`, {
+            has_metadata: !!category.metadata,
+            has_filter_config: !!category.metadata?.filter_config,
+            available_count: category.metadata?.filter_config?.available_filters?.length || 0
+        })
+
         // ⚡ Clean existing metadata to remove admin-only and legacy fields
-        // This reduces payload size by ~800 bytes (~33%)
+        // ⭐ CRITICAL: Also exclude filter_config to prevent spread conflicts
         const {
-            available_attributes,  // Admin-only: List of attributes for UI
-            original_wc_url,       // Legacy: WooCommerce URL (unused)
+            available_attributes,  // Remove: Auto-sync IDs (old system)
+            filters_metadata,      // Remove: Total counts (old system)
+            original_wc_url,       // Remove: WooCommerce URL (unused)
+            filter_config: _removedFilterConfig,  // ⭐ Remove: Will rebuild below
             ...cleanExistingMetadata
         } = category.metadata || {}
 
-        // Update metadata with filter config AND generated filters
-        // Only include customer-facing fields to minimize payload
+        // ⭐ Get or generate available_filters from THE ORIGINAL metadata
+        const existingConfig = category.metadata?.filter_config || {}
+        let availableFilters = existingConfig.available_filters
+
+        console.log(`🔍 [SAVE ${categoryId}] Existing config:`, {
+            is_null: availableFilters === null,
+            is_undefined: availableFilters === undefined,
+            is_array: Array.isArray(availableFilters),
+            length: availableFilters?.length || 0
+        })
+
+        // If null/empty, generate from category products (mini nuclear sync)
+        if (!availableFilters || availableFilters.length === 0) {
+            console.log(`⚡ Generating available_filters for ${categoryId} (not set by nuclear sync)`)
+
+            // Get unique attribute IDs from category products
+            const attributeQuery: any = await remoteQuery.graph({
+                entity: "attribute_value",
+                fields: ["attribute_key_id"],
+                filters: {
+                    product_link: {
+                        product: {
+                            categories: {
+                                id: categoryId
+                            }
+                        }
+                    }
+                }
+            })
+
+            const uniqueAttrIds = [...new Set(attributeQuery.data.map((av: any) => av.attribute_key_id))]
+
+            availableFilters = uniqueAttrIds.map((attrId, index) => ({
+                attribute_id: attrId,
+                order: index,
+                type: 'checkbox'
+            }))
+
+            console.log(`  ✅ Generated ${availableFilters.length} available_filters`)
+        } else {
+            console.log(`  ✅ Preserving ${availableFilters.length} existing available_filters`)
+        }
+
+        // Update metadata with filter config AND generated filters ONLY
         const updatedMetadata = {
             ...cleanExistingMetadata,
             filter_config: {
                 override_inheritance,
-                active_filters,
+                available_filters: availableFilters,  // ⭐ Generated or preserved
+                active_filters,  // User's manual selection
             },
             filters: filtersData.filters,
-            filters_metadata: filtersData.metadata,
         }
 
         // Use raw Knex to update

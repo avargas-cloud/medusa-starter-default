@@ -38,6 +38,8 @@ export default function FiltersPage() {
         setOverrideInheritance,
         activeFilters,
         setActiveFilters,
+        newlyAddedIds,
+        setNewlyAddedIds,
         handleToggleFilter,
         handleDragEnd,
         handleSave,
@@ -83,6 +85,35 @@ export default function FiltersPage() {
         })
     }
 
+    const [isNuclearSyncing, setIsNuclearSyncing] = useState(false)
+
+    const handleNuclearSync = async () => {
+        if (!confirm('⚠️ NUCLEAR SYNC\n\nThis will regenerate filter_config for ALL categories.\nThis may take a few minutes.\n\nContinue?')) {
+            return
+        }
+
+        setIsNuclearSyncing(true)
+
+        try {
+            const response = await fetch('/admin/product-categories/nuclear-sync', {
+                method: 'POST',
+                credentials: 'include'
+            })
+
+            if (response.ok) {
+                const result = await response.json()
+                alert(`✅ Nuclear Sync Complete!\n\nPhase 1: ${result.phase1.processed} categories synced\nPhase 2: ${result.phase2.generated} filters generated`)
+                window.location.reload()
+            } else {
+                throw new Error(`Failed: ${response.status}`)
+            }
+        } catch (error: any) {
+            alert(`❌ Nuclear sync failed: ${error.message}`)
+        } finally {
+            setIsNuclearSyncing(false)
+        }
+    }
+
     if (isLoading) {
         return (
             <Container className="h-screen flex items-center justify-center">
@@ -94,11 +125,24 @@ export default function FiltersPage() {
     return (
         <Container className="p-0">
             {/* HEADER */}
-            <div className="px-8 py-6 border-b border-ui-border-base">
-                <Heading level="h1">Category Filters</Heading>
-                <Text className="text-ui-fg-subtle mt-1">
-                    Configure which attributes appear as filters for each category
-                </Text>
+            <div className="px-8 py-6 border-b border-ui-border-base flex justify-between items-start">
+                <div>
+                    <Heading level="h1">Category Filters</Heading>
+                    <Text className="text-ui-fg-subtle mt-1">
+                        Configure which attributes appear as filters for each category
+                    </Text>
+                </div>
+
+                {/* NUCLEAR SYNC BUTTON */}
+                <Button
+                    variant="danger"
+                    size="small"
+                    onClick={handleNuclearSync}
+                    isLoading={isNuclearSyncing}
+                    disabled={isNuclearSyncing}
+                >
+                    {isNuclearSyncing ? 'Syncing...' : '🔥 Nuclear Sync'}
+                </Button>
             </div>
 
             {/* TWO COLUMN LAYOUT */}
@@ -178,6 +222,7 @@ export default function FiltersPage() {
                                 {/* ⭐ ACTIVE FILTERS - Drag & Drop */}
                                 <ActiveFiltersSection
                                     activeFilters={activeFilters}
+                                    newlyAddedIds={newlyAddedIds}
                                     attributes={attributes}
                                     onDragEnd={handleDragEnd}
                                     onRemoveFilter={handleToggleFilter}
@@ -192,6 +237,8 @@ export default function FiltersPage() {
                                         const newFilters = new Set(activeFilters)
                                         selectedIds.forEach(id => newFilters.add(id))
                                         setActiveFilters(newFilters)
+                                        // ⭐ Track newly added for "New" badges
+                                        setNewlyAddedIds(prev => new Set([...prev, ...selectedIds]))
                                     }}
                                     overrideInheritance={overrideInheritance}
                                 />

@@ -27,13 +27,23 @@ const CategoryPrerenderWidget = ({ data }: DetailWidgetProps<CategoryWithMetadat
         setIsSaving(true)
 
         try {
+            // CRITICAL: Fetch current metadata first to avoid overwriting other fields
+            const fetchResponse = await fetch(`/admin/product-categories/${data.id}?fields=+metadata`, {
+                credentials: "include",
+            })
+
+            if (!fetchResponse.ok) throw new Error("Failed to fetch category")
+
+            const categoryData = await fetchResponse.json()
+            const existingMetadata = categoryData.product_category?.metadata || {}
+
             const response = await fetch(`/admin/product-categories/${data.id}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 credentials: "include",
                 body: JSON.stringify({
                     metadata: {
-                        ...data.metadata,
+                        ...existingMetadata,
                         prerender: checked,
                     },
                 }),

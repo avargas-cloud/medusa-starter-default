@@ -227,11 +227,38 @@ const CategoryImageWidget = ({
     const [uploading, setUploading] = useState(false)
     const [showMediaLibrary, setShowMediaLibrary] = useState(false)
 
-    const category = data as AdminProductCategory & { thumbnail?: string | null }
-    const initialThumbnail = category.thumbnail || (category.metadata?.thumbnail as string)
+    // Fetch full category data with thumbnail field
+    const { data: categoryData } = useQuery({
+        queryKey: ["product_category", data.id, "thumbnail"],
+        queryFn: async () => {
+            const response = await fetch(`${BASE_URL}/admin/product-categories/${data.id}`, {
+                credentials: "include",
+            })
+            if (!response.ok) throw new Error("Failed to fetch category")
+            const result = await response.json()
+            console.log('[Category Image Widget] API Response:', result)
+            return result.product_category || result
+        }
+    })
+
+    const category = (categoryData || data) as AdminProductCategory & { thumbnail?: string | null }
+
+    // DEBUG: Log what we're getting from API
+    console.log('[Category Image Widget] Data received:', {
+        id: category.id,
+        name: category.name,
+        thumbnail: category.thumbnail,
+        metadata: category.metadata,
+        fromQuery: !!categoryData,
+        fullData: data
+    })
+
+    const imageData = category.metadata?.image as { url?: string } | undefined
+    const initialThumbnail = imageData?.url || null
 
     // Local state to track current thumbnail for immediate UI updates
     const [currentThumbnail, setCurrentThumbnail] = useState<string | null | undefined>(initialThumbnail)
+
 
     // Sync with props when category data changes
     useEffect(() => {
@@ -239,21 +266,38 @@ const CategoryImageWidget = ({
     }, [initialThumbnail])
 
     const updateCategory = useMutation({
-        mutationFn: async (payload: { metadata: { thumbnail: string | null } }) => {
+        mutationFn: async (payload: { thumbnail: string | null }) => {
+            // CRITICAL: Fetch current metadata first to avoid overwriting other fields
+            const fetchResponse = await fetch(`${BASE_URL}/admin/product-categories/${data.id}`, {
+                credentials: "include",
+            })
+
+            if (!fetchResponse.ok) throw new Error("Failed to fetch category")
+
+            const categoryData = await fetchResponse.json()
+            const existingMetadata = categoryData.product_category?.metadata || {}
+
             const response = await fetch(`${BASE_URL}/admin/product-categories/${data.id}`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                 },
                 credentials: "include",
-                body: JSON.stringify(payload)
+                body: JSON.stringify({
+                    metadata: {
+                        ...existingMetadata,
+                        image: {
+                            url: payload.thumbnail
+                        }
+                    }
+                })
             })
             if (!response.ok) throw new Error("Update failed")
             return response.json()
         },
         onSuccess: (_, variables) => {
             // Immediately update local state for instant UI feedback
-            setCurrentThumbnail(variables.metadata.thumbnail)
+            setCurrentThumbnail(variables.thumbnail)
             queryClient.invalidateQueries({ queryKey: ["product_category"] })
             queryClient.invalidateQueries({ queryKey: ["product_categories"] })
             toast.success("Category updated")
@@ -291,7 +335,7 @@ const CategoryImageWidget = ({
             const url = data.files?.[0]?.url
             if (!url) throw new Error("No URL returned from upload")
 
-            updateCategory.mutate({ metadata: { thumbnail: url } })
+            updateCategory.mutate({ thumbnail: url })
 
         } catch (err: any) {
             toast.error("Upload failed", { description: err.message })
@@ -302,11 +346,11 @@ const CategoryImageWidget = ({
     }
 
     const handleRemove = () => {
-        updateCategory.mutate({ metadata: { thumbnail: null } })
+        updateCategory.mutate({ thumbnail: null })
     }
 
     const handleSelectFromLibrary = (url: string) => {
-        updateCategory.mutate({ metadata: { thumbnail: url } })
+        updateCategory.mutate({ thumbnail: url })
         setShowMediaLibrary(false)
     }
 
@@ -396,7 +440,7 @@ const CategoryImageWidget = ({
 }
 
 export const config = defineWidgetConfig({
-    zone: "product_category.details.side.after",
+    zone: "product_category.details.side.after"
 })
 
 export default CategoryImageWidget

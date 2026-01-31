@@ -1,15 +1,20 @@
 # Category Filters - Complete System Guide
 
-> **Last Updated**: 2026-01-29  
-> **Status**: ✅ Production Ready
+> **Last Updated**: 2026-01-30  
+> **Status**: ✅ Production Ready (v2.0 - Soft-Delete Filtering)
+
+> [!WARNING]
+> **CRITICAL:** Filter generation MUST exclude soft-deleted attribute links. All queries to `product_product_productattributes_attribute_value` must include `.whereNull("deleted_at")` to prevent ghost values.
 
 ## Table of Contents
 - [Overview](#overview)
 - [System Architecture](#system-architecture)
+- [Soft-Delete Filtering](#soft-delete-filtering)
 - [Data Model](#data-model)
 - [Admin Configuration](#admin-configuration)
 - [Store API](#store-api)
 - [Frontend Integration](#frontend-integration)
+- [Mass Filter Sync](#mass-filter-sync)
 - [Attribute Deletion Cascade](#attribute-deletion-cascade)
 - [Testing & Debugging](#testing--debugging)
 
@@ -21,13 +26,19 @@ The Category Filters system allows you to configure which product attributes app
 
 1. **Admin UI** (`/app/filters`) - Configure filters per category with drag-and-drop ordering
 2. **Store API** (`/store/categories/:id/filters`) - Public endpoint for frontend to fetch filter configuration
-3. **Cascade Deletion** - Automatic cleanup when attributes are deleted
+3. **Filter Generator** - Auto-generates filter metadata based on actual product attributes
+4. **Cascade Deletion** - Automatic cleanup when attributes are deleted
 
 ### Key Features
 - ✅ **Inheritance System** - Child categories can inherit parent filters
 - ✅ **Drag-and-Drop Ordering** - Control display order of filters
-- ✅ **Auto-Sync** - Middleware automatically tracks available attributes
+- ✅ **Nuclear Sync** - Mass populate `available_filters` from product data
+- ✅ **Soft-Delete Filtering** - Excludes ghost/deleted attribute links
 - ✅ **Complete Cascade Deletion** - Removing an attribute cleans up all references
+- ✅ **Metadata Preservation** - `available_filters` survive save operations
+
+> [!IMPORTANT]
+> **Critical Bug Fixed (2026-01-31):** Filter save endpoint now correctly preserves `available_filters` metadata. Previously, a JavaScript spread conflict would erase `available_filters` on save, requiring re-running nuclear sync. This is now fixed via explicit destructuring exclusion.
 
 ---
 
@@ -63,20 +74,45 @@ graph TD
 
 ```typescript
 category.metadata = {
-  // Auto-maintained by middleware
-  available_attributes: string[],  // ["attr_key_123", "attr_key_456"]
-  
-  // User-configured in Filters admin page
+  // ⭐ NEW (v2.1): Curated list of attributes found in this category's products
+  // Populated by nuclear sync, preserved on save to prevent showing all system attributes
   filter_config?: {
-    override_inheritance: boolean,  // false = inherit from parent
+    available_filters?: Array<{
+      attribute_id: string,      // ID of the AttributeKey
+      order: number,             // Display order in "Available" section
+      type: string               // Filter UI type (e.g., 'checkbox')
+    }>,
+    
+    // User-configured active filters (shown in storefront)
     active_filters: Array<{
-      attribute_id: string,         // ID of the AttributeKey
-      order: number,                // Display order (0-indexed)
-      type: string                  // Filter UI type (e.g., 'checkbox')
-    }>
-  }
+      attribute_id: string,      // ID of the AttributeKey
+      order: number,             // Display order (0-indexed)
+      type: string               // Filter UI type (e.g., 'checkbox')
+    }>,
+    
+    override_inheritance: boolean  // false = inherit from parent
+  },
+  
+  // ⚠️ DEPRECATED: Auto-maintained by middleware (being phased out in favor of available_filters)
+  available_attributes?: string[]  // ["attr_key_123", "attr_key_456"]
 }
 ```
+
+### Nuclear Sync Workflow
+
+The recommend workflow for managing filters:
+
+1. **Run Nuclear Sync** - Populates `available_filters` for all categories by scanning product attributes
+   ```bash
+   npx tsx nuclear-filter-sync.ts
+   ```
+
+2. **Configure Active Filters** - Use Admin UI (`/app/filters`) to activate desired filters from the available list
+
+3. **Save Configuration** - Metadata preservation ensures `available_filters` survive saves
+
+> [!TIP]
+> Nuclear sync should be run once after product import or when adding new categories. The `available_filters` list is then preserved automatically.
 
 ### Backward Compatibility
 

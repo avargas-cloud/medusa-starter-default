@@ -39,8 +39,8 @@ export const SortingPage = () => {
     // Debug: Log current config when it changes
     useEffect(() => {
         if (selectedCategoryId) {
-            console.log("[Sorting Debug] Category:", selectedCategory?.name)
-            console.log("[Sorting Debug] Current Config:", currentConfig)
+            // console.log("[Sorting Debug] Category:", selectedCategory?.name)
+            // console.log("[Sorting Debug] Current Config:", currentConfig)
         }
     }, [selectedCategoryId, currentConfig])
 
@@ -74,15 +74,15 @@ export const SortingPage = () => {
             const configOrder = currentConfig?.product_order || []
             const existingIds = products.map((p) => p.id)
 
-            console.log("[Sorting Debug] Products from API:", products.map(p => p.title))
-            console.log("[Sorting Debug] Config Product Order:", configOrder)
+            // console.log("[Sorting Debug] Products from API:", products.map(p => p.title))
+            // console.log("[Sorting Debug] Config Product Order:", configOrder)
 
             // CRITICAL FIX: Convert handles to IDs if config contains handles
             const normalizedConfigOrder = configOrder.map(item => {
                 if (typeof item === 'string' && item.includes('-') && !item.match(/^prod_[0-9A-Z]{26}$/i)) {
                     const match = products.find(p => p.handle === item)
                     if (match) {
-                        console.log(`[Sorting Debug] Converted product handle "${item}" to ID "${match.id}"`)
+                        // console.log(`[Sorting Debug] Converted product handle "${item}" to ID "${match.id}"`)
                         return match.id
                     }
                 }
@@ -103,9 +103,9 @@ export const SortingPage = () => {
 
             const fullOrder = [...preservedOrder, ...sortedNewItems]
 
-            console.log("[Sorting Debug] Products Preserved:", preservedOrder.map(id => products.find(p => p.id === id)?.title))
-            console.log("[Sorting Debug] Products New:", sortedNewItems.map(id => products.find(p => p.id === id)?.title))
-            console.log("[Sorting Debug] Products Final Order:", fullOrder.map(id => products.find(p => p.id === id)?.title))
+            // console.log("[Sorting Debug] Products Preserved:", preservedOrder.map(id => products.find(p => p.id === id)?.title))
+            // console.log("[Sorting Debug] Products New:", sortedNewItems.map(id => products.find(p => p.id === id)?.title))
+            // console.log("[Sorting Debug] Products Final Order:", fullOrder.map(id => products.find(p => p.id === id)?.title))
 
             setProductOrder(fullOrder)
         }
