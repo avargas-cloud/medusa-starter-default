@@ -15,23 +15,23 @@ const CategorySubcategorySortingWidget = ({ data }: DetailWidgetProps<CategoryDa
 
     return (
         <>
-            <Container className="divide-y p-0">
-                <div className="flex items-center justify-between px-6 py-4">
-                    <div className="flex gap-x-4 items-center">
-                        <div className="flex items-center justify-center w-10 h-10 rounded-full bg-ui-bg-base border border-ui-border-base">
-                            <ListTree className="text-ui-fg-subtle" />
-                        </div>
-                        <div>
-                            <Heading level="h2">Subcategory Sorting</Heading>
-                            <Text className="text-ui-fg-subtle text-sm">
-                                Manage the display order of subcategories
-                            </Text>
-                        </div>
+            <Container className="p-4 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                    <div className="p-2 bg-ui-bg-base-hover rounded-md">
+                        <ListTree className="text-ui-fg-subtle" />
                     </div>
-                    <Button variant="secondary" size="small" onClick={() => setIsModalOpen(true)}>
-                        Manage Subcategory Sorting
-                    </Button>
+                    <div>
+                        <Heading level="h2" className="text-ui-fg-base text-sm font-medium">
+                            Subcategory Sorting
+                        </Heading>
+                        <Text className="text-ui-fg-subtle text-xs">
+                            Customize the display order of subcategories in this category.
+                        </Text>
+                    </div>
                 </div>
+                <Button variant="secondary" size="small" onClick={() => setIsModalOpen(true)}>
+                    Manage Subcategory Sorting
+                </Button>
             </Container>
 
             <ManageSubcategorySortingModal
