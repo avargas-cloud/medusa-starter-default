@@ -31,7 +31,10 @@ export async function POST(
         }
 
         const category = categories[0]
-        const sortingConfig = category.metadata?.sorting_config
+        const sortingConfig = category.metadata?.sorting_config as {
+            subcategory_order?: string[]
+            product_order?: string[]
+        } | undefined
 
         if (!sortingConfig) {
             // No sorting config, nothing to clean
@@ -54,13 +57,12 @@ export async function POST(
         )
 
         // 3. Fetch all current products in this category
-        // @ts-ignore - categories filter works but type is strict
         const { data: actualProducts } = await query.graph({
             entity: "product",
             fields: ["id"],
             filters: {
                 categories: { id: categoryId }
-            }
+            } as any  // Type is correct but overly strict
         })
 
         const actualProductIds = new Set(
@@ -68,15 +70,13 @@ export async function POST(
         )
 
         // 4. Clean subcategory_order array
-        // @ts-ignore - sortingConfig type is inferred correctly at runtime
-        const currentSubcategoryOrder = sortingConfig.subcategory_order || []
+        const currentSubcategoryOrder = sortingConfig?.subcategory_order || []
         const cleanedSubcategoryOrder = currentSubcategoryOrder.filter(
             (id: string) => actualSubcategoryIds.has(id)
         )
 
         // 5. Clean product_order array
-        // @ts-ignore - sortingConfig type is inferred correctly at runtime
-        const currentProductOrder = sortingConfig.product_order || []
+        const currentProductOrder = sortingConfig?.product_order || []
         const cleanedProductOrder = currentProductOrder.filter(
             (id: string) => actualProductIds.has(id)
         )
