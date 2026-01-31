@@ -1,9 +1,23 @@
 import { useEffect } from "react"
 import { Button, Heading, Text } from "@medusajs/ui"
 import { XMark } from "@medusajs/icons"
+import {
+    DndContext,
+    closestCenter,
+    KeyboardSensor,
+    PointerSensor,
+    useSensor,
+    useSensors,
+} from "@dnd-kit/core"
+import {
+    arrayMove,
+    SortableContext,
+    sortableKeyboardCoordinates,
+    rectSortingStrategy,
+} from "@dnd-kit/sortable"
 import { useSortingData } from "../hooks/useSortingData"
 import { useCategorySorting } from "../hooks/useCategorySorting"
-import { ProductsList } from "./sorting/ProductsList"
+import { ProductGridItem } from "./sorting/ProductGridItem"
 
 interface ManageProductSortingModalProps {
     open: boolean
@@ -38,6 +52,14 @@ export const ManageProductSortingModal = ({
         hasChanges,
     } = useCategorySorting(categoryId, currentConfig)
 
+    // DnD sensors
+    const sensors = useSensors(
+        useSensor(PointerSensor),
+        useSensor(KeyboardSensor, {
+            coordinateGetter: sortableKeyboardCoordinates,
+        })
+    )
+
     // Initialize product order when modal opens
     useEffect(() => {
         if (open && products.length > 0) {
@@ -47,6 +69,18 @@ export const ManageProductSortingModal = ({
         }
     }, [open, products])
 
+    const handleDragEnd = (event: any) => {
+        const { active, over } = event
+
+        if (over && active.id !== over.id) {
+            setProductOrder((items) => {
+                const oldIndex = items.indexOf(active.id)
+                const newIndex = items.indexOf(over.id)
+                return arrayMove(items, oldIndex, newIndex)
+            })
+        }
+    }
+
     const handleSave = async () => {
         const success = await saveSorting()
         if (success) {
@@ -55,19 +89,24 @@ export const ManageProductSortingModal = ({
         }
     }
 
+    // Order products based on productOrder array
+    const orderedProducts = productOrder
+        .map((id) => products.find((p) => p.id === id))
+        .filter(Boolean) as typeof products
+
     if (!open) return null
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="bg-ui-bg-base rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+            <div className="bg-ui-bg-base rounded-lg shadow-xl w-full h-full max-w-7xl max-h-[90vh] flex flex-col">
                 {/* Header */}
-                <div className="flex items-center justify-between p-6 border-b border-ui-border-base">
+                <div className="flex items-center justify-between p-6 border-b border-ui-border-base shrink-0">
                     <div>
                         <Heading level="h2" className="text-ui-fg-base">
                             Manage Product Sorting
                         </Heading>
                         <Text className="text-ui-fg-subtle text-sm mt-1">
-                            {categoryName}
+                            {categoryName} • {products.length} products
                         </Text>
                     </div>
                     <Button
@@ -79,7 +118,7 @@ export const ManageProductSortingModal = ({
                     </Button>
                 </div>
 
-                {/* Content - Reuse ProductsList component */}
+                {/* Content - Grid Layout */}
                 <div className="flex-1 overflow-y-auto p-6">
                     {isLoading ? (
                         <div className="flex items-center justify-center py-12">
@@ -94,22 +133,37 @@ export const ManageProductSortingModal = ({
                             </Text>
                         </div>
                     ) : (
-                        <div className="space-y-2">
-                            <Text className="text-ui-fg-subtle text-sm mb-4">
-                                Drag and drop to reorder products (
-                                {products.length} total)
+                        <div className="space-y-4">
+                            <Text className="text-ui-fg-subtle text-sm">
+                                Drag and drop to reorder • {products.length} total
                             </Text>
-                            <ProductsList
-                                products={products}
-                                order={productOrder}
-                                onOrderChange={setProductOrder}
-                            />
+                            <DndContext
+                                sensors={sensors}
+                                collisionDetection={closestCenter}
+                                onDragEnd={handleDragEnd}
+                            >
+                                <SortableContext
+                                    items={productOrder}
+                                    strategy={rectSortingStrategy}
+                                >
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                                        {orderedProducts.map((product) => (
+                                            <ProductGridItem
+                                                key={product.id}
+                                                id={product.id}
+                                                name={product.title}
+                                                thumbnail={product.thumbnail}
+                                            />
+                                        ))}
+                                    </div>
+                                </SortableContext>
+                            </DndContext>
                         </div>
                     )}
                 </div>
 
                 {/* Footer */}
-                <div className="flex items-center justify-end gap-2 p-6 border-t border-ui-border-base">
+                <div className="flex items-center justify-end gap-2 p-6 border-t border-ui-border-base shrink-0">
                     <Button
                         variant="secondary"
                         onClick={() => onOpenChange(false)}
