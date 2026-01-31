@@ -140,13 +140,8 @@ export function useCategorySorting(categoryId?: string, initialConfig?: SortingC
             }
 
             toast.success("Success", {
-                description: "Sorting saved successfully (rank + metadata backup). Refreshing page...",
+                description: "Sorting saved successfully",
             })
-
-            // Hard refresh after successful save
-            setTimeout(() => {
-                window.location.reload()
-            }, 500)
 
             return true
         } catch (error: any) {
