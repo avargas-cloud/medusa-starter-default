@@ -53,16 +53,8 @@ const CategoryPrerenderWidget = ({ data }: DetailWidgetProps<CategoryWithMetadat
 
             console.log(`[PRE-RENDER] Updated category ${data.id}: prerender=${checked}`)
 
-            // Force refetch to update widget display (avoids need for hard refresh)
-            const refetchResponse = await fetch(`/admin/product-categories/${data.id}?fields=+metadata`, {
-                credentials: "include",
-            })
-
-            if (refetchResponse.ok) {
-                const updatedData = await refetchResponse.json()
-                const newValue = updatedData.product_category?.metadata?.prerender === true
-                setPrerender(newValue)  // Update from server response (source of truth)
-            }
+            // No refetch needed - local state already updated via setPrerender()
+            // Matches pattern from sorting widgets (ManageProductSortingModal, etc.)
         } catch (error) {
             console.error("[PRE-RENDER] Failed to update:", error)
             // Revert on error
