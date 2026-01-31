@@ -157,14 +157,14 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             // Count products per filter value
             filters = filters.map(filter => {
                 const valueCounts: Record<string, number> = {}
-                
+
                 // Extract original string values (handle both formats)
-                const originalValues: string[] = Array.isArray(filter.values) 
-                    ? (typeof filter.values[0] === 'string' 
+                const originalValues: string[] = Array.isArray(filter.values)
+                    ? (typeof filter.values[0] === 'string'
                         ? filter.values as string[]
-                        : (filter.values as Array<{value: string}>).map((v: any) => v.value))
+                        : (filter.values as Array<{ value: string }>).map((v: any) => v.value))
                     : []
-                
+
                 // Initialize all values with 0
                 originalValues.forEach((value: string) => {
                     valueCounts[value] = 0
@@ -176,14 +176,15 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                     if (!attributes) return
 
                     // Get the value of this attribute for this product
-                    const productValue = attributes[filter.attribute] // Use handle as key
-                    
+                    // Use filter.name (handle) as key, NOT filter.attribute (label)
+                    const productValue = attributes[filter.name]
+
                     if (productValue && valueCounts.hasOwnProperty(productValue)) {
                         valueCounts[productValue]++
                     }
                 })
 
-                console.log(`  Filter "${filter.attribute}":`, valueCounts)
+                console.log(`  Filter "${filter.name}" (${filter.attribute}):`, valueCounts)
 
                 // Transform values array to include counts
                 return {
