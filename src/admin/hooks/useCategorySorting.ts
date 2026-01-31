@@ -107,6 +107,7 @@ export function useCategorySorting(categoryId?: string, initialConfig?: SortingC
             const updatedMetadata = {
                 ...existingMetadata,
                 sorting_config: {
+                    ...existingSortingConfig,  // CRITICAL: Preserve other fields
                     // Preserve existing subcategory_order if not modified (empty array means not touched)
                     subcategory_order: subcategoryOrder.length > 0
                         ? subcategoryOrder
