@@ -33,6 +33,10 @@
     ".cache",
     "docs",
     "src/scripts",
+    "scripts",
+    "diagnose-*.ts",
+    "migration-*.ts",
+    "check-*.ts",
     "**/*.md"
   ]
 }
