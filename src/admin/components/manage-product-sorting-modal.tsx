@@ -119,8 +119,8 @@ export const ManageProductSortingModal = ({
     const handleSave = async () => {
         const success = await saveSorting()
         if (success) {
-            // Hard refresh to update UI (custom metadata)
-            window.location.reload()
+            // Close modal - state is already updated, no refresh needed!
+            onOpenChange(false)
         }
     }
 
