@@ -142,33 +142,81 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             // ⭐ Calculate product counts for this specific category
             console.log(`🔢 Calculating product counts for category: ${id}`)
 
+            // Get products in category
             const productsResult: any = await queryService.graph({
                 entity: "product",
-                fields: [
-                    "id",
-                    "attribute_values.value",
-                    "attribute_values.attribute_key.handle",
-                    "attribute_values.attribute_key.label"
-                ],
+                fields: ["id", "title"],
                 filters: {
                     // @ts-expect-error - Medusa v2 query syntax
-                    categories: { id: id }  // Only products in THIS category
+                    categories: { id: id }
                 },
             })
 
             const products = productsResult?.data || []
             console.log(`📦 Found ${products.length} products in category`)
 
-            // 🔍 DEBUG: Log first product's metadata structure
-            if (products.length > 0) {
-                console.log('🔍 Sample product metadata:', JSON.stringify(products[0].metadata, null, 2))
+            if (products.length === 0) {
+                console.log(`⚠️  No products in category, returning filters with 0 counts`)
+                // Return filters with zero counts
+                filters = filters.map(filter => ({
+                    ...filter,
+                    options: (filter.options || []).map((opt: string | { option: string }) => ({
+                        option: typeof opt === 'string' ? opt : opt.option,
+                        count: 0
+                    }))
+                }))
+                return res.json({ category_id: id, category_name, category_handle, filters, inherited })
             }
+
+            // Get knex for direct SQL queries (same as admin attributes endpoint)
+            const knex = req.scope.resolve("__pg_connection__")
+
+            // Get all product IDs
+            const productIds = products.map((p: any) => p.id)
+
+            // Fetch ALL attribute links for ALL products in one query
+            const allLinks = await knex("product_product_productattributes_attribute_value")
+                .select("product_id", "attribute_value_id")
+                .whereIn("product_id", productIds)
+                .whereNull("deleted_at")
+
+            console.log(`🔗 Found ${allLinks.length} total attribute links for ${productIds.length} products`)
+
+            if (allLinks.length === 0) {
+                console.log(`⚠️  No attributes found for products, returning filters with 0 counts`)
+                filters = filters.map(filter => ({
+                    ...filter,
+                    options: (filter.options || []).map((opt: string | { option: string }) => ({
+                        option: typeof opt === 'string' ? opt : opt.option,
+                        count: 0
+                    }))
+                }))
+                return res.json({ category_id: id, category_name, category_handle, filters, inherited })
+            }
+
+            // Get unique attribute value IDs
+            const allAttributeValueIds = [...new Set(allLinks.map((l: any) => l.attribute_value_id))]
+
+            // Fetch all attribute values with their keys
+            const { data: allAttributeValues } = await queryService.graph({
+                entity: "attribute_value",
+                fields: [
+                    "id",
+                    "value",
+                    "attribute_key.id",
+                    "attribute_key.handle",
+                    "attribute_key.label"
+                ],
+                filters: { id: allAttributeValueIds }
+            })
+
+            console.log(`📋 Fetched ${allAttributeValues.length} attribute values`)
 
             // Count products per filter value
             filters = filters.map(filter => {
                 const optionCounts: Record<string, number> = {}
 
-                // Extract original string options (handle both formats)
+                // Extract original string options
                 const originalOptions: string[] = Array.isArray(filter.options)
                     ? (typeof filter.options[0] === 'string'
                         ? filter.options as string[]
@@ -181,31 +229,34 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 })
 
                 console.log(`\n🔍 Processing filter: ${filter.name} (${filter.attribute})`)
-                console.log(`  Looking for handle: "${filter.name}" in product.attribute_values`)
                 console.log(`  Possible options:`, originalOptions.slice(0, 5))
 
-                // Count products that have this attribute
+                // For each product, check if it has this attribute
                 products.forEach((product: any) => {
-                    const attributeValues = product.attribute_values || []
+                    // Find all attribute values for this product
+                    const productLinks = allLinks.filter((l: any) => l.product_id === product.id)
+                    const productAttributeValueIds = productLinks.map((l: any) => l.attribute_value_id)
 
-                    // Find the attribute value that matches this filter's handle
-                    const matchingAttr = attributeValues.find(
-                        (av: any) => av.attribute_key?.handle === filter.name
+                    // Find attribute values that match THIS filter's handle
+                    const matchingValues = allAttributeValues.filter((av: any) =>
+                        productAttributeValueIds.includes(av.id) &&
+                        av.attribute_key?.handle === filter.name
                     )
 
-                    if (matchingAttr) {
-                        const productOption = matchingAttr.value
-                        console.log(`    ✓ Product ID ${product.id}: ${filter.name} = "${productOption}"`)
+                    // Count each value
+                    matchingValues.forEach((av: any) => {
+                        const optionValue = av.value
+                        console.log(`    ✓ Product "${product.title}": ${filter.name} = "${optionValue}"`)
 
-                        if (optionCounts.hasOwnProperty(productOption)) {
-                            optionCounts[productOption]++
+                        if (optionCounts.hasOwnProperty(optionValue)) {
+                            optionCounts[optionValue]++
                         } else {
-                            console.log(`      ⚠️ Option "${productOption}" not in available options list`)
+                            console.log(`      ⚠️ Option "${optionValue}" not in available options list`)
                         }
-                    }
+                    })
                 })
 
-                console.log(`  Filter "${filter.name}" (${filter.attribute}):`, optionCounts)
+                console.log(`  Filter "${filter.name}" counts:`, optionCounts)
 
                 // Transform options array to include counts
                 return {
