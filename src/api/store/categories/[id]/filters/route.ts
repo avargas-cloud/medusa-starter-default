@@ -1,4 +1,3 @@
-// @ts-nocheck - API nomenclature change: using options/option to match metadata
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 
 /**
@@ -155,6 +154,11 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             const products = productsResult?.data || []
             console.log(`📦 Found ${products.length} products in category`)
 
+            // 🔍 DEBUG: Log first product's metadata structure
+            if (products.length > 0) {
+                console.log('🔍 Sample product metadata:', JSON.stringify(products[0].metadata, null, 2))
+            }
+
             // Count products per filter value
             filters = filters.map(filter => {
                 const optionCounts: Record<string, number> = {}
@@ -171,6 +175,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                     optionCounts[option] = 0
                 })
 
+                console.log(`\n🔍 Processing filter: ${filter.name} (${filter.attribute})`)
+                console.log(`  Looking for key: "${filter.name}" in product metadata.attributes`)
+                console.log(`  Possible options:`, originalOptions.slice(0, 5))
+
                 // Count products that have this attribute
                 products.forEach((product: any) => {
                     const attributes = product.metadata?.attributes
@@ -180,8 +188,13 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                     // Use filter.name (handle) as key, NOT filter.attribute (label)
                     const productOption = attributes[filter.name]
 
-                    if (productOption && optionCounts.hasOwnProperty(productOption)) {
-                        optionCounts[productOption]++
+                    if (productOption) {
+                        console.log(`    ✓ Product has ${filter.name} = "${productOption}"`)
+                        if (optionCounts.hasOwnProperty(productOption)) {
+                            optionCounts[productOption]++
+                        } else {
+                            console.log(`      ⚠️ Option "${productOption}" not in available options list`)
+                        }
                     }
                 })
 
