@@ -146,7 +146,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 entity: "product",
                 fields: ["id", "metadata"],
                 filters: {
-                    category_id: id  // Only products in THIS category
+                    categories: { id: id }  // Only products in THIS category
                 },
             })
 
