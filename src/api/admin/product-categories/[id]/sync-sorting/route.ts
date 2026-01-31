@@ -31,9 +31,12 @@ export async function POST(
         }
 
         const category = categories[0]
-        const sortingConfig = category.metadata?.sorting_config
+        const sortingConfig = (category.metadata?.sorting_config || {}) as {
+            subcategory_order?: string[]
+            product_order?: string[]
+        }
 
-        if (!sortingConfig) {
+        if (!sortingConfig.subcategory_order && !sortingConfig.product_order) {
             // No sorting config, nothing to clean
             return res.json({
                 success: true,
