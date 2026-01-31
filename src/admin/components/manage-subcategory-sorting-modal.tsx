@@ -167,7 +167,7 @@ export const ManageSubcategorySortingModal = ({
 
                 {/* Content - Grid Layout */}
                 <div className="flex-1 overflow-y-auto p-6">
-                    {isLoading ? (
+                    {isLoading || !currentConfig ? (
                         <div className="flex items-center justify-center py-12">
                             <Text className="text-ui-fg-subtle">
                                 Loading subcategories...
