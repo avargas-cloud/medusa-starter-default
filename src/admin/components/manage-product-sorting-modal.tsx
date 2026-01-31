@@ -1,29 +1,9 @@
 import { useState, useEffect } from "react"
 import { Button, Heading, Text } from "@medusajs/ui"
 import { XMark } from "@medusajs/icons"
-import {
-    DndContext,
-    closestCenter,
-    KeyboardSensor,
-    PointerSensor,
-    useSensor,
-    useSensors,
-    DragEndEvent,
-} from "@dnd-kit/core"
-import {
-    arrayMove,
-    SortableContext,
-    sortableKeyboardCoordinates,
-    verticalListSortingStrategy,
-} from "@dnd-kit/sortable"
-import { SortableItem } from "./sorting/SortableItem"
-
-interface Product {
-    id: string
-    title: string
-    handle: string
-    thumbnail?: string
-}
+import { useSortingData } from "../hooks/useSortingData"
+import { useCategorySorting } from "../hooks/useCategorySorting"
+import { ProductsList } from "./sorting/ProductsList"
 
 interface ManageProductSortingModalProps {
     open: boolean
@@ -38,117 +18,49 @@ export const ManageProductSortingModal = ({
     categoryId,
     categoryName,
 }: ManageProductSortingModalProps) => {
-    const [products, setProducts] = useState<Product[]>([])
-    const [productOrder, setProductOrder] = useState<string[]>([])
-    const [loading, setLoading] = useState(false)
-    const [saving, setSaving] = useState(false)
+    // Use existing hooks - SAME logic as /app/sorting page
+    const {
+        products,
+        loading: loadingProducts,
+        currentConfig,
+        refetch,
+    } = useSortingData(categoryId)
 
-    const sensors = useSensors(
-        useSensor(PointerSensor),
-        useSensor(KeyboardSensor, {
-            coordinateGetter: sortableKeyboardCoordinates,
-        })
-    )
+    const {
+        productOrder,
+        setProductOrder,
+        saveSorting,
+        isSaving,
+        hasChanges,
+    } = useCategorySorting(categoryId, currentConfig)
 
-    // Fetch products when modal opens
+    // Initialize product order when modal opens
     useEffect(() => {
-        if (open && categoryId) {
-            fetchProducts()
-        }
-    }, [open, categoryId])
+        if (open && products.length > 0) {
+            const existingOrder = currentConfig?.product_order || []
+            const allProductIds = products.map((p) => p.id)
 
-    const fetchProducts = async () => {
-        setLoading(true)
-        try {
-            // Fetch category metadata to get current order
-            const categoryRes = await fetch(`/admin/product-categories/${categoryId}?fields=+metadata`, {
-                credentials: "include",
-            })
-            const categoryData = await categoryRes.json()
-            const currentOrder = categoryData.product_category?.metadata?.sorting_config?.product_order || []
-
-            // Fetch all products in category
-            const productsRes = await fetch(
-                `/admin/products?category_id[]=${categoryId}&fields=id,title,handle,thumbnail&limit=1000`,
-                { credentials: "include" }
+            // Preserve existing order, append new products
+            const preservedOrder = existingOrder.filter((id: string) =>
+                allProductIds.includes(id)
             )
-            const productsData = await productsRes.json()
-            const allProducts = productsData.products || []
+            const newProducts = allProductIds.filter(
+                (id) => !existingOrder.includes(id)
+            )
 
-            setProducts(allProducts)
-
-            // Initialize order (preserve existing order, append new products)
-            const existingIds = allProducts.map((p: Product) => p.id)
-            const preservedOrder = currentOrder.filter((id: string) => existingIds.includes(id))
-            const newProducts = existingIds.filter((id: string) => !currentOrder.includes(id))
             setProductOrder([...preservedOrder, ...newProducts])
-        } catch (error) {
-            console.error("Failed to fetch products:", error)
-        } finally {
-            setLoading(false)
         }
-    }
-
-    const handleDragEnd = (event: DragEndEvent) => {
-        const { active, over } = event
-
-        if (over && active.id !== over.id) {
-            setProductOrder((items) => {
-                const oldIndex = items.findIndex((id) => id === active.id)
-                const newIndex = items.findIndex((id) => id === over.id)
-                return arrayMove(items, oldIndex, newIndex)
-            })
-        }
-    }
+    }, [open, products, currentConfig])
 
     const handleSave = async () => {
-        setSaving(true)
-        try {
-            // Fetch existing metadata
-            const fetchRes = await fetch(`/admin/product-categories/${categoryId}?fields=+metadata`, {
-                credentials: "include",
-            })
-            const fetchData = await fetchRes.json()
-            const existingMetadata = fetchData.product_category?.metadata || {}
-
-            // Update metadata with new product order
-            const response = await fetch(`/admin/product-categories/${categoryId}`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                credentials: "include",
-                body: JSON.stringify({
-                    metadata: {
-                        ...existingMetadata,
-                        sorting_config: {
-                            ...existingMetadata.sorting_config,
-                            product_order: productOrder,
-                        },
-                    },
-                }),
-            })
-
-            if (!response.ok) {
-                throw new Error("Failed to save product order")
-            }
-
-            // Hard refresh to update UI (since it's custom metadata)
+        const success = await saveSorting()
+        if (success) {
+            // Hard refresh to update UI (custom metadata)
             window.location.reload()
-        } catch (error) {
-            console.error("Failed to save product order:", error)
-            alert("Failed to save product order. Please try again.")
-        } finally {
-            setSaving(false)
         }
     }
 
     if (!open) return null
-
-    // Sort products by current order
-    const orderedProducts = productOrder
-        .map((id) => products.find((p) => p.id === id))
-        .filter(Boolean) as Product[]
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -172,39 +84,31 @@ export const ManageProductSortingModal = ({
                     </Button>
                 </div>
 
-                {/* Content */}
+                {/* Content - Reuse ProductsList component */}
                 <div className="flex-1 overflow-y-auto p-6">
-                    {loading ? (
+                    {loadingProducts ? (
                         <div className="flex items-center justify-center py-12">
-                            <Text className="text-ui-fg-subtle">Loading products...</Text>
+                            <Text className="text-ui-fg-subtle">
+                                Loading products...
+                            </Text>
                         </div>
-                    ) : orderedProducts.length === 0 ? (
+                    ) : products.length === 0 ? (
                         <div className="flex items-center justify-center py-12">
-                            <Text className="text-ui-fg-subtle">No products in this category</Text>
+                            <Text className="text-ui-fg-subtle">
+                                No products in this category
+                            </Text>
                         </div>
                     ) : (
                         <div className="space-y-2">
                             <Text className="text-ui-fg-subtle text-sm mb-4">
-                                Drag and drop to reorder products ({orderedProducts.length} total)
+                                Drag and drop to reorder products (
+                                {products.length} total)
                             </Text>
-                            <DndContext
-                                sensors={sensors}
-                                collisionDetection={closestCenter}
-                                onDragEnd={handleDragEnd}
-                            >
-                                <SortableContext
-                                    items={productOrder}
-                                    strategy={verticalListSortingStrategy}
-                                >
-                                    {orderedProducts.map((product) => (
-                                        <SortableItem
-                                            key={product.id}
-                                            id={product.id}
-                                            label={product.title}
-                                        />
-                                    ))}
-                                </SortableContext>
-                            </DndContext>
+                            <ProductsList
+                                products={products}
+                                order={productOrder}
+                                onOrderChange={setProductOrder}
+                            />
                         </div>
                     )}
                 </div>
@@ -214,16 +118,21 @@ export const ManageProductSortingModal = ({
                     <Button
                         variant="secondary"
                         onClick={() => onOpenChange(false)}
-                        disabled={saving}
+                        disabled={isSaving}
                     >
                         Cancel
                     </Button>
                     <Button
                         variant="primary"
                         onClick={handleSave}
-                        disabled={saving || loading || orderedProducts.length === 0}
+                        disabled={
+                            isSaving ||
+                            loadingProducts ||
+                            products.length === 0 ||
+                            !hasChanges()
+                        }
                     >
-                        {saving ? "Saving..." : "Save Order"}
+                        {isSaving ? "Saving..." : "Save Order"}
                     </Button>
                 </div>
             </div>
