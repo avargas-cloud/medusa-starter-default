@@ -58,7 +58,7 @@ export async function POST(
             entity: "product",
             fields: ["id"],
             filters: {
-                categories: { id: categoryId }
+                categories: { id: [categoryId] }  // Must be array
             }
         })
 
