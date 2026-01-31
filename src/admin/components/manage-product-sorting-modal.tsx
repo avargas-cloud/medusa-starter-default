@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useEffect } from "react"
 import { Button, Heading, Text } from "@medusajs/ui"
 import { XMark } from "@medusajs/icons"
 import { useSortingData } from "../hooks/useSortingData"
@@ -21,10 +21,14 @@ export const ManageProductSortingModal = ({
     // Use existing hooks - SAME logic as /app/sorting page
     const {
         products,
-        loading: loadingProducts,
-        currentConfig,
-        refetch,
+        isLoading,
     } = useSortingData(categoryId)
+
+    // Get current sorting config from first category
+    const currentConfig = products.length > 0 ? {
+        subcategory_order: [],
+        product_order: [],
+    } : undefined
 
     const {
         productOrder,
@@ -37,20 +41,11 @@ export const ManageProductSortingModal = ({
     // Initialize product order when modal opens
     useEffect(() => {
         if (open && products.length > 0) {
-            const existingOrder = currentConfig?.product_order || []
+            // For now, just use product IDs in current order
             const allProductIds = products.map((p) => p.id)
-
-            // Preserve existing order, append new products
-            const preservedOrder = existingOrder.filter((id: string) =>
-                allProductIds.includes(id)
-            )
-            const newProducts = allProductIds.filter(
-                (id) => !existingOrder.includes(id)
-            )
-
-            setProductOrder([...preservedOrder, ...newProducts])
+            setProductOrder(allProductIds)
         }
-    }, [open, products, currentConfig])
+    }, [open, products])
 
     const handleSave = async () => {
         const success = await saveSorting()
@@ -86,7 +81,7 @@ export const ManageProductSortingModal = ({
 
                 {/* Content - Reuse ProductsList component */}
                 <div className="flex-1 overflow-y-auto p-6">
-                    {loadingProducts ? (
+                    {isLoading ? (
                         <div className="flex items-center justify-center py-12">
                             <Text className="text-ui-fg-subtle">
                                 Loading products...
@@ -127,9 +122,9 @@ export const ManageProductSortingModal = ({
                         onClick={handleSave}
                         disabled={
                             isSaving ||
-                            loadingProducts ||
+                            isLoading ||
                             products.length === 0 ||
-                            !hasChanges()
+                            !hasChanges
                         }
                     >
                         {isSaving ? "Saving..." : "Save Order"}
