@@ -23,6 +23,8 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
     const queryClient = useQueryClient()
     const [overrideInheritance, setOverrideInheritance] = useState(false)
     const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set())
+    const [inheritedFilters, setInheritedFilters] = useState<Set<string>>(new Set())
+    const [inheritedFromParentName, setInheritedFromParentName] = useState<string | null>(null)
     const [newlyAddedIds, setNewlyAddedIds] = useState<Set<string>>(new Set())
 
     // Load configuration when category is selected
@@ -30,6 +32,8 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
         if (!selectedCategoryId) {
             setOverrideInheritance(false)
             setActiveFilters(new Set())
+            setInheritedFilters(new Set())
+            setInheritedFromParentName(null)
             setNewlyAddedIds(new Set())
             return
         }
@@ -55,11 +59,81 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
                 }
             }
             setActiveFilters(new Set(activeIds))
+
+            // ⭐ NEW: Fetch inherited filters from parent if not overriding
+            if (!config.override_inheritance && category.parent_category_id) {
+                const parent = categories.find(c => c.id === category.parent_category_id)
+                if (parent) {
+                    const parentConfig = parent.metadata?.filter_config
+                    let parentActiveIds: string[] = []
+
+                    if (parentConfig?.active_filters && parentConfig.active_filters.length > 0) {
+                        const first = parentConfig.active_filters[0]
+                        if (typeof first === "string") {
+                            parentActiveIds = parentConfig.active_filters as string[]
+                        } else if (typeof first === "object" && (first as any).attribute_id) {
+                            parentActiveIds = (parentConfig.active_filters as Array<{ attribute_id: string }>).map(f => f.attribute_id)
+                        }
+                    }
+
+                    setInheritedFilters(new Set(parentActiveIds))
+                    setInheritedFromParentName(parent.name)
+                } else {
+                    setInheritedFilters(new Set())
+                    setInheritedFromParentName(null)
+                }
+            } else {
+                setInheritedFilters(new Set())
+                setInheritedFromParentName(null)
+            }
         } else {
             setOverrideInheritance(false)
             setActiveFilters(new Set())
+            setInheritedFilters(new Set())
+            setInheritedFromParentName(null)
         }
-    }, [selectedCategoryId])  // ⭐ Only re-run when category selection changes, not when categories array changes
+    }, [selectedCategoryId, categories])  // ⭐ Include categories to update when parent changes
+
+    // ⭐ NEW: Bidirectional toggle behavior
+    // When override is enabled: copy inherited → active
+    // When override is disabled: clear active, restore inherited display
+    useEffect(() => {
+        const category = categories.find((c) => c.id === selectedCategoryId)
+        if (!category || !category.parent_category_id) return
+
+        const parent = categories.find(c => c.id === category.parent_category_id)
+        if (!parent) return
+
+        const parentConfig = parent.metadata?.filter_config
+        if (!parentConfig) return
+
+        // Parse parent's active filters
+        let parentActiveIds: string[] = []
+        if (parentConfig.active_filters && parentConfig.active_filters.length > 0) {
+            const first = parentConfig.active_filters[0]
+            if (typeof first === "string") {
+                parentActiveIds = parentConfig.active_filters as string[]
+            } else if (typeof first === "object" && (first as any).attribute_id) {
+                parentActiveIds = (parentConfig.active_filters as Array<{ attribute_id: string }>).map(f => f.attribute_id)
+            }
+        }
+
+        if (overrideInheritance) {
+            // Override ON: Copy inherited to active (if we have inherited)
+            if (inheritedFilters.size > 0) {
+                console.log('🔄 Override enabled - copying inherited filters to active')
+                setActiveFilters(new Set(inheritedFilters))
+                setInheritedFilters(new Set())
+                setInheritedFromParentName(null)
+            }
+        } else {
+            // Override OFF: Clear active, restore inherited display
+            console.log('🔄 Override disabled - restoring inherited filters display')
+            setActiveFilters(new Set())
+            setInheritedFilters(new Set(parentActiveIds))
+            setInheritedFromParentName(parent.name)
+        }
+    }, [overrideInheritance]) // Trigger on override toggle
 
     // Save mutation
     // ⭐ Save mutation - Generates filters JSON and saves to metadata
@@ -148,6 +222,8 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
         setOverrideInheritance,
         activeFilters,
         setActiveFilters, // ⭐ Export for bulk operations like Select All
+        inheritedFilters, // ⭐ NEW: Filters inherited from parent
+        inheritedFromParentName, // ⭐ NEW: Parent category name
         newlyAddedIds, // ⭐ Export for "New" badges
         setNewlyAddedIds, // ⭐ Export so page can update when adding filters
         handleToggleFilter,

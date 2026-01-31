@@ -87,11 +87,11 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             attribute_id: string
             order: number
             type: string
-            values: string[]
+            values: string[] | Array<{ value: string; count: number }>
         }> = []
         if (activeFilters.length > 0) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const attributeModuleService: any = req.scope.resolve("productAttributesService")
+            const attributeModuleService: any = req.scope.resolve("productAttributes")
 
             // Extract just the IDs for querying
             const attributeIds = activeFilters.map(f => f.attribute_id)
@@ -138,6 +138,61 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
             // Sort by order
             filters.sort((a, b) => a.order - b.order)
+
+            // ⭐ Calculate product counts for this specific category
+            console.log(`🔢 Calculating product counts for category: ${id}`)
+
+            const productsResult: any = await queryService.graph({
+                entity: "product",
+                fields: ["id", "metadata"],
+                filters: {
+                    categories: { id: [id] }  // Only products in THIS category
+                },
+            })
+
+            const products = productsResult?.data || []
+            console.log(`📦 Found ${products.length} products in category`)
+
+            // Count products per filter value
+            filters = filters.map(filter => {
+                const valueCounts: Record<string, number> = {}
+                
+                // Extract original string values (handle both formats)
+                const originalValues: string[] = Array.isArray(filter.values) 
+                    ? (typeof filter.values[0] === 'string' 
+                        ? filter.values as string[]
+                        : (filter.values as Array<{value: string}>).map((v: any) => v.value))
+                    : []
+                
+                // Initialize all values with 0
+                originalValues.forEach((value: string) => {
+                    valueCounts[value] = 0
+                })
+
+                // Count products that have this attribute
+                products.forEach((product: any) => {
+                    const attributes = product.metadata?.attributes
+                    if (!attributes) return
+
+                    // Get the value of this attribute for this product
+                    const productValue = attributes[filter.name] // Use handle as key
+                    
+                    if (productValue && valueCounts.hasOwnProperty(productValue)) {
+                        valueCounts[productValue]++
+                    }
+                })
+
+                console.log(`  Filter "${filter.name}":`, valueCounts)
+
+                // Transform values array to include counts
+                return {
+                    ...filter,
+                    values: originalValues.map((value: string) => ({
+                        value,
+                        count: valueCounts[value] || 0
+                    }))
+                }
+            })
         }
 
         return res.json({

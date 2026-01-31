@@ -39,8 +39,10 @@ export function SortableFilterItem({ id, label, handle, isNew, onRemove }: Sorta
             {...listeners}
         >
             <div className="flex-1">
-                <Text size="small" weight="plus">{label}</Text>
-                <Text className="text-ui-fg-muted text-xs">{handle}</Text>
+                <Text size="small" weight="plus">
+                    {label}{" "}
+                    <span className="text-ui-fg-muted font-normal">({handle})</span>
+                </Text>
             </div>
             {isNew && (
                 <Badge size="small" color="orange">

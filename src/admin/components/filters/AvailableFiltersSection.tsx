@@ -25,6 +25,7 @@ interface AvailableFiltersSectionProps {
     selectedCategory: Category | undefined
     attributes: AttributeKey[]
     activeFilters: Set<string>
+    inheritedFilters?: Set<string> // ⭐ NEW: Inherited from parent
     onAddToActive: (selectedIds: Set<string>) => void
     overrideInheritance: boolean
 }
@@ -33,6 +34,7 @@ export function AvailableFiltersSection({
     selectedCategory,
     attributes,
     activeFilters,
+    inheritedFilters = new Set(),
     onAddToActive,
     overrideInheritance,
 }: AvailableFiltersSectionProps) {
@@ -50,8 +52,10 @@ export function AvailableFiltersSection({
         ? attributes.filter(attr => availableAttrIds.includes(attr.id))
         : []  // Show empty if not synced
 
-    // ⭐ Exclude already active filters (they appear in Active Filters section above)
-    const inactiveAttributes = filteredAttributes.filter(attr => !activeFilters.has(attr.id))
+    // ⭐ Exclude already active filters AND inherited filters (they appear in Active Filters section above)
+    const inactiveAttributes = filteredAttributes.filter(attr =>
+        !activeFilters.has(attr.id) && !inheritedFilters.has(attr.id)
+    )
 
     // ⭐ Direct activation - single click like widget
     const handleActivateFilter = (attrId: string) => {

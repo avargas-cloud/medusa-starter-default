@@ -106,6 +106,60 @@ const CategoryFiltersWidget = ({ data }: DetailWidgetProps<CategoryWithMetadata>
 
     const handleSave = async (newActiveIds: string[], newOverride: boolean) => {
         try {
+            let finalActiveIds = newActiveIds
+
+            // ⭐ Auto-populate with parent's filters when inheriting
+            if (!newOverride && data.parent_category_id) {
+                try {
+                    console.log('🔄 Inheriting from parent, fetching parent filters...')
+
+                    // Fetch parent category
+                    const parentResponse = await fetch(
+                        `/admin/product-categories/${data.parent_category_id}`,
+                        { credentials: "include" }
+                    )
+
+                    if (!parentResponse.ok) {
+                        throw new Error(`Failed to fetch parent: ${parentResponse.status}`)
+                    }
+
+                    const { product_category: parent } = await parentResponse.json()
+                    const parentFilterConfig = parent.metadata?.filter_config
+                    const parentActives = parentFilterConfig?.active_filters || []
+
+                    console.log('📋 Parent filter config:', parentFilterConfig)
+                    console.log('📋 Parent active_filters (raw):', parentActives)
+                    console.log('📋 Child available filters:', availableAttrIds)
+
+                    // Parse parent's active_filters (could be string[] or object[])
+                    let parentActiveIds: string[] = []
+                    if (parentActives.length > 0) {
+                        const first = parentActives[0]
+                        if (typeof first === "string") {
+                            parentActiveIds = parentActives as string[]
+                        } else if (typeof first === "object" && (first as any).attribute_id) {
+                            parentActiveIds = (parentActives as Array<{ attribute_id: string }>).map(f => f.attribute_id)
+                        }
+                    }
+
+                    console.log('📋 Parent active IDs (parsed):', parentActiveIds)
+
+                    // Intersection: parent's filters ∩ child's available filters
+                    const inheritedFilters = parentActiveIds.filter(filterId =>
+                        availableAttrIds.includes(filterId)
+                    )
+
+                    console.log('✅ Inherited filters (intersection):', inheritedFilters)
+
+                    // Use inherited filters (respects parent's order)
+                    finalActiveIds = inheritedFilters
+                } catch (error) {
+                    console.error('❌ Failed to fetch parent filters:', error)
+                    // Fallback to user's selection if parent fetch fails
+                    console.log('⚠️ Using user selection as fallback')
+                }
+            }
+
             const response = await fetch(`/admin/product-categories/${data.id}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -114,7 +168,7 @@ const CategoryFiltersWidget = ({ data }: DetailWidgetProps<CategoryWithMetadata>
                     metadata: {
                         ...data.metadata,
                         filter_config: {
-                            active_filters: newActiveIds,
+                            active_filters: finalActiveIds,
                             override_inheritance: newOverride
                         }
                     }
@@ -124,7 +178,9 @@ const CategoryFiltersWidget = ({ data }: DetailWidgetProps<CategoryWithMetadata>
             if (!response.ok) throw new Error("Failed to save")
 
             toast.success("Success", {
-                description: "Category filters updated successfully"
+                description: newOverride
+                    ? "Category filters updated successfully"
+                    : `Inherited ${finalActiveIds.length} filters from parent category`
             })
 
             // Refresh page to reload category data (required for widget update)

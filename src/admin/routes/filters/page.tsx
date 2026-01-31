@@ -38,6 +38,8 @@ export default function FiltersPage() {
         setOverrideInheritance,
         activeFilters,
         setActiveFilters,
+        inheritedFilters, // ⭐ NEW: Inherited from parent
+        inheritedFromParentName, // ⭐ NEW: Parent category name
         newlyAddedIds,
         setNewlyAddedIds,
         handleToggleFilter,
@@ -222,6 +224,8 @@ export default function FiltersPage() {
                                 {/* ⭐ ACTIVE FILTERS - Drag & Drop */}
                                 <ActiveFiltersSection
                                     activeFilters={activeFilters}
+                                    inheritedFilters={inheritedFilters}
+                                    inheritedFromParentName={inheritedFromParentName}
                                     newlyAddedIds={newlyAddedIds}
                                     attributes={attributes}
                                     onDragEnd={handleDragEnd}
@@ -233,6 +237,7 @@ export default function FiltersPage() {
                                     selectedCategory={selectedCategory}
                                     attributes={attributes}
                                     activeFilters={activeFilters}
+                                    inheritedFilters={inheritedFilters}
                                     onAddToActive={(selectedIds) => {
                                         const newFilters = new Set(activeFilters)
                                         selectedIds.forEach(id => newFilters.add(id))

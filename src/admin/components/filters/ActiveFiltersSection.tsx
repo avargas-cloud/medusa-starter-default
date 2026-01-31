@@ -23,6 +23,8 @@ interface AttributeKey {
 
 interface ActiveFiltersSectionProps {
     activeFilters: Set<string>
+    inheritedFilters?: Set<string> // ⭐ NEW: Inherited from parent
+    inheritedFromParentName?: string | null // ⭐ NEW: Parent category name
     newlyAddedIds: Set<string>
     attributes: AttributeKey[]
     onDragEnd: (event: DragEndEvent) => void
@@ -31,6 +33,8 @@ interface ActiveFiltersSectionProps {
 
 export function ActiveFiltersSection({
     activeFilters,
+    inheritedFilters = new Set(),
+    inheritedFromParentName = null,
     newlyAddedIds,
     attributes,
     onDragEnd,
@@ -44,12 +48,13 @@ export function ActiveFiltersSection({
     )
 
     const hasUnsavedChanges = newlyAddedIds.size > 0
+    const totalFiltersCount = activeFilters.size + inheritedFilters.size
 
     return (
         <div className="mb-6">
             <div className="flex items-center gap-2 mb-3">
                 <Text weight="plus">
-                    Active Filters ({activeFilters.size})
+                    Active Filters ({totalFiltersCount})
                 </Text>
                 {hasUnsavedChanges && (
                     <Badge size="small" color="orange">
@@ -58,45 +63,92 @@ export function ActiveFiltersSection({
                 )}
             </div>
 
-            {activeFilters.size === 0 ? (
+            {totalFiltersCount === 0 ? (
                 <Text className="text-ui-fg-muted text-sm italic">
                     Select filters from available list below →
                 </Text>
             ) : (
                 <>
-                    <Text className="text-ui-fg-muted text-xs mb-3">
-                        Drag to reorder • Order affects storefront display
-                    </Text>
-                    <DndContext
-                        sensors={sensors}
-                        collisionDetection={closestCenter}
-                        onDragEnd={onDragEnd}
-                    >
-                        <SortableContext
-                            items={Array.from(activeFilters)}
-                            strategy={verticalListSortingStrategy}
-                        >
-                            <div className="flex flex-col gap-2">
-                                {Array.from(activeFilters).map(attrId => {
+                    {/* ⭐ Inherited Filters (Read-only) */}
+                    {inheritedFilters.size > 0 && inheritedFromParentName && (
+                        <div className="mb-4">
+                            <div className="flex items-center gap-2 mb-2">
+                                <Text size="small" className="text-ui-fg-subtle">
+                                    Inherited from {inheritedFromParentName}
+                                </Text>
+                                <Badge size="small" color="blue">
+                                    {inheritedFilters.size}
+                                </Badge>
+                            </div>
+                            <div className="flex flex-col gap-2 opacity-75">
+                                {Array.from(inheritedFilters).map(attrId => {
                                     const attr = attributes.find(a => a.id === attrId)
                                     if (!attr) return null
 
-                                    const isNew = newlyAddedIds.has(attrId)
-
                                     return (
-                                        <SortableFilterItem
+                                        <div
                                             key={attr.id}
-                                            id={attr.id}
-                                            label={attr.label}
-                                            handle={attr.handle}
-                                            isNew={isNew}
-                                            onRemove={() => onRemoveFilter(attr.id)}
-                                        />
+                                            className="flex items-center gap-3 p-3 rounded border bg-ui-bg-subtle border-ui-border-base"
+                                        >
+                                            <div className="flex-1">
+                                                <Text size="small" weight="plus">
+                                                    {attr.label}{" "}
+                                                    <span className="text-ui-fg-muted font-normal">({attr.handle})</span>
+                                                </Text>
+                                            </div>
+                                            <Badge size="small" color="grey">
+                                                Inherited
+                                            </Badge>
+                                        </div>
                                     )
                                 })}
                             </div>
-                        </SortableContext>
-                    </DndContext>
+                        </div>
+                    )}
+
+                    {/* ⭐ Manually Activated Filters (Drag & Drop) */}
+                    {activeFilters.size > 0 && (
+                        <>
+                            {inheritedFilters.size > 0 && (
+                                <Text size="small" className="text-ui-fg-subtle mb-2">
+                                    Custom Filters (Override)
+                                </Text>
+                            )}
+                            <Text className="text-ui-fg-muted text-xs mb-3">
+                                Drag to reorder • Order affects storefront display
+                            </Text>
+                            <DndContext
+                                sensors={sensors}
+                                collisionDetection={closestCenter}
+                                onDragEnd={onDragEnd}
+                            >
+                                <SortableContext
+                                    items={Array.from(activeFilters)}
+                                    strategy={verticalListSortingStrategy}
+                                >
+                                    <div className="flex flex-col gap-2">
+                                        {Array.from(activeFilters).map(attrId => {
+                                            const attr = attributes.find(a => a.id === attrId)
+                                            if (!attr) return null
+
+                                            const isNew = newlyAddedIds.has(attrId)
+
+                                            return (
+                                                <SortableFilterItem
+                                                    key={attr.id}
+                                                    id={attr.id}
+                                                    label={attr.label}
+                                                    handle={attr.handle}
+                                                    isNew={isNew}
+                                                    onRemove={() => onRemoveFilter(attr.id)}
+                                                />
+                                            )
+                                        })}
+                                    </div>
+                                </SortableContext>
+                            </DndContext>
+                        </>
+                    )}
                 </>
             )}
         </div>

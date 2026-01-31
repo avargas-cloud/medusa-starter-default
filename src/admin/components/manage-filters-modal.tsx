@@ -62,8 +62,10 @@ const SortableFilterItem = ({ attribute, isNew }: { attribute: Attribute; isNew?
                 }`}
         >
             <div className="flex-1">
-                <Text size="small" weight="plus">{attribute.label}</Text>
-                <Text className="text-ui-fg-muted text-xs">{attribute.handle}</Text>
+                <Text size="small" weight="plus">
+                    {attribute.label}{" "}
+                    <span className="text-ui-fg-muted font-normal">({attribute.handle})</span>
+                </Text>
             </div>
             <Badge size="small" color={isNew ? "orange" : "blue"}>
                 {attribute.filter_type || "checkbox"}
