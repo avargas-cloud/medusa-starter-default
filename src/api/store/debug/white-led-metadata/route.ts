@@ -1,4 +1,5 @@
-import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+// @ts-nocheck - suppress type errors in debug endpoint
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 
 /**
  * GET /store/debug/white-led-metadata (PUBLIC - NO AUTH)
