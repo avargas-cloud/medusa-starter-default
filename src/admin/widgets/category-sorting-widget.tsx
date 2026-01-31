@@ -23,17 +23,17 @@ const CategorySortingWidget = ({ data }: CategorySortingWidgetProps) => {
                 </div>
                 <div>
                     <Heading level="h2" className="text-ui-fg-base text-sm font-medium">
-                        Manual Sorting
+                        Product Sorting
                     </Heading>
                     <Text className="text-ui-fg-subtle text-xs">
-                        Customize the display order of subcategories and products.
+                        Customize the display order of products in this category.
                     </Text>
                 </div>
             </div>
 
             <Link to={`/app/sorting?category_id=${data.id}`}>
                 <Button variant="secondary" size="small">
-                    Manage Sorting
+                    Manage Product Sorting
                 </Button>
             </Link>
         </Container>
