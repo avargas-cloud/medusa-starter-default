@@ -7,6 +7,7 @@ interface Category {
     rank?: number  // Medusa v2 native rank field
     parent_category_id: string | null
     metadata?: {
+        image?: { url: string }
         sorting_config?: {
             subcategory_order: string[]
             product_order: string[]
@@ -62,9 +63,9 @@ export function useSortingData(selectedCategoryId?: string) {
         const fetchSubcategories = async () => {
             setIsLoading(true)
             try {
-                // UPDATED: Fetch rank field (PRIMARY sorting)
+                // UPDATED: Fetch rank field (PRIMARY sorting) AND metadata for images
                 const res = await fetch(
-                    `/admin/product-categories?fields=id,name,handle,rank&parent_category_id=${selectedCategoryId}&limit=999`,
+                    `/admin/product-categories?fields=id,name,handle,rank,+metadata&parent_category_id=${selectedCategoryId}&limit=999`,
                     { credentials: "include" }
                 )
                 if (!res.ok) throw new Error("Failed to fetch subcategories")
