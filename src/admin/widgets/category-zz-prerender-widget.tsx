@@ -22,15 +22,10 @@ const CategoryPrerenderWidget = ({ data }: DetailWidgetProps<CategoryWithMetadat
     useEffect(() => {
         const fetchFreshMetadata = async () => {
             try {
-                // Add timestamp to bypass ALL caching layers
+                // Add timestamp to bypass cache (simple and compatible)
                 const timestamp = Date.now()
                 const response = await fetch(`/admin/product-categories/${data.id}?fields=+metadata&_t=${timestamp}`, {
                     credentials: "include",
-                    cache: "no-store",  // Force fresh fetch, no cache
-                    headers: {
-                        "Cache-Control": "no-cache, no-store, must-revalidate",
-                        "Pragma": "no-cache",
-                    }
                 })
 
                 if (response.ok) {
