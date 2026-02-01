@@ -24,6 +24,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             filters.id = req.query.id
         }
 
+        if (req.query.handle) {
+            filters.handle = req.query.handle
+        }
+
         // Fetch products
         const { data: products } = await query.graph({
             entity: "product",
@@ -36,7 +40,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 "status",
                 "created_at",
                 "updated_at",
-                "metadata"
+                "metadata",
+                "variants.*"
             ],
             filters,
             pagination: {
@@ -106,7 +111,59 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             product.attributes = attributesByProduct.get(product.id) || []
         })
 
-        console.log(`[PRODUCT-ATTRS] ✅ Returning ${products.length} products with attributes`)
+        // Calculate price ranges from variants
+        console.log(`[PRODUCT-PRICE] 💰 Calculating price ranges for ${products.length} products`)
+
+        for (const product of products) {
+            if (!product.variants || product.variants.length === 0) {
+                continue
+            }
+
+            // Get all variant IDs for this product
+            const variantIds = product.variants.map((v: any) => v.id)
+
+            // Fetch prices through price_set relationship  
+            // variant → product_variant_price_set → price
+            const prices = await knex("price")
+                .select("price.amount", "price.currency_code")
+                .join("product_variant_price_set", "price.price_set_id", "product_variant_price_set.price_set_id")
+                .whereIn("product_variant_price_set.variant_id", variantIds)
+                .where("price.currency_code", "usd")
+                .whereNull("price.deleted_at")
+
+            if (prices.length === 0) {
+                continue
+            }
+
+            // Get min and max prices
+            const amounts = prices.map((p: any) => p.amount)
+            const minPrice = Math.min(...amounts)
+            const maxPrice = Math.max(...amounts)
+
+            // If all prices are the same, return single price
+            if (minPrice === maxPrice) {
+                // @ts-expect-error - price is dynamically injected
+                product.price = {
+                    amount: minPrice,
+                    currency_code: "usd"
+                }
+            } else {
+                // Return price range
+                // @ts-expect-error - price_range is dynamically injected
+                product.price_range = {
+                    min: {
+                        amount: minPrice,
+                        currency_code: "usd"
+                    },
+                    max: {
+                        amount: maxPrice,
+                        currency_code: "usd"
+                    }
+                }
+            }
+        }
+
+        console.log(`[PRODUCT-ATTRS] ✅ Returning ${products.length} products with attributes and prices`)
 
         return res.json({ products })
 

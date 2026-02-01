@@ -157,6 +157,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                     // @ts-expect-error - Medusa v2 query syntax
                     categories: { id: id }
                 },
+                pagination: {
+                    take: 1000  // Ensure we get ALL products in category, not just default limit
+                }
             })
 
             const products = productsResult?.data || []
