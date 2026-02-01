@@ -17,7 +17,6 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         const filters: any = {}
 
         if (req.query.category_id) {
-            // @ts-expect-error - Medusa graph query syntax
             filters.categories = { id: req.query.category_id }
         }
 
