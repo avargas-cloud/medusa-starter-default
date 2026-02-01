@@ -98,6 +98,8 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
     // When override is enabled: copy inherited → active
     // When override is disabled: clear active, restore inherited display
     useEffect(() => {
+        if (!selectedCategoryId) return
+
         const category = categories.find((c) => c.id === selectedCategoryId)
         if (!category || !category.parent_category_id) return
 
@@ -119,21 +121,32 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
         }
 
         if (overrideInheritance) {
-            // Override ON: Copy inherited to active (if we have inherited)
-            if (inheritedFilters.size > 0) {
+            // Override ON: Copy inherited to active (if we have inherited and active is empty)
+            if (inheritedFilters.size > 0 && activeFilters.size === 0) {
                 console.log('🔄 Override enabled - copying inherited filters to active')
                 setActiveFilters(new Set(inheritedFilters))
                 setInheritedFilters(new Set())
                 setInheritedFromParentName(null)
             }
         } else {
-            // Override OFF: Clear active, restore inherited display
-            console.log('🔄 Override disabled - restoring inherited filters display')
-            setActiveFilters(new Set())
-            setInheritedFilters(new Set(parentActiveIds))
-            setInheritedFromParentName(parent.name)
+            // Override OFF: Clear active only if it has filters, restore inherited display
+            const parentSet = new Set(parentActiveIds)
+            const parentSetString = JSON.stringify([...parentSet].sort())
+            const currentInheritedString = JSON.stringify([...inheritedFilters].sort())
+
+            // Only update if something actually changed
+            if (activeFilters.size > 0 || currentInheritedString !== parentSetString) {
+                console.log('🔄 Override disabled - restoring inherited filters display')
+                if (activeFilters.size > 0) {
+                    setActiveFilters(new Set())
+                }
+                if (currentInheritedString !== parentSetString) {
+                    setInheritedFilters(parentSet)
+                    setInheritedFromParentName(parent.name)
+                }
+            }
         }
-    }, [overrideInheritance]) // Trigger on override toggle
+    }, [overrideInheritance, selectedCategoryId, categories]) // All dependencies included
 
     // Save mutation
     // ⭐ Save mutation - Generates filters JSON and saves to metadata
