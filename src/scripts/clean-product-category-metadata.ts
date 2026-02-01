@@ -46,7 +46,7 @@ export default async function cleanProductMetadata({ container }: any) {
     const productModuleService: IProductModuleService = container.resolve(Modules.PRODUCT)
 
     console.log('\n🧹 CLEANING PRODUCT METADATA - CATEGORY REFERENCES\n')
-    console.log('=' * 70)
+    console.log('='.repeat(70))
 
     // Get all products with metadata
     const products = await knex('product')
