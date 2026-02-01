@@ -54,6 +54,7 @@ export async function GET(
 /**
  * POST /admin/quickbooks/config
  * Updates QuickBooks configuration intervals
+ * Accepts null to disable automatic syncs
  */
 export async function POST(
     req: MedusaRequest,
@@ -64,25 +65,26 @@ export async function POST(
     })
 
     try {
-        const { inventory_interval_minutes, price_interval_minutes } = req.body as {
-            inventory_interval_minutes?: number
-            price_interval_minutes?: number
+        const { inventory_sync_interval_minutes, price_sync_interval_minutes, customer_sync_interval_minutes } = req.body as {
+            inventory_sync_interval_minutes?: number | null
+            price_sync_interval_minutes?: number | null
+            customer_sync_interval_minutes?: number | null
         }
 
-        // Validation
-        if (inventory_interval_minutes !== undefined) {
-            if (inventory_interval_minutes < 5 || inventory_interval_minutes > 10080) {
+        // Validation (only validate non-null numbers)
+        if (inventory_sync_interval_minutes !== undefined && inventory_sync_interval_minutes !== null) {
+            if (inventory_sync_interval_minutes < 1 || inventory_sync_interval_minutes > 10080) {
                 res.status(400).json({
-                    error: "inventory_interval_minutes must be between 5 and 10080 (7 days)"
+                    error: "inventory_sync_interval_minutes must be between 1 and 10080 (7 days)"
                 })
                 return
             }
         }
 
-        if (price_interval_minutes !== undefined) {
-            if (price_interval_minutes < 5 || price_interval_minutes > 10080) {
+        if (price_sync_interval_minutes !== undefined && price_sync_interval_minutes !== null) {
+            if (price_sync_interval_minutes < 1 || price_sync_interval_minutes > 10080) {
                 res.status(400).json({
-                    error: "price_interval_minutes must be between 5 and 10080 (7 days)"
+                    error: "price_sync_interval_minutes must be between 1 and 10080 (7 days)"
                 })
                 return
             }
@@ -95,15 +97,39 @@ export async function POST(
         const values: any[] = []
         let paramIndex = 1
 
-        if (inventory_interval_minutes !== undefined) {
+        if (inventory_sync_interval_minutes !== undefined) {
             updates.push(`inventory_interval_minutes = $${paramIndex}`)
-            values.push(inventory_interval_minutes)
+            values.push(inventory_sync_interval_minutes) // Can be null to disable
             paramIndex++
         }
 
-        if (price_interval_minutes !== undefined) {
+        if (price_sync_interval_minutes !== undefined && price_sync_interval_minutes !== null) {
+            if (price_sync_interval_minutes < 1 || price_sync_interval_minutes > 10080) {
+                res.status(400).json({
+                    error: "price_sync_interval_minutes must be between 1 and 10080 (7 days)"
+                })
+                return
+            }
+        }
+
+        if (price_sync_interval_minutes !== undefined) {
             updates.push(`price_interval_minutes = $${paramIndex}`)
-            values.push(price_interval_minutes)
+            values.push(price_sync_interval_minutes) // Can be null to disable
+            paramIndex++
+        }
+
+        if (customer_sync_interval_minutes !== undefined && customer_sync_interval_minutes !== null) {
+            if (customer_sync_interval_minutes < 1 || customer_sync_interval_minutes > 10080) {
+                res.status(400).json({
+                    error: "customer_sync_interval_minutes must be between 1 and 10080 (7 days)"
+                })
+                return
+            }
+        }
+
+        if (customer_sync_interval_minutes !== undefined) {
+            updates.push(`customer_interval_minutes = $${paramIndex}`)
+            values.push(customer_sync_interval_minutes) // Can be null to disable
             paramIndex++
         }
 
