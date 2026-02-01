@@ -55,6 +55,13 @@ module.exports = defineConfig({
     //     },
     //   },
     // },
+    {
+      resolve: "@medusajs/notification-sendgrid",
+      options: {
+        api_key: process.env.SENDGRID_API_KEY,
+        from: process.env.SENDGRID_FROM || "noreply@ecopowertech.com",
+      },
+    },
   ],
   modules: [
     {

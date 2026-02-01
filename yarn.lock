@@ -2594,7 +2594,7 @@
   resolved "https://registry.yarnpkg.com/@medusajs/notification-local/-/notification-local-2.13.1.tgz#51f21284ec393917c2b9f4d3cb21d477772bff73"
   integrity sha512-7PdUjzCuiUgtSw2uwM0mumbgvn2XtvpE3VDFx4HuoS+BQOSmQ2AScmbIwXKwifH3MErvqQ5zvRSbhwv+T2Lr7A==
 
-"@medusajs/notification-sendgrid@2.13.1":
+"@medusajs/notification-sendgrid@2.13.1", "@medusajs/notification-sendgrid@^2.13.1":
   version "2.13.1"
   resolved "https://registry.yarnpkg.com/@medusajs/notification-sendgrid/-/notification-sendgrid-2.13.1.tgz#7eca3df40cb864a88c8cb13009c38ea3882b1a14"
   integrity sha512-MK/k/SvgkMOD8f/rA2G3chbxLAH+EQzOcWgYRQM3XM2Fxu56MmMz+fyfKOEPsnXjjNq/EpmBCQwChTJiApq/pA==
@@ -10729,6 +10729,11 @@ node-schedule@^2.1.1:
     cron-parser "^4.2.0"
     long-timeout "0.1.1"
     sorted-array-functions "^1.3.0"
+
+nodemailer@^7.0.13:
+  version "7.0.13"
+  resolved "https://registry.yarnpkg.com/nodemailer/-/nodemailer-7.0.13.tgz#74acaa55f0c6f9476384c29f27f53e467e8483cd"
+  integrity sha512-PNDFSJdP+KFgdsG3ZzMXCgquO7I6McjY2vlqILjtJd0hy8wEvtugS9xKRF2NWlPNGxvLCXlTNIae4serI7dinw==
 
 nodemon@^3.1.11:
   version "3.1.11"
