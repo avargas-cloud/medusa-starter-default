@@ -1,5 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { registerCustomerWorkflow } from "../../../workflows/register-customer"
+import { registerCustomerWorkflow } from "../../../../workflows/register-customer"
 
 export const POST = async (
     req: MedusaRequest,
@@ -42,14 +42,44 @@ export const POST = async (
 
         // Case 3: Legacy customer (exists but no account)
         if (existingCustomer && !existingCustomer.has_account && existingCustomer.metadata?.legacy_customer) {
-            // TODO: Send activation email via SendGrid
-            // For now, return success indicating email was sent
-            return res.status(200).json({
-                success: true,
-                needs_activation: true,
-                message: "Activation email sent. Please check your inbox to complete registration.",
-                email: email
-            })
+            // Send activation email via SendGrid
+            try {
+                const notificationModule = req.scope.resolve("notificationModuleService") as any
+
+                // Generate activation token (simple for now - in production use JWT or secure token)
+                const activationToken = Buffer.from(`${existingCustomer.id}:${Date.now()}`).toString('base64')
+                const activationLink = `${process.env.STOREFRONT_URL}/activate?token=${activationToken}`
+
+                await notificationModule.createNotifications({
+                    to: email,
+                    channel: "email",
+                    template: "customer-activation",
+                    data: {
+                        customer_name: existingCustomer.first_name || "Customer",
+                        activation_link: activationLink,
+                        email: email
+                    }
+                })
+
+                console.log(`✅ Activation email sent to ${email}`)
+
+                return res.status(200).json({
+                    success: true,
+                    needs_activation: true,
+                    message: "Activation email sent. Please check your inbox to complete registration.",
+                    email: email
+                })
+            } catch (emailError) {
+                console.error('SendGrid email error:', emailError)
+                // Return success anyway - don't block registration on email failure
+                return res.status(200).json({
+                    success: true,
+                    needs_activation: true,
+                    message: "Registration initiated. If you don't receive an email, please contact support.",
+                    email: email,
+                    warning: "Email sending failed"
+                })
+            }
         }
 
         // Case 1: New customer - use custom workflow to create Auth Identity + Customer
