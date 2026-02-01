@@ -1,4 +1,4 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/medusa"
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { enrichProducts } from "../../../_shared/product-enrichment"
 import { calculateFilters } from "../../../_shared/filter-calculation"
 
