@@ -93,20 +93,20 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
                     // ⭐ Get child's available filters to validate inheritance
                     const childAvailableIds = (config.available_filters || []).map((f: any) => f.attribute_id)
 
-                    console.log('🔍 [Inheritance Debug]', {
-                        category: category.name,
-                        parent: parent.name,
-                        parentActiveCount: parentActiveIds.length,
-                        childAvailableCount: childAvailableIds.length,
-                        parentActive: parentActiveIds,
-                        childAvailable: childAvailableIds
-                    })
+                    // console.log('🔍 [Inheritance Debug]', {
+                    //     category: category.name,
+                    //     parent: parent.name,
+                    //     parentActiveCount: parentActiveIds.length,
+                    //     childAvailableCount: childAvailableIds.length,
+                    //     parentActive: parentActiveIds,
+                    //     childAvailable: childAvailableIds
+                    // })
 
                     // ⭐ Only inherit filters that exist in child's products (intersection)
                     // Keep the parent's array order (position 0 is first, position 1 is second, etc.)
                     const validInheritedIds = parentActiveIds.filter(id => childAvailableIds.includes(id))
 
-                    console.log('✅ Valid inherited:', validInheritedIds.length, validInheritedIds)
+                    // console.log('✅ Valid inherited:', validInheritedIds.length, validInheritedIds)
 
                     setInheritedFilters(new Set(validInheritedIds))
                     setInheritedFromParentName(parent.name)

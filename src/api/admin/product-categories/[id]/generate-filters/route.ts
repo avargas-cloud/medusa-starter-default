@@ -129,15 +129,24 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
             console.log(`  ✅ Preserving ${availableFilters.length} existing available_filters`)
         }
 
-        // ⭐ Validate active_filters against available_filters (prevent inheriting invalid filters)
-        const availableFilterIds = availableFilters.map((f: any) => f.attribute_id)
-        const validatedActiveFilters = active_filters.filter((id: string) =>
-            availableFilterIds.includes(id)
-        )
+        // ⭐ Validate active_filters against available_filters 
+        // ONLY when inheriting (override_inheritance = false)
+        // When override = true, user manually selected, so trust their selection
+        let finalActiveFilters = active_filters
 
-        if (validatedActiveFilters.length !== active_filters.length) {
-            console.log(`⚠️ Filtered active_filters: ${active_filters.length} → ${validatedActiveFilters.length}`)
-            console.log(`   Removed: ${active_filters.filter((id: string) => !availableFilterIds.includes(id))}`)
+        if (!override_inheritance) {
+            // Inheriting from parent - validate against child's available_filters
+            const availableFilterIds = availableFilters.map((f: any) => f.attribute_id)
+            finalActiveFilters = active_filters.filter((id: string) =>
+                availableFilterIds.includes(id)
+            )
+
+            if (finalActiveFilters.length !== active_filters.length) {
+                console.log(`⚠️ Filtered inherited active_filters: ${active_filters.length} → ${finalActiveFilters.length}`)
+                console.log(`   Removed (not in child's products): ${active_filters.filter((id: string) => !availableFilterIds.includes(id))}`)
+            }
+        } else {
+            console.log(`✅ Override enabled - saving ${active_filters.length} manually selected filters`)
         }
 
         // Update metadata with filter config AND generated filters ONLY
@@ -146,7 +155,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
             filter_config: {
                 override_inheritance,
                 available_filters: availableFilters,  // ⭐ Generated or preserved
-                active_filters: validatedActiveFilters,  // ⭐ Validated against available_filters
+                active_filters: finalActiveFilters,  // ⭐ Validated only when inheriting
             },
             filters: filtersData.filters,
         }
