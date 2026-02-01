@@ -52,7 +52,7 @@ export const POST = async (
         }
 
         // Case 1: New customer - create account normally
-        const customerModule = req.scope.resolve("customerModuleService")
+        const customerModule = req.scope.resolve("customerModuleService") as any
 
         const newCustomer = await customerModule.createCustomers({
             email,
