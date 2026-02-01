@@ -129,13 +129,24 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
             console.log(`  ✅ Preserving ${availableFilters.length} existing available_filters`)
         }
 
+        // ⭐ Validate active_filters against available_filters (prevent inheriting invalid filters)
+        const availableFilterIds = availableFilters.map((f: any) => f.attribute_id)
+        const validatedActiveFilters = active_filters.filter((id: string) =>
+            availableFilterIds.includes(id)
+        )
+
+        if (validatedActiveFilters.length !== active_filters.length) {
+            console.log(`⚠️ Filtered active_filters: ${active_filters.length} → ${validatedActiveFilters.length}`)
+            console.log(`   Removed: ${active_filters.filter((id: string) => !availableFilterIds.includes(id))}`)
+        }
+
         // Update metadata with filter config AND generated filters ONLY
         const updatedMetadata = {
             ...cleanExistingMetadata,
             filter_config: {
                 override_inheritance,
                 available_filters: availableFilters,  // ⭐ Generated or preserved
-                active_filters,  // User's manual selection
+                active_filters: validatedActiveFilters,  // ⭐ Validated against available_filters
             },
             filters: filtersData.filters,
         }
