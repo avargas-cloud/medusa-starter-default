@@ -34,9 +34,34 @@ const PrimaryCategoryWidget = ({ data: productData }: DetailWidgetProps<AdminPro
         }
     }, [product])
 
-    // Update mutation
+    // Update mutation - now generates breadcrumbs automatically
     const updateProduct = useMutation({
         mutationFn: async (categoryId: string) => {
+            // First, fetch the full category hierarchy to build breadcrumbs
+            const breadcrumbs: Array<{ id: string; name: string; handle: string }> = []
+            let currentCategoryId: string | null = categoryId
+
+            while (currentCategoryId) {
+                const catRes: Response = await fetch(
+                    `${BASE_URL}/admin/product-categories/${currentCategoryId}?fields=id,name,handle,parent_category_id`,
+                    { credentials: "include" }
+                )
+                if (!catRes.ok) break
+
+                const catData: any = await catRes.json()
+                const category: any = catData.product_category
+
+                // Add to beginning of breadcrumb trail
+                breadcrumbs.unshift({
+                    id: category.id,
+                    name: category.name,
+                    handle: category.handle
+                })
+
+                currentCategoryId = category.parent_category_id || null
+            }
+
+            // Update product with both primary_category_id AND breadcrumbs
             const res = await fetch(`${BASE_URL}/admin/products/${productData.id}`, {
                 method: "POST",
                 headers: {
@@ -47,6 +72,7 @@ const PrimaryCategoryWidget = ({ data: productData }: DetailWidgetProps<AdminPro
                     metadata: {
                         ...product?.metadata,
                         primary_category_id: categoryId,
+                        main_category_breadcrumbs: breadcrumbs,
                     },
                 })
             })
@@ -54,7 +80,7 @@ const PrimaryCategoryWidget = ({ data: productData }: DetailWidgetProps<AdminPro
             return res.json()
         },
         onSuccess: () => {
-            toast.success("Primary category updated successfully")
+            toast.success("Primary category & breadcrumbs updated successfully")
             queryClient.invalidateQueries({ queryKey: ["product", productData.id] })
         },
         onError: (err) => {
