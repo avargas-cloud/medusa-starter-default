@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { createCustomersWorkflow } from "@medusajs/core-flows"
 
 export const POST = async (
     req: MedusaRequest,
@@ -51,21 +52,25 @@ export const POST = async (
             })
         }
 
-        // Case 1: New customer - create account normally
-        const customerModule = req.scope.resolve("customerModuleService") as any
-
-        const newCustomer = await customerModule.createCustomers({
-            email,
-            first_name,
-            last_name,
-            has_account: true,
-            metadata: {
-                created_via: "storefront_registration",
-                registered_at: new Date().toISOString()
+        // Case 1: New customer - create account using Medusa workflow
+        const { result } = await createCustomersWorkflow(req.scope).run({
+            input: {
+                customers: [{
+                    email,
+                    first_name,
+                    last_name,
+                    has_account: true,
+                    metadata: {
+                        created_via: "storefront_registration",
+                        registered_at: new Date().toISOString()
+                    }
+                }]
             }
         })
 
-        // TODO: Hash password and store
+        const newCustomer = result[0]
+
+        // TODO: Hash password and store (Medusa handles this via auth endpoints)
         // TODO: Auto-login customer
         // TODO: Send welcome email
 
