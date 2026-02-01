@@ -97,7 +97,18 @@ export const POST = async (
             metadata: updatedMetadata
         })
 
-        console.log(`✅ Customer ${customer.email} activated successfully`)
+        // Update has_account field directly (customerModule doesn't support this field)
+        const { Client } = await import('pg')
+        const dbClient = new Client({ connectionString: process.env.DATABASE_URL })
+
+        try {
+            await dbClient.connect()
+            await dbClient.query('UPDATE customer SET has_account = true WHERE id = $1', [customerId])
+        } finally {
+            await dbClient.end()
+        }
+
+        console.log(`Customer ${customer.email} activated successfully`)
 
         return res.status(200).json({
             success: true,
