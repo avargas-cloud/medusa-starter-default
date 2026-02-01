@@ -41,6 +41,18 @@ async function testEndpoint(categoryId: string, limit = 5) {
         console.log(`   Returned: ${data.products?.length || 0}`)
         console.log(`   Total: ${data.pagination?.total}`)
 
+        // Check product status
+        const statusCount: Record<string, number> = {}
+        data.products?.forEach((p: any) => {
+            const status = p.status || 'unknown'
+            statusCount[status] = (statusCount[status] || 0) + 1
+        })
+
+        console.log(`\n   Status breakdown:`)
+        Object.entries(statusCount).forEach(([status, count]) => {
+            console.log(`   - ${status}: ${count}`)
+        })
+
         if (data.products && data.products.length > 0) {
             const firstProduct = data.products[0]
             console.log(`\n   First product:`)

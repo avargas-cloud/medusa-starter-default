@@ -136,7 +136,7 @@ credentials: 'include'  // ← CRITICAL for session cookies
 GET /store/products?limit=20&offset=0
 
 // Get products in specific category
-GET /store/products?category_id=pcat_01JHJG30GNRTZ4NKT3YHRQGQED
+GET /store/products?category_id=pcat_01KGAD1KQXDWJEP7HE92G5FCS4
 
 // Get single product by handle (SEO-friendly)
 GET /store/products?handle=100w-waterproof-meanwell-power-supply-plastic-24vdc
@@ -349,7 +349,125 @@ const filtered = products.filter(product =>
 
 ---
 
-### 7. `GET /store/categories/:id/sorting` ⭐ CUSTOM
+### 7. `GET /store/categories/:id/products-with-filters` ⭐ NEW COMBINED ENDPOINT
+
+**Purpose:** Fetch **paginated products + dynamic filters** in a **single request**, guaranteeing 100% consistency between products and filter counts.
+
+**Why Use This:**
+- ✅ **Data Consistency** - Same query powers both products AND filters  
+- ✅ **Fewer Network Requests** - One call instead of two  
+- ✅ **Accurate Filter Counts** - Counts reflect exact products in current view  
+- ✅ **Respects Category Settings** - Honors `include_descendants_tree` metadata
+
+**Query Parameters:**
+| Parameter | Type | Description | Example |
+|-----------|------|-------------|---------|
+| `limit` | number | Products per page (default: 20) | `20` |
+| `offset` | number | Skip items (pagination) | `0` |
+
+**✅ Tested Response (LED Strips - 30 published products):**
+```json
+{
+  "category": {
+    "id": "pcat_01KGAD1KQXDWJEP7HE92G5FCS4",
+    "name": "LED Strips",
+    "handle": "led-strips",
+    "parent_category_id": null,
+    "include_descendants_tree": true
+  },
+  "products": [
+    {
+      "id": "product_01KGAX7RCT3S44GA70WHKMAPK3",
+      "title": "18/2 AWG Stranded Wire",
+      "status": "published",
+      "attributes": [
+        { "handle": "color-options", "label": "Color Options", "value": "3000K" },
+        { "handle": "length", "label": "Length", "value": "16.4ft" }
+      ],
+      "price": { "amount": 32.00, "currency_code": "usd" }
+    }
+  ],
+  "filters": [
+    {
+      "id": "color-options",
+      "attribute": "color-options",
+      "name": "Color Options",
+      "type": "checkbox",
+      "options": [
+        { "option": "3000K", "count": 8 },
+        { "option": "4000K", "count": 5 }
+      ]
+    }
+  ],
+  "pagination": {
+    "total": 30,
+    "limit": 20,
+    "offset": 0,
+    "has_more": true
+  }
+}
+```
+
+**Custom Features:**
+- ✅ `attributes` + `calculated_price` auto-injected
+- ✅ Filter counts from ALL products (not just current page)
+- ✅ Respects `category.metadata.include_descendants_tree`
+- ✅ **Only `status: "published"` products** (drafts excluded)
+
+**Usage:**
+```typescript
+GET /store/categories/pcat_01KGAD1KQXDWJEP7HE92G5FCS4/products-with-filters?limit=20
+```
+
+**⚙️ Category Configuration: `include_descendants_tree` Metadata**
+
+Each category can control whether to include products from child categories using the `include_descendants_tree` metadata field.
+
+**Admin UI Widget:**
+- Location: Category detail pages
+- Widget name: "Include Subcategory Products"
+- Options: Yes / No toggle
+- Default: **Yes** (true) for all categories
+
+**Setting via Admin UI:**
+1. Navigate to category detail page in Admin
+2. Scroll to "Include Subcategory Products" widget
+3. Toggle Yes/No
+4. Page auto-reloads with new setting
+
+**Effect on API Response:**
+
+```typescript
+// Category with include_descendants_tree: true
+{
+  "category": {
+    "include_descendants_tree": true
+  },
+  "pagination": {
+    "total": 30  // ← Includes products from 18 child categories
+  }
+}
+
+// Category with include_descendants_tree: false  
+{
+  "category": {
+    "include_descendants_tree": false
+  },
+  "pagination": {
+    "total": 10  // ← Only products directly in this category
+  }
+}
+```
+
+**Implementation Details:**
+- Stored in `category.metadata.include_descendants_tree`
+- Defaults to `true` if not explicitly set
+- Recursive search (max depth: 5 levels) when enabled
+- All 126 existing categories initialized to `true`
+
+---
+
+### 8. `GET /store/categories/:id/sorting` ⭐ CUSTOM
 
 **Purpose:** Get manually sorted product list for category
 
