@@ -115,6 +115,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             )
 
             // Map to enriched filter objects
+            // @ts-expect-error - Type definition expects 'values' but we use 'options' nomenclature
             filters = activeFilters.map(filterConfig => {
                 const attributeKey = attributeKeys.find((k: any) => k.id === filterConfig.attribute_id)
 
@@ -141,6 +142,11 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
             // ⭐ Calculate product counts for this specific category
             console.log(`🔢 Calculating product counts for category: ${id}`)
+
+            // Extract category info for response
+            const category_name = categoryResult.data[0].name
+            const category_handle = categoryResult.data[0].handle
+            const inherited = categoryResult.data[0].metadata?.filters_inherited || false
 
             // Get products in category
             const productsResult: any = await queryService.graph({

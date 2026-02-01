@@ -41,8 +41,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             ],
             filters,
             pagination: {
-                limit: parseInt(req.query.limit as string) || 20,
-                offset: parseInt(req.query.offset as string) || 0
+                take: parseInt(req.query.limit as string) || 20,
+                skip: parseInt(req.query.offset as string) || 0
             }
         })
 
