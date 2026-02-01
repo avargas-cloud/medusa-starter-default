@@ -1,4 +1,4 @@
-import { MedusaRequest } from "@medusajs/framework/http"
+import type { MedusaRequest } from "@medusajs/medusa"
 import { Knex } from "knex"
 
 /**
