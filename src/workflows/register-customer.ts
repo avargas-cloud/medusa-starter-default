@@ -21,6 +21,7 @@ const createAuthIdentityStep = createStep(
     },
     // Compensation logic (rollback) if something fails after
     async (authId, { container }) => {
+        if (!authId) return
         const authModule = container.resolve(Modules.AUTH)
         await authModule.deleteAuthIdentities([authId])
     }
@@ -43,6 +44,7 @@ const createCustomerStep = createStep(
         return new StepResponse(customer, customer.id)
     },
     async (customerId, { container }) => {
+        if (!customerId) return
         const customerModule = container.resolve(Modules.CUSTOMER)
         await customerModule.deleteCustomers([customerId])
     }
@@ -51,7 +53,7 @@ const createCustomerStep = createStep(
 // Step 3: Index Customer in MeiliSearch
 const indexCustomerInMeiliSearchStep = createStep(
     "index-customer-meilisearch",
-    async (customerId: string, { container }) => {
+    async (input: { customerId: string }, { container }) => {
         try {
             const { MeiliSearch } = await import("meilisearch")
             const query = container.resolve("query") as any
@@ -66,7 +68,7 @@ const indexCustomerInMeiliSearchStep = createStep(
             // Fetch the customer we just created
             const { data: customers } = await query.graph({
                 entity: "customer",
-                filters: { id: customerId },
+                filters: { id: input.customerId },
                 fields: [
                     "id", "email", "first_name", "last_name", "phone",
                     "company_name", "has_account", "created_at", "updated_at",
@@ -77,7 +79,7 @@ const indexCustomerInMeiliSearchStep = createStep(
             const customer = customers[0]
 
             if (!customer) {
-                throw new Error(`Customer ${customerId} not found for indexing`)
+                throw new Error(`Customer ${input.customerId} not found for indexing`)
             }
 
             // Transform to MeiliSearch format
@@ -102,11 +104,11 @@ const indexCustomerInMeiliSearchStep = createStep(
 
             console.log(`✅ Indexed customer ${customer.email} in MeiliSearch`)
 
-            return new StepResponse({ indexed: true, customerId })
+            return new StepResponse({ indexed: true, customerId: input.customerId })
         } catch (error) {
             console.error('MeiliSearch indexing error:', error)
             // Don't fail the whole workflow if MeiliSearch fails
-            return new StepResponse({ indexed: false, error: error instanceof Error ? error.message : 'Unknown error' })
+            return new StepResponse({ indexed: false, customerId: input.customerId, error: error instanceof Error ? error.message : 'Unknown error' })
         }
     }
 )
@@ -137,7 +139,7 @@ export const registerCustomerWorkflow = createWorkflow(
         })
 
         // 3. Index in MeiliSearch
-        const meiliResult = indexCustomerInMeiliSearchStep(customer.id)
+        indexCustomerInMeiliSearchStep({ customerId: customer.id })
 
         return new WorkflowResponse(customer)
     }
