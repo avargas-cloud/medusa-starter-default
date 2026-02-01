@@ -90,7 +90,14 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
                         }
                     }
 
-                    setInheritedFilters(new Set(parentActiveIds))
+                    // ⭐ Get child's available filters to validate inheritance
+                    const childAvailableIds = (config.available_filters || []).map((f: any) => f.attribute_id)
+
+                    // ⭐ Only inherit filters that exist in child's products (intersection)
+                    // Keep the parent's array order (position 0 is first, position 1 is second, etc.)
+                    const validInheritedIds = parentActiveIds.filter(id => childAvailableIds.includes(id))
+
+                    setInheritedFilters(new Set(validInheritedIds))
                     setInheritedFromParentName(parent.name)
                 } else {
                     setInheritedFilters(new Set())
@@ -149,8 +156,17 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
         } else {
             // Override OFF: Clear active, restore inherited  
             // console.log('🔄 Override disabled - restoring inherited filters display')
+
+            // ⭐ Get child's available filters to validate inheritance
+            const config = category.metadata?.filter_config
+            const childAvailableIds = (config?.available_filters || []).map((f: any) => f.attribute_id)
+
+            // ⭐ Only inherit filters that exist in child's products (intersection)
+            // Keep the parent's array order (position 0 is first, position 1 is second, etc.)
+            const validInheritedIds = parentActiveIds.filter(id => childAvailableIds.includes(id))
+
             setActiveFilters(new Set())
-            setInheritedFilters(new Set(parentActiveIds))
+            setInheritedFilters(new Set(validInheritedIds))
             setInheritedFromParentName(parent.name)
         }
     }, [overrideInheritance]) // ⭐ ONLY depend on overrideInheritance toggle

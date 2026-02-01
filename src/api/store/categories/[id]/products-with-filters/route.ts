@@ -82,11 +82,18 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
         if (filterConfig?.active_filters && Array.isArray(filterConfig.active_filters)) {
             // Parse active_filters (can be string[] or object[])
-            const activeFilterIds = typeof filterConfig.active_filters[0] === 'string'
+            let activeFilterIds = typeof filterConfig.active_filters[0] === 'string'
                 ? filterConfig.active_filters as string[]
                 : (filterConfig.active_filters as Array<{ attribute_id: string }>).map(f => f.attribute_id)
 
-            // Fetch attribute configurations
+            // ⭐ Validate against available_filters (only include filters that exist in child's products)
+            if (filterConfig?.available_filters && Array.isArray(filterConfig.available_filters)) {
+                const availableFilterIds = filterConfig.available_filters.map((f: any) => f.attribute_id)
+                activeFilterIds = activeFilterIds.filter(id => availableFilterIds.includes(id))
+                console.log(`[PRODUCTS-WITH-FILTERS] ⚖️ Validated ${activeFilterIds.length} active filters against available_filters`)
+            }
+
+            // Fetch attribute configurations (only for valid filters)
             const { data: attributes } = await query.graph({
                 entity: "attribute_key",
                 filters: { id: activeFilterIds },
