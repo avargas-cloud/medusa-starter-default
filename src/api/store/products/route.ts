@@ -148,10 +148,12 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             product.variants.forEach((variant: any) => {
                 const amount = priceMap.get(variant.id)
                 if (amount !== undefined) {
-                    variant.calculated_price = {
-                        calculated_amount: amount,
-                        currency_code: "usd"
-                    }
+                    Object.assign(variant, {
+                        calculated_price: {
+                            calculated_amount: amount,
+                            currency_code: "usd"
+                        }
+                    })
                 }
             })
 
@@ -162,22 +164,26 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
             // If all prices are the same, return single price
             if (minPrice === maxPrice) {
-                product.price = {
-                    amount: minPrice,
-                    currency_code: "usd"
-                }
-            } else {
-                // Return price range
-                product.price_range = {
-                    min: {
+                Object.assign(product, {
+                    price: {
                         amount: minPrice,
                         currency_code: "usd"
-                    },
-                    max: {
-                        amount: maxPrice,
-                        currency_code: "usd"
                     }
-                }
+                })
+            } else {
+                // Return price range
+                Object.assign(product, {
+                    price_range: {
+                        min: {
+                            amount: minPrice,
+                            currency_code: "usd"
+                        },
+                        max: {
+                            amount: maxPrice,
+                            currency_code: "usd"
+                        }
+                    }
+                })
             }
         }
 
