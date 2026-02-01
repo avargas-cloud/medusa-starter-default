@@ -40,8 +40,20 @@ export const POST = async (
             })
         }
 
+        // Debug logging
+        console.log('=== LEGACY CUSTOMER CHECK ===')
+        console.log('existingCustomer:', !!existingCustomer)
+        console.log('has_account:', existingCustomer?.has_account)
+        console.log('legacy_customer value:', existingCustomer?.metadata?.legacy_customer)
+        console.log('legacy_customer type:', typeof existingCustomer?.metadata?.legacy_customer)
+        console.log('Condition 1 (exists):', !!existingCustomer)
+        console.log('Condition 2 (no account):', !existingCustomer?.has_account)
+        console.log('Condition 3 (legacy):', existingCustomer?.metadata?.legacy_customer === true || existingCustomer?.metadata?.legacy_customer === "true")
+        console.log('=============================')
+
         // Case 3: Legacy customer (exists but no account)
         if (existingCustomer && !existingCustomer.has_account && (existingCustomer.metadata?.legacy_customer === true || existingCustomer.metadata?.legacy_customer === "true")) {
+            console.log('🎯 ENTERING LEGACY CUSTOMER BLOCK - SENDING EMAIL')
             // Send activation email via SendGrid
             try {
                 const sgMail = await import("@sendgrid/mail")
