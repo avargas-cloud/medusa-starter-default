@@ -231,58 +231,125 @@ const { product, main_category_breadcrumbs } = await res.json()
 **Purpose:** Fetch single product with calculated prices per variant (optimized for product detail pages)
 
 **Path Parameter:**
-- `:id` - Product ID (e.g., `product_01KGAX7RCXVXJVQ8QVHD7W0T54`)
+### 4. Get Product with Prices, Images, Attributes & Breadcrumbs
 
-**✅ Tested Response:**
+**Endpoint:** `GET /store/products/:id/with-prices`
+
+**Purpose:** Fetch complete product data in a **single API call**, including calculated prices, images, attributes, and category breadcrumbs. This endpoint aggregates data from multiple sources to provide everything needed for a Product Detail Page (PDP).
+
+**Parameters:**
+- `id` (path parameter): Product ID
+
+**Headers Required:**
+```
+x-publishable-api-key: your_publishable_key
+```
+
+**Response Structure:**
 ```json
 {
   "product": {
-    "id": "product_01KGAX7RCXVXJVQ8QVHD7W0T54",
-    "title": "adorne® Netatmo Smart Gateway",
-    "handle": "adorne-netatmo-smart-gateway",
-    "description": "Smart home gateway for adorne system",
-    "thumbnail": "https://bucket-production.up.railway.app/medusa-media/product-...",
+    "id": "product_xxx",
+    "title": "Product Name",
+    "handle": "product-handle",
+    "description": "Product description",
+    "thumbnail": "https://...",
     "images": [
       {
-        "id": "img_01XXX",
-        "url": "https://bucket-production.up.railway.app/medusa-media/product-...",
-        "metadata": null,
-        "rank": 0
-      },
-      {
-        "id": "img_02XXX",
+        "id": "img_xxx",
         "url": "https://...",
         "metadata": null,
-        "rank": 1
+        "rank": 0
       }
-      // ... 4 total images
     ],
     "variants": [
       {
-        "id": "variant_01XXX",
+        "id": "variant_xxx",
         "title": "Default",
-        "sku": "ADTH703GW4",
-        "inventory_quantity": 5,
+        "sku": "SKU123",
         "calculated_price": {
-          "calculated_amount": 179,
-          "currency_code": "usd"
-        }
+          "calculated_amount": "56.75",
+          "is_calculated_price_price_list": false
+        },
+        "inventory_quantity": 100
       }
     ],
-    "options": [...]
-  }
+    "attributes": [
+      {
+        "id": "attr_xxx",
+        "title": "Height",
+        "rank": 0,
+        "values": [
+          {
+            "id": "attrval_xxx",
+            "value": "10 inches",
+            "rank": 0
+          }
+        ]
+      }
+    ],
+    "options": [...],
+    "metadata": {
+      "primary_category_id": "pcat_xxx",
+      "main_category_breadcrumbs": [...]
+    }
+  },
+  "breadcrumbs": [
+    {
+      "id": "pcat_root",
+      "name": "BY CATEGORIES",
+      "handle": "by-categories"
+    },
+    {
+      "id": "pcat_parent",
+      "name": "LED Strips",
+      "handle": "led-strips"
+    },
+    {
+      "id": "pcat_current",
+      "name": "WHITE LED STRIPS",
+      "handle": "led-strips-white"
+    }
+  ]
 }
 ```
 
 **Custom Features:**
-- ✅ **Explicit image fields** - Uses `images.id`, `images.url`, `images.metadata`, `images.rank` instead of wildcard
-- ✅ **Spread operator pattern** - Immutable object construction to preserve all fields
-- ✅ **Calculated prices** - Each variant includes `calculated_price` with amount in dollars
-- ✅ **Full product data** - Thumbnail, images, variants, and options included
+
+1. **Dynamic Pricing Resolution**
+   - Queries customer-specific pricing via SQL
+   - Uses `COALESCE` to return customer group price → retail price → base price
+   - Prices returned in **dollars** (not cents)
+   - Supports price lists and customer groups
+
+2. **Explicit Image Fields**
+   - Uses `images.id`, `images.url`, `images.metadata`, `images.rank`
+   - Avoids wildcard fields (`images.*`) to ensure data consistency
+   - Returns both `thumbnail` and full `images` array
+
+3. **Product Attributes**
+   - Batch-fetched using `query.graph`
+   - Includes attribute titles and ranked values
+   - Sorted by rank for proper display order
+
+4. **Category Breadcrumbs**
+   - **Source:** Pre-calculated breadcrumbs from `metadata.main_category_breadcrumbs`
+   - **Generation:** Admin widget auto-generates when saving primary category
+   - **Structure:** Full hierarchy from root to selected category
+   - Each breadcrumb includes: `id`, `name`, `handle`
+   - Returns `null` if no primary category set
+
+**Breadcrumb Workflow:**
+1. In Medusa Admin, navigate to product detail page
+2. Use "Primary Category" widget to select main category
+3. Click "Save Selection" button
+4. Widget automatically:
+   - Traverses category hierarchy to root
+   - Generates complete breadcrumb JSON
+   - Saves to `metadata.main_category_breadcrumbs`
+5. `/with-prices` endpoint returns breadcrumbs from metadata
 
 **Implementation Notes:**
-This endpoint was specifically designed to solve the "images not loading" issue when adding dynamic pricing. The solution uses:
-
 1. **Explicit image fields** instead of `images.*` wildcard (Medusa v2 quirk)
 2. **Spread operator pattern** to avoid object mutation:
    ```typescript
