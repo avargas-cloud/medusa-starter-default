@@ -10,7 +10,7 @@ export async function enrichProducts(products: any[], req: MedusaRequest) {
         return products
     }
 
-    const knex: Knex = (req.scope.resolve("__pg__") as any).raw
+    const knex = req.scope.resolve("__pg_connection__")
 
     // Get all product IDs
     const productIds = products.map(p => p.id)
