@@ -55,7 +55,7 @@ export const POST = async (
         // Case 1: New customer - create account using Medusa workflow
         const { result } = await createCustomersWorkflow(req.scope).run({
             input: {
-                customers: [{
+                customersData: [{
                     email,
                     first_name,
                     last_name,
