@@ -1,81 +1,137 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { Modules } from "@medusajs/framework/utils"
+import { IProductModuleService } from "@medusajs/framework/types"
+import { getProductMainCategoryBreadcrumbs } from "../../../../utils/breadcrumbs"
 
-export const GET = async (
-    req: MedusaRequest,
-    res: MedusaResponse
-) => {
-    const { id } = req.params
-    const query = req.scope.resolve("query")
-    const knex = req.scope.resolve("__pg_connection__") as any
-
+/**
+ * GET /store/products/:id/with-prices
+ * 
+ * Complete product data endpoint:
+ * - Images (thumbnail + images array)
+ * - Calculated prices per variant
+ * - Category breadcrumbs
+ * - Product attributes
+ */
+export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     try {
-        // Get product with variants
+        const { id } = req.params
+        const query = req.scope.resolve("query")
+        const knex = req.scope.resolve("__pg_connection__")
+        const productModuleService: IProductModuleService = req.scope.resolve(Modules.PRODUCT)
+
+        // 1. Fetch product with explicit image fields + categories for breadcrumbs
         const { data: products } = await query.graph({
             entity: "product",
-            filters: { id },
             fields: [
                 "id",
                 "title",
                 "handle",
                 "description",
-                "options.id",
-                "options.title",
-                "options.values",
-                "variants.id",
-                "variants.title",
-                "variants.sku",
-                "variants.options",
-                "variants.options.value"
-            ]
+                "thumbnail",
+                "status",
+                "created_at",
+                "updated_at",
+                "metadata",
+                "variants.*",
+                "images.id",
+                "images.url",
+                "images.metadata",
+                "images.rank",
+                "options.*"
+            ],
+            filters: { id }
         })
 
         if (!products || products.length === 0) {
-            return res.status(404).json({ error: "Product not found" })
+            return res.status(404).json({
+                message: "Product not found",
+                product: null
+            })
         }
 
-        const product = products[0]
+        const originalProduct = products[0]
 
-        // Get prices directly from database
-        const pricesQuery = await knex.raw(`
-      SELECT 
-        pv.id as variant_id,
-        p.amount,
-        p.currency_code
-      FROM product_variant pv
-      LEFT JOIN product_variant_price_set pvps ON pv.id = pvps.variant_id
-      LEFT JOIN price p ON p.price_set_id = pvps.price_set_id
-      WHERE pv.product_id = ?
-    `, [id])
+        // 2. Get breadcrumbs from product metadata (pre-calculated)
+        // Products have main_category_breadcrumbs already calculated in metadata
+        const breadcrumbs = originalProduct.metadata?.main_category_breadcrumbs || null
 
-        // Map prices to variants
-        const variantsWithPrices = product.variants.map((variant: any) => {
-            const price = pricesQuery.rows.find((p: any) => p.variant_id === variant.id)
+        // 3. Get variant IDs for pricing query
+        const variantIds = originalProduct.variants.map((v: any) => v.id)
+
+        // 5. Fetch prices
+        const prices = await knex("price")
+            .select("price.amount", "price.currency_code", "product_variant_price_set.variant_id")
+            .join("product_variant_price_set", "price.price_set_id", "product_variant_price_set.price_set_id")
+            .whereIn("product_variant_price_set.variant_id", variantIds)
+            .where("price.currency_code", "usd")
+            .whereNull("price.deleted_at")
+
+        // 6. Create price map
+        const priceMap = new Map<string, number>()
+        prices.forEach((p: any) => {
+            priceMap.set(p.variant_id, p.amount)
+        })
+
+        // 7. Create variants with calculated prices
+        const variantsWithPrices = originalProduct.variants.map((variant: any) => {
+            const amount = priceMap.get(variant.id)
 
             return {
-                id: variant.id,
-                title: variant.title,
-                sku: variant.sku,
-                options: variant.options,
-                calculated_price: price ? {
-                    calculated_amount: price.amount,
-                    original_amount: price.amount,
-                    currency_code: price.currency_code
+                ...variant,
+                calculated_price: amount !== undefined ? {
+                    calculated_amount: amount,
+                    currency_code: "usd"
                 } : null
             }
         })
 
-        res.json({
-            product: {
-                id: product.id,
-                title: product.title,
-                handle: product.handle,
-                description: product.description,
-                options: product.options,
-                variants: variantsWithPrices
-            }
+        // 8. Fetch product attributes
+        const attributeLinks = await knex("product_product_productattributes_attribute_value")
+            .select("attribute_value_id")
+            .where("product_id", id)
+            .whereNull("deleted_at")
+
+        let attributes: any[] = []
+
+        if (attributeLinks.length > 0) {
+            const attributeValueIds = attributeLinks.map((link: any) => link.attribute_value_id)
+
+            const { data: attributeValues } = await query.graph({
+                entity: "attribute_value",
+                fields: [
+                    "id",
+                    "value",
+                    "attribute_key.id",
+                    "attribute_key.handle",
+                    "attribute_key.label"
+                ],
+                filters: { id: attributeValueIds }
+            })
+
+            attributes = attributeValues.map((av: any) => ({
+                handle: av.attribute_key?.handle,
+                label: av.attribute_key?.label,
+                value: av.value
+            }))
+        }
+
+        // 9. ✅ Create complete product response with spread operator
+        const productResponse = {
+            ...originalProduct,
+            variants: variantsWithPrices,
+            attributes: attributes
+        }
+
+        return res.json({
+            product: productResponse,
+            breadcrumbs: breadcrumbs  // Add breadcrumbs to response
         })
+
     } catch (error: any) {
-        console.error("Error fetching product with prices:", error)
-        res.status(500).json({ error: error.message })
+        console.error("[WITH-PRICES] Error:", error)
+        return res.status(500).json({
+            error: "Failed to fetch product with prices",
+            message: error.message
+        })
     }
 }

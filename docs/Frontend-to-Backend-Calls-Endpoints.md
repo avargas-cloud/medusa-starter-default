@@ -226,9 +226,104 @@ const { product, main_category_breadcrumbs } = await res.json()
 
 ---
 
+### 4. `GET /store/products/:id/with-prices` - Get Product with Calculated Prices ⭐ CUSTOM
+
+**Purpose:** Fetch single product with calculated prices per variant (optimized for product detail pages)
+
+**Path Parameter:**
+- `:id` - Product ID (e.g., `product_01KGAX7RCXVXJVQ8QVHD7W0T54`)
+
+**✅ Tested Response:**
+```json
+{
+  "product": {
+    "id": "product_01KGAX7RCXVXJVQ8QVHD7W0T54",
+    "title": "adorne® Netatmo Smart Gateway",
+    "handle": "adorne-netatmo-smart-gateway",
+    "description": "Smart home gateway for adorne system",
+    "thumbnail": "https://bucket-production.up.railway.app/medusa-media/product-...",
+    "images": [
+      {
+        "id": "img_01XXX",
+        "url": "https://bucket-production.up.railway.app/medusa-media/product-...",
+        "metadata": null,
+        "rank": 0
+      },
+      {
+        "id": "img_02XXX",
+        "url": "https://...",
+        "metadata": null,
+        "rank": 1
+      }
+      // ... 4 total images
+    ],
+    "variants": [
+      {
+        "id": "variant_01XXX",
+        "title": "Default",
+        "sku": "ADTH703GW4",
+        "inventory_quantity": 5,
+        "calculated_price": {
+          "calculated_amount": 179,
+          "currency_code": "usd"
+        }
+      }
+    ],
+    "options": [...]
+  }
+}
+```
+
+**Custom Features:**
+- ✅ **Explicit image fields** - Uses `images.id`, `images.url`, `images.metadata`, `images.rank` instead of wildcard
+- ✅ **Spread operator pattern** - Immutable object construction to preserve all fields
+- ✅ **Calculated prices** - Each variant includes `calculated_price` with amount in dollars
+- ✅ **Full product data** - Thumbnail, images, variants, and options included
+
+**Implementation Notes:**
+This endpoint was specifically designed to solve the "images not loading" issue when adding dynamic pricing. The solution uses:
+
+1. **Explicit image fields** instead of `images.*` wildcard (Medusa v2 quirk)
+2. **Spread operator pattern** to avoid object mutation:
+   ```typescript
+   const productResponse = {
+       ...originalProduct,        // Preserves all fields
+       variants: variantsWithPrices  // Only overwrites variants
+   }
+   ```
+
+**Usage:**
+```typescript
+// Get product with prices
+const response = await fetch(
+  `/store/products/product_01KGAX7RCXVXJVQ8QVHD7W0T54/with-prices`,
+  {
+    headers: {
+      'x-publishable-api-key': 'pk_519e7f66680afc4ab0136ce701a7f6d1e8df2b8fc48a29b7a55616a05cb5b5f3'
+    }
+  }
+)
+
+const { product } = await response.json()
+
+// Display product
+console.log(product.title)                    // "adorne® Netatmo Smart Gateway"
+console.log(product.thumbnail)                // Image URL
+console.log(product.images.length)            // 4
+console.log(product.variants[0].calculated_price.calculated_amount)  // 179
+```
+
+**Use Cases:**
+- Product detail pages needing images + prices
+- Cart preview with product images
+- Quick-view modals with pricing
+- Any component needing full product data in one call
+
+---
+
 ## Store API - Categories & Filters
 
-### 4. `GET /store/product-categories` - List Categories
+### 5. `GET /store/product-categories` - List Categories
 
 **Purpose:** Fetch category tree
 
@@ -262,7 +357,7 @@ const { product, main_category_breadcrumbs } = await res.json()
 
 ---
 
-### 5. `GET /store/product-categories/:id` - Get Category
+### 6. `GET /store/product-categories/:id` - Get Category
 
 **Purpose:** Get single category details
 
@@ -270,7 +365,7 @@ const { product, main_category_breadcrumbs } = await res.json()
 
 ---
 
-### 6. `GET /store/categories/:id/filters` ⭐ CUSTOM
+### 7. `GET /store/categories/:id/filters` ⭐ CUSTOM
 
 **Purpose:** Get available filters for category with **accurate product counts**
 
@@ -349,7 +444,7 @@ const filtered = products.filter(product =>
 
 ---
 
-### 7. `GET /store/categories/:id/products-with-filters` ⭐ NEW COMBINED ENDPOINT
+### 8. `GET /store/categories/:id/products-with-filters` ⭐ NEW COMBINED ENDPOINT
 
 **Purpose:** Fetch **paginated products + dynamic filters** in a **single request**, guaranteeing 100% consistency between products and filter counts.
 
@@ -467,7 +562,7 @@ Each category can control whether to include products from child categories usin
 
 ---
 
-### 8. `GET /store/categories/:id/sorting` ⭐ CUSTOM
+### 9. `GET /store/categories/:id/sorting` ⭐ CUSTOM
 
 **Purpose:** Get manually sorted product list for category
 
