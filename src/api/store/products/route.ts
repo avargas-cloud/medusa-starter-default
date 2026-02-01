@@ -28,6 +28,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             filters.handle = req.query.handle
         }
 
+        // Store API should only return published products
+        filters.status = "published"
+
         // Fetch products
         const { data: products } = await query.graph({
             entity: "product",
@@ -145,7 +148,6 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             product.variants.forEach((variant: any) => {
                 const amount = priceMap.get(variant.id)
                 if (amount !== undefined) {
-                    // @ts-expect-error - calculated_price is dynamically injected
                     variant.calculated_price = {
                         calculated_amount: amount,
                         currency_code: "usd"

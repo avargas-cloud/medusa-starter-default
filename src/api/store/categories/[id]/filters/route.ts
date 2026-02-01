@@ -155,7 +155,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 fields: ["id", "title"],
                 filters: {
                     // @ts-expect-error - Medusa v2 query syntax
-                    categories: { id: id }
+                    categories: { id: id },
+                    status: "published"  // Only count published products
                 },
                 pagination: {
                     take: 1000  // Ensure we get ALL products in category, not just default limit
