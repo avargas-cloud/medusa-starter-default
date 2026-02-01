@@ -2,6 +2,60 @@
 
 # ⚠️ CRITICAL CHECKS - READ FIRST BEFORE ANY ACTION
 
+## 🚨 WSL ENVIRONMENT - PROCESS MANAGEMENT (CRITICAL!)
+
+**⛔ THIS IS A WINDOWS MACHINE RUNNING WSL (Ubuntu). SPECIAL RULES APPLY:**
+
+### ❌ ABSOLUTELY PROHIBITED Commands (Will Destroy WSL Session)
+
+**NEVER use these - they WILL crash the entire WSL environment:**
+
+```bash
+# ❌ NEVER USE THESE IN WSL:
+pkill -f "medusa"
+pkill -f "yarn"  
+pkill -f "node"
+killall medusa
+killall node
+killall yarn
+
+# ❌ NEVER kill processes by pattern matching
+# ❌ NEVER use pkill with -f flag
+# ❌ NEVER use killall command
+```
+
+**Why:** WSL shares process space with Windows. Killing processes by name pattern can terminate critical WSL services and **destroy the entire session**, requiring a complete WSL restart and losing all terminal states.
+
+### ✅ SAFE Process Management (WSL Only)
+
+**ONLY use these methods in WSL:**
+
+1. **Background with PID tracking:**
+   ```bash
+   yarn dev > /tmp/medusa.log 2>&1 &
+   echo $! > /tmp/medusa.pid
+   
+   # To stop:
+   kill $(cat /tmp/medusa.pid) 2>/dev/null || true
+   rm -f /tmp/medusa.pid
+   ```
+
+2. **Process Manager (pm2):**
+   ```bash
+   pm2 start yarn --name medusa -- dev
+   pm2 stop medusa
+   pm2 restart medusa
+   pm2 delete medusa
+   ```
+
+3. **Ask User:**
+   - "Please stop the dev server (Ctrl+C in your terminal)"
+   - Let user manage their own terminal sessions
+
+**If server must restart:** Ask user to do it manually. NEVER automate process killing in WSL.
+
+---
+
 ## 🚨 Package Manager: YARN ONLY
 - ✅ **Use**: `yarn install`, `yarn add`, `yarn dev`, `yarn build`
 - ❌ **NEVER use**: `npm install`, `npm i`, `npm ci`, `npm run`, `npx`
