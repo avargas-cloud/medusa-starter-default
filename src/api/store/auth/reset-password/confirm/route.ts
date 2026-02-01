@@ -46,7 +46,7 @@ export const POST = async (
         }
 
         // Check token expiry
-        const resetExpires = customer.metadata?.reset_expires
+        const resetExpires = customer.metadata?.reset_expires as number | undefined
         if (!resetExpires || Date.now() > resetExpires) {
             // Clean up expired token
             const cleanMetadata = { ...customer.metadata }
@@ -75,13 +75,13 @@ export const POST = async (
         }
 
         // Update password
-        await authModule.updateAuthIdentities(matchingIdentity.id, {
-            provider_identities: [{
-                entity_id: customer.email,
-                provider: "emailpass",
+        const providerIdentity = matchingIdentity.provider_identities?.find((pi: any) => pi.entity_id === customer.email)
+        if (providerIdentity) {
+            await authModule.updateProviderIdentities({
+                id: providerIdentity.id,
                 user_metadata: { password }
-            }]
-        })
+            })
+        }
 
         // Invalidate reset token
         const cleanMetadata = { ...customer.metadata }

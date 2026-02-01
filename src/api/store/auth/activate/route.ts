@@ -79,10 +79,10 @@ export const POST = async (
             })
         }
 
-        // Create Auth Identity
-        await authModule.createAuthIdentities({
+        // Create Auth Identity  
+        const authIdentity = await authModule.createAuthIdentities({
             provider_identities: [{
-                entity_id: customer.email,
+                entity_id: customer.email!,
                 provider: "emailpass",
                 user_metadata: { password }
             }]
@@ -94,7 +94,6 @@ export const POST = async (
         updatedMetadata.activated_at = new Date().toISOString()
 
         await customerModule.updateCustomers(customerId, {
-            has_account: true,
             metadata: updatedMetadata
         })
 
