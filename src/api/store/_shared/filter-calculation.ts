@@ -62,21 +62,17 @@ export async function calculateFilters(
     const filters = configuredFilters.map(filter => {
         const optionCounts: Record<string, number> = {}
 
-        // Extract original string options
-        const originalOptions: string[] = Array.isArray(filter.options)
+        // Extract original string options (if predefined)
+        const originalOptions: string[] = Array.isArray(filter.options) && filter.options.length > 0
             ? (typeof filter.options[0] === 'string'
                 ? filter.options as string[]
                 : (filter.options as Array<{ option: string }>).map((v: any) => v.option))
             : []
 
-        // Initialize all options with 0
-        originalOptions.forEach((option: string) => {
-            optionCounts[option] = 0
-        })
-
         console.log(`\n🔍 Processing filter: ${filter.name} (${filter.attribute})`)
+        console.log(`  Predefined options: ${originalOptions.length}`)
 
-        // Count products for each option
+        // Count products for each option (and discover new options if not predefined)
         allLinks.forEach((link: any) => {
             const attrValue = allAttributeValues.find((av: any) => av.id === link.attribute_value_id)
             if (!attrValue) return
@@ -84,19 +80,32 @@ export async function calculateFilters(
             // Match by attribute handle
             if (attrValue.attribute_key?.handle === filter.attribute) {
                 const value = attrValue.value
-                if (optionCounts.hasOwnProperty(value)) {
-                    optionCounts[value]++
+
+                // If no predefined options, discover all unique values
+                if (originalOptions.length === 0) {
+                    optionCounts[value] = (optionCounts[value] || 0) + 1
+                } else {
+                    // Only count if in predefined options
+                    if (originalOptions.includes(value)) {
+                        optionCounts[value] = (optionCounts[value] || 0) + 1
+                    }
                 }
             }
         })
 
+        // Determine final options list
+        const finalOptions = originalOptions.length > 0
+            ? originalOptions // Use predefined options
+            : Object.keys(optionCounts).sort() // Discover from products (sorted)
+
         // Format as array
-        const options = originalOptions.map(option => ({
+        const options = finalOptions.map(option => ({
             option,
             count: optionCounts[option] || 0
         }))
 
-        console.log(`  Counts:`, options.slice(0, 5))
+        console.log(`  Final options: ${options.length}`)
+        console.log(`  Sample counts:`, options.slice(0, 5))
 
         return {
             ...filter,
