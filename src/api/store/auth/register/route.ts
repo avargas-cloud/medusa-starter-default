@@ -41,7 +41,7 @@ export const POST = async (
         }
 
         // Case 3: Legacy customer (exists but no account)
-        if (existingCustomer && !existingCustomer.has_account && existingCustomer.metadata?.legacy_customer) {
+        if (existingCustomer && !existingCustomer.has_account && (existingCustomer.metadata?.legacy_customer === true || existingCustomer.metadata?.legacy_customer === "true")) {
             // Send activation email via SendGrid
             try {
                 const sgMail = await import("@sendgrid/mail")
