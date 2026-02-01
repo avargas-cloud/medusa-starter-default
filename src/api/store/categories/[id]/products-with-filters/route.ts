@@ -77,7 +77,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         const enrichedProducts = await enrichProducts(paginatedProducts, req)
 
         // 7. Get configured filters from category metadata
-        const filterConfig = category.metadata?.filter_config
+        const filterConfig = category.metadata?.filter_config as any
         let configuredFilters: any[] = []
 
         if (filterConfig?.active_filters && Array.isArray(filterConfig.active_filters)) {
