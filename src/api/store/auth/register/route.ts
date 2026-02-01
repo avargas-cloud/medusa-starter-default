@@ -27,7 +27,7 @@ export const POST = async (
         const { data: existingCustomers } = await query.graph({
             entity: "customer",
             filters: { email },
-            fields: ["id", "email", "has_account", "metadata"]
+            fields: ["id", "email", "has_account", "metadata", "first_name"]
         })
 
         const existingCustomer = existingCustomers?.[0]
@@ -44,22 +44,35 @@ export const POST = async (
         if (existingCustomer && !existingCustomer.has_account && existingCustomer.metadata?.legacy_customer) {
             // Send activation email via SendGrid
             try {
-                const notificationModule = req.scope.resolve("notificationModuleService") as any
+                const sgMail = await import("@sendgrid/mail")
+                sgMail.default.setApiKey(process.env.SENDGRID_API_KEY!)
 
-                // Generate activation token (simple for now - in production use JWT or secure token)
+                // Generate activation token
                 const activationToken = Buffer.from(`${existingCustomer.id}:${Date.now()}`).toString('base64')
-                const activationLink = `${process.env.STOREFRONT_URL}/activate?token=${activationToken}`
+                const activationLink = `${process.env.STOREFRONT_URL || 'http://localhost:3000'}/activate?token=${activationToken}`
 
-                await notificationModule.createNotifications({
+                const emailContent = {
                     to: email,
-                    channel: "email",
-                    template: "customer-activation",
-                    data: {
-                        customer_name: existingCustomer.first_name || "Customer",
-                        activation_link: activationLink,
-                        email: email
-                    }
-                })
+                    from: process.env.SENDGRID_FROM || "noreply@ecopowertech.com",
+                    subject: "Activate Your Account - Ecopower Tech",
+                    text: `Hi ${existingCustomer.first_name || 'Customer'},\n\nWelcome to Ecopower Tech! Please activate your account by clicking the link below:\n\n${activationLink}\n\nThis link will expire in 24 hours.\n\nBest regards,\nEcopower Tech Team`,
+                    html: `
+                        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                            <h2>Welcome to Ecopower Tech!</h2>
+                            <p>Hi ${existingCustomer.first_name || 'Customer'},</p>
+                            <p>We're excited to have you! Please activate your account by clicking the button below:</p>
+                            <div style="text-align: center; margin: 30px 0;">
+                                <a href="${activationLink}" style="background-color: #0070f3; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">Activate Account</a>
+                            </div>
+                            <p style="color: #666; font-size: 14px;">This link will expire in 24 hours.</p>
+                            <p style="color: #666; font-size: 14px;">If you didn't request this, please ignore this email.</p>
+                            <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+                            <p style="color: #999; font-size: 12px;">Ecopower Tech - Lighting Solutions</p>
+                        </div>
+                    `
+                }
+
+                await sgMail.default.send(emailContent)
 
                 console.log(`✅ Activation email sent to ${email}`)
 
@@ -69,9 +82,9 @@ export const POST = async (
                     message: "Activation email sent. Please check your inbox to complete registration.",
                     email: email
                 })
-            } catch (emailError) {
+            } catch (emailError: any) {
                 console.error('SendGrid email error:', emailError)
-                // Return success anyway - don't block registration on email failure
+                console.error('SendGrid error details:', emailError.response?.body)
                 return res.status(200).json({
                     success: true,
                     needs_activation: true,
