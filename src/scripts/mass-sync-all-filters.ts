@@ -1,9 +1,9 @@
 import { ExecArgs } from "@medusajs/framework/types"
-import { generateFiltersForCategory } from "../modules/category-filters/utils/filter-generator"
+import { generateFiltersForCategory } from "../api/admin/product-categories/[id]/generate-filters/generator"
 
 export default async function ({ container }: ExecArgs) {
-    const query = container.resolve("query")
-    const knex = container.resolve("__pg_connection__")
+    const query = container.resolve("query") as any
+    const knex = container.resolve("__pg_connection__") as any
 
     console.log("\n🔄 MASS FILTER SYNC - ALL CATEGORIES")
     console.log("=".repeat(80))
@@ -58,12 +58,17 @@ export default async function ({ container }: ExecArgs) {
 
             console.log(`   → Regenerating ${activeFilterIds.length} filters...`)
 
+            // ⭐ Read include_descendants_tree setting (default = true)
+            const includeDescendants = category.metadata?.include_descendants_tree ?? true
+            console.log(`   → Include descendants: ${includeDescendants}`)
+
             // Generate new filters using the FIXED logic (with .whereNull("deleted_at"))
             const result = await generateFiltersForCategory(
                 category.id,
                 activeFilterIds,
                 query,
-                knex
+                knex,
+                includeDescendants  // ⭐ NEW parameter
             )
 
             // Update category metadata

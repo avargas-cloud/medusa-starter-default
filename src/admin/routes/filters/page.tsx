@@ -90,7 +90,18 @@ export default function FiltersPage() {
     const [isNuclearSyncing, setIsNuclearSyncing] = useState(false)
 
     const handleNuclearSync = async () => {
-        if (!confirm('⚠️ NUCLEAR SYNC\n\nThis will regenerate filter_config for ALL categories.\nThis may take a few minutes.\n\nContinue?')) {
+        const userInput = prompt(
+            '☢️ NUCLEAR SYNC\n\n' +
+            'This will regenerate filters for ALL 75 configured categories.\n\n' +
+            '⏱️ This process will take approximately 5-8 minutes.\n' +
+            '⚠️ Do not close this page while syncing.\n\n' +
+            'To confirm, please type: sync'
+        )
+
+        if (userInput !== 'sync') {
+            if (userInput !== null) {
+                alert('❌ Nuclear sync cancelled - confirmation text must match exactly')
+            }
             return
         }
 

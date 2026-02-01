@@ -12,38 +12,40 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     try {
         const remoteQuery = req.scope.resolve("remoteQuery")
         const knex = req.scope.resolve("__pg_connection__")
+        const queryService = req.scope.resolve("query")
+
+        // ⭐ FIRST: Fetch category to read include_descendants_tree
+        const categoryResult: any = await queryService.graph({
+            entity: "product_category",
+            fields: ["id", "metadata"],
+            filters: { id: categoryId },
+        })
+
+        if (!categoryResult?.data || categoryResult.data.length === 0) {
+            return res.status(404).json({ message: "Category not found" })
+        }
+
+        const category = categoryResult.data[0]
+        const includeDescendants = category.metadata?.include_descendants_tree ?? true
 
         // ⭐ Normalize active_filters to string[] for generator
         const normalizedFilters = active_filters.map(f =>
             typeof f === 'string' ? f : f.attribute_id
         )
 
-        // Generate filters JSON
+        // Generate filters JSON with include_descendants setting
         const filtersData = await generateFiltersForCategory(
             categoryId,
             normalizedFilters,
             remoteQuery,
-            knex
+            knex,
+            includeDescendants
         )
-
-        // Get category to merge with existing metadata
-        const queryService = req.scope.resolve("query")
-
-        const result: any = await queryService.graph({
-            entity: "product_category",
-            fields: ["id", "metadata"],
-            filters: { id: categoryId },
-        })
-
-        if (!result?.data || result.data.length === 0) {
-            return res.status(404).json({ message: "Category not found" })
-        }
-
-        const category = result.data[0]
 
         console.log(`🔍 [SAVE ${categoryId}] Category fetched:`, {
             has_metadata: !!category.metadata,
             has_filter_config: !!category.metadata?.filter_config,
+            include_descendants_tree: includeDescendants,
             available_count: category.metadata?.filter_config?.available_filters?.length || 0
         })
 
@@ -72,6 +74,33 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         if (!availableFilters || availableFilters.length === 0) {
             console.log(`⚡ Generating available_filters for ${categoryId} (not set by nuclear sync)`)
 
+            // ⭐ Build category IDs list based on include_descendants_tree
+            let categoryIdsForDiscovery = [categoryId]
+            if (includeDescendants) {
+                // Recursive function to get all descendants
+                const getAllDescendants = async (parentId: string): Promise<string[]> => {
+                    const children = await remoteQuery({
+                        entryPoint: "product_category",
+                        fields: ["id"],
+                        variables: { filters: { parent_category_id: parentId } }
+                    })
+
+                    let allIds: string[] = []
+                    for (const child of children || []) {
+                        allIds.push(child.id)
+                        const grandchildren = await getAllDescendants(child.id)
+                        allIds = allIds.concat(grandchildren)
+                    }
+                    return allIds
+                }
+
+                const descendantIds = await getAllDescendants(categoryId)
+                categoryIdsForDiscovery = [categoryId, ...descendantIds]
+                console.log(`  📂 Including ${descendantIds.length} descendant categories for attribute discovery`)
+            } else {
+                console.log(`  📂 Only discovering attributes from this category (descendants excluded)`)
+            }
+
             // Get unique attribute IDs from category products
             const attributeQuery: any = await remoteQuery.graph({
                 entity: "attribute_value",
@@ -80,7 +109,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
                     product_link: {
                         product: {
                             categories: {
-                                id: categoryId
+                                id: categoryIdsForDiscovery  // ⭐ CONDITIONAL
                             }
                         }
                     }

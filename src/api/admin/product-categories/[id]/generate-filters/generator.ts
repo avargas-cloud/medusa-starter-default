@@ -97,7 +97,8 @@ export async function generateFiltersForCategory(
     categoryId: string,
     activeFilterIds: string[],
     remoteQuery: any,
-    knex: any // Medusa's remote query function
+    knex: any, // Medusa's remote query function
+    includeDescendants: boolean = true // ⭐ NEW: Control subcategory inclusion
 ): Promise<{
     filters: GeneratedFilter[]
     metadata: {
@@ -134,10 +135,19 @@ export async function generateFiltersForCategory(
         }
     }
 
-    // 2. Get all descendant category IDs (recursive)
-    const descendantIds = await getAllDescendantCategoryIds(categoryId, remoteQuery)
-    const allCategoryIds = [categoryId, ...descendantIds]
-    console.log(`[FILTER-GEN] Including ${descendantIds.length} descendant categories`)
+    // 2. Get all descendant category IDs (conditional on includeDescendants)
+    let descendantIds: string[] = []
+    if (includeDescendants) {
+        descendantIds = await getAllDescendantCategoryIds(categoryId, remoteQuery)
+        console.log(`[FILTER-GEN] Including ${descendantIds.length} descendant categories for product counting`)
+    } else {
+        console.log(`[FILTER-GEN] NOT including descendants (include_descendants_tree = false)`)
+    }
+
+    // Build category IDs list based on setting
+    const categoryIdsToInclude = includeDescendants
+        ? [categoryId, ...descendantIds]
+        : [categoryId]
 
     // 3. Fetch ALL PUBLISHED products with categories
     const allProducts = await remoteQuery({
@@ -150,15 +160,15 @@ export async function generateFiltersForCategory(
         }
     })
 
-    // 4. Filter client-side for THIS category OR any descendant
+    // 4. Filter products based on include_descendants_tree setting
     const products = allProducts.filter((p: any) =>
-        p.categories?.some((cat: any) => allCategoryIds.includes(cat.id))
+        p.categories?.some((cat: any) => categoryIdsToInclude.includes(cat.id))
     )
 
     const productIds = products?.map((p: any) => p.id) || []
     const totalProducts = productIds.length
 
-    console.log(`[FILTER-GEN] Found ${totalProducts} published products in category ${categoryId} (including ${descendantIds.length} descendants)`)
+    console.log(`[FILTER-GEN] Found ${totalProducts} published products in category ${categoryId} (${includeDescendants ? `including ${descendantIds.length} descendants` : 'descendants NOT included'})`)
 
     if (totalProducts === 0) {
         console.log(`[FILTER-GEN] No products in category, returning empty filters`)

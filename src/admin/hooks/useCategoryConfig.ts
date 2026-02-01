@@ -141,14 +141,14 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
         if (overrideInheritance) {
             // Override ON: Copy inherited to active
             if (inheritedFilters.size > 0) {
-                console.log('🔄 Override enabled - copying inherited filters to active')
+                // console.log('🔄 Override enabled - copying inherited filters to active')
                 setActiveFilters(new Set(inheritedFilters))
                 setInheritedFilters(new Set())
                 setInheritedFromParentName(null)
             }
         } else {
             // Override OFF: Clear active, restore inherited  
-            console.log('🔄 Override disabled - restoring inherited filters display')
+            // console.log('🔄 Override disabled - restoring inherited filters display')
             setActiveFilters(new Set())
             setInheritedFilters(new Set(parentActiveIds))
             setInheritedFromParentName(parent.name)
@@ -197,13 +197,13 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
     })
 
     const handleToggleFilter = (attributeId: string) => {
-        console.log('🔍 handleToggleFilter called with:', attributeId)
-        console.log('   Current activeFilters:', Array.from(activeFilters))
+        // console.log('🔍 handleToggleFilter called with:', attributeId)
+        // console.log('   Current activeFilters:', Array.from(activeFilters))
 
         const newSet = new Set(activeFilters)
         if (newSet.has(attributeId)) {
             // Removing
-            console.log('   ➖ Removing from active')
+            // console.log('   ➖ Removing from active')
             newSet.delete(attributeId)
             setNewlyAddedIds(prev => {
                 const updated = new Set(prev)
@@ -212,12 +212,12 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
             })
         } else {
             // Adding - mark as new
-            console.log('   ➕ Adding to active')
+            // console.log('   ➕ Adding to active')
             newSet.add(attributeId)
             setNewlyAddedIds(prev => new Set(prev).add(attributeId))
         }
         setActiveFilters(newSet)
-        console.log('   New activeFilters:', Array.from(newSet))
+        // console.log('   New activeFilters:', Array.from(newSet))
     }
 
     const handleDragEnd = (event: DragEndEvent) => {
