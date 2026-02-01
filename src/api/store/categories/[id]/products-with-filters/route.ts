@@ -53,16 +53,14 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         }
 
         // 4. Query productos PAGINADOS (for response)
-        const { data: paginatedProducts, count } = await query.graph({
+        const { data: paginatedProducts } = await query.graph({
             entity: "product",
             filters: productFilters,
             fields: ["*", "variants.*"],
             pagination: { skip: parseInt(offset as string), take: parseInt(limit as string) }
         })
 
-        console.log(`[PRODUCTS-WITH-FILTERS] 📦 Found ${count} total products, returning ${paginatedProducts.length}`)
-
-        // 5. Query ALL product IDs (for filters calculation)
+        // 5. Query ALL product IDs (for filters calculation + total count)
         const { data: allProducts } = await query.graph({
             entity: "product",
             fields: ["id"],
@@ -71,6 +69,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         })
 
         const allProductIds = allProducts.map((p: any) => p.id)
+        const totalCount = allProducts.length
+
+        console.log(`[PRODUCTS-WITH-FILTERS] 📦 Found ${totalCount} total products, returning ${paginatedProducts.length}`)
 
         // 6. Enrich paginated products (prices + attributes)
         const enrichedProducts = await enrichProducts(paginatedProducts, req)
@@ -121,10 +122,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             products: enrichedProducts,
             filters: calculatedFilters,
             pagination: {
-                total: count,
+                total: totalCount,
                 limit: parseInt(limit as string),
                 offset: parseInt(offset as string),
-                has_more: parseInt(offset as string) + parseInt(limit as string) < count
+                has_more: parseInt(offset as string) + parseInt(limit as string) < totalCount
             }
         })
 
