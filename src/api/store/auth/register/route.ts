@@ -1,5 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { createCustomersWorkflow } from "@medusajs/core-flows"
+import { registerCustomerWorkflow } from "../../../workflows/register-customer"
 
 export const POST = async (
     req: MedusaRequest,
@@ -52,37 +52,38 @@ export const POST = async (
             })
         }
 
-        // Case 1: New customer - create account using Medusa workflow
-        const { result } = await createCustomersWorkflow(req.scope).run({
+        // Case 1: New customer - use custom workflow to create Auth Identity + Customer
+        const { result: customer, errors } = await registerCustomerWorkflow(req.scope).run({
             input: {
-                customersData: [{
-                    email,
-                    first_name,
-                    last_name,
-                    has_account: true,
-                    metadata: {
-                        created_via: "storefront_registration",
-                        registered_at: new Date().toISOString()
-                    }
-                }]
-            }
+                email,
+                password,
+                first_name,
+                last_name,
+                metadata: {
+                    created_via: "storefront_registration",
+                    registered_at: new Date().toISOString()
+                }
+            },
+            throwOnError: false
         })
 
-        const newCustomer = result[0]
-
-        // TODO: Hash password and store (Medusa handles this via auth endpoints)
-        // TODO: Auto-login customer
-        // TODO: Send welcome email
+        if (errors && errors.length > 0) {
+            console.error('Registration workflow errors:', errors)
+            return res.status(500).json({
+                error: "Registration failed",
+                details: errors[0]?.error?.message || 'Unknown error'
+            })
+        }
 
         return res.status(201).json({
             success: true,
             needs_activation: false,
             message: "Account created successfully",
             customer: {
-                id: newCustomer.id,
-                email: newCustomer.email,
-                first_name: newCustomer.first_name,
-                last_name: newCustomer.last_name
+                id: customer.id,
+                email: customer.email,
+                first_name: customer.first_name,
+                last_name: customer.last_name
             }
         })
 
