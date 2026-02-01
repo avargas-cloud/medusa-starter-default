@@ -162,14 +162,12 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
             // If all prices are the same, return single price
             if (minPrice === maxPrice) {
-                // @ts-expect-error - price is dynamically injected
                 product.price = {
                     amount: minPrice,
                     currency_code: "usd"
                 }
             } else {
                 // Return price range
-                // @ts-expect-error - price_range is dynamically injected
                 product.price_range = {
                     min: {
                         amount: minPrice,
