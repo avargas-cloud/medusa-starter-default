@@ -125,7 +125,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             // Fetch prices through price_set relationship  
             // variant → product_variant_price_set → price
             const prices = await knex("price")
-                .select("price.amount", "price.currency_code")
+                .select("price.amount", "price.currency_code", "product_variant_price_set.variant_id")
                 .join("product_variant_price_set", "price.price_set_id", "product_variant_price_set.price_set_id")
                 .whereIn("product_variant_price_set.variant_id", variantIds)
                 .where("price.currency_code", "usd")
@@ -135,7 +135,25 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 continue
             }
 
-            // Get min and max prices
+            // Create price map by variant_id
+            const priceMap = new Map<string, number>()
+            prices.forEach((p: any) => {
+                priceMap.set(p.variant_id, p.amount)
+            })
+
+            // Inject calculated_price into each variant
+            product.variants.forEach((variant: any) => {
+                const amount = priceMap.get(variant.id)
+                if (amount !== undefined) {
+                    // @ts-expect-error - calculated_price is dynamically injected
+                    variant.calculated_price = {
+                        calculated_amount: amount,
+                        currency_code: "usd"
+                    }
+                }
+            })
+
+            // Get min and max prices for product-level price/price_range
             const amounts = prices.map((p: any) => p.amount)
             const minPrice = Math.min(...amounts)
             const maxPrice = Math.max(...amounts)
