@@ -234,7 +234,7 @@ if (result.needs_activation) {
 ### Activation Flow
 
 ```typescript
-// Page: /activate?token=xxx
+// Page: /activate-account?token=xxx
 
 const token = new URLSearchParams(window.location.search).get('token')
 
@@ -291,7 +291,7 @@ if (result.success) {
 **Content:**
 - Welcome message
 - Blue "Activate Account" button
-- Link: `/activate?token=xxx`
+- Link: `/activate-account?token=xxx`
 - Expires in 24 hours
 
 ### Password Reset Email
