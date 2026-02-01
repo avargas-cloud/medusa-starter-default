@@ -48,6 +48,69 @@ const createCustomerStep = createStep(
     }
 )
 
+// Step 3: Index Customer in MeiliSearch
+const indexCustomerInMeiliSearchStep = createStep(
+    "index-customer-meilisearch",
+    async (customerId: string, { container }) => {
+        try {
+            const { MeiliSearch } = await import("meilisearch")
+            const query = container.resolve("query") as any
+
+            const client = new MeiliSearch({
+                host: process.env.MEILISEARCH_HOST!,
+                apiKey: process.env.MEILISEARCH_API_KEY!,
+            })
+
+            const index = client.index("customers")
+
+            // Fetch the customer we just created
+            const { data: customers } = await query.graph({
+                entity: "customer",
+                filters: { id: customerId },
+                fields: [
+                    "id", "email", "first_name", "last_name", "phone",
+                    "company_name", "has_account", "created_at", "updated_at",
+                    "metadata", "groups.*",
+                ]
+            })
+
+            const customer = customers[0]
+
+            if (!customer) {
+                throw new Error(`Customer ${customerId} not found for indexing`)
+            }
+
+            // Transform to MeiliSearch format
+            const meiliCustomer = {
+                id: customer.id,
+                email: customer.email,
+                first_name: customer.first_name,
+                last_name: customer.last_name,
+                company_name: customer.company_name || customer.metadata?.company_name || "",
+                phone: customer.phone,
+                has_account: customer.has_account,
+                created_at: new Date(customer.created_at).getTime(),
+                updated_at: new Date(customer.updated_at).getTime(),
+                list_id: customer.metadata?.qb_list_id || customer.metadata?.quickbooks_list_id || "",
+                price_level: customer.metadata?.qb_price_level || "Retail",
+                customer_type: customer.metadata?.qb_customer_type || "Retail",
+                groups: customer.groups?.map((g: any) => g.name) || []
+            }
+
+            // Index in MeiliSearch
+            await index.addDocuments([meiliCustomer], { primaryKey: "id" })
+
+            console.log(`✅ Indexed customer ${customer.email} in MeiliSearch`)
+
+            return new StepResponse({ indexed: true, customerId })
+        } catch (error) {
+            console.error('MeiliSearch indexing error:', error)
+            // Don't fail the whole workflow if MeiliSearch fails
+            return new StepResponse({ indexed: false, error: error instanceof Error ? error.message : 'Unknown error' })
+        }
+    }
+)
+
 // Workflow Definition
 export const registerCustomerWorkflow = createWorkflow(
     "register-customer",
@@ -72,6 +135,9 @@ export const registerCustomerWorkflow = createWorkflow(
             last_name: input.last_name,
             metadata: input.metadata
         })
+
+        // 3. Index in MeiliSearch
+        const meiliResult = indexCustomerInMeiliSearchStep(customer.id)
 
         return new WorkflowResponse(customer)
     }
