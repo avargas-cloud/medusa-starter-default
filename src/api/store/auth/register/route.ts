@@ -61,7 +61,7 @@ export const POST = async (
 
                 // Generate activation token
                 const activationToken = Buffer.from(`${existingCustomer.id}:${Date.now()}`).toString('base64')
-                const activationLink = `${process.env.STOREFRONT_URL || 'http://localhost:3000'}/activate?token=${activationToken}`
+                const activationLink = `${process.env.STOREFRONT_URL || 'http://localhost:3000'}/activate-account?token=${activationToken}`
 
                 const emailContent = {
                     to: email,
