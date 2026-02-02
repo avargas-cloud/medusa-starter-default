@@ -46,9 +46,6 @@ export const POST = async (
 
             console.log('🎯 Legacy customer - sending activation email')
 
-            // Hash password and save in metadata
-            const hashedPassword = await hashPassword(password)
-
             // Send activation email via SendGrid
             try {
                 const sgMail = await import("@sendgrid/mail")
@@ -58,12 +55,12 @@ export const POST = async (
                 const activationToken = Buffer.from(`${existingCustomer.id}:${Date.now()}`).toString('base64')
                 const activationLink = `${process.env.STOREFRONT_URL || 'http://localhost:3000'}/activate-account?token=${activationToken}`
 
-                // Save hashed password and token in metadata
+                // Save temporary password and token in metadata (password will be hashed on activation)
                 const customerModule = req.scope.resolve(Modules.CUSTOMER)
                 await customerModule.updateCustomers(existingCustomer.id, {
                     metadata: {
                         ...existingCustomer.metadata,
-                        temporary_password_hash: hashedPassword,
+                        temporary_password: password, // Plain text, will be hashed on activation
                         activation_token: activationToken,
                         activation_expires: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
                     }
