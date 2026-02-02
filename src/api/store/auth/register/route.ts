@@ -1,5 +1,4 @@
 import { Modules } from '@medusajs/framework/utils'
-import { hashPassword } from '../../../../utils/password'
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 
 export const POST = async (
