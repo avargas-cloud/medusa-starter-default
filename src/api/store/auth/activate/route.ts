@@ -101,23 +101,6 @@ export const POST = async (
             await pgClient.end()
         }
 
-        // Create session for auto-login
-        const authIdentities = await authModule.listAuthIdentities({
-            entity_id: customer.email!,
-            provider: "emailpass"
-        })
-
-        const authIdentity = authIdentities[0]
-
-        if (authIdentity) {
-            // Set auth identity in session
-            req.session.auth_context = {
-                actor_id: authIdentity.id,
-                actor_type: "customer",
-                auth_identity_id: authIdentity.id
-            }
-        }
-
         return res.status(200).json({
             success: true,
             message: "Account activated successfully! Redirecting...",

@@ -18,7 +18,7 @@ const PRODUCT_ID = 'product_01XXX'
 const REGION_ID = 'reg_01XXX'  // IMPORTANTE: Necesitas la región
 
 const response = await fetch(
-  `${BACKEND_URL}/store/products/${PRODUCT_ID}?region_id=${REGION_ID}`,
+  `${BACKEND_URL}/store/products/${PRODUCT_ID}?regcuid=${REGION_ID}`,
   {
     headers: {
       'x-publishable-api-key': API_KEY
