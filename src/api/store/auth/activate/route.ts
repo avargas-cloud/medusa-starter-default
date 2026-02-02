@@ -1,47 +1,48 @@
+import { Modules, generateJwtToken, ContainerRegistrationKeys } from '@medusajs/framework/utils'
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { Modules } from "@medusajs/framework/utils"
-import { Client } from "pg"
+import { z } from "zod"
+import { getSql } from '../../../../lib/db'
 
-export const POST = async (
+const ActivateSchema = z.object({
+    token: z.string().min(1, "Activation token is required")
+})
+
+/**
+ * POST /store/auth/activate
+ * GOLD STANDARD: Uses native Medusa AuthModule for credential creation
+ */
+export async function POST(
     req: MedusaRequest,
     res: MedusaResponse
-) => {
-    try {
-        const { token } = req.body as { token: string }
+) {
+    console.log('🔐 Activation endpoint called')
 
-        if (!token) {
+    const sql = getSql()
+
+    try {
+        const validation = ActivateSchema.safeParse(req.body)
+        if (!validation.success) {
             return res.status(400).json({
-                error: "Activation token is required"
+                error: "Invalid request",
+                message: "Activation token is required",
+                details: validation.error.errors
             })
         }
 
-        // Decode token
+        const { token } = validation.data
+
+        // Decode token: base64(customer_id:timestamp)
         const decoded = Buffer.from(token, 'base64').toString('utf-8')
         const [customerId, timestamp] = decoded.split(':')
 
-        if (!customerId || !timestamp) {
-            return res.status(400).json({
-                error: "Invalid activation token"
-            })
-        }
-
-        // Check token expiration (24 hours)
-        const tokenAge = Date.now() - parseInt(timestamp)
-        const twentyFourHours = 24 * 60 * 60 * 1000
-
-        if (tokenAge > twentyFourHours) {
-            return res.status(400).json({
-                error: "Activation link has expired. Please register again."
-            })
-        }
+        console.log('📝 Decoded customer ID:', customerId)
 
         // Get customer
-        const customerModule = req.scope.resolve(Modules.CUSTOMER)
-        const authModule = req.scope.resolve(Modules.AUTH)
-
-        const customer = await customerModule.retrieveCustomer(customerId, {
-            relations: ["metadata"]
-        })
+        const [customer] = await sql`
+            SELECT id, email, first_name, last_name, has_account, metadata
+            FROM customer
+            WHERE id = ${customerId} AND deleted_at IS NULL
+        `
 
         if (!customer) {
             return res.status(404).json({
@@ -49,73 +50,127 @@ export const POST = async (
             })
         }
 
-        // Verify this is a legacy customer
-        if (!customer.metadata?.legacy_customer) {
+        console.log('✅ Customer found:', customer.email)
+
+        // Parse metadata
+        let rawMetadata = customer.metadata
+        if (typeof rawMetadata === 'string') {
+            rawMetadata = JSON.parse(rawMetadata)
+        }
+        if (Array.isArray(rawMetadata)) {
+            rawMetadata = rawMetadata[rawMetadata.length - 1] || {}
+        }
+
+        const activationToken = rawMetadata.activation_token
+        const temporaryPassword = rawMetadata.temporary_password
+        const activationExpires = rawMetadata.activation_expires
+
+        // Validate token
+        if (!activationToken || activationToken !== token) {
             return res.status(400).json({
-                error: "Invalid activation request"
+                error: "Invalid token"
             })
         }
 
-        // Get the pre-hashed password from metadata
-        const hashedPassword = customer.metadata.temporary_password_hash as string | undefined
-
-        if (!hashedPassword) {
+        // Check expiration
+        if (activationExpires && new Date(activationExpires) < new Date()) {
             return res.status(400).json({
-                error: "Activation data not found. Please register again."
+                error: "Token expired"
             })
         }
 
-        // Create Auth Identity with the saved hashed password
-        await authModule.createAuthIdentities({
-            provider_identities: [{
-                entity_id: customer.email!,
-                provider: "emailpass",
-                user_metadata: { password: hashedPassword }
-            }]
-        })
-
-        // Update customer: set has_account = true, remove temporary data
-        const updatedMetadata = { ...customer.metadata }
-        delete updatedMetadata.legacy_customer
-        delete updatedMetadata.temporary_password_hash
-        delete updatedMetadata.activation_token
-        delete updatedMetadata.activation_expires
-        updatedMetadata.activated_at = new Date().toISOString()
-
-        await customerModule.updateCustomers(customerId, {
-            metadata: updatedMetadata
-        })
-
-        // Update has_account flag using direct pg connection
-        const pgClient = new Client({
-            connectionString: process.env.DATABASE_URL
-        })
-
-        try {
-            await pgClient.connect()
-            await pgClient.query(
-                `UPDATE customer SET has_account = true WHERE id = $1`,
-                [customerId]
-            )
-        } finally {
-            await pgClient.end()
+        if (!temporaryPassword) {
+            return res.status(400).json({
+                error: "Activation data not found"
+            })
         }
+
+        console.log('🚀 Creating credentials with Medusa AuthModule...')
+
+        // Use Medusa's native AuthModule - GOLD STANDARD
+        const authModule = req.scope.resolve(Modules.AUTH)
+
+        console.log('🔵 Registering emailpass provider...')
+        const authResult = await authModule.register("emailpass", {
+            body: {
+                email: customer.email,
+                password: temporaryPassword
+            }
+        } as any)
+
+        if (!authResult.success || !authResult.authIdentity) {
+            console.error('❌ Registration failed:', authResult.error)
+            return res.status(500).json({
+                error: "Activation failed",
+                message: authResult.error || "Failed to create credentials"
+            })
+        }
+
+        const authIdentityId = authResult.authIdentity.id
+        console.log('✅ Auth created:', authIdentityId)
+
+        // Link auth_identity to customer via SQL
+        console.log('🔵 Linking auth to customer...')
+        await sql`
+            UPDATE auth_identity
+            SET app_metadata = ${{ customer_id: customer.id }}
+            WHERE id = ${authIdentityId}
+        `
+        console.log('✅ Linked')
+
+        // Mark customer as activated
+        console.log('🔵 Updating customer...')
+        await sql`
+            UPDATE customer
+            SET 
+                has_account = true,
+                metadata = ${JSON.stringify({
+            ...rawMetadata,
+            activation_token: null,
+            activation_expires: null,
+            temporary_password: null,
+            activated_at: new Date().toISOString()
+        })}::jsonb
+            WHERE id = ${customer.id}
+        `
+        console.log('✅ Customer activated')
+
+        // Generate JWT token
+        const config = req.scope.resolve(ContainerRegistrationKeys.CONFIG_MODULE)
+        const { http } = config.projectConfig
+
+        const jwtToken = generateJwtToken({
+            actor_id: customer.id,
+            actor_type: "customer",
+            auth_identity_id: authIdentityId,
+            app_metadata: {
+                customer_id: customer.id
+            }
+        }, {
+            secret: http.jwtSecret,
+            expiresIn: http.jwtExpiresIn,
+            jwtOptions: http.jwtOptions
+        })
+
+        console.log('✅ Activation complete for:', customer.email)
 
         return res.status(200).json({
             success: true,
-            message: "Account activated successfully! Redirecting...",
             customer: {
                 id: customer.id,
                 email: customer.email,
                 first_name: customer.first_name,
                 last_name: customer.last_name
-            }
+            },
+            token: jwtToken,
+            message: "Account activated successfully. You are now logged in."
         })
 
-    } catch (error: any) {
-        console.error('Activation error:', error)
+    } catch (error) {
+        console.error('❌ Activation error:', error)
         return res.status(500).json({
-            error: "Activation failed. Please try again."
+            error: "Internal server error",
+            message: error instanceof Error ? error.message : 'Unknown error'
         })
     }
 }
