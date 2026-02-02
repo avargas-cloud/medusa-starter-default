@@ -102,10 +102,12 @@ export const POST = async (
         }
 
         // Create session for auto-login
-        const authIdentity = await authModule.retrieveAuthIdentity({
+        const authIdentities = await authModule.listAuthIdentities({
             entity_id: customer.email!,
             provider: "emailpass"
         })
+
+        const authIdentity = authIdentities[0]
 
         if (authIdentity) {
             // Set auth identity in session

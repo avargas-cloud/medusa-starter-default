@@ -1,7 +1,6 @@
 import { Modules } from '@medusajs/framework/utils'
 import { hashPassword } from '../../../../utils/password'
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { registerCustomerWorkflow } from "../../../../workflows/register-customer"
 
 export const POST = async (
     req: MedusaRequest,
@@ -42,20 +41,11 @@ export const POST = async (
             })
         }
 
-        // Debug logging
-        console.log('=== LEGACY CUSTOMER CHECK ===')
-        console.log('existingCustomer:', !!existingCustomer)
-        console.log('has_account:', existingCustomer?.has_account)
-        console.log('legacy_customer value:', existingCustomer?.metadata?.legacy_customer)
-        console.log('legacy_customer type:', typeof existingCustomer?.metadata?.legacy_customer)
-        console.log('Condition 1 (exists):', !!existingCustomer)
-        console.log('Condition 2 (no account):', !existingCustomer?.has_account)
-        console.log('Condition 3 (legacy):', existingCustomer?.metadata?.legacy_customer === true || existingCustomer?.metadata?.legacy_customer === "true")
-        console.log('=============================')
-
         // Case 3: Legacy customer (exists but no account)
-        if (existingCustomer && !existingCustomer.has_account && (existingCustomer.metadata?.legacy_customer === true || existingCustomer.metadata?.legacy_customer === "true")) {
-            console.log('🎯 ENTERING LEGACY CUSTOMER BLOCK - SENDING EMAIL')
+        if (existingCustomer && !existingCustomer.has_account &&
+            (existingCustomer.metadata?.legacy_customer === true || existingCustomer.metadata?.legacy_customer === "true")) {
+
+            console.log('🎯 Legacy customer - sending activation email')
 
             // Hash password and save in metadata
             const hashedPassword = await hashPassword(password)
@@ -80,82 +70,42 @@ export const POST = async (
                     }
                 })
 
-                const emailContent = {
+                await sgMail.default.send({
                     to: email,
-                    from: process.env.SENDGRID_FROM || "noreply@ecopowertech.com",
-                    subject: "Confirm Your Email - Ecopower Tech",
-                    text: `Hi ${existingCustomer.first_name || 'Customer'},\n\nWelcome to Ecopower Tech! Please confirm your email address by clicking the link below:\n\n${activationLink}\n\nThis link will expire in 24 hours.\n\nBest regards,\nEcopower Tech Team`,
+                    from: process.env.SENDGRID_FROM_EMAIL || 'noreply@yourdomain.com',
+                    subject: 'Activate Your Account',
                     html: `
-                        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                            <h2>Welcome to Ecopower Tech!</h2>
-                            <p>Hi ${existingCustomer.first_name || 'Customer'},</p>
-                            <p>We're excited to have you! Please confirm your email address by clicking the button below:</p>
-                            <div style="text-align: center; margin: 30px 0;">
-                                <a href="${activationLink}" style="background-color: #0070f3; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">Confirm Email</a>
-                            </div>
-                            <p style="color: #666; font-size: 14px;">This link will expire in 24 hours.</p>
-                            <p style="color: #666; font-size: 14px;">If you didn't request this, please ignore this email.</p>
-                            <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
-                            <p style="color: #999; font-size: 12px;">Ecopower Tech - Lighting Solutions</p>
-                        </div>
+                        <h2>Welcome ${existingCustomer.first_name}!</h2>
+                        <p>Click the link below to activate your account:</p>
+                        <a href="${activationLink}">Activate Account</a>
+                        <p>This link expires in 24 hours.</p>
                     `
-                }
-
-                await sgMail.default.send(emailContent)
-
-                console.log(`✅ Activation email sent to ${email}`)
-
-                return res.status(200).json({
-                    success: true,
-                    needs_activation: true,
-                    message: "Activation email sent. Please check your inbox to complete registration.",
-                    email: email
                 })
-            } catch (emailError: any) {
-                console.error('SendGrid email error:', emailError)
-                console.error('SendGrid error details:', emailError.response?.body)
+
+                console.log('✅ Activation email sent successfully')
+
                 return res.status(200).json({
                     success: true,
                     needs_activation: true,
-                    message: "Registration initiated. If you don't receive an email, please contact support.",
-                    email: email,
-                    warning: "Email sending failed"
+                    message: "Activation email sent. Please check your inbox."
+                })
+
+            } catch (emailError) {
+                console.error('SendGrid error:', emailError)
+                return res.status(500).json({
+                    error: "Failed to send activation email",
+                    details: emailError instanceof Error ? emailError.message : 'Unknown error'
                 })
             }
         }
 
-        // Case 1: New customer - use custom workflow to create Auth Identity + Customer
-        const { result: customer, errors } = await registerCustomerWorkflow(req.scope).run({
-            input: {
-                email,
-                password,
-                first_name,
-                last_name,
-                metadata: {
-                    created_via: "storefront_registration",
-                    registered_at: new Date().toISOString()
-                }
-            },
-            throwOnError: false
-        })
-
-        if (errors && errors.length > 0) {
-            console.error('Registration workflow errors:', errors)
-            return res.status(500).json({
-                error: "Registration failed",
-                details: errors[0]?.error?.message || 'Unknown error'
-            })
-        }
-
-        return res.status(201).json({
-            success: true,
-            needs_activation: false,
-            message: "Account created successfully",
-            customer: {
-                id: customer.id,
-                email: customer.email,
-                first_name: customer.first_name,
-                last_name: customer.last_name
+        // Case 1: New customer - redirect to native endpoints
+        return res.status(400).json({
+            error: "Use native Medusa endpoints",
+            message: "For new customers, please use the 2-step registration flow",
+            instructions: {
+                step1: "POST /auth/customer/emailpass/register with {email, password}",
+                step2: "POST /store/customers with {email, first_name, last_name} and Authorization header"
             }
         })
 

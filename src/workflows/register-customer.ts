@@ -1,22 +1,36 @@
 import { createWorkflow, WorkflowResponse } from "@medusajs/framework/workflows-sdk"
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
 import { Modules } from "@medusajs/framework/utils"
+import scryptKdf from "scrypt-kdf"
 
-// Step 1: Create Auth Identity
+// Step 1: Create Auth Identity with MANUAL password hashing
 const createAuthIdentityStep = createStep(
     "create-auth-identity",
     async (input: { email: string; password: string }, { container }) => {
         const authModule = container.resolve(Modules.AUTH)
 
-        // Create identity using 'emailpass' provider
-        const authIdentity = await authModule.createAuthIdentities({
+        // CRITICAL FIX: createAuthIdentities is LOW-LEVEL and does NOT hash automatically
+        // We MUST hash the password manually before passing it
+        // Using scrypt-kdf (same library as @medusajs/auth-emailpass provider)
+        const hashConfig = { logN: 15, r: 8, p: 1 }
+        const passwordHash = await scryptKdf.kdf(input.password, hashConfig)
+        const hashedPasswordBase64 = passwordHash.toString("base64")
+
+        // Create auth identity with HASHED password in provider_metadata
+        // This matches what the emailpass provider's register() method does internally
+        const authIdentities = await authModule.createAuthIdentities({
             provider_identities: [{
                 entity_id: input.email,
                 provider: "emailpass",
-                user_metadata: { password: input.password } // Provider handles hashing
+                // CRITICAL: Store in provider_metadata.password (NOT user_metadata)
+                // The emailpass provider looks for password in provider_metadata during login
+                provider_metadata: {
+                    password: hashedPasswordBase64
+                }
             }]
         })
 
+        const authIdentity = authIdentities[0]
         return new StepResponse(authIdentity, authIdentity.id)
     },
     // Compensation logic (rollback) if something fails after
@@ -50,86 +64,34 @@ const createCustomerStep = createStep(
     }
 )
 
-// Step 3: Index Customer in MeiliSearch
-const indexCustomerInMeiliSearchStep = createStep(
-    "index-customer-meilisearch",
-    async (input: { customerId: string }, { container }) => {
-        try {
-            const { MeiliSearch } = await import("meilisearch")
-            const query = container.resolve("query") as any
+// Step 3: Link Auth Identity to Customer (Optional but recommended)
+const linkAuthToCustomerStep = createStep(
+    "link-auth-to-customer",
+    async (input: { authId: string; customerId: string; actorType: string }, { container }) => {
+        const authModule = container.resolve(Modules.AUTH)
 
-            const client = new MeiliSearch({
-                host: process.env.MEILISEARCH_HOST!,
-                apiKey: process.env.MEILISEARCH_API_KEY!,
-            })
-
-            const index = client.index("customers")
-
-            // Fetch the customer we just created
-            const { data: customers } = await query.graph({
-                entity: "customer",
-                filters: { id: input.customerId },
-                fields: [
-                    "id", "email", "first_name", "last_name", "phone",
-                    "company_name", "has_account", "created_at", "updated_at",
-                    "metadata", "groups.*",
-                ]
-            })
-
-            const customer = customers[0]
-
-            if (!customer) {
-                throw new Error(`Customer ${input.customerId} not found for indexing`)
+        // Update auth identity with app_metadata to link it to the customer
+        await authModule.updateAuthIdentities(input.authId, {
+            app_metadata: {
+                customer_id: input.customerId
             }
+        })
 
-            // Transform to MeiliSearch format
-            const meiliCustomer = {
-                id: customer.id,
-                email: customer.email,
-                first_name: customer.first_name,
-                last_name: customer.last_name,
-                company_name: customer.company_name || customer.metadata?.company_name || "",
-                phone: customer.phone,
-                has_account: customer.has_account,
-                created_at: new Date(customer.created_at).getTime(),
-                updated_at: new Date(customer.updated_at).getTime(),
-                list_id: customer.metadata?.qb_list_id || customer.metadata?.quickbooks_list_id || "",
-                price_level: customer.metadata?.qb_price_level || "Retail",
-                customer_type: customer.metadata?.qb_customer_type || "Retail",
-                groups: customer.groups?.map((g: any) => g.name) || []
-            }
-
-            // Index in MeiliSearch
-            await index.addDocuments([meiliCustomer], { primaryKey: "id" })
-
-            console.log(`✅ Indexed customer ${customer.email} in MeiliSearch`)
-
-            return new StepResponse({ indexed: true, customerId: input.customerId })
-        } catch (error) {
-            console.error('MeiliSearch indexing error:', error)
-            // Don't fail the whole workflow if MeiliSearch fails
-            return new StepResponse({ indexed: false, customerId: input.customerId, error: error instanceof Error ? error.message : 'Unknown error' })
-        }
+        return new StepResponse({ success: true })
     }
 )
 
-// Workflow Definition
+// WORKFLOW PRINCIPAL
 export const registerCustomerWorkflow = createWorkflow(
     "register-customer",
-    (input: {
-        email: string
-        password: string
-        first_name: string
-        last_name: string
-        metadata?: any
-    }) => {
-        // 1. Create Auth
+    (input: { email: string; password: string; first_name: string; last_name: string; metadata?: any }) => {
+        // Step 1: Create Auth Identity (with manual hashing)
         const authIdentity = createAuthIdentityStep({
             email: input.email,
             password: input.password
         })
 
-        // 2. Create Customer
+        // Step 2: Create Customer Profile
         const customer = createCustomerStep({
             authId: authIdentity.id,
             email: input.email,
@@ -138,9 +100,16 @@ export const registerCustomerWorkflow = createWorkflow(
             metadata: input.metadata
         })
 
-        // 3. Index in MeiliSearch
-        indexCustomerInMeiliSearchStep({ customerId: customer.id })
+        // Step 3: Link Auth to Customer
+        linkAuthToCustomerStep({
+            authId: authIdentity.id,
+            customerId: customer.id,
+            actorType: "customer"
+        })
 
-        return new WorkflowResponse(customer)
+        return new WorkflowResponse({
+            customer,
+            authIdentity
+        })
     }
 )
