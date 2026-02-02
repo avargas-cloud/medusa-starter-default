@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Modules } from "@medusajs/framework/utils"
+import { hashPassword } from "../../../utils/password"
 
 export const POST = async (
     req: MedusaRequest,
@@ -79,12 +80,15 @@ export const POST = async (
             })
         }
 
-        // Create Auth Identity  
+        // Hash password using scrypt (Medusa v2 compatible)
+        const hashedPassword = await hashPassword(password)
+
+        // Create Auth Identity with hashed password
         const authIdentity = await authModule.createAuthIdentities({
             provider_identities: [{
                 entity_id: customer.email!,
                 provider: "emailpass",
-                user_metadata: { password }
+                user_metadata: { password: hashedPassword }
             }]
         })
 
