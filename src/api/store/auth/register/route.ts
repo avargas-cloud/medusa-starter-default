@@ -1,3 +1,5 @@
+import { Modules } from '@medusajs/framework/utils'
+import { hashPassword } from '../../../../utils/password'
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { registerCustomerWorkflow } from "../../../../workflows/register-customer"
 
@@ -54,6 +56,10 @@ export const POST = async (
         // Case 3: Legacy customer (exists but no account)
         if (existingCustomer && !existingCustomer.has_account && (existingCustomer.metadata?.legacy_customer === true || existingCustomer.metadata?.legacy_customer === "true")) {
             console.log('🎯 ENTERING LEGACY CUSTOMER BLOCK - SENDING EMAIL')
+
+            // Hash password and save in metadata
+            const hashedPassword = await hashPassword(password)
+
             // Send activation email via SendGrid
             try {
                 const sgMail = await import("@sendgrid/mail")
@@ -63,18 +69,29 @@ export const POST = async (
                 const activationToken = Buffer.from(`${existingCustomer.id}:${Date.now()}`).toString('base64')
                 const activationLink = `${process.env.STOREFRONT_URL || 'http://localhost:3000'}/activate-account?token=${activationToken}`
 
+                // Save hashed password and token in metadata
+                const customerModule = req.scope.resolve(Modules.CUSTOMER)
+                await customerModule.updateCustomers(existingCustomer.id, {
+                    metadata: {
+                        ...existingCustomer.metadata,
+                        temporary_password_hash: hashedPassword,
+                        activation_token: activationToken,
+                        activation_expires: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+                    }
+                })
+
                 const emailContent = {
                     to: email,
                     from: process.env.SENDGRID_FROM || "noreply@ecopowertech.com",
-                    subject: "Activate Your Account - Ecopower Tech",
-                    text: `Hi ${existingCustomer.first_name || 'Customer'},\n\nWelcome to Ecopower Tech! Please activate your account by clicking the link below:\n\n${activationLink}\n\nThis link will expire in 24 hours.\n\nBest regards,\nEcopower Tech Team`,
+                    subject: "Confirm Your Email - Ecopower Tech",
+                    text: `Hi ${existingCustomer.first_name || 'Customer'},\n\nWelcome to Ecopower Tech! Please confirm your email address by clicking the link below:\n\n${activationLink}\n\nThis link will expire in 24 hours.\n\nBest regards,\nEcopower Tech Team`,
                     html: `
                         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
                             <h2>Welcome to Ecopower Tech!</h2>
                             <p>Hi ${existingCustomer.first_name || 'Customer'},</p>
-                            <p>We're excited to have you! Please activate your account by clicking the button below:</p>
+                            <p>We're excited to have you! Please confirm your email address by clicking the button below:</p>
                             <div style="text-align: center; margin: 30px 0;">
-                                <a href="${activationLink}" style="background-color: #0070f3; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">Activate Account</a>
+                                <a href="${activationLink}" style="background-color: #0070f3; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">Confirm Email</a>
                             </div>
                             <p style="color: #666; font-size: 14px;">This link will expire in 24 hours.</p>
                             <p style="color: #666; font-size: 14px;">If you didn't request this, please ignore this email.</p>

@@ -1,64 +1,47 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Modules } from "@medusajs/framework/utils"
-import { hashPassword } from "../../../utils/password"
+import { Client } from "pg"
 
 export const POST = async (
     req: MedusaRequest,
     res: MedusaResponse
 ) => {
-    const { token, password } = req.body as {
-        token: string
-        password: string
-    }
-
-    if (!token || !password) {
-        return res.status(400).json({
-            error: "Missing required fields",
-            required: ["token", "password"]
-        })
-    }
-
-    // Password validation
-    if (password.length < 8) {
-        return res.status(400).json({
-            error: "Password must be at least 8 characters"
-        })
-    }
-
     try {
+        const { token } = req.body as { token: string }
+
+        if (!token) {
+            return res.status(400).json({
+                error: "Activation token is required"
+            })
+        }
+
         // Decode token
-        const decoded = Buffer.from(token, 'base64').toString()
+        const decoded = Buffer.from(token, 'base64').toString('utf-8')
         const [customerId, timestamp] = decoded.split(':')
 
         if (!customerId || !timestamp) {
             return res.status(400).json({
-                error: "Invalid token format"
+                error: "Invalid activation token"
             })
         }
 
-        // Check token expiry (24 hours)
+        // Check token expiration (24 hours)
         const tokenAge = Date.now() - parseInt(timestamp)
-        const maxAge = 24 * 60 * 60 * 1000 // 24 hours
+        const twentyFourHours = 24 * 60 * 60 * 1000
 
-        if (tokenAge > maxAge) {
+        if (tokenAge > twentyFourHours) {
             return res.status(400).json({
-                error: "Token expired",
-                message: "Activation link has expired. Please request a new one."
+                error: "Activation link has expired. Please register again."
             })
         }
 
-        const query = req.scope.resolve("query")
-        const authModule = req.scope.resolve(Modules.AUTH)
+        // Get customer
         const customerModule = req.scope.resolve(Modules.CUSTOMER)
+        const authModule = req.scope.resolve(Modules.AUTH)
 
-        // Find customer
-        const { data: customers } = await query.graph({
-            entity: "customer",
-            filters: { id: customerId },
-            fields: ["id", "email", "has_account", "metadata", "first_name", "last_name"]
+        const customer = await customerModule.retrieveCustomer(customerId, {
+            relations: ["metadata"]
         })
-
-        const customer = customers?.[0]
 
         if (!customer) {
             return res.status(404).json({
@@ -66,25 +49,24 @@ export const POST = async (
             })
         }
 
-        // Verify customer is legacy (hasn't been activated yet)
-        if (customer.has_account) {
-            return res.status(400).json({
-                error: "Account already activated",
-                message: "This account has already been activated. Please login instead."
-            })
-        }
-
+        // Verify this is a legacy customer
         if (!customer.metadata?.legacy_customer) {
             return res.status(400).json({
                 error: "Invalid activation request"
             })
         }
 
-        // Hash password using scrypt (Medusa v2 compatible)
-        const hashedPassword = await hashPassword(password)
+        // Get the pre-hashed password from metadata
+        const hashedPassword = customer.metadata.temporary_password_hash as string | undefined
 
-        // Create Auth Identity with hashed password
-        const authIdentity = await authModule.createAuthIdentities({
+        if (!hashedPassword) {
+            return res.status(400).json({
+                error: "Activation data not found. Please register again."
+            })
+        }
+
+        // Create Auth Identity with the saved hashed password
+        await authModule.createAuthIdentities({
             provider_identities: [{
                 entity_id: customer.email!,
                 provider: "emailpass",
@@ -92,31 +74,51 @@ export const POST = async (
             }]
         })
 
-        // Update customer: set has_account = true, remove legacy flag
+        // Update customer: set has_account = true, remove temporary data
         const updatedMetadata = { ...customer.metadata }
         delete updatedMetadata.legacy_customer
+        delete updatedMetadata.temporary_password_hash
+        delete updatedMetadata.activation_token
+        delete updatedMetadata.activation_expires
         updatedMetadata.activated_at = new Date().toISOString()
 
         await customerModule.updateCustomers(customerId, {
             metadata: updatedMetadata
         })
 
-        // Update has_account field directly (customerModule doesn't support this field)
-        const { Client } = await import('pg')
-        const dbClient = new Client({ connectionString: process.env.DATABASE_URL })
+        // Update has_account flag using direct pg connection
+        const pgClient = new Client({
+            connectionString: process.env.DATABASE_URL
+        })
 
         try {
-            await dbClient.connect()
-            await dbClient.query('UPDATE customer SET has_account = true WHERE id = $1', [customerId])
+            await pgClient.connect()
+            await pgClient.query(
+                `UPDATE customer SET has_account = true WHERE id = $1`,
+                [customerId]
+            )
         } finally {
-            await dbClient.end()
+            await pgClient.end()
         }
 
-        console.log(`Customer ${customer.email} activated successfully`)
+        // Create session for auto-login
+        const authIdentity = await authModule.retrieveAuthIdentity({
+            entity_id: customer.email!,
+            provider: "emailpass"
+        })
+
+        if (authIdentity) {
+            // Set auth identity in session
+            req.session.auth_context = {
+                actor_id: authIdentity.id,
+                actor_type: "customer",
+                auth_identity_id: authIdentity.id
+            }
+        }
 
         return res.status(200).json({
             success: true,
-            message: "Account activated successfully! You can now login.",
+            message: "Account activated successfully! Redirecting...",
             customer: {
                 id: customer.id,
                 email: customer.email,
@@ -127,17 +129,8 @@ export const POST = async (
 
     } catch (error: any) {
         console.error('Activation error:', error)
-
-        if (error.message?.includes('already exists')) {
-            return res.status(409).json({
-                error: "Email already has authentication credentials",
-                message: "This email is already registered. Please login instead."
-            })
-        }
-
         return res.status(500).json({
-            error: "Activation failed",
-            details: error instanceof Error ? error.message : 'Unknown error'
+            error: "Activation failed. Please try again."
         })
     }
 }
