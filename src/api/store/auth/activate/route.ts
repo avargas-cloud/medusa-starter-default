@@ -113,7 +113,7 @@ export async function POST(
         console.log('🔵 Linking auth to customer...')
         await sql`
             UPDATE auth_identity
-            SET app_metadata = ${{ customer_id: customer.id }}
+            SET app_metadata = ${sql.json({ customer_id: customer.id })}
             WHERE id = ${authIdentityId}
         `
         console.log('✅ Linked')
