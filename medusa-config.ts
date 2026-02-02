@@ -104,6 +104,25 @@ module.exports = defineConfig({
       },
     },
     {
+      resolve: "@medusajs/medusa/auth",
+      options: {
+        providers: [
+          {
+            resolve: "@medusajs/auth-emailpass",
+            id: "emailpass",
+            options: {
+              // Hash settings for password (scrypt)
+              hashConfig: {
+                logN: 15,
+                r: 8,
+                p: 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
       resolve: "./src/modules/product-attributes",
     },
     {
