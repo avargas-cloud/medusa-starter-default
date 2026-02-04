@@ -103,7 +103,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         },
     }
 
-    const token = jwt.sign(tokenData, http.jwtSecret, {
+    const token = jwt.sign(tokenData, http.jwtSecret as string, {
         expiresIn: http.jwtExpiresIn || "24h",
     })
 
