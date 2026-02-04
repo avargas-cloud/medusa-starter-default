@@ -131,7 +131,7 @@ module.exports = defineConfig({
               }
             }
           },
-          {
+          ...(process.env.GOOGLE_CLIENT_ID ? [{
             resolve: "@medusajs/auth-google",
             id: "google",
             options: {
@@ -139,7 +139,7 @@ module.exports = defineConfig({
               clientSecret: process.env.GOOGLE_CLIENT_SECRET,
               callbackUrl: `${process.env.MEDUSA_BACKEND_URL}/auth/customer/google/callback`
             }
-          }
+          }] : [])
         ]
       }
     },
