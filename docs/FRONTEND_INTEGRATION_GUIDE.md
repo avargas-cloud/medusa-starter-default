@@ -252,55 +252,51 @@ const cleanHTML = DOMPurify.sanitize(longDesc)
 
 ---
 
-### Main Category & Breadcrumbs
+### Category Breadcrumbs & Subcategories
 
-
-Los productos pueden tener **múltiples categorías**, pero puedes designar una como **categoría principal** para generar breadcrumbs.
+**UPDATED:** Las breadcrumbs ahora se obtienen directamente de la **Category API**, no de product metadata.
 
 #### ¿Cómo funciona?
 
-1. **Admin UI**: En la página de producto, usa el widget "Primary Category" (lateral derecho)
-2. **Metadata**: Se guarda en `product.metadata.primary_category_id`
-3. **API**: El endpoint `/store/products/:id/breadcrumbs` genera el trail completo automáticamente
+1. **Fetch por Handle:** Usa `GET /store/product-categories?handle=led-drivers`
+2. **Response Automático:** Incluye `breadcrumbs`, `category_children`, y `metadata`
+3. **Un Solo Request:** Todo está en la respuesta inicial
 
-#### Endpoint: Obtener Breadcrumbs
+#### Endpoint: Obtener Categoría con Breadcrumbs
 
 ```typescript
-GET /store/products/:id/breadcrumbs
+GET /store/product-categories?handle=led-drivers
 
 // Response
 {
-  "product": { ... },  // Producto completo
-  "main_category_breadcrumbs": [
-    {
-      "id": "pcat_ceiling-lights",
-      "name": "Ceiling Lights",
-      "handle": "ceiling-lights"
+  "product_categories": [{
+    "id": "pcat_01KGAD1KQXVSAXPSQXXYH5YCV8",
+    "name": "LED Drivers",
+    "handle": "led-drivers",
+    "metadata": {
+      "image": { "url": "https://..." },
+      "filters": [...]
     },
-    {
-      "id": "pcat_flush-mount",
-      "name": "Flush Mount Fixtures",
-      "handle": "flush-mount-fixtures-ceiling-lights"
-    },
-    {
-      "id": "pcat_square-units",
-      "name": "Square Units",
-      "handle": "square-units-flush-mount-fixtures-ceiling-lights"
-    }
-  ]
+    "breadcrumbs": [
+      { "id": "pcat_...", "name": "BY CATEGORIES", "handle": "by-categories" },
+      { "id": "pcat_...", "name": "LED Drivers", "handle": "led-drivers" }
+    ],
+    "category_children": [
+      { "id": "pcat_...", "name": "DIMMABLE", "handle": "dimmable-power-supplies" },
+      { "id": "pcat_...", "name": "WATERPROOF", "handle": "waterproof-power-supplies" }
+    ]
+  }]
 }
 ```
 
 #### Ejemplo de Uso (Next.js)
 
 ```tsx
-// app/products/[handle]/page.tsx
-import { BreadcrumbItem } from '@/types'
-
-export default async function ProductPage({ params }: { params: { handle: string } }) {
-  // Fetch product with breadcrumbs
+// app/category/[handle]/page.tsx
+export default async function CategoryPage({ params }) {
+  // Fetch category data
   const response = await fetch(
-    `${process.env.NEXT_PUBLIC_MEDUSA_BACKEND_URL}/store/products/${params.handle}/breadcrumbs`,
+    `${process.env.NEXT_PUBLIC_MEDUSA_BACKEND_URL}/store/product-categories?handle=${params.handle}`,
     {
       headers: {
         'x-publishable-api-key': process.env.NEXT_PUBLIC_PUBLISHABLE_API_KEY!
@@ -308,40 +304,43 @@ export default async function ProductPage({ params }: { params: { handle: string
     }
   )
   
-  const { product, main_category_breadcrumbs } = await response.json()
+  const { product_categories } = await response.json()
+  const category = product_categories[0]
   
   return (
     <div>
       {/* Breadcrumbs */}
-      {main_category_breadcrumbs && (
-        <nav className="breadcrumbs">
-          <a href="/">Home</a>
-          {main_category_breadcrumbs.map((crumb, i) => (
-            <span key={crumb.id}>
-              {' > '}
-              <a href={`/categories/${crumb.handle}`}>
-                {crumb.name}
-              </a>
-            </span>
+      <nav className="breadcrumbs">
+        <a href="/">Home</a>
+        {category.breadcrumbs.map((crumb, i) => (
+          <span key={crumb.id}>
+            {' > '}
+            <a href={`/category/${crumb.handle}`}>{crumb.name}</a>
+          </span>
+        ))}
+      </nav>
+      
+      {/* Category Header */}
+      <h1>{category.name}</h1>
+      
+      {/* Subcategories */}
+      {category.category_children.length > 0 && (
+        <div className="subcategories">
+          {category.category_children.map(sub => (
+            <a key={sub.id} href={`/category/${sub.handle}`}>
+              {sub.name}
+            </a>
           ))}
-          {' > '}
-          <span>{product.title}</span>
-        </nav>
+        </div>
       )}
       
-      {/* Product details */}
-      <h1>{product.title}</h1>
-      {/* ... rest of product page */}
+      {/* Products would go here */}
     </div>
   )
 }
 ```
 
-#### Fallback Behavior
-
-Si no hay `primary_category_id` en metadata:
-- ✅ Usa la **primera categoría** del producto automáticamente
-- ✅ Si no hay categorías, devuelve `null`
+**Documentación Completa:** Ver `/docs/FRONTEND_BREADCRUMBS_IMPLEMENTATION.md`
 
 ---
 
