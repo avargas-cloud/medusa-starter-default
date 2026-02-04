@@ -1,6 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Modules, ContainerRegistrationKeys, MedusaError } from "@medusajs/framework/utils"
-import jwt, { Secret } from "jsonwebtoken"
+import jwt, { Secret, SignOptions } from "jsonwebtoken"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const config = req.scope.resolve(ContainerRegistrationKeys.CONFIG_MODULE)
@@ -107,9 +107,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         },
     }
 
-    const token = jwt.sign(tokenData, jwtSecret, {
+    const options: SignOptions = {
         expiresIn: jwtExpiresIn,
-    })
+    }
+
+    const token = jwt.sign(tokenData, jwtSecret, options)
 
     // 🔥 Redirigir al frontend con el token
     const returnTo = (req.query.returnTo as string) ||
