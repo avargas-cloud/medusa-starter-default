@@ -30,7 +30,7 @@ export const syncCustomersToMeiliStep = createStep(
 
             const index = client.index("customers")
 
-            // 1. Update Settings (No delete, so old data stays visible during sync)
+            // 1. Update Settings
             await index.updateSettings({
                 filterableAttributes: ["customer_type", "price_level", "has_account", "groups"],
                 sortableAttributes: ["company_name", "created_at", "updated_at", "email"],
@@ -38,7 +38,11 @@ export const syncCustomersToMeiliStep = createStep(
                 pagination: { maxTotalHits: 20000 }
             })
 
-            // 2. Batched Fetching & Indexing
+            // 2. Atomic delete (prevents orphaned documents)
+            console.log(`🗑️  Clearing index before sync...`)
+            await index.deleteAllDocuments()
+
+            // 3. Batched Fetching & Indexing
             const BATCH_SIZE = 2500
             let offset = 0
             let hasMore = true

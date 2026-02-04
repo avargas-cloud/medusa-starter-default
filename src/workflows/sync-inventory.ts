@@ -19,6 +19,8 @@ export const syncInventoryToMeiliStep = createStep(
             fields: [
                 "id",
                 "sku",
+                "created_at",
+                "updated_at",
                 "product.id",
                 "product.title",
                 "product.thumbnail",
@@ -32,6 +34,8 @@ export const syncInventoryToMeiliStep = createStep(
                 "inventory_items.inventory.id",
                 "inventory_items.inventory.sku",
                 "inventory_items.inventory.title",
+                "inventory_items.inventory.created_at",
+                "inventory_items.inventory.updated_at",
                 "inventory_items.inventory.stocked_quantity",
                 "inventory_items.inventory.reserved_quantity",
             ],
@@ -66,6 +70,8 @@ export const syncInventoryToMeiliStep = createStep(
                     productId: product?.id || null,
                     category_handles: Array.from(allCategoryHandles),
                     status: product?.status || "draft",
+                    created_at: new Date(inventory.created_at || variant.created_at).getTime(),
+                    updated_at: new Date(inventory.updated_at || variant.updated_at).getTime(),
                 }
             })
         })
@@ -89,7 +95,9 @@ export const syncInventoryToMeiliStep = createStep(
                 "sku",
                 "totalStock",
                 "price",
-                "totalReserved"
+                "totalReserved",
+                "updated_at",
+                "created_at"
             ],
             searchableAttributes: [
                 "title",

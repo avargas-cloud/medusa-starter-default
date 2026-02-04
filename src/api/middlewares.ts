@@ -281,6 +281,262 @@ async function syncCategorySortingMiddleware(
     next()
 }
 
+/**
+ * AUTO-SYNC MEILISEARCH: PRODUCTS
+ * 
+ * Incrementally syncs products to MeiliSearch ONE AT A TIME when they change.
+ * Follows the same proven pattern as category sync.
+ * 
+ * CRITICAL: This does NOT do bulk sync - it syncs individual products as they're modified.
+ * This keeps the backend fast and responsive.
+ */
+async function syncProductsMeiliMiddleware(
+    req: MedusaRequest,
+    res: MedusaResponse,
+    next: MedusaNextFunction
+) {
+    const method = req.method?.toUpperCase()
+    if (method !== 'POST' && method !== 'PUT' && method !== 'DELETE') {
+        return next()
+    }
+
+    const originalJson = res.json.bind(res)
+
+    res.json = (data: any) => {
+        const hasProduct = data?.product
+        const isProductDelete = method === 'DELETE' && req.path?.includes('/products/')
+
+        if (hasProduct || isProductDelete) {
+            setImmediate(async () => {
+                try {
+                    const syncBasePath = `http://localhost:${process.env.PORT || 9000}`
+
+                    if (isProductDelete) {
+                        // Product deleted - trigger full sync to cleanup index
+                        console.log(`[MEILI-PRODUCT-SYNC] 🗑️  Product deleted, triggering full cleanup sync`)
+
+                        await fetch(`${syncBasePath}/admin/search/products/sync`, {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                                "Cookie": req.headers.cookie || "",
+                                "Authorization": req.headers.authorization || ""
+                            }
+                        })
+                    } else if (hasProduct) {
+                        // Single product created/updated - INCREMENTAL sync (fast!)
+                        const productId = data.product.id
+                        console.log(`[MEILI-PRODUCT-SYNC] 🔄 Product ${productId} changed, incremental update`)
+
+                        const response = await fetch(`${syncBasePath}/admin/search/products/update`, {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                                "Cookie": req.headers.cookie || "",
+                                "Authorization": req.headers.authorization || ""
+                            },
+                            body: JSON.stringify({ productId })
+                        })
+
+                        if (response.ok) {
+                            const result = await response.json()
+                            if (result.success) {
+                                console.log(`[MEILI-PRODUCT-SYNC] ✅ Updated: ${result.title}`)
+                            } else {
+                                console.log(`[MEILI-PRODUCT-SYNC] ⚠️  Product not found or skipped`)
+                            }
+                        } else {
+                            console.warn(`[MEILI-PRODUCT-SYNC] ⚠️  Update failed: ${response.status}`)
+                        }
+                    }
+                } catch (error: any) {
+                    console.error(`[MEILI-PRODUCT-SYNC] ❌ Error:`, error.message)
+                }
+            })
+        }
+
+        return originalJson(data)
+    }
+
+    next()
+}
+
+/**
+ * AUTO-SYNC MEILISEARCH: CUSTOMERS
+ * 
+ * Incrementally syncs customers to MeiliSearch ONE AT A TIME when they change.
+ * Pattern: Same as products, optimized for real-time updates.
+ */
+async function syncCustomersMeiliMiddleware(
+    req: MedusaRequest,
+    res: MedusaResponse,
+    next: MedusaNextFunction
+) {
+    const method = req.method?.toUpperCase()
+    if (method !== 'POST' && method !== 'PUT' && method !== 'DELETE') {
+        return next()
+    }
+
+    const originalJson = res.json.bind(res)
+
+    res.json = (data: any) => {
+        const hasCustomer = data?.customer
+        const isCustomerDelete = method === 'DELETE' && req.path?.includes('/customers/')
+
+        if (hasCustomer || isCustomerDelete) {
+            setImmediate(async () => {
+                try {
+                    const syncBasePath = `http://localhost:${process.env.PORT || 9000}`
+
+                    if (isCustomerDelete) {
+                        console.log(`[MEILI-CUSTOMER-SYNC] 🗑️  Customer deleted, full cleanup sync`)
+
+                        await fetch(`${syncBasePath}/admin/search/customers/sync`, {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                                "Cookie": req.headers.cookie || "",
+                                "Authorization": req.headers.authorization || ""
+                            }
+                        })
+                    } else if (hasCustomer) {
+                        // INCREMENTAL sync (fast!)
+                        const customerId = data.customer.id
+                        console.log(`[MEILI-CUSTOMER-SYNC] 🔄 Customer ${customerId}, incremental update`)
+
+                        const response = await fetch(`${syncBasePath}/admin/search/customers/update`, {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                                "Cookie": req.headers.cookie || "",
+                                "Authorization": req.headers.authorization || ""
+                            },
+                            body: JSON.stringify({ customerId })
+                        })
+
+                        if (response.ok) {
+                            const result = await response.json()
+                            if (result.success) {
+                                console.log(`[MEILI-CUSTOMER-SYNC] ✅ Updated: ${result.email}`)
+                            } else {
+                                console.log(`[MEILI-CUSTOMER-SYNC] ⚠️  Not found or skipped`)
+                            }
+                        } else {
+                            console.warn(`[MEILI-CUSTOMER-SYNC] ⚠️  Update failed: ${response.status}`)
+                        }
+                    }
+                } catch (error: any) {
+                    console.error(`[MEILI-CUSTOMER-SYNC] ❌ Error:`, error.message)
+                }
+            })
+        }
+
+        return originalJson(data)
+    }
+
+    next()
+}
+
+/**
+ * AUTO-SYNC MEILISEARCH: INVENTORY
+ * 
+ * Incrementally syncs inventory to MeiliSearch when variants or inventory levels change.
+ * Note: Inventory sync triggers on variant changes (since inventory is tied to variants).
+ */
+async function syncInventoryMeiliMiddleware(
+    req: MedusaRequest,
+    res: MedusaResponse,
+    next: MedusaNextFunction
+) {
+    const method = req.method?.toUpperCase()
+    if (method !== 'POST' && method !== 'PUT' && method !== 'DELETE') {
+        return next()
+    }
+
+    const originalJson = res.json.bind(res)
+
+    res.json = (data: any) => {
+        // Inventory changes can come from:
+        // 1. Variant updates (prices, SKUs)
+        // 2. Inventory item updates (stock levels)
+        // 3. Product updates (affects all variants)
+        const hasProduct = data?.product
+        const hasVariant = data?.variant || data?.product_variant
+        const hasInventoryItem = data?.inventory_item
+        const isInventoryPath = req.path?.includes('/inventory')
+
+        if (hasProduct || hasVariant || hasInventoryItem || isInventoryPath) {
+            setImmediate(async () => {
+                try {
+                    const syncBasePath = `http://localhost:${process.env.PORT || 9000}`
+
+                    // Determine what to sync
+                    let variantId: string | undefined
+                    let productId: string | undefined
+
+                    if (hasVariant) {
+                        variantId = data.variant?.id || data.product_variant?.id
+                    } else if (hasProduct) {
+                        productId = data.product.id
+                    } else if (hasInventoryItem && isInventoryPath) {
+                        // When editing inventory directly, we need to find the variant
+                        // The response doesn't include variant, so we'll need to query it
+                        const query = req.scope.resolve("query")
+                        try {
+                            const { data: inventoryItems } = await query.graph({
+                                entity: "inventory_item",
+                                fields: ["id", "variants.id"],
+                                filters: { id: data.inventory_item.id }
+                            })
+
+                            if (inventoryItems?.[0]?.variants?.[0]?.id) {
+                                variantId = inventoryItems[0].variants[0].id
+                            }
+                        } catch (err) {
+                            console.warn(`[MEILI-INVENTORY-SYNC] Could not resolve variant for inventory item`)
+                        }
+                    }
+
+                    // Skip if we don't have any identifier
+                    if (!variantId && !productId) {
+                        console.log(`[MEILI-INVENTORY-SYNC] ⚠️  No variant/product ID found, skipping sync`)
+                        return
+                    }
+
+                    console.log(`[MEILI-INVENTORY-SYNC] 🔄 Inventory change, incremental update (variantId: ${variantId}, productId: ${productId})`)
+
+                    const response = await fetch(`${syncBasePath}/admin/search/inventory/update`, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Cookie": req.headers.cookie || "",
+                            "Authorization": req.headers.authorization || ""
+                        },
+                        body: JSON.stringify({ variantId, productId })
+                    })
+
+                    if (response.ok) {
+                        const result = await response.json()
+                        if (result.success) {
+                            console.log(`[MEILI-INVENTORY-SYNC] ✅ Updated ${result.itemsUpdated} items`)
+                        } else {
+                            console.log(`[MEILI-INVENTORY-SYNC] ⚠️  No items to update`)
+                        }
+                    } else {
+                        console.warn(`[MEILI-INVENTORY-SYNC] ⚠️  Update failed: ${response.status}`)
+                    }
+                } catch (error: any) {
+                    console.error(`[MEILI-INVENTORY-SYNC] ❌ Error:`, error.message)
+                }
+            })
+        }
+
+        return originalJson(data)
+    }
+
+    next()
+}
+
 export default defineMiddlewares({
     routes: [
         {
@@ -303,6 +559,26 @@ export default defineMiddlewares({
             matcher: "/admin/product-categories*",
             middlewares: [syncCategorySortingMiddleware],
         },
+        {
+            // 🔍 MEILI SYNC: Products (auto-sync to search index)
+            matcher: "/admin/products*",
+            middlewares: [syncProductsMeiliMiddleware],
+        },
+        {
+            // 🔍 MEILI SYNC: Customers (auto-sync to search index)
+            matcher: "/admin/customers*",
+            middlewares: [syncCustomersMeiliMiddleware],
+        },
+        {
+            // 🔍 MEILI SYNC: Inventory (auto-sync to search index)
+            // Covers both product variants and inventory-item endpoints
+            matcher: "/admin/products*",
+            middlewares: [syncInventoryMeiliMiddleware],
+        },
+        {
+            // 🔍 MEILI SYNC: Inventory items direct endpoint
+            matcher: "/admin/inventory-items*",
+            middlewares: [syncInventoryMeiliMiddleware],
+        },
     ],
 })
-
