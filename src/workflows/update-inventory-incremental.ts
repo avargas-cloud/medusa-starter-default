@@ -1,5 +1,4 @@
 import { createWorkflow, createStep, StepResponse, WorkflowResponse } from "@medusajs/framework/workflows-sdk"
-import { MeiliSearch } from "meilisearch"
 
 interface UpdateInventoryIncrementalInput {
     variantId?: string
@@ -20,6 +19,9 @@ const updateInventoryIncrementalStep = createStep(
         const query = container.resolve("query")
 
         try {
+            // Dynamic import for ESM compatibility
+            const { MeiliSearch } = await import("meilisearch")
+
             // 1. Determine which variants to sync
             let variantIds: string[] = []
 
@@ -37,7 +39,7 @@ const updateInventoryIncrementalStep = createStep(
 
             if (variantIds.length === 0) {
                 logger.warn(`[MEILI-INVENTORY-INCREMENTAL] No variants to sync`)
-                return new StepResponse({ success: false, reason: "no_variants" })
+                return new StepResponse({ success: false, itemsUpdated: 0 })
             }
 
             // 2. Fetch variants with all data
@@ -48,91 +50,86 @@ const updateInventoryIncrementalStep = createStep(
                     "title",
                     "sku",
                     "barcode",
-                    "created_at",
                     "updated_at",
                     "product.id",
                     "product.title",
                     "product.thumbnail",
-                    "product.categories.handle",
                     "product.status",
+                    "product.handle",
+                    "product.categories.handle",
+                    "prices.amount",
+                    "prices.currency_code",
+                    "prices.price_list_id",
                     "inventory_items.inventory.id",
-                    "inventory_items.inventory.created_at",
-                    "inventory_items.inventory.updated_at",
-                    "inventory_items.inventory.location_id",
-                    "inventory_items.inventory.stocked_quantity",
-                    "inventory_items.inventory.reserved_quantity"
+                    "inventory_items.inventory.title",
+                    "inventory_items.inventory.sku",
+                    "inventory_items.inventory.location_levels.stocked_quantity",
+                    "inventory_items.inventory.location_levels.reserved_quantity",
+                    "inventory_items.inventory.updated_at"
                 ],
                 filters: { id: variantIds }
             })
 
-            if (!variants || variants.length === 0) {
-                logger.warn(`[MEILI-INVENTORY-INCREMENTAL] Variants not found`)
-                return new StepResponse({ success: false, reason: "not_found" })
+            // 3. Transform to inventory items
+            const inventoryItems = variants.flatMap((variant: any) => {
+                return variant.inventory_items?.map((invItem: any) => {
+                    const inventory = invItem.inventory
+                    if (!inventory || !variant.product?.id) return null
+
+                    const locationLevels = inventory.location_levels || []
+                    const totalStock = locationLevels.reduce((sum: number, level: any) =>
+                        sum + (level.stocked_quantity || 0), 0)
+                    const totalReserved = locationLevels.reduce((sum: number, level: any) =>
+                        sum + (level.reserved_quantity || 0), 0)
+
+                    const firstPrice = variant.prices?.[0]
+
+                    return {
+                        id: inventory.id,
+                        sku: inventory.sku || variant.sku || "",
+                        title: variant.title || inventory.title || "",
+                        totalStock,
+                        totalReserved,
+                        price: firstPrice?.amount || 0,
+                        currencyCode: firstPrice?.currency_code || "USD",
+                        variantId: variant.id,
+                        productId: variant.product.id,
+                        status: variant.product.status || "draft",
+                        category_handles: variant.product.categories?.map((c: any) => c.handle) || [],
+                        thumbnail: variant.product.thumbnail || "",
+                        created_at: new Date(inventory.created_at || Date.now()).getTime(),
+                        updated_at: new Date(inventory.updated_at || Date.now()).getTime()
+                    }
+                }).filter(Boolean) || []
+            })
+
+            if (inventoryItems.length === 0) {
+                logger.warn(`[MEILI-INVENTORY-INCREMENTAL] No inventory items found for variants`)
+                return new StepResponse({ success: false, itemsUpdated: 0 })
             }
 
-            // 3. Initialize MeiliSearch client
+            // 4. Update in MeiliSearch
             const client = new MeiliSearch({
                 host: process.env.MEILISEARCH_HOST || "http://localhost:7700",
                 apiKey: process.env.MEILISEARCH_API_KEY || "masterKey"
             })
 
-            // 4. Transform variants to inventory items
-            const meiliInventoryItems = variants.map((variant: any) => {
-                const inventoryLevels = variant.inventory_items?.flatMap((ii: any) => ii.inventory || []) || []
-                const totalStock = inventoryLevels.reduce((sum: number, level: any) =>
-                    sum + (level.stocked_quantity || 0), 0)
-                const totalReserved = inventoryLevels.reduce((sum: number, level: any) =>
-                    sum + (level.reserved_quantity || 0), 0)
-
-                // Get latest updated_at from inventory items or variant
-                const inventoryUpdates = inventoryLevels.map((inv: any) => new Date(inv.updated_at || 0).getTime())
-                const latestInventoryUpdate = Math.max(...inventoryUpdates, 0)
-                const variantUpdate = new Date(variant.updated_at || 0).getTime()
-                const finalUpdatedAt = Math.max(latestInventoryUpdate, variantUpdate)
-
-                return {
-                    id: variant.id,
-                    variantId: variant.id,
-                    productId: variant.product?.id || "",
-                    title: `${variant.product?.title || "Unknown"} - ${variant.title || ""}`.trim(),
-                    sku: variant.sku || "",
-                    barcode: variant.barcode || "",
-                    thumbnail: variant.product?.thumbnail || null,
-                    category_handles: variant.product?.categories?.map((c: any) => c.handle).filter(Boolean) || [],
-                    status: variant.product?.status || "draft",
-                    totalStock,
-                    totalReserved,
-                    availableStock: totalStock - totalReserved,
-                    created_at: new Date(variant.created_at || 0).getTime(),
-                    updated_at: finalUpdatedAt
-                }
-            })
-
-            // Filter out invalid items
-            const validItems = meiliInventoryItems.filter(item => item.variantId && item.productId)
-
-            if (validItems.length === 0) {
-                logger.warn(`[MEILI-INVENTORY-INCREMENTAL] No valid items to sync`)
-                return new StepResponse({ success: false, reason: "no_valid_items" })
-            }
-
-            // 5. Update in MeiliSearch
             const index = client.index("inventory")
-            const result = await index.addDocuments(validItems, { primaryKey: "id" })
+            const result = await index.addDocuments(inventoryItems, { primaryKey: "id" })
 
-            // 6. Wait for indexing to complete
+            // 5. Wait for indexing to complete
             await (client as any).tasks.waitForTask(result.taskUid)
 
-            logger.info(`[MEILI-INVENTORY-INCREMENTAL] ✅ Updated ${validItems.length} inventory items`)
+            logger.info(`[MEILI-INVENTORY-INCREMENTAL] ✅ Updated ${inventoryItems.length} items`)
 
             return new StepResponse({
                 success: true,
-                itemsUpdated: validItems.length
+                itemsUpdated: inventoryItems.length
             })
 
         } catch (error: any) {
             logger.error(`[MEILI-INVENTORY-INCREMENTAL] ❌ Failed:`, error.message)
-            return new StepResponse({ success: false, error: error.message })
+            return new StepResponse({ success: false, itemsUpdated: 0 })
         }
     }
 )

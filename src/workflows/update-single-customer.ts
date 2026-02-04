@@ -1,5 +1,4 @@
 import { createWorkflow, createStep, StepResponse, WorkflowResponse } from "@medusajs/framework/workflows-sdk"
-import { MeiliSearch } from "meilisearch"
 
 interface UpdateSingleCustomerInput {
     customerId: string
@@ -19,6 +18,9 @@ const updateSingleCustomerStep = createStep(
         const query = container.resolve("query")
 
         try {
+            // Dynamic import for ESM compatibility
+            const { MeiliSearch } = await import("meilisearch")
+
             // 1. Fetch the single customer with groups
             const { data: customers } = await query.graph({
                 entity: "customer",
@@ -42,7 +44,7 @@ const updateSingleCustomerStep = createStep(
 
             if (!customer) {
                 logger.warn(`[MEILI-INCREMENTAL] Customer ${customerId} not found, skipping sync`)
-                return new StepResponse({ success: false, reason: "not_found" })
+                return new StepResponse({ success: false, customerId: "", email: "" })
             }
 
             // 2. Initialize MeiliSearch client
@@ -80,12 +82,12 @@ const updateSingleCustomerStep = createStep(
             return new StepResponse({
                 success: true,
                 customerId: customer.id,
-                email: customer.email
+                email: customer.email || ""
             })
 
         } catch (error: any) {
             logger.error(`[MEILI-INCREMENTAL] ❌ Failed to update customer ${customerId}:`, error.message)
-            return new StepResponse({ success: false, error: error.message })
+            return new StepResponse({ success: false, customerId: "", email: "" })
         }
     }
 )
