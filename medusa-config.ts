@@ -123,9 +123,14 @@ module.exports = defineConfig({
             resolve: "@medusajs/auth-google",
             id: "google",
             options: {
-              clientId: process.env.GOOGLE_CLIENT_ID!,
-              clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-              callbackUrl: `${process.env.MEDUSA_BACKEND_URL}/auth/customer/google/callback`
+              // Google OAuth - only if credentials are provided
+              ...(process.env.GOOGLE_CLIENT_ID ? {
+                google: {
+                  clientID: process.env.GOOGLE_CLIENT_ID,
+                  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+                  callbackURL: process.env.GOOGLE_CALLBACK_URL || "http://localhost:9000/auth/google/callback",
+                },
+              } : {}),
             }
           }
         ]
