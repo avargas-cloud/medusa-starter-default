@@ -34,6 +34,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@medusajs/admin-sdk": "^2.13.0",
+    "@medusajs/auth-google": "^2.13.1",
     "@medusajs/cli": "^2.13.1",
     "@medusajs/draft-order": "^2.13.1",
     "@medusajs/file-s3": "^2.13.0",

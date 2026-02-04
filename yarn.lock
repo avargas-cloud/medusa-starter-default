@@ -2215,7 +2215,7 @@
   resolved "https://registry.yarnpkg.com/@medusajs/auth-github/-/auth-github-2.13.1.tgz#a77718e84048d51cc87a35d04dae5ae84387e1f7"
   integrity sha512-syUONU7LQ83EK5OMbyvxl73sqdilemkAgfcif4wCyG6Wqmlbw1j4SiCDhJ4Iu+KDmEYDRe4/VerWW/uFkhDMYg==
 
-"@medusajs/auth-google@2.13.1":
+"@medusajs/auth-google@2.13.1", "@medusajs/auth-google@^2.13.1":
   version "2.13.1"
   resolved "https://registry.yarnpkg.com/@medusajs/auth-google/-/auth-google-2.13.1.tgz#dec7261f34f18fccb6f8971b70222accf3e026ea"
   integrity sha512-5GqP3o+lSuOJpw/sQPECl1SMyaFTmW3akbr3OjaJc7GjLjfy+PazXH1SSqUexiX+2S5x59/W6cw5ayuTy7aTrA==
