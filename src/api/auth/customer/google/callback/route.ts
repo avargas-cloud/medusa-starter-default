@@ -106,6 +106,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         },
     }
 
+    // @ts-ignore - jsonwebtoken types have overload issues with SignOptions
     const token = jwt.sign(
         tokenData,
         jwtSecret,
