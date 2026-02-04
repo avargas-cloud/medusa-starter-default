@@ -87,6 +87,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     // Generar JWT token
     const { http } = config.projectConfig
 
+    if (!http.jwtSecret) {
+        throw new MedusaError(
+            MedusaError.Types.INVALID_DATA,
+            "JWT secret not configured"
+        )
+    }
+
     const tokenData = {
         actor_id: authIdentity.id,
         actor_type: "customer",
