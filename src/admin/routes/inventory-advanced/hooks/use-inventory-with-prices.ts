@@ -32,7 +32,7 @@ export const useInventoryWithPrices = () => {
     const itemsPerPage = 20
 
     const { data, isLoading, error, refetch } = useQuery({
-        queryKey: ["custom-inventory-with-prices"],
+        queryKey: ["custom-inventory-with-prices", Date.now()], // Force fresh data every time
         queryFn: async () => {
             const response = await fetch("/admin/inventory/with-prices", {
                 credentials: "include",
@@ -46,11 +46,14 @@ export const useInventoryWithPrices = () => {
             }
 
             const data = await response.json()
-            // console.log("✅ Inventory items loaded:", data.items.length)
-            // console.log("💰 Sample item with price:", data.items.find((i: any) => i.price))
+            console.log("✅ Inventory items loaded:", data.items.length)
+            console.log("💰 Sample EPS-MDA-60-24:", data.items.find((i: any) => i.sku === "EPS-MDA-60-24"))
 
             return data.items as InventoryItemWithPrice[]
-        }
+        },
+        // Force fresh data - no caching
+        staleTime: 0,
+        gcTime: 0
     })
 
     const allItems = data || []

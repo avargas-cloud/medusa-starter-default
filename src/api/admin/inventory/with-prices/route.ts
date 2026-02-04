@@ -44,6 +44,16 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             // Take first price (or search for specific currency if needed)
             const priceObj = primaryVariant?.prices?.[0]
 
+            // DEBUG: Log specific SKU
+            if (item.sku === "EPS-MDA-60-24") {
+                console.log("\n🔍 DEBUG SKU: EPS-MDA-60-24")
+                console.log("   Variants count:", item.variants?.length)
+                console.log("   Primary variant ID:", primaryVariant?.id)
+                console.log("   Prices count:", primaryVariant?.prices?.length)
+                console.log("   All prices:", JSON.stringify(primaryVariant?.prices, null, 2))
+                console.log("   Selected price (first):", priceObj)
+            }
+
             return {
                 id: item.id,
                 sku: item.sku || "",

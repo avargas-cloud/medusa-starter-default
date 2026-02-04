@@ -44,9 +44,9 @@ export const InventoryHeader = ({
                             Inventory
                         </Heading>
                         <SyncStatusButton
-                            entity="products"
+                            entity="inventory"
                             label="Check Inventory Sync"
-                            onSyncComplete={() => queryClient.invalidateQueries({ queryKey: ["meili-inventory"] })}
+                            onSyncComplete={() => queryClient.invalidateQueries({ queryKey: ["custom-inventory-with-prices"] })}
                         />
                     </div>
                     <Text size="small" className="text-ui-fg-subtle mt-1">
