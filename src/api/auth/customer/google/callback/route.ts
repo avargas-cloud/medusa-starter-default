@@ -1,6 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Modules, ContainerRegistrationKeys, MedusaError } from "@medusajs/framework/utils"
-import jwt, { Secret, SignOptions } from "jsonwebtoken"
+import * as jwt from "jsonwebtoken"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const config = req.scope.resolve(ContainerRegistrationKeys.CONFIG_MODULE)
@@ -94,9 +94,6 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         )
     }
 
-    // Extraer valores con tipo específico
-    const jwtSecret: Secret = http.jwtSecret
-
     const tokenData = {
         actor_id: authIdentity.id,
         actor_type: "customer",
@@ -106,12 +103,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         },
     }
 
-    // @ts-ignore - jsonwebtoken types have overload issues with SignOptions
-    const token = jwt.sign(
-        tokenData,
-        jwtSecret,
-        { expiresIn: http.jwtExpiresIn || "24h" }
-    )
+    const token = jwt.sign(tokenData, http.jwtSecret, {
+        expiresIn: http.jwtExpiresIn || "24h",
+    })
 
     // 🔥 Redirigir al frontend con el token
     const returnTo = (req.query.returnTo as string) ||
