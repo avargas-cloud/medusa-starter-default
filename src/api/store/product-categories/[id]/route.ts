@@ -67,10 +67,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             depth++
         }
 
-        // Get category_children (subcategories)
+        // Get category_children (subcategories) with metadata
         const { data: children } = await query.graph({
             entity: "product_category",
-            fields: ["id", "name", "handle", "rank"],
+            fields: ["id", "name", "handle", "rank", "metadata"],
             filters: { parent_category_id: categoryId }
         })
 

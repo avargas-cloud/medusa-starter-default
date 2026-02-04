@@ -52,10 +52,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 // Build breadcrumbs
                 const breadcrumbs = await buildBreadcrumbs(category.id, query)
 
-                // Get category_children (subcategories)
+                // Get category_children (subcategories) with metadata
                 const { data: children } = await query.graph({
                     entity: "product_category",
-                    fields: ["id", "name", "handle", "rank"],
+                    fields: ["id", "name", "handle", "rank", "metadata"],
                     filters: { parent_category_id: category.id }
                 })
 
