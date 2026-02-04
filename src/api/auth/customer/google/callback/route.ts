@@ -1,6 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Modules, ContainerRegistrationKeys, MedusaError } from "@medusajs/framework/utils"
-import jwt from "jsonwebtoken"
+import jwt, { Secret } from "jsonwebtoken"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const config = req.scope.resolve(ContainerRegistrationKeys.CONFIG_MODULE)
@@ -95,7 +95,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     }
 
     // Extraer valores con tipo específico
-    const jwtSecret: string = http.jwtSecret
+    const jwtSecret: Secret = http.jwtSecret
     const jwtExpiresIn: string = http.jwtExpiresIn || "24h"
 
     const tokenData = {
