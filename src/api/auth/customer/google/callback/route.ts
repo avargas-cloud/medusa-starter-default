@@ -94,6 +94,10 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         )
     }
 
+    // Extraer valores con tipo específico
+    const jwtSecret: string = http.jwtSecret
+    const jwtExpiresIn: string = http.jwtExpiresIn || "24h"
+
     const tokenData = {
         actor_id: authIdentity.id,
         actor_type: "customer",
@@ -103,8 +107,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         },
     }
 
-    const token = jwt.sign(tokenData, http.jwtSecret as string, {
-        expiresIn: http.jwtExpiresIn || "24h",
+    const token = jwt.sign(tokenData, jwtSecret, {
+        expiresIn: jwtExpiresIn,
     })
 
     // 🔥 Redirigir al frontend con el token
