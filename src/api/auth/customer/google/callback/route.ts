@@ -106,11 +106,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         },
     }
 
-    const options: SignOptions = {
-        expiresIn: (http.jwtExpiresIn || "24h") as string | number,
-    }
-
-    const token = jwt.sign(tokenData, jwtSecret, options)
+    const token = jwt.sign(
+        tokenData,
+        jwtSecret,
+        { expiresIn: http.jwtExpiresIn || "24h" }
+    )
 
     // 🔥 Redirigir al frontend con el token
     const returnTo = (req.query.returnTo as string) ||
