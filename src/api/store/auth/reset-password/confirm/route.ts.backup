@@ -1,0 +1,163 @@
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { Modules } from "@medusajs/framework/utils"
+
+export const POST = async (
+    req: MedusaRequest,
+    res: MedusaResponse
+) => {
+    const { token, password } = req.body as {
+        token: string
+        password: string
+    }
+
+    if (!token || !password) {
+        return res.status(400).json({
+            error: "Missing required fields",
+            required: ["token", "password"]
+        })
+    }
+
+    // Password validation
+    if (password.length < 8) {
+        return res.status(400).json({
+            error: "Password must be at least 8 characters"
+        })
+    }
+
+    try {
+        const query = req.scope.resolve("query")
+        const customerModule = req.scope.resolve(Modules.CUSTOMER)
+        const authModule = req.scope.resolve(Modules.AUTH)
+
+        console.log('🔐 Password Reset Confirm - Starting')
+        console.log('📧 Token (first 20):', token.substring(0, 20))
+
+        // Step 1: Find customer by token using native Medusa query
+        const customers = await query.graph({
+            entity: "customer",
+            fields: ["id", "email", "metadata", "has_account"],
+            filters: {}
+        })
+
+        console.log('📊 Customers retrieved:', customers.data.length)
+
+        const customer = customers.data.find((c: any) => {
+            const metadata = c.metadata || {}
+            return metadata.reset_token === token
+        })
+
+        if (!customer) {
+            console.log('❌ Invalid token - no customer found')
+            return res.status(404).json({
+                error: "Invalid or expired reset token"
+            })
+        }
+
+        console.log('✅ Customer:', customer.email)
+
+        // Step 2: Validate token expiration
+        const metadata = customer.metadata || {}
+        const resetExpires = metadata.reset_expires
+
+        if (!resetExpires) {
+            console.log('❌ No expiration found')
+            return res.status(400).json({
+                error: "Invalid reset token"
+            })
+        }
+
+        const expiresDate = new Date(resetExpires)
+        const now = new Date()
+
+        if (now > expiresDate) {
+            console.log('❌ Token expired')
+            return res.status(400).json({
+                error: "Reset token has expired"
+            })
+        }
+
+        console.log('✅ Token valid, expires:', expiresDate.toLocaleString())
+
+        // Step 3: Find auth_identity using native Medusa authModule
+        console.log('🔍 Finding auth_identity via authModule.listAuthIdentities()...')
+
+        const authIdentities = await authModule.listAuthIdentities({
+            // listAuthIdentities doesn't support filtering by app_metadata
+            // so we get all and filter in memory (this is Medusa's limitation)
+        })
+
+        console.log('📊 Total auth identities:', authIdentities.length)
+
+        const authIdentity = authIdentities.find((identity: any) =>
+            identity.app_metadata?.customer_id === customer.id
+        )
+
+        if (!authIdentity) {
+            console.log('❌ No auth_identity for customer')
+            return res.status(404).json({
+                error: "Authentication identity not found"
+            })
+        }
+
+        console.log('✅ Auth identity ID:', authIdentity.id)
+
+        // Step 4: Find provider_identity using native Medusa authModule
+        console.log('🔍  Finding provider_identity via authModule.listProviderIdentities()...')
+
+        const providerIdentities = await authModule.listProviderIdentities({
+            auth_identity_id: authIdentity.id
+        })
+
+        console.log('📊 Provider identities found:', providerIdentities.length)
+
+        const emailpassProvider = providerIdentities.find((pi: any) =>
+            pi.provider === 'emailpass'
+        )
+
+        if (!emailpassProvider) {
+            console.log('❌ No emailpass provider for auth_identity')
+            return res.status(404).json({
+                error: "Email/password authentication not found"
+            })
+        }
+
+        console.log('✅ Provider identity:', emailpassProvider.entity_id)
+
+        // Step 5: Update password using native Medusa authModule
+        console.log('🔐 Updating password via authModule.updateProviderIdentities()...')
+
+        await authModule.updateProviderIdentities([{
+            id: emailpassProvider.id,
+            provider_metadata: {
+                password: password
+            }
+        }])
+
+        console.log('✅ Password updated successfully!')
+
+        // Invalidate reset token
+        const cleanMetadata = { ...customer.metadata }
+        delete cleanMetadata.reset_token
+        delete cleanMetadata.reset_expires
+        cleanMetadata.password_reset_at = new Date().toISOString()
+
+        await customerModule.updateCustomers(customer.id, {
+            metadata: cleanMetadata
+        })
+
+        console.log(`✅ ✅ ✅ Password reset successful for ${customer.email}`)
+
+        return res.status(200).json({
+            success: true,
+            message: "Password reset successfully! You can now login with your new password."
+        })
+
+    } catch (error: any) {
+        console.error('❌ ❌ ❌ Reset password confirm error:', error)
+        console.error('Stack:', error?.stack)
+        return res.status(500).json({
+            error: "Password reset failed",
+            details: error instanceof Error ? error.message : 'Unknown error'
+        })
+    }
+}

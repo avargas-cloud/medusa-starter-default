@@ -163,22 +163,39 @@ Body: {
 
 **Endpoint:** `POST /store/auth/reset-password/confirm`
 
-**Purpose:** Process reset token and update password
+**Purpose:** Process reset token and update password with auto-login
 
 **Request:**
 ```typescript
 POST /store/auth/reset-password/confirm
+Headers:
+  x-publishable-api-key: pk_xxx
 Body: {
   token: string,      // From reset email link
   password: string    // New password (min 8 chars)
 }
 ```
 
-**Response - Success:**
+**Response - Success (with Auto-Login):**
 ```json
 {
   "success": true,
-  "message": "Password reset successfully! You can now login with your new password."
+  "customer": {
+    "id": "cus_xxx",
+    "email": "user@example.com"
+  },
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "message": "Password reset successfully! You are now logged in."
+}
+```
+
+✅ Returns JWT token for immediate login after password reset
+
+**Response - Password Reuse Not Allowed:**
+```json
+{
+  "error": "Password reuse not allowed",
+  "message": "Your new password cannot be the same as your current password. Please choose a different password."
 }
 ```
 
@@ -189,6 +206,12 @@ Body: {
   "message": "Please request a new password reset link."
 }
 ```
+
+🔒 Security Features:
+- Validates new password ≠ current password
+- Token expires in 1 hour
+- Single-use token (invalidated after successful reset)
+- Password hashed with scrypt-kdf (Medusa native)
 
 ---
 
@@ -259,7 +282,10 @@ if (result.success) {
 // Page 1: /forgot-password
 const response = await fetch('/store/auth/reset-password', {
   method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+  headers: { 
+    'Content-Type': 'application/json',
+    'x-publishable-api-key': API_KEY 
+  },
   body: JSON.stringify({ email })
 })
 // Always shows success, redirect to "check email" page
@@ -270,13 +296,26 @@ const token = new URLSearchParams(window.location.search).get('token')
 
 const response = await fetch('/store/auth/reset-password/confirm', {
   method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+  headers: { 
+    'Content-Type': 'application/json',
+    'x-publishable-api-key': API_KEY 
+  },
   body: JSON.stringify({ token, password })
 })
 
 const result = await response.json()
+
+if (response.status === 400 && result.error === 'Password reuse not allowed') {
+  // Show error: "Cannot use same password"
+  showError(result.message)
+  return
+}
+
 if (result.success) {
-  navigate('/login')
+  // Store JWT token for auto-login
+  localStorage.setItem('auth_token', result.token)
+  // Redirect to dashboard (already logged in)
+  navigate('/dashboard')
 }
 ```
 

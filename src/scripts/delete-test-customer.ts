@@ -1,9 +1,8 @@
 /**
  * Script to completely delete a test customer (Auth Identity + Customer Profile)
- * Usage: npx medusa exec ./src/scripts/delete-test-customer.ts --email=test@example.com
+ * Usage: email=test@example.com npx medusa exec ./src/scripts/delete-test-customer.ts
  */
 
-import { Modules } from "@medusajs/framework/utils"
 import type { MedusaContainer } from "@medusajs/framework/types"
 
 export default async function deleteTestCustomer(container: MedusaContainer) {
@@ -11,52 +10,70 @@ export default async function deleteTestCustomer(container: MedusaContainer) {
 
     if (!email) {
         console.error('❌ Error: Email required')
-        console.log('Usage: npx medusa exec ./src/scripts/delete-test-customer.ts --email=test@example.com')
+        console.log('Usage: email=test@example.com npx medusa exec ./src/scripts/delete-test-customer.ts')
         return
     }
 
     console.log(`🔍 Looking for customer: ${email}\n`)
 
-    const authModule = container.resolve(Modules.AUTH)
-    const customerModule = container.resolve(Modules.CUSTOMER)
+    // Get query for direct database access
+    const query = container.resolve('query')
 
     let authDeleted = false
     let customerDeleted = false
     let authId = null
     let customerId = null
 
-    // 1. Find and delete Auth Identity
     try {
-        const identities = await authModule.listAuthIdentities()
-        const matchingIdentity = identities.find((identity: any) =>
-            identity.provider_identities?.some((pi: any) => pi.entity_id === email)
-        )
+        // 1. Find customer
+        const result = await query.graph({
+            entity: 'customer',
+            filters: { email },
+            fields: ['id', 'email']
+        })
 
-        if (matchingIdentity) {
-            await authModule.deleteAuthIdentities([matchingIdentity.id])
-            authDeleted = true
-            authId = matchingIdentity.id
+        const customers = result.data || []
+
+        if (!customers || customers.length === 0) {
+            console.log('⚠️  Customer not found (may not have existed)')
+        } else {
+            customerId = customers[0].id
+            console.log(`📌 Customer ID: ${customerId}`)
         }
-    } catch (error: any) {
-        console.error('⚠️  Error deleting auth identity:', error.message)
-    }
 
-    // 2. Find and delete Customer Profile
-    try {
-        const customers = await customerModule.listCustomers({ email })
+        // 2. Delete provider identities first (auth identity)
+        const knex = container.resolve('__pg_connection__') as any
 
-        if (customers.length > 0) {
-            const customer = customers[0]
-            await customerModule.deleteCustomers([customer.id])
+        if (knex) {
+            const deletedIdentities = await knex('provider_identity')
+                .where('entity_id', email)
+                .del()
+                .returning('id')
+
+            if (deletedIdentities.length > 0) {
+                authDeleted = true
+                authId = deletedIdentities[0].id
+                console.log(`✅ Provider identities deleted: ${deletedIdentities.length}`)
+            }
+        }
+
+        // 3. Delete customer using the customer module service
+        if (customerId) {
+            await knex('customer')
+                .where('id', customerId)
+                .del()
+
             customerDeleted = true
-            customerId = customer.id
+            console.log(`✅ Customer deleted: ${customerId}`)
         }
+
     } catch (error: any) {
-        console.error('⚠️  Error deleting customer:', error.message)
+        console.error('❌ Error during deletion:', error.message)
+        throw error
     }
 
-    // 3. Report results
-    console.log('📋 Deletion Results:')
+    // 4. Report results
+    console.log('\n📋 Deletion Results:')
     console.log('─────────────────────')
 
     if (authDeleted) {
@@ -71,5 +88,7 @@ export default async function deleteTestCustomer(container: MedusaContainer) {
         console.log('⚠️  Customer Profile not found (may not have existed)')
     }
 
-    console.log('\n✨ Email can now be reused for registration\n')
+    console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+    console.log('✨ Email can now be reused for registration')
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
 }

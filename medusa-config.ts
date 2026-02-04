@@ -15,9 +15,19 @@ module.exports = defineConfig({
     // Without this, subscribers will NOT load (even if code is correct)
     workerMode: (process.env.WORKER_MODE || "shared") as "shared" | "worker" | "server",
     http: {
-      storeCors: process.env.STORE_CORS!,
-      adminCors: process.env.ADMIN_CORS!,
-      authCors: process.env.AUTH_CORS!,
+      // ✅ Smart CORS: Auto-detect dev vs production
+      storeCors: process.env.NODE_ENV === "production"
+        ? "https://ecopowertech.com,https://www.ecopowertech.com"
+        : "http://localhost:4321,http://localhost:8000,https://docs.medusajs.com",
+
+      adminCors: process.env.NODE_ENV === "production"
+        ? "https://medusa-starter-default-production-b69e.up.railway.app"
+        : "http://localhost:5173,http://localhost:9000",
+
+      authCors: process.env.NODE_ENV === "production"
+        ? "https://ecopowertech.com,https://www.ecopowertech.com,https://medusa-starter-default-production-b69e.up.railway.app"
+        : "http://localhost:4321,http://localhost:5173,http://localhost:9000",
+
       jwtSecret: process.env.JWT_SECRET || "supersecret",
       cookieSecret: process.env.COOKIE_SECRET || "supersecret",
       authMethodsPerActor: {
@@ -32,7 +42,9 @@ module.exports = defineConfig({
     }
   },
   admin: {
-    backendUrl: process.env.MEDUSA_BACKEND_URL || "https://medusa-starter-default-production-b69e.up.railway.app",
+    backendUrl: process.env.NODE_ENV === "production"
+      ? "https://medusa-starter-default-production-b69e.up.railway.app"
+      : "http://localhost:9000",
   },
   plugins: [
     // Google OAuth Authentication
@@ -119,7 +131,7 @@ module.exports = defineConfig({
               }
             }
           },
-          ...(process.env.GOOGLE_CLIENT_ID ? [{
+          {
             resolve: "@medusajs/auth-google",
             id: "google",
             options: {
@@ -127,7 +139,7 @@ module.exports = defineConfig({
               clientSecret: process.env.GOOGLE_CLIENT_SECRET,
               callbackUrl: `${process.env.MEDUSA_BACKEND_URL}/auth/customer/google/callback`
             }
-          }] : [])
+          }
         ]
       }
     },
