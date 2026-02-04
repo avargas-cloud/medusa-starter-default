@@ -96,7 +96,6 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
     // Extraer valores con tipo específico
     const jwtSecret: Secret = http.jwtSecret
-    const jwtExpiresIn: string = http.jwtExpiresIn || "24h"
 
     const tokenData = {
         actor_id: authIdentity.id,
@@ -108,7 +107,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     }
 
     const options: SignOptions = {
-        expiresIn: jwtExpiresIn,
+        expiresIn: (http.jwtExpiresIn || "24h") as string | number,
     }
 
     const token = jwt.sign(tokenData, jwtSecret, options)
