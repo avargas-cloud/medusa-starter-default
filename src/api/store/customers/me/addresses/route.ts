@@ -54,7 +54,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const knex = req.scope.resolve("db");
 
         if (setAsDefaultBilling) {
-            await knex.raw(`
+            await (knex as any).raw(`
         UPDATE customer_address 
         SET is_default_billing = false 
         WHERE customer_id = ? AND is_default_billing = true
@@ -62,7 +62,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
 
         if (setAsDefaultShipping) {
-            await knex.raw(`
+            await (knex as any).raw(`
         UPDATE customer_address 
         SET is_default_shipping = false 
         WHERE customer_id = ? AND is_default_shipping = true
