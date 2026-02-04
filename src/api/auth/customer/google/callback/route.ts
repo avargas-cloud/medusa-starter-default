@@ -94,7 +94,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         )
     }
 
-    const tokenData = {
+    const tokenData: any = {
         actor_id: authIdentity.id,
         actor_type: "customer",
         auth_identity_id: authIdentity.id,
@@ -103,7 +103,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         },
     }
 
-    const token = jwt.sign(tokenData, http.jwtSecret, {
+    // Type assertion to bypass Railway TypeScript strictness
+    const token = (jwt.sign as any)(tokenData, http.jwtSecret, {
         expiresIn: http.jwtExpiresIn || "24h",
     })
 
