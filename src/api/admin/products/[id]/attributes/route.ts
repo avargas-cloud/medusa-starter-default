@@ -3,12 +3,16 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { updateProductAttributesWorkflow } from "../../../../../workflows/product-attributes/update-product-attributes"
 import { safeDeleteOptionWorkflow } from "../../../../../workflows/variant-cleanup"
 import { Modules } from "@medusajs/framework/utils"
-import type { PRODUCT_ATTRIBUTES_MODULE } from "../../../../../modules/product-attributes"
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     const query = req.scope.resolve("query")
     const knex = req.scope.resolve("__pg_connection__")
     const { id } = req.params
+
+    if (!id) {
+        res.status(400).json({ error: "id is required" })
+        return
+    }
 
     try {
         // Use RAW SQL to avoid query.graph caching issues
@@ -54,6 +58,11 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     const { value_ids, variant_keys } = req.body as { value_ids: string[], variant_keys: string[] }
     const { id: productId } = req.params
+
+    if (!productId) {
+        res.status(400).json({ error: "productId is required" })
+        return
+    }
 
     console.log("🔥 [API] POST /attributes:", { productId, value_ids, variant_keys })
 
@@ -248,17 +257,17 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
                     })
 
                     if (isDuplicate) {
-                        console.log(`   ⏭️  Skipping duplicate: ${combo.map(v => v.value).join(" / ")}`)
+                        console.log(`   ⏭️  Skipping duplicate: ${combo.map((v: any) => v.value).join(" / ")}`)
                         return null
                     }
 
                     return {
                         product_id: productId,
-                        title: combo.map(v => v.value).join(" / "),
+                        title: combo.map((v: any) => v.value).join(" / "),
                         options: optionsMap,
                         metadata: {
                             managed_by: "attributes",
-                            variation: combo.map(v => slugify(v.value)).join("-")
+                            variation: combo.map((v: any) => slugify(v.value)).join("-")
                         },
                         manage_inventory: false
                     }

@@ -90,7 +90,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     if (setAsDefaultShipping) {
         // Use METADATA (no native field exists for default shipping)
         customerUpdate.metadata = {
-            ...(existingCustomer.metadata || {}),
+            ...(existingCustomer?.metadata || {}),
             default_shipping_address_id: createdAddress.id
         };
         console.log(`✅ Setting customer.metadata.default_shipping_address_id = ${createdAddress.id}`);

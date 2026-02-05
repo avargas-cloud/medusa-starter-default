@@ -85,7 +85,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     if (setAsDefaultShipping) {
         // Use METADATA (no native field exists for default shipping)
         customerUpdate.metadata = {
-            ...(existingCustomer.metadata || {}),
+            ...(existingCustomer?.metadata || {}),
             default_shipping_address_id: addressId
         };
         console.log(`✅ Setting customer.metadata.default_shipping_address_id = ${addressId}`);
@@ -151,13 +151,13 @@ export async function DELETE(req: MedusaRequest, res: MedusaResponse) {
     const customerUpdate: any = {};
 
     // Clear billing_address_id if deleting default billing
-    if (customer.billing_address_id === addressId) {
+    if (customer && (customer as any).billing_address_id === addressId) {
         customerUpdate.billing_address_id = null;
         console.log(`✅ Clearing billing_address_id (deleted address was default)`);
     }
 
     // Clear metadata.default_shipping_address_id if deleting default shipping
-    if (customer.metadata?.default_shipping_address_id === addressId) {
+    if (customer && customer.metadata?.default_shipping_address_id === addressId) {
         customerUpdate.metadata = {
             ...(customer.metadata || {}),
             default_shipping_address_id: null

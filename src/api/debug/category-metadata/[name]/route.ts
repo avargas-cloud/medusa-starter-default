@@ -7,6 +7,10 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
  */
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     const { name } = req.params
+
+        if (!name) {
+            return res.status(400).json({ error: "name required" })
+        }
     const query = req.scope.resolve("query")
 
     try {

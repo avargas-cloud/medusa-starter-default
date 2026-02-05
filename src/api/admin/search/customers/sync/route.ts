@@ -79,7 +79,8 @@ export const POST = async (
             success: true,
             message: "Synced Now",
             status: "synced_now",
-            synced: result.synced,
+        })
+        return
         })
     } catch (error: any) {
         console.error("[MeiliSearch Sync Error]:", (error as Error).message)
