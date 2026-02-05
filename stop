@@ -1,0 +1,14 @@
+#!/bin/bash
+# Stop the dev server
+
+SESSION_NAME="medusa-dev"
+
+echo "🛑 Stopping dev server..."
+
+# Kill the tmux session (kills everything inside)
+tmux kill-session -t $SESSION_NAME 2>/dev/null
+
+# Also kill any stray dev.sh processes
+pkill -f "bash dev.sh" 2>/dev/null
+
+echo "✅ Dev server stopped"

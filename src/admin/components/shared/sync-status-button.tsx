@@ -5,7 +5,7 @@ import { ArrowPath, CheckCircle, ExclamationCircle } from "@medusajs/icons"
 type SyncStatus = "idle" | "loading" | "already_synced" | "synced_now" | "error"
 
 interface SyncStatusButtonProps {
-    entity: "products" | "customers"
+    entity: "products" | "customers" | "inventory"
     label?: string
     onSyncComplete?: () => void
 }
@@ -25,10 +25,12 @@ export const SyncStatusButton = ({ entity, label = "Check Sync", onSyncComplete 
         setMessage("Checking...")
 
         try {
-            // "products" endpoint handles both Product & Inventory pages
+            // Route to correct sync endpoint based on entity
             const endpoint = entity === "products"
                 ? "/admin/search/products/sync"
-                : "/admin/search/customers/sync"
+                : entity === "customers"
+                    ? "/admin/search/customers/sync"
+                    : "/admin/search/inventory/sync"
 
             const response = await fetch(endpoint, {
                 method: "POST",

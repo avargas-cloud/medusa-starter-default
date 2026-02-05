@@ -30,7 +30,31 @@ killall yarn
 
 **ONLY use these methods in WSL:**
 
-1. **Background with PID tracking:**
+1. **Tmux-based Dev Server (RECOMMENDED):**
+   ```bash
+   # Start dev server (auto-attaches to tmux)
+   ./dev
+   
+   # Stop dev server completely
+   ./stop
+   
+   # Exit tmux without stopping server: Ctrl+B then D
+   # Reconnect to running server: tmux attach -t medusa-dev
+   ```
+   
+   **How it works:**
+   - Starts Medusa in background tmux session
+   - Auto-connects you to see logs live
+   - Claude Code can read logs via: `tmux capture-pane -t medusa-dev -p`
+   - WSL-safe: Only kills processes on port 9000 and dev.sh
+   
+   **Benefits:**
+   - ✅ Live log viewing for user
+   - ✅ Programmatic log access for Claude Code  
+   - ✅ Survives terminal disconnects
+   - ✅ Clean startup/shutdown
+   
+2. **Background with PID tracking (Legacy):**
    ```bash
    yarn dev > /tmp/medusa.log 2>&1 &
    echo $! > /tmp/medusa.pid
@@ -40,7 +64,7 @@ killall yarn
    rm -f /tmp/medusa.pid
    ```
 
-2. **Process Manager (pm2):**
+3. **Process Manager (pm2) (Legacy):**
    ```bash
    pm2 start yarn --name medusa -- dev
    pm2 stop medusa
@@ -48,11 +72,11 @@ killall yarn
    pm2 delete medusa
    ```
 
-3. **Ask User:**
+4. **Ask User:**
    - "Please stop the dev server (Ctrl+C in your terminal)"
    - Let user manage their own terminal sessions
 
-**If server must restart:** Ask user to do it manually. NEVER automate process killing in WSL.
+**Preferred Method**: Use `./dev` and `./stop` scripts. They handle all cleanup safely.
 
 ---
 
@@ -312,6 +336,123 @@ const stats = await client.query(`
 ## 9. Consultas a la Base de Datos
 
 Instrucción para el Agente: Cuando necesites buscar información real en la base de datos de Medusa, NO alucines datos. Ejecuta este comando en la terminal: node ~/.agent/skills/medusa-db-tool/query.js "TU CONSULTA SQL AQUI"
+
+## 9.5. Organización de Scripts (OBLIGATORIO)
+
+**⚠️ REGLA CRÍTICA: TODOS los scripts deben ir en `src/scripts/` organizados por categoría.**
+
+### Ubicación de Scripts
+
+**NUNCA** crear scripts en la raíz del proyecto. **SIEMPRE** usar `src/scripts/[categoria]/`:
+
+```
+src/scripts/
+├── checks/         - Validación (check-*.ts)
+├── verify/         - Verificaciones post-implementación (verify-*.ts)
+├── tests/          - Tests (test-*.ts)
+├── debug/          - Debugging (debug-*.ts)
+├── diagnostics/    - Diagnósticos (diagnose-*.ts)
+├── find/           - Búsqueda (find-*.ts)
+├── compare/        - Comparaciones (compare-*.ts)
+├── migrations/     - Migraciones (migrate-*, migration-*.ts)
+├── sync/           - Sincronización (sync-*, resync-*.ts)
+├── create/         - Creación (create-*.ts)
+├── delete/         - Eliminación (delete-*.ts)
+├── fix/            - Reparación (fix-*, repair-*, heal-*.ts)
+├── import/         - Importación (import-*.ts)
+├── export/         - Exportación (export-*.ts)
+├── cleanup/        - Limpieza (cleanup-*, clean-*.ts)
+├── list/           - Listado (list-*.ts)
+├── show/           - Mostrar (show-*.ts)
+├── get/            - Getters (get-*.ts)
+└── ... (ver README para lista completa)
+```
+
+### Cómo Nombrar Scripts
+
+Use el prefijo según la categoría:
+- `check-[feature].ts` → `src/scripts/checks/`
+- `verify-[feature].ts` → `src/scripts/verify/`
+- `test-[feature].ts` → `src/scripts/tests/`
+- `debug-[feature].ts` → `src/scripts/debug/`
+
+### Ejemplo Correcto
+
+```typescript
+// ✅ CORRECTO: src/scripts/verify/verify-linting-system.ts
+import dotenv from 'dotenv';
+dotenv.config();
+
+async function verifyLintingSystem() {
+  // ... código de verificación
+}
+
+verifyLintingSystem();
+```
+
+### Ejemplo Incorrecto
+
+```typescript
+// ❌ INCORRECTO: verify-linting-system.ts (en raíz)
+// ❌ INCORRECTO: scripts/verify-linting-system.ts (fuera de src/)
+```
+
+### Al Crear Nuevos Scripts
+
+1. Determinar categoría por prefijo del nombre
+2. Crear en `src/scripts/[categoria]/[nombre].ts`
+3. Usar shebang si es ejecutable: `#!/usr/bin/env tsx`
+4. Ejecutar con: `npx -y tsx src/scripts/[categoria]/[nombre].ts`
+
+**No hay excepciones a esta regla.**
+
+## 10. Protocolo de Verificación Pre-Completitud (OBLIGATORIO)
+
+**⚠️ REGLA CRÍTICA: Nunca reportar una tarea como completa sin ejecutar verificaciones.**
+
+### Antes de Notificar Completitud
+
+El agente **DEBE** ejecutar el siguiente protocolo:
+
+1. **Crear Script de Verificación**: 
+   - Archivo en `src/scripts/verify-[feature].ts`
+   - Debe probar la funcionalidad implementada
+   - Solo backend/scripts, NO browser
+
+2. **Ejecutar Verificación**:
+   ```bash
+   npx -y tsx src/scripts/verify-[feature].ts
+   ```
+
+3. **Revisar Resultados**:
+   - ✅ Todos los tests pasan → Continuar
+   - ❌ Algún test falla → Corregir y volver a ejecutar
+
+4. **Pre-Completion Check** (Opcional pero recomendado):
+   ```bash
+   yarn run pre-complete
+   ```
+
+5. **Solo entonces** reportar al usuario que está completo
+
+### Checklist de Verificación
+
+Antes de `notify_user` con completitud:
+- [ ] Script de verificación creado
+- [ ] Script ejecutado exitosamente
+- [ ] Todos los tests pasaron
+- [ ] No hay errores en logs
+- [ ] Código funciona según requerimientos
+
+### Auto-Verificación del Agente
+
+El agente debe preguntarse:
+1. ¿Creé un script de verificación?
+2. ¿Lo ejecuté y pasó sin errores?
+3. ¿Probé casos reales, no solo teóricos?
+4. ¿Documenté los resultados de la verificación?
+
+**Solo si las 4 respuestas son SÍ, proceder a notificar completitud.**
 
 ## 9. Agent Policy: Code Modularization
 

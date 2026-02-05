@@ -1,0 +1,29 @@
+#!/bin/bash
+# Dead simple: Start dev server so Claude can read logs
+
+SESSION_NAME="medusa-dev"
+
+echo "🧹 Cleaning up old Medusa processes..."
+
+# WSL-safe cleanup: Only kill Medusa-specific processes
+# Kill dev.sh wrapper
+pkill -f "bash dev.sh" 2>/dev/null
+
+# Kill node processes running on port 9000 (Medusa default)
+lsof -ti:9000 2>/dev/null | xargs -r kill -9 2>/dev/null
+
+# Kill tmux session if exists
+tmux kill-session -t $SESSION_NAME 2>/dev/null
+
+echo "✅ Starting fresh dev server..."
+sleep 1
+
+# Start in tmux
+tmux new-session -d -s $SESSION_NAME "bash dev.sh"
+
+sleep 2
+echo "✅ Dev server started! Connecting..."
+
+# Auto-attach so you see logs immediately
+# To detach: Ctrl+B then D
+tmux attach -t $SESSION_NAME

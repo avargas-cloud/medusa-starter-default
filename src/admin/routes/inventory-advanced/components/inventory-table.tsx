@@ -22,9 +22,13 @@ interface InventoryTableProps {
 export const InventoryTable = ({ items, isLoading, sortBy, onSortChange }: InventoryTableProps) => {
     const navigate = useNavigate()
 
-    const formatPrice = (price: number, currencyCode: string) => {
+    const formatPrice = (price: number | null | undefined, currencyCode: string) => {
+        if (price === null || price === undefined || isNaN(price)) {
+            return `${currencyCode} $0.00`
+        }
         return `${currencyCode} $${price.toFixed(2)}`
     }
+
 
     // Navigate to Inventory Item page
     const goToInventoryItem = (id: string) => {

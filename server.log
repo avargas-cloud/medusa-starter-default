@@ -1,0 +1,60 @@
+
+> medusa-starter-default@0.0.1 dev
+> nodemon
+
+[33m[nodemon] 3.1.11[39m
+[33m[nodemon] to restart at any time, enter `rs`[39m
+[33m[nodemon] watching path(s): src/**/* medusa-config.ts .env[39m
+[33m[nodemon] watching extensions: ts,js,json[39m
+[32m[nodemon] starting `medusa develop`[39m
+🔵 Loading medusa-config.ts
+🔵 CWD: /home/alejo/medusa-starter-default
+🔵 REDIS_URL: FOUND
+🔵 DATABASE_URL: FOUND
+🔵 WORKER_MODE: NOT SET (will default to 'shared')
+[32minfo[39m:    [Watcher] Using standard dev server (restart on file change)
+[32minfo[39m:    [Watcher] Watching filesystem to reload dev server on file change
+[32minfo[39m:    [Watcher] modified server.log modified: restarting dev server
+[32minfo[39m:    [Watcher] Reloaded in 2.51ms
+🔵 Loading medusa-config.ts
+🔵 CWD: /home/alejo/medusa-starter-default
+🔵 REDIS_URL: FOUND
+🔵 DATABASE_URL: FOUND
+[32minfo[39m:    [Watcher] modified server.log modified: restarting dev server
+🔵 WORKER_MODE: NOT SET (will default to 'shared')
+[32minfo[39m:    [Watcher] Reloaded in 2.31ms
+🔵 Loading medusa-config.ts
+🔵 CWD: /home/alejo/medusa-starter-default
+🔵 REDIS_URL: FOUND
+🔵 DATABASE_URL: FOUND
+🔵 WORKER_MODE: NOT SET (will default to 'shared')
+[32minfo[39m:    [Watcher] modified server.log modified: restarting dev server
+[32minfo[39m:    [Watcher] Reloaded in 2.70ms
+🔵 Loading medusa-config.ts
+🔵 CWD: /home/alejo/medusa-starter-default
+🔵 REDIS_URL: FOUND
+[32minfo[39m:    [Watcher] modified server.log modified: restarting dev server
+🔵 DATABASE_URL: FOUND
+🔵 WORKER_MODE: NOT SET (will default to 'shared')
+[32minfo[39m:    [Watcher] Reloaded in 2.40ms
+🔵 Loading medusa-config.ts
+🔵 CWD: /home/alejo/medusa-starter-default
+🔵 REDIS_URL: FOUND
+🔵 DATABASE_URL: FOUND
+🔵 WORKER_MODE: NOT SET (will default to 'shared')
+[32minfo[39m:    [Watcher] modified server.log modified: restarting dev server
+[32minfo[39m:    [Watcher] Reloaded in 2.61ms
+🔵 Loading medusa-config.ts
+🔵 CWD: /home/alejo/medusa-starter-default
+🔵 REDIS_URL: FOUND
+🔵 DATABASE_URL: FOUND
+🔵 WORKER_MODE: NOT SET (will default to 'shared')
+[32minfo[39m:    [Watcher] modified server.log modified: restarting dev server
+[32minfo[39m:    [Watcher] Reloaded in 2.49ms
+🔵 Loading medusa-config.ts
+🔵 CWD: /home/alejo/medusa-starter-default
+🔵 REDIS_URL: FOUND
+🔵 DATABASE_URL: FOUND
+🔵 WORKER_MODE: NOT SET (will default to 'shared')
+[32minfo[39m:    [Watcher] modified server.log modified: restarting dev server
+[32minfo[39m:    [Watcher] Reloaded in 2.51ms

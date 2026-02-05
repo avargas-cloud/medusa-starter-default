@@ -1,0 +1,30 @@
+🧪 ==========================================
+🧪 TESTING PASSWORD RESET END-TO-END
+🧪 ==========================================
+
+📧 STEP 1: Requesting password reset...
+
+❌ ==========================================
+❌ TEST FAILED!
+❌ Error: fetch failed
+❌ ==========================================
+
+node:internal/deps/undici/undici:14902
+      Error.captureStackTrace(err);
+            ^
+
+TypeError: fetch failed
+    at node:internal/deps/undici/undici:14902:13
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async testPasswordReset (/home/alejo/medusa-starter-default/test-password-reset-e2e.ts:18:31) {
+  [cause]: Error: connect ECONNREFUSED 127.0.0.1:9000
+      at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1611:16) {
+    errno: -111,
+    code: 'ECONNREFUSED',
+    syscall: 'connect',
+    address: '127.0.0.1',
+    port: 9000
+  }
+}
+
+Node.js v20.20.0

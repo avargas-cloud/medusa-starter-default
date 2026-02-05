@@ -51,6 +51,7 @@ export const POST = async (
                 "updated_at",
                 "product.id",
                 "inventory_items.inventory.id",
+                "inventory_items.inventory.updated_at", // Added: must match sync workflow
             ],
         })
 
@@ -60,7 +61,7 @@ export const POST = async (
                 id: invItem.inventory?.id,
                 variantId: variant.id,
                 productId: variant.product?.id,
-                updated_at: invItem.inventory?.updated_at || variant.updated_at
+                updated_at: invItem.inventory?.updated_at || variant.updated_at // Match sync workflow
             })) || []
         })
 

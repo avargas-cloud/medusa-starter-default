@@ -1,5 +1,7 @@
 import { defineMiddlewares } from "@medusajs/medusa"
 import type { MedusaRequest, MedusaResponse, MedusaNextFunction } from "@medusajs/framework/http"
+import { addCategoryBreadcrumbs } from "./middlewares/add-category-breadcrumbs"
+
 
 /**
  * AUTO-SYNC AVAILABLE ATTRIBUTES MIDDLEWARE
@@ -579,6 +581,11 @@ export default defineMiddlewares({
             // 🔍 MEILI SYNC: Inventory items direct endpoint
             matcher: "/admin/inventory-items*",
             middlewares: [syncInventoryMeiliMiddleware],
+        },
+        {
+            // 🍞 BREADCRUMBS: Auto-add to Store API category responses
+            matcher: "/store/product-categories*",
+            middlewares: [addCategoryBreadcrumbs],
         },
     ],
 })

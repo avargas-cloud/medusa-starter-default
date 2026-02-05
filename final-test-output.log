@@ -1,0 +1,27 @@
+🧪 PASSWORD RESET FLOW TEST
+============================
+📧 Email: a.vargas@ecopowertech.com
+🔐 New Password: alejovp32145*
+🌐 Backend: http://localhost:9000
+
+🔐 STEP 1: Requesting Password Reset Token
+==========================================
+
+
+❌ ❌ ❌ TEST FAILED ❌ ❌ ❌
+Error: connect ECONNREFUSED 127.0.0.1:9000
+Stack: Error: connect ECONNREFUSED 127.0.0.1:9000
+    at Function.from (/home/alejo/medusa-starter-default/node_modules/axios/lib/core/AxiosError.js:7:28)
+    at RedirectableRequest.handleRequestError (/home/alejo/medusa-starter-default/node_modules/axios/lib/adapters/http.js:820:25)
+    at RedirectableRequest.emit (node:events:524:28)
+    at eventHandlers.<computed> (/home/alejo/medusa-starter-default/node_modules/follow-redirects/index.js:49:24)
+    at ClientRequest.emit (node:events:524:28)
+    at emitErrorEvent (node:_http_client:101:11)
+    at Socket.socketErrorListener (node:_http_client:504:5)
+    at Socket.emit (node:events:524:28)
+    at emitErrorNT (node:internal/streams/destroy:169:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:128:3)
+    at Axios.request (/home/alejo/medusa-starter-default/node_modules/axios/lib/core/Axios.js:45:41)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async step1_RequestResetToken (/home/alejo/medusa-starter-default/src/scripts/_deprecated/auth-scripts/test-password-reset-flow.ts:19:22)
+    at async main (/home/alejo/medusa-starter-default/src/scripts/_deprecated/auth-scripts/test-password-reset-flow.ts:135:9)
