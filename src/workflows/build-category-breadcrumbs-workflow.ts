@@ -24,7 +24,7 @@ const buildHierarchyStep = createStep(
         const MAX_DEPTH = 10
 
         while (currentId && depth < MAX_DEPTH) {
-            const { data } = await query.graph({
+            const { data }: { data: any[] } = await query.graph({
                 entity: "product_category",
                 fields: ["id", "name", "handle", "parent_category_id"],
                 filters: { id: currentId }
@@ -36,7 +36,7 @@ const buildHierarchyStep = createStep(
                 break
             }
 
-            const category = data[0]
+            const category: any = data[0]
 
             // Add to beginning of array (we're traversing from child to root)
             crumbs.unshift({

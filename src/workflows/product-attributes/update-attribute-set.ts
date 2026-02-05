@@ -49,14 +49,9 @@ const updateAttributeSetStep = createStep(
 
         return new StepResponse(updated, previousData)
     },
-    async (previousData, { container }) => {
-        if (!previousData) return
-
-        const productAttributesService = container.resolve(PRODUCT_ATTRIBUTES_MODULE)
-
-        // Restore previous data - we need to get the id from somewhere
-        // Since we can't access the input in compensation, we'll skip rollback
-        // In production, you might want to store the id in previousData
+    async (_previousData, { container: _container }) => {
+        // Note: Rollback would require the set ID which is in the input
+        // Skipping to avoid errors
     }
 )
 

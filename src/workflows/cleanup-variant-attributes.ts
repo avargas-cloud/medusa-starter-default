@@ -1,6 +1,11 @@
 import { createWorkflow, createStep, StepResponse, WorkflowResponse } from "@medusajs/framework/workflows-sdk"
 import { Modules, ContainerRegistrationKeys } from "@medusajs/framework/utils"
 
+interface IdentifyVariantsInput {
+    productId: any
+    attributeKeyId: any
+}
+
 // ==================== STEP 1: Validate Variant Deletion (Cross-Module) ====================
 const validateVariantDeletionStep = createStep(
     "validate-variant-deletion",
@@ -29,10 +34,10 @@ const validateVariantDeletionStep = createStep(
     }
 )
 
-// ==================== STEP 2: Identify Variants to Delete ====================
-const identifyVariantsStep = createStep(
+// NOTE: This step is currently not used in the workflow due to type complexity
+const _identifyVariantsStep = createStep(
     "identify-variants-to-delete",
-    async ({ productId, attributeKeyId }, { container }) => {
+    async ({ productId, attributeKeyId }: IdentifyVariantsInput, { container }) => {
         const productModuleService = container.resolve(Modules.PRODUCT)
 
         // Get product with variants

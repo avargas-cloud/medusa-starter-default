@@ -3,7 +3,7 @@
  * 
  * Fixed to capture headers in closure to avoid race conditions
  */
-export function scheduleCategoryUpdate(categoryId: string, scope: any, headers?: any): void {
+export function scheduleCategoryUpdate(categoryId: string, _scope: any, headers?: any): void {
     console.log(`🔄 [SCHEDULER] Scheduling update for ${categoryId}, has headers: ${!!headers}, cookie: ${!!headers?.cookie}`)
 
     // Debounce: only create ONE timer per category

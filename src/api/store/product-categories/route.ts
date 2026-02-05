@@ -1,5 +1,4 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { Modules } from "@medusajs/framework/utils"
 
 /**
  * GET /store/product-categories
@@ -85,18 +84,18 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
 async function buildBreadcrumbs(categoryId: string, query: any) {
     const breadcrumbs: Array<{ id: string; name: string; handle: string }> = []
-    let currentId: string | null = categoryId
+    let currentId: string | null | undefined = categoryId
     let depth = 0
     const MAX_DEPTH = 10
 
     while (currentId && depth < MAX_DEPTH) {
-        const { data: categories } = await query.graph({
+        const { data: categories }: { data: any[] } = await query.graph({
             entity: "product_category",
             fields: ["id", "name", "handle", "parent_category_id"],
             filters: { id: currentId }
         })
 
-        const cat = categories?.[0]
+        const cat: any = categories?.[0]
         if (!cat) break
 
         breadcrumbs.unshift({

@@ -1,7 +1,4 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { Modules } from "@medusajs/framework/utils"
-import { IProductModuleService } from "@medusajs/framework/types"
-import { getProductMainCategoryBreadcrumbs } from "../../../../utils/breadcrumbs"
 
 /**
  * GET /store/products/:id/with-prices
@@ -17,7 +14,6 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         const { id } = req.params
         const query = req.scope.resolve("query")
         const knex = req.scope.resolve("__pg_connection__")
-        const productModuleService: IProductModuleService = req.scope.resolve(Modules.PRODUCT)
 
         // 1. Fetch product with explicit image fields + categories for breadcrumbs
         const { data: products } = await query.graph({
@@ -50,6 +46,13 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         }
 
         const originalProduct = products[0]
+
+        if (!originalProduct) {
+            return res.status(404).json({
+                message: "Product not found",
+                product: null
+            })
+        }
 
         // 2. Get breadcrumbs from product metadata (pre-calculated)
         // Products have main_category_breadcrumbs already calculated in metadata

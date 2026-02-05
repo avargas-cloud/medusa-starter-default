@@ -73,7 +73,7 @@ const deleteAttributeSetStep = createStep(
         const productAttributesService = container.resolve(PRODUCT_ATTRIBUTES_MODULE)
 
         // Recreate the set
-        const [recreated] = await productAttributesService.createAttributeSets([
+        const [_recreated] = await productAttributesService.createAttributeSets([
             {
                 id: deletedSetData.id,
                 title: deletedSetData.title,

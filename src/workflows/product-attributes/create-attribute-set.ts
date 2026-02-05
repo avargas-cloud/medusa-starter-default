@@ -25,9 +25,13 @@ export const createAttributeSetStep = createStep(
             handle,
         }])
 
+        if (!attributeSet) {
+            throw new Error("Failed to create attribute set")
+        }
+
         return new StepResponse(attributeSet, attributeSet.id)
     },
-    async (attributeSetId: string, { container }) => {
+    async (attributeSetId: string | undefined, { container }) => {
         if (!attributeSetId) return
         const service = container.resolve(PRODUCT_ATTRIBUTES_MODULE)
         await service.deleteAttributeSets([attributeSetId])
@@ -37,7 +41,7 @@ export const createAttributeSetStep = createStep(
 export const createAttributeSetWorkflow = createWorkflow(
     "create-attribute-set-workflow",
     (input: { title: string }) => {
-        const attributeSet = createAttributeSetStep(input)
+        const attributeSet = createAttributeSetStep({ title: input.title })
         return new WorkflowResponse(attributeSet)
     }
 )

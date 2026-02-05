@@ -33,13 +33,13 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
         // Traverse from child to root
         while (currentId && depth < MAX_DEPTH) {
-            const { data: categories } = await query.graph({
+            const { data: categories }: { data: any[] } = await query.graph({
                 entity: "product_category",
                 fields: ["id", "name", "handle", "parent_category_id"],
                 filters: { id: currentId }
             })
 
-            const category = categories?.[0]
+            const category: any = categories?.[0]
 
             if (!category) {
                 return res.status(404).json({

@@ -123,7 +123,7 @@ const updateLinksStep = createStep(
 
         return new StepResponse(valueIds, { oldIds: currentIds })
     },
-    async (input, { container }) => {
+    async (_input, { container: _container }) => {
         // Rollback logic (omitted for brevity)
     }
 )

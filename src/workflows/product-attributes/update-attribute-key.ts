@@ -92,7 +92,7 @@ const updateAttributeKeyStep = createStep(
 
         return new StepResponse(updated, previousData)
     },
-    async (previousData, { container }) => {
+    async (_previousData, { container: _container }) => {
         // Rollback logic would require knowing ID, which we don't pass here easily without context
         // Skipping complex rollback for now for simplicity, but could be added
     }

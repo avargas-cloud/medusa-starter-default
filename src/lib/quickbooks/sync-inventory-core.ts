@@ -48,8 +48,13 @@ export async function syncInventoryCore(container: any): Promise<SyncInventoryRe
             logger.error(`❌ ${error}`)
             return { success: false, stats, error }
         }
-        const locationId = locations[0].id
-        logger.info(`📍 Using Stock Location: ${locations[0].name} (${locationId})`)
+        const locationId = locations[0]?.id
+        if (!locationId) {
+            const error = "Stock Location ID is invalid"
+            logger.error(`❌ ${error}`)
+            return { success: false, stats, error }
+        }
+        logger.info(`📍 Using Stock Location: ${locations[0]?.name} (${locationId})`)
 
         // 2. Fetch Medusa Products with QB ID
         logger.info("🔍 Fetching Medusa Products with QuickBooks ID...")
@@ -189,7 +194,7 @@ export async function syncInventoryCore(container: any): Promise<SyncInventoryRe
                     location_id: locationId
                 })
 
-                if (levels.length > 0) {
+                if (levels.length > 0 && levels[0]) {
                     await inventoryService.updateInventoryLevels({
                         id: levels[0].id,
                         inventory_item_id: inventoryItemId,

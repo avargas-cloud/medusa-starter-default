@@ -116,7 +116,7 @@ export const syncVariantsStep = createStep(
 
         return new StepResponse(updates, { productId, updates })
     },
-    async (input, { container }) => {
+    async (_input, { container: _container }) => {
         // Compensation logic (generic)
     }
 )

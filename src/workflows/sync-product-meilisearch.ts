@@ -36,6 +36,11 @@ const syncProductToMeiliSearchStep = createStep(
 
             const product = products[0]
 
+            if (!product) {
+                logger.warn(`[MeiliSearch Workflow] Product data is invalid: ${productId}`)
+                return new StepResponse({ synced: false })
+            }
+
             const { MeiliSearch } = await import("meilisearch")
 
             const client = new MeiliSearch({

@@ -1,7 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Modules } from "@medusajs/framework/utils"
 import { IProductModuleService } from "@medusajs/framework/types"
-import { getProductMainCategoryBreadcrumbs, BreadcrumbItem } from "../../../../utils/breadcrumbs"
+import { getProductMainCategoryBreadcrumbs } from "../../../../utils/breadcrumbs"
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     const productModuleService: IProductModuleService = req.scope.resolve(Modules.PRODUCT)
@@ -9,7 +9,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     const { id } = req.params
 
     if (!id) {
-        return res.status(400).json({ error: "Product ID is required" })
+        res.status(400).json({ error: "Product ID is required" })
+        return
     }
 
     try {

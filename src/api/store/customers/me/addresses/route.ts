@@ -71,7 +71,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     // Create address using Medusa native workflow with is_default_* flags
-    const { result: addresses } = await createCustomerAddressesWorkflow(req.scope)
+    await createCustomerAddressesWorkflow(req.scope)
         .run({
             input: {
                 addresses: [{
@@ -83,8 +83,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 }]
             }
         });
-
-    const newAddress = addresses[0];
 
     // Return customer with all addresses
     const query = req.scope.resolve("query");
@@ -98,6 +96,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             id: customerId
         }
     });
+
+    if (!customer) {
+        res.status(404).json({ message: "Customer not found" });
+        return;
+    }
 
     // Compute default address IDs from boolean flags (to match CustomerDTO interface)
     const defaultBillingAddress = customer.addresses?.find((addr: any) => addr.is_default_billing === true);

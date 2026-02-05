@@ -356,8 +356,8 @@ async function generateCheckboxFilter(
 async function generateRangeFilter(
     attribute: AttributeKey,
     attributeValues: AttributeValue[],
-    productIds: string[],
-    remoteQuery: any,
+    _productIds: string[],
+    _remoteQuery: any,
     order: number
 ): Promise<GeneratedFilter> {
     // Parse numeric values
@@ -422,14 +422,14 @@ async function generateRangeFilter(
 async function generateToggleFilter(
     attribute: AttributeKey,
     productIds: string[],
-    remoteQuery: any,
+    _remoteQuery: any,
     order: number
 ): Promise<GeneratedFilter> {
     // For toggle, we just count how many products have this attribute at all
-    const remoteLink = remoteQuery.getRemoteLink("productProductattributes")
+    const remoteLink = _remoteQuery.getRemoteLink("productProductattributes")
 
     // Get all values for this attribute key
-    const attributeValues = await remoteQuery({
+    const attributeValues = await _remoteQuery({
         entryPoint: "attribute_value",
         fields: ["id"],
         variables: {

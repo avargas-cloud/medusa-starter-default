@@ -1,5 +1,5 @@
 import { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
-import { Modules, ProductEvents } from "@medusajs/framework/utils"
+import { ProductEvents } from "@medusajs/framework/utils"
 
 /**
  * IMPORTANT: This subscriber executes AFTER the option is deleted.
@@ -14,7 +14,6 @@ export default async function protectManagedOptionsHandler({
     console.log("🛡️ [PROTECTION POST-DELETE] Option was deleted:", data.id)
     console.log("   Note: This fires AFTER deletion. Cannot block the operation.")
 
-    const productService = container.resolve(Modules.PRODUCT)
     const query = container.resolve("query")
 
     try {
@@ -35,6 +34,12 @@ export default async function protectManagedOptionsHandler({
         }
 
         const product = products[0]
+
+        if (!product) {
+            console.log("   ✅ Product not found")
+            return
+        }
+
         const option = product.options?.find((o: any) => o.id === data.id)
 
         if (!option) {

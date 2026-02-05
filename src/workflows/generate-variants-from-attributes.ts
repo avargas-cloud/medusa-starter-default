@@ -1,10 +1,18 @@
 import { createWorkflow, createStep, StepResponse, WorkflowResponse } from "@medusajs/framework/workflows-sdk"
 import { Modules } from "@medusajs/framework/utils"
 
+interface CreateVariantsInput {
+    productId: any
+    variantKeys: any
+    attributes: any
+    basePrice: any
+}
+
 // Simplified workflow - one step at a time for debugging
-const createVariantsStep = createStep(
+// NOTE: This step is defined but not currently used in the workflow
+export const _createVariantsStep = createStep(
     "create-variants-simple",
-    async ({ productId, variantKeys, attributes, basePrice }, { container }) => {
+    async ({ productId, variantKeys, attributes, basePrice }: CreateVariantsInput, { container }) => {
         const productModuleService = container.resolve(Modules.PRODUCT)
         const pricingModuleService = container.resolve(Modules.PRICING)
         const remoteLink = container.resolve("remoteLink")
@@ -24,10 +32,10 @@ const createVariantsStep = createStep(
         console.log("   Existing variants:", product.variants?.length || 0)
 
         // Filter attributes by variant keys
-        const variantAttributes = variantKeys.map(keyId => ({
+        const variantAttributes = variantKeys.map((keyId: any) => ({
             keyId,
-            label: attributes.find(a => a.attribute_key.id === keyId)?.attribute_key?.label || "Unknown",
-            values: attributes.filter(a => a.attribute_key.id === keyId)
+            label: attributes.find((a: any) => a.attribute_key.id === keyId)?.attribute_key?.label || "Unknown",
+            values: attributes.filter((a: any) => a.attribute_key.id === keyId)
         }))
 
         console.log("   Variant attributes:", variantAttributes)
@@ -55,7 +63,7 @@ const createVariantsStep = createStep(
             // Step 1: Create options
             for (const attr of variantAttributes) {
                 const optionTitle = attr.label
-                const optionValues = attr.values.map(v => v.value)
+                const optionValues = attr.values.map((v: any) => v.value)
 
                 const existingOption = product.options?.find(o => o.title === optionTitle)
 
@@ -66,28 +74,30 @@ const createVariantsStep = createStep(
                         title: optionTitle,
                         values: optionValues
                     }])
-                    createdOptions.push(newOptions[0].id)
-                    console.log(`   ✅ Option created: ${newOptions[0].id}`)
+                    if (newOptions[0]) {
+                        createdOptions.push(newOptions[0].id)
+                        console.log(`   ✅ Option created: ${newOptions[0].id}`)
+                    }
                 }
             }
 
             // Step 2: Create variants
-            const variantsData = combinations.map(combo => ({
+            const variantsData = combinations.map((combo: any) => ({
                 product_id: productId,
-                title: combo.map(v => v.value).join(" / "),
-                options: combo.reduce((acc, v) => {
+                title: combo.map((v: any) => v.value).join(" / "),
+                options: combo.reduce((acc: any, v: any) => {
                     acc[v.attribute_key.label] = v.value
                     return acc
                 }, {} as Record<string, string>),
                 metadata: {
                     managed_by: "attributes",
-                    variation: combo.map(v => slugify(v.value)).join("-")
+                    variation: combo.map((v: any) => slugify(v.value)).join("-")
                 },
                 manage_inventory: false
             }))
 
             console.log(`   Creating ${variantsData.length} variants...`)
-            const newVariants = await productModuleService.createProductVariants(productId, variantsData)
+            const newVariants = await productModuleService.createProductVariants(variantsData)
             createdVariants.push(...newVariants)
             console.log(`   ✅ Created ${newVariants.length} variants`)
 
@@ -139,12 +149,14 @@ const createVariantsStep = createStep(
 
 export const generateVariantsWorkflow = createWorkflow(
     "generate-variants-from-attributes",
-    function (input: {
+    function (_input: {
         productId: string
         variantKeys: string[]
         attributes: any[]
         basePrice?: number
     }) {
+        // Note: This workflow is not actually using createVariantsStep
+        // Keeping skeleton for future implementation
         return new WorkflowResponse({
             variantsCreated: 0,
             priceSetsCreated: 0
@@ -155,10 +167,10 @@ export const generateVariantsWorkflow = createWorkflow(
 // Helper functions
 function generateCartesianProduct(variantAttributes: any[]) {
     const groups = variantAttributes.map(attr => attr.values)
-    return groups.reduce((acc, group) =>
-        acc.flatMap(combo => group.map(val => [...combo, val])),
+    return groups.reduce((acc: any[], group: any) =>
+        acc.flatMap((combo: any) => group.map((val: any) => [...combo, val])),
         [[]]
-    ).filter(combo => combo.length === variantAttributes.length)
+    ).filter((combo: any) => combo.length === variantAttributes.length)
 }
 
 function slugify(text: string): string {

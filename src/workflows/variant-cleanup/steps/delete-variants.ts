@@ -24,7 +24,7 @@ export const deleteVariantsStep = createStep(
             deleted: input.variantIds.length
         }, input.variantIds)
     },
-    async (deletedIds: string[] | undefined, { container }) => {
+    async (deletedIds: string[] | undefined, { container: _container }) => {
         // Compensation: restore deleted variants if workflow fails
         console.log(`   ⏪ Compensation: Would restore ${deletedIds?.length || 0} variants`)
     }

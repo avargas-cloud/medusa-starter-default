@@ -1,0 +1,667 @@
+
+> medusa-starter-default@0.0.1 build
+> medusa build
+
+🔵 Loading medusa-config.ts
+🔵 CWD: /home/alejo/ecopowertech-website/backend
+🔵 REDIS_URL: FOUND
+🔵 DATABASE_URL: FOUND
+🔵 WORKER_MODE: NOT SET (will default to 'shared')
+[32minfo[39m:    Generating types...
+[32minfo[39m:    No link to load from /home/alejo/ecopowertech-website/backend/node_modules/@medusajs/notification-sendgrid/.medusa/server/src/links. skipped.
+[32minfo[39m:    No link to load from /home/alejo/ecopowertech-website/backend/node_modules/@medusajs/draft-order/.medusa/server/src/links. skipped.
+[32minfo[39m:    Types generated successfully
+[32minfo[39m:    Starting build...
+[32minfo[39m:    Compiling backend source...
+[32minfo[39m:    Removing existing ".medusa/server" folder
+[32minfo[39m:    Compiling frontend source...
+[96msrc/api/admin/attribute-sets/[id]/route.ts[0m:[93m39[0m:[93m43[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string | object | string[] | object[]'.
+  Type 'undefined' is not assignable to type 'string | object | string[] | object[]'.
+
+[7m39[0m         await service.deleteAttributeSets(id)
+[7m  [0m [91m                                          ~~[0m
+[96msrc/api/admin/attributes/[id]/move/route.ts[0m:[93m15[0m:[93m17[0m - [91merror[0m[90m TS2322: [0mType 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m15[0m                 id,
+[7m  [0m [91m                ~~[0m
+[96msrc/api/admin/attributes/[id]/route.ts[0m:[93m79[0m:[93m17[0m - [91merror[0m[90m TS2322: [0mType 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m79[0m                 id,
+[7m  [0m [91m                ~~[0m
+[96msrc/api/admin/attributes/bulk-move/route.ts[0m:[93m5[0m:[93m23[0m - [91merror[0m[90m TS7030: [0mNot all code paths return a value.
+
+[7m5[0m export async function POST(
+[7m [0m [91m                      ~~~~[0m
+[96msrc/api/admin/media/route.ts[0m:[93m4[0m:[93m20[0m - [91merror[0m[90m TS7030: [0mNot all code paths return a value.
+
+[7m4[0m export const GET = async (
+[7m [0m [91m                   ~~~~~~~[0m
+[7m5[0m     req: MedusaRequest,
+[7m [0m [91m~~~~~~~~~~~~~~~~~~~~~~~[0m
+[7m6[0m     res: MedusaResponse
+[7m [0m [91m~~~~~~~~~~~~~~~~~~~~~~~[0m
+[7m7[0m ) => {
+[7m [0m [91m~~~~~~[0m
+[96msrc/api/admin/media/route.ts[0m:[93m33[0m:[93m23[0m - [91merror[0m[90m TS7022: [0m'command' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
+
+[7m33[0m                 const command = new ListObjectsV2Command({
+[7m  [0m [91m                      ~~~~~~~[0m
+[96msrc/api/admin/media/route.ts[0m:[93m41[0m:[93m23[0m - [91merror[0m[90m TS7022: [0m'response' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
+
+[7m41[0m                 const response = await s3Client.send(command)
+[7m  [0m [91m                      ~~~~~~~~[0m
+[96msrc/api/admin/media/route.ts[0m:[93m45[0m:[93m63[0m - [91merror[0m[90m TS7006: [0mParameter 'item' implicitly has an 'any' type.
+
+[7m45[0m                     allFiles.push(...response.Contents.filter(item => item.Key !== prefix))
+[7m  [0m [91m                                                              ~~~~[0m
+[96msrc/api/admin/media/route.ts[0m:[93m119[0m:[93m20[0m - [91merror[0m[90m TS18046: [0m'error' is of type 'unknown'.
+
+[7m119[0m             error: error.message,
+[7m   [0m [91m                   ~~~~~[0m
+[96msrc/api/admin/product-categories/[id]/generate-filters/generator.ts[0m:[93m378[0m:[93m5[0m - [91merror[0m[90m TS6133: [0m'productIds' is declared but its value is never read.
+
+[7m378[0m     productIds: string[],
+[7m   [0m [91m    ~~~~~~~~~~[0m
+[96msrc/api/admin/product-categories/[id]/generate-filters/generator.ts[0m:[93m379[0m:[93m5[0m - [91merror[0m[90m TS6133: [0m'remoteQuery' is declared but its value is never read.
+
+[7m379[0m     remoteQuery: any,
+[7m   [0m [91m    ~~~~~~~~~~~[0m
+[96msrc/api/admin/product-categories/[id]/sync-attributes/route.ts[0m:[93m13[0m:[93m23[0m - [91merror[0m[90m TS7030: [0mNot all code paths return a value.
+
+[7m13[0m export async function POST(
+[7m  [0m [91m                      ~~~~[0m
+[96msrc/api/admin/product-categories/[id]/sync-attributes/route.ts[0m:[93m53[0m:[93m66[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m53[0m         const categoryIdsToScan = [categoryId, ...getDescendants(categoryId)]
+[7m  [0m [91m                                                                 ~~~~~~~~~~[0m
+[96msrc/api/admin/product-categories/[id]/sync-attributes/route.ts[0m:[93m75[0m:[93m34[0m - [91merror[0m[90m TS18048: [0m'category' is possibly 'undefined'.
+
+[7m75[0m         const existingMetadata = category.metadata || {}
+[7m  [0m [91m                                 ~~~~~~~~[0m
+[96msrc/api/admin/product-categories/[id]/sync-attributes/route.ts[0m:[93m92[0m:[93m15[0m - [91merror[0m[90m TS6133: [0m'existingActiveIds' is declared but its value is never read.
+
+[7m92[0m         const existingActiveIds = new Set(
+[7m  [0m [91m              ~~~~~~~~~~~~~~~~~[0m
+[96msrc/api/admin/product-categories/[id]/sync-attributes/route.ts[0m:[93m148[0m:[93m27[0m - [91merror[0m[90m TS18048: [0m'category' is possibly 'undefined'.
+
+[7m148[0m             categoryName: category.name,
+[7m   [0m [91m                          ~~~~~~~~[0m
+[96msrc/api/admin/product-categories/[id]/sync-sorting/route.ts[0m:[93m13[0m:[93m23[0m - [91merror[0m[90m TS7030: [0mNot all code paths return a value.
+
+[7m13[0m export async function POST(
+[7m  [0m [91m                      ~~~~[0m
+[96msrc/api/admin/product-categories/[id]/sync-sorting/route.ts[0m:[93m34[0m:[93m31[0m - [91merror[0m[90m TS18048: [0m'category' is possibly 'undefined'.
+
+[7m34[0m         const sortingConfig = category.metadata?.sorting_config as {
+[7m  [0m [91m                              ~~~~~~~~[0m
+[96msrc/api/admin/product-categories/[id]/sync-sorting/route.ts[0m:[93m44[0m:[93m27[0m - [91merror[0m[90m TS18048: [0m'category' is possibly 'undefined'.
+
+[7m44[0m                 category: category.name
+[7m  [0m [91m                          ~~~~~~~~[0m
+[96msrc/api/admin/product-categories/[id]/sync-sorting/route.ts[0m:[93m93[0m:[93m27[0m - [91merror[0m[90m TS18048: [0m'category' is possibly 'undefined'.
+
+[7m93[0m                 category: category.name,
+[7m  [0m [91m                          ~~~~~~~~[0m
+[96msrc/api/admin/product-categories/[id]/sync-sorting/route.ts[0m:[93m103[0m:[93m39[0m - [91merror[0m[90m TS18048: [0m'category' is possibly 'undefined'.
+
+[7m103[0m         const existingSortingConfig = category.metadata?.sorting_config || {}
+[7m   [0m [91m                                      ~~~~~~~~[0m
+[96msrc/api/admin/product-categories/[id]/sync-sorting/route.ts[0m:[93m105[0m:[93m16[0m - [91merror[0m[90m TS18048: [0m'category' is possibly 'undefined'.
+
+[7m105[0m             ...category.metadata,
+[7m   [0m [91m               ~~~~~~~~[0m
+[96msrc/api/admin/product-categories/[id]/sync-sorting/route.ts[0m:[93m123[0m:[93m23[0m - [91merror[0m[90m TS18048: [0m'category' is possibly 'undefined'.
+
+[7m123[0m             category: category.name,
+[7m   [0m [91m                      ~~~~~~~~[0m
+[96msrc/api/admin/products/[id]/attributes/route.ts[0m:[93m6[0m:[93m1[0m - [91merror[0m[90m TS6133: [0m'PRODUCT_ATTRIBUTES_MODULE' is declared but its value is never read.
+
+[7m6[0m import { PRODUCT_ATTRIBUTES_MODULE } from "../../../../../modules/product-attributes"
+[7m [0m [91m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/api/admin/products/[id]/attributes/route.ts[0m:[93m8[0m:[93m20[0m - [91merror[0m[90m TS7030: [0mNot all code paths return a value.
+
+[7m8[0m export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
+[7m [0m [91m                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/api/admin/products/[id]/attributes/route.ts[0m:[93m53[0m:[93m21[0m - [91merror[0m[90m TS7030: [0mNot all code paths return a value.
+
+[7m53[0m export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+[7m  [0m [91m                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/api/admin/products/[id]/attributes/route.ts[0m:[93m66[0m:[93m62[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m66[0m         const product = await productService.retrieveProduct(productId)
+[7m  [0m [91m                                                             ~~~~~~~~~[0m
+[96msrc/api/admin/products/[id]/attributes/route.ts[0m:[93m78[0m:[93m21[0m - [91merror[0m[90m TS2322: [0mType 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m78[0m                     productId,
+[7m  [0m [91m                    ~~~~~~~~~[0m
+[96msrc/api/admin/products/[id]/attributes/route.ts[0m:[93m114[0m:[93m85[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m114[0m                     const productWithOptions = await productService.retrieveProduct(productId, {
+[7m   [0m [91m                                                                                    ~~~~~~~~~[0m
+[96msrc/api/admin/products/[id]/attributes/route.ts[0m:[93m178[0m:[93m77[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m178[0m             const productWithOptions = await productService.retrieveProduct(productId, {
+[7m   [0m [91m                                                                            ~~~~~~~~~[0m
+[96msrc/api/admin/products/[id]/attributes/route.ts[0m:[93m229[0m:[93m54[0m - [91merror[0m[90m TS7006: [0mParameter 'acc' implicitly has an 'any' type.
+
+[7m229[0m                     const optionsMap = combo.reduce((acc, v) => {
+[7m   [0m [91m                                                     ~~~[0m
+[96msrc/api/admin/products/[id]/attributes/route.ts[0m:[93m229[0m:[93m59[0m - [91merror[0m[90m TS7006: [0mParameter 'v' implicitly has an 'any' type.
+
+[7m229[0m                     const optionsMap = combo.reduce((acc, v) => {
+[7m   [0m [91m                                                          ~[0m
+[96msrc/api/admin/products/[id]/attributes/route.ts[0m:[93m250[0m:[93m77[0m - [91merror[0m[90m TS7006: [0mParameter 'v' implicitly has an 'any' type.
+
+[7m250[0m                         console.log(`   ⏭️  Skipping duplicate: ${combo.map(v => v.value).join(" / ")}`)
+[7m   [0m [91m                                                                            ~[0m
+[96msrc/api/admin/products/[id]/attributes/route.ts[0m:[93m256[0m:[93m42[0m - [91merror[0m[90m TS7006: [0mParameter 'v' implicitly has an 'any' type.
+
+[7m256[0m                         title: combo.map(v => v.value).join(" / "),
+[7m   [0m [91m                                         ~[0m
+[96msrc/api/admin/products/[id]/attributes/route.ts[0m:[93m260[0m:[93m50[0m - [91merror[0m[90m TS7006: [0mParameter 'v' implicitly has an 'any' type.
+
+[7m260[0m                             variation: combo.map(v => slugify(v.value)).join("-")
+[7m   [0m [91m                                                 ~[0m
+[96msrc/api/admin/products/bulk-assign-prices/route.ts[0m:[93m12[0m:[93m37[0m - [91merror[0m[90m TS6133: [0m'Modules' is declared but its value is never read.
+
+[7m12[0m import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+[7m  [0m [91m                                    ~~~~~~~[0m
+[96msrc/api/admin/quickbooks/check/customers/route.ts[0m:[93m10[0m:[93m5[0m - [91merror[0m[90m TS6133: [0m'req' is declared but its value is never read.
+
+[7m10[0m     req: MedusaRequest,
+[7m  [0m [91m    ~~~[0m
+[96msrc/api/admin/quickbooks/config/route.ts[0m:[93m9[0m:[93m5[0m - [91merror[0m[90m TS6133: [0m'req' is declared but its value is never read.
+
+[7m9[0m     req: MedusaRequest,
+[7m [0m [91m    ~~~[0m
+[96msrc/api/admin/search/customers/sync/route.ts[0m:[93m10[0m:[93m21[0m - [91merror[0m[90m TS7030: [0mNot all code paths return a value.
+
+[7m10[0m export const POST = async (
+[7m  [0m [91m                    ~~~~~~~[0m
+[7m11[0m     req: MedusaRequest,
+[7m  [0m [91m~~~~~~~~~~~~~~~~~~~~~~~[0m
+[7m12[0m     res: MedusaResponse
+[7m  [0m [91m~~~~~~~~~~~~~~~~~~~~~~~[0m
+[7m13[0m ) => {
+[7m  [0m [91m~~~~~~[0m
+[96msrc/api/admin/search/customers/sync/route.ts[0m:[93m16[0m:[93m15[0m - [91merror[0m[90m TS6133: [0m'query' is declared but its value is never read.
+
+[7m16[0m         const query = req.scope.resolve("query")
+[7m  [0m [91m              ~~~~~[0m
+[96msrc/api/admin/search/customers/sync/route.ts[0m:[93m39[0m:[93m29[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m39[0m                 const val = latestMeili.hits[0].updated_at
+[7m  [0m [91m                            ~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/api/admin/search/products/sync/route.ts[0m:[93m40[0m:[93m29[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m40[0m                 const val = latestMeili.hits[0].updated_at
+[7m  [0m [91m                            ~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/api/admin/sync-product-meilisearch/[id]/route.ts[0m:[93m53[0m:[93m17[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m53[0m             id: product.id,
+[7m  [0m [91m                ~~~~~~~[0m
+[96msrc/api/admin/sync-product-meilisearch/[id]/route.ts[0m:[93m54[0m:[93m20[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m54[0m             title: product.title,
+[7m  [0m [91m                   ~~~~~~~[0m
+[96msrc/api/admin/sync-product-meilisearch/[id]/route.ts[0m:[93m55[0m:[93m26[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m55[0m             description: product.description,
+[7m  [0m [91m                         ~~~~~~~[0m
+[96msrc/api/admin/sync-product-meilisearch/[id]/route.ts[0m:[93m56[0m:[93m21[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m56[0m             handle: product.handle,
+[7m  [0m [91m                    ~~~~~~~[0m
+[96msrc/api/admin/sync-product-meilisearch/[id]/route.ts[0m:[93m57[0m:[93m24[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m57[0m             thumbnail: product.thumbnail,
+[7m  [0m [91m                       ~~~~~~~[0m
+[96msrc/api/admin/sync-product-meilisearch/[id]/route.ts[0m:[93m58[0m:[93m26[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m58[0m             variant_sku: product.variants?.map((v: any) => v.sku).filter(Boolean) || [],
+[7m  [0m [91m                         ~~~~~~~[0m
+[96msrc/api/admin/sync-product-meilisearch/[id]/route.ts[0m:[93m59[0m:[93m23[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m59[0m             metadata: product.metadata || {},
+[7m  [0m [91m                      ~~~~~~~[0m
+[96msrc/api/admin/sync-product-meilisearch/[id]/route.ts[0m:[93m60[0m:[93m32[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m60[0m             metadata_material: product.metadata?.material || null,
+[7m  [0m [91m                               ~~~~~~~[0m
+[96msrc/api/admin/sync-product-meilisearch/[id]/route.ts[0m:[93m61[0m:[93m32[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m61[0m             metadata_category: product.metadata?.category || null,
+[7m  [0m [91m                               ~~~~~~~[0m
+[96msrc/api/admin/sync-product-meilisearch/[id]/route.ts[0m:[93m62[0m:[93m21[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m62[0m             status: product.status,
+[7m  [0m [91m                    ~~~~~~~[0m
+[96msrc/api/admin/sync-product-meilisearch/[id]/route.ts[0m:[93m68[0m:[93m49[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m68[0m             `[MeiliSearch Sync API] ✅ Synced: ${product.title} | SKUs: [${document.variant_sku.join(", ")}]`
+[7m  [0m [91m                                                ~~~~~~~[0m
+[96msrc/api/admin/sync-product-meilisearch/[id]/route.ts[0m:[93m73[0m:[93m22[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m73[0m             product: product.title,
+[7m  [0m [91m                     ~~~~~~~[0m
+[96msrc/api/admin/uploads/route.ts[0m:[93m64[0m:[93m20[0m - [91merror[0m[90m TS18046: [0m'error' is of type 'unknown'.
+
+[7m64[0m             error: error.message
+[7m  [0m [91m                   ~~~~~[0m
+[96msrc/api/debug/category-metadata/[name]/route.ts[0m:[93m16[0m:[93m30[0m - [91merror[0m[90m TS18048: [0m'name' is possibly 'undefined'.
+
+[7m16[0m             filters: { name: name.toUpperCase() }
+[7m  [0m [91m                             ~~~~[0m
+[96msrc/api/middlewares.ts[0m:[93m42[0m:[93m27[0m - [91merror[0m[90m TS6133: [0m'basePath' is declared but its value is never read.
+
+[7m42[0m                     const basePath = process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
+[7m  [0m [91m                          ~~~~~~~~[0m
+[96msrc/api/store/_shared/product-enrichment.ts[0m:[93m2[0m:[93m1[0m - [91merror[0m[90m TS6133: [0m'Knex' is declared but its value is never read.
+
+[7m2[0m import { Knex } from "knex"
+[7m [0m [91m~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/api/store/auth/activate/route.ts[0m:[93m36[0m:[93m28[0m - [91merror[0m[90m TS6133: [0m'timestamp' is declared but its value is never read.
+
+[7m36[0m         const [customerId, timestamp] = decoded.split(':')
+[7m  [0m [91m                           ~~~~~~~~~[0m
+[96msrc/api/store/auth/activate/route.ts[0m:[93m44[0m:[93m26[0m - [91merror[0m[90m TS2769: [0mNo overload matches this call.
+  Argument of type '[string | undefined]' is not assignable to parameter of type 'never'.
+  Overload 2 of 2, '(template: TemplateStringsArray, ...parameters: readonly ParameterOrFragment<never>[]): PendingQuery<Row[]>', gave the following error.
+    Argument of type 'string | undefined' is not assignable to parameter of type 'ParameterOrFragment<never>'.
+      Type 'undefined' is not assignable to type 'ParameterOrFragment<never>'.
+
+[7m44[0m             WHERE id = ${customerId} AND deleted_at IS NULL
+[7m  [0m [91m                         ~~~~~~~~~~[0m
+
+[96msrc/api/store/auth/register/case1-new-customer.ts[0m:[93m80[0m:[93m40[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m80[0m                     customer_group_id: retailGroups[0].id
+[7m  [0m [91m                                       ~~~~~~~~~~~~~~~[0m
+[96msrc/api/store/auth/register/case3-legacy-customer.ts[0m:[93m1[0m:[93m1[0m - [91merror[0m[90m TS6133: [0m'Modules' is declared but its value is never read.
+
+[7m1[0m import { Modules } from '@medusajs/framework/utils'
+[7m [0m [91m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/api/store/auth/register/case3-legacy-customer.ts[0m:[93m9[0m:[93m5[0m - [91merror[0m[90m TS6133: [0m'req' is declared but its value is never read.
+
+[7m9[0m     req: MedusaRequest,
+[7m [0m [91m    ~~~[0m
+[96msrc/api/store/auth/reset-password/confirm/route.ts[0m:[93m139[0m:[93m30[0m - [91merror[0m[90m TS18048: [0m'newProvider' is possibly 'undefined'.
+
+[7m139[0m                 WHERE id = ${newProvider.id}
+[7m   [0m [91m                             ~~~~~~~~~~~[0m
+[96msrc/api/store/auth/sendgrid-debug/route.ts[0m:[93m8[0m:[93m5[0m - [91merror[0m[90m TS6133: [0m'req' is declared but its value is never read.
+
+[7m8[0m     req: MedusaRequest,
+[7m [0m [91m    ~~~[0m
+[96msrc/api/store/categories/[id]/products-with-filters/route.ts[0m:[93m37[0m:[93m36[0m - [91merror[0m[90m TS18048: [0m'category' is possibly 'undefined'.
+
+[7m37[0m         const includeDescendants = category.metadata?.include_descendants_tree ?? true
+[7m  [0m [91m                                   ~~~~~~~~[0m
+[96msrc/api/store/categories/[id]/products-with-filters/route.ts[0m:[93m44[0m:[93m62[0m - [91merror[0m[90m TS2345: [0mArgument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m44[0m             const descendants = await getCategoryDescendants(id, query)
+[7m  [0m [91m                                                             ~~[0m
+[96msrc/api/store/categories/[id]/products-with-filters/route.ts[0m:[93m80[0m:[93m30[0m - [91merror[0m[90m TS18048: [0m'category' is possibly 'undefined'.
+
+[7m80[0m         const filterConfig = category.metadata?.filter_config as any
+[7m  [0m [91m                             ~~~~~~~~[0m
+[96msrc/api/store/categories/[id]/products-with-filters/route.ts[0m:[93m123[0m:[93m21[0m - [91merror[0m[90m TS18048: [0m'category' is possibly 'undefined'.
+
+[7m123[0m                 id: category.id,
+[7m   [0m [91m                    ~~~~~~~~[0m
+[96msrc/api/store/categories/[id]/products-with-filters/route.ts[0m:[93m124[0m:[93m23[0m - [91merror[0m[90m TS18048: [0m'category' is possibly 'undefined'.
+
+[7m124[0m                 name: category.name,
+[7m   [0m [91m                      ~~~~~~~~[0m
+[96msrc/api/store/categories/[id]/products-with-filters/route.ts[0m:[93m125[0m:[93m25[0m - [91merror[0m[90m TS18048: [0m'category' is possibly 'undefined'.
+
+[7m125[0m                 handle: category.handle,
+[7m   [0m [91m                        ~~~~~~~~[0m
+[96msrc/api/store/categories/[id]/products-with-filters/route.ts[0m:[93m126[0m:[93m37[0m - [91merror[0m[90m TS18048: [0m'category' is possibly 'undefined'.
+
+[7m126[0m                 parent_category_id: category.parent_category_id,
+[7m   [0m [91m                                    ~~~~~~~~[0m
+[96msrc/api/store/custom/route.ts[0m:[93m4[0m:[93m3[0m - [91merror[0m[90m TS6133: [0m'req' is declared but its value is never read.
+
+[7m4[0m   req: MedusaRequest,
+[7m [0m [91m  ~~~[0m
+[96msrc/api/store/customers/check-email/route.ts[0m:[93m37[0m:[93m26[0m - [91merror[0m[90m TS18048: [0m'customer' is possibly 'undefined'.
+
+[7m37[0m             has_account: customer.has_account || false,
+[7m  [0m [91m                         ~~~~~~~~[0m
+[96msrc/api/store/customers/check-email/route.ts[0m:[93m38[0m:[93m24[0m - [91merror[0m[90m TS18048: [0m'customer' is possibly 'undefined'.
+
+[7m38[0m             is_legacy: customer.metadata?.legacy_customer === true
+[7m  [0m [91m                       ~~~~~~~~[0m
+[96msrc/api/store/customers/me/addresses/[address_id]/route.ts[0m:[93m100[0m:[93m35[0m - [91merror[0m[90m TS18048: [0m'customer' is possibly 'undefined'.
+
+[7m100[0m     const defaultBillingAddress = customer.addresses?.find((addr: any) => addr.is_default_billing === true);
+[7m   [0m [91m                                  ~~~~~~~~[0m
+[96msrc/api/store/customers/me/addresses/[address_id]/route.ts[0m:[93m101[0m:[93m36[0m - [91merror[0m[90m TS18048: [0m'customer' is possibly 'undefined'.
+
+[7m101[0m     const defaultShippingAddress = customer.addresses?.find((addr: any) => addr.is_default_shipping === true);
+[7m   [0m [91m                                   ~~~~~~~~[0m
+[96msrc/api/store/customers/me/addresses/[address_id]/route.ts[0m:[93m122[0m:[93m24[0m - [91merror[0m[90m TS2322: [0mType 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+
+[7m122[0m         input: { ids: [addressId] }
+[7m   [0m [91m                       ~~~~~~~~~[0m
+[96msrc/api/store/customers/me/addresses/[address_id]/route.ts[0m:[93m139[0m:[93m35[0m - [91merror[0m[90m TS18048: [0m'customer' is possibly 'undefined'.
+
+[7m139[0m     const defaultBillingAddress = customer.addresses?.find((addr: any) => addr.is_default_billing === true);
+[7m   [0m [91m                                  ~~~~~~~~[0m
+[96msrc/api/store/customers/me/addresses/[address_id]/route.ts[0m:[93m140[0m:[93m36[0m - [91merror[0m[90m TS18048: [0m'customer' is possibly 'undefined'.
+
+[7m140[0m     const defaultShippingAddress = customer.addresses?.find((addr: any) => addr.is_default_shipping === true);
+[7m   [0m [91m                                   ~~~~~~~~[0m
+[96msrc/api/store/customers/me/addresses/route.ts[0m:[93m87[0m:[93m11[0m - [91merror[0m[90m TS6133: [0m'newAddress' is declared but its value is never read.
+
+[7m87[0m     const newAddress = addresses[0];
+[7m  [0m [91m          ~~~~~~~~~~[0m
+[96msrc/api/store/customers/me/addresses/route.ts[0m:[93m103[0m:[93m35[0m - [91merror[0m[90m TS18048: [0m'customer' is possibly 'undefined'.
+
+[7m103[0m     const defaultBillingAddress = customer.addresses?.find((addr: any) => addr.is_default_billing === true);
+[7m   [0m [91m                                  ~~~~~~~~[0m
+[96msrc/api/store/customers/me/addresses/route.ts[0m:[93m104[0m:[93m36[0m - [91merror[0m[90m TS18048: [0m'customer' is possibly 'undefined'.
+
+[7m104[0m     const defaultShippingAddress = customer.addresses?.find((addr: any) => addr.is_default_shipping === true);
+[7m   [0m [91m                                   ~~~~~~~~[0m
+[96msrc/api/store/customers/me/auth-methods/route.ts[0m:[93m2[0m:[93m1[0m - [91merror[0m[90m TS6133: [0m'Modules' is declared but its value is never read.
+
+[7m2[0m import { Modules } from "@medusajs/framework/utils"
+[7m [0m [91m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/api/store/product-categories/[id]/breadcrumbs/route.ts[0m:[93m36[0m:[93m27[0m - [91merror[0m[90m TS7022: [0m'categories' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
+
+[7m36[0m             const { data: categories } = await query.graph({
+[7m  [0m [91m                          ~~~~~~~~~~[0m
+[96msrc/api/store/product-categories/[id]/breadcrumbs/route.ts[0m:[93m42[0m:[93m19[0m - [91merror[0m[90m TS7022: [0m'category' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
+
+[7m42[0m             const category = categories?.[0]
+[7m  [0m [91m                  ~~~~~~~~[0m
+[96msrc/api/store/product-categories/[id]/route.ts[0m:[93m2[0m:[93m1[0m - [91merror[0m[90m TS6133: [0m'Modules' is declared but its value is never read.
+
+[7m2[0m import { Modules } from "@medusajs/framework/utils"
+[7m [0m [91m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/api/store/product-categories/[id]/route.ts[0m:[93m46[0m:[93m13[0m - [91merror[0m[90m TS2322: [0mType 'string | undefined' is not assignable to type 'string | null'.
+  Type 'undefined' is not assignable to type 'string | null'.
+
+[7m46[0m         let currentId: string | null = categoryId
+[7m  [0m [91m            ~~~~~~~~~[0m
+[96msrc/api/store/product-categories/route.ts[0m:[93m2[0m:[93m1[0m - [91merror[0m[90m TS6133: [0m'Modules' is declared but its value is never read.
+
+[7m2[0m import { Modules } from "@medusajs/framework/utils"
+[7m [0m [91m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/api/store/product-categories/route.ts[0m:[93m93[0m:[93m23[0m - [91merror[0m[90m TS7022: [0m'categories' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
+
+[7m93[0m         const { data: categories } = await query.graph({
+[7m  [0m [91m                      ~~~~~~~~~~[0m
+[96msrc/api/store/product-categories/route.ts[0m:[93m99[0m:[93m15[0m - [91merror[0m[90m TS7022: [0m'cat' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
+
+[7m99[0m         const cat = categories?.[0]
+[7m  [0m [91m              ~~~[0m
+[96msrc/api/store/products/[id]/breadcrumbs/route.ts[0m:[93m4[0m:[93m45[0m - [91merror[0m[90m TS6133: [0m'BreadcrumbItem' is declared but its value is never read.
+
+[7m4[0m import { getProductMainCategoryBreadcrumbs, BreadcrumbItem } from "../../../../utils/breadcrumbs"
+[7m [0m [91m                                            ~~~~~~~~~~~~~~[0m
+[96msrc/api/store/products/[id]/breadcrumbs/route.ts[0m:[93m6[0m:[93m20[0m - [91merror[0m[90m TS7030: [0mNot all code paths return a value.
+
+[7m6[0m export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
+[7m [0m [91m                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/api/store/products/[id]/with-prices/route.ts[0m:[93m4[0m:[93m1[0m - [91merror[0m[90m TS6133: [0m'getProductMainCategoryBreadcrumbs' is declared but its value is never read.
+
+[7m4[0m import { getProductMainCategoryBreadcrumbs } from "../../../../utils/breadcrumbs"
+[7m [0m [91m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/api/store/products/[id]/with-prices/route.ts[0m:[93m20[0m:[93m15[0m - [91merror[0m[90m TS6133: [0m'productModuleService' is declared but its value is never read.
+
+[7m20[0m         const productModuleService: IProductModuleService = req.scope.resolve(Modules.PRODUCT)
+[7m  [0m [91m              ~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/api/store/products/[id]/with-prices/route.ts[0m:[93m56[0m:[93m29[0m - [91merror[0m[90m TS18048: [0m'originalProduct' is possibly 'undefined'.
+
+[7m56[0m         const breadcrumbs = originalProduct.metadata?.main_category_breadcrumbs || null
+[7m  [0m [91m                            ~~~~~~~~~~~~~~~[0m
+[96msrc/api/store/products/[id]/with-prices/route.ts[0m:[93m59[0m:[93m28[0m - [91merror[0m[90m TS18048: [0m'originalProduct' is possibly 'undefined'.
+
+[7m59[0m         const variantIds = originalProduct.variants.map((v: any) => v.id)
+[7m  [0m [91m                           ~~~~~~~~~~~~~~~[0m
+[96msrc/api/store/products/[id]/with-prices/route.ts[0m:[93m76[0m:[93m36[0m - [91merror[0m[90m TS18048: [0m'originalProduct' is possibly 'undefined'.
+
+[7m76[0m         const variantsWithPrices = originalProduct.variants.map((variant: any) => {
+[7m  [0m [91m                                   ~~~~~~~~~~~~~~~[0m
+[96msrc/lib/category-attributes-sync.ts[0m:[93m6[0m:[93m60[0m - [91merror[0m[90m TS6133: [0m'scope' is declared but its value is never read.
+
+[7m6[0m export function scheduleCategoryUpdate(categoryId: string, scope: any, headers?: any): void {
+[7m [0m [91m                                                           ~~~~~[0m
+[96msrc/lib/quickbooks/sync-inventory-core.ts[0m:[93m51[0m:[93m28[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m51[0m         const locationId = locations[0].id
+[7m  [0m [91m                           ~~~~~~~~~~~~[0m
+[96msrc/lib/quickbooks/sync-inventory-core.ts[0m:[93m52[0m:[93m49[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m52[0m         logger.info(`📍 Using Stock Location: ${locations[0].name} (${locationId})`)
+[7m  [0m [91m                                                ~~~~~~~~~~~~[0m
+[96msrc/lib/quickbooks/sync-inventory-core.ts[0m:[93m194[0m:[93m29[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m194[0m                         id: levels[0].id,
+[7m   [0m [91m                            ~~~~~~~~~[0m
+[96msrc/modules/category-filters/utils/filter-generator.ts[0m:[93m359[0m:[93m5[0m - [91merror[0m[90m TS6133: [0m'productIds' is declared but its value is never read.
+
+[7m359[0m     productIds: string[],
+[7m   [0m [91m    ~~~~~~~~~~[0m
+[96msrc/modules/category-filters/utils/filter-generator.ts[0m:[93m360[0m:[93m5[0m - [91merror[0m[90m TS6133: [0m'remoteQuery' is declared but its value is never read.
+
+[7m360[0m     remoteQuery: any,
+[7m   [0m [91m    ~~~~~~~~~~~[0m
+[96msrc/subscribers/protect-managed-options.ts[0m:[93m17[0m:[93m11[0m - [91merror[0m[90m TS6133: [0m'productService' is declared but its value is never read.
+
+[7m17[0m     const productService = container.resolve(Modules.PRODUCT)
+[7m  [0m [91m          ~~~~~~~~~~~~~~[0m
+[96msrc/subscribers/protect-managed-options.ts[0m:[93m38[0m:[93m24[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m38[0m         const option = product.options?.find((o: any) => o.id === data.id)
+[7m  [0m [91m                       ~~~~~~~[0m
+[96msrc/subscribers/protect-managed-options.ts[0m:[93m45[0m:[93m39[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m45[0m         console.log(`   📦 Product: ${product.title}`)
+[7m  [0m [91m                                      ~~~~~~~[0m
+[96msrc/subscribers/protect-managed-options.ts[0m:[93m49[0m:[93m36[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m49[0m         const variantAttributes = (product.metadata?.variant_attributes as string[]) || []
+[7m  [0m [91m                                   ~~~~~~~[0m
+[96msrc/workflows/build-category-breadcrumbs-workflow.ts[0m:[93m27[0m:[93m21[0m - [91merror[0m[90m TS7022: [0m'data' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
+
+[7m27[0m             const { data } = await query.graph({
+[7m  [0m [91m                    ~~~~[0m
+[96msrc/workflows/build-category-breadcrumbs-workflow.ts[0m:[93m39[0m:[93m19[0m - [91merror[0m[90m TS7022: [0m'category' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
+
+[7m39[0m             const category = data[0]
+[7m  [0m [91m                  ~~~~~~~~[0m
+[96msrc/workflows/cleanup-variant-attributes.ts[0m:[93m33[0m:[93m7[0m - [91merror[0m[90m TS6133: [0m'identifyVariantsStep' is declared but its value is never read.
+
+[7m33[0m const identifyVariantsStep = createStep(
+[7m  [0m [91m      ~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/workflows/cleanup-variant-attributes.ts[0m:[93m35[0m:[93m5[0m - [91merror[0m[90m TS2345: [0mArgument of type '({ productId, attributeKeyId }: { productId: any; attributeKeyId: any; }, { container }: StepExecutionContext) => Promise<StepResponse<{ ids: string[]; count: number; product: ProductDTO; }, { ids: string[]; count: number; product: ProductDTO; }>>' is not assignable to parameter of type 'InvokeFn<unknown, { ids: string[]; count: number; product: ProductDTO; }, { ids: string[]; count: number; product: ProductDTO; }>'.
+  Types of parameters '__0' and 'input' are incompatible.
+    Type 'unknown' is not assignable to type '{ productId: any; attributeKeyId: any; }'.
+
+[7m35[0m     async ({ productId, attributeKeyId }, { container }) => {
+[7m  [0m [91m    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m5[0m:[93m7[0m - [91merror[0m[90m TS6133: [0m'createVariantsStep' is declared but its value is never read.
+
+[7m5[0m const createVariantsStep = createStep(
+[7m [0m [91m      ~~~~~~~~~~~~~~~~~~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m7[0m:[93m5[0m - [91merror[0m[90m TS2345: [0mArgument of type '({ productId, variantKeys, attributes, basePrice }: { productId: any; variantKeys: any; attributes: any; basePrice: any; }, { container }: StepExecutionContext) => Promise<StepResponse<{ variantsCreated: number; priceSetsCreated: number; createdOptions: string[]; createdVariants: any[]; createdPriceSets: string[]; }...' is not assignable to parameter of type 'InvokeFn<unknown, { variantsCreated: number; priceSetsCreated: number; createdOptions: string[]; createdVariants: any[]; createdPriceSets: string[]; }, { variantsCreated: number; priceSetsCreated: number; createdOptions: string[]; createdVariants: any[]; createdPriceSets: string[]; }>'.
+  Types of parameters '__0' and 'input' are incompatible.
+    Type 'unknown' is not assignable to type '{ productId: any; variantKeys: any; attributes: any; basePrice: any; }'.
+
+[7m7[0m     async ({ productId, variantKeys, attributes, basePrice }, { container }) => {
+[7m [0m [91m    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m27[0m:[93m51[0m - [91merror[0m[90m TS7006: [0mParameter 'keyId' implicitly has an 'any' type.
+
+[7m27[0m         const variantAttributes = variantKeys.map(keyId => ({
+[7m  [0m [91m                                                  ~~~~~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m29[0m:[93m36[0m - [91merror[0m[90m TS7006: [0mParameter 'a' implicitly has an 'any' type.
+
+[7m29[0m             label: attributes.find(a => a.attribute_key.id === keyId)?.attribute_key?.label || "Unknown",
+[7m  [0m [91m                                   ~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m30[0m:[93m39[0m - [91merror[0m[90m TS7006: [0mParameter 'a' implicitly has an 'any' type.
+
+[7m30[0m             values: attributes.filter(a => a.attribute_key.id === keyId)
+[7m  [0m [91m                                      ~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m58[0m:[93m54[0m - [91merror[0m[90m TS7006: [0mParameter 'v' implicitly has an 'any' type.
+
+[7m58[0m                 const optionValues = attr.values.map(v => v.value)
+[7m  [0m [91m                                                     ~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m69[0m:[93m41[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m69[0m                     createdOptions.push(newOptions[0].id)
+[7m  [0m [91m                                        ~~~~~~~~~~~~~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m70[0m:[93m57[0m - [91merror[0m[90m TS2532: [0mObject is possibly 'undefined'.
+
+[7m70[0m                     console.log(`   ✅ Option created: ${newOptions[0].id}`)
+[7m  [0m [91m                                                        ~~~~~~~~~~~~~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m75[0m:[93m51[0m - [91merror[0m[90m TS7006: [0mParameter 'combo' implicitly has an 'any' type.
+
+[7m75[0m             const variantsData = combinations.map(combo => ({
+[7m  [0m [91m                                                  ~~~~~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m77[0m:[93m34[0m - [91merror[0m[90m TS7006: [0mParameter 'v' implicitly has an 'any' type.
+
+[7m77[0m                 title: combo.map(v => v.value).join(" / "),
+[7m  [0m [91m                                 ~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m78[0m:[93m40[0m - [91merror[0m[90m TS7006: [0mParameter 'acc' implicitly has an 'any' type.
+
+[7m78[0m                 options: combo.reduce((acc, v) => {
+[7m  [0m [91m                                       ~~~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m78[0m:[93m45[0m - [91merror[0m[90m TS7006: [0mParameter 'v' implicitly has an 'any' type.
+
+[7m78[0m                 options: combo.reduce((acc, v) => {
+[7m  [0m [91m                                            ~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m84[0m:[93m42[0m - [91merror[0m[90m TS7006: [0mParameter 'v' implicitly has an 'any' type.
+
+[7m84[0m                     variation: combo.map(v => slugify(v.value)).join("-")
+[7m  [0m [91m                                         ~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m142[0m:[93m15[0m - [91merror[0m[90m TS6133: [0m'input' is declared but its value is never read.
+
+[7m142[0m     function (input: {
+[7m   [0m [91m              ~~~~~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m159[0m:[93m21[0m - [91merror[0m[90m TS7006: [0mParameter 'combo' implicitly has an 'any' type.
+
+[7m159[0m         acc.flatMap(combo => group.map(val => [...combo, val])),
+[7m   [0m [91m                    ~~~~~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m159[0m:[93m40[0m - [91merror[0m[90m TS7006: [0mParameter 'val' implicitly has an 'any' type.
+
+[7m159[0m         acc.flatMap(combo => group.map(val => [...combo, val])),
+[7m   [0m [91m                                       ~~~[0m
+[96msrc/workflows/generate-variants-from-attributes.ts[0m:[93m161[0m:[93m14[0m - [91merror[0m[90m TS7006: [0mParameter 'combo' implicitly has an 'any' type.
+
+[7m161[0m     ).filter(combo => combo.length === variantAttributes.length)
+[7m   [0m [91m             ~~~~~[0m
+[96msrc/workflows/product-attributes/create-attribute-set.ts[0m:[93m28[0m:[93m47[0m - [91merror[0m[90m TS18048: [0m'attributeSet' is possibly 'undefined'.
+
+[7m28[0m         return new StepResponse(attributeSet, attributeSet.id)
+[7m  [0m [91m                                              ~~~~~~~~~~~~[0m
+[96msrc/workflows/product-attributes/create-attribute-set.ts[0m:[93m30[0m:[93m5[0m - [91merror[0m[90m TS2345: [0mArgument of type '(attributeSetId: string, { container }: StepExecutionContext) => Promise<void>' is not assignable to parameter of type 'CompensateFn<string>'.
+  Types of parameters 'attributeSetId' and 'input' are incompatible.
+    Type 'string | undefined' is not assignable to type 'string'.
+      Type 'undefined' is not assignable to type 'string'.
+
+[7m30[0m     async (attributeSetId: string, { container }) => {
+[7m  [0m [91m    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/workflows/product-attributes/create-attribute-set.ts[0m:[93m40[0m:[93m53[0m - [91merror[0m[90m TS2554: [0mExpected 0 arguments, but got 1.
+
+[7m40[0m         const attributeSet = createAttributeSetStep(input)
+[7m  [0m [91m                                                    ~~~~~[0m
+[96msrc/workflows/product-attributes/delete-attribute-set.ts[0m:[93m76[0m:[93m16[0m - [91merror[0m[90m TS6133: [0m'recreated' is declared but its value is never read.
+
+[7m76[0m         const [recreated] = await productAttributesService.createAttributeSets([
+[7m  [0m [91m               ~~~~~~~~~[0m
+[96msrc/workflows/product-attributes/steps/sync-variants.ts[0m:[93m119[0m:[93m12[0m - [91merror[0m[90m TS6133: [0m'input' is declared but its value is never read.
+
+[7m119[0m     async (input, { container }) => {
+[7m   [0m [91m           ~~~~~[0m
+[96msrc/workflows/product-attributes/steps/sync-variants.ts[0m:[93m119[0m:[93m19[0m - [91merror[0m[90m TS6133: [0m'container' is declared but its value is never read.
+
+[7m119[0m     async (input, { container }) => {
+[7m   [0m [91m                  ~~~~~~~~~~~~~[0m
+[96msrc/workflows/product-attributes/update-attribute-key.ts[0m:[93m95[0m:[93m12[0m - [91merror[0m[90m TS6133: [0m'previousData' is declared but its value is never read.
+
+[7m95[0m     async (previousData, { container }) => {
+[7m  [0m [91m           ~~~~~~~~~~~~[0m
+[96msrc/workflows/product-attributes/update-attribute-key.ts[0m:[93m95[0m:[93m26[0m - [91merror[0m[90m TS6133: [0m'container' is declared but its value is never read.
+
+[7m95[0m     async (previousData, { container }) => {
+[7m  [0m [91m                         ~~~~~~~~~~~~~[0m
+[96msrc/workflows/product-attributes/update-attribute-set.ts[0m:[93m55[0m:[93m15[0m - [91merror[0m[90m TS6133: [0m'productAttributesService' is declared but its value is never read.
+
+[7m55[0m         const productAttributesService = container.resolve(PRODUCT_ATTRIBUTES_MODULE)
+[7m  [0m [91m              ~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[96msrc/workflows/product-attributes/update-product-attributes.ts[0m:[93m126[0m:[93m12[0m - [91merror[0m[90m TS6133: [0m'input' is declared but its value is never read.
+
+[7m126[0m     async (input, { container }) => {
+[7m   [0m [91m           ~~~~~[0m
+[96msrc/workflows/product-attributes/update-product-attributes.ts[0m:[93m126[0m:[93m19[0m - [91merror[0m[90m TS6133: [0m'container' is declared but its value is never read.
+
+[7m126[0m     async (input, { container }) => {
+[7m   [0m [91m                  ~~~~~~~~~~~~~[0m
+[96msrc/workflows/sync-product-meilisearch.ts[0m:[93m49[0m:[93m21[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m49[0m                 id: product.id,
+[7m  [0m [91m                    ~~~~~~~[0m
+[96msrc/workflows/sync-product-meilisearch.ts[0m:[93m50[0m:[93m24[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m50[0m                 title: product.title,
+[7m  [0m [91m                       ~~~~~~~[0m
+[96msrc/workflows/sync-product-meilisearch.ts[0m:[93m51[0m:[93m30[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m51[0m                 description: product.description,
+[7m  [0m [91m                             ~~~~~~~[0m
+[96msrc/workflows/sync-product-meilisearch.ts[0m:[93m52[0m:[93m25[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m52[0m                 handle: product.handle,
+[7m  [0m [91m                        ~~~~~~~[0m
+[96msrc/workflows/sync-product-meilisearch.ts[0m:[93m53[0m:[93m28[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m53[0m                 thumbnail: product.thumbnail,
+[7m  [0m [91m                           ~~~~~~~[0m
+[96msrc/workflows/sync-product-meilisearch.ts[0m:[93m54[0m:[93m30[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m54[0m                 variant_sku: product.variants?.map((v: any) => v.sku).filter(Boolean) || [],
+[7m  [0m [91m                             ~~~~~~~[0m
+[96msrc/workflows/sync-product-meilisearch.ts[0m:[93m55[0m:[93m27[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m55[0m                 metadata: product.metadata || {},
+[7m  [0m [91m                          ~~~~~~~[0m
+[96msrc/workflows/sync-product-meilisearch.ts[0m:[93m56[0m:[93m36[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m56[0m                 metadata_material: product.metadata?.material || null,
+[7m  [0m [91m                                   ~~~~~~~[0m
+[96msrc/workflows/sync-product-meilisearch.ts[0m:[93m57[0m:[93m36[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m57[0m                 metadata_category: product.metadata?.category || null,
+[7m  [0m [91m                                   ~~~~~~~[0m
+[96msrc/workflows/sync-product-meilisearch.ts[0m:[93m58[0m:[93m25[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m58[0m                 status: product.status,
+[7m  [0m [91m                        ~~~~~~~[0m
+[96msrc/workflows/sync-product-meilisearch.ts[0m:[93m64[0m:[93m53[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m64[0m                 `[MeiliSearch Workflow] ✅ Synced: ${product.title} | SKUs: [${document.variant_sku.join(", ")}]`
+[7m  [0m [91m                                                    ~~~~~~~[0m
+[96msrc/workflows/sync-product-meilisearch.ts[0m:[93m67[0m:[93m62[0m - [91merror[0m[90m TS18048: [0m'product' is possibly 'undefined'.
+
+[7m67[0m             return new StepResponse({ synced: true, product: product.title })
+[7m  [0m [91m                                                             ~~~~~~~[0m
+[96msrc/workflows/variant-cleanup/steps/delete-variants.ts[0m:[93m27[0m:[93m46[0m - [91merror[0m[90m TS6133: [0m'container' is declared but its value is never read.
+
+[7m27[0m     async (deletedIds: string[] | undefined, { container }) => {
+[7m  [0m [91m                                             ~~~~~~~~~~~~~[0m
+
+[33mwarn[39m:    Backend build completed with errors (7.13s)
+[32minfo[39m:    Frontend build completed successfully (26.31s)
