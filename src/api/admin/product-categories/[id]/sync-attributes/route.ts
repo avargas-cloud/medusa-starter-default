@@ -95,9 +95,9 @@ export async function POST(
         const existingAvailableIds = new Set(
             existingAvailable.map((f: any) => typeof f === 'string' ? f : f.attribute_id)
         )
-        const ___existingActiveIds = new Set(
-            existingActive.map((f: any) => typeof f === 'string' ? f : f.attribute_id)
-        )
+//         const ___existingActiveIds = new Set(
+//             existingActive.map((f: any) => typeof f === 'string' ? f : f.attribute_id)
+//         )
 
         const currentAttrIds = new Set(attributeKeyIds)
 

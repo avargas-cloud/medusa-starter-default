@@ -35,22 +35,22 @@ const validateVariantDeletionStep = createStep(
 )
 
 // NOTE: This step is currently not used in the workflow due to type complexity
-const ___identifyVariantsStep = createStep(
-    "identify-variants-to-delete",
-    async ({ productId, attributeKeyId }: IdentifyVariantsInput, { container }) => {
-        const productModuleService = container.resolve(Modules.PRODUCT)
-
-        // Get product with variants
-        const product = await productModuleService.retrieveProduct(productId, {
-            relations: ["variants", "options"]
-        })
-
-        // Find option for this attribute (we'll need attributeKey helper)
-        // For now, assume we can fetch it via API or store it in metadata
-        // Simplified: search by matching in metadata or option title
-
-        const variantsToDelete = product.variants?.filter(v =>
-            v.metadata?.managed_by === "attributes" &&
+// const ___identifyVariantsStep = createStep(
+//     "identify-variants-to-delete",
+//     async ({ productId, attributeKeyId }: IdentifyVariantsInput, { container }) => {
+//         const productModuleService = container.resolve(Modules.PRODUCT)
+// 
+//         // Get product with variants
+//         const product = await productModuleService.retrieveProduct(productId, {
+//             relations: ["variants", "options"]
+//         })
+// 
+//         // Find option for this attribute (we'll need attributeKey helper)
+//         // For now, assume we can fetch it via API or store it in metadata
+//         // Simplified: search by matching in metadata or option title
+// 
+//         const variantsToDelete = product.variants?.filter(v =>
+//             v.metadata?.managed_by === "attributes" &&
             v.metadata?.attribute_key_id === attributeKeyId
         ) || []
 

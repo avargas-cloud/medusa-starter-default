@@ -13,7 +13,7 @@ export const POST = async (
 ) => {
     try {
         const customerModule = req.scope.resolve("customer")
-        const ___query = req.scope.resolve("query")
+//         const ___query = req.scope.resolve("query")
         const { MeiliSearch } = await import("meilisearch")
 
         // 1. Get MeiliSearch Stats
