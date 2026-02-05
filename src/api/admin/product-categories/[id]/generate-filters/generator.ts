@@ -6,7 +6,7 @@
  */
 async function getAllDescendantCategoryIds(
     categoryId: string,
-    remoteQuery: any
+    _remoteQuery: any
 ): Promise<string[]> {
     const visited = new Set<string>()
     const descendants: string[] = []
@@ -296,7 +296,7 @@ export async function generateFiltersForCategory(
 async function generateCheckboxFilter(
     attribute: AttributeKey,
     attributeValues: AttributeValue[],
-    _productIds: string[],
+    productIds: string[],
     knex: any,
     order: number
 ): Promise<GeneratedFilter> {
@@ -375,7 +375,7 @@ async function generateCheckboxFilter(
 async function generateRangeFilter(
     attribute: AttributeKey,
     attributeValues: AttributeValue[],
-    _productIds: string[],
+    productIds: string[],
     _remoteQuery: any,
     order: number
 ): Promise<GeneratedFilter> {
@@ -440,7 +440,7 @@ async function generateRangeFilter(
 
 async function generateToggleFilter(
     attribute: AttributeKey,
-    _productIds: string[],
+    productIds: string[],
     _remoteQuery: any,
     order: number
 ): Promise<GeneratedFilter> {

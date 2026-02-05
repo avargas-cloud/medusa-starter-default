@@ -70,7 +70,7 @@ export async function POST(
               AND av.deleted_at IS NULL
         `, [categoryIdsToScan])
 
-        const _attributeKeyIds = attributesResult.rows.map((row: any) => row.attribute_key_id)
+        const attributeKeyIds = attributesResult.rows.map((row: any) => row.attribute_key_id)
 
         // console.log(`[SYNC-ATTRIBUTES] Category ${categoryId}:`)
         // console.log(`  - Scanned ${categoryIdsToScan.length} categories`)
@@ -89,9 +89,83 @@ export async function POST(
         // console.log(`  - Existing active: ${existingConfig.active_filters?.length || 0}`)
 
         const existingAvailable = existingConfig.available_filters || []
-        const _existingActive = existingConfig.active_filters || []
+        const existingActive = existingConfig.active_filters || []
 
         // Parse to IDs
-        const _existingAvailableIds = new Set(
+        const existingAvailableIds = new Set(
             existingAvailable.map((f: any) => typeof f === 'string' ? f : f.attribute_id)
         )
+        const _existingActiveIds = new Set(
+            existingActive.map((f: any) => typeof f === 'string' ? f : f.attribute_id)
+        )
+
+        const currentAttrIds = new Set(attributeKeyIds)
+
+        // 5. Reconcile available_filters
+        const reconciledAvailable = existingAvailable.filter((f: any) => {
+            const id = typeof f === 'string' ? f : f.attribute_id
+            return currentAttrIds.has(id)
+        })
+
+        // Add new attributes
+        attributeKeyIds.forEach((attrId: string) => {
+            if (!existingAvailableIds.has(attrId)) {
+                reconciledAvailable.push({
+                    attribute_id: attrId,
+                    order: reconciledAvailable.length,
+                    type: 'checkbox'
+                })
+            }
+        })
+
+        // 6. Reconcile active_filters (remove if no longer exist)
+        const reconciledActive = existingActive.filter((f: any) => {
+            const id = typeof f === 'string' ? f : f.attribute_id
+            return currentAttrIds.has(id)
+        })
+
+        // 7. Build new metadata (PRESERVE all other fields - critical for metadata spread bug)
+        const newMetadata = {
+            ...existingMetadata,
+            filter_config: {
+                override_inheritance: existingConfig.override_inheritance ?? false,
+                available_filters: reconciledAvailable,
+                active_filters: reconciledActive
+            }
+        }
+
+        // 8. ✅ Update using KNEX (per QUERY_PATTERNS_REFERENCE.md - correct pattern)
+        await knex("product_category")
+            .where({ id: categoryId })
+            .update({
+                metadata: JSON.stringify(newMetadata),
+                updated_at: new Date()
+            })
+
+        const added = attributeKeyIds.filter((id: string) => !existingAvailableIds.has(id)).length
+        const removed = Array.from(existingAvailableIds).filter(id => !currentAttrIds.has(id)).length
+
+        // console.log(`  - Reconciled available: ${reconciledAvailable.length}`)
+        // console.log(`  - Added: ${added}, Removed: ${removed}`)
+
+        res.json({
+            success: true,
+            categoryId,
+            categoryName: category.name,
+            scannedCategories: categoryIdsToScan.length,
+            filterCount: reconciledAvailable.length,
+            activeCount: reconciledActive.length,
+            added,
+            removed
+        })
+        return
+
+    } catch (error: any) {
+        console.error("[SYNC-ATTRIBUTES] Error:", error)
+        res.status(500).json({
+            error: "Failed to sync attributes",
+            message: (error as Error).message
+        })
+        return
+    }
+}
