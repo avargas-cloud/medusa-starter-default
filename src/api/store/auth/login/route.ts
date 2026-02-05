@@ -126,7 +126,7 @@ export async function POST(
 
         return res.status(500).json({
             error: "Internal server error",
-            message: error instanceof Error ? error.message : 'Unknown error'
+            message: error instanceof Error ? (error as Error).message : 'Unknown error'
         })
     }
 }

@@ -134,7 +134,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         console.error("[WITH-PRICES] Error:", error)
         return res.status(500).json({
             error: "Failed to fetch product with prices",
-            message: error.message
+            message: (error as Error).message
         })
     }
 }

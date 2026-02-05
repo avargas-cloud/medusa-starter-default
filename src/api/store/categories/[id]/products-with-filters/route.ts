@@ -137,8 +137,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         })
 
     } catch (error: any) {
-        console.error("[PRODUCTS-WITH-FILTERS] ❌ Error:", error.message)
-        return res.status(500).json({ error: error.message })
+        console.error("[PRODUCTS-WITH-FILTERS] ❌ Error:", (error as Error).message)
+        return res.status(500).json({ error: (error as Error).message })
     }
 }
 

@@ -81,7 +81,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     logger.info(`Updated ${updated}/${variants.length} variants...`)
                 }
             } catch (error: any) {
-                errors.push(`${variant.sku}: ${error.message}`)
+                errors.push(`${variant.sku}: ${(error as Error).message}`)
             }
         }
 
@@ -96,10 +96,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         })
 
     } catch (error: any) {
-        logger.error(`❌ Error: ${error.message}`)
+        logger.error(`❌ Error: ${(error as Error).message}`)
         return res.status(500).json({
             success: false,
-            error: error.message,
+            error: (error as Error).message,
         })
     }
 }

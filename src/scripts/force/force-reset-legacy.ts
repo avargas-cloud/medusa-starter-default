@@ -49,7 +49,7 @@ async function forceResetToLegacy() {
             UPDATE customer
             SET 
                 has_account = false,
-                metadata = ${JSON.stringify(newMetadata)}::jsonb
+                metadata = ${sql.json(newMetadata)}
             WHERE id = ${customer.id}
         `
 

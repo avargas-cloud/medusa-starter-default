@@ -135,7 +135,7 @@ export async function POST(
         console.error("[SYNC-SORTING] Error:", error)
         res.status(500).json({
             error: "Failed to sync sorting",
-            message: error.message
+            message: (error as Error).message
         })
     }
 }

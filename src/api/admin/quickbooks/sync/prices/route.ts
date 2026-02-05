@@ -75,11 +75,11 @@ export async function POST(
                 message = $1,
                 completed_at = $2
             WHERE id = $3
-        `, [error.message, new Date(), logId]).catch(console.error)
+        `, [(error as Error).message, new Date(), logId]).catch(console.error)
 
         res.status(500).json({
             error: "Price sync failed",
-            message: error.message
+            message: (error as Error).message
         })
     } finally {
         await client.end()

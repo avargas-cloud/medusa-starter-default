@@ -42,7 +42,7 @@ export const GET = async (
         console.error('Error checking customer email:', error)
         return res.status(500).json({
             error: "Failed to check customer email",
-            details: error instanceof Error ? error.message : 'Unknown error'
+            details: error instanceof Error ? (error as Error).message : 'Unknown error'
         })
     }
 }

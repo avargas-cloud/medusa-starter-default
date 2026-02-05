@@ -80,7 +80,7 @@ export async function POST(
             skus: document.variant_sku,
         })
     } catch (error: any) {
-        logger.error(`[MeiliSearch Sync API] ❌ Error: ${error.message}`)
-        res.status(500).json({ error: error.message })
+        logger.error(`[MeiliSearch Sync API] ❌ Error: ${(error as Error).message}`)
+        res.status(500).json({ error: (error as Error).message })
     }
 }

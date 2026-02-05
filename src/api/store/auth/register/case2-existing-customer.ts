@@ -77,7 +77,7 @@ export async function handleExistingCustomer(
         console.error('❌ Error in existing customer handler:', error)
         return res.status(500).json({
             error: "Internal server error",
-            details: error instanceof Error ? error.message : 'Unknown error'
+            details: error instanceof Error ? (error as Error).message : 'Unknown error'
         })
     }
 }

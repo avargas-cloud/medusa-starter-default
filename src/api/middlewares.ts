@@ -104,16 +104,16 @@ async function syncCategoryAttributesMiddleware(
                                     console.warn(`[CATEGORY-ATTR-SYNC] Response: ${errorText}`)
                                 }
                             } catch (error: any) {
-                                console.error(`[CATEGORY-ATTR-SYNC] ❌ Category ${categoryId} error:`, error.message)
+                                console.error(`[CATEGORY-ATTR-SYNC] ❌ Category ${categoryId} error:`, (error as Error).message)
                             }
                         }
 
                     } catch (error: any) {
-                        console.error("[CATEGORY-ATTR-SYNC] ❌ Middleware error during sync process:", error.message)
+                        console.error("[CATEGORY-ATTR-SYNC] ❌ Middleware error during sync process:", (error as Error).message)
                     }
 
                 } catch (error: any) {
-                    console.error("[CATEGORY-ATTR-SYNC] ❌ Middleware error:", error.message)
+                    console.error("[CATEGORY-ATTR-SYNC] ❌ Middleware error:", (error as Error).message)
                 }
             })
         }
@@ -266,12 +266,12 @@ async function syncCategorySortingMiddleware(
                                 console.warn(`[SORTING-SYNC] ⚠️  Category ${categoryId} sync failed: ${response.status}`)
                             }
                         } catch (error: any) {
-                            console.error(`[SORTING-SYNC] ❌ Category ${categoryId} error:`, error.message)
+                            console.error(`[SORTING-SYNC] ❌ Category ${categoryId} error:`, (error as Error).message)
                         }
                     }
 
                 } catch (error: any) {
-                    console.error("[SORTING-SYNC] ❌ Middleware error:", error.message)
+                    console.error("[SORTING-SYNC] ❌ Middleware error:", (error as Error).message)
                 }
             })
         }
@@ -351,7 +351,7 @@ async function syncProductsMeiliMiddleware(
                         }
                     }
                 } catch (error: any) {
-                    console.error(`[MEILI-PRODUCT-SYNC] ❌ Error:`, error.message)
+                    console.error(`[MEILI-PRODUCT-SYNC] ❌ Error:`, (error as Error).message)
                 }
             })
         }
@@ -427,7 +427,7 @@ async function syncCustomersMeiliMiddleware(
                         }
                     }
                 } catch (error: any) {
-                    console.error(`[MEILI-CUSTOMER-SYNC] ❌ Error:`, error.message)
+                    console.error(`[MEILI-CUSTOMER-SYNC] ❌ Error:`, (error as Error).message)
                 }
             })
         }
@@ -527,7 +527,7 @@ async function syncInventoryMeiliMiddleware(
                         console.warn(`[MEILI-INVENTORY-SYNC] ⚠️  Update failed: ${response.status}`)
                     }
                 } catch (error: any) {
-                    console.error(`[MEILI-INVENTORY-SYNC] ❌ Error:`, error.message)
+                    console.error(`[MEILI-INVENTORY-SYNC] ❌ Error:`, (error as Error).message)
                 }
             })
         }

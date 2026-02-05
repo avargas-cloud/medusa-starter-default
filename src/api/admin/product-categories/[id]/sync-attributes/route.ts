@@ -157,7 +157,7 @@ export async function POST(
         console.error("[SYNC-ATTRIBUTES] Error:", error)
         res.status(500).json({
             error: "Failed to sync attributes",
-            message: error.message
+            message: (error as Error).message
         })
     }
 }

@@ -179,7 +179,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         res.status(500).json({
             success: false,
             message: "Failed to generate filters",
-            error: error.message,
+            error: (error as Error).message,
         })
     }
 }

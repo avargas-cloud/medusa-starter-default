@@ -30,7 +30,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         console.error("[MEILI-UPDATE-INVENTORY] Error:", error)
         return res.status(500).json({
             error: "Failed to update inventory in MeiliSearch",
-            details: error.message
+            details: (error as Error).message
         })
     }
 }

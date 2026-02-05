@@ -44,7 +44,7 @@ export async function handleLegacyCustomerActivation(
             temporary_password: password,
             activation_token: activationToken,
             activation_expires: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-        }}::jsonb
+        })}
             WHERE id = ${existingCustomer.id}
         `
         console.log('✅ [CHECKPOINT] Metadata saved')

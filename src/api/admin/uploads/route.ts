@@ -61,7 +61,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         console.error("🔴 [Upload Route] Error:", error)
         res.status(500).json({ 
             message: "Upload failed",
-            error: error.message 
+            error: (error as Error).message 
         })
     }
 }

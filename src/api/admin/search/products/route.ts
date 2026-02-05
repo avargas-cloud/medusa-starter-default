@@ -57,11 +57,11 @@ export const GET = async (
         })
 
     } catch (error: any) {
-        console.error("[MeiliSearch Error]:", error.message)
+        console.error("[MeiliSearch Error]:", (error as Error).message)
 
         return res.status(500).json({
             error: "Search failed",
-            message: error.message,
+            message: (error as Error).message,
             hits: []
         })
     }

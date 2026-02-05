@@ -77,7 +77,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     } catch (error: any) {
         return res.status(500).json({
             type: "internal_error",
-            message: error.message || "Failed to retrieve categories"
+            message: (error as Error).message || "Failed to retrieve categories"
         })
     }
 }

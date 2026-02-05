@@ -83,7 +83,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         console.error("❌ Query Graph Error:", error)
         res.status(500).json({
             message: "Failed to fetch inventory with prices",
-            error: error.message,
+            error: (error as Error).message,
             stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         })
     }

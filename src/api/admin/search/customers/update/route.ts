@@ -31,7 +31,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         console.error("[MEILI-UPDATE-CUSTOMER] Error:", error)
         return res.status(500).json({
             error: "Failed to update customer in MeiliSearch",
-            details: error.message
+            details: (error as Error).message
         })
     }
 }

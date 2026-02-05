@@ -351,7 +351,7 @@ async function generateCheckboxFilter(
             options,
         }
     } catch (error: any) {
-        console.error(`[FILTER-GEN]     ✗ Error in generateCheckboxFilter:`, error.message)
+        console.error(`[FILTER-GEN]     ✗ Error in generateCheckboxFilter:`, (error as Error).message)
         console.error(`[FILTER-GEN]     ✗ Stack:`, error.stack)
         return {
             id: attribute.id,

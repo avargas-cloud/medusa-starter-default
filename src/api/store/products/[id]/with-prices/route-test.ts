@@ -95,10 +95,10 @@ export const GET_TEST = async (req: MedusaRequest, res: MedusaResponse) => {
         return res.json({ product })
 
     } catch (error: any) {
-        console.error("[PRODUCT-ATTRS] ❌ Error:", error.message)
+        console.error("[PRODUCT-ATTRS] ❌ Error:", (error as Error).message)
         return res.status(500).json({
             error: "Failed to fetch product with attributes",
-            message: error.message
+            message: (error as Error).message
         })
     }
 }

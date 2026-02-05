@@ -301,7 +301,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         console.error("Error fetching category filters:", error)
         return res.status(500).json({
             error: "Failed to fetch category filters",
-            message: error.message,
+            message: (error as Error).message,
         })
     }
 }

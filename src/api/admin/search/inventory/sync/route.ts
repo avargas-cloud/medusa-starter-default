@@ -112,12 +112,12 @@ export const POST = async (
         })
 
     } catch (error: any) {
-        console.error("[MeiliSearch Inventory Sync Error]:", error.message)
+        console.error("[MeiliSearch Inventory Sync Error]:", (error as Error).message)
 
         return res.status(500).json({
             success: false,
             error: "Sync failed",
-            message: error.message,
+            message: (error as Error).message,
         })
     }
 }

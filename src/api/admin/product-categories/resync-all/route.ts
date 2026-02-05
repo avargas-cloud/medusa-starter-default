@@ -59,7 +59,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
                 results.push({
                     category: category.name,
                     success: false,
-                    error: error.message
+                    error: (error as Error).message
                 })
             }
 
@@ -80,10 +80,10 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
             results
         })
     } catch (error: any) {
-        console.error(`❌ [RESYNC-ALL] Error:`, error.message)
+        console.error(`❌ [RESYNC-ALL] Error:`, (error as Error).message)
         return res.status(500).json({
             error: "Failed to resync categories",
-            message: error.message
+            message: (error as Error).message
         })
     }
 }

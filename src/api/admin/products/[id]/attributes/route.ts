@@ -143,10 +143,10 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
                             console.log(`   ✅ Safely deleted option "${keyLabel}" and ${result.variantsDeleted} variant(s)`)
 
                         } catch (error: any) {
-                            console.error(`   💥 Error in safe deletion:`, error.message)
+                            console.error(`   💥 Error in safe deletion:`, (error as Error).message)
                             return res.status(500).json({
                                 error: "Deletion failed",
-                                message: error.message
+                                message: (error as Error).message
                             })
                         }
                     } else {
@@ -304,7 +304,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         console.error("💥 [API ERROR]:", error)
         res.status(500).json({
             message: "Failed to update attributes",
-            error: error.message,
+            error: (error as Error).message,
             stack: error.stack
         })
     }

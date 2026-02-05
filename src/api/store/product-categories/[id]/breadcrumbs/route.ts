@@ -68,7 +68,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
     } catch (error: any) {
         return res.status(500).json({
-            error: error.message || "Failed to generate breadcrumbs"
+            error: (error as Error).message || "Failed to generate breadcrumbs"
         })
     }
 }

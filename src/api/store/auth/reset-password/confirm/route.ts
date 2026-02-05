@@ -197,7 +197,7 @@ export const POST = async (
         console.error('Reset password confirm error:', error)
         return res.status(500).json({
             error: "Password reset failed",
-            details: error instanceof Error ? error.message : 'Unknown error'
+            details: error instanceof Error ? (error as Error).message : 'Unknown error'
         })
     }
 }

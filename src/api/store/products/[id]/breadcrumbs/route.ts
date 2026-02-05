@@ -30,7 +30,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         console.error("Error fetching product breadcrumbs:", error)
         res.status(500).json({
             error: "Failed to fetch product breadcrumbs",
-            message: error instanceof Error ? error.message : "Unknown error"
+            message: error instanceof Error ? (error as Error).message : "Unknown error"
         })
     }
 }

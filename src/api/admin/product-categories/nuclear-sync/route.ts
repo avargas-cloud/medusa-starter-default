@@ -210,7 +210,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
                 }
 
             } catch (error: any) {
-                console.error(`[NUCLEAR-SYNC]    ❌ Error for ${category.name}:`, error.message)
+                console.error(`[NUCLEAR-SYNC]    ❌ Error for ${category.name}:`, (error as Error).message)
                 phase2Failed++
             }
         }
@@ -239,7 +239,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         console.error('[NUCLEAR-SYNC] Stack:', error.stack)
         return res.status(500).json({
             error: "Nuclear sync failed",
-            message: error.message,
+            message: (error as Error).message,
             stack: error.stack
         })
     }

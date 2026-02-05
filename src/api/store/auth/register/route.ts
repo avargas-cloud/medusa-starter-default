@@ -99,7 +99,7 @@ export const POST = async (
         console.error('Registration error:', error)
         return res.status(500).json({
             error: "Registration failed",
-            details: error instanceof Error ? error.message : 'Unknown error'
+            details: error instanceof Error ? (error as Error).message : 'Unknown error'
         })
     }
 }

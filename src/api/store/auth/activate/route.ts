@@ -176,7 +176,7 @@ export async function POST(
         console.error('❌ Activation error:', error)
         return res.status(500).json({
             error: "Internal server error",
-            message: error instanceof Error ? error.message : 'Unknown error'
+            message: error instanceof Error ? (error as Error).message : 'Unknown error'
         })
     }
 }
