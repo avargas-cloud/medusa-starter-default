@@ -10,6 +10,12 @@ export async function GET(
     res: MedusaResponse
 ): Promise<void> {
     const { id } = req.params
+
+    if (!id) {
+        res.status(400).json({ error: "id parameter is required" })
+        return
+    }
+
     const productAttributesService = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE)
     const query = req.scope.resolve("query")
 
@@ -72,6 +78,10 @@ export async function POST(
 ): Promise<void> {
     const { id } = req.params
 
+    if (!id) {
+        res.status(400).json({ error: "id parameter is required" })
+        return
+    }
 
     try {
         const { result } = await updateAttributeKeyWorkflow(req.scope).run({
@@ -96,6 +106,12 @@ export async function DELETE(
     res: MedusaResponse
 ): Promise<void> {
     const { id } = req.params
+
+    if (!id) {
+        res.status(400).json({ error: "id parameter is required" })
+        return
+    }
+
     const productAttributesService = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE)
     const query = req.scope.resolve("query")
     const remoteLink = req.scope.resolve("remoteLink")

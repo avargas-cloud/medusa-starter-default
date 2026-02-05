@@ -1,5 +1,4 @@
 import type { MedusaRequest } from "@medusajs/framework/http"
-import { Knex } from "knex"
 
 /**
  * Enriches products with attributes and prices

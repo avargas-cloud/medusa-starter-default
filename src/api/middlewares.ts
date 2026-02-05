@@ -39,7 +39,6 @@ async function syncCategoryAttributesMiddleware(
             // ⭐ ASYNC: Don't block HTTP response
             setImmediate(async () => {
                 try {
-                    const basePath = process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
                     const query = (req as any).scope.resolve("query")
 
                     // Extract product IDs

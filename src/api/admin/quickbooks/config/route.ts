@@ -6,7 +6,7 @@ import { Client } from "pg"
  * Returns current QuickBooks configuration
  */
 export async function GET(
-    req: MedusaRequest,
+    _req: MedusaRequest,
     res: MedusaResponse
 ): Promise<void> {
     const client = new Client({

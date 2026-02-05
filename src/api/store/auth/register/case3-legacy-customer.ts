@@ -1,4 +1,4 @@
-import { Modules } from '@medusajs/framework/utils'
+import { Modules as _Modules } from '@medusajs/framework/utils'
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 
 /**
@@ -6,7 +6,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
  * Sends activation email for customers imported from QuickBooks
  */
 export async function handleLegacyCustomerActivation(
-    req: MedusaRequest,
+    _req: MedusaRequest,
     res: MedusaResponse,
     existingCustomer: any,
     password: string

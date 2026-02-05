@@ -7,6 +7,12 @@ export async function POST(
     res: MedusaResponse
 ): Promise<void> {
     const { id } = req.params
+
+    if (!id) {
+        res.status(400).json({ error: "id parameter is required" })
+        return
+    }
+
     const { attribute_set_id } = req.body as { attribute_set_id?: string | null }
 
     try {

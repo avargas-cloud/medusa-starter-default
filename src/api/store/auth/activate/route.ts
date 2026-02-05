@@ -33,9 +33,15 @@ export async function POST(
 
         // Decode token: base64(customer_id:timestamp)
         const decoded = Buffer.from(token, 'base64').toString('utf-8')
-        const [customerId, timestamp] = decoded.split(':')
+        const [customerId, _timestamp] = decoded.split(':')
 
         console.log('📝 Decoded customer ID:', customerId)
+
+        if (!customerId) {
+            return res.status(400).json({
+                error: "Invalid activation token"
+            })
+        }
 
         // Get customer
         const [customer] = await sql`

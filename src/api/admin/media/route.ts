@@ -27,27 +27,27 @@ export const GET = async (
         if (searchQuery) {
             const allFiles: any[] = []
             let nextToken: string | undefined = undefined
-            
+
             // Fetch all pages
             do {
-                const command = new ListObjectsV2Command({
+                const command: ListObjectsV2Command = new ListObjectsV2Command({
                     Bucket: bucket,
                     Prefix: prefix,
                     Delimiter: "/",
                     MaxKeys: 1000,
                     ContinuationToken: nextToken,
                 })
-                
-                const response = await s3Client.send(command)
-                
+
+                const response: any = await s3Client.send(command)
+
                 // Add files
                 if (response.Contents) {
-                    allFiles.push(...response.Contents.filter(item => item.Key !== prefix))
+                    allFiles.push(...response.Contents.filter((item: any) => item.Key !== prefix))
                 }
-                
+
                 nextToken = (response as any).NextContinuationToken
             } while (nextToken)
-            
+
             // Filter by search query
             const searchLower = searchQuery.toLowerCase()
             const filteredFiles = allFiles
@@ -61,7 +61,7 @@ export const GET = async (
                     type: "file" as const,
                     last_modified: item.LastModified,
                 }))
-            
+
             return res.json({
                 folders: [],
                 files: filteredFiles,
@@ -116,7 +116,7 @@ export const GET = async (
         console.error("Media library error:", error)
         res.status(500).json({
             message: "Failed to list files",
-            error: error.message,
+            error: (error as Error).message,
             folders: [],
             files: [],
             count: 0,

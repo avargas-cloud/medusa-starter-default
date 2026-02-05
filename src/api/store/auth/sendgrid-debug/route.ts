@@ -5,7 +5,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
  * GET /store/auth/sendgrid-debug
  */
 export async function GET(
-    req: MedusaRequest,
+    _req: MedusaRequest,
     res: MedusaResponse
 ) {
     const apiKey = process.env.SENDGRID_API_KEY || 'NOT SET'

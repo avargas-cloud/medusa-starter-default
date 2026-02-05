@@ -11,6 +11,12 @@ export async function POST(
     res: MedusaResponse
 ): Promise<void> {
     const productId = req.params.id
+
+    if (!productId) {
+        res.status(400).json({ error: "id parameter is required" })
+        return
+    }
+
     const logger = req.scope.resolve("logger")
     const query = req.scope.resolve("query")
 

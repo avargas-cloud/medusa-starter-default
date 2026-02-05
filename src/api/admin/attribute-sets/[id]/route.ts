@@ -8,6 +8,11 @@ export async function POST(
     res: MedusaResponse
 ) {
     const { id } = req.params
+
+    if (!id) {
+        return res.status(400).json({ error: "id parameter is required" })
+    }
+
     const service: ProductAttributesService = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE)
 
     try {
@@ -18,9 +23,9 @@ export async function POST(
             ...req.body as any
         })
 
-        res.json({ attribute_set: updated })
+        return res.json({ attribute_set: updated })
     } catch (error) {
-        res.status(400).json({
+        return res.status(400).json({
             message: (error as Error).message,
         })
     }
@@ -32,19 +37,24 @@ export async function DELETE(
     res: MedusaResponse
 ) {
     const { id } = req.params
+
+    if (!id) {
+        return res.status(400).json({ error: "id parameter is required" })
+    }
+
     const service: ProductAttributesService = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE)
 
     try {
         // MedusaService default delete
         await service.deleteAttributeSets(id)
 
-        res.json({
+        return res.json({
             id,
             object: "attribute_set",
             deleted: true,
         })
     } catch (error) {
-        res.status(400).json({
+        return res.status(400).json({
             message: (error as Error).message,
         })
     }
