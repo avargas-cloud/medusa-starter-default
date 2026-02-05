@@ -296,7 +296,7 @@ export async function generateFiltersForCategory(
 async function generateCheckboxFilter(
     attribute: AttributeKey,
     attributeValues: AttributeValue[],
-    _productIds: string[],
+    productIds: string[],
     knex: any,
     order: number
 ): Promise<GeneratedFilter> {
@@ -375,8 +375,8 @@ async function generateCheckboxFilter(
 async function generateRangeFilter(
     attribute: AttributeKey,
     attributeValues: AttributeValue[],
-    _productIds: string[],
-    remoteQuery: any,
+    productIds: string[],
+    _remoteQuery: any,
     order: number
 ): Promise<GeneratedFilter> {
     // Parse numeric values
@@ -440,7 +440,7 @@ async function generateRangeFilter(
 
 async function generateToggleFilter(
     attribute: AttributeKey,
-    _productIds: string[],
+    productIds: string[],
     remoteQuery: any,
     order: number
 ): Promise<GeneratedFilter> {

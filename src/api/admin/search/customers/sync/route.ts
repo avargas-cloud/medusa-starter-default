@@ -13,7 +13,7 @@ export const POST = async (
 ) => {
     try {
         const customerModule = req.scope.resolve("customer")
-        const __query = req.scope.resolve("query")
+        const ___query = req.scope.resolve("query")
         const { MeiliSearch } = await import("meilisearch")
 
         // 1. Get MeiliSearch Stats
@@ -80,8 +80,8 @@ export const POST = async (
             message: "Synced Now",
             status: "synced_now",
             synced: result.synced,
-        return
         })
+        return
     } catch (error: any) {
         console.error("[MeiliSearch Sync Error]:", (error as Error).message)
         return res.status(500).json({
