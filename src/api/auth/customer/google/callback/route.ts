@@ -52,10 +52,10 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         fields: ["id", "email", "has_account", "metadata"]
     })
 
-    const existingCustomer = customers?.[0]
+    let customer = customers?.[0]
 
     // CASO 3: Legacy Customer (QuickBooks) - Vincular Google y activar
-    if (existingCustomer && existingCustomer.metadata?.legacy_customer === true && !existingCustomer.has_account) {
+    if (customer && customer.metadata?.legacy_customer === true && !customer.has_account) {
         console.log(`🎯 CASO 3: Legacy customer ${googleEmail} autenticado con Google - Activando...`)
 
         // Actualizar customer: activar cuenta y limpiar metadata de legacy
@@ -67,7 +67,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       SET 
         has_account = true,
         metadata = metadata - 'legacy_customer' - 'temporary_password' - 'activation_token' - 'activation_expires'
-      WHERE id = ${existingCustomer.id}
+      WHERE id = ${customer.id}
     `
 
         console.log(`✅ Legacy customer activado: ${googleEmail}`)
@@ -75,13 +75,34 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     }
 
     // CASO 2: Cliente existente normal - ya está autenticado, solo login
-    else if (existingCustomer && existingCustomer.has_account) {
+    else if (customer && customer.has_account) {
         console.log(`✅ CASO 2: Cliente existente ${googleEmail} - Login normal`)
     }
 
-    // CASO 1: Cliente nuevo - Google OAuth ya lo creó automáticamente
-    else if (!existingCustomer) {
-        console.log(`✨ CASO 1: Nuevo cliente ${googleEmail} - Creado por Google OAuth`)
+    // CASO 1: Cliente nuevo - Buscar customer recién creado por Google Auth Module
+    else if (!customer) {
+        console.log(`✨ CASO 1: Nuevo cliente ${googleEmail} - Buscando customer creado por Auth Module...`)
+
+        // El Auth Module crea el customer automáticamente, busquémoslo de nuevo
+        // con un pequeño delay para asegurar que la transacción se completó
+        await new Promise(resolve => setTimeout(resolve, 100))
+
+        const { data: newCustomers } = await query.graph({
+            entity: "customer",
+            filters: { email: googleEmail },
+            fields: ["id", "email", "has_account", "metadata"]
+        })
+
+        customer = newCustomers?.[0]
+
+        if (!customer) {
+            throw new MedusaError(
+                MedusaError.Types.NOT_FOUND,
+                `Customer not found after Google OAuth for email: ${googleEmail}`
+            )
+        }
+
+        console.log(`✅ Customer encontrado: ${customer.id}`)
     }
 
     // Generar JWT token
@@ -94,29 +115,30 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         )
     }
 
+    // CRITICAL: actor_id MUST be the customer.id, not authIdentity.id
     const tokenData: any = {
-        actor_id: authIdentity.id,
+        actor_id: customer.id,      // ← Customer ID (NOT authIdentity.id)
         actor_type: "customer",
-        auth_identity_id: authIdentity.id,
+        auth_identity_id: authIdentity.id,  // ← Auth Identity ID
         app_metadata: {
+            customer_id: customer.id, // ← Customer ID for linking
             provider: "google",
         },
     }
+
+    console.log('[Google OAuth Callback] Generating JWT for customer:', customer.id);
 
     // Type assertion to bypass Railway TypeScript strictness
     const token = (jwt.sign as any)(tokenData, http.jwtSecret, {
         expiresIn: http.jwtExpiresIn || "24h",
     })
 
-    // 🔥 Redirigir al frontend con el token
-    const returnTo = (req.query.returnTo as string) ||
-        process.env.STORE_URL ||
-        "http://localhost:4321/account"
+    // 🔥 Redirigir al frontend con el token (FIXED)
+    const frontendCallbackUrl = `${process.env.STOREFRONT_URL || 'http://localhost:4321'}/auth/callback?token=${token}`;
 
-    const redirectUrl = new URL(returnTo)
-    redirectUrl.searchParams.set("token", token)
+    console.log('[Google OAuth Callback] Redirecting to:', frontendCallbackUrl);
 
-    return res.redirect(redirectUrl.toString())
+    return res.redirect(frontendCallbackUrl)
 }
 
 export const POST = GET
