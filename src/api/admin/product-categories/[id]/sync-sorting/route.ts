@@ -130,6 +130,7 @@ export async function POST(
                 products: cleanedProductOrder.length
             }
         })
+        return
 
     } catch (error: any) {
         console.error("[SYNC-SORTING] Error:", error)
@@ -137,5 +138,6 @@ export async function POST(
             error: "Failed to sync sorting",
             message: (error as Error).message
         })
+        return
     }
 }

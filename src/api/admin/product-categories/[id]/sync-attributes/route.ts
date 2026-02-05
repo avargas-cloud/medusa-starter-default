@@ -15,6 +15,12 @@ export async function POST(
     res: MedusaResponse
 ) {
     const { id: categoryId } = req.params
+
+    if (!categoryId) {
+        res.status(400).json({ error: "categoryId is required" })
+        return
+    }
+
     const query = req.scope.resolve("query")
     const knex = req.scope.resolve("__pg_connection__")
 
@@ -152,6 +158,7 @@ export async function POST(
             added,
             removed
         })
+        return
 
     } catch (error: any) {
         console.error("[SYNC-ATTRIBUTES] Error:", error)
@@ -159,5 +166,6 @@ export async function POST(
             error: "Failed to sync attributes",
             message: (error as Error).message
         })
+        return
     }
 }
