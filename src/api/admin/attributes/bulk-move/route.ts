@@ -23,9 +23,11 @@ export async function POST(
         })
 
         res.json(result)
+        return
     } catch (error) {
         res.status(400).json({
             message: (error as Error).message,
         })
+        return
     }
 }

@@ -30,7 +30,7 @@ export async function POST(
             return res.status(404).json({ error: "Category not found" })
         }
 
-        const category = categories[0]
+        const category = categories[0]!  // Safe: checked length
         const sortingConfig = category.metadata?.sorting_config as {
             subcategory_order?: string[]
             product_order?: string[]

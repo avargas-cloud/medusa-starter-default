@@ -44,7 +44,7 @@ export async function POST(
             return
         }
 
-        const product = products[0]
+        const product = products[0]!  // Safe: checked length above!  // Safe: checked above
 
         const { MeiliSearch } = await import("meilisearch")
 

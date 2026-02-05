@@ -112,6 +112,7 @@ export const GET = async (
             isTruncated: response.IsTruncated || false,
             nextContinuationToken: response.NextContinuationToken || null,
         })
+        return
     } catch (error) {
         console.error("Media library error:", error)
         res.status(500).json({
@@ -123,5 +124,6 @@ export const GET = async (
             isTruncated: false,
             nextContinuationToken: null,
         })
+        return
     }
 }

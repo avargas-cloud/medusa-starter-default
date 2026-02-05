@@ -35,7 +35,7 @@ const validateVariantDeletionStep = createStep(
 )
 
 // NOTE: This step is currently not used in the workflow due to type complexity
-const _identifyVariantsStep = createStep(
+const __identifyVariantsStep = createStep(
     "identify-variants-to-delete",
     async ({ productId, attributeKeyId }: IdentifyVariantsInput, { container }) => {
         const productModuleService = container.resolve(Modules.PRODUCT)

@@ -3,7 +3,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { updateProductAttributesWorkflow } from "../../../../../workflows/product-attributes/update-product-attributes"
 import { safeDeleteOptionWorkflow } from "../../../../../workflows/variant-cleanup"
 import { Modules } from "@medusajs/framework/utils"
-import { PRODUCT_ATTRIBUTES_MODULE } from "../../../../../modules/product-attributes"
+import type { PRODUCT_ATTRIBUTES_MODULE } from "../../../../../modules/product-attributes"
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     const query = req.scope.resolve("query")
@@ -41,6 +41,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         console.log(`✅ [API GET] Returning ${attributes.length} attributes`)
 
         res.json({ attributes })
+        return
     } catch (error) {
         console.error("💥 [API ERROR] GET /attributes:", error)
         res.status(500).json({
@@ -226,7 +227,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
             const variantsToCreate = combinations
                 .map(combo => {
-                    const optionsMap = combo.reduce((acc, v) => {
+                    const optionsMap = combo.reduce((acc: any, v: any) => {
                         acc[v.attribute_key.label] = v.value
                         return acc
                     }, {} as Record<string, string>)

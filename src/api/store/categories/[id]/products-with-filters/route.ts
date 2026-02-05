@@ -14,6 +14,10 @@ import { calculateFilters } from "../../../_shared/filter-calculation"
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     try {
         const { id } = req.params
+
+        if (!id) {
+            return res.status(400).json({ error: "id required" })
+        }
         const { limit = 20, offset = 0 } = req.query
 
         const query = req.scope.resolve("query")
@@ -33,7 +37,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             return res.status(404).json({ error: "Category not found" })
         }
 
-        const category = categories[0]
+        const category = categories[0]!  // Safe: checked 404 above
         const includeDescendants = category.metadata?.include_descendants_tree ?? true
 
         console.log(`[PRODUCTS-WITH-FILTERS] 🌳 include_descendants_tree: ${includeDescendants}`)

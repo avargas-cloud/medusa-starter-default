@@ -37,7 +37,7 @@ export const POST = async (
             })
             if (latestMeili.hits.length > 0) {
                 // Meili stores as unix timestamp (number)
-                const val = latestMeili.hits[0].updated_at
+                const val = latestMeili.hits[0]!.updated_at
                 if (val) meiliLastUpdate = new Date(val)
             }
         } catch (e) {

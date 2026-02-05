@@ -30,7 +30,7 @@ export const GET = async (
             })
         }
 
-        const customer = customers[0]
+        const customer = customers[0]!  // Safe: checked exists above
 
         return res.json({
             exists: true,

@@ -30,7 +30,7 @@ export async function POST(
             return res.status(404).json({ error: "Category not found" })
         }
 
-        const category = categories[0]
+        const category = categories[0]!  // Safe: checked length
 
         // 2. Get all descendant categories (recursive scan)
         const { data: allCategories } = await query.graph({
@@ -89,7 +89,7 @@ export async function POST(
         const existingAvailableIds = new Set(
             existingAvailable.map((f: any) => typeof f === 'string' ? f : f.attribute_id)
         )
-        const existingActiveIds = new Set(
+        const _existingActiveIds = new Set(
             existingActive.map((f: any) => typeof f === 'string' ? f : f.attribute_id)
         )
 

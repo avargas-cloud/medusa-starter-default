@@ -13,7 +13,7 @@ export const POST = async (
 ) => {
     try {
         const customerModule = req.scope.resolve("customer")
-        const query = req.scope.resolve("query")
+        const _query = req.scope.resolve("query")
         const { MeiliSearch } = await import("meilisearch")
 
         // 1. Get MeiliSearch Stats
@@ -36,7 +36,7 @@ export const POST = async (
             })
 
             if (latestMeili.hits.length > 0) {
-                const val = latestMeili.hits[0].updated_at
+                const val = latestMeili.hits[0]!.updated_at
                 if (val) meiliLastUpdate = new Date(val)
             }
         } catch (e) { }

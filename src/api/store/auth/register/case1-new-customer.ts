@@ -77,7 +77,7 @@ export async function handleNewCustomerRegistration(
             if (retailGroups.length > 0) {
                 await customerModuleService.addCustomerToGroup({
                     customer_id: customer.id,
-                    customer_group_id: retailGroups[0].id
+                    customer_group_id: retailGroups[0]!.id  // Safe: filtered above
                 })
                 console.log(`✅ Customer auto-assigned to Retail group`)
             } else {
