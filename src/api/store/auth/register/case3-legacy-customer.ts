@@ -39,12 +39,12 @@ export async function handleLegacyCustomerActivation(
         console.log('💾 [CHECKPOINT] Saving activation data...')
         await sql`
             UPDATE customer
-            SET metadata = ${JSON.stringify({
+            SET metadata = ${sql.json({
             legacy_customer: true,
             temporary_password: password,
             activation_token: activationToken,
             activation_expires: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-        })}::jsonb
+        }}::jsonb
             WHERE id = ${existingCustomer.id}
         `
         console.log('✅ [CHECKPOINT] Metadata saved')

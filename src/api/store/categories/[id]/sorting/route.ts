@@ -129,10 +129,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         })
 
     } catch (error: any) {
-        console.error(`[STORE-SORTING] Error fetching sorting for category ${categoryId}:`, error.message)
+        console.error(`[STORE-SORTING] Error fetching sorting for category ${categoryId}:`, (error as Error).message)
         return res.status(500).json({
             error: "Failed to fetch sorting configuration",
-            message: error.message
+            message: (error as Error).message
         })
     }
 }

@@ -26,15 +26,17 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             return res.status(404).json({ error: "Product not found" })
         }
 
+        const product = products[0]!  // Safe: we checked length above
+
         return res.json({
-            product: products[0],
+            product,
             test: "location_test",
-            has_images: !!products[0].images,
-            image_count: products[0].images?.length || 0
+            has_images: !!product.images,
+            image_count: product.images?.length || 0
         })
 
     } catch (error: any) {
         console.error("Error:", error)
-        return res.status(500).json({ error: error.message })
+        return res.status(500).json({ error: (error as Error).message })
     }
 }
