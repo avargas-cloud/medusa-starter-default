@@ -1,10 +1,10 @@
 import { createWorkflow, createStep, StepResponse, WorkflowResponse } from "@medusajs/framework/workflows-sdk"
 import { Modules, ContainerRegistrationKeys } from "@medusajs/framework/utils"
 
-interface IdentifyVariantsInput {
-    productId: any
-    attributeKeyId: any
-}
+// interface IdentifyVariantsInput {
+//     productId: any
+//     attributeKeyId: any
+// }
 
 // ==================== STEP 1: Validate Variant Deletion (Cross-Module) ====================
 const validateVariantDeletionStep = createStep(
@@ -51,16 +51,16 @@ const validateVariantDeletionStep = createStep(
 // 
 //         const variantsToDelete = product.variants?.filter(v =>
 //             v.metadata?.managed_by === "attributes" &&
-            v.metadata?.attribute_key_id === attributeKeyId
-        ) || []
-
-        return new StepResponse({
-            ids: variantsToDelete.map(v => v.id),
-            count: variantsToDelete.length,
-            product
-        })
-    }
-)
+//             v.metadata?.attribute_key_id === attributeKeyId
+//         ) || []
+//
+//         return new StepResponse({
+//             ids: variantsToDelete.map(v => v.id),
+//             count: variantsToDelete.length,
+//             product
+//         })
+//     }
+// )
 
 // ==================== STEP 3: Delete Variants and Options ====================
 const cleanupVariantsStep = createStep(
