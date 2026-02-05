@@ -6,7 +6,7 @@
  */
 async function getAllDescendantCategoryIds(
     categoryId: string,
-    _remoteQuery: any
+    remoteQuery: any
 ): Promise<string[]> {
     const visited = new Set<string>()
     const descendants: string[] = []
@@ -96,7 +96,7 @@ interface GeneratedFilter {
 export async function generateFiltersForCategory(
     categoryId: string,
     activeFilterIds: string[],
-    _remoteQuery: any,
+    remoteQuery: any,
     knex: any, // Medusa's remote query function
     includeDescendants: boolean = true // ⭐ NEW: Control subcategory inclusion
 ): Promise<{
@@ -296,7 +296,7 @@ export async function generateFiltersForCategory(
 async function generateCheckboxFilter(
     attribute: AttributeKey,
     attributeValues: AttributeValue[],
-    productIds: string[],
+    _productIds: string[],
     knex: any,
     order: number
 ): Promise<GeneratedFilter> {
@@ -375,8 +375,8 @@ async function generateCheckboxFilter(
 async function generateRangeFilter(
     attribute: AttributeKey,
     attributeValues: AttributeValue[],
-    productIds: string[],
-    _remoteQuery: any,
+    _productIds: string[],
+    remoteQuery: any,
     order: number
 ): Promise<GeneratedFilter> {
     // Parse numeric values
@@ -440,8 +440,8 @@ async function generateRangeFilter(
 
 async function generateToggleFilter(
     attribute: AttributeKey,
-    productIds: string[],
-    _remoteQuery: any,
+    _productIds: string[],
+    remoteQuery: any,
     order: number
 ): Promise<GeneratedFilter> {
     // For toggle, we just count how many products have this attribute at all
