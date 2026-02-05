@@ -311,6 +311,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         }
 
         res.json({ message: "Attributes updated successfully" })
+        return
     } catch (error: any) {
         console.error("💥 [API ERROR]:", error)
         res.status(500).json({
