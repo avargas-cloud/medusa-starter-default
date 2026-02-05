@@ -97,6 +97,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     });
 
     // Compute default address IDs from boolean flags
+    if (!customer) {
+        res.status(404).json({ message: "Customer not found" });
+        return;
+    }
+
     const defaultBillingAddress = customer.addresses?.find((addr: any) => addr.is_default_billing === true);
     const defaultShippingAddress = customer.addresses?.find((addr: any) => addr.is_default_shipping === true);
 
@@ -118,6 +123,11 @@ export async function DELETE(req: MedusaRequest, res: MedusaResponse) {
         return;
     }
 
+    if (!addressId) {
+        res.status(400).json({ message: "Address ID is required" });
+        return;
+    }
+
     await deleteCustomerAddressesWorkflow(req.scope).run({
         input: { ids: [addressId] }
     });
@@ -136,6 +146,11 @@ export async function DELETE(req: MedusaRequest, res: MedusaResponse) {
     });
 
     // Compute default address IDs
+    if (!customer) {
+        res.status(404).json({ message: "Customer not found" });
+        return;
+    }
+
     const defaultBillingAddress = customer.addresses?.find((addr: any) => addr.is_default_billing === true);
     const defaultShippingAddress = customer.addresses?.find((addr: any) => addr.is_default_shipping === true);
 
