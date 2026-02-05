@@ -136,7 +136,7 @@ export const POST = async (
             await sql`
                 UPDATE provider_identity
                 SET auth_identity_id = ${matchingIdentity.id}
-                WHERE id = ${newProvider.id}
+                WHERE id = ${newProvider!.id}
             `
 
             // Delete the temporary auth_identity

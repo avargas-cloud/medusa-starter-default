@@ -375,7 +375,7 @@ async function generateCheckboxFilter(
 async function generateRangeFilter(
     attribute: AttributeKey,
     attributeValues: AttributeValue[],
-    productIds: string[],
+    _productIds: string[],
     _remoteQuery: any,
     order: number
 ): Promise<GeneratedFilter> {
