@@ -46,56 +46,37 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     const addressData = validation.data;
 
-    // Extract default flags from metadata (frontend contract)
+    // Extract default flags from metadata (frontend sends them here)
     const setAsDefaultBilling = addressData.metadata?.is_default_billing === true;
     const setAsDefaultShipping = addressData.metadata?.is_default_shipping === true;
 
     // Update address using workflow
+    // Medusa automatically handles unsetting previous defaults
     await updateCustomerAddressesWorkflow(req.scope).run({
         input: {
             selector: { id: addressId, customer_id: customerId },
             update: {
-                ...addressData,
-                metadata: addressData.metadata || {}
+                first_name: addressData.first_name,
+                last_name: addressData.last_name,
+                address_1: addressData.address_1,
+                address_2: addressData.address_2,
+                city: addressData.city,
+                country_code: addressData.country_code,
+                province: addressData.province,
+                postal_code: addressData.postal_code,
+                phone: addressData.phone,
+                company: addressData.company,
+                address_name: addressData.address_name,
+                // NATIVE FIELDS - Medusa handles toggle automatically
+                is_default_billing: setAsDefaultBilling,
+                is_default_shipping: setAsDefaultShipping,
+                metadata: {} // Clear metadata, we use native fields
             }
         }
     });
 
-    console.log(`✅ Address updated: ${addressId}`);
-
-    // Update customer default addresses using NATIVE fields
-    const customerModule = req.scope.resolve("customer");
-    const query = req.scope.resolve("query");
-
-    // Get current customer to merge metadata
-    const { data: [existingCustomer] } = await query.graph({
-        entity: "customer",
-        fields: ["id", "metadata", "billing_address_id"],
-        filters: { id: customerId }
-    });
-
-    const customerUpdate: any = {};
-
-    if (setAsDefaultBilling) {
-        // Use NATIVE Medusa v2 field: billing_address_id
-        customerUpdate.billing_address_id = addressId;
-        console.log(`✅ Setting customer.billing_address_id = ${addressId}`);
-    }
-
-    if (setAsDefaultShipping) {
-        // Use METADATA (no native field exists for default shipping)
-        customerUpdate.metadata = {
-            ...(existingCustomer?.metadata || {}),
-            default_shipping_address_id: addressId
-        };
-        console.log(`✅ Setting customer.metadata.default_shipping_address_id = ${addressId}`);
-    }
-
-    if (Object.keys(customerUpdate).length > 0) {
-        await customerModule.updateCustomers(customerId, customerUpdate);
-    }
-
     // Return updated customer
+    const query = req.scope.resolve("query");
     const { data: [customer] } = await query.graph({
         entity: "customer",
         fields: [
@@ -103,8 +84,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             "email",
             "first_name",
             "last_name",
-            "billing_address_id",
-            "metadata",
             "addresses.*"
         ],
         filters: {
@@ -117,12 +96,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         return;
     }
 
-    const customerResponse = {
-        ...customer,
-        default_shipping_address_id: customer.metadata?.default_shipping_address_id || null
-    };
-
-    res.json({ customer: customerResponse });
+    res.json({ customer });
 }
 
 export async function DELETE(req: MedusaRequest, res: MedusaResponse) {
@@ -139,53 +113,20 @@ export async function DELETE(req: MedusaRequest, res: MedusaResponse) {
         return;
     }
 
-    // Check if this was a default address and clear it from customer
-    const query = req.scope.resolve("query");
-    const { data: [customer] } = await query.graph({
-        entity: "customer",
-        fields: ["id", "billing_address_id", "metadata"],
-        filters: { id: customerId }
-    });
-
-    const customerModule = req.scope.resolve("customer");
-    const customerUpdate: any = {};
-
-    // Clear billing_address_id if deleting default billing
-    if (customer && (customer as any).billing_address_id === addressId) {
-        customerUpdate.billing_address_id = null;
-        console.log(`✅ Clearing billing_address_id (deleted address was default)`);
-    }
-
-    // Clear metadata.default_shipping_address_id if deleting default shipping
-    if (customer && customer.metadata?.default_shipping_address_id === addressId) {
-        customerUpdate.metadata = {
-            ...(customer.metadata || {}),
-            default_shipping_address_id: null
-        };
-        console.log(`✅ Clearing metadata.default_shipping_address_id (deleted address was default)`);
-    }
-
-    if (Object.keys(customerUpdate).length > 0) {
-        await customerModule.updateCustomers(customerId, customerUpdate);
-    }
-
-    // Delete the address
+    // Delete the address - Medusa handles everything
     await deleteCustomerAddressesWorkflow(req.scope).run({
         input: { ids: [addressId] }
     });
 
-    console.log(`✅ Address deleted: ${addressId}`);
-
     // Return updated customer
-    const { data: [updatedCustomer] } = await query.graph({
+    const query = req.scope.resolve("query");
+    const { data: [customer] } = await query.graph({
         entity: "customer",
         fields: [
             "id",
             "email",
             "first_name",
             "last_name",
-            "billing_address_id",
-            "metadata",
             "addresses.*"
         ],
         filters: {
@@ -193,15 +134,10 @@ export async function DELETE(req: MedusaRequest, res: MedusaResponse) {
         }
     });
 
-    if (!updatedCustomer) {
+    if (!customer) {
         res.status(404).json({ message: "Customer not found" });
         return;
     }
 
-    const customerResponse = {
-        ...updatedCustomer,
-        default_shipping_address_id: updatedCustomer.metadata?.default_shipping_address_id || null
-    };
-
-    res.json({ customer: customerResponse });
+    res.json({ customer });
 }

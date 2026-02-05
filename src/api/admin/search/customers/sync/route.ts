@@ -13,7 +13,7 @@ export const POST = async (
 ) => {
     try {
         const customerModule = req.scope.resolve("customer")
-        const _query = req.scope.resolve("query")
+        const __query = req.scope.resolve("query")
         const { MeiliSearch } = await import("meilisearch")
 
         // 1. Get MeiliSearch Stats
@@ -73,7 +73,7 @@ export const POST = async (
             })
         }
 
-        const { result } = await syncCustomersWorkflow(req.scope).run()
+        const { result: _result } = await syncCustomersWorkflow(req.scope).run()
 
         res.json({
             success: true,
@@ -81,7 +81,6 @@ export const POST = async (
             status: "synced_now",
         })
         return
-        })
     } catch (error: any) {
         console.error("[MeiliSearch Sync Error]:", (error as Error).message)
         return res.status(500).json({

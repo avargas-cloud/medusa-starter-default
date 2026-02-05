@@ -70,7 +70,7 @@ export async function POST(
               AND av.deleted_at IS NULL
         `, [categoryIdsToScan])
 
-        const attributeKeyIds = attributesResult.rows.map((row: any) => row.attribute_key_id)
+        const _attributeKeyIds = attributesResult.rows.map((row: any) => row.attribute_key_id)
 
         // console.log(`[SYNC-ATTRIBUTES] Category ${categoryId}:`)
         // console.log(`  - Scanned ${categoryIdsToScan.length} categories`)
@@ -89,9 +89,9 @@ export async function POST(
         // console.log(`  - Existing active: ${existingConfig.active_filters?.length || 0}`)
 
         const existingAvailable = existingConfig.available_filters || []
-        const existingActive = existingConfig.active_filters || []
+        const _existingActive = existingConfig.active_filters || []
 
         // Parse to IDs
-        const existingAvailableIds = new Set(
+        const _existingAvailableIds = new Set(
             existingAvailable.map((f: any) => typeof f === 'string' ? f : f.attribute_id)
         )

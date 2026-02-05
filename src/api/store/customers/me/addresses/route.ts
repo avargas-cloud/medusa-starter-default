@@ -43,64 +43,38 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     const addressData = validation.data;
 
-    // Extract default flags from metadata (frontend contract)
+    // Extract default flags from metadata (frontend sends them here)
     const setAsDefaultBilling = addressData.metadata?.is_default_billing === true;
     const setAsDefaultShipping = addressData.metadata?.is_default_shipping === true;
 
     // Create address using Medusa native workflow
-    const { result } = await createCustomerAddressesWorkflow(req.scope)
+    // Medusa automatically handles unsetting previous defaults via maybeUnsetDefaultBillingAddressesStep
+    await createCustomerAddressesWorkflow(req.scope)
         .run({
             input: {
                 addresses: [{
                     customer_id: customerId,
-                    ...addressData,
-                    metadata: addressData.metadata || {}
+                    first_name: addressData.first_name,
+                    last_name: addressData.last_name,
+                    address_1: addressData.address_1,
+                    address_2: addressData.address_2,
+                    city: addressData.city,
+                    country_code: addressData.country_code,
+                    province: addressData.province,
+                    postal_code: addressData.postal_code,
+                    phone: addressData.phone,
+                    company: addressData.company,
+                    address_name: addressData.address_name,
+                    // NATIVE FIELDS - Medusa handles toggle automatically
+                    is_default_billing: setAsDefaultBilling,
+                    is_default_shipping: setAsDefaultShipping,
+                    metadata: {} // Clear metadata, we use native fields
                 }]
             }
         });
 
-    const createdAddress = result?.[0];
-
-    if (!createdAddress) {
-        res.status(500).json({ message: "Failed to create address" });
-        return;
-    }
-
-    console.log(`✅ Address created: ${createdAddress.id}`);
-
-    // Update customer default addresses using NATIVE fields
-    const customerModule = req.scope.resolve("customer");
-    const query = req.scope.resolve("query");
-
-    // Get current customer to merge metadata
-    const { data: [existingCustomer] } = await query.graph({
-        entity: "customer",
-        fields: ["id", "metadata", "billing_address_id"],
-        filters: { id: customerId }
-    });
-
-    const customerUpdate: any = {};
-
-    if (setAsDefaultBilling) {
-        // Use NATIVE Medusa v2 field: billing_address_id
-        customerUpdate.billing_address_id = createdAddress.id;
-        console.log(`✅ Setting customer.billing_address_id = ${createdAddress.id}`);
-    }
-
-    if (setAsDefaultShipping) {
-        // Use METADATA (no native field exists for default shipping)
-        customerUpdate.metadata = {
-            ...(existingCustomer?.metadata || {}),
-            default_shipping_address_id: createdAddress.id
-        };
-        console.log(`✅ Setting customer.metadata.default_shipping_address_id = ${createdAddress.id}`);
-    }
-
-    if (Object.keys(customerUpdate).length > 0) {
-        await customerModule.updateCustomers(customerId, customerUpdate);
-    }
-
     // Return customer with all addresses
+    const query = req.scope.resolve("query");
     const { data: [customer] } = await query.graph({
         entity: "customer",
         fields: [
@@ -108,8 +82,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             "email",
             "first_name",
             "last_name",
-            "billing_address_id",
-            "metadata",
             "addresses.*"
         ],
         filters: {
@@ -122,10 +94,5 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         return;
     }
 
-    const customerResponse = {
-        ...customer,
-        default_shipping_address_id: customer.metadata?.default_shipping_address_id || null
-    };
-
-    res.json({ customer: customerResponse });
+    res.json({ customer });
 }

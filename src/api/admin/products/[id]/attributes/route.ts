@@ -52,6 +52,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             message: "Failed to fetch product attributes",
             error: (error as Error).message
         })
+        return
     }
 }
 
@@ -317,6 +318,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
             error: (error as Error).message,
             stack: error.stack
         })
+        return
     }
 }
 
