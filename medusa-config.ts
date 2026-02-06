@@ -15,18 +15,24 @@ module.exports = defineConfig({
     // Without this, subscribers will NOT load (even if code is correct)
     workerMode: (process.env.WORKER_MODE || "shared") as "shared" | "worker" | "server",
     http: {
-      // ✅ Smart CORS: Auto-detect dev vs production
-      storeCors: process.env.NODE_ENV === "production"
-        ? "https://ecopowertech.com,https://www.ecopowertech.com"
-        : "http://localhost:4321,http://localhost:8000,https://docs.medusajs.com",
+      // ✅ Smart CORS: Use env vars with fallbacks
+      storeCors: process.env.STORE_CORS || (
+        process.env.NODE_ENV === "production"
+          ? "https://ecopowertech.com,https://www.ecopowertech.com"
+          : "http://localhost:4321,http://localhost:8000,https://docs.medusajs.com"
+      ),
 
-      adminCors: process.env.NODE_ENV === "production"
-        ? "https://medusa-starter-default-production-b69e.up.railway.app"
-        : "http://localhost:5173,http://localhost:9000",
+      adminCors: process.env.ADMIN_CORS || (
+        process.env.NODE_ENV === "production"
+          ? "https://medusa-starter-default-production-b69e.up.railway.app"
+          : "http://localhost:5173,http://localhost:9000"
+      ),
 
-      authCors: process.env.NODE_ENV === "production"
-        ? "https://ecopowertech.com,https://www.ecopowertech.com,https://ecopowertech-headless-medusa.vercel.app,https://medusa-starter-default-production-b69e.up.railway.app"
-        : "http://localhost:4321,http://localhost:5173,http://localhost:9000",
+      authCors: process.env.AUTH_CORS || (
+        process.env.NODE_ENV === "production"
+          ? "https://ecopowertech.com,https://www.ecopowertech.com,https://ecopowertech-headless-medusa.vercel.app,https://medusa-starter-default-production-b69e.up.railway.app"
+          : "http://localhost:4321,http://localhost:5173,http://localhost:9000"
+      ),
 
       jwtSecret: process.env.JWT_SECRET || "supersecret",
       cookieSecret: process.env.COOKIE_SECRET || "supersecret",
