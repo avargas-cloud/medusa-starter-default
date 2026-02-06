@@ -33,7 +33,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 "images.url",
                 "images.metadata",
                 "images.rank",
-                "options.*"
+                "options.*",
+                "options.values.*"  // ✅ FIX: Include option values
             ],
             filters: { id }
         })
