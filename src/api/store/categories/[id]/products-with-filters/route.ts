@@ -77,7 +77,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         const enrichedProducts = await enrichProducts(paginatedProducts, req)
 
         // 7. Get pre-calculated filters from metadata
-        const preCalculatedFilters = category.metadata?.filters || []
+        const preCalculatedFilters = (category.metadata?.filters || []) as any[]
 
         console.log(`[PRODUCTS-WITH-FILTERS] 📊 Using ${preCalculatedFilters.length} pre-calculated filters`)
 
