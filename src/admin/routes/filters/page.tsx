@@ -60,7 +60,7 @@ export default function FiltersPage() {
     // ⭐ Auto-select first root category on load
     useEffect(() => {
         if (!selectedCategoryId && rootCategories.length > 0) {
-            setSelectedCategoryId(rootCategories[0].id)
+            setSelectedCategoryId(rootCategories[0]!.id)
         }
     }, [rootCategories, selectedCategoryId])
 

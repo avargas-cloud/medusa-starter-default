@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { enrichProducts } from "../../../_shared/product-enrichment"
+import { getCacheManager } from "../../../../../lib/cache-manager"
 
 /**
  * GET /store/categories/:id/products-with-filters
@@ -9,6 +10,8 @@ import { enrichProducts } from "../../../_shared/product-enrichment"
  * - Pre-calculated filters from metadata
  * 
  * Respects category.metadata.include_descendants_tree setting
+ * 
+ * CACHING: Results are cached for 5 minutes per category+pagination combination
  */
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     try {
@@ -18,6 +21,21 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             return res.status(400).json({ error: "id required" })
         }
         const { limit = 20, offset = 0 } = req.query
+
+        // 🔥 CACHE LAYER: Check cache first
+        const cacheKey = `category:${id}:products-filters:${limit}:${offset}`
+        const cacheService = req.scope.resolve("cache")
+        const cacheManager = getCacheManager(cacheService)
+
+        const cached = await cacheManager.get<any>(cacheKey)
+        if (cached) {
+            console.log(`[PRODUCTS-WITH-FILTERS] 🎯 Cache HIT: ${cacheKey}`)
+            res.setHeader("X-Cache", "HIT")
+            return res.json(cached)
+        }
+
+        console.log(`[PRODUCTS-WITH-FILTERS] ❌ Cache MISS: ${cacheKey}`)
+        res.setHeader("X-Cache", "MISS")
 
         const query = req.scope.resolve("query")
 
@@ -81,8 +99,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
         console.log(`[PRODUCTS-WITH-FILTERS] 📊 Using ${preCalculatedFilters.length} pre-calculated filters`)
 
-        // 8. Return combined response
-        return res.json({
+        // 8. Build response object
+        const responseData = {
             category: {
                 id: category.id,
                 name: category.name,
@@ -98,7 +116,13 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 offset: Number(offset),
                 has_more: (Number(offset) + enrichedProducts.length) < totalCount
             }
-        })
+        }
+
+        // 🔥 CACHE: Store result for 5 minutes
+        await cacheManager.set(cacheKey, responseData, 300)
+        console.log(`[PRODUCTS-WITH-FILTERS] 💾 Cached result: ${cacheKey}`)
+
+        return res.json(responseData)
 
     } catch (error: any) {
         console.error("[PRODUCTS-WITH-FILTERS] ❌ Error:", (error as Error).message)

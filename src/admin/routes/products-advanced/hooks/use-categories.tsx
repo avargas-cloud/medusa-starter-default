@@ -33,15 +33,15 @@ export const useCategories = () => {
                 }
 
                 // 4. Custom Sorting
-                const { CATEGORY_PRIORITY_LIST } = await import("../category-sorting");
+                const { CATEGORY_PRIORITY_LIST } = await import("../category-sorting.js");
 
                 return categoriesShim.sort((a, b) => {
                     const nameA = a.name.toLowerCase();
                     const nameB = b.name.toLowerCase();
 
                     // Find priority index (0 is highest)
-                    const priorityA = CATEGORY_PRIORITY_LIST.findIndex(p => nameA.includes(p.toLowerCase()));
-                    const priorityB = CATEGORY_PRIORITY_LIST.findIndex(p => nameB.includes(p.toLowerCase()));
+                    const priorityA = CATEGORY_PRIORITY_LIST.findIndex((p: string) => nameA.includes(p.toLowerCase()));
+                    const priorityB = CATEGORY_PRIORITY_LIST.findIndex((p: string) => nameB.includes(p.toLowerCase()));
 
                     // If both are in priority list, sort by their order in that list
                     if (priorityA !== -1 && priorityB !== -1) {
