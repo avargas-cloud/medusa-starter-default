@@ -1,6 +1,6 @@
 # 🔍 MeiliSearch Auto-Sync Complete Guide
 
-**Last Updated:** February 4, 2026
+**Last Updated:** February 6, 2026
 
 This document covers the complete MeiliSearch synchronization system, including automatic incremental updates via middleware and manual sync buttons.
 
@@ -383,7 +383,50 @@ This prevents indexing broken/deleted variants.
 
 ---
 
-## Summary Checklist
+## Troubleshooting Common Issues
+
+### Price Changes Not Syncing ✅ FIXED Feb 2026
+
+**Problem:** Edited prices in Admin UI don't update in MeiliSearch inventory-advanced.
+
+**Root Cause:** Price changes use `/admin/products/{id}/variants/batch` endpoint which returns `{updated: [...]}` array, not single `variant` object. Middleware wasn't detecting this format.
+
+**Fix Applied:**
+1. Added `hasBatchUpdate` detection in middleware condition
+2. Aligned incremental workflow fields with full sync (use direct `stocked_quantity` not `location_levels`)
+3. Added batch variant ID extraction logic
+
+**Verify Fix:**
+```bash
+# After changing a price, logs should show:
+[MEILI-INVENTORY-SYNC] 📦 Batch update detected: 1 variants
+[MEILI-INVENTORY-SYNC] ✅ Updated 1 items for variant xxx
+```
+
+See `INVENTORY-ADVANCED-ARCHITECTURE.md` for detailed technical explanation.
+
+---
+
+### Sync Button Shows "Already Synced" But Data is Stale
+
+**Cause:** Timestamp was updated but actual data fields weren't synced (related to batch variant bug above).
+
+**Solution:** After applying the batch variant fix, force a full sync:
+1. Run: `yarn exec tsx src/scripts/force/force-rebuild-inventory-index.ts`
+2. Click "Check Inventory Sync" button - will detect empty index and rebuild
+3. All data should now be correct
+
+---
+
+### Changes Not Appearing After Auto-Sync
+
+**Checklist:**
+- [ ] Check server logs for `[MEILI-INVENTORY-SYNC]` messages
+- [ ] Verify middleware triggered (should see `🔍 DEBUG` or `📦 Batch` logs)
+- [ ] Hard refresh browser (Ctrl+Shift+R) to clear React Query cache
+- [ ] Test with manual sync button to rule out middleware issues
+
+---
 
 ### For Normal Operations ✅
 

@@ -33,8 +33,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 "images.url",
                 "images.metadata",
                 "images.rank",
-                "options.*",
-                "options.values.*"  // ✅ FIX: Include option values
+                "options.*",        // ✅ Medusa v2: Select all option fields
+                "options.values.*"  // ✅ Medusa v2: Hydrate option values
             ],
             filters: { id }
         })
@@ -120,11 +120,16 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         }
 
         // 9. ✅ Create complete product response with spread operator
+        console.log('[WITH-PRICES] 🔍 originalProduct.options:', JSON.stringify(originalProduct.options, null, 2));
+
         const productResponse = {
             ...originalProduct,
+            options: originalProduct.options,  // ✅ Explicitly preserve options with values
             variants: variantsWithPrices,
             attributes: attributes
         }
+
+        console.log('[WITH-PRICES] 📤 Response options:', JSON.stringify(productResponse.options, null, 2));
 
         return res.json({
             product: productResponse,

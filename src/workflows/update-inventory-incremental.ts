@@ -42,63 +42,67 @@ const updateInventoryIncrementalStep = createStep(
                 return new StepResponse({ success: false, itemsUpdated: 0 })
             }
 
-            // 2. Fetch variants with all data
+            // 2. Fetch variants with all data (MUST MATCH sync-inventory.ts fields!)
             const { data: variants } = await query.graph({
                 entity: "product_variant",
                 fields: [
                     "id",
-                    "title",
                     "sku",
-                    "barcode",
+                    "created_at",
                     "updated_at",
                     "product.id",
                     "product.title",
                     "product.thumbnail",
                     "product.status",
-                    "product.handle",
+                    "product.categories.id",
                     "product.categories.handle",
+                    "product.categories.parent_category.handle",
+                    "product.categories.parent_category.parent_category.handle",
                     "prices.amount",
                     "prices.currency_code",
-                    "prices.price_list_id",
                     "inventory_items.inventory.id",
-                    "inventory_items.inventory.title",
                     "inventory_items.inventory.sku",
-                    "inventory_items.inventory.location_levels.stocked_quantity",
-                    "inventory_items.inventory.location_levels.reserved_quantity",
-                    "inventory_items.inventory.updated_at"
+                    "inventory_items.inventory.title",
+                    "inventory_items.inventory.created_at",
+                    "inventory_items.inventory.updated_at",
+                    "inventory_items.inventory.stocked_quantity",      // ✅ DIRECT field (not location_levels)
+                    "inventory_items.inventory.reserved_quantity",     // ✅ DIRECT field
                 ],
                 filters: { id: variantIds }
             })
 
-            // 3. Transform to inventory items
+            // 3. Transform to inventory items (MUST MATCH sync-inventory.ts logic!)
             const inventoryItems = variants.flatMap((variant: any) => {
+                const product = variant.product
+                const priceObj = variant.prices?.[0]
+
+                // ✅ Flatten all category handles (including parents) - SAME AS FULL SYNC
+                const allCategoryHandles = new Set<string>()
+                product?.categories?.forEach((c: any) => {
+                    if (c.handle) allCategoryHandles.add(c.handle)
+                    if (c.parent_category?.handle) allCategoryHandles.add(c.parent_category.handle)
+                    if (c.parent_category?.parent_category?.handle) allCategoryHandles.add(c.parent_category.parent_category.handle)
+                })
+
                 return variant.inventory_items?.map((invItem: any) => {
                     const inventory = invItem.inventory
                     if (!inventory || !variant.product?.id) return null
 
-                    const locationLevels = inventory.location_levels || []
-                    const totalStock = locationLevels.reduce((sum: number, level: any) =>
-                        sum + (level.stocked_quantity || 0), 0)
-                    const totalReserved = locationLevels.reduce((sum: number, level: any) =>
-                        sum + (level.reserved_quantity || 0), 0)
-
-                    const firstPrice = variant.prices?.[0]
-
                     return {
                         id: inventory.id,
                         sku: inventory.sku || variant.sku || "",
-                        title: variant.title || inventory.title || "",
-                        totalStock,
-                        totalReserved,
-                        price: firstPrice?.amount || 0,
-                        currencyCode: firstPrice?.currency_code || "USD",
+                        title: inventory.title || product?.title || "Untitled",
+                        thumbnail: product?.thumbnail || null,
+                        totalStock: inventory.stocked_quantity || 0,           // ✅ FIXED: Direct field
+                        totalReserved: inventory.reserved_quantity || 0,       // ✅ FIXED: Direct field  
+                        price: priceObj?.amount || 0,                          // v2: already in dollars
+                        currencyCode: priceObj?.currency_code?.toUpperCase() || "USD",
                         variantId: variant.id,
-                        productId: variant.product.id,
-                        status: variant.product.status || "draft",
-                        category_handles: variant.product.categories?.map((c: any) => c.handle) || [],
-                        thumbnail: variant.product.thumbnail || "",
-                        created_at: new Date(inventory.created_at || Date.now()).getTime(),
-                        updated_at: new Date(inventory.updated_at || Date.now()).getTime()
+                        productId: product.id,
+                        category_handles: Array.from(allCategoryHandles),      // ✅ FIXED: Include parents
+                        status: product.status || "draft",
+                        created_at: new Date(inventory.created_at || variant.created_at).getTime(),
+                        updated_at: new Date(inventory.updated_at || variant.updated_at).getTime()
                     }
                 }).filter(Boolean) || []
             })

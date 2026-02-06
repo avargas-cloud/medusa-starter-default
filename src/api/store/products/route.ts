@@ -44,7 +44,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 "created_at",
                 "updated_at",
                 "metadata",
-                "variants.*"
+                "variants.*",
+                "*options",
+                "options.values.*"  //  Medusa v2: Hydrate option values
             ],
             filters,
             pagination: {

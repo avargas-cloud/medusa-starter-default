@@ -457,31 +457,53 @@ async function syncInventoryMeiliMiddleware(
     const originalJson = res.json.bind(res)
 
     res.json = (data: any) => {
+        // 🔍 DEBUG: Log ALL requests that reach this middleware
+        console.log(`[MEILI-INVENTORY-SYNC] 🔍 DEBUG: ${method} ${req.path}`)
+        console.log(`[MEILI-INVENTORY-SYNC] 🔍 Response keys: ${Object.keys(data || {}).join(', ')}`)
+
         // Inventory changes can come from:
         // 1. Variant updates (prices, SKUs)
         // 2. Inventory item updates (stock levels)
         // 3. Product updates (affects all variants)
+        // 4. Batch variant updates (price changes via /variants/batch)
         const hasProduct = data?.product
         const hasVariant = data?.variant || data?.product_variant
         const hasInventoryItem = data?.inventory_item
+        const hasPrice = data?.price || data?.prices
+        const hasBatchUpdate = data?.updated && Array.isArray(data.updated)  // ✅ CRITICAL FIX
         const isInventoryPath = req.path?.includes('/inventory')
 
-        if (hasProduct || hasVariant || hasInventoryItem || isInventoryPath) {
+        // ✅ TRIGGER on any inventory-related change
+        if (hasProduct || hasVariant || hasInventoryItem || hasPrice || hasBatchUpdate || isInventoryPath) {
             setImmediate(async () => {
                 try {
                     const syncBasePath = `http://localhost:${process.env.PORT || 9000}`
 
                     // Determine what to sync
-                    let variantId: string | undefined
+                    let variantIds: string[] = []
                     let productId: string | undefined
 
-                    if (hasVariant) {
-                        variantId = data.variant?.id || data.product_variant?.id
-                    } else if (hasProduct) {
+                    // ✅ BATCH VARIANT UPDATES (price changes use this!)
+                    if (data.updated && Array.isArray(data.updated)) {
+                        console.log(`[MEILI-INVENTORY-SYNC] 📦 Batch update detected: ${data.updated.length} variants`)
+                        variantIds = data.updated.map((v: any) => v.id).filter(Boolean)
+                        // Extract product ID from URL path (e.g., /admin/products/prod_123/variants/batch)
+                        const productMatch = req.path.match(/\/admin\/products\/([^\/]+)\//)
+                        if (productMatch) {
+                            productId = productMatch[1]
+                        }
+                    }
+                    // Single variant update
+                    else if (hasVariant) {
+                        variantIds = [data.variant?.id || data.product_variant?.id].filter(Boolean)
+                    }
+                    // Product update (sync all variants)
+                    else if (hasProduct) {
                         productId = data.product.id
-                    } else if (hasInventoryItem && isInventoryPath) {
+                    }
+                    // Inventory item update
+                    else if (hasInventoryItem && isInventoryPath) {
                         // When editing inventory directly, we need to find the variant
-                        // The response doesn't include variant, so we'll need to query it
                         const query = req.scope.resolve("query")
                         try {
                             const { data: inventoryItems } = await query.graph({
@@ -491,7 +513,7 @@ async function syncInventoryMeiliMiddleware(
                             })
 
                             if (inventoryItems?.[0]?.variants?.[0]?.id) {
-                                variantId = inventoryItems[0].variants[0].id
+                                variantIds = [inventoryItems[0].variants[0].id]
                             }
                         } catch (err) {
                             console.warn(`[MEILI-INVENTORY-SYNC] Could not resolve variant for inventory item`)
@@ -499,32 +521,56 @@ async function syncInventoryMeiliMiddleware(
                     }
 
                     // Skip if we don't have any identifier
-                    if (!variantId && !productId) {
+                    if (variantIds.length === 0 && !productId) {
                         console.log(`[MEILI-INVENTORY-SYNC] ⚠️  No variant/product ID found, skipping sync`)
                         return
                     }
 
-                    console.log(`[MEILI-INVENTORY-SYNC] 🔄 Inventory change, incremental update (variantId: ${variantId}, productId: ${productId})`)
+                    // Sync each variant individually (or entire product)
+                    if (variantIds.length > 0) {
+                        console.log(`[MEILI-INVENTORY-SYNC] 🔄 Syncing ${variantIds.length} variant(s)...`)
 
-                    const response = await fetch(`${syncBasePath}/admin/search/inventory/update`, {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            "Cookie": req.headers.cookie || "",
-                            "Authorization": req.headers.authorization || ""
-                        },
-                        body: JSON.stringify({ variantId, productId })
-                    })
+                        for (const variantId of variantIds) {
+                            const response = await fetch(`${syncBasePath}/admin/search/inventory/update`, {
+                                method: "POST",
+                                headers: {
+                                    "Content-Type": "application/json",
+                                    "Cookie": req.headers.cookie || "",
+                                    "Authorization": req.headers.authorization || ""
+                                },
+                                body: JSON.stringify({ variantId })
+                            })
 
-                    if (response.ok) {
-                        const result = await response.json()
-                        if (result.success) {
-                            console.log(`[MEILI-INVENTORY-SYNC] ✅ Updated ${result.itemsUpdated} items`)
-                        } else {
-                            console.log(`[MEILI-INVENTORY-SYNC] ⚠️  No items to update`)
+                            if (response.ok) {
+                                const result = await response.json()
+                                if (result.success) {
+                                    console.log(`[MEILI-INVENTORY-SYNC] ✅ Updated ${result.itemsUpdated} items for variant ${variantId}`)
+                                }
+                            } else {
+                                console.warn(`[MEILI-INVENTORY-SYNC] ⚠️  Update failed for variant ${variantId}: ${response.status}`)
+                            }
                         }
-                    } else {
-                        console.warn(`[MEILI-INVENTORY-SYNC] ⚠️  Update failed: ${response.status}`)
+                    } else if (productId) {
+                        console.log(`[MEILI-INVENTORY-SYNC] 🔄 Syncing entire product: ${productId}`)
+
+                        const response = await fetch(`${syncBasePath}/admin/search/inventory/update`, {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                                "Cookie": req.headers.cookie || "",
+                                "Authorization": req.headers.authorization || ""
+                            },
+                            body: JSON.stringify({ productId })
+                        })
+
+                        if (response.ok) {
+                            const result = await response.json()
+                            if (result.success) {
+                                console.log(`[MEILI-INVENTORY-SYNC] ✅ Updated ${result.itemsUpdated} items`)
+                            }
+                        } else {
+                            console.warn(`[MEILI-INVENTORY-SYNC] ⚠️  Update failed: ${response.status}`)
+                        }
                     }
                 } catch (error: any) {
                     console.error(`[MEILI-INVENTORY-SYNC] ❌ Error:`, (error as Error).message)
@@ -579,6 +625,11 @@ export default defineMiddlewares({
         {
             // 🔍 MEILI SYNC: Inventory items direct endpoint
             matcher: "/admin/inventory-items*",
+            middlewares: [syncInventoryMeiliMiddleware],
+        },
+        {
+            // 🔍 MEILI SYNC: Price updates (when editing variant prices)
+            matcher: "/admin/prices*",
             middlewares: [syncInventoryMeiliMiddleware],
         },
         {

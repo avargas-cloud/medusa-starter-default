@@ -28,7 +28,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 "metadata",
                 "variants.*",
                 "images.*",
-                "options.*"
+                "*options",
+                "options.values.*"  // ✅ Medusa v2: Hydrate option values
             ],
             filters: { id }
         })
