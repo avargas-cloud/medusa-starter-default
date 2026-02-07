@@ -178,28 +178,37 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
         if (product.categories && product.categories.length > 0 && product.categories[0]) {
             const categoryId = product.categories[0].id
+            const categoryHandle = product.categories[0].handle
 
-            const { data: related } = await query.graph({
-                entity: "product",
-                fields: [
-                    "id",
-                    "title",
-                    "handle",
-                    "thumbnail",
-                    "variants.*"
-                ],
-                filters: {
-                    categories: { id: categoryId } as any,
-                    status: "published",
-                    id: { $ne: product.id } as any // Exclude current product
-                },
-                pagination: {
-                    take: 5,
-                    skip: 0
-                }
-            })
+            console.log(`[CONSOLIDATED] 🔍 Fetching related products for category: ${categoryHandle} (${categoryId})`)
 
-            relatedProducts = related || []
+            try {
+                const { data: related } = await query.graph({
+                    entity: "product",
+                    fields: [
+                        "id",
+                        "title",
+                        "handle",
+                        "thumbnail",
+                        "variants.*"
+                    ],
+                    filters: {
+                        categories: { handle: categoryHandle } as any,
+                        status: "published"
+                    },
+                    pagination: {
+                        take: 6, // Get 6 so we can exclude current and still have 5
+                        skip: 0
+                    }
+                })
+
+                // Manually exclude current product
+                relatedProducts = (related || []).filter((p: any) => p.id !== product.id).slice(0, 5)
+
+                console.log(`[CONSOLIDATED] 🔗 Found ${related?.length || 0} products in category, ${relatedProducts.length} after filtering`)
+            } catch (error) {
+                console.error(`[CONSOLIDATED] ❌ Error fetching related products:`, error)
+            }
 
             // Add prices to related products
             if (relatedProducts.length > 0) {
