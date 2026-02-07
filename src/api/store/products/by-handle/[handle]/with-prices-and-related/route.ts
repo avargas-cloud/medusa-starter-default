@@ -57,7 +57,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             })
         }
 
-        const product = products[0]
+        const product: any = products[0]
+        if (!product) {
+            return res.status(404).json({ message: "Product not found" })
+        }
 
         console.log(`[CONSOLIDATED] ✅ Found product: ${product.title}`)
 
@@ -133,42 +136,46 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         if (product.categories && product.categories.length > 0) {
             // Use the first category for breadcrumbs
             const category = product.categories[0]
+            if (!category) {
+                console.warn('[CONSOLIDATED] No category found')
+            } else {
 
-            // Build category tree upwards
-            const categoryChain: any[] = [category]
-            let currentCategoryId = category.parent_category_id
+                // Build category tree upwards
+                const categoryChain: any[] = [category]
+                let currentCategoryId = category.parent_category_id
 
-            while (currentCategoryId) {
-                const { data: parentCategories } = await query.graph({
-                    entity: "product_category",
-                    fields: ["id", "name", "handle", "parent_category_id"],
-                    filters: { id: currentCategoryId }
-                })
+                while (currentCategoryId) {
+                    const { data: parentCategories } = await query.graph({
+                        entity: "product_category",
+                        fields: ["id", "name", "handle", "parent_category_id"],
+                        filters: { id: currentCategoryId }
+                    })
 
-                if (parentCategories && parentCategories.length > 0) {
-                    categoryChain.unshift(parentCategories[0])
-                    currentCategoryId = parentCategories[0].parent_category_id
-                } else {
-                    break
+                    if (parentCategories && parentCategories.length > 0 && parentCategories[0]) {
+                        categoryChain.unshift(parentCategories[0])
+                        currentCategoryId = parentCategories[0].parent_category_id
+                    } else {
+                        break
+                    }
                 }
-            }
 
-            // Convert to breadcrumb format (match frontend expectations: {id, name, handle})
-            categoryChain.forEach((cat: any) => {
-                breadcrumbs.push({
-                    id: cat.id,
-                    name: cat.name,
-                    handle: cat.handle
+                // Convert to breadcrumb format (match frontend expectations: {id, name, handle})
+                categoryChain.forEach((cat: any) => {
+                    breadcrumbs.push({
+                        id: cat.id,
+                        name: cat.name,
+                        handle: cat.handle
+                    })
                 })
-            })
 
-            console.log(`[CONSOLIDATED] 🍞 Built ${breadcrumbs.length} breadcrumbs`)
+                console.log(`[CONSOLIDATED] 🍞 Built ${breadcrumbs.length} breadcrumbs`)
+            }
         }
 
         // Step 5: Get related products (same category, limit 5, exclude current)
         let relatedProducts: any[] = []
 
-        if (product.categories && product.categories.length > 0) {
+        if (product.categories && product.categories.length > 0 && product.categories[0]) {
             const categoryId = product.categories[0].id
 
             const { data: related } = await query.graph({
@@ -181,9 +188,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                     "variants.*"
                 ],
                 filters: {
-                    categories: { id: categoryId },
+                    categories: { id: categoryId } as any,
                     status: "published",
-                    id: { $ne: product.id } // Exclude current product
+                    id: { $ne: product.id } as any // Exclude current product
                 },
                 pagination: {
                     take: 5,
