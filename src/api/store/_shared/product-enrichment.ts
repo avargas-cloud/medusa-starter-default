@@ -64,36 +64,47 @@ export async function enrichProducts(products: any[], req: MedusaRequest) {
     }
 
     // Calculate price ranges from variants
+    // OPTIMIZATION: Batch fetch all prices for all products in ONE query instead of N queries
+
+    // Collect all variant IDs from all products
+    const allVariantIds: string[] = []
+    for (const product of products) {
+        if (product.variants && product.variants.length > 0) {
+            allVariantIds.push(...product.variants.map((v: any) => v.id))
+        }
+    }
+
+    if (allVariantIds.length === 0) {
+        return products
+    }
+
+    // Single batch query for ALL prices
+    const allPrices = await knex("price")
+        .select("price.amount", "price.currency_code", "product_variant_price_set.variant_id")
+        .join("product_variant_price_set", "price.price_set_id", "product_variant_price_set.price_set_id")
+        .whereIn("product_variant_price_set.variant_id", allVariantIds)
+        .where("price.currency_code", "usd")
+        .whereNull("price.deleted_at")
+
+    // Group prices by variant_id for easy lookup
+    const pricesByVariant = new Map<string, number>()
+    allPrices.forEach((p: any) => {
+        pricesByVariant.set(p.variant_id, p.amount)
+    })
+
+    // Now process each product using the pre-fetched prices
     for (const product of products) {
         if (!product.variants || product.variants.length === 0) {
             continue
         }
 
-        // Get all variant IDs for this product
-        const variantIds = product.variants.map((v: any) => v.id)
-
-        // Fetch prices through price_set relationship  
-        const prices = await knex("price")
-            .select("price.amount", "price.currency_code", "product_variant_price_set.variant_id")
-            .join("product_variant_price_set", "price.price_set_id", "product_variant_price_set.price_set_id")
-            .whereIn("product_variant_price_set.variant_id", variantIds)
-            .where("price.currency_code", "usd")
-            .whereNull("price.deleted_at")
-
-        if (prices.length === 0) {
-            continue
-        }
-
-        // Create price map by variant_id
-        const priceMap = new Map<string, number>()
-        prices.forEach((p: any) => {
-            priceMap.set(p.variant_id, p.amount)
-        })
-
         // Inject calculated_price into each variant
+        const productPrices: number[] = []
+
         product.variants.forEach((variant: any) => {
-            const amount = priceMap.get(variant.id)
+            const amount = pricesByVariant.get(variant.id)
             if (amount !== undefined) {
+                productPrices.push(amount)
                 Object.assign(variant, {
                     calculated_price: {
                         calculated_amount: amount,
@@ -103,10 +114,13 @@ export async function enrichProducts(products: any[], req: MedusaRequest) {
             }
         })
 
+        if (productPrices.length === 0) {
+            continue
+        }
+
         // Get min and max prices for product-level price/price_range
-        const amounts = prices.map((p: any) => p.amount)
-        const minPrice = Math.min(...amounts)
-        const maxPrice = Math.max(...amounts)
+        const minPrice = Math.min(...productPrices)
+        const maxPrice = Math.max(...productPrices)
 
         // If all prices are the same, return single price
         if (minPrice === maxPrice) {

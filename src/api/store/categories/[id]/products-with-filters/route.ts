@@ -61,7 +61,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         // 2. Get descendant category IDs if needed
         let categoryIds = [id]
         if (includeDescendants) {
-            const descendants = await getCategoryDescendants(id, query)
+            const knex = req.scope.resolve("__pg_connection__")
+            const descendants = await getCategoryDescendants(id, knex)
             categoryIds = [id, ...descendants]
             console.log(`[PRODUCTS-WITH-FILTERS] 👨‍👩‍👧‍👦 Including ${descendants.length} descendant categories`)
         }
@@ -72,21 +73,25 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             categories: { id: categoryIds }
         }
 
-        // 4. Query all products to get accurate total count
-        const { data: allProducts } = await query.graph({
-            entity: "product",
-            filters: productFilters,
-            fields: ["id"]
-        })
+        // 4. Get total count using direct SQL (faster than query.graph)
+        const knex = req.scope.resolve("__pg_connection__")
 
-        const totalCount = allProducts.length
+        const countResult = await knex("product")
+            .join("product_category_product", "product.id", "product_category_product.product_id")
+            .whereIn("product_category_product.product_category_id", categoryIds)
+            .where("product.status", "published")
+            .whereNull("product.deleted_at")
+            .countDistinct("product.id as count")
+            .first()
+
+        const totalCount = parseInt(String(countResult?.count || "0"))
 
         // 5. Query paginated products
         const { data: paginatedProducts } = await query.graph({
             entity: "product",
             filters: productFilters,
             fields: ["*", "variants.*"],
-            pagination: { skip: parseInt(offset as string), take: parseInt(limit as string) }
+            pagination: { skip: Number(offset), take: Number(limit) }
         })
 
         console.log(`[PRODUCTS-WITH-FILTERS] 📦 Found ${totalCount} total products, returning ${paginatedProducts.length}`)
@@ -131,30 +136,28 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 }
 
 /**
- * Recursively get all descendant category IDs
+ * Get all descendant category IDs using PostgreSQL recursive CTE
+ * Single efficient query instead of N recursive queries
  */
-async function getCategoryDescendants(categoryId: string, query: any): Promise<string[]> {
-    const descendants: string[] = []
-    const visited = new Set<string>()
-    const queue = [categoryId]
+async function getCategoryDescendants(categoryId: string, knex: any): Promise<string[]> {
+    const result = await knex.raw(`
+        WITH RECURSIVE descendants AS (
+            -- Base: direct children
+            SELECT id
+            FROM product_category
+            WHERE parent_category_id = ?
+              AND deleted_at IS NULL
+            
+            UNION
+            
+            -- Recursive: children of children
+            SELECT pc.id
+            FROM product_category pc
+            INNER JOIN descendants d ON pc.parent_category_id = d.id
+            WHERE pc.deleted_at IS NULL
+        )
+        SELECT id FROM descendants;
+    `, [categoryId])
 
-    while (queue.length > 0) {
-        const currentId = queue.shift()!
-
-        if (visited.has(currentId)) continue
-        visited.add(currentId)
-
-        const { data: children } = await query.graph({
-            entity: "product_category",
-            filters: { parent_category_id: currentId },
-            fields: ["id"]
-        })
-
-        for (const child of children) {
-            descendants.push(child.id)
-            queue.push(child.id)
-        }
-    }
-
-    return descendants
+    return result.rows.map((row: any) => row.id)
 }
