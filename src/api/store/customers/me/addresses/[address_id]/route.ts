@@ -26,7 +26,7 @@ const updateAddressSchema = z.object({
 });
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
-    const customerId = (req as any).auth?.actor_id;
+    const customerId = (req as any).auth_context?.actor_id;
     const addressId = req.params.address_id;
 
     if (!customerId) {
@@ -46,12 +46,71 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     const addressData = validation.data;
 
-    // Extract default flags from metadata (frontend sends them here)
-    const setAsDefaultBilling = addressData.metadata?.is_default_billing === true;
-    const setAsDefaultShipping = addressData.metadata?.is_default_shipping === true;
+    // Extract default flags from REQUEST BODY (frontend sends them at root level, NOT in metadata)
+    const setAsDefaultBilling = (req.body as any).is_default_billing === true;
+    const setAsDefaultShipping = (req.body as any).is_default_shipping === true;
 
-    // Update address using workflow
-    // Medusa automatically handles unsetting previous defaults
+    console.log('[UPDATE ADDRESS] 🔍 Extracted flags:', {
+        setAsDefaultBilling,
+        setAsDefaultShipping,
+        addressId,
+        customerId
+    });
+
+    // First, if setting as default, we need to UNSET all other addresses
+    if (setAsDefaultBilling || setAsDefaultShipping) {
+        const query = req.scope.resolve("query");
+        const { data: allAddresses } = await query.graph({
+            entity: "customer_address",
+            fields: ["id", "metadata"],
+            filters: {
+                customer_id: customerId,
+                id: { $ne: addressId } // All addresses EXCEPT the one we're updating
+            }
+        });
+
+        console.log('[UPDATE ADDRESS] 📋 Found', allAddresses?.length || 0, 'other addresses to update');
+
+        // Update each other address to UNSET the default flags
+        if (allAddresses && allAddresses.length > 0) {
+            for (const otherAddress of allAddresses) {
+                const updatedMetadata = { ...(otherAddress.metadata || {}) };
+
+                if (setAsDefaultBilling) {
+                    updatedMetadata.is_default_billing = false;
+                }
+                if (setAsDefaultShipping) {
+                    updatedMetadata.is_default_shipping = false;
+                }
+
+                console.log('[UPDATE ADDRESS] 🔄 Unsetting defaults on address:', otherAddress.id);
+
+                // Update BOTH metadata AND native fields for compatibility
+                await updateCustomerAddressesWorkflow(req.scope).run({
+                    input: {
+                        selector: { id: otherAddress.id, customer_id: customerId },
+                        update: {
+                            metadata: updatedMetadata,
+                            // Also try to update native fields (even though Medusa may ignore them)
+                            is_default_billing: setAsDefaultBilling ? false : undefined,
+                            is_default_shipping: setAsDefaultShipping ? false : undefined
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    // Now update the target address with the new data AND set it as default
+    const updatedMetadata = {
+        ...(addressData.metadata || {}),
+        is_default_billing: setAsDefaultBilling,
+        is_default_shipping: setAsDefaultShipping
+    };
+
+    console.log('[UPDATE ADDRESS] ✅ Updating target address with metadata:', updatedMetadata);
+
+    // Update address using workflow - set BOTH metadata AND native fields
     await updateCustomerAddressesWorkflow(req.scope).run({
         input: {
             selector: { id: addressId, customer_id: customerId },
@@ -67,10 +126,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 phone: addressData.phone,
                 company: addressData.company,
                 address_name: addressData.address_name,
-                // NATIVE FIELDS - Medusa handles toggle automatically
+                metadata: updatedMetadata,
+                // ALSO update native fields (for full compatibility)
                 is_default_billing: setAsDefaultBilling,
-                is_default_shipping: setAsDefaultShipping,
-                metadata: {} // Clear metadata, we use native fields
+                is_default_shipping: setAsDefaultShipping
             }
         }
     });
@@ -100,7 +159,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 }
 
 export async function DELETE(req: MedusaRequest, res: MedusaResponse) {
-    const customerId = (req as any).auth?.actor_id;
+    const customerId = (req as any).auth_context?.actor_id;
     const addressId = req.params.address_id;
 
     if (!customerId) {

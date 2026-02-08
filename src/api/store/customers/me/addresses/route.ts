@@ -25,7 +25,7 @@ const createAddressSchema = z.object({
 });
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
-    const customerId = (req as any).auth?.actor_id;
+    const customerId = (req as any).auth_context?.actor_id;
     if (!customerId) {
         res.status(401).json({ message: "Unauthorized. No customer ID found." });
         return;

@@ -1,4 +1,4 @@
-import { defineMiddlewares } from "@medusajs/medusa"
+import { defineMiddlewares, authenticate } from "@medusajs/medusa"
 import type { MedusaRequest, MedusaResponse, MedusaNextFunction } from "@medusajs/framework/http"
 import { addCategoryBreadcrumbs } from "./middlewares/add-category-breadcrumbs"
 
@@ -636,6 +636,12 @@ export default defineMiddlewares({
             // 🍞 BREADCRUMBS: Auto-add to Store API category responses
             matcher: "/store/product-categories*",
             middlewares: [addCategoryBreadcrumbs],
+        },
+        {
+            // 🔐 AUTHENTICATION: Enable customer authentication for /store/customers/me routes
+            // This populates req.auth_context.actor_id with customer ID from JWT token
+            matcher: "/store/customers/me*",
+            middlewares: [authenticate("customer", ["session", "bearer"])],
         },
     ],
 })
