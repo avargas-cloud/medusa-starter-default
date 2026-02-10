@@ -1,5 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 
 /**
  * GET /store/products/by-handle/:handle/with-prices-and-related
@@ -81,6 +81,21 @@ export const GET = async (
         }
 
         const mainProduct = products[0]
+
+        // 🔧 Fetch product options - query.graph doesn't support this
+        // Must use productService.retrieveProduct with relations
+        const productService = req.scope.resolve(Modules.PRODUCT)
+        try {
+            const productWithOptions = await productService.retrieveProduct(mainProduct.id, {
+                relations: ["options"]
+            })
+                // Merge options into mainProduct (type assertion to avoid DTO mismatch)
+                ; (mainProduct as any).options = productWithOptions.options || []
+        } catch (error) {
+            console.error('[OPTIONS-FETCH] Error fetching options:', error)
+                // Continue without options if fetch fails
+                ; (mainProduct as any).options = []
+        }
 
         // Get breadcrumbs from database directly to avoid truncation by query.graph()
         // query.graph() sometimes truncates deep nested arrays in metadata

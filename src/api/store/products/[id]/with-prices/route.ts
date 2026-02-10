@@ -108,11 +108,24 @@ export const GET = async (
         // Fetch product attributes (if they exist)
         const knex = req.scope.resolve("__pg_connection__")
 
-        const attributes = await knex("product_to_attribute")
-            .select("attribute_key", "attribute_value")
-            .where("product_id", id)
-            .whereNull("deleted_at")
-            .orderBy("attribute_key")
+        // Get attributes - handle gracefully if table doesn't exist (local dev)
+        let attributes: any[] = []
+        try {
+            const attributeResults = await knex("product_to_attribute")
+                .select("attribute_key", "attribute_value")
+                .where("product_id", id)
+                .whereNull("deleted_at")
+                .orderBy("attribute_key")
+
+            attributes = attributeResults || []
+        } catch (error: any) {
+            // Table might not exist in local dev environment
+            if (error.message?.includes('does not exist')) {
+                // Silently handle missing table in local dev
+            } else {
+                throw error
+            }
+        }
 
         // Return product with enriched data
         return res.json({
