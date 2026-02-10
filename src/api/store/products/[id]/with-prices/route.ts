@@ -1,146 +1,138 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 
 /**
  * GET /store/products/:id/with-prices
  * 
- * Complete product data endpoint:
- * - Images (thumbnail + images array)
- * - Calculated prices per variant
- * - Category breadcrumbs
- * - Product attributes
+ * Fetches a product with prices, attributes, and category breadcrumbs.
+ * 
+ * ✨ NEW: Uses Medusa Pricing Module for customer-specific pricing
+ * - Retail customers see retail prices
+ * - Wholesale customers see wholesale prices (via price lists)
+ * - Anonymous users see default prices
+ * 
+ * @route GET /store/products/:id/with-prices
  */
-export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
+export const GET = async (
+    req: MedusaRequest,
+    res: MedusaResponse
+) => {
     try {
         const { id } = req.params
-        const query = req.scope.resolve("query")
-        const knex = req.scope.resolve("__pg_connection__")
 
-        // 1. Fetch product with explicit image fields + categories for breadcrumbs
+        // Resolve query service
+        const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)
+        const pricingModule = req.scope.resolve("pricing")
+        const customerModule = req.scope.resolve("customer")
+
+        // Build pricing context for customer-specific pricing
+        const pricingContext: Record<string, any> = {
+            currency_code: "usd",
+            region_id: "reg_01KFS28SNF1MT1MRHRAFQ6ZGK1"
+        }
+
+        // Get customer and their groups
+        const customerId = req.auth_context?.actor_id
+        if (customerId) {
+            try {
+                const customer = await customerModule.retrieveCustomer(customerId, {
+                    relations: ["groups"]
+                })
+
+                if (customer.groups?.length) {
+                    pricingContext.customer_group_id = customer.groups.map(g => g.id)
+                    console.log(`[WITH-PRICES] 👤 Customer groups:`, pricingContext.customer_group_id)
+                }
+            } catch (error) {
+                console.warn(`[WITH-PRICES] ⚠️  Could not fetch customer groups`)
+            }
+        }
+
+        // 1. Fetch product with attributes and category data
         const { data: products } = await query.graph({
             entity: "product",
             fields: [
                 "id",
                 "title",
-                "handle",
                 "description",
+                "handle",
                 "thumbnail",
-                "status",
-                "created_at",
-                "updated_at",
                 "metadata",
                 "variants.*",
-                "images.id",
-                "images.url",
-                "images.metadata",
-                "images.rank",
-                "options.*",        // ✅ Medusa v2: Select all option fields
-                "options.values.*"  // ✅ Medusa v2: Hydrate option values
+                "variants.price_set.id",
+                "variants.options.*",
+                "categories.*",
+                "categories.parent_category_id"
             ],
             filters: { id }
         })
 
         if (!products || products.length === 0) {
-            return res.status(404).json({
-                message: "Product not found",
-                product: null
-            })
+            return res.status(404).json({ message: "Product not found" })
         }
 
         const originalProduct = products[0]
 
-        if (!originalProduct) {
-            return res.status(404).json({
-                message: "Product not found",
-                product: null
-            })
-        }
-
-        // 2. Get breadcrumbs from product metadata (pre-calculated)
-        // Products have main_category_breadcrumbs already calculated in metadata
+        // Get breadcrumbs from metadata (pre-synced via middleware)
         const breadcrumbs = originalProduct.metadata?.main_category_breadcrumbs || null
 
-        // 3. Get variant IDs for pricing query
-        const variantIds = originalProduct.variants.map((v: any) => v.id)
+        // Get variants with price_set_id
+        const variants = originalProduct.variants || []
 
-        // 5. Fetch prices
-        const prices = await knex("price")
-            .select("price.amount", "price.currency_code", "product_variant_price_set.variant_id")
-            .join("product_variant_price_set", "price.price_set_id", "product_variant_price_set.price_set_id")
-            .whereIn("product_variant_price_set.variant_id", variantIds)
-            .where("price.currency_code", "usd")
-            .whereNull("price.deleted_at")
+        // ✨ Calculate prices using Pricing Module (supports customer groups!)
+        const priceSetIds = variants.map(v => v.price_set?.id).filter(Boolean)
 
-        // 6. Create price map
-        const priceMap = new Map<string, number>()
-        prices.forEach((p: any) => {
-            priceMap.set(p.variant_id, p.amount)
-        })
+        let calculatedPrices = []
+        if (priceSetIds.length > 0) {
+            calculatedPrices = await pricingModule.calculatePrices(
+                { id: priceSetIds },
+                { context: pricingContext }
+            )
+            console.log(`[WITH-PRICES] 💵 Calculated ${calculatedPrices.length} prices (customer-aware)`)
+        }
 
-        // 7. Create variants with calculated prices
-        const variantsWithPrices = originalProduct.variants.map((variant: any) => {
-            const amount = priceMap.get(variant.id)
+        // Create variants with calculated prices
+        const variantsWithPrices = variants.map((variant: any) => {
+            const priceData = calculatedPrices.find(p => p.id === variant.price_set?.id)
 
             return {
                 ...variant,
-                calculated_price: amount !== undefined ? {
-                    calculated_amount: amount,
-                    currency_code: "usd"
+                calculated_price: priceData ? {
+                    calculated_amount: priceData.calculated_amount,
+                    original_amount: priceData.original_amount,
+                    currency_code: priceData.currency_code
                 } : null
             }
         })
 
-        // 8. Fetch product attributes
-        const attributeLinks = await knex("product_product_productattributes_attribute_value")
-            .select("attribute_value_id")
+        // Fetch product attributes (if they exist)
+        const knex = req.scope.resolve("__pg_connection__")
+
+        const attributes = await knex("product_to_attribute")
+            .select("attribute_key", "attribute_value")
             .where("product_id", id)
             .whereNull("deleted_at")
+            .orderBy("attribute_key")
 
-        let attributes: any[] = []
-
-        if (attributeLinks.length > 0) {
-            const attributeValueIds = attributeLinks.map((link: any) => link.attribute_value_id)
-
-            const { data: attributeValues } = await query.graph({
-                entity: "attribute_value",
-                fields: [
-                    "id",
-                    "value",
-                    "attribute_key.id",
-                    "attribute_key.handle",
-                    "attribute_key.label"
-                ],
-                filters: { id: attributeValueIds }
-            })
-
-            attributes = attributeValues.map((av: any) => ({
-                handle: av.attribute_key?.handle,
-                label: av.attribute_key?.label,
-                value: av.value
-            }))
-        }
-
-        // 9. ✅ Create complete product response with spread operator
-        console.log('[WITH-PRICES] 🔍 originalProduct.options:', JSON.stringify(originalProduct.options, null, 2));
-
-        const productResponse = {
-            ...originalProduct,
-            options: originalProduct.options,  // ✅ Explicitly preserve options with values
-            variants: variantsWithPrices,
-            attributes: attributes
-        }
-
-        console.log('[WITH-PRICES] 📤 Response options:', JSON.stringify(productResponse.options, null, 2));
-
+        // Return product with enriched data
         return res.json({
-            product: productResponse,
-            breadcrumbs: breadcrumbs  // Add breadcrumbs to response
+            product: {
+                ...originalProduct,
+                variants: variantsWithPrices,
+                attributes: attributes || [],
+                breadcrumbs,
+                customer_context: {
+                    customer_id: customerId || 'anonymous',
+                    customer_groups: pricingContext.customer_group_id || []
+                }
+            }
         })
 
     } catch (error: any) {
-        console.error("[WITH-PRICES] Error:", error)
+        console.error("[WITH-PRICES] Error:", error.message)
         return res.status(500).json({
-            error: "Failed to fetch product with prices",
-            message: (error as Error).message
+            error: "Failed to fetch product",
+            message: error.message
         })
     }
 }

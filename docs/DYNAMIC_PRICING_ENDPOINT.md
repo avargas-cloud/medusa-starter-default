@@ -1,7 +1,9 @@
 # Cómo Implementar Precios Dinámicos en Páginas de Producto
 
 **Guía Paso a Paso para Nuevos Desarrolladores**  
-**Última actualización**: 2026-02-07
+**Última actualización**: 2026-02-10
+
+> **⚠️ IMPORTANTE PARA WHOLESALE PRICING**: Este endpoint soporta precios wholesale/mayorista cuando el cliente está autenticado. Ver sección [Wholesale Pricing con JWT](#wholesale-pricing-con-jwt-authentication) abajo para detalles críticos.
 
 ---
 
@@ -160,6 +162,125 @@ curl -H "x-publishable-api-key: TU_API_KEY" \\
 ```
 
 ✅ **Si ves eso, el endpoint funciona!**
+
+---
+
+## ⚠️ PARTE CRÍTICA: Wholesale Pricing con JWT Authentication
+
+### 🎯 Problema Común: Precios Wholesale no se muestran
+
+Si tienes clientes mayoristas con precios especiales, el endpoint **DEBE** recibir el JWT token del frontend para identificar al cliente y aplicar sus precios.
+
+### 🔍 Síntomas del problema:
+
+- ✅ Backend detecta correctamente los customer groups (logs muestran: `Customer groups: ['cusgroup_01XXX']`)
+- ✅ Backend calcula correctamente el precio wholesale ($56.42 vs $60.99)
+- ❌ **Pero el frontend sigue mostrando precio retail** porque no envía el JWT token
+
+### ✅ Solución: El Frontend DEBE enviar Authorization header
+
+El middleware de Medusa está configurado para aceptar autenticación por **session cookies O Bearer token**:
+
+```typescript
+// backend/src/api/middlewares.ts
+{
+    matcher: "/store/products/:id/prices-and-stock",
+    middlewares: [
+        authenticate("customer", ["session", "bearer"], {
+            allowUnauthenticated: true  // Guests pueden acceder sin token
+        }),
+    ],
+}
+```
+
+**PERO**: En la práctica, las cookies de sesión no siempre funcionan correctamente (especialmente en desarrollo con diferentes puertos). **La solución es usar JWT Bearer tokens**.
+
+### 📝 Implementación Correcta en el Frontend:
+
+```typescript
+// ❌ MAL - Solo depende de cookies (no funciona siempre)
+const response = await fetch(`${backendUrl}/store/products/${productId}/prices-and-stock`, {
+    headers: {
+        'x-publishable-api-key': apiKey,
+    },
+    credentials: 'include'  // Solo esto NO ES SUFICIENTE
+})
+
+// ✅ BIEN - Envía JWT token + cookies (funciona siempre)
+const token = localStorage.getItem('medusa_auth_token')
+const headers = {
+    'x-publishable-api-key': apiKey,
+    'Content-Type': 'application/json'
+}
+
+if (token) {
+    headers['Authorization'] = `Bearer ${token}`  // ✅ CRÍTICO para wholesale
+}
+
+const response = await fetch(`${backendUrl}/store/products/${productId}/prices-and-stock`, {
+    headers,
+    credentials: 'include'
+})
+```
+
+### 🔄 Flujo Completo de Autenticación:
+
+```
+1. Usuario hace login → Frontend guarda JWT en localStorage
+   localStorage.setItem('medusa_auth_token', token)
+
+2. Usuario visita product page → ProductDynamicPricing monta
+
+3. Component lee token y lo incluye en fetch:
+   Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+
+4. Middleware authenticate() detecta el Bearer token
+
+5. Backend identifica customer y sus grupos:
+   → Customer ID: cus_01XXX
+   → Groups: ['Wholesale']
+
+6. Backend calcula precio con context wholesale:
+   → Precio retail: $60.99
+   → ✅ Precio wholesale aplicado: $56.42
+
+7. Frontend recibe y muestra $56.42
+```
+
+### 🐛 Debugging Wholesale Pricing:
+
+Si el precio wholesale no aparece, verifica en orden:
+
+1. **¿Hay JWT token en localStorage?**
+   ```javascript
+   console.log(localStorage.getItem('medusa_auth_token'))
+   // Debe mostrar: "eyJhbGciOiJIUzI1NiIs..."
+   ```
+
+2. **¿Se está enviando en el header?**
+   ```javascript
+   // En Network tab de DevTools:
+   // Request Headers
+   Authorization: Bearer eyJhbGci...  // ✅ Debe aparecer
+   ```
+
+3. **¿El backend detecta al customer?**
+   ```bash
+   # En logs del backend debe aparecer:
+   [PRICES-STOCK] Customer groups: ['cusgroup_01XXX']
+   ```
+
+4. **¿Se calcula el precio correcto?**
+   ```bash
+   # Backend debe mostrar en respuesta:
+   "price": { "amount": 56.42, "original_amount": 60.99 }
+   ```
+
+### 📚 Referencias:
+
+- Ver `ProductDynamicPricing.tsx` (líneas 70-84) para implementación correcta
+- Ver `medusa-client.ts` para el patrón usado en toda la app
+- Ver `backend/WHOLESALE_PRICING.md` para setup de customer groups
 
 ---
 

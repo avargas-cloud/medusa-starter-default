@@ -1,14 +1,14 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import { getCacheManager } from "../../../../../lib/cache-manager"
 
 /**
  * GET /store/products/:id/prices-and-stock
  * 
- * Lightweight endpoint for client-side price hydration in SSG pages.
- * Returns ONLY prices and inventory levels (no full product data).
- * 
- * PERFORMANCE: Uses direct Knex queries for speed (~40ms uncached, ~10ms cached)
- * CACHING: Results are cached for 5 minutes (300s) per product
+ * ✅ CORRECT IMPLEMENTATION using Medusa v2 native pricing
+ * - Uses pricingModule.calculatePrices() correctly
+ * - Supports customer-specific pricing (wholesale/retail)
+ * - Fetches inventory via SQL
  * 
  * @route GET /store/products/:id/prices-and-stock
  */
@@ -16,42 +16,84 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     try {
         const { id } = req.params
 
-        // 🔥 CACHE LAYER: Check cache first
-        const cacheKey = `product:${id}:prices-stock`
-        const cacheService = req.scope.resolve("cache")
-        const cacheManager = getCacheManager(cacheService)
-
-        const cached = await cacheManager.get<any>(cacheKey)
-        if (cached) {
-            console.log(`[PRICES-STOCK] 🎯 Cache HIT: ${cacheKey}`)
-            return res.json(cached)
+        // Build pricing context
+        const pricingContext: Record<string, any> = {
+            currency_code: "usd",
+            region_id: "reg_01KFS28SNF1MT1MRHRAFQ6ZGK1"
         }
 
-        console.log(`[PRICES-STOCK] ❌ Cache MISS: ${cacheKey}`)
-        console.log(`[PRICES-STOCK] 💰 Fetching dynamic data for product: ${id}`)
+        // Get customer groups for wholesale pricing
+        const customerId = (req as any).auth_context?.actor_id
+
+        if (customerId) {
+            try {
+                const customerModule = req.scope.resolve(Modules.CUSTOMER)
+                const customer = await customerModule.retrieveCustomer(customerId, {
+                    relations: ["groups"]
+                })
+
+                if (customer.groups?.length) {
+                    pricingContext.customer_group_id = customer.groups.map(g => g.id)
+                }
+            } catch (error) {
+                // Could not fetch customer groups
+            }
+        }
+
+        // Cache removed - prices calculated fresh every time for dynamic pricing
 
         const knex = req.scope.resolve("__pg_connection__")
+        const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)
+        const pricingModule = req.scope.resolve(Modules.PRICING)
 
-        // Fetch variant prices (direct Knex for speed)
-        const prices = await knex("price")
-            .select(
-                "price.amount",
-                "price.currency_code",
-                "product_variant_price_set.variant_id",
-                "product_variant.id as variant_id_full",
-                "product_variant.title as variant_title",
-                "product_variant.sku"
-            )
-            .join("product_variant_price_set", "price.price_set_id", "product_variant_price_set.price_set_id")
-            .join("product_variant", "product_variant_price_set.variant_id", "product_variant.id")
-            .where("product_variant.product_id", id)
-            .where("price.currency_code", "usd")
-            .whereNull("price.deleted_at")
-            .whereNull("product_variant.deleted_at")
+        // Step 1: Get variants with price_set_id
+        const { data: variants } = await query.graph({
+            entity: "variant",
+            fields: [
+                "id",
+                "title",
+                "sku",
+                "price_set.id"
+            ],
+            filters: { product_id: id }
+        })
 
-        console.log(`[PRICES-STOCK] 💵 Found ${prices.length} variant prices`)
 
-        // Fetch inventory levels
+        if (variants.length === 0) {
+            return res.json({
+                product_id: id,
+                variants: [],
+                timestamp: new Date().toISOString()
+            })
+        }
+
+        // Step 2: Calculate prices using Pricing Module (CORRECT WAY)
+        const priceSetIds = variants
+            .map(v => v.price_set?.id)
+            .filter(Boolean)
+
+
+        let calculatedPrices: any[] = []
+        if (priceSetIds.length > 0) {
+            try {
+                calculatedPrices = await pricingModule.calculatePrices(
+                    { id: priceSetIds },
+                    { context: pricingContext }
+                )
+                console.log(`[PRICES-STOCK] ✅ Calculated ${calculatedPrices.length} prices`)
+                if (calculatedPrices.length > 0) {
+                    console.log(`[PRICES-STOCK] 🔍 Sample price:`, {
+                        id: calculatedPrices[0].id,
+                        amount: calculatedPrices[0].calculated_amount,
+                        currency: calculatedPrices[0].currency_code
+                    })
+                }
+            } catch (error: any) {
+                console.error(`[PRICES-STOCK] ❌ Price calculation error:`, error.message)
+            }
+        }
+
+        // Step 3: Fetch inventory
         const inventory = await knex("inventory_level")
             .select(
                 "inventory_level.stocked_quantity",
@@ -65,24 +107,25 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             .whereNull("inventory_level.deleted_at")
             .whereNull("product_variant.deleted_at")
 
-        console.log(`[PRICES-STOCK] 📦 Found ${inventory.length} inventory records`)
+        // Step 4: Map everything together
+        const variantData = variants.map(v => {
+            const priceSetId = v.price_set?.id
+            const calculatedPrice = calculatedPrices.find(p => p.id === priceSetId)
 
-        // Build variant data map
-        const variantData = prices.map(p => {
-            const inv = inventory.find(i => i.variant_id === p.variant_id)
+            const inv = inventory.find(i => i.variant_id === v.id)
             const availableQuantity = inv
                 ? (inv.stocked_quantity || 0) - (inv.reserved_quantity || 0)
                 : 0
 
             return {
-                variant_id: p.variant_id,
-                sku: p.sku,
-                title: p.variant_title,
+                variant_id: v.id,
+                sku: v.sku,
+                title: v.title,
                 price: {
-                    amount: p.amount,
-                    currency_code: p.currency_code,
-                    // Medusa v2: prices are already in decimal format, no need to divide by 100
-                    formatted: `$${parseFloat(p.amount).toFixed(2)}`
+                    amount: calculatedPrice?.calculated_amount || 0,
+                    original_amount: calculatedPrice?.original_amount,
+                    currency_code: calculatedPrice?.currency_code || 'usd',
+                    formatted: `$${(calculatedPrice?.calculated_amount || 0).toFixed(2)}`
                 },
                 inventory: {
                     available: availableQuantity,
@@ -94,22 +137,29 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             }
         })
 
-        console.log(`[PRICES-STOCK] ✅ Returning ${variantData.length} variants`)
-
         const responseData = {
             product_id: id,
             variants: variantData,
+            customer_context: {
+                customer_id: customerId || 'anonymous',
+                customer_groups: pricingContext.customer_group_id || []
+            },
             timestamp: new Date().toISOString()
         }
 
-        // 💾 CACHE: Store result for 5 minutes (300 seconds)
-        await cacheManager.set(cacheKey, responseData, 300)
-        console.log(`[PRICES-STOCK] 💾 Cached result: ${cacheKey}`)
+        // No caching - prices are calculated fresh every time
+        // This ensures dynamic pricing always reflects current prices
+
+        // Prevent HTTP browser cache - always get fresh prices
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+        res.setHeader('Pragma', 'no-cache')
+        res.setHeader('Expires', '0')
 
         return res.json(responseData)
 
     } catch (error: any) {
         console.error("[PRICES-STOCK] ❌ Error:", error.message)
+        console.error("[PRICES-STOCK] Stack:", error.stack)
         return res.status(500).json({
             error: "Failed to fetch prices and stock",
             message: error.message

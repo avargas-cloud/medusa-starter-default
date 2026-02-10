@@ -643,5 +643,34 @@ export default defineMiddlewares({
             matcher: "/store/customers/me*",
             middlewares: [authenticate("customer", ["session", "bearer"])],
         },
+        {
+            // 💰 CUSTOMER-SPECIFIC PRICING: Enable authentication for price endpoints
+            // Allows both authenticated (specific price lists) and anonymous users (default pricing)
+            // Used by ProductDynamicPricing component and product pages
+            matcher: "/store/products/:id/prices-and-stock",
+            middlewares: [
+                authenticate("customer", ["session", "bearer"], {
+                    allowUnauthenticated: true  // ✅ Guests can access without token
+                }),
+            ],
+        },
+        {
+            // 💰 CUSTOMER-SPECIFIC PRICING: with-prices endpoint
+            matcher: "/store/products/:id/with-prices",
+            middlewares: [
+                authenticate("customer", ["session", "bearer"], {
+                    allowUnauthenticated: true  // ✅ Guests can access without token
+                }),
+            ],
+        },
+        {
+            // 💰 CUSTOMER-SPECIFIC PRICING: with-prices-and-related endpoint
+            matcher: "/store/products/by-handle/:handle/with-prices-and-related",
+            middlewares: [
+                authenticate("customer", ["session", "bearer"], {
+                    allowUnauthenticated: true  // ✅ Guests can access without token
+                }),
+            ],
+        },
     ],
 })

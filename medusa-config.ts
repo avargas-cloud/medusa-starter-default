@@ -90,6 +90,13 @@ module.exports = defineConfig({
       resolve: "@medusajs/medusa/event-bus-redis",
       options: {
         redisUrl: process.env.REDIS_URL,
+        redisOptions: {
+          connectTimeout: 5000,
+          retryStrategy: (times: number) => {
+            if (times > 3) return null;
+            return Math.min(times * 500, 2000);
+          },
+        },
       },
     },
     {
@@ -97,6 +104,13 @@ module.exports = defineConfig({
       options: {
         redis: {
           redisUrl: process.env.REDIS_URL,
+          redisOptions: {
+            connectTimeout: 5000,
+            retryStrategy: (times: number) => {
+              if (times > 3) return null;
+              return Math.min(times * 500, 2000);
+            },
+          },
         },
       },
     },
@@ -104,6 +118,13 @@ module.exports = defineConfig({
       resolve: "@medusajs/medusa/cache-redis",
       options: {
         redisUrl: process.env.REDIS_URL,
+        redisOptions: {
+          connectTimeout: 5000,
+          retryStrategy: (times: number) => {
+            if (times > 3) return null;
+            return Math.min(times * 500, 2000);
+          },
+        },
       },
     },
     {

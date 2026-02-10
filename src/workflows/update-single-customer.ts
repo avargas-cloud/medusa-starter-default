@@ -9,6 +9,10 @@ interface UpdateSingleCustomerInput {
  * 
  * Updates only the specified customer in MeiliSearch.
  * Used by auto-sync middleware for real-time updates.
+ * 
+ * LOGIC (matches subscriber):
+ * - customer_type: Preserved from metadata (business category)
+ * - price_level: Calculated from customer groups (Wholesale/Retail)
  */
 
 const updateSingleCustomerStep = createStep(
@@ -47,37 +51,44 @@ const updateSingleCustomerStep = createStep(
                 return new StepResponse({ success: false, customerId: "", email: "" })
             }
 
-            // 2. Initialize MeiliSearch client
+            // 2. Calculate price_level from customer groups (SAME AS SUBSCRIBER)
+            const customerGroups = customer.groups?.map((g: any) => g.name) || []
+            const hasWholesaleGroup = customerGroups.includes("Wholesale")
+            const priceLevel = hasWholesaleGroup ? "Wholesale" : "Retail"
+
+            // 3. Get customer_type from metadata (PRESERVE IT, DON'T CHANGE)
+            const existingCustomerType = customer.metadata?.customer_type || "Standard"
+
+            // 4. Initialize MeiliSearch client
             const client = new MeiliSearch({
                 host: process.env.MEILISEARCH_HOST || "http://localhost:7700",
                 apiKey: process.env.MEILISEARCH_API_KEY || "masterKey"
             })
 
-            // 3. Transform customer for MeiliSearch
+            // 5. Transform customer for MeiliSearch
             const meiliCustomer = {
                 id: customer.id,
                 email: customer.email,
                 first_name: customer.first_name,
                 last_name: customer.last_name,
-                company_name: customer.company_name || customer.metadata?.company_name || "",
+                company: customer.company_name || "",
                 phone: customer.phone,
-                has_account: customer.has_account,
-                created_at: new Date(customer.created_at).getTime(),
+                customer_type: existingCustomerType,     // ← From metadata (preserved)
+                price_level: priceLevel,                  // ← Calculated from groups
+                status: customer.has_account ? "Registered" : "Guest",
+                customer_groups: customerGroups,
                 updated_at: new Date(customer.updated_at).getTime(),
-                list_id: customer.metadata?.qb_list_id || customer.metadata?.quickbooks_list_id || "",
-                price_level: customer.metadata?.qb_price_level || "Retail",
-                customer_type: customer.metadata?.qb_customer_type || "Retail",
-                groups: customer.groups?.map((g: any) => g.name) || []
+                created_at: new Date(customer.created_at).getTime(),
             }
 
-            // 4. Update in MeiliSearch
+            // 6. Update in MeiliSearch
             const index = client.index("customers")
             const result = await index.addDocuments([meiliCustomer], { primaryKey: "id" })
 
-            // 5. Wait for indexing to complete
+            // 7. Wait for indexing to complete
             await (client as any).tasks.waitForTask(result.taskUid)
 
-            logger.info(`[MEILI-INCREMENTAL] ✅ Customer ${customerId} updated`)
+            logger.info(`[MEILI-INCREMENTAL] ✅ Customer ${customer.email} - Type: ${existingCustomerType}, Price: ${priceLevel}`)
 
             return new StepResponse({
                 success: true,
