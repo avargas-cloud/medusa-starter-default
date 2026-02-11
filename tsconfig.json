@@ -44,24 +44,8 @@
     ".medusa/admin",
     ".cache",
     "docs",
-    "src/scripts",
     "scripts",
-    // Exclude specific utility script patterns
-    "add-*.ts",
-    "delete-*.ts",
-    "fix-*.ts",
-    "keep-*.ts",
-    "remove-*.ts",
-    "see-*.ts",
-    "setup-*.ts",
-    "check-*.ts",
-    "test-*.ts",
-    "diagnose-*.ts",
-    "migration-*.ts",
-    "verify-*.ts",
-    // Exclude data and log files
-    "**/*.log",
-    "**/*.csv",
+    "src/scripts",
     "**/*.md"
   ]
 }

@@ -1,74 +1,63 @@
+import { ExecArgs } from "@medusajs/framework/types";
+import WooCommerceRestApi from "@woocommerce/woocommerce-rest-api";
+
 /**
- * Check specific product that's showing "Price unavailable"
+ * Check a specific SKU in WooCommerce to see its data
+ * Run with: npx medusa exec ./src/scripts/check-specific-product.ts
  */
-
-import { Modules } from "@medusajs/framework/utils"
-
-export default async function checkSpecificProduct({ container }: any) {
-    const logger = container.resolve("logger")
-    const query = container.resolve("query")
-    const knex = container.resolve("__pg_connection__")
-
-    const HANDLE = "ul-freecut-cob-led-strip-single-color-bright-output"
-
-    logger.info(`\n🔍 CHECKING PRODUCT: ${HANDLE}\n`)
+export default async function checkSpecificProduct({ container }: ExecArgs) {
+    console.log("\n🔍 Checking LPV-100-24 in WooCommerce...\n");
 
     try {
-        // 1. Get product
-        const { data: products } = await query.graph({
-            entity: "product",
-            fields: ["id", "title", "handle", "variants.*"],
-            filters: { handle: HANDLE }
-        })
+        const WooCommerce = new WooCommerceRestApi({
+            url: process.env.WC_URL!,
+            consumerKey: process.env.WC_CONSUMER_KEY!,
+            consumerSecret: process.env.WC_CONSUMER_SECRET!,
+            version: "wc/v3"
+        });
+
+        // Search by SKU
+        // Note: WC API doesn't allow direct get by sku easily without iterating or using `slug` depending on version
+        // We will list products filtering by search or sku if supported.
+        // Actually, listing with `sku` parameter works in v3.
+
+        const response = await WooCommerce.get("products", {
+            sku: "LPV-100-24"
+        });
+
+        const products = response.data;
 
         if (products.length === 0) {
-            logger.info("❌ Product not found")
-            return { success: false }
+            console.log("❌ Product LPV-100-24 not found in WooCommerce via SKU search!");
+
+            // Try searching generally
+            const response2 = await WooCommerce.get("products", {
+                search: "LPV-100-24"
+            });
+            console.log(`   Genera search found ${response2.data.length} items.`);
+            response2.data.forEach((p: any) => console.log(`   - [${p.id}] ${p.name} (SKU: ${p.sku})`));
+            return;
         }
 
-        const product = products[0]
-        logger.info(`✅ Found: "${product.title}"`)
-        logger.info(`   Variants: ${product.variants.length}`)
+        const p = products[0];
+        console.log(`✅ Found in WC: [${p.id}] ${p.name}`);
+        console.log(`   Type: ${p.type}`);
+        console.log(`   SKU: '${p.sku}'`);
+        console.log(`   Weight: ${p.weight}`);
+        console.log(`   Dimensions:`, p.dimensions);
 
-        // 2. Check each variant
-        for (const variant of product.variants.slice(0, 3)) {
-            logger.info(`\n📦 Variant: ${variant.title}`)
-            logger.info(`   SKU: ${variant.sku || 'NO SKU'}`)
-            logger.info(`   ID: ${variant.id}`)
-
-            // Check price_set link
-            const priceSetLink = await knex("product_variant_price_set")
-                .where("variant_id", variant.id)
-                .first()
-
-            if (!priceSetLink) {
-                logger.info(`   ❌ NO PRICE_SET LINK FOUND!`)
-                logger.info(`   → This variant has NO connection to any price_set`)
-                logger.info(`   → This is why calculated_price is null`)
-                continue
-            }
-
-            logger.info(`   ✅ price_set_id: ${priceSetLink.price_set_id}`)
-
-            // Check prices
-            const prices = await knex("price")
-                .where("price_set_id", priceSetLink.price_set_id)
-                .whereNull("deleted_at")
-
-            logger.info(`   💰 Prices in this price_set: ${prices.length}`)
-            prices.forEach((p: any) => {
-                logger.info(`      - $${p.amount} ${p.currency_code} ${p.price_list_id ? '(wholesale)' : '(default)'}`)
-            })
-
-            if (prices.length === 0) {
-                logger.info(`   ⚠️  Price set exists but has NO prices!`)
-            }
+        // Check variations if variable
+        if (p.type === 'variable') {
+            console.log("\n   Fetching variations...");
+            const vResponse = await WooCommerce.get(`products/${p.id}/variations`);
+            vResponse.data.forEach((v: any) => {
+                console.log(`   - Var [${v.id}] SKU: '${v.sku}'`);
+                console.log(`     Weight: ${v.weight}`);
+                console.log(`     Dimensions:`, v.dimensions);
+            });
         }
 
-        return { success: true }
-
-    } catch (error: any) {
-        logger.error(`❌ Error: ${error.message}`)
-        throw error
+    } catch (e) {
+        console.error(e);
     }
 }

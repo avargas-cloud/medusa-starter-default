@@ -36,7 +36,8 @@ export async function GET(
             },
             headers: req.headers,
             authScope: "store", // Important: scope must be "store" for customer auth
-            protocol: req.protocol
+            // Force HTTPS in production (behind proxy)
+            protocol: process.env.NODE_ENV === 'production' ? 'https' : req.protocol,
         } as any) as any; // Type cast to bypass strict DTO typing (see Medusa docs Section 19)
 
         // Extract redirect location

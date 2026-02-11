@@ -13,7 +13,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         headers: req.headers as Record<string, string>,
         query: req.query as Record<string, string>,
         body: req.body as Record<string, string>,
-        protocol: req.protocol,
+        // Railway terminates SSL, so req.protocol sees 'http'. 
+        // We must force 'https' in production to match the registered redirect_uri.
+        protocol: process.env.NODE_ENV === 'production' ? 'https' : req.protocol,
     }
 
     // Validar callback con Google (provider name hardcoded porque ruta es /customer/google/callback)
