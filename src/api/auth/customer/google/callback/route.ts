@@ -19,6 +19,16 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         host: req.headers.host, // CRITICAL: Railway needs explicit host for redirect_uri validation
     }
 
+    // 🔍 DEBUG: Log crítico para diagnosticar producción
+    console.log('[GOOGLE OAUTH CALLBACK] Starting validation...');
+    console.log('  Environment:', process.env.NODE_ENV);
+    console.log('  Protocol:', authData.protocol);
+    console.log('  Host:', authData.host);
+    console.log('  Full URL:', req.url);
+    console.log('  Query params:', Object.keys(req.query).join(', '));
+    console.log('  Has code:', !!req.query.code);
+    console.log('  Has state:', !!req.query.state);
+
     // Validar callback con Google (provider name hardcoded porque ruta es /customer/google/callback)
     const { success, error, authIdentity } = await authService.validateCallback(
         "google",
@@ -26,11 +36,18 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     )
 
     if (!success || !authIdentity) {
+        console.error('[GOOGLE OAUTH CALLBACK] ❌ Validation FAILED');
+        console.error('  Success:', success);
+        console.error('  Error:', error);
+        console.error('  AuthIdentity:', authIdentity);
         throw new MedusaError(
             MedusaError.Types.UNAUTHORIZED,
             error || "Authentication failed"
         )
     }
+
+    console.log('[GOOGLE OAUTH CALLBACK] ✅ Validation SUCCESS');
+
 
     // El email está en provider_identities[0].user_metadata.email
     const googleEmail = (authIdentity as any).provider_identities?.[0]?.user_metadata?.email
