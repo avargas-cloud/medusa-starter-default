@@ -65,16 +65,15 @@ export async function POST(
 
         console.log(`[Sync Dimensions] Found ${medusaProducts.length} Medusa products`);
 
-        // Match and update
+        // Match and update VARIANTS (not products)
         const updates = [];
-        const matchedProducts = [];
+        const matchedVariants = [];
         let skippedCount = 0;
 
         for (const wcProduct of wcProducts) {
-            // Try to match by wc_id in metadata (this is what the products actually use)
+            // Find Medusa product that contains a variant with this WC product's SKU
             const medusaProduct = medusaProducts.find((p: any) =>
-                p.metadata?.wc_id === wcProduct.id ||
-                p.metadata?.wc_id === String(wcProduct.id)
+                p.variants?.some((v: any) => v.sku === wcProduct.sku)
             );
 
             if (!medusaProduct) {
@@ -82,29 +81,34 @@ export async function POST(
                 continue;
             }
 
-            matchedProducts.push({
-                medusa_id: medusaProduct.id,
-                wc_id: wcProduct.id,
+            // Find the specific variant with matching SKU
+            const variant = medusaProduct.variants?.find((v: any) => v.sku === wcProduct.sku);
+
+            if (!variant) {
+                skippedCount++;
+                continue;
+            }
+
+            matchedVariants.push({
+                variant_id: variant.id,
+                product_id: medusaProduct.id,
                 sku: wcProduct.sku,
-                title: wcProduct.title,
+                title: `${medusaProduct.title} - ${variant.title || ''}`,
                 dimensions: {
-                    length: parseFloat(wcProduct.length) || 0,
-                    width: parseFloat(wcProduct.width) || 0,
-                    height: parseFloat(wcProduct.height) || 0,
-                    weight: parseFloat(wcProduct.weight) || 0
+                    length: parseFloat(wcProduct.length) || undefined,
+                    width: parseFloat(wcProduct.width) || undefined,
+                    height: parseFloat(wcProduct.height) || undefined,
+                    weight: parseFloat(wcProduct.weight) || undefined
                 }
             });
 
-            // Update product
+            // Update VARIANT with native Medusa v2 dimension fields
             updates.push(
-                productService.updateProducts(medusaProduct.id, {
-                    metadata: {
-                        ...medusaProduct.metadata,
-                        package_length_in: parseFloat(wcProduct.length) || 0,
-                        package_width_in: parseFloat(wcProduct.width) || 0,
-                        package_height_in: parseFloat(wcProduct.height) || 0,
-                        package_weight_lb: parseFloat(wcProduct.weight) || 0
-                    }
+                productService.updateProductVariants(variant.id, {
+                    height: parseFloat(wcProduct.height) || undefined,
+                    width: parseFloat(wcProduct.width) || undefined,
+                    length: parseFloat(wcProduct.length) || undefined,
+                    weight: parseFloat(wcProduct.weight) || undefined
                 })
             );
         }
@@ -112,16 +116,16 @@ export async function POST(
         // Execute all updates
         await Promise.all(updates);
 
-        console.log(`[Sync Dimensions] ✅ Updated ${updates.length} products`);
+        console.log(`[Sync Dimensions] ✅ Updated ${updates.length} variants`);
 
         res.json({
             success: true,
             wc_products_count: wcProducts.length,
             medusa_products_count: medusaProducts.length,
-            matched_count: matchedProducts.length,
+            matched_count: matchedVariants.length,
             updated_count: updates.length,
             skipped_count: skippedCount,
-            products: matchedProducts
+            variants: matchedVariants
         });
 
     } catch (error) {
