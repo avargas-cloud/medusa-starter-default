@@ -49,7 +49,7 @@
     "@medusajs/framework": "^2.13.0",
     "@medusajs/icons": "^2.13.0",
     "@medusajs/js-sdk": "^2.13.0",
-    "@medusajs/medusa": "^2.13.0",
+    "@medusajs/medusa": "2.13.0",
     "@medusajs/notification-sendgrid": "^2.13.1",
     "@medusajs/ui": "^4.1.0",
     "@rokmohar/medusa-plugin-meilisearch": "^1.3.5",

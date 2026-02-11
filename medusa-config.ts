@@ -64,6 +64,22 @@ module.exports = defineConfig({
       : "http://localhost:9000",
   },
   plugins: [
+    // MinIO / S3 File Storage
+    {
+      resolve: "@medusajs/file-s3",
+      options: {
+        file_url: process.env.MINIO_ENDPOINT,
+        access_key_id: process.env.MINIO_ACCESS_KEY,
+        secret_access_key: process.env.MINIO_SECRET_KEY,
+        region: "us-east-1", // MinIO doesn't use regions but SDK requires it
+        bucket: process.env.MINIO_BUCKET,
+        endpoint: process.env.MINIO_ENDPOINT,
+        // MinIO-specific S3 settings
+        s3_force_path_style: true, // Required for MinIO
+        // Uncomment if MinIO uses self-signed certificate
+        // s3_ssl_enabled: false,
+      },
+    },
     // Google OAuth Authentication
     // TEMPORARILY DISABLED: Plugin causing build errors
     // {
@@ -101,13 +117,6 @@ module.exports = defineConfig({
       resolve: "@medusajs/medusa/event-bus-redis",
       options: {
         redisUrl: process.env.REDIS_URL,
-        redisOptions: {
-          connectTimeout: 5000,
-          retryStrategy: (times: number) => {
-            if (times > 3) return null;
-            return Math.min(times * 500, 2000);
-          },
-        },
       },
     },
     {
@@ -115,13 +124,6 @@ module.exports = defineConfig({
       options: {
         redis: {
           redisUrl: process.env.REDIS_URL,
-          redisOptions: {
-            connectTimeout: 5000,
-            retryStrategy: (times: number) => {
-              if (times > 3) return null;
-              return Math.min(times * 500, 2000);
-            },
-          },
         },
       },
     },
@@ -129,13 +131,6 @@ module.exports = defineConfig({
       resolve: "@medusajs/medusa/cache-redis",
       options: {
         redisUrl: process.env.REDIS_URL,
-        redisOptions: {
-          connectTimeout: 5000,
-          retryStrategy: (times: number) => {
-            if (times > 3) return null;
-            return Math.min(times * 500, 2000);
-          },
-        },
       },
     },
     {
@@ -207,7 +202,9 @@ module.exports = defineConfig({
         ],
       },
     },
-    {
+    // Meilisearch Plugin - Only load when using local Meilisearch
+    // Railway Meilisearch connection in plugin causes 40-60s startup delay
+    ...(process.env.MEILISEARCH_HOST?.includes("localhost") ? [{
       resolve: "@rokmohar/medusa-plugin-meilisearch",
       options: {
         config: {
@@ -268,6 +265,6 @@ module.exports = defineConfig({
           },
         },
       },
-    },
+    }] : []),
   ]
 })

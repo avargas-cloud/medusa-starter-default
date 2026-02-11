@@ -27,13 +27,26 @@ if [ ! -z "$PORT_PID" ]; then
 fi
 sleep 1
 
-# Show which database is configured
+# Show which database and Redis are configured
+DB_LOCAL=false
+REDIS_LOCAL=false
+
 if grep -q "localhost:5432" .env 2>/dev/null; then
+    DB_LOCAL=true
+fi
+
+if grep -q "localhost:6379" .env 2>/dev/null; then
+    REDIS_LOCAL=true
+fi
+
+if [ "$DB_LOCAL" = true ] && [ "$REDIS_LOCAL" = true ]; then
+    echo "🔵 Using LOCAL PostgreSQL + LOCAL Redis"
+elif [ "$DB_LOCAL" = true ] && [ "$REDIS_LOCAL" = false ]; then
     echo "🔵 Using LOCAL PostgreSQL + Railway Redis"
-elif grep -q "railway.app\|rlwy.net" .env 2>/dev/null; then
-    echo "📡 Using RAILWAY services (Postgres + Redis)"
+elif [ "$DB_LOCAL" = false ] && [ "$REDIS_LOCAL" = true ]; then
+    echo "📡 Using RAILWAY PostgreSQL + LOCAL Redis"
 else
-    echo "⚠️  Database configuration not detected"
+    echo "📡 Using RAILWAY services (PostgreSQL + Redis)"
 fi
 
 
