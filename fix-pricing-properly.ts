@@ -1,8 +1,7 @@
-import { Modules } from "@medusajs/framework/utils";
+// Removed unused Modules import
 
-export default async function ({ container }) {
+export default async function ({ container }: { container: any }) {
     const knex = container.resolve("__pg_connection__");
-    const pricingModule = container.resolve(Modules.PRICING);
 
     console.log("🔧 Setting up CORRECT pricing structure...\n");
 

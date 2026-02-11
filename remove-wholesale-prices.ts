@@ -1,10 +1,6 @@
-import { Modules } from "@medusajs/framework/utils";
-
-/**
- * REMOVE all wholesale prices from price_list
- * Use this to revert to retail-only pricing
- */
-export default async function ({ container }) {
+// Remove wholesale prices from price_list
+// Removes prices with price_list_id set
+export default async function ({ container }: { container: any }) {
     const knex = container.resolve("__pg_connection__");
 
     console.log("🗑️  Removing wholesale prices from price_list...\n");

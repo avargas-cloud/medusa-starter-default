@@ -1,12 +1,11 @@
-import { Modules } from "@medusajs/framework/utils";
+// Removed unused Modules import
 
 /**
  * Add wholesale prices to the wholesale price_list
  * Creates 7.5% discounted prices for all products
  */
-export default async function ({ container }) {
+export default async function ({ container }: { container: any }) {
     const knex = container.resolve("__pg_connection__");
-    const pricingService = container.resolve(Modules.PRICING);
 
     console.log("💰 Adding wholesale prices to price_list...\n");
 

@@ -32,7 +32,7 @@ export const GET = async (
         }
 
         // Get customer and their groups
-        const customerId = req.auth_context?.actor_id
+        const customerId = (req as any).auth_context?.actor_id
         if (customerId) {
             try {
                 const customer = await customerModule.retrieveCustomer(customerId, {
@@ -74,15 +74,15 @@ export const GET = async (
         const originalProduct = products[0]
 
         // Get breadcrumbs from metadata (pre-synced via middleware)
-        const breadcrumbs = originalProduct.metadata?.main_category_breadcrumbs || null
+        const breadcrumbs = originalProduct?.metadata?.main_category_breadcrumbs || null
 
         // Get variants with price_set_id
-        const variants = originalProduct.variants || []
+        const variants = originalProduct?.variants || []
 
         // ✨ Calculate prices using Pricing Module (supports customer groups!)
-        const priceSetIds = variants.map(v => v.price_set?.id).filter(Boolean)
+        const priceSetIds = variants.map(v => v.price_set?.id).filter((id): id is string => Boolean(id))
 
-        let calculatedPrices = []
+        let calculatedPrices: any[] = []
         if (priceSetIds.length > 0) {
             calculatedPrices = await pricingModule.calculatePrices(
                 { id: priceSetIds },

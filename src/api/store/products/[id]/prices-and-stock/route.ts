@@ -1,6 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
-import { getCacheManager } from "../../../../../lib/cache-manager"
+// Cache manager removed - using fresh pricing calculations
 
 /**
  * GET /store/products/:id/prices-and-stock
@@ -70,7 +70,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         // Step 2: Calculate prices using Pricing Module (CORRECT WAY)
         const priceSetIds = variants
             .map(v => v.price_set?.id)
-            .filter(Boolean)
+            .filter((id): id is string => Boolean(id))
 
 
         let calculatedPrices: any[] = []

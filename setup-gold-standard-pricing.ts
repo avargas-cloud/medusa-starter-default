@@ -4,7 +4,7 @@ import { Modules } from "@medusajs/framework/utils";
  * GOLD STANDARD Medusa v2 Pricing Setup
  * Uses native Pricing Module APIs, not direct DB manipulation
  */
-export default async function ({ container }) {
+export default async function ({ container }: { container: any }) {
     const pricingService = container.resolve(Modules.PRICING);
     const customerModule = container.resolve(Modules.CUSTOMER);
 
