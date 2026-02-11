@@ -27,7 +27,7 @@ export async function calculateFilters(
         .whereIn("product_id", productIds)
         .whereNull("deleted_at")
 
-    console.log(`🔗 Found ${allLinks.length} total attribute links for ${productIds.length} products`)
+
 
     if (allLinks.length === 0) {
         // Return filters with 0 counts
@@ -56,7 +56,7 @@ export async function calculateFilters(
         filters: { id: allAttributeValueIds }
     })
 
-    console.log(`📋 Fetched ${allAttributeValues.length} attribute values`)
+
 
     // Count products per filter value
     const filters = configuredFilters.map(filter => {
@@ -69,8 +69,7 @@ export async function calculateFilters(
                 : (filter.options as Array<{ option: string }>).map((v: any) => v.option))
             : []
 
-        console.log(`\n🔍 Processing filter: ${filter.name} (${filter.attribute})`)
-        console.log(`  Predefined options: ${originalOptions.length}`)
+
 
         // Count products for each option (and discover new options if not predefined)
         allLinks.forEach((link: any) => {
@@ -104,8 +103,7 @@ export async function calculateFilters(
             count: optionCounts[option] || 0
         }))
 
-        console.log(`  Final options: ${options.length}`)
-        console.log(`  Sample counts:`, options.slice(0, 5))
+
 
         return {
             ...filter,

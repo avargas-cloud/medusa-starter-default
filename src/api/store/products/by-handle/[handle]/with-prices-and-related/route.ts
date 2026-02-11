@@ -1,5 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 
 /**
  * GET /store/products/by-handle/:handle/with-prices-and-related
@@ -35,7 +35,8 @@ export const GET = async (
         }
 
         // Get customer and their groups
-        const customerId = req.auth_context?.actor_id
+        // @ts-ignore - auth_context is added by middleware
+        const customerId = (req as any).auth_context?.actor_id
         if (customerId) {
             try {
                 const customer = await customerModule.retrieveCustomer(customerId, {
@@ -43,8 +44,7 @@ export const GET = async (
                 })
 
                 if (customer.groups?.length) {
-                    pricingContext.customer_group_id = customer.groups.map(g => g.id)
-                    console.log(`[WITH-PRICES-RELATED] 👤 Customer groups:`, pricingContext.customer_group_id)
+                    pricingContext.customer_group_id = customer.groups.map((g: any) => g.id)
                 }
             } catch (error) {
                 console.warn(`[WITH-PRICES-RELATED] ⚠️  Could not fetch customer groups`)
@@ -64,38 +64,21 @@ export const GET = async (
                 "variants.*",
                 "variants.price_set.id",
                 "variants.options.*",
+                "options.*",
+                "options.values.*",
                 "categories.*",
                 "categories.parent_category_id"
             ],
             filters: { handle }
         })
 
-        console.log('[BREADCRUMB-DEBUG] Products count:', products.length)
-        if (products.length > 0) {
-            console.log('[BREADCRUMB-DEBUG] Product metadata keys:', Object.keys(products[0].metadata || {}))
-            console.log('[BREADCRUMB-DEBUG] Full metadata object:', JSON.stringify(products[0].metadata, null, 2))
-        }
-
         if (!products || products.length === 0) {
             return res.status(404).json({ message: "Product not found" })
         }
 
-        const mainProduct = products[0]
+        const mainProduct: any = products[0]
 
-        // 🔧 Fetch product options - query.graph doesn't support this
-        // Must use productService.retrieveProduct with relations
-        const productService = req.scope.resolve(Modules.PRODUCT)
-        try {
-            const productWithOptions = await productService.retrieveProduct(mainProduct.id, {
-                relations: ["options"]
-            })
-                // Merge options into mainProduct (type assertion to avoid DTO mismatch)
-                ; (mainProduct as any).options = productWithOptions.options || []
-        } catch (error) {
-            console.error('[OPTIONS-FETCH] Error fetching options:', error)
-                // Continue without options if fetch fails
-                ; (mainProduct as any).options = []
-        }
+        // Options are now fetched natively via query.graph
 
         // Get breadcrumbs from database directly to avoid truncation by query.graph()
         // query.graph() sometimes truncates deep nested arrays in metadata
@@ -108,13 +91,11 @@ export const GET = async (
 
         const breadcrumbs = productWithMetadata?.metadata?.main_category_breadcrumbs || null
 
-        console.log('[BREADCRUMB-FIX] Breadcrumbs from DB:', breadcrumbs?.length || 0)
-        if (breadcrumbs) {
-            console.log('[BREADCRUMB-FIX] Breadcrumb names:', breadcrumbs.map((b: any) => b.name).join(' > '))
+        if (breadcrumbs && breadcrumbs.length > 0) {
         }
 
         // Get attributes - handle gracefully if table doesn't exist (local dev)
-        let attributes = []
+        let attributes: any[] = []
         try {
             const attributeResults = await knex("product_to_attribute")
                 .select("attribute_key", "attribute_value")
@@ -134,9 +115,9 @@ export const GET = async (
 
         // 2. Calculate prices for main product using Pricing Module
         const mainVariants = mainProduct.variants || []
-        const mainPriceSetIds = mainVariants.map(v => v.price_set?.id).filter(Boolean)
+        const mainPriceSetIds = mainVariants.map((v: any) => v.price_set?.id).filter(Boolean)
 
-        let mainCalculatedPrices = []
+        let mainCalculatedPrices: any[] = []
         if (mainPriceSetIds.length > 0) {
             mainCalculatedPrices = await pricingModule.calculatePrices(
                 { id: mainPriceSetIds },
@@ -146,7 +127,7 @@ export const GET = async (
 
         // Create variants with calculated prices for main product
         const mainVariantsWithPrices = mainVariants.map((variant: any) => {
-            const priceData = mainCalculatedPrices.find(p => p.id === variant.price_set?.id)
+            const priceData = mainCalculatedPrices.find((p: any) => p.id === variant.price_set?.id)
 
             return {
                 ...variant,
@@ -160,7 +141,7 @@ export const GET = async (
 
         // 3. Fetch related products from same category
         const mainCategoryId = mainProduct.categories?.[0]?.id
-        let relatedProducts = []
+        let relatedProducts: any[] = []
 
         if (mainCategoryId) {
             const { data: relatedProductsData } = await query.graph({
@@ -174,7 +155,7 @@ export const GET = async (
                     "variants.price_set.id"
                 ],
                 filters: {
-                    categories: { id: mainCategoryId },
+                    categories: { id: mainCategoryId } as any,
                     id: { $ne: mainProduct.id } // Exclude main product
                 }
             })
@@ -186,10 +167,10 @@ export const GET = async (
             if (limitedRelated.length > 0) {
                 const relatedPriceSetIds = limitedRelated
                     .flatMap(p => p.variants || [])
-                    .map(v => v.price_set?.id)
+                    .map((v: any) => v.price_set?.id)
                     .filter(Boolean)
 
-                let relatedCalculatedPrices = []
+                let relatedCalculatedPrices: any[] = []
                 if (relatedPriceSetIds.length > 0) {
                     relatedCalculatedPrices = await pricingModule.calculatePrices(
                         { id: relatedPriceSetIds },
@@ -200,7 +181,7 @@ export const GET = async (
                 // Map prices to related products
                 relatedProducts = limitedRelated.map((product: any) => {
                     const variantsWithPrices = (product.variants || []).map((variant: any) => {
-                        const priceData = relatedCalculatedPrices.find(p => p.id === variant.price_set?.id)
+                        const priceData = relatedCalculatedPrices.find((p: any) => p.id === variant.price_set?.id)
 
                         return {
                             ...variant,

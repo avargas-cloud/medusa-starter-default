@@ -29,13 +29,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         )
     }
 
-    // 🔍 Debug: Ver estructura de authIdentity
-    console.log('🔍 authIdentity completo:', JSON.stringify(authIdentity, null, 2))
-
     // El email está en provider_identities[0].user_metadata.email
     const googleEmail = (authIdentity as any).provider_identities?.[0]?.user_metadata?.email
-
-    console.log('📧 Email extraído:', googleEmail)
 
     if (!googleEmail) {
         console.error('❌ authIdentity:', authIdentity)
@@ -54,9 +49,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
     let customer = customers?.[0]
 
-    // CASO 3: Legacy Customer (QuickBooks) - Vincular Google y activar
     if (customer && customer.metadata?.legacy_customer === true && !customer.has_account) {
-        console.log(`🎯 CASO 3: Legacy customer ${googleEmail} autenticado con Google - Activando...`)
 
         // Actualizar customer: activar cuenta y limpiar metadata de legacy
         const postgres = await import('postgres')
@@ -69,19 +62,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         metadata = metadata - 'legacy_customer' - 'temporary_password' - 'activation_token' - 'activation_expires'
       WHERE id = ${customer.id}
     `
-
-        console.log(`✅ Legacy customer activado: ${googleEmail}`)
         await sql.end()
     }
 
-    // CASO 2: Cliente existente normal - ya está autenticado, solo login
     else if (customer && customer.has_account) {
-        console.log(`✅ CASO 2: Cliente existente ${googleEmail} - Login normal`)
     }
 
-    // CASO 1: Cliente nuevo - Buscar customer recién creado por Google Auth Module
     else if (!customer) {
-        console.log(`✨ CASO 1: Nuevo cliente ${googleEmail} - Buscando customer creado por Auth Module...`)
 
         // El Auth Module crea el customer automáticamente, busquémoslo de nuevo
         // con un pequeño delay para asegurar que la transacción se completó
@@ -101,8 +88,6 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
                 `Customer not found after Google OAuth for email: ${googleEmail}`
             )
         }
-
-        console.log(`✅ Customer encontrado: ${customer.id}`)
     }
 
     // Generar JWT token
@@ -126,8 +111,6 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         },
     }
 
-    console.log('[Google OAuth Callback] Generating JWT for customer:', customer.id);
-
     // Type assertion to bypass Railway TypeScript strictness
     const token = (jwt.sign as any)(tokenData, http.jwtSecret, {
         expiresIn: http.jwtExpiresIn || "24h",
@@ -135,8 +118,6 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
     // 🔥 Redirigir al frontend con el token (FIXED)
     const frontendCallbackUrl = `${process.env.STOREFRONT_URL || 'http://localhost:4321'}/auth/callback?token=${token}`;
-
-    console.log('[Google OAuth Callback] Redirecting to:', frontendCallbackUrl);
 
     return res.redirect(frontendCallbackUrl)
 }

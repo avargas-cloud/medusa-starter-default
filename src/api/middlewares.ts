@@ -72,19 +72,15 @@ async function syncCategoryAttributesMiddleware(
                     })
 
                     if (categoryIds.size === 0) {
-                        console.log(`[CATEGORY-ATTR-SYNC] No categories affected by product changes`)
                         return
                     }
 
                     // Sync each affected category
-                    console.log(`[CATEGORY-ATTR-SYNC] 🎯 Intercepted response for product(s): ${productIds.join(', ')}`)
-                    console.log(`[CATEGORY-ATTR-SYNC] 📂 Found ${categoryIds.size} categories to sync`)
 
                     try {
                         const syncBasePath = `http://localhost:${process.env.PORT || 9000}`
 
                         for (const categoryId of categoryIds) {
-                            console.log(`[CATEGORY-ATTR-SYNC] 🔄 Syncing category: ${categoryId}`)
                             try {
                                 const response = await fetch(`${syncBasePath}/admin/product-categories/${categoryId}/sync-attributes`, {
                                     method: "POST",
@@ -96,12 +92,9 @@ async function syncCategoryAttributesMiddleware(
                                 })
 
                                 if (response.ok) {
-                                    const result = await response.json()
-                                    console.log(`[CATEGORY-ATTR-SYNC] ✅ Category ${categoryId}: ${result.filterCount} filters`)
+                                    await response.json()
                                 } else {
-                                    const errorText = await response.text()
-                                    console.warn(`[CATEGORY-ATTR-SYNC] ⚠️  Category ${categoryId} sync failed: ${response.status}`)
-                                    console.warn(`[CATEGORY-ATTR-SYNC] Response: ${errorText}`)
+                                    await response.text()
                                 }
                             } catch (error: any) {
                                 console.error(`[CATEGORY-ATTR-SYNC] ❌ Category ${categoryId} error:`, (error as Error).message)
@@ -166,7 +159,6 @@ async function syncCategorySortingMiddleware(
                     // Handle product deletion
                     if (isProductDelete) {
                         const productId = req.params.id
-                        console.log(`[SORTING-SYNC] 🗑️  Product deleted: ${productId}`)
 
                         // Find all categories that might have this product in sorting_config
                         const { data: allCategories } = await query.graph({
@@ -186,7 +178,6 @@ async function syncCategorySortingMiddleware(
                     // Handle category deletion
                     else if (isCategoryDelete) {
                         const categoryId = req.params.id
-                        console.log(`[SORTING-SYNC] 🗑️  Category deleted: ${categoryId}`)
 
                         // Find parent category to clean it
                         const { data: deletedCategory } = await query.graph({
@@ -242,8 +233,6 @@ async function syncCategorySortingMiddleware(
                         return
                     }
 
-                    console.log(`[SORTING-SYNC] 🎯 Found ${affectedCategories.size} categories to sync`)
-
                     const syncBasePath = `http://localhost:${process.env.PORT || 9000}`
 
                     for (const categoryId of affectedCategories) {
@@ -260,10 +249,8 @@ async function syncCategorySortingMiddleware(
                             if (response.ok) {
                                 const result = await response.json()
                                 if (result.cleaned) {
-                                    console.log(`[SORTING-SYNC] ✅ Category ${categoryId}: Removed ${result.removed.subcategories + result.removed.products} orphaned IDs`)
                                 }
                             } else {
-                                console.warn(`[SORTING-SYNC] ⚠️  Category ${categoryId} sync failed: ${response.status}`)
                             }
                         } catch (error: any) {
                             console.error(`[SORTING-SYNC] ❌ Category ${categoryId} error:`, (error as Error).message)
@@ -314,7 +301,6 @@ async function syncProductsMeiliMiddleware(
 
                     if (isProductDelete) {
                         // Product deleted - trigger full sync to cleanup index
-                        console.log(`[MEILI-PRODUCT-SYNC] 🗑️  Product deleted, triggering full cleanup sync`)
 
                         await fetch(`${syncBasePath}/admin/search/products/sync`, {
                             method: "POST",
@@ -327,7 +313,6 @@ async function syncProductsMeiliMiddleware(
                     } else if (hasProduct) {
                         // Single product created/updated - INCREMENTAL sync (fast!)
                         const productId = data.product.id
-                        console.log(`[MEILI-PRODUCT-SYNC] 🔄 Product ${productId} changed, incremental update`)
 
                         const response = await fetch(`${syncBasePath}/admin/search/products/update`, {
                             method: "POST",
@@ -342,12 +327,9 @@ async function syncProductsMeiliMiddleware(
                         if (response.ok) {
                             const result = await response.json()
                             if (result.success) {
-                                console.log(`[MEILI-PRODUCT-SYNC] ✅ Updated: ${result.title}`)
                             } else {
-                                console.log(`[MEILI-PRODUCT-SYNC] ⚠️  Product not found or skipped`)
                             }
                         } else {
-                            console.warn(`[MEILI-PRODUCT-SYNC] ⚠️  Update failed: ${response.status}`)
                         }
                     }
                 } catch (error: any) {
@@ -390,7 +372,6 @@ async function syncCustomersMeiliMiddleware(
                     const syncBasePath = `http://localhost:${process.env.PORT || 9000}`
 
                     if (isCustomerDelete) {
-                        console.log(`[MEILI-CUSTOMER-SYNC] 🗑️  Customer deleted, full cleanup sync`)
 
                         await fetch(`${syncBasePath}/admin/search/customers/sync`, {
                             method: "POST",
@@ -403,7 +384,6 @@ async function syncCustomersMeiliMiddleware(
                     } else if (hasCustomer) {
                         // INCREMENTAL sync (fast!)
                         const customerId = data.customer.id
-                        console.log(`[MEILI-CUSTOMER-SYNC] 🔄 Customer ${customerId}, incremental update`)
 
                         const response = await fetch(`${syncBasePath}/admin/search/customers/update`, {
                             method: "POST",
@@ -418,12 +398,9 @@ async function syncCustomersMeiliMiddleware(
                         if (response.ok) {
                             const result = await response.json()
                             if (result.success) {
-                                console.log(`[MEILI-CUSTOMER-SYNC] ✅ Updated: ${result.email}`)
                             } else {
-                                console.log(`[MEILI-CUSTOMER-SYNC] ⚠️  Not found or skipped`)
                             }
                         } else {
-                            console.warn(`[MEILI-CUSTOMER-SYNC] ⚠️  Update failed: ${response.status}`)
                         }
                     }
                 } catch (error: any) {
@@ -458,8 +435,6 @@ async function syncInventoryMeiliMiddleware(
 
     res.json = (data: any) => {
         // 🔍 DEBUG: Log ALL requests that reach this middleware
-        console.log(`[MEILI-INVENTORY-SYNC] 🔍 DEBUG: ${method} ${req.path}`)
-        console.log(`[MEILI-INVENTORY-SYNC] 🔍 Response keys: ${Object.keys(data || {}).join(', ')}`)
 
         // Inventory changes can come from:
         // 1. Variant updates (prices, SKUs)
@@ -485,7 +460,6 @@ async function syncInventoryMeiliMiddleware(
 
                     // ✅ BATCH VARIANT UPDATES (price changes use this!)
                     if (data.updated && Array.isArray(data.updated)) {
-                        console.log(`[MEILI-INVENTORY-SYNC] 📦 Batch update detected: ${data.updated.length} variants`)
                         variantIds = data.updated.map((v: any) => v.id).filter(Boolean)
                         // Extract product ID from URL path (e.g., /admin/products/prod_123/variants/batch)
                         const productMatch = req.path.match(/\/admin\/products\/([^\/]+)\//)
@@ -522,13 +496,11 @@ async function syncInventoryMeiliMiddleware(
 
                     // Skip if we don't have any identifier
                     if (variantIds.length === 0 && !productId) {
-                        console.log(`[MEILI-INVENTORY-SYNC] ⚠️  No variant/product ID found, skipping sync`)
                         return
                     }
 
                     // Sync each variant individually (or entire product)
                     if (variantIds.length > 0) {
-                        console.log(`[MEILI-INVENTORY-SYNC] 🔄 Syncing ${variantIds.length} variant(s)...`)
 
                         for (const variantId of variantIds) {
                             const response = await fetch(`${syncBasePath}/admin/search/inventory/update`, {
@@ -544,14 +516,11 @@ async function syncInventoryMeiliMiddleware(
                             if (response.ok) {
                                 const result = await response.json()
                                 if (result.success) {
-                                    console.log(`[MEILI-INVENTORY-SYNC] ✅ Updated ${result.itemsUpdated} items for variant ${variantId}`)
                                 }
                             } else {
-                                console.warn(`[MEILI-INVENTORY-SYNC] ⚠️  Update failed for variant ${variantId}: ${response.status}`)
                             }
                         }
                     } else if (productId) {
-                        console.log(`[MEILI-INVENTORY-SYNC] 🔄 Syncing entire product: ${productId}`)
 
                         const response = await fetch(`${syncBasePath}/admin/search/inventory/update`, {
                             method: "POST",
@@ -566,10 +535,8 @@ async function syncInventoryMeiliMiddleware(
                         if (response.ok) {
                             const result = await response.json()
                             if (result.success) {
-                                console.log(`[MEILI-INVENTORY-SYNC] ✅ Updated ${result.itemsUpdated} items`)
                             }
                         } else {
-                            console.warn(`[MEILI-INVENTORY-SYNC] ⚠️  Update failed: ${response.status}`)
                         }
                     }
                 } catch (error: any) {
