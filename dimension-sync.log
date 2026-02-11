@@ -1,0 +1,12 @@
+[dotenv@17.2.3] injecting env (42) from .env -- tip: 🛠️  run anywhere with `dotenvx run -- yourcommand`
+[Sync Dimensions] Starting...
+
+[WooCommerce] Fetching products...
+[WooCommerce] Found 309 products with dimensions/weight
+
+✅ Saved to ./wc-product-dimensions.json
+
+[Medusa] Updating products with dimensions...
+
+[Sync Dimensions] Fatal error: TypeError: Cannot read properties of undefined (reading 'MedusaAppLoader')
+    at main (/home/alejo/webapps/ecopowertech-workspace/backend/src/scripts/sync-dimensions-from-wc.ts:80:24)

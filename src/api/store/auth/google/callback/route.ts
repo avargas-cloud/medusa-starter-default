@@ -34,7 +34,8 @@ export async function GET(
 
         if (!authResponse.success) {
             console.error('[Google OAuth Callback] Authentication failed:', authResponse.error);
-            return res.redirect(`${process.env.STOREFRONT_URL || 'http://localhost:4321'}/404?error=auth_failed`);
+            const storefrontUrl = process.env.STOREFRONT_URL || (process.env.NODE_ENV === 'production' ? 'https://ecopowertech-headless-medusa.vercel.app' : 'http://localhost:4321');
+            return res.redirect(`${storefrontUrl}/404?error=auth_failed`);
         }
 
         console.log('[Google OAuth Callback] Authentication successful');
@@ -45,7 +46,8 @@ export async function GET(
         if (!email) {
             console.error('[Google OAuth Callback] No email in auth response');
             console.error('[Google OAuth Callback] AuthIdentity:', JSON.stringify(authResponse.authIdentity, null, 2));
-            return res.redirect(`${process.env.STOREFRONT_URL || 'http://localhost:4321'}/404?error=no_email`);
+            const storefrontUrl = process.env.STOREFRONT_URL || (process.env.NODE_ENV === 'production' ? 'https://ecopowertech-headless-medusa.vercel.app' : 'http://localhost:4321');
+            return res.redirect(`${storefrontUrl}/404?error=no_email`);
         }
 
         console.log('[Google OAuth Callback] Email extracted:', email);
@@ -101,7 +103,8 @@ export async function GET(
         console.log('[Google OAuth Callback] Token generated successfully');
 
         // Step 5: Redirection (Gold Standard)
-        const frontendCallbackUrl = `${process.env.STOREFRONT_URL || 'http://localhost:4321'}/auth/callback?token=${token}`;
+        const storefrontUrl = process.env.STOREFRONT_URL || (process.env.NODE_ENV === 'production' ? 'https://ecopowertech-headless-medusa.vercel.app' : 'http://localhost:4321');
+        const frontendCallbackUrl = `${storefrontUrl}/auth/callback?token=${token}`;
 
         console.log('[Google OAuth Callback] Redirecting to:', frontendCallbackUrl);
 
@@ -110,6 +113,7 @@ export async function GET(
     } catch (error: any) {
         console.error('[Google OAuth Callback] Error:', error);
         console.error('[Google OAuth Callback] Error stack:', error.stack);
-        return res.redirect(`${process.env.STOREFRONT_URL || 'http://localhost:4321'}/404?error=server_error`);
+        const storefrontUrl = process.env.STOREFRONT_URL || (process.env.NODE_ENV === 'production' ? 'https://ecopowertech-headless-medusa.vercel.app' : 'http://localhost:4321');
+        return res.redirect(`${storefrontUrl}/404?error=server_error`);
     }
 }

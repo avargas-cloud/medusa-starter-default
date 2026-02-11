@@ -164,7 +164,11 @@ module.exports = defineConfig({
             options: {
               clientId: process.env.GOOGLE_CLIENT_ID,
               clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-              callbackUrl: `${process.env.MEDUSA_BACKEND_URL}/auth/customer/google/callback`
+              callbackUrl: process.env.GOOGLE_CALLBACK_URL || (
+                process.env.NODE_ENV === 'production'
+                  ? 'https://medusa-starter-default-production-b69e.up.railway.app/auth/customer/google/callback'
+                  : `${process.env.MEDUSA_BACKEND_URL || 'http://localhost:9000'}/auth/customer/google/callback`
+              )
             }
           }] : [])
         ]

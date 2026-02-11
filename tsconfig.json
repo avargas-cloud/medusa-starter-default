@@ -44,11 +44,20 @@
     ".medusa/admin",
     ".cache",
     "docs",
+    // Exclude all utility scripts
     "src/scripts",
     "scripts",
-    "diagnose-*.ts",
-    "migration-*.ts",
-    "check-*.ts",
+    // Exclude all root-level TypeScript utility files
+    "*.ts",
+    "!instrumentation.ts",
+    "!medusa-config.ts",
+    // Exclude logs and data files
+    "**/*.log",
+    "**/*.csv",
+    "**/*.json",
+    "!package.json",
+    "!tsconfig.json",
+    "!railway.json",
     "**/*.md"
   ]
 }

@@ -117,7 +117,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     })
 
     // 🔥 Redirigir al frontend con el token (FIXED)
-    const frontendCallbackUrl = `${process.env.STOREFRONT_URL || 'http://localhost:4321'}/auth/callback?token=${token}`;
+    const storefrontUrl = process.env.STOREFRONT_URL || (process.env.NODE_ENV === 'production' ? 'https://ecopowertech-headless-medusa.vercel.app' : 'http://localhost:4321');
+    const frontendCallbackUrl = `${storefrontUrl}/auth/callback?token=${token}`;
 
     return res.redirect(frontendCallbackUrl)
 }

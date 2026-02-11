@@ -1,0 +1,2783 @@
+[
+  {
+    "id": 12074,
+    "sku": "ECTSK-RFRC1C15A",
+    "title": "SKY Single Color Radio Frequency Receiver with Sync Function, 15A",
+    "length": "7.25",
+    "width": "2",
+    "height": "1.5",
+    "weight": "0.3"
+  },
+  {
+    "id": 8250,
+    "sku": "EMSH4V160D15W",
+    "title": "LED Module Sheet, 24VDC",
+    "length": "20.88",
+    "width": "9.75",
+    "height": "1.75",
+    "weight": "1.75"
+  },
+  {
+    "id": 18726,
+    "sku": "EPS-MDA-60-24",
+    "title": "60W Mini Dimmable Power Supply, 24VDC",
+    "length": "11.875",
+    "width": "1.25",
+    "height": ".875",
+    "weight": "0.7"
+  },
+  {
+    "id": 18795,
+    "sku": "ESPFC4R4N50W08",
+    "title": "UL FREECUT COB LED Strip Single Color, Bright Output",
+    "length": "7.38",
+    "width": "8.25",
+    "height": "0.63",
+    "weight": "0.25"
+  },
+  {
+    "id": 12264,
+    "sku": "EAP-RM5-8S",
+    "title": "8-feet Slim Flanged Aluminum Channel",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "0.8125"
+  },
+  {
+    "id": 13174,
+    "sku": "ECTSU-AMA4C5A",
+    "title": "12/24V Amplifier, 4 Channels for DIM/CCT/RGB/RGBW Strips, 5A",
+    "length": "9",
+    "width": "2",
+    "height": "1.25",
+    "weight": "0.375"
+  },
+  {
+    "id": 7773,
+    "sku": "LRS-200-24",
+    "title": "200W Enclosed Power Supply, 24VDC",
+    "length": "10",
+    "width": "5",
+    "height": "1.5",
+    "weight": "1.4375"
+  },
+  {
+    "id": 7706,
+    "sku": "EAP-RT1-8S",
+    "title": "8-feet Deep Trim-less Aluminum Channel for Drywalls",
+    "length": "94.5",
+    "width": "1.09",
+    "height": "0.5",
+    "weight": "1.875"
+  },
+  {
+    "id": 12258,
+    "sku": "EAP-SM5-8S",
+    "title": "8-feet Slim Aluminum Channel",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "0.8125"
+  },
+  {
+    "id": 8221,
+    "sku": "ECTL-CT2C5A",
+    "title": "CCT Radio Frequency Controller with Sync Function, 6A, M5 series",
+    "length": "8",
+    "width": "5.25",
+    "height": "0.88",
+    "weight": "0.3125"
+  },
+  {
+    "id": 14998,
+    "sku": "ECNA-LENU-2TO2",
+    "title": "Lever Compact Wire Connectors, 2 Cables In 2 Cables Out",
+    "length": "2",
+    "width": "1",
+    "height": "0.5",
+    "weight": "0.02"
+  },
+  {
+    "id": 13815,
+    "sku": "EPS-JDA2-192-24",
+    "title": "EPS 5-in-1 Dimmable 192W Power Supply, 24VDC",
+    "length": "12.25",
+    "width": "4.5",
+    "height": "2.25",
+    "weight": "4"
+  },
+  {
+    "id": 12109,
+    "sku": "ECTSK-TWRC5C3A-G",
+    "title": "3A SKY WIFI Receiver & Compatible Radio Frequency Remotes",
+    "length": "9.13",
+    "width": "6.25",
+    "height": "1.25",
+    "weight": "0.375"
+  },
+  {
+    "id": 14891,
+    "sku": "ESPCA3R4N70W10RG",
+    "title": "UL COB LED Strips RGB Chips, RGB, 24V Super Bright Output Unit",
+    "length": "9.38",
+    "width": "9.25",
+    "height": "0.75",
+    "weight": "0.9375"
+  },
+  {
+    "id": 11664,
+    "sku": "ECLDLE-34R-S3",
+    "title": "3\" Interchangeable Trim Down Light - Silver Frame",
+    "length": "3.5",
+    "width": "3.63",
+    "height": "0.63",
+    "weight": "0.125"
+  },
+  {
+    "id": 18810,
+    "sku": "ESPC5R4N40W08",
+    "title": "UL COB LED Strip Single Color, Bright Output, High Density 1600 LEDs",
+    "length": "7.38",
+    "width": "8.25",
+    "height": "0.63",
+    "weight": "0.25"
+  },
+  {
+    "id": 14711,
+    "sku": "EAP-AS1-8B",
+    "title": "8-feet Aluminum Channel, Black - AS1",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "0.8125"
+  },
+  {
+    "id": 14737,
+    "sku": "EAP-BBT1-8S",
+    "title": "8-feet Trim-less Baseboard Profiles",
+    "length": "94.5",
+    "width": "1.09",
+    "height": "0.5",
+    "weight": "1.875"
+  },
+  {
+    "id": 7759,
+    "sku": "ESPS5R4W90W12RG",
+    "title": "UL SMD5050 LED Strips 600 RGB Chips, RGB, 24V Super Bright Output Unit, Wet Rated",
+    "length": "9.38",
+    "width": "9.25",
+    "height": "0.75",
+    "weight": "0.9375"
+  },
+  {
+    "id": 13183,
+    "sku": "ECTSK-AM3&4C8A",
+    "title": "12/24V Amplifier, 4 Channels for DIM/CCT/RGB/RGBW Strips, 8A",
+    "length": "6",
+    "width": "5.5",
+    "height": "1.5",
+    "weight": ".8"
+  },
+  {
+    "id": 7782,
+    "sku": "LPV-60-24",
+    "title": "60W Waterproof Meanwell Power Supply, 24VDC",
+    "length": "8",
+    "width": "3",
+    "height": "1.5",
+    "weight": "0.875"
+  },
+  {
+    "id": 10761,
+    "sku": "LRS-350-24",
+    "title": "350W Enclosed Power Supply, 24VDC",
+    "length": "10",
+    "width": "5",
+    "height": "1.5",
+    "weight": "1.6875"
+  },
+  {
+    "id": 12446,
+    "sku": "ECTSK-TWRC5C6A-G",
+    "title": "6A SKY WIFI Receiver & Compatible Radio Frequency Remotes",
+    "length": "9.13",
+    "width": "6.25",
+    "height": "1.25",
+    "weight": "0.375"
+  },
+  {
+    "id": 12078,
+    "sku": "ECTSK-RM1C4ZB",
+    "title": "SKY DIM/Single Color Remote Control with Sync Function, 4 Zones",
+    "length": "4.75",
+    "width": "2.5",
+    "height": "0.8",
+    "weight": "0.1"
+  },
+  {
+    "id": 8249,
+    "sku": "EMO-LI3B25W-70K",
+    "title": "SMD2835 LED Linear Modules, 3 Chips, 7000K",
+    "length": "10",
+    "width": "7",
+    "height": "0.38",
+    "weight": "0.625"
+  },
+  {
+    "id": 7700,
+    "sku": "EAP-AR1-8S",
+    "title": "8-feet Flanged Aluminum Channel Silver - AR1",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "1"
+  },
+  {
+    "id": 13822,
+    "sku": "EPS-JDA2-288-24",
+    "title": "EPS 5-in-1 Dimmable 288W Power Supply, 24VDC",
+    "length": "13",
+    "width": "4.5",
+    "height": "3.25",
+    "weight": "4.20"
+  },
+  {
+    "id": 15002,
+    "sku": "ECNA-LENU-2TO4",
+    "title": "Lever Compact Wire Connectors, 2 Cables In 4 Cables Out",
+    "length": "2",
+    "width": "2",
+    "height": "0.5",
+    "weight": "0.02"
+  },
+  {
+    "id": 14723,
+    "sku": "EAP-AR1-8B",
+    "title": "8-feet Flanged Aluminum Channel Black - AR1",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "1"
+  },
+  {
+    "id": 18793,
+    "sku": "ESPC3R4N90W12RW",
+    "title": "UL COB LED Strips RGBW Chips, 24V Super Bright Output Unit",
+    "length": "9.38",
+    "width": "9.25",
+    "height": "0.75",
+    "weight": "0.9375"
+  },
+  {
+    "id": 14719,
+    "sku": "EAP-AS1-8W",
+    "title": "8-feet Aluminum Channel, White - AS1",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "0.8125"
+  },
+  {
+    "id": 13787,
+    "sku": "EPS-JNA-200-24",
+    "title": "EPS Constant Voltage 200W Power Supply, 24VDC",
+    "length": "12.25",
+    "width": "4.5",
+    "height": "2.25",
+    "weight": "4"
+  },
+  {
+    "id": 7718,
+    "sku": "ESPS2R4N90W10",
+    "title": "UL SMD2216 LED Strip 1500 Single Color Chips, Super Bright Output",
+    "length": "8.5",
+    "width": "9.5",
+    "height": "0.63",
+    "weight": "0.3125"
+  },
+  {
+    "id": 12051,
+    "sku": "ECTSK-RM3&4C1Z",
+    "title": "SKY RGB/RGBW Radio Frequency Remote Control with Sync Function",
+    "length": "4.75",
+    "width": "2.5",
+    "height": "0.8",
+    "weight": "0.1"
+  },
+  {
+    "id": 12044,
+    "sku": "ECTSK-RFRC3C4A",
+    "title": "SKY RGB Radio Frequency Receiver with Sync Function, 12A",
+    "length": "4.75",
+    "width": "1.75",
+    "height": "1",
+    "weight": "0.1"
+  },
+  {
+    "id": 15006,
+    "sku": "ECNA-LENU-2TO6",
+    "title": "Lever Compact Wire Connectors, 2 Cables In 6 Cables Out",
+    "length": "2",
+    "width": "1",
+    "height": "0.5",
+    "weight": "0.02"
+  },
+  {
+    "id": 11669,
+    "sku": "ECLDLE-34R-WH3",
+    "title": "3\" Interchangeable Trim Down Light - White",
+    "length": "3.5",
+    "width": "3.63",
+    "height": "0.63",
+    "weight": "0.125"
+  },
+  {
+    "id": 8248,
+    "sku": "EMO-LI3B20W-RGBW",
+    "title": "SMD5050 LED Modules, RGBW - Multicolor Light",
+    "length": "10",
+    "width": "7",
+    "height": "0.38",
+    "weight": "0.6875"
+  },
+  {
+    "id": 18855,
+    "sku": "EPS-JDA2-384-24",
+    "title": "EPS 5-in-1 Dimmable 384W Power Supply, 24VDC",
+    "length": "13",
+    "width": "4.5",
+    "height": "3.25",
+    "weight": "4.20"
+  },
+  {
+    "id": 12096,
+    "sku": "ECTSK-RFRC1C15A",
+    "title": "SKY Single Color Radio Frequency Receiver with Sync Function, 15A",
+    "length": "7.25",
+    "width": "2",
+    "height": "1.5",
+    "weight": "0.3"
+  },
+  {
+    "id": 12097,
+    "sku": "ECTSK-RFRC1C15A-G",
+    "title": "SKY Single Color Radio Frequency Controller with Sync Function, 15A",
+    "length": "9.13",
+    "width": "6.25",
+    "height": "1.25",
+    "weight": "0.375"
+  },
+  {
+    "id": 15012,
+    "sku": "ECNA-LENU-2TO10",
+    "title": "Lever Compact Wire Connectors, 2 Cables In 10 Cables Out",
+    "length": "2",
+    "width": "3",
+    "height": "0.5",
+    "weight": "0.02"
+  },
+  {
+    "id": 14804,
+    "sku": "ESPS1L4N96W10",
+    "title": "65FT UL SMD2835 LED Strip 2400 Single Color Chips, Bright Output",
+    "length": "15",
+    "width": "17",
+    "height": "0.82",
+    "weight": "0.25"
+  },
+  {
+    "id": 12057,
+    "sku": "ECTSK-RM34C4Z",
+    "title": "SKY RGB/RGBW Radio Frequency Remote Control with Sync Function, 4 Zones",
+    "length": "4.75",
+    "width": "2.5",
+    "height": ".8",
+    "weight": "0.1"
+  },
+  {
+    "id": 13784,
+    "sku": "EPS-JNA-300-24",
+    "title": "EPS Constant Voltage 300W Power Supply, 24VDC",
+    "length": "13",
+    "width": "4.5",
+    "height": "2.25",
+    "weight": "4.2"
+  },
+  {
+    "id": 14729,
+    "sku": "EAP-AR1-8W",
+    "title": "8-feet Flanged Aluminum Channel White - AR1",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "1"
+  },
+  {
+    "id": 18768,
+    "sku": "EAP-AS1-8S",
+    "title": "8-feet Aluminum Channel Silver - AS1",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "0.8125"
+  },
+  {
+    "id": 11667,
+    "sku": "ECLDLE-34R-S4",
+    "title": "4\" Interchangeable Trim Down Light - Silver Frame",
+    "length": "4.88",
+    "width": "4.88",
+    "height": "0.88",
+    "weight": "0.25"
+  },
+  {
+    "id": 14987,
+    "sku": "ESPS9R4N50W04",
+    "title": "UL SMD2216 LED Strip 1200 Single Color Chips, Narrow (4mm/0.16\")",
+    "length": "8.25",
+    "width": "7.5",
+    "height": "0.5",
+    "weight": "0.1875"
+  },
+  {
+    "id": 11670,
+    "sku": "ECLDLE-34R-WH4",
+    "title": "4\" Interchangeable Trim Down Light - White",
+    "length": "4.88",
+    "width": "4.88",
+    "height": "0.88",
+    "weight": "0.25"
+  },
+  {
+    "id": 15015,
+    "sku": "ECNA-BT-2PO-2R",
+    "title": "Terminal Block, 2 Position Dual Row",
+    "length": "2",
+    "width": "2",
+    "height": "0.5",
+    "weight": "0.02"
+  },
+  {
+    "id": 12106,
+    "sku": "ECTSK-RFRC4C5A-G",
+    "title": "SKY RGB/RGBW Radio Frequency Receiver with Sync Function, 15A/RGB 20A/RGBW KIT",
+    "length": "9.13",
+    "width": "6.25",
+    "height": "1.25",
+    "weight": "0.375"
+  },
+  {
+    "id": 18715,
+    "sku": "EPS-MDA-96-24",
+    "title": "96W Mini Dimmable Power Supply, 24VDC",
+    "length": "11.875",
+    "width": "1.25",
+    "height": ".875",
+    "weight": "0.7"
+  },
+  {
+    "id": 13955,
+    "sku": "ECTSK-TWRC5C6A-DM-G",
+    "title": "6A SKY WIFI Receiver & Dimmer Remote Control",
+    "length": "9.13",
+    "width": "6.25",
+    "height": "1.25",
+    "weight": "0.375"
+  },
+  {
+    "id": 7693,
+    "sku": "SUP-AP-IP-SM1-S",
+    "title": "8-feet Aluminum Channel Silver",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "0.8125"
+  },
+  {
+    "id": 8192,
+    "sku": "ECLDL-2S3W-S",
+    "title": "2 3/4\" LED Under Cabinet Square Light Silver Frame, 3W",
+    "length": "5.25",
+    "width": "5",
+    "height": "3",
+    "weight": "0.5"
+  },
+  {
+    "id": 18748,
+    "sku": "SUP-C2R4N70W10CT",
+    "title": "Color Temperature Adjustable COB LED Strips 604 chips, High Output",
+    "length": "8.38",
+    "width": "7.5",
+    "height": "0.5",
+    "weight": "0.3125"
+  },
+  {
+    "id": 18866,
+    "sku": "ENO-JD2-192W24V",
+    "title": "ENOLED 3-in-1 Dimmable 192W Power Supply, 24VDC",
+    "length": "12.25",
+    "width": "4.5",
+    "height": "2.25",
+    "weight": "4"
+  },
+  {
+    "id": 13956,
+    "sku": "ECTSK-TWRC5C3A-DM-G",
+    "title": "3A SKY WIFI Receiver & Dimmer Remote Control",
+    "length": "9.13",
+    "width": "6.25",
+    "height": "1.25",
+    "weight": "0.375"
+  },
+  {
+    "id": 15025,
+    "sku": "ECNA-BT-5PO-2R",
+    "title": "Terminal Block, 5 Position Dual Row",
+    "length": "4",
+    "width": "2",
+    "height": "0.5",
+    "weight": "0.02"
+  },
+  {
+    "id": 7690,
+    "sku": "EAP-CP1-8S",
+    "title": "8-feet V-Shape Aluminum Channel for 90 Degree Applications",
+    "length": "94.5",
+    "width": "0.63",
+    "height": "0.63",
+    "weight": "0.6875"
+  },
+  {
+    "id": 7787,
+    "sku": "LPV-100-24",
+    "title": "100W Waterproof Meanwell Power Supply, 24VDC",
+    "length": "9",
+    "width": "3",
+    "height": "2",
+    "weight": "1.3125"
+  },
+  {
+    "id": 12103,
+    "sku": "ECTSK-RFRC3C4A-G",
+    "title": "SKY RGB Radio Frequency Receiver with Sync Function, 12A KIT",
+    "length": "9.13",
+    "width": "6.25",
+    "height": "1.25",
+    "weight": "0.375"
+  },
+  {
+    "id": 18867,
+    "sku": "ENO-JD2-288W24V",
+    "title": "ENOLED 3-in-1 Dimmable 288W Power Supply, 24VDC",
+    "length": "13",
+    "width": "4.5",
+    "height": "3.25",
+    "weight": "4.20"
+  },
+  {
+    "id": 13493,
+    "sku": "EHB-EUG1015W50K",
+    "title": "8th Gen UFO LED High Bay, 100W-150W Switchable - ETL Listed",
+    "length": "13",
+    "width": "13",
+    "height": "8",
+    "weight": "8"
+  },
+  {
+    "id": 15030,
+    "sku": "ECNA-BT-4PO-2R",
+    "title": "Terminal Block, 4 Position Dual Row",
+    "length": "4",
+    "width": "2",
+    "height": "0.5",
+    "weight": "0.02"
+  },
+  {
+    "id": 20074,
+    "sku": "ECTSK-RM1C1ZW",
+    "title": "SKY DIM/Single Color Remote Control with Sync Function, 1 Zone",
+    "length": "4.75",
+    "width": "2.5",
+    "height": "0.8",
+    "weight": "0.1"
+  },
+  {
+    "id": 13524,
+    "sku": "EHB-EUG2024W50K",
+    "title": "8th Gen UFO LED High Bay, 200W-240W Switchable - ETL Listed",
+    "length": "13",
+    "width": "13",
+    "height": "8",
+    "weight": "8"
+  },
+  {
+    "id": 13519,
+    "sku": "EHB-EUG-OS",
+    "title": "8th Gen UFO Series, Microwave Motion Sensor",
+    "length": "13",
+    "width": "13",
+    "height": "8",
+    "weight": "8"
+  },
+  {
+    "id": 7793,
+    "sku": "XLG-200-24-A",
+    "title": "200W Waterproof Meanwell Power Supply, 24VDC",
+    "length": "12",
+    "width": "4",
+    "height": "2",
+    "weight": "2.4375"
+  },
+  {
+    "id": 8239,
+    "sku": "EHB-CUF100W50K",
+    "title": "UFO LED High Bay, 100W - ETL Listed",
+    "length": "13",
+    "width": "13",
+    "height": "8",
+    "weight": "8"
+  },
+  {
+    "id": 8216,
+    "sku": "ECNA-DC-2PW-B",
+    "title": "3.3-feet 2-pin Female to Male Connector, IP65, Black",
+    "length": "5",
+    "width": "5",
+    "height": "1.25",
+    "weight": "0.18"
+  },
+  {
+    "id": 20077,
+    "sku": "ECTSK-RM1C1ZB",
+    "title": "SKY DIM/Single Color Remote Control with Sync Function, 1 Zone",
+    "length": "4.75",
+    "width": "2.5",
+    "height": "0.8",
+    "weight": "0.1"
+  },
+  {
+    "id": 8217,
+    "sku": "ECNA-DC-2PW-W",
+    "title": "3.3-feet 2-pin Female to Male Connector, IP65, White",
+    "length": "5",
+    "width": "5",
+    "height": "1.25",
+    "weight": "0.18"
+  },
+  {
+    "id": 7799,
+    "sku": "XLG-320-V-A",
+    "title": "300W Waterproof Meanwell Power Supply, 12/24VDC",
+    "length": "14",
+    "width": "5",
+    "height": "3",
+    "weight": "4.25"
+  },
+  {
+    "id": 15033,
+    "sku": "ECNA-DC-2P-W",
+    "title": "Plug-and-Play DC Pair Connector",
+    "length": "4",
+    "width": "2",
+    "height": "0.5",
+    "weight": "0.02"
+  },
+  {
+    "id": 7869,
+    "sku": "EHB-CUF150W50K",
+    "title": "UFO LED High Bay, 150W - ETL Listed",
+    "length": "15",
+    "width": "15",
+    "height": "8",
+    "weight": "9"
+  },
+  {
+    "id": 7872,
+    "sku": "EHB-CUF150W50K-W",
+    "title": "UFO LED High Bay, 150W, White - ETL Listed",
+    "length": "15",
+    "width": "15",
+    "height": "8",
+    "weight": "9"
+  },
+  {
+    "id": 20072,
+    "sku": "ECTSK-TWRC2C5A",
+    "title": "SKY WIFI For Single Color/CCT LED Strips, 5A",
+    "length": "5",
+    "width": "1.85",
+    "height": "1.25",
+    "weight": "0.15"
+  },
+  {
+    "id": 14976,
+    "sku": "ECNA-6F2PR-B",
+    "title": "6ft 18 AWG Universal 2-Prong Power Cord",
+    "length": "5",
+    "width": "5",
+    "height": "1.25",
+    "weight": "0.18"
+  },
+  {
+    "id": 8218,
+    "sku": "ECNA-DC-4PW-B",
+    "title": "3.3-feet 4-pin Female to Male Connector for RGB Strips, IP65",
+    "length": "5",
+    "width": "5",
+    "height": "1.25",
+    "weight": "0.18"
+  },
+  {
+    "id": 8219,
+    "sku": "ECNA-DC-5PW-B",
+    "title": "3.3-feet 5-pin Female to Male Connector for RGBW Strips, IP65",
+    "length": "8",
+    "width": "5.5",
+    "height": "0.88",
+    "weight": "0.31"
+  },
+  {
+    "id": 8240,
+    "sku": "EHB-CUF200W50K",
+    "title": "UFO LED High Bay, 200W - ETL Listed",
+    "length": "17",
+    "width": "17",
+    "height": "8",
+    "weight": "13"
+  },
+  {
+    "id": 8233,
+    "sku": "ECTSU-RC1C8A",
+    "title": "SUN Low Voltage Receiver for single color LED Strips, 8A",
+    "length": "5.25",
+    "width": "1.75",
+    "height": "1",
+    "weight": "0.1875"
+  },
+  {
+    "id": 8240,
+    "sku": "EHB-CUF200W50K",
+    "title": "UFO LED High Bay, 200W - ETL Listed",
+    "length": "17",
+    "width": "17",
+    "height": "8",
+    "weight": "13"
+  },
+  {
+    "id": 8241,
+    "sku": "EHB-CUF200W50K-W",
+    "title": "UFO LED High Bay, 200W, White - ETL Listed",
+    "length": "17",
+    "width": "17",
+    "height": "8",
+    "weight": "13"
+  },
+  {
+    "id": 8236,
+    "sku": "ECTSU-WM1C",
+    "title": "SUN RF Wall Mount Dimmer for Single Color Strips",
+    "length": "5.75",
+    "width": "3.5",
+    "height": "1.88",
+    "weight": "0.5"
+  },
+  {
+    "id": 8210,
+    "sku": "ECNA-2SCR4P-10",
+    "title": "Two Ends \"L\" Connector for 10mm RGB Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 15037,
+    "sku": "ECNA-PLUG2-SC",
+    "title": "15A Screw-In US Plug Connector",
+    "length": "4",
+    "width": "2",
+    "height": "0.5",
+    "weight": "0.02"
+  },
+  {
+    "id": 7875,
+    "sku": "EHB-CUF240W50K",
+    "title": "UFO LED High Bay, 240W - ETL Listed",
+    "length": "17",
+    "width": "17",
+    "height": "8",
+    "weight": "15"
+  },
+  {
+    "id": 8211,
+    "sku": "ECNA-2SCR5P-12",
+    "title": "Two Ends \"L\" Connector for 12mm RGBW Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 8238,
+    "sku": "ECTSU-WM4C1",
+    "title": "SUN Wall Mount Low Voltage Controller for RGBW Strips, Touch Panel",
+    "length": "5.38",
+    "width": "3.5",
+    "height": "2",
+    "weight": "0.5"
+  },
+  {
+    "id": 15044,
+    "sku": "ECNA-PLUG2-SC-1",
+    "title": "15A Slide-in US Plug Connector",
+    "length": "4",
+    "width": "2",
+    "height": "0.5",
+    "weight": "0.02"
+  },
+  {
+    "id": 15050,
+    "sku": "ECNA-PLUG2-SC-2",
+    "title": "15A Screw-In US Grounding Plug Connector",
+    "length": "4",
+    "width": "2",
+    "height": "0.5",
+    "weight": "0.02"
+  },
+  {
+    "id": 8235,
+    "sku": "ECTSU-WI-RF",
+    "title": "SUN Wifi Hub, Wifi to RF Converter",
+    "length": "6.63",
+    "width": "4.13",
+    "height": "3",
+    "weight": "0.6875"
+  },
+  {
+    "id": 7878,
+    "sku": "EHB-CUF240W50K-W",
+    "title": "UFO LED High Bay, 240W, White - ETL Listed",
+    "length": "17",
+    "width": "17",
+    "height": "8",
+    "weight": "15"
+  },
+  {
+    "id": 8208,
+    "sku": "ECNA-2SCR2P-08",
+    "title": "Two Ends \"L\" Connector for 8mm Single Color Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 8254,
+    "sku": "ESB-C100WSF50K",
+    "title": "LED Shoebox, 100W, Slit Fitter Mount",
+    "length": "16",
+    "width": "16",
+    "height": "6.5",
+    "weight": "12"
+  },
+  {
+    "id": 8214,
+    "sku": "ECNA-2SW4P-10",
+    "title": "Two Ends Connector for 10mm RGB Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 7863,
+    "sku": "ESB-C150WSF50K",
+    "title": "LED Shoebox, 150W, Slit Fitter Mount",
+    "length": "15.75",
+    "width": "15.25",
+    "height": "6.38",
+    "weight": "12"
+  },
+  {
+    "id": 13856,
+    "sku": "ECNA-SL-SW4P-10",
+    "title": "RGB Strip to Power Connector for 10mm SMD RGB LED Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 8213,
+    "sku": "ECNA-2SW2P-10",
+    "title": "Two Ends Connector for 10mm Single Color Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 8255,
+    "sku": "ESB-C150WSF50K-W",
+    "title": "LED Shoebox, 150W, White Finish, Slit Fitter Mount",
+    "length": "23.63",
+    "width": "15.25",
+    "height": "6.25",
+    "weight": "15"
+  },
+  {
+    "id": 8215,
+    "sku": "ECNA-2SW5P-12",
+    "title": "Two Ends Connector for 12mm RGBW Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 7866,
+    "sku": "ESB-C300WSF50K",
+    "title": "LED Shoebox, 300W, Slit Fitter Mount",
+    "length": "22.25",
+    "width": "15.38",
+    "height": "6.25",
+    "weight": "17.75"
+  },
+  {
+    "id": 8256,
+    "sku": "ESB-C300WSF50K-W",
+    "title": "LED Shoebox, 300W, White Finish, Slit Fitter Mount",
+    "length": "23",
+    "width": "16",
+    "height": "6.5",
+    "weight": "18"
+  },
+  {
+    "id": 8212,
+    "sku": "ECNA-2SW2P-08",
+    "title": "Two Ends Connector for 8mm Single Color Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 8253,
+    "sku": "ESB-C450WSA50K",
+    "title": "LED Shoebox, 450W, Slit Fitter Mount",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 13852,
+    "sku": "ECNA-SL-SW2P-08",
+    "title": "Strips to Power Connector for 8mm SMD Single Color LED Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 8283,
+    "sku": "EWP-A41W50K",
+    "title": "LED Wall Pack, 41W",
+    "length": "16",
+    "width": "12",
+    "height": "10",
+    "weight": "7"
+  },
+  {
+    "id": 13860,
+    "sku": "ECNA-BC-SS2P-08",
+    "title": "Strip to Strip Connector for 8mm SMD Single Color LED Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 7881,
+    "sku": "EWP-A60W50K",
+    "title": "LED Wall Pack, 60W",
+    "length": "16",
+    "width": "11",
+    "height": "10",
+    "weight": "7"
+  },
+  {
+    "id": 13864,
+    "sku": "ECNA-BC-SW2P-08",
+    "title": "Strips to a Wire Connector for 8mm SMD Single Color LED Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 13936,
+    "sku": "EWP-6/8/10-0WCCT",
+    "title": "LED Wall Pack, 60/80/100W",
+    "length": "16",
+    "width": "11",
+    "height": "10",
+    "weight": "7"
+  },
+  {
+    "id": 7679,
+    "sku": "EWP-A80W50K",
+    "title": "LED Wall Pack, 80W",
+    "length": "15",
+    "width": "11",
+    "height": "9.25",
+    "weight": "7"
+  },
+  {
+    "id": 13868,
+    "sku": "ECNA-CC-SS2P-10",
+    "title": "Strip to Strip Connector for 10mm 2216 and COB Single Color LED Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 13872,
+    "sku": "ECNA-CC-SW2P-10",
+    "title": "Strips to Power Connector for 10mm 2216 and COB Single Color LED Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 7884,
+    "sku": "EWP-A100W50K",
+    "title": "LED Wall Pack, 100W",
+    "length": "16",
+    "width": "12",
+    "height": "10",
+    "weight": "11"
+  },
+  {
+    "id": 8281,
+    "sku": "EWP-A120W50K",
+    "title": "LED Wall Pack, 120W",
+    "length": "16",
+    "width": "11",
+    "height": "10",
+    "weight": "11"
+  },
+  {
+    "id": 13890,
+    "sku": "ECNA-CC-SWN2P-10",
+    "title": "Strip to Wire Connector for 10mm 2216 and COB Single Color LED Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 14830,
+    "sku": "ECNA-CC-SS2P-08",
+    "title": "Strip to Strip Connector for 8mm COB Single Color LED Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 8282,
+    "sku": "EWP-A150W50K",
+    "title": "LED Wall Pack, 150W",
+    "length": "20",
+    "width": "11",
+    "height": "11",
+    "weight": "13"
+  },
+  {
+    "id": 8356,
+    "sku": "WE-LPN1X440W50KD",
+    "title": "1x4 ft LED Flat Panel, 40W",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 13199,
+    "sku": "ETPF-EA40W-50K",
+    "title": "4ft LED Tri-proof Fixture, 40W",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 13191,
+    "sku": "ESLF-A4F40W-3CT",
+    "title": "4ft LED Strip Light Fixture, 40W, 3CCT",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 14831,
+    "sku": "ECNA-CC-SW2P-08",
+    "title": "Strips to Power Connector for 8mm COB Single Color LED Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 13681,
+    "sku": "SAT-65-571",
+    "title": "2x2 ft LED Flat Panel, Color Selectable, 40W",
+    "length": "25",
+    "width": "25",
+    "height": "8.5",
+    "weight": "22"
+  },
+  {
+    "id": 14832,
+    "sku": "ECNA-CC-SWN2P-08",
+    "title": "Strip to Wire Connector for 8mm COB Single Color LED Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 8355,
+    "sku": "WE-LPN2X240W50KD",
+    "title": "2x2 ft LED Flat Panel, 40W",
+    "length": "25",
+    "width": "25",
+    "height": "8.5",
+    "weight": "22"
+  },
+  {
+    "id": 14918,
+    "sku": "ECNA-CC-CR2P-08",
+    "title": "Strip to Strip Corner Connector for 8mm COB Single Color LED Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 8360,
+    "sku": "WE-LPNG-SRFC-2X2",
+    "title": "2x2ft LED Flat Panel Ceiling Frame Kit",
+    "length": "30",
+    "width": "3",
+    "height": "2",
+    "weight": "2"
+  },
+  {
+    "id": 14927,
+    "sku": "ECNA-CC-CR2P-10",
+    "title": "Strip to Strip Corner Connector for 10mm High Density and COB Single Color LED Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 8357,
+    "sku": "WE-LPN2X450W50KD",
+    "title": "2x4 ft LED Flat Panel, 50W",
+    "length": "50",
+    "width": "25.5",
+    "height": "8",
+    "weight": "38"
+  },
+  {
+    "id": 8358,
+    "sku": "WE-LPN2X460W50KD",
+    "title": "2x4 ft LED Flat Panel, 60W",
+    "length": "50",
+    "width": "25.5",
+    "height": "8",
+    "weight": "38"
+  },
+  {
+    "id": 8361,
+    "sku": "WE-LPNG-SRFC-2X4",
+    "title": "2x4ft LED Flat Panel Ceiling Frame Kit",
+    "length": "53",
+    "width": "3",
+    "height": "2",
+    "weight": "2.4375"
+  },
+  {
+    "id": 8243,
+    "sku": "EHPB-LAW36D05-5K",
+    "title": "LED Waterproof High Power Bulb 360°, 54W E39",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8244,
+    "sku": "EHPB-LAW36D07-5K",
+    "title": "LED Waterproof High Power Bulb 360°, 75W E39",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8245,
+    "sku": "EHPB-LAW36D10-5K",
+    "title": "LED Waterproof High Power Bulb 360°, 100W E39",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8246,
+    "sku": "EHPB-LAW36D12-5K",
+    "title": "LED Waterproof High Power Bulb 360°, 125W E39",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8247,
+    "sku": "EHPB-LAW36D15-5K",
+    "title": "LED Waterproof High Power Bulb 360°, 150W E39",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 15056,
+    "sku": "ECB-22-2-STR-WH",
+    "title": "22/2 AWG Stranded Wire",
+    "length": "4",
+    "width": "2",
+    "height": "0.5",
+    "weight": "0.02"
+  },
+  {
+    "id": 8346,
+    "sku": "WE-LFXXS15W-KN",
+    "title": "LFX LED Floodlight with Knuckle Base, 15W, 120-277V",
+    "length": "7",
+    "width": "5",
+    "height": "2",
+    "weight": "0.9375"
+  },
+  {
+    "id": 8349,
+    "sku": "WE-LFXMD50W-KN",
+    "title": "LFX LED Floodlight with Knuckle base, 15W/20W/30W/50W, 120-277V",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 15060,
+    "sku": "ECB-18-2-STR-WH",
+    "title": "18/2 AWG Stranded Wire",
+    "length": "4",
+    "width": "2",
+    "height": "0.5",
+    "weight": "0.02"
+  },
+  {
+    "id": 8337,
+    "sku": "WE-FLS-10W-BR",
+    "title": "FLS LED Bullet Light with Knuckle Base, 10W, 120V",
+    "length": "6",
+    "width": "3",
+    "height": "3.5",
+    "weight": "0.4375"
+  },
+  {
+    "id": 15064,
+    "sku": "ECB-18-4-STR-WH",
+    "title": "18/4 AWG Stranded Wire",
+    "length": "4",
+    "width": "2",
+    "height": "0.5",
+    "weight": "0.02"
+  },
+  {
+    "id": 15067,
+    "sku": "ECB-22-4-STR-WH",
+    "title": "22/4 AWG Stranded Wire",
+    "length": "4",
+    "width": "2",
+    "height": "0.5",
+    "weight": "0.02"
+  },
+  {
+    "id": 12442,
+    "sku": "WE-FLD2-15W-KN",
+    "title": "FLD2 LED Bullet Light with Knuckle Base, 15W, 100-277V, NEW",
+    "length": "5",
+    "width": "5",
+    "height": "5",
+    "weight": "0.9375"
+  },
+  {
+    "id": 8284,
+    "sku": "EWW-SF1V1FRGB",
+    "title": "LED Wall Washer with Independent & DMX Mode, 40W",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8278,
+    "sku": "ETB-AHB4",
+    "title": "4 ft Hybrid LED Tube, 18W",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8275,
+    "sku": "ETB-AS28",
+    "title": "8 ft LED Tube FA8 Base, 36W",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 14757,
+    "sku": "ECLCPE-A4S9WRCCT",
+    "title": "4\" Smart LED Flat Square Panel - RGBCCT, 10W, Round Cutout",
+    "length": "6.25",
+    "width": "5.38",
+    "height": "2.75",
+    "weight": "0.75"
+  },
+  {
+    "id": 7848,
+    "sku": "ECLCPE-A4S9W5CT",
+    "title": "4\" LED Flat Square Panel - Switchable Color Temperature, 9W, Round Cutout",
+    "length": "6.25",
+    "width": "5.38",
+    "height": "2.75",
+    "weight": "0.75"
+  },
+  {
+    "id": 7842,
+    "sku": "ECLCPE-A4R9W5CT",
+    "title": "4\" LED Flat Round Panel - Switchable Color Temperature, 9W",
+    "length": "6.25",
+    "width": "5.38",
+    "height": "2.75",
+    "weight": ".7"
+  },
+  {
+    "id": 14758,
+    "sku": "ECLCPE-A4R9WRCCT",
+    "title": "4\" Smart LED Flat Round Panel - RGBCCT, 10W",
+    "length": "6.25",
+    "width": "5.38",
+    "height": "2.75",
+    "weight": ".7"
+  },
+  {
+    "id": 13253,
+    "sku": "LUX-LR23595",
+    "title": "9\" LED SQUARE FLUSH MOUNT FIXTURE",
+    "length": "9.5",
+    "width": "9.5",
+    "height": "1.75",
+    "weight": "1.3"
+  },
+  {
+    "id": 13260,
+    "sku": "WE-FML-R10-MCT",
+    "title": "10\" LED ROUND FLUSH MOUNT FIXTURE",
+    "length": "12.5",
+    "width": "11.5",
+    "height": "2",
+    "weight": "2.5"
+  },
+  {
+    "id": 13275,
+    "sku": "LUX-LR23847",
+    "title": "6\" LED ROUND FLUSH MOUNT DISK",
+    "length": "7.75",
+    "width": "7.75",
+    "height": "1.5",
+    "weight": "0.45"
+  },
+  {
+    "id": 13268,
+    "sku": "FML-R8-MCT",
+    "title": "8\" LED ROUND FLUSH MOUNT FIXTURE",
+    "length": "12.5",
+    "width": "11.5",
+    "height": "2",
+    "weight": "2.5"
+  },
+  {
+    "id": 12243,
+    "sku": "ECLCPE-A6S12W5CT",
+    "title": "6\" LED Flat Square Panel - Switchable Color Temperature, 12W, Round Cutout",
+    "length": "8.5",
+    "width": "7.25",
+    "height": "2.5",
+    "weight": "1.1"
+  },
+  {
+    "id": 7850,
+    "sku": "ECLCPE-6S12W3CT",
+    "title": "6\" LED Flat Square Panel - Switchable Color Temperature, 12W",
+    "length": "12",
+    "width": "7.5",
+    "height": "1.75",
+    "weight": "1.25"
+  },
+  {
+    "id": 7845,
+    "sku": "ECLCPE-A6R12W5CT",
+    "title": "6\" LED Flat Round Panel - Switchable Color Temperature, 12W",
+    "length": "8.5",
+    "width": "7.25",
+    "height": "2.5",
+    "weight": "0.95"
+  },
+  {
+    "id": 7855,
+    "sku": "ECLCP-8S18W60K",
+    "title": "8\" ETL LED Square Flat Panel - White Frame, 18W Dimmable",
+    "length": "10.13",
+    "width": "8.88",
+    "height": "1.13",
+    "weight": "0.75"
+  },
+  {
+    "id": 7853,
+    "sku": "WE-RSL8-MCT5",
+    "title": "8\" LED Flat Round Panel, White Frame",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8204,
+    "sku": "ECLDLE-34R8WW3CT",
+    "title": "Interchangeable Trim Down Light Engine - White Frame, 8W",
+    "length": "5.25",
+    "width": "4.38",
+    "height": "3.38",
+    "weight": "0.875"
+  },
+  {
+    "id": 7860,
+    "sku": "ECLCP-5R10WRW",
+    "title": "4-1/2\" LED Flat Round Panel - Multicolor RGBW, 9W",
+    "length": "9.5",
+    "width": "7.13",
+    "height": "2.5",
+    "weight": "0.5"
+  },
+  {
+    "id": 8321,
+    "sku": "SUN-P20A-D",
+    "title": "LED Par20 Light White Frame, 7W Dimmable",
+    "length": "2.5",
+    "width": "2.5",
+    "height": "3.5",
+    "weight": "0.1875"
+  },
+  {
+    "id": 8327,
+    "sku": "SUN-P38-D",
+    "title": "LED Par38 Light White Frame, 18W Dimmable",
+    "length": "5",
+    "width": "5",
+    "height": "6",
+    "weight": "0.625"
+  },
+  {
+    "id": 7802,
+    "sku": "MG-E40R12DC",
+    "title": "40W Dimmable Power Supply for 12VDC LED Units, Thin Design",
+    "length": "6",
+    "width": "2.5",
+    "height": "1",
+    "weight": "0.5"
+  },
+  {
+    "id": 8292,
+    "sku": "MG-E40L12DC",
+    "title": "40W Dimmable Power Supply for 12VDC LED Units",
+    "length": "9",
+    "width": "4",
+    "height": "2.5",
+    "weight": "1.25"
+  },
+  {
+    "id": 7809,
+    "sku": "MG-E60L12DC",
+    "title": "60W Dimmable Power Supply for 12VDC LED Units",
+    "length": "10",
+    "width": "3",
+    "height": "2",
+    "weight": "1.3125"
+  },
+  {
+    "id": 7806,
+    "sku": "MG-E60R12DC",
+    "title": "60W Dimmable Power Supply for 12VDC LED Units, Thin Design",
+    "length": "6",
+    "width": "2.5",
+    "height": "2",
+    "weight": "0.4375"
+  },
+  {
+    "id": 7827,
+    "sku": "MG-E60L24DC",
+    "title": "60W Dimmable Power Supply for 24VDC LED Units",
+    "length": "9",
+    "width": "3",
+    "height": "2",
+    "weight": "1.25"
+  },
+  {
+    "id": 7824,
+    "sku": "MG-E96R24DC",
+    "title": "96W Dimmable Power Supply for 24VDC LED Units, Thin Design",
+    "length": "6",
+    "width": "2.5",
+    "height": "1",
+    "weight": "0.5"
+  },
+  {
+    "id": 7830,
+    "sku": "MG-E96L24DC-KO",
+    "title": "96W Dimmable Power Supply for 24VDC LED Units",
+    "length": "9",
+    "width": "3",
+    "height": "2",
+    "weight": "1.125"
+  },
+  {
+    "id": 7812,
+    "sku": "MG-M100L12DC",
+    "title": "100W Dimmable Power Supply for 12VDC LED Units",
+    "length": "11",
+    "width": "6",
+    "height": "3.5",
+    "weight": "5"
+  },
+  {
+    "id": 7765,
+    "sku": "LRS-100-24",
+    "title": "100W Enclosed Power Supply, 24VDC",
+    "length": "6",
+    "width": "4",
+    "height": "1.5",
+    "weight": "0.75"
+  },
+  {
+    "id": 7816,
+    "sku": "MG-M150L12DC",
+    "title": "150W Dimmable Power Supply for 12VDC LED Units",
+    "length": "11",
+    "width": "6",
+    "height": "3.5",
+    "weight": "6"
+  },
+  {
+    "id": 7833,
+    "sku": "MG-M150L24DC",
+    "title": "150W Dimmable Power Supply for 24VDC LED Units",
+    "length": "11",
+    "width": "5",
+    "height": "3.5",
+    "weight": "6"
+  },
+  {
+    "id": 7819,
+    "sku": "MG-M200L12DC",
+    "title": "200W Dimmable Power Supply for 12VDC LED Units",
+    "length": "11",
+    "width": "4",
+    "height": "4",
+    "weight": "6"
+  },
+  {
+    "id": 7836,
+    "sku": "MG-M200L24DC",
+    "title": "200W Dimmable Power Supply for 24VDC LED Units",
+    "length": "11",
+    "width": "4",
+    "height": "4",
+    "weight": "6"
+  },
+  {
+    "id": 7821,
+    "sku": "MG-M300L12DC",
+    "title": "300W Dimmable Power Supply for 12VDC LED Units",
+    "length": "11",
+    "width": "5",
+    "height": "5",
+    "weight": "9"
+  },
+  {
+    "id": 7839,
+    "sku": "MG-M300L24DC",
+    "title": "300W Dimmable Power Supply for 24VDC LED Units",
+    "length": "11",
+    "width": "5",
+    "height": "5",
+    "weight": "9"
+  },
+  {
+    "id": 7768,
+    "sku": "LRS-200-12",
+    "title": "200W Enclosed Power Supply, 12VDC",
+    "length": "10",
+    "width": "5",
+    "height": "1.5",
+    "weight": "1.4375"
+  },
+  {
+    "id": 7776,
+    "sku": "LRS-350-12",
+    "title": "350W Enclosed Power Supply, 12VDC",
+    "length": "9.63",
+    "width": "4.88",
+    "height": "1.5",
+    "weight": "1.6875"
+  },
+  {
+    "id": 7779,
+    "sku": "LPV-60-12",
+    "title": "60W Waterproof Meanwell Power Supply, 12VDC",
+    "length": "8",
+    "width": "3",
+    "height": "1.5",
+    "weight": "0.8125"
+  },
+  {
+    "id": 13817,
+    "sku": "EPS-JBD5-300W12V",
+    "title": "EPS Dimmable 300W Power Supply, 12VDC",
+    "length": "13",
+    "width": "4.5",
+    "height": "2.25",
+    "weight": "4.20"
+  },
+  {
+    "id": 13811,
+    "sku": "EPS-JBD-200W12V",
+    "title": "EPS Dimmable 200W Power Supply, 12VDC",
+    "length": "12.25",
+    "width": "4.5",
+    "height": "2.25",
+    "weight": "4"
+  },
+  {
+    "id": 13799,
+    "sku": "EPS-JBD-96W24V",
+    "title": "EPS Dimmable 96W Power Supply, 24VDC",
+    "length": "11",
+    "width": "4.125",
+    "height": "2",
+    "weight": "2.90"
+  },
+  {
+    "id": 13771,
+    "sku": "EPS-JBND-150W12V",
+    "title": "EPS 150W Power Supply, 12VDC",
+    "length": "12.25",
+    "width": "451.5",
+    "height": "2.25",
+    "weight": "4"
+  },
+  {
+    "id": 13778,
+    "sku": "EPS-JBND-150W24V",
+    "title": "EPS 150W Power Supply, 24VDC",
+    "length": "12.25",
+    "width": "4.5",
+    "height": "2.25",
+    "weight": "4"
+  },
+  {
+    "id": 13780,
+    "sku": "EPS-JBND-300W12V",
+    "title": "EPS 300W Power Supply, 12VDC",
+    "length": "13",
+    "width": "4.5",
+    "height": "2.25",
+    "weight": "4.20"
+  },
+  {
+    "id": 13805,
+    "sku": "EPS-JBD-60W24V",
+    "title": "EPS Dimmable 60W Power Supply, 24VDC",
+    "length": "9.75",
+    "width": "4.875",
+    "height": "2",
+    "weight": "2.50"
+  },
+  {
+    "id": 13808,
+    "sku": "EPS-JBD-60W12V",
+    "title": "EPS Dimmable 60W Power Supply, 12VDC",
+    "length": "9.75",
+    "width": "4.875",
+    "height": "2",
+    "weight": "2.50"
+  },
+  {
+    "id": 8288,
+    "sku": "XLG-75-12A",
+    "title": "60W Waterproof Meanwell Power Supply, 12VDC",
+    "length": "9",
+    "width": "4",
+    "height": "2",
+    "weight": "1"
+  },
+  {
+    "id": 7784,
+    "sku": "LPV-100-12",
+    "title": "100W Waterproof Meanwell Power Supply, 12VDC",
+    "length": "9",
+    "width": "3",
+    "height": "2",
+    "weight": "1.375"
+  },
+  {
+    "id": 8186,
+    "sku": "ECLDL-2R3W-S",
+    "title": "2 1/2\" LED Under Cabinet Light - Silver Frame, 3W",
+    "length": "3.88",
+    "width": "3.88",
+    "height": "2.75",
+    "weight": "0.25"
+  },
+  {
+    "id": 8189,
+    "sku": "ECLDL-2R3W-W",
+    "title": "2 1/2\" LED Under Cabinet Light - White Frame, 3W",
+    "length": "3.88",
+    "width": "3.88",
+    "height": "2.75",
+    "weight": "0.25"
+  },
+  {
+    "id": 8198,
+    "sku": "ECLDL-3R7WS",
+    "title": "3 1/2\" LED Dimmable Down Light - Silver Frame, 7W",
+    "length": "5",
+    "width": "5",
+    "height": "3.63",
+    "weight": "0.75"
+  },
+  {
+    "id": 8201,
+    "sku": "ECLDL-3R7WW",
+    "title": "3 1/2\" LED Dimmable Down Light - White Frame, 7W",
+    "length": "5",
+    "width": "5",
+    "height": "3.63",
+    "weight": "0.75"
+  },
+  {
+    "id": 11674,
+    "sku": "ECLDLE-3R8WS3CT-3",
+    "title": "3\" Interchangeable Trim Down Light - Silver Frame, 8W",
+    "length": "4",
+    "width": "4",
+    "height": "3",
+    "weight": "1"
+  },
+  {
+    "id": 11688,
+    "sku": "ECLDLE-3R8WW3CT-3",
+    "title": "3\" Interchangeable Trim Down Light - White Frame, 8W",
+    "length": "4",
+    "width": "4",
+    "height": "3",
+    "weight": "1"
+  },
+  {
+    "id": 11683,
+    "sku": "ECLDLE-4R8WS3CT-4",
+    "title": "4\" Interchangeable Trim Down Light - Silver Frame, 8W",
+    "length": "4",
+    "width": "4",
+    "height": "3",
+    "weight": "0.5"
+  },
+  {
+    "id": 11689,
+    "sku": "ECLDLE-4R8WW3CT-4",
+    "title": "4\" Interchangeable Trim Down Light - White Frame, 8W",
+    "length": "4",
+    "width": "4",
+    "height": "3",
+    "weight": "0.8"
+  },
+  {
+    "id": 8205,
+    "sku": "ECLDLE-34R8WS3CT",
+    "title": "Interchangeable Trim Down Light Engine - Silver Frame, 8W",
+    "length": "5.25",
+    "width": "4.38",
+    "height": "3.38",
+    "weight": "0.875"
+  },
+  {
+    "id": 8363,
+    "sku": "WE-RDPF4-MCT5",
+    "title": "4\" LED Round Recessed Down Light, Baffle Trim, 10W",
+    "length": "6",
+    "width": "6",
+    "height": "3.5",
+    "weight": "0.5"
+  },
+  {
+    "id": 8369,
+    "sku": "WE-RDPS4-MCT5",
+    "title": "4\" LED Round Recessed Down Light, Smooth Trim, 10W",
+    "length": "6",
+    "width": "6",
+    "height": "4",
+    "weight": "0.5"
+  },
+  {
+    "id": 8378,
+    "sku": "WE-RDPF6-MCT5",
+    "title": "6\" Round LED Recessed Down Light, Baffle Trim, 13W",
+    "length": "8",
+    "width": "8",
+    "height": "4",
+    "weight": "0.81"
+  },
+  {
+    "id": 8372,
+    "sku": "WE-RDPS6-MCT5",
+    "title": "6\" LED Round Recessed Down Light, Smooth Trim, 13W",
+    "length": "8.5",
+    "width": "8",
+    "height": "4",
+    "weight": "0.8125"
+  },
+  {
+    "id": 8375,
+    "sku": "WE-SDL4-BF-MCT5",
+    "title": "4\" Square LED Recessed Down Light, Baffle Trim, 10W",
+    "length": "9",
+    "width": "7.5",
+    "height": "4",
+    "weight": "1.25"
+  },
+  {
+    "id": 9832,
+    "sku": "WE-SDL6-BF-MCT5",
+    "title": "6\" Square LED Recessed Down Light, Baffle Trim, 15W",
+    "length": "9",
+    "width": "7.5",
+    "height": "4",
+    "weight": "1.25"
+  },
+  {
+    "id": 8301,
+    "sku": "ASP-19001AR",
+    "title": "4\" Airtight Remodeling Universal Housing, E26",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8298,
+    "sku": "ASP-17002A",
+    "title": "6\" Airtight New Construction Universal Housing, IC Rated, E26",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8302,
+    "sku": "RP-8202HA-G",
+    "title": "4\" Airtight New Construction Universal Housing IC Rated, E26",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8305,
+    "sku": "BL-R4-GUICAT",
+    "title": "4\" Airtight New Construction Universal Housing IC Rated, GU10",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8300,
+    "sku": "ASP-19002A",
+    "title": "4\" Airtight New Construction Universal Housing, E26",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8303,
+    "sku": "BL-R4-G19AT",
+    "title": "4\" Airtight New Construction Universal Housing, GU10",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8155,
+    "sku": "BL-R4-G19SAT",
+    "title": "4\" Airtight New Construction Universal Housing, Shallow, GU10",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8304,
+    "sku": "BL-R4-G19RAT",
+    "title": "4\" Airtight Remodeling Universal Housing, GU10",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 13989,
+    "sku": "WE-RSL4-RI",
+    "title": "4\" Remodeling Plate for 4\" Flat Panels",
+    "length": "14",
+    "width": "7",
+    "height": "0.5",
+    "weight": "0.5"
+  },
+  {
+    "id": 14003,
+    "sku": "LUX-LR41002",
+    "title": "3\"/4\"/6\" New Construction Plate for Flat Panels",
+    "length": "14",
+    "width": "7",
+    "height": "0.5",
+    "weight": ".5"
+  },
+  {
+    "id": 13994,
+    "sku": "WE-RSL6-RI",
+    "title": "6\" Remodeling Plate for 6\" Flat Panels",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8156,
+    "sku": "BL-R4-G19SRAT",
+    "title": "4\" Airtight Remodeling Universal Housing, Shallow, GU10",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8176,
+    "sku": "ECLCG-5R12W3CT",
+    "title": "5\" LED Glass Round Panel - Switchable Color Temperature, 12W",
+    "length": "7.75",
+    "width": "7.5",
+    "height": "1.75",
+    "weight": "1"
+  },
+  {
+    "id": 8177,
+    "sku": "ECLCG-5S12W3CT",
+    "title": "5\" LED Glass Square Panel - Switchable Color Temperature, 12W",
+    "length": "7.75",
+    "width": "7.5",
+    "height": "1.75",
+    "weight": "1.0625"
+  },
+  {
+    "id": 8299,
+    "sku": "ASP-17003AR",
+    "title": "6\" Airtight Remodeling Universal Housing, IC Rated, E26",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8206,
+    "sku": "ECLDL-6R18WS60K",
+    "title": "6\" LED Down Light Silver Frame, 18W",
+    "length": "7.5",
+    "width": "7.25",
+    "height": "3.25",
+    "weight": "1.38"
+  },
+  {
+    "id": 8207,
+    "sku": "ECLDL-6R18WW60K",
+    "title": "6\" LED Down Light White Frame, 18W",
+    "length": "7.38",
+    "width": "7.25",
+    "height": "3.25",
+    "weight": "1.5"
+  },
+  {
+    "id": 8182,
+    "sku": "ECLCG-B6R12W60K",
+    "title": "6\" LED Flat Round Panel with Blue Edge Lighting - White Frame, 12W",
+    "length": "8.75",
+    "width": "8.75",
+    "height": "1.63",
+    "weight": "0.6875"
+  },
+  {
+    "id": 8183,
+    "sku": "ECLCG-B6S12W60K",
+    "title": "6\" LED Flat Square Panel with Blue Edge Lighting - White Frame 12W",
+    "length": "8.75",
+    "width": "8.75",
+    "height": "1.63",
+    "weight": "0.875"
+  },
+  {
+    "id": 8294,
+    "sku": "OC-PL-TS-HPL-6",
+    "title": "6\" Low Voltage LED Paver Light",
+    "length": "6.5",
+    "width": "3",
+    "height": "2.5",
+    "weight": "0.56"
+  },
+  {
+    "id": 8178,
+    "sku": "ECLCG-7R18W3CT",
+    "title": "7\" LED Glass Round Panel - Switchable Color Temperature, 12W",
+    "length": "9.25",
+    "width": "9.25",
+    "height": "1.75",
+    "weight": "1.125"
+  },
+  {
+    "id": 8179,
+    "sku": "ECLCG-7S18W3CT",
+    "title": "7\" LED Glass Square Panel - Switchable Color Temperature, 12W",
+    "length": "9.25",
+    "width": "9.25",
+    "height": "1.75",
+    "weight": "1.5"
+  },
+  {
+    "id": 15095,
+    "sku": "EAP-SM2-EC-S",
+    "title": "Pair of End Caps for model EAP-SM2-FC-8FT-S",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "0.8125"
+  },
+  {
+    "id": 15097,
+    "sku": "EAP-RM2-EC-S",
+    "title": "Pair of End Caps for model EAP-RM2-FC-8FT-S",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "0.8125"
+  },
+  {
+    "id": 15090,
+    "sku": "EAP-SM1-EC-S",
+    "title": "Pair of End Caps for model EAP-SM1-FC-8FT-S",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "0.8125"
+  },
+  {
+    "id": 15092,
+    "sku": "EAP-RM1-EC-S",
+    "title": "Pair of End Caps for model EAP-RM1-FC-8FT-S",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "0.8125"
+  },
+  {
+    "id": 18632,
+    "sku": "EAP-CP1-EC-S-1",
+    "title": "Pair of End Caps for model EAP-CP1-FC-8FT-S",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "0.8125"
+  },
+  {
+    "id": 15087,
+    "sku": "EAP-V-MB",
+    "title": "Mounting Bracket for Aluminum Channels",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "0.8125"
+  },
+  {
+    "id": 18770,
+    "sku": "SUP-AP-IP-RM1-S",
+    "title": "8-feet Flanged Aluminum Channel Silver - AR1",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "1"
+  },
+  {
+    "id": 18773,
+    "sku": "EAP-RM1-FC-8FT-W",
+    "title": "8-feet Flanged Aluminum Channel White",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.38",
+    "weight": "1"
+  },
+  {
+    "id": 7697,
+    "sku": "EAP-SM2-8S",
+    "title": "8-feet Deep Aluminum Channel",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.5",
+    "weight": "1.125"
+  },
+  {
+    "id": 7703,
+    "sku": "EAP-RM2-8S",
+    "title": "8-feet Deep Flanged Aluminum Channel",
+    "length": "94.5",
+    "width": "0.69",
+    "height": "0.5",
+    "weight": "1"
+  },
+  {
+    "id": 8295,
+    "sku": "OC-PL-TS-HPL-8",
+    "title": "8\" Low Voltage LED Paver Light",
+    "length": "8.5",
+    "width": "3",
+    "height": "2.5",
+    "weight": "0.75"
+  },
+  {
+    "id": 8296,
+    "sku": "OC-PL-TS-HPL-9",
+    "title": "9\" Low Voltage LED Paver Light",
+    "length": "4.5",
+    "width": "33",
+    "height": "2.5",
+    "weight": "0.88"
+  },
+  {
+    "id": 10063,
+    "sku": "LEG-ADTP4FBL3P",
+    "title": "adorne® 0-10V sofTap™ Dimmer",
+    "length": "6",
+    "width": "3",
+    "height": "2.5",
+    "weight": "0.32"
+  },
+  {
+    "id": 10128,
+    "sku": "LEG-ARPTR151G",
+    "title": "adorne® 15A One-Gang Pop-Out™ Outlet",
+    "length": "5.5",
+    "width": "3.88",
+    "height": "2.5",
+    "weight": "0.6875"
+  },
+  {
+    "id": 10083,
+    "sku": "LEG-ARTR152",
+    "title": "adorne® 15A Outlet",
+    "length": "6.13",
+    "width": "3.88",
+    "height": "2.38",
+    "weight": "0.1875"
+  },
+  {
+    "id": 9959,
+    "sku": "LEG-ASPD1532",
+    "title": "adorne® 15A Paddle™ Switch",
+    "length": "6.13",
+    "width": "3.88",
+    "height": "2.38",
+    "weight": "0.1875"
+  },
+  {
+    "id": 10153,
+    "sku": "LEG-AGFTR2152",
+    "title": "adorne® 15A Tamper-Resistant Self-Test GFCI Outlet",
+    "length": "3.38",
+    "width": "2.63",
+    "height": "1.88",
+    "weight": "0.3125"
+  },
+  {
+    "id": 10175,
+    "sku": "LEG-AGFTR2153",
+    "title": "adorne® 15A Tamper-Resistant Self-Test GFCI Outlet - Plus-Size",
+    "length": "6",
+    "width": "4",
+    "height": "2.5",
+    "weight": "0.37"
+  },
+  {
+    "id": 10263,
+    "sku": "LEG-AC2PF",
+    "title": "adorne® 2-Port Frame",
+    "length": "7",
+    "width": "4",
+    "height": "0.88",
+    "weight": "0.0625"
+  },
+  {
+    "id": 9967,
+    "sku": "LEG-ASPD2042",
+    "title": "adorne® 20A 4-Way Paddle™ Switch",
+    "length": "6.13",
+    "width": "3.88",
+    "height": "2.38",
+    "weight": "0.1875"
+  },
+  {
+    "id": 10164,
+    "sku": "LEG-AGFTR2202",
+    "title": "adorne® 20A Tamper-Resistant Self-Test GFCI Outlet",
+    "length": "6.13",
+    "width": "3.88",
+    "height": "2.38",
+    "weight": "0.1875"
+  },
+  {
+    "id": 9999,
+    "sku": "LEG-ADPD453L",
+    "title": "adorne® 450W CFL/LED Paddle™ Dimmer",
+    "length": "6.13",
+    "width": "3.88",
+    "height": "2.38",
+    "weight": "0.3125"
+  },
+  {
+    "id": 10025,
+    "sku": "LEG-ADTP703TU",
+    "title": "adorne® 700W sofTap™ Tru-Universal Dimmer",
+    "length": "6.13",
+    "width": "3.88",
+    "height": "2.38",
+    "weight": "0.1875"
+  },
+  {
+    "id": 10196,
+    "sku": "LEG-AABK1",
+    "title": "adorne® Blank - Half-Size",
+    "length": "7",
+    "width": "2.25",
+    "height": "0.88",
+    "weight": "0.0625"
+  },
+  {
+    "id": 10240,
+    "sku": "LEG-ACBLK",
+    "title": "adorne® Blank Keystone Insert",
+    "length": "5.25",
+    "width": "2.63",
+    "height": "1.25",
+    "weight": "0.0625"
+  },
+  {
+    "id": 10206,
+    "sku": "LEG-ARTRUSB153",
+    "title": "adorne® Dual-USB Outlet",
+    "length": "5.25",
+    "width": "3.38",
+    "height": "2",
+    "weight": "0.5"
+  },
+  {
+    "id": 10536,
+    "sku": "LEG-AWP4G",
+    "title": "adorne® Four-Gang Screwless Wall Plate",
+    "length": "9.13",
+    "width": "5.25",
+    "height": "1.13",
+    "weight": "0.75"
+  },
+  {
+    "id": 10324,
+    "sku": "LEG-AWP1G2",
+    "title": "adorne® One-Gang Screwless Wall Plate",
+    "length": "5.5",
+    "width": "3.5",
+    "height": "1",
+    "weight": "0.32"
+  },
+  {
+    "id": 10431,
+    "sku": "LEG-AWP1G3",
+    "title": "adorne® One-Gang-Plus Screwless Wall Plate",
+    "length": "5.25",
+    "width": "3.5",
+    "height": "1",
+    "weight": "0.3125"
+  },
+  {
+    "id": 10217,
+    "sku": "LEG-ACRJ25",
+    "title": "adorne® RJ25 Phone Jack",
+    "length": "5.25",
+    "width": "2.75",
+    "height": "1.25",
+    "weight": "0.3125"
+  },
+  {
+    "id": 10558,
+    "sku": "LEG-AWP6G",
+    "title": "adorne® Six-Gang Screwless Wall Plate",
+    "length": "13.25",
+    "width": "6.25",
+    "height": "1.38",
+    "weight": "1.0625"
+  },
+  {
+    "id": 9982,
+    "sku": "LEG-ASTP1532",
+    "title": "adorne® sofTap™ Switch",
+    "length": "6",
+    "width": "4",
+    "height": "2.5",
+    "weight": "0.18"
+  },
+  {
+    "id": 10643,
+    "sku": "LEG-WNAL10",
+    "title": "sofTap™ Master Switch, Wireless Control with Netatmo",
+    "length": "6.13",
+    "width": "3.88",
+    "height": "2.38",
+    "weight": "0.3125"
+  },
+  {
+    "id": 10684,
+    "sku": "LEG-WNAL50",
+    "title": "sofTap™ Master Dimmer, Wireless Control with Netatmo",
+    "length": "6",
+    "width": "3",
+    "height": "2.5",
+    "weight": "0.3"
+  },
+  {
+    "id": 10651,
+    "sku": "LEG-WNAL23",
+    "title": "sofTap™ Switch, Wireless Control with Netatmo, Battery Powered",
+    "length": "6.13",
+    "width": "3.88",
+    "height": "2.38",
+    "weight": "0.25"
+  },
+  {
+    "id": 9990,
+    "sku": "LEG-ASTH1532",
+    "title": "adorne® Touch™ Switch",
+    "length": "6",
+    "width": "4",
+    "height": "2.5",
+    "weight": "0.25"
+  },
+  {
+    "id": 10441,
+    "sku": "LEG-AWP2G",
+    "title": "adorne® Two-Gang Screwless Wall Plate",
+    "length": "5.38",
+    "width": "5.38",
+    "height": "1.13",
+    "weight": "0.4375"
+  },
+  {
+    "id": 10185,
+    "sku": "LEG-ARUSB",
+    "title": "adorne® USB Outlet - Half-Size",
+    "length": "3.38",
+    "width": "3.75",
+    "height": "2.13",
+    "weight": "0.1875"
+  },
+  {
+    "id": 9973,
+    "sku": "LEG-ASWR1532",
+    "title": "adorne® Whisper™ Switch",
+    "length": "6",
+    "width": "4",
+    "height": "2.5",
+    "weight": "0.18"
+  },
+  {
+    "id": 14995,
+    "sku": "ESPC2R4N80W10CT",
+    "title": "Color Temperature Adjustable COB LED Strips 840 chips, High Output",
+    "length": "8.38",
+    "width": "7.5",
+    "height": "0.5",
+    "weight": "0.3125"
+  },
+  {
+    "id": 7747,
+    "sku": "ESP5V4-C20-06CT",
+    "title": "Color Temperature Adjustable LED Strips 300 chips, High Output",
+    "length": "8.38",
+    "width": "7.5",
+    "height": "0.5",
+    "weight": "0.3125"
+  },
+  {
+    "id": 8274,
+    "sku": "ESP5V4-C65-06CT",
+    "title": "Color Temperature Adjustable LED Strips 300 chips, High Output, Wet Rated",
+    "length": "9.13",
+    "width": "9.25",
+    "height": "0.63",
+    "weight": "0.875"
+  },
+  {
+    "id": 8359,
+    "sku": "WE-ELB-2048-EXTR",
+    "title": "Emergency Battery Backup for LED Panels",
+    "length": "16",
+    "width": "3.5",
+    "height": "2.5",
+    "weight": "3.2"
+  },
+  {
+    "id": 8340,
+    "sku": "WE-FLV12-12W",
+    "title": "FLV12 LED Bullet Light with Skype, 12W, 12V",
+    "length": "7.5",
+    "width": "5.5",
+    "height": "6.5",
+    "weight": "2.5"
+  },
+  {
+    "id": 8306,
+    "sku": "SUN-A199W",
+    "title": "LED A19 Bulb 105°, Dimmable 9W UL Listed",
+    "length": "2.5",
+    "width": "2.5",
+    "height": "4.5",
+    "weight": "0.125"
+  },
+  {
+    "id": 8310,
+    "sku": "SUN-A1914W",
+    "title": "LED A21 Bulb 105°, Dimmable 14W UL Listed",
+    "length": "2.5",
+    "width": "2.5",
+    "height": "5",
+    "weight": "0.125"
+  },
+  {
+    "id": 8173,
+    "sku": "EBU-G9D3.5W",
+    "title": "LED Dimmable G9, 3.5W",
+    "length": "3",
+    "width": "1",
+    "height": "1",
+    "weight": "0.06"
+  },
+  {
+    "id": 8164,
+    "sku": "EBU-CLFT3.5W",
+    "title": "LED Filament Candle Bulb with Flame Tip, 3.5W",
+    "length": "3.88",
+    "width": "1.63",
+    "height": "1.5",
+    "weight": "0.0625"
+  },
+  {
+    "id": 8167,
+    "sku": "EBU-CLTO3.5W",
+    "title": "LED Filament Candle Bulb with Torpedo Shape, 3.5W",
+    "length": "4",
+    "width": "1.5",
+    "height": "1.5",
+    "weight": "0.25"
+  },
+  {
+    "id": 8170,
+    "sku": "EBU-G4ND1.5W",
+    "title": "LED G4 compatible with AC/DC, 1.5W",
+    "length": "1.88",
+    "width": "0.75",
+    "height": "0.75",
+    "weight": "0.0125"
+  },
+  {
+    "id": 8157,
+    "sku": "E01SLILA",
+    "title": "LED Inground Light with Half Round Light Shape",
+    "length": "2",
+    "width": "1.5",
+    "height": "4",
+    "weight": "0.1875"
+  },
+  {
+    "id": 8160,
+    "sku": "E01SLILB",
+    "title": "LED Round Inground Light Stainless Steel",
+    "length": "4",
+    "width": "1.75",
+    "height": "4",
+    "weight": "0.25"
+  },
+  {
+    "id": 8343,
+    "sku": "WE-LF12-6W",
+    "title": "LF LED Bullet Light with Spike, 6W, 12V",
+    "length": "7.5",
+    "width": "3.5",
+    "height": "3",
+    "weight": "0.7"
+  },
+  {
+    "id": 11026,
+    "sku": "sku-9998",
+    "title": "Producto integración pago authorize.net",
+    "length": "0",
+    "width": "0",
+    "height": "0",
+    "weight": "0"
+  },
+  {
+    "id": 8227,
+    "sku": "ECTL-DM3C6A-BT",
+    "title": "RGB DMX Decoder, 6A per Channel, Block Terminal",
+    "length": "7.13",
+    "width": "1.75",
+    "height": "1.63",
+    "weight": "0.6875"
+  },
+  {
+    "id": 8228,
+    "sku": "ECTL-DM3C6A-RJ",
+    "title": "RGB DMX Decoder, 6A per Channel, RJ45",
+    "length": "7.25",
+    "width": "2",
+    "height": "1.87",
+    "weight": "0.75"
+  },
+  {
+    "id": 8226,
+    "sku": "ECTL-DM24C3AXGE",
+    "title": "RGB DMX Decoder, 72A, 8 RGB Groups",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 12048,
+    "sku": "ECTSK-RFRC4C5A",
+    "title": "SKY RGB/RGBW Radio Frequency Receiver with Sync Function, 15A/RGB 20A/RGBW",
+    "length": "7.25",
+    "width": "2",
+    "height": "1.5",
+    "weight": "0.3"
+  },
+  {
+    "id": 14747,
+    "sku": "ECTSK-ST32C1A",
+    "title": "SKY Stair Lighting Controller",
+    "length": "7.25",
+    "width": "4",
+    "height": "2",
+    "weight": "1.5"
+  },
+  {
+    "id": 12411,
+    "sku": "ECTSK-TWRC5C6A",
+    "title": "SKY WIFI For DIM/CCT/RGB/RGBW/RGBCCT Strips, 6A",
+    "length": "7.5",
+    "width": "2.5",
+    "height": "1.5",
+    "weight": "0.4"
+  },
+  {
+    "id": 12061,
+    "sku": "ECTSK-TWRC5C3A",
+    "title": "SKY WIFI For DIM/CCT/RGB/RGBW/RGBCCT Strips, 3A",
+    "length": "5",
+    "width": "1.85",
+    "height": "1.25",
+    "weight": "0.15"
+  },
+  {
+    "id": 8229,
+    "sku": "ECTL-DM4C5A-BT",
+    "title": "RGBW DMX Decoder, 5A per Channel, Block Terminal",
+    "length": "7.25",
+    "width": "2",
+    "height": "2",
+    "weight": "0.75"
+  },
+  {
+    "id": 8230,
+    "sku": "ECTL-DM4C5A-RJ",
+    "title": "RGBW DMX Decoder, 5A per Channel, RJ45",
+    "length": "7.25",
+    "width": "2",
+    "height": "1.87",
+    "weight": "0.75"
+  },
+  {
+    "id": 8234,
+    "sku": "ECTSU-RC4C5A",
+    "title": "SUN Low Voltage Receiver for RGB / RGBW LED Strips, 20A",
+    "length": "7.13",
+    "width": "2",
+    "height": "1",
+    "weight": "0.3125"
+  },
+  {
+    "id": 8237,
+    "sku": "ECTSU-WM3C2",
+    "title": "SUN RF Wall Mount Controller for RGB Strips, Touch Panel",
+    "length": "5.5",
+    "width": "3.5",
+    "height": "2",
+    "weight": "0.5"
+  },
+  {
+    "id": 8362,
+    "sku": "WE-SCL-GSY10",
+    "title": "Suspension kit for 2x4 ft LED Panels",
+    "length": "",
+    "width": "",
+    "height": "",
+    "weight": ""
+  },
+  {
+    "id": 8209,
+    "sku": "ECNA-2SCR2P-10",
+    "title": "Two Ends \"L\" Connector for 10mm Single Color Strips",
+    "length": "1",
+    "width": "1",
+    "height": "0.25",
+    "weight": "0.0062"
+  },
+  {
+    "id": 7738,
+    "sku": "ESPS4R2N60W10RG",
+    "title": "UL SMD5050 LED Strips 300 RGB Chips, RGB High Output Unit",
+    "length": "8.25",
+    "width": "7.38",
+    "height": "0.63",
+    "weight": "0.3125"
+  },
+  {
+    "id": 7725,
+    "sku": "ESP2V2-S20-06",
+    "title": "UL SMD2835 LED Strip 300 Side Bendable Single Color Chips, Bright Output",
+    "length": "9.5",
+    "width": "8.63",
+    "height": "0.5",
+    "weight": "0.25"
+  },
+  {
+    "id": 14792,
+    "sku": "SUP-C2R4N50W08",
+    "title": "UL COB LED Strip Single Color, Bright Output, High Density 2400 LEDs",
+    "length": "7.38",
+    "width": "8.25",
+    "height": "0.63",
+    "weight": "0.25"
+  },
+  {
+    "id": 7730,
+    "sku": "ESPS3R2N36W10RG",
+    "title": "UL SMD5050 LED Strips 150 RGB Chips, RGB Moderate Light",
+    "length": "8.25",
+    "width": "7.38",
+    "height": "0.63",
+    "weight": "0.3125"
+  },
+  {
+    "id": 7750,
+    "sku": "ESPS3R2W36W10RG",
+    "title": "UL SMD5050 LED Strips 150 RGB Chips, Wet Rated",
+    "length": "9.38",
+    "width": "9.25",
+    "height": "0.63",
+    "weight": "0.8125"
+  },
+  {
+    "id": 7753,
+    "sku": "ESPS4R2W55W10RG",
+    "title": "UL SMD5050 LED Strips 300 RGB Chips, Wet Rated",
+    "length": "9.38",
+    "width": "9.25",
+    "height": "0.75",
+    "weight": "0.875"
+  },
+  {
+    "id": 7756,
+    "sku": "ESPS4R2W60W10RG",
+    "title": "UL SMD5050 LED Strips 300 RGBW Chips, Wet Rated",
+    "length": "9.38",
+    "width": "9.25",
+    "height": "0.75",
+    "weight": "0.9375"
+  },
+  {
+    "id": 7744,
+    "sku": "ESPS5R4N90W12RG",
+    "title": "UL SMD5050 LED Strips 600 RGB Chips, RGB Super Bright Output Unit",
+    "length": "8.25",
+    "width": "7.38",
+    "height": "0.63",
+    "weight": "0.4375"
+  },
+  {
+    "id": 8231,
+    "sku": "ECTL-DMCT1",
+    "title": "USB DMX Controller",
+    "length": "7.25",
+    "width": "2",
+    "height": "2",
+    "weight": "0.75"
+  }
+]
