@@ -57,8 +57,19 @@ fi
 
 # Step 2: Drop and recreate local database
 echo -e "${BLUE}[2/4]${NC} Dropping and recreating local database..."
-if PGPASSWORD='hUMSVtteMnqSBZSuSGUBivBooMdRoKtj' $PSQL -U postgres -h localhost -c "DROP DATABASE IF EXISTS ecopowertech_dev;" 2>/dev/null &&
-   PGPASSWORD='hUMSVtteMnqSBZSuSGUBivBooMdRoKtj' $PSQL -U postgres -h localhost -c "CREATE DATABASE ecopowertech_dev;" 2>/dev/null; then
+
+# Extract password from LOCAL_DB_URL
+LOCAL_PASSWORD=$(echo "$LOCAL_DB_URL" | grep -oP '://postgres:\K[^@]+')
+
+# Terminate all connections to the database
+if PGPASSWORD="$LOCAL_PASSWORD" $PSQL -U postgres -h localhost -d postgres -c \
+   "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'ecopowertech_dev' AND pid <> pg_backend_pid();" 2>/dev/null; then
+    echo -e "${GREEN}      ✅ Terminated active connections${NC}"
+fi
+
+# Drop and recreate database
+if PGPASSWORD="$LOCAL_PASSWORD" $PSQL -U postgres -h localhost -c "DROP DATABASE IF EXISTS ecopowertech_dev;" 2>/dev/null &&
+   PGPASSWORD="$LOCAL_PASSWORD" $PSQL -U postgres -h localhost -c "CREATE DATABASE ecopowertech_dev;" 2>/dev/null; then
     echo -e "${GREEN}      ✅ Local database recreated${NC}"
 else
     echo -e "${RED}      ❌ Failed to recreate local database${NC}"

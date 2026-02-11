@@ -27,7 +27,15 @@ if [ ! -z "$PORT_PID" ]; then
 fi
 sleep 1
 
-echo "📡 Using Railway services (Postgres, Redis, MeiliSearch)"
+# Show which database is configured
+if grep -q "localhost:5432" .env 2>/dev/null; then
+    echo "🔵 Using LOCAL PostgreSQL + Railway Redis"
+elif grep -q "railway.app\|rlwy.net" .env 2>/dev/null; then
+    echo "📡 Using RAILWAY services (Postgres + Redis)"
+else
+    echo "⚠️  Database configuration not detected"
+fi
+
 
 # Start Medusa with explicit nodemon config
 echo "🛍️  Starting Medusa Server..."
