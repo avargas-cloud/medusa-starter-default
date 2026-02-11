@@ -10,6 +10,17 @@ console.log("🔵 WORKER_MODE:", process.env.WORKER_MODE || "NOT SET (will defau
 module.exports = defineConfig({
   projectConfig: {
     databaseUrl: process.env.DATABASE_URL,
+    databaseDriverOptions: {
+      connection: {
+        ssl: {
+          rejectUnauthorized: false
+        }
+      },
+      pool: {
+        min: 2,
+        max: 10
+      }
+    },
     redisUrl: process.env.REDIS_URL,
     // CRITICAL: Enable subscribers by setting workerMode to 'shared'
     // Without this, subscribers will NOT load (even if code is correct)
