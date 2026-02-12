@@ -529,6 +529,147 @@ curl https://meilisearch-production-1237.up.railway.app/health
 
 ---
 
+---
+
+### Phase 7: Critical DNS Resolution Issue (February 12, 2026) ⚠️
+
+**Objective:** Resolve severe 120+ second startup delay on Ubuntu native environment
+
+#### The Problem
+
+After successfully using the optimized Railway configuration for weeks, a **critical issue** emerged when setting up the backend on a **native Ubuntu work PC**:
+
+- **WSL Environment**: Server started in **7-9 seconds** ✅
+- **Ubuntu Native (same machine)**: Server started in **120+ seconds** ❌
+
+**Symptoms:**
+```
+info:    Initializing project...
+info:    Database initialized
+[HANGS HERE FOR 120 SECONDS]
+info:    ✔ Server is ready on port: 9000
+```
+
+The hang occurred **after** all plugins loaded, database connected, and Redis connected - specifically during the `http.listen()` call.
+
+#### Investigation Timeline
+
+**Failed Attempts:**
+1. ❌ Forcing IPv4 for Redis (`family: 4` in medusa-config.ts)
+2. ❌ Globally disabling IPv6 at system level (`sysctl`)
+3. ❌ Disabling Admin panel (`MEDUSA_DISABLE_ADMIN=true`)
+4. ❌ Increasing npm timeouts
+5. ❌ Explicitly setting `HOST=127.0.0.1`
+6. ❌ Commenting out `::1 localhost` in `/etc/hosts`
+7. ❌ Complete clean reinstall (node_modules, .medusa, dist)
+
+**Environment Comparison:**
+- **WSL**: Using DNS `10.255.255.254` (Windows DNS proxy)
+- **Ubuntu Native**: Using DNS `127.0.0.53` (systemd-resolved)
+
+#### Root Cause Discovery
+
+The issue was **NOT** related to:
+- Node.js version
+- Medusa configuration
+- Database connections
+- Redis connections
+- IPv6 vs IPv4
+- Network configuration
+
+**The REAL culprit:** `systemd-resolved` (Ubuntu's default DNS resolver)
+
+When Node.js `http.listen()` binds to a port, it performs DNS lookups. On Ubuntu native, `systemd-resolved` (127.0.0.53) was causing **massive delays** in these lookups - adding 110+ seconds to startup time.
+
+#### The Solution ✅
+
+**Replace systemd-resolved with Google DNS:**
+
+```bash
+# Remove systemd-resolved symlink
+sudo unlink /etc/resolv.conf
+
+# Add Google DNS servers
+sudo bash -c 'echo "nameserver 8.8.8.8" > /etc/resolv.conf'
+sudo bash -c 'echo "nameserver 8.8.4.4" >> /etc/resolv.conf'
+
+# Make resolv.conf immutable (prevent systemd from overwriting)
+sudo chattr +i /etc/resolv.conf
+```
+
+**Results:**
+- **Before DNS fix**: 120+ seconds
+- **After DNS fix**: **13 seconds** ✅
+- **Improvement**: ~90% faster
+
+#### Why This Happened
+
+1. **systemd-resolved behavior**: Ubuntu's `systemd-resolved` uses a local stub resolver (127.0.0.53) that can introduce significant latency during DNS lookups
+2. **Node.js http.listen()**: Performs reverse DNS lookups during port binding
+3. **WSL difference**: WSL bypasses systemd-resolved, using Windows DNS directly (10.255.255.254)
+4. **Not a general Ubuntu issue**: This is specific to how systemd-resolved interacts with Node.js in certain network configurations
+
+#### Verification
+
+```bash
+# Check DNS configuration
+cat /etc/resolv.conf
+# Should show:
+# nameserver 8.8.8.8
+# nameserver 8.8.4.4
+
+# Verify immutable flag
+lsattr /etc/resolv.conf
+# Should show: ----i-------- /etc/resolv.conf
+
+# Test DNS resolution speed
+time nslookup google.com
+# Should be fast (< 100ms)
+
+# Test backend startup
+cd backend && time yarn dev
+# Should complete in 11-15 seconds
+```
+
+#### Important Notes
+
+**⚠️ This fix is environment-specific:**
+- Only needed on Ubuntu native installations showing this symptom
+- WSL environments don't need this fix (they use different DNS)
+- Other Linux distributions may or may not need this depending on their DNS configuration
+
+**Alternative solutions (if Google DNS not preferred):**
+```bash
+# Use Cloudflare DNS
+nameserver 1.1.1.1
+nameserver 1.0.0.1
+
+# Use OpenDNS
+nameserver 208.67.222.222
+nameserver 208.67.220.220
+
+# Use local network DNS (replace with your router IP)
+nameserver 192.168.1.1
+```
+
+**To revert (if needed):**
+```bash
+# Remove immutable flag
+sudo chattr -i /etc/resolv.conf
+
+# Restore systemd-resolved
+sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+```
+
+#### Key Takeaways
+
+1. **DNS matters**: Even seemingly unrelated DNS configuration can dramatically impact Node.js startup time
+2. **Environment differences**: Same codebase can behave very differently based on OS-level configuration
+3. **systemd-resolved gotcha**: Be aware of potential systemd-resolved latency issues with Node.js
+4. **Testing methodology**: Always test in production-like environments, not just development environments
+
+---
+
 ## Conclusion
 
 The investigation revealed that the perceived "60-second startup problem" was actually:
@@ -536,11 +677,19 @@ The investigation revealed that the perceived "60-second startup problem" was ac
 2. Not present in the clean, simple configuration
 3. The current 4.4s Railway startup is optimal and faster than the stated baseline
 
+**UPDATE - February 12, 2026:**
+
+A NEW critical issue was discovered and resolved:
+1. **Problem**: 120+ second startup on Ubuntu native (systemd-resolved DNS)
+2. **Solution**: Replace with Google DNS (8.8.8.8, 8.8.4.4)
+3. **Result**: Startup reduced to 13 seconds (~90% improvement)
+
 **Final Configuration:**
 - ✅ Two simple modes (local-all, railway-all)
 - ✅ No conditional logic
 - ✅ Admin always enabled
-- ✅ Fast startup in both modes
+- ✅ Fast startup in both modes (4.4s Railway, 2.4s local, 13s Ubuntu native with DNS fix)
 - ✅ All services verified working
 
 **Ready for production! 🚀**
+

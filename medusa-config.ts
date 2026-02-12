@@ -202,6 +202,83 @@ module.exports = defineConfig({
         ],
       },
     },
+    // Fulfillment Module with Custom Providers
+    {
+      resolve: "@medusajs/medusa/fulfillment",
+      options: {
+        providers: [
+          // Default manual fulfillment
+          {
+            resolve: "@medusajs/medusa/fulfillment-manual",
+            id: "manual",
+            options: {},
+          },
+          // Store Pickup - Always Free
+          {
+            resolve: "./src/modules/store-pickup",
+            id: "store-pickup",
+            options: {},
+          },
+          // Ground Shipping - Conditional Pricing
+          {
+            resolve: "./src/modules/ground-shipping",
+            id: "ground-shipping",
+            options: {},
+          },
+          // UPS Next Day Air
+          {
+            resolve: "./src/modules/ups-shipping",
+            id: "ups-next-day-air",
+            options: {
+              clientId: process.env.UPS_CLIENT_ID,
+              clientSecret: process.env.UPS_CLIENT_SECRET,
+              serviceCode: "01",
+              serviceName: "Next Day Air",
+              shipperName: process.env.UPS_SHIPPER_NAME || "Ecopowertech",
+              shipperAddressLine1: process.env.UPS_SHIPPER_ADDRESS_LINE1 || "",
+              shipperCity: process.env.UPS_SHIPPER_CITY || "",
+              shipperState: process.env.UPS_SHIPPER_STATE || "",
+              shipperPostalCode: process.env.UPS_SHIPPER_POSTAL_CODE || "",
+              shipperCountry: process.env.UPS_SHIPPER_COUNTRY || "US",
+            },
+          },
+          // UPS 2nd Day Air
+          {
+            resolve: "./src/modules/ups-shipping",
+            id: "ups-2nd-day-air",
+            options: {
+              clientId: process.env.UPS_CLIENT_ID,
+              clientSecret: process.env.UPS_CLIENT_SECRET,
+              serviceCode: "02",
+              serviceName: "2nd Day Air",
+              shipperName: process.env.UPS_SHIPPER_NAME || "Ecopowertech",
+              shipperAddressLine1: process.env.UPS_SHIPPER_ADDRESS_LINE1 || "",
+              shipperCity: process.env.UPS_SHIPPER_CITY || "",
+              shipperState: process.env.UPS_SHIPPER_STATE || "",
+              shipperPostalCode: process.env.UPS_SHIPPER_POSTAL_CODE || "",
+              shipperCountry: process.env.UPS_SHIPPER_COUNTRY || "US",
+            },
+          },
+          // UPS 3 Day Select
+          {
+            resolve: "./src/modules/ups-shipping",
+            id: "ups-3-day-select",
+            options: {
+              clientId: process.env.UPS_CLIENT_ID,
+              clientSecret: process.env.UPS_CLIENT_SECRET,
+              serviceCode: "12",
+              serviceName: "3 Day Select",
+              shipperName: process.env.UPS_SHIPPER_NAME || "Ecopowertech",
+              shipperAddressLine1: process.env.UPS_SHIPPER_ADDRESS_LINE1 || "",
+              shipperCity: process.env.UPS_SHIPPER_CITY || "",
+              shipperState: process.env.UPS_SHIPPER_STATE || "",
+              shipperPostalCode: process.env.UPS_SHIPPER_POSTAL_CODE || "",
+              shipperCountry: process.env.UPS_SHIPPER_COUNTRY || "US",
+            },
+          },
+        ],
+      },
+    },
     // Meilisearch Plugin - Only load when using local Meilisearch
     // Railway Meilisearch connection in plugin causes 40-60s startup delay
     ...(process.env.MEILISEARCH_HOST?.includes("localhost") ? [{

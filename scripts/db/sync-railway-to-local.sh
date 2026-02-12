@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Use PostgreSQL 17 tools to match Railway version
-PG_DUMP=/usr/lib/postgresql/17/bin/pg_dump
-PSQL=/usr/lib/postgresql/17/bin/psql
+PG_DUMP=/usr/lib/postgresql/16/bin/pg_dump
+PSQL=/usr/lib/postgresql/16/bin/psql
 
 # Color codes for output
 RED='\033[0;31m'
