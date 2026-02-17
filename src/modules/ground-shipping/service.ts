@@ -1,38 +1,33 @@
 import { AbstractFulfillmentProviderService } from "@medusajs/framework/utils"
-import { MedusaContainer } from "@medusajs/framework/types"
 
 class GroundShippingService extends AbstractFulfillmentProviderService {
     static identifier = "custom-fulfillment"
 
-    constructor(container: MedusaContainer, options: any) {
-        super(container, options)
-    }
-
-    async validateOption(data: any): Promise<boolean> {
+    async validateOption(_data: any): Promise<boolean> {
         return true
     }
 
     async validateFulfillmentData(
-        optionData: any,
+        _optionData: any,
         data: any,
-        context: any
+        _context: any
     ): Promise<any> {
         return data
     }
 
-    async canCalculate(data: any): Promise<boolean> {
+    async canCalculate(_data: any): Promise<boolean> {
         return true
     }
 
     async calculatePrice(
-        optionData: any,
+        _optionData: any,
         data: any,
         context: any
-    ): Promise<number> {
+    ): Promise<{ calculated_amount: number; is_calculated_price_tax_inclusive: boolean }> {
         const { cart } = data
 
         if (!cart) {
-            return 0
+            return { calculated_amount: 0, is_calculated_price_tax_inclusive: false }
         }
 
         // Get shipping settings from database
@@ -49,7 +44,7 @@ class GroundShippingService extends AbstractFulfillmentProviderService {
         const settings = settingsData?.[0]
         if (!settings) {
             // Default values if settings not found
-            return 1499 // $14.99 in cents
+            return { calculated_amount: 1499, is_calculated_price_tax_inclusive: false } // $14.99 in cents
         }
 
         // Get cart total (already in cents in Medusa v2)
@@ -63,23 +58,23 @@ class GroundShippingService extends AbstractFulfillmentProviderService {
         // Apply conditional pricing logic
         // 1. Free shipping if cart total >= free_shipping_minimum
         if (cartTotal >= settings.free_shipping_minimum) {
-            return 0
+            return { calculated_amount: 0, is_calculated_price_tax_inclusive: false }
         }
 
         // 2. Long item shipping if cart total < minimum AND has long items
         if (hasLongItems) {
-            return settings.long_item_ground_shipping_price
+            return { calculated_amount: settings.long_item_ground_shipping_price, is_calculated_price_tax_inclusive: false }
         }
 
         // 3. Regular flat shipping otherwise
-        return settings.regular_ground_shipping_price
+        return { calculated_amount: settings.regular_ground_shipping_price, is_calculated_price_tax_inclusive: false }
     }
 
     async createFulfillment(
-        data: any,
-        items: any,
-        order: any,
-        fulfillment: any
+        _data: any,
+        _items: any,
+        _order: any,
+        _fulfillment: any
     ): Promise<any> {
         return {
             data: {
@@ -88,7 +83,7 @@ class GroundShippingService extends AbstractFulfillmentProviderService {
         }
     }
 
-    async cancelFulfillment(fulfillment: any): Promise<any> {
+    async cancelFulfillment(_fulfillment: any): Promise<any> {
         return {}
     }
 
@@ -102,8 +97,8 @@ class GroundShippingService extends AbstractFulfillmentProviderService {
     }
 
     async retrieveDocuments(
-        fulfillmentData: any,
-        documentType: string
+        _fulfillmentData: any,
+        _documentType: string
     ): Promise<any> {
         return null
     }

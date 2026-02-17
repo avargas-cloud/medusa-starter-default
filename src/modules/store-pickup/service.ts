@@ -3,36 +3,36 @@ import { AbstractFulfillmentProviderService } from "@medusajs/framework/utils"
 class StorePickupService extends AbstractFulfillmentProviderService {
     static identifier = "custom-fulfillment"
 
-    async validateOption(data: any): Promise<boolean> {
+    async validateOption(_data: any): Promise<boolean> {
         return true
     }
 
     async validateFulfillmentData(
-        optionData: any,
+        _optionData: any,
         data: any,
-        context: any
+        _context: any
     ): Promise<any> {
         return data
     }
 
-    async canCalculate(data: any): Promise<boolean> {
+    async canCalculate(_data: any): Promise<boolean> {
         return true
     }
 
     async calculatePrice(
-        optionData: any,
-        data: any,
-        context: any
-    ): Promise<number> {
+        _optionData: any,
+        _data: any,
+        _context: any
+    ): Promise<{ calculated_amount: number; is_calculated_price_tax_inclusive: boolean }> {
         // Store pickup is always free
-        return 0
+        return { calculated_amount: 0, is_calculated_price_tax_inclusive: false }
     }
 
     async createFulfillment(
-        data: any,
-        items: any,
-        order: any,
-        fulfillment: any
+        _data: any,
+        _items: any,
+        _order: any,
+        _fulfillment: any
     ): Promise<any> {
         return {
             data: {
@@ -42,7 +42,7 @@ class StorePickupService extends AbstractFulfillmentProviderService {
         }
     }
 
-    async cancelFulfillment(fulfillment: any): Promise<any> {
+    async cancelFulfillment(_fulfillment: any): Promise<any> {
         return {}
     }
 
@@ -56,8 +56,8 @@ class StorePickupService extends AbstractFulfillmentProviderService {
     }
 
     async retrieveDocuments(
-        fulfillmentData: any,
-        documentType: string
+        _fulfillmentData: any,
+        _documentType: string
     ): Promise<any> {
         return null
     }

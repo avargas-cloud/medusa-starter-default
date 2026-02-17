@@ -20,8 +20,8 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
     private accessToken: string | null = null
     private tokenExpiry: number = 0
 
-    constructor(container: any, options: UPSOptions) {
-        super(container, options)
+    constructor(options: UPSOptions) {
+        super()
         this.options_ = options
     }
 
@@ -54,21 +54,21 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
             // Token expires in 3600 seconds, cache for 3500 to be safe
             this.tokenExpiry = Date.now() + (3500 * 1000)
 
-            return this.accessToken
+            return this.accessToken!
         } catch (error: any) {
             console.error("UPS OAuth error:", error.response?.data || error.message)
             throw new Error("Failed to authenticate with UPS API")
         }
     }
 
-    async validateOption(data: any): Promise<boolean> {
+    async validateOption(_data: any): Promise<boolean> {
         return true
     }
 
     async validateFulfillmentData(
-        optionData: any,
+        _optionData: any,
         data: any,
-        context: any
+        _context: any
     ): Promise<any> {
         return data
     }
@@ -78,10 +78,10 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
     }
 
     async calculatePrice(
-        optionData: any,
+        _optionData: any,
         data: any,
-        context: any
-    ): Promise<number> {
+        _context: any
+    ): Promise<{ calculated_amount: number; is_calculated_price_tax_inclusive: boolean }> {
         const cart = data?.cart
 
         // Start logging for debugging
@@ -94,7 +94,7 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
         // If no cart or address (e.g. Admin UI validation), return a dummy price to pass validation
         if (!cart?.shipping_address) {
             console.log("UPS: No cart/address, returning fallback price for validation")
-            return 2500 // Return $25.00 as placeholder
+            return { calculated_amount: 2500, is_calculated_price_tax_inclusive: false } // Return $25.00 as placeholder
         }
 
         // Calculate total weight from cart items
@@ -192,7 +192,7 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
             const rate = parseFloat(rateStr)
 
             // Return price in cents
-            return Math.round(rate * 100)
+            return { calculated_amount: Math.round(rate * 100), is_calculated_price_tax_inclusive: false }
 
         } catch (error: any) {
             console.error("UPS Rate API error:", error.response?.data || error.message)
@@ -204,15 +204,15 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
                 "12": 2500  // 3 Day Select: $25
             }
 
-            return fallbackPrices[this.options_.serviceCode] || 2500
+            return { calculated_amount: fallbackPrices[this.options_.serviceCode] || 2500, is_calculated_price_tax_inclusive: false }
         }
     }
 
     async createFulfillment(
-        data: any,
-        items: any,
-        order: any,
-        fulfillment: any
+        _data: any,
+        _items: any,
+        _order: any,
+        _fulfillment: any
     ): Promise<any> {
         // TODO: Implement shipping label generation
         return {
@@ -224,7 +224,7 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
         }
     }
 
-    async cancelFulfillment(fulfillment: any): Promise<any> {
+    async cancelFulfillment(_fulfillment: any): Promise<any> {
         // TODO: Implement shipment cancellation if needed
         return {}
     }
@@ -239,8 +239,8 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
     }
 
     async retrieveDocuments(
-        fulfillmentData: any,
-        documentType: string
+        _fulfillmentData: any,
+        _documentType: string
     ): Promise<any> {
         return null
     }

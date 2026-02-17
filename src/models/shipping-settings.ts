@@ -21,8 +21,8 @@ const ShippingSettings = model.define("shipping_settings", {
     long_item_ground_shipping_price: model.number().default(0),
 
     // Timestamps
-    created_at: model.dateTime().default("now"),
-    updated_at: model.dateTime().default("now"),
+    created_at: model.dateTime(),
+    updated_at: model.dateTime(),
 })
 
 export default ShippingSettings
