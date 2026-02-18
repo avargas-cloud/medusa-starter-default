@@ -125,12 +125,39 @@ export const GET = async (
             )
         }
 
+        // 2b. Fetch inventory quantities for each variant via SQL
+        // Medusa v2 stores inventory in a separate module — not in product_variant directly
+        const variantIds = mainVariants.map((v: any) => v.id).filter(Boolean)
+        const inventoryByVariant: Record<string, number> = {}
+
+        if (variantIds.length > 0) {
+            try {
+                const inventoryRows = await knex("product_variant_inventory_item as pvi")
+                    .join("inventory_level as il", "il.inventory_item_id", "pvi.inventory_item_id")
+                    .select("pvi.variant_id")
+                    .sum("il.stocked_quantity as total_stocked")
+                    .sum("il.reserved_quantity as total_reserved")
+                    .whereIn("pvi.variant_id", variantIds)
+                    .groupBy("pvi.variant_id")
+
+                for (const row of inventoryRows) {
+                    const stocked = parseInt(row.total_stocked) || 0
+                    const reserved = parseInt(row.total_reserved) || 0
+                    inventoryByVariant[row.variant_id] = Math.max(0, stocked - reserved)
+                }
+            } catch (err: any) {
+                // Silently skip if inventory tables don't exist (local dev without inventory module)
+                console.warn("[WITH-PRICES-RELATED] Could not fetch inventory:", err.message)
+            }
+        }
+
         // Create variants with calculated prices for main product
         const mainVariantsWithPrices = mainVariants.map((variant: any) => {
             const priceData = mainCalculatedPrices.find((p: any) => p.id === variant.price_set?.id)
 
             return {
                 ...variant,
+                inventory_quantity: inventoryByVariant[variant.id] ?? null,
                 calculated_price: priceData ? {
                     calculated_amount: priceData.calculated_amount,
                     original_amount: priceData.original_amount,
@@ -138,6 +165,7 @@ export const GET = async (
                 } : null
             }
         })
+
 
         // 3. Fetch related products from same category
         const mainCategoryId = mainProduct.categories?.[0]?.id
