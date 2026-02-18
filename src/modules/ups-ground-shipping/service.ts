@@ -38,9 +38,9 @@ class UPSGroundShippingService extends AbstractFulfillmentProviderService {
             return this.accessToken
         }
 
-        const auth = Buffer.from(
-            `${this.options_.clientId}:${this.options_.clientSecret}`
-        ).toString("base64")
+        const clientId = process.env.UPS_CLIENT_ID!
+        const clientSecret = process.env.UPS_CLIENT_SECRET!
+        const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64")
 
         try {
             const response = await axios.post(
@@ -84,16 +84,18 @@ class UPSGroundShippingService extends AbstractFulfillmentProviderService {
     async calculatePrice(
         _optionData: any,
         data: any,
-        _context: any
+        context: any
     ): Promise<{ calculated_amount: number; is_calculated_price_tax_inclusive: boolean }> {
-        const cart = data?.cart
+        // Medusa passes cart spread into context (not data.cart)
+        const cart = context?.id ? context : data?.cart
         const serviceCode = this.serviceCode
 
         // Start logging for debugging
         console.log("UPS calculatePrice called with:", {
             hasCart: !!cart,
             hasAddress: !!cart?.shipping_address,
-            serviceCode
+            serviceCode,
+            cartId: cart?.id
         })
 
         // If no cart or address (e.g. Admin UI validation), return a dummy price to pass validation
@@ -117,6 +119,16 @@ class UPSGroundShippingService extends AbstractFulfillmentProviderService {
         try {
             const token = await this.getAccessToken()
 
+            // Read shipper address from Stock Location (from_location in context) with env fallback
+            const fromLocation = context?.from_location
+            const fromAddress = fromLocation?.address
+            const shipperName = fromLocation?.name || process.env.UPS_ORIGIN_NAME
+            const shipperAddress = fromAddress?.address_1 || process.env.UPS_ORIGIN_ADDRESS
+            const shipperCity = fromAddress?.city || process.env.UPS_ORIGIN_CITY
+            const shipperState = fromAddress?.province || process.env.UPS_ORIGIN_STATE
+            const shipperZip = fromAddress?.postal_code || process.env.UPS_ORIGIN_ZIP
+            const shipperCountry = fromAddress?.country_code?.toUpperCase() || process.env.UPS_ORIGIN_COUNTRY
+
             const rateRequest = {
                 RateRequest: {
                     Request: {
@@ -126,14 +138,14 @@ class UPSGroundShippingService extends AbstractFulfillmentProviderService {
                     },
                     Shipment: {
                         Shipper: {
-                            Name: this.options_.shipperName,
-                            ShipperNumber: "", // Not required for rating
+                            Name: shipperName,
+                            ShipperNumber: process.env.UPS_SHIPPER_NUMBER || "",
                             Address: {
-                                AddressLine: [this.options_.shipperAddressLine1],
-                                City: this.options_.shipperCity,
-                                StateProvinceCode: this.options_.shipperState,
-                                PostalCode: this.options_.shipperPostalCode,
-                                CountryCode: this.options_.shipperCountry
+                                AddressLine: [shipperAddress],
+                                City: shipperCity,
+                                StateProvinceCode: shipperState,
+                                PostalCode: shipperZip,
+                                CountryCode: shipperCountry
                             }
                         },
                         ShipTo: {
@@ -147,8 +159,8 @@ class UPSGroundShippingService extends AbstractFulfillmentProviderService {
                             }
                         },
                         Service: {
-                            Code: this.options_.serviceCode,
-                            Description: this.options_.serviceName
+                            Code: this.serviceCode,
+                            Description: this.serviceName
                         },
                         Package: [{
                             PackagingType: {
@@ -177,9 +189,6 @@ class UPSGroundShippingService extends AbstractFulfillmentProviderService {
                         "transId": `rate_${Date.now()}`,
                         "transactionSrc": "medusa"
                     },
-                    params: {
-                        additionalinfo: "validate"
-                    }
                 }
             )
 
@@ -202,14 +211,8 @@ class UPSGroundShippingService extends AbstractFulfillmentProviderService {
         } catch (error: any) {
             console.error("UPS Rate API error:", error.response?.data || error.message)
 
-            // Fallback prices if API fails (in cents)
-            const fallbackPrices: Record<string, number> = {
-                "01": 5000, // Next Day Air: $50
-                "02": 3500, // 2nd Day Air: $35
-                "12": 2500  // 3 Day Select: $25
-            }
-
-            return { calculated_amount: fallbackPrices[this.options_.serviceCode] || 2500, is_calculated_price_tax_inclusive: false }
+            // Do NOT use fallback prices — rethrow so Medusa excludes this option.
+            throw error
         }
     }
 
@@ -222,8 +225,8 @@ class UPSGroundShippingService extends AbstractFulfillmentProviderService {
         // TODO: Implement shipping label generation
         return {
             data: {
-                method: `ups-${this.options_.serviceCode}`,
-                service: this.options_.serviceName,
+                method: `ups-${this.serviceCode}`,
+                service: this.serviceName,
                 tracking_number: ""
             }
         }
@@ -237,8 +240,8 @@ class UPSGroundShippingService extends AbstractFulfillmentProviderService {
     async getFulfillmentOptions(): Promise<any[]> {
         return [
             {
-                id: `ups-${this.options_.serviceCode}`,
-                name: this.options_.serviceName,
+                id: `ups-${this.serviceCode}`,
+                name: this.serviceName,
             }
         ]
     }

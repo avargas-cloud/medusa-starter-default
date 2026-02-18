@@ -1,16 +1,30 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Client } from "pg"
 
-// Enable CORS for this endpoint
-export const CORS = {
-    origin: (process.env.STORE_CORS || "http://localhost:4321").split(","),
-    credentials: true,
+// Helper to set CORS headers
+function setCorsHeaders(req: MedusaRequest, res: MedusaResponse) {
+    const origin = req.headers.origin || ""
+    const allowedOrigins = (process.env.STORE_CORS || "http://localhost:4321,http://localhost:8000").split(",")
+    if (allowedOrigins.includes(origin) || origin.startsWith("http://localhost")) {
+        res.setHeader("Access-Control-Allow-Origin", origin)
+    }
+    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS")
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization")
+    res.setHeader("Access-Control-Allow-Credentials", "true")
+}
+
+// Handle CORS preflight
+export const OPTIONS = async (req: MedusaRequest, res: MedusaResponse) => {
+    setCorsHeaders(req, res)
+    res.status(204).end()
 }
 
 export const GET = async (
-    _req: MedusaRequest,
+    req: MedusaRequest,
     res: MedusaResponse
 ) => {
+    setCorsHeaders(req, res)
+
     const client = new Client({
         connectionString: process.env.DATABASE_URL
     })

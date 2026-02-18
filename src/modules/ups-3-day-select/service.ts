@@ -38,9 +38,9 @@ class UPS3DaySelectService extends AbstractFulfillmentProviderService {
             return this.accessToken
         }
 
-        const auth = Buffer.from(
-            `${this.options_.clientId}:${this.options_.clientSecret}`
-        ).toString("base64")
+        const clientId = process.env.UPS_CLIENT_ID!
+        const clientSecret = process.env.UPS_CLIENT_SECRET!
+        const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64")
 
         try {
             const response = await axios.post(
@@ -86,9 +86,10 @@ class UPS3DaySelectService extends AbstractFulfillmentProviderService {
     async calculatePrice(
         _optionData: any,
         data: any,
-        _context: any
+        context: any
     ): Promise<{ calculated_amount: number; is_calculated_price_tax_inclusive: boolean }> {
-        const cart = data?.cart
+        // Medusa passes cart spread into context (not data.cart)
+        const cart = context?.id ? context : data?.cart
         const serviceCode = this.serviceCode
         const serviceName = this.serviceName
 
@@ -123,6 +124,16 @@ class UPS3DaySelectService extends AbstractFulfillmentProviderService {
         try {
             const token = await this.getAccessToken()
 
+            // Read shipper address from Stock Location (from_location in context) with env fallback
+            const fromLocation = context?.from_location
+            const fromAddress = fromLocation?.address
+            const shipperName = fromLocation?.name || process.env.UPS_ORIGIN_NAME
+            const shipperAddress = fromAddress?.address_1 || process.env.UPS_ORIGIN_ADDRESS
+            const shipperCity = fromAddress?.city || process.env.UPS_ORIGIN_CITY
+            const shipperState = fromAddress?.province || process.env.UPS_ORIGIN_STATE
+            const shipperZip = fromAddress?.postal_code || process.env.UPS_ORIGIN_ZIP
+            const shipperCountry = fromAddress?.country_code?.toUpperCase() || process.env.UPS_ORIGIN_COUNTRY
+
             const rateRequest = {
                 RateRequest: {
                     Request: {
@@ -132,14 +143,14 @@ class UPS3DaySelectService extends AbstractFulfillmentProviderService {
                     },
                     Shipment: {
                         Shipper: {
-                            Name: this.options_.shipperName,
-                            ShipperNumber: "", // Not required for rating
+                            Name: shipperName,
+                            ShipperNumber: process.env.UPS_SHIPPER_NUMBER || "",
                             Address: {
-                                AddressLine: [this.options_.shipperAddressLine1],
-                                City: this.options_.shipperCity,
-                                StateProvinceCode: this.options_.shipperState,
-                                PostalCode: this.options_.shipperPostalCode,
-                                CountryCode: this.options_.shipperCountry
+                                AddressLine: [shipperAddress],
+                                City: shipperCity,
+                                StateProvinceCode: shipperState,
+                                PostalCode: shipperZip,
+                                CountryCode: shipperCountry
                             }
                         },
                         ShipTo: {
@@ -154,7 +165,7 @@ class UPS3DaySelectService extends AbstractFulfillmentProviderService {
                         },
                         Service: {
                             Code: this.serviceCode,
-                            Description: this.options_.serviceName
+                            Description: this.serviceName
                         },
                         Package: [{
                             PackagingType: {
@@ -183,9 +194,6 @@ class UPS3DaySelectService extends AbstractFulfillmentProviderService {
                         "transId": `rate_${Date.now()}`,
                         "transactionSrc": "medusa"
                     },
-                    params: {
-                        additionalinfo: "validate"
-                    }
                 }
             )
 
@@ -218,18 +226,8 @@ class UPS3DaySelectService extends AbstractFulfillmentProviderService {
                 serviceCode,
                 error: error.response?.data || error.message
             })
-
-            // Fallback prices if API fails (in cents)
-            const fallbackPrices: Record<string, number> = {
-                "01": 5000, // Next Day Air: $50
-                "02": 3500, // 2nd Day Air: $35
-                "12": 2500  // 3 Day Select: $25
-            }
-
-            const fallbackPrice = fallbackPrices[serviceCode] || 2500
-            console.log("⚠️  Using fallback price:", fallbackPrice, "cents")
-
-            return { calculated_amount: fallbackPrice, is_calculated_price_tax_inclusive: false }
+            // Do NOT use fallback prices — expedite shipping costs vary widely by weight/destination.
+            throw error
         }
     }
 
@@ -243,7 +241,7 @@ class UPS3DaySelectService extends AbstractFulfillmentProviderService {
         return {
             data: {
                 method: `ups-${this.serviceCode}`,
-                service: this.options_.serviceName,
+                service: this.serviceName,
                 tracking_number: ""
             }
         }
@@ -258,7 +256,7 @@ class UPS3DaySelectService extends AbstractFulfillmentProviderService {
         return [
             {
                 id: `ups-${this.serviceCode}`,
-                name: this.options_.serviceName,
+                name: this.serviceName,
             }
         ]
     }

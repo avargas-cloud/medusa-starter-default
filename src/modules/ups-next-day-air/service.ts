@@ -38,9 +38,9 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
             return this.accessToken
         }
 
-        const auth = Buffer.from(
-            `${this.options_.clientId}:${this.options_.clientSecret}`
-        ).toString("base64")
+        const clientId = process.env.UPS_CLIENT_ID!
+        const clientSecret = process.env.UPS_CLIENT_SECRET!
+        const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64")
 
         try {
             const response = await axios.post(
@@ -57,10 +57,10 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
             this.accessToken = response.data.access_token
             // Token expires in 3600 seconds, cache for 3500 to be safe
             this.tokenExpiry = Date.now() + (3500 * 1000)
-
+            console.log("✅ UPS OAuth token obtained successfully")
             return this.accessToken!
         } catch (error: any) {
-            console.error("UPS OAuth error:", error.response?.data || error.message)
+            console.error("❌ UPS OAuth error:", JSON.stringify(error.response?.data, null, 2) || error.message)
             throw new Error("Failed to authenticate with UPS API")
         }
     }
@@ -86,9 +86,10 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
     async calculatePrice(
         _optionData: any,
         data: any,
-        _context: any
+        context: any
     ): Promise<{ calculated_amount: number; is_calculated_price_tax_inclusive: boolean }> {
-        const cart = data?.cart
+        // Medusa passes cart spread into context (not data.cart)
+        const cart = context?.id ? context : data?.cart
         const serviceCode = this.serviceCode
         const serviceName = this.serviceName
 
@@ -102,7 +103,7 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
             cartId: cart?.id,
             cartTotal: cart?.total,
             addressCity: cart?.shipping_address?.city,
-            fullData: JSON.stringify(data, null, 2)
+            contextKeys: Object.keys(context || {})
         })
 
         // If no cart or address (e.g. Admin UI validation), return a dummy price to pass validation
@@ -126,6 +127,16 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
         try {
             const token = await this.getAccessToken()
 
+            // Read shipper address from Stock Location (from_location in context) with env fallback
+            const fromLocation = context?.from_location
+            const fromAddress = fromLocation?.address
+            const shipperName = fromLocation?.name || process.env.UPS_ORIGIN_NAME
+            const shipperAddress = fromAddress?.address_1 || process.env.UPS_ORIGIN_ADDRESS
+            const shipperCity = fromAddress?.city || process.env.UPS_ORIGIN_CITY
+            const shipperState = fromAddress?.province || process.env.UPS_ORIGIN_STATE
+            const shipperZip = fromAddress?.postal_code || process.env.UPS_ORIGIN_ZIP
+            const shipperCountry = fromAddress?.country_code?.toUpperCase() || process.env.UPS_ORIGIN_COUNTRY
+
             const rateRequest = {
                 RateRequest: {
                     Request: {
@@ -135,14 +146,14 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
                     },
                     Shipment: {
                         Shipper: {
-                            Name: this.options_.shipperName,
-                            ShipperNumber: "", // Not required for rating
+                            Name: shipperName,
+                            ShipperNumber: process.env.UPS_SHIPPER_NUMBER || "",
                             Address: {
-                                AddressLine: [this.options_.shipperAddressLine1],
-                                City: this.options_.shipperCity,
-                                StateProvinceCode: this.options_.shipperState,
-                                PostalCode: this.options_.shipperPostalCode,
-                                CountryCode: this.options_.shipperCountry
+                                AddressLine: [shipperAddress],
+                                City: shipperCity,
+                                StateProvinceCode: shipperState,
+                                PostalCode: shipperZip,
+                                CountryCode: shipperCountry
                             }
                         },
                         ShipTo: {
@@ -157,7 +168,7 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
                         },
                         Service: {
                             Code: this.serviceCode,
-                            Description: this.options_.serviceName
+                            Description: this.serviceName
                         },
                         Package: [{
                             PackagingType: {
@@ -186,9 +197,6 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
                         "transId": `rate_${Date.now()}`,
                         "transactionSrc": "medusa"
                     },
-                    params: {
-                        additionalinfo: "validate"
-                    }
                 }
             )
 
@@ -220,20 +228,11 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
         } catch (error: any) {
             console.error("❌ UPS Rate API error:", {
                 serviceCode,
-                error: error.response?.data || error.message
+                status: error.response?.status,
+                errorBody: JSON.stringify(error.response?.data, null, 2),
+                message: error.message
             })
-
-            // Fallback prices if API fails (in cents)
-            const fallbackPrices: Record<string, number> = {
-                "01": 5000, // Next Day Air: $50
-                "02": 3500, // 2nd Day Air: $35
-                "12": 2500  // 3 Day Select: $25
-            }
-
-            const fallbackPrice = fallbackPrices[serviceCode] || 2500
-            console.log("⚠️  Using fallback price:", fallbackPrice, "cents")
-
-            return { calculated_amount: fallbackPrice, is_calculated_price_tax_inclusive: false }
+            throw error
         }
     }
 
@@ -247,7 +246,7 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
         return {
             data: {
                 method: `ups-${this.serviceCode}`,
-                service: this.options_.serviceName,
+                service: this.serviceName,
                 tracking_number: ""
             }
         }
@@ -262,7 +261,7 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
         return [
             {
                 id: `ups-${this.serviceCode}`,
-                name: this.options_.serviceName,
+                name: this.serviceName,
             }
         ]
     }
