@@ -1,7 +1,7 @@
 import { AbstractFulfillmentProviderService } from "@medusajs/framework/utils"
 
 class StorePickupService extends AbstractFulfillmentProviderService {
-    static identifier = "custom-fulfillment"
+    static identifier = "store-pickup"
 
     async validateOption(_data: any): Promise<boolean> {
         return true

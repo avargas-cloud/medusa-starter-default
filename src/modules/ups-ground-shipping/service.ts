@@ -14,8 +14,8 @@ type UPSOptions = {
     shipperCountry: string
 }
 
-class UPSShippingService extends AbstractFulfillmentProviderService {
-    static identifier = "ups-shipping"
+class UPSGroundShippingService extends AbstractFulfillmentProviderService {
+    static identifier = "ups-ground"
     protected options_: UPSOptions
     private accessToken: string | null = null
     private tokenExpiry: number = 0
@@ -84,19 +84,16 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
     ): Promise<{ calculated_amount: number; is_calculated_price_tax_inclusive: boolean }> {
         const cart = data?.cart
 
-        // Enhanced logging for debugging
-        console.log("\n🔵 UPS calculatePrice called:", {
-            serviceCode: this.options_.serviceCode,
-            serviceName: this.options_.serviceName,
+        // Start logging for debugging
+        console.log("UPS calculatePrice called with:", {
             hasCart: !!cart,
             hasAddress: !!cart?.shipping_address,
-            cartId: cart?.id,
-            addressCity: cart?.shipping_address?.city
+            serviceCode: this.options_.serviceCode
         })
 
         // If no cart or address (e.g. Admin UI validation), return a dummy price to pass validation
         if (!cart?.shipping_address) {
-            console.log("⚠️  UPS: No cart/address, returning fallback price for validation")
+            console.log("UPS: No cart/address, returning fallback price for validation")
             return { calculated_amount: 2500, is_calculated_price_tax_inclusive: false } // Return $25.00 as placeholder
         }
 
@@ -193,23 +190,12 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
                 "0"
 
             const rate = parseFloat(rateStr)
-            const priceInCents = Math.round(rate * 100)
-
-            console.log("✅ UPS API SUCCESS:", {
-                serviceCode: this.options_.serviceCode,
-                serviceName: this.options_.serviceName,
-                rateUSD: rate,
-                priceInCents: priceInCents
-            })
 
             // Return price in cents
-            return { calculated_amount: priceInCents, is_calculated_price_tax_inclusive: false }
+            return { calculated_amount: Math.round(rate * 100), is_calculated_price_tax_inclusive: false }
 
         } catch (error: any) {
-            console.error("❌ UPS Rate API error:", {
-                serviceCode: this.options_.serviceCode,
-                error: error.response?.data || error.message
-            })
+            console.error("UPS Rate API error:", error.response?.data || error.message)
 
             // Fallback prices if API fails (in cents)
             const fallbackPrices: Record<string, number> = {
@@ -218,10 +204,7 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
                 "12": 2500  // 3 Day Select: $25
             }
 
-            const fallbackPrice = fallbackPrices[this.options_.serviceCode] || 2500
-            console.log("⚠️  Using fallback price:", fallbackPrice, "cents")
-
-            return { calculated_amount: fallbackPrice, is_calculated_price_tax_inclusive: false }
+            return { calculated_amount: fallbackPrices[this.options_.serviceCode] || 2500, is_calculated_price_tax_inclusive: false }
         }
     }
 
@@ -263,4 +246,4 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
     }
 }
 
-export default UPSShippingService
+export default UPSGroundShippingService

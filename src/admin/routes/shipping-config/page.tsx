@@ -1,6 +1,6 @@
 import { defineRouteConfig } from "@medusajs/admin-sdk"
 import { TruckFast } from "@medusajs/icons"
-import { Container, Heading, Button, Input, Label, Text, toast } from "@medusajs/ui"
+import { Container, Heading, Button, Input, Label, Text, toast, Checkbox } from "@medusajs/ui"
 import { useState, useEffect } from "react"
 
 const ShippingConfigPage = () => {
@@ -8,6 +8,7 @@ const ShippingConfigPage = () => {
     const [freeShippingMin, setFreeShippingMin] = useState("")
     const [regularGroundPrice, setRegularGroundPrice] = useState("")
     const [longItemPrice, setLongItemPrice] = useState("")
+    const [overrideUpsGround, setOverrideUpsGround] = useState(false)
 
     useEffect(() => {
         const loadSettings = async () => {
@@ -24,6 +25,7 @@ const ShippingConfigPage = () => {
                 setFreeShippingMin((settings.free_shipping_minimum / 100).toFixed(2))
                 setRegularGroundPrice((settings.regular_ground_shipping_price / 100).toFixed(2))
                 setLongItemPrice((settings.long_item_ground_shipping_price / 100).toFixed(2))
+                setOverrideUpsGround(settings.override_ups_ground || false)
             } catch (error) {
                 console.error('Failed to load settings:', error)
             }
@@ -32,29 +34,33 @@ const ShippingConfigPage = () => {
     }, [])
 
     const handleSave = async () => {
-        const freeShipNum = parseFloat(freeShippingMin)
-        const regularNum = parseFloat(regularGroundPrice)
-        const longNum = parseFloat(longItemPrice)
+        // Parse values, treating empty strings as 0
+        const freeShipNum = freeShippingMin === "" ? 0 : parseFloat(freeShippingMin)
+        const regularNum = regularGroundPrice === "" ? 0 : parseFloat(regularGroundPrice)
+        const longNum = longItemPrice === "" ? 0 : parseFloat(longItemPrice)
 
-        if (isNaN(freeShipNum) || freeShipNum < 0) {
-            toast.error("Validation Error", {
-                description: "Free shipping minimum must be a valid non-negative number",
-            })
-            return
-        }
+        // Only validate if override is enabled (UPS native doesn't need these values)
+        if (overrideUpsGround) {
+            if (isNaN(freeShipNum) || freeShipNum < 0) {
+                toast.error("Validation Error", {
+                    description: "Free shipping minimum must be a valid non-negative number",
+                })
+                return
+            }
 
-        if (isNaN(regularNum) || regularNum < 0) {
-            toast.error("Validation Error", {
-                description: "Regular ground shipping price must be a valid non-negative number",
-            })
-            return
-        }
+            if (isNaN(regularNum) || regularNum < 0) {
+                toast.error("Validation Error", {
+                    description: "Regular ground shipping price must be a valid non-negative number",
+                })
+                return
+            }
 
-        if (isNaN(longNum) || longNum < 0) {
-            toast.error("Validation Error", {
-                description: "Long item ground shipping price must be a valid non-negative number",
-            })
-            return
+            if (isNaN(longNum) || longNum < 0) {
+                toast.error("Validation Error", {
+                    description: "Long item ground shipping price must be a valid non-negative number",
+                })
+                return
+            }
         }
 
         setLoading(true)
@@ -69,6 +75,7 @@ const ShippingConfigPage = () => {
                     free_shipping_minimum: Math.round(freeShipNum * 100),
                     regular_ground_shipping_price: Math.round(regularNum * 100),
                     long_item_ground_shipping_price: Math.round(longNum * 100),
+                    override_ups_ground: overrideUpsGround,
                 })
             })
 
@@ -100,6 +107,25 @@ const ShippingConfigPage = () => {
 
             <Container>
                 <div className="p-4 space-y-3">
+                    <div className="flex items-center gap-2">
+                        <Checkbox
+                            id="override-ups-ground"
+                            checked={overrideUpsGround}
+                            onCheckedChange={(checked) => setOverrideUpsGround(checked === true)}
+                        />
+                        <Label htmlFor="override-ups-ground" className="cursor-pointer font-medium">
+                            Override UPS Ground Shipping
+                        </Label>
+                    </div>
+                    <Text size="small" className="text-gray-600">
+                        When <strong>enabled</strong>, use custom fixed pricing for Ground Shipping based on order total and item types.
+                        When <strong>disabled</strong>, use UPS native Ground service with real-time rates.
+                    </Text>
+                </div>
+            </Container>
+
+            <Container>
+                <div className="p-4 space-y-3">
                     <Heading level="h3" className="text-sm font-medium">Free Shipping</Heading>
 
                     <div className="space-y-2">
@@ -114,6 +140,7 @@ const ShippingConfigPage = () => {
                             value={freeShippingMin}
                             onChange={(e) => setFreeShippingMin(e.target.value)}
                             placeholder="0.00"
+                            disabled={!overrideUpsGround}
                         />
                         <Text size="small" className="text-gray-600">
                             Orders above this amount qualify for free shipping
@@ -138,6 +165,7 @@ const ShippingConfigPage = () => {
                             value={regularGroundPrice}
                             onChange={(e) => setRegularGroundPrice(e.target.value)}
                             placeholder="0.00"
+                            disabled={!overrideUpsGround}
                         />
                         <Text size="small" className="text-gray-600">
                             Flat shipping rate for regular items
@@ -162,6 +190,7 @@ const ShippingConfigPage = () => {
                             value={longItemPrice}
                             onChange={(e) => setLongItemPrice(e.target.value)}
                             placeholder="0.00"
+                            disabled={!overrideUpsGround}
                         />
                         <Text size="small" className="text-gray-600">
                             Flat rate when order contains items with long shipping profile

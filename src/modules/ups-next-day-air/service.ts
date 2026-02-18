@@ -14,8 +14,8 @@ type UPSOptions = {
     shipperCountry: string
 }
 
-class UPSShippingService extends AbstractFulfillmentProviderService {
-    static identifier = "ups-shipping"
+class UPSNextDayAirService extends AbstractFulfillmentProviderService {
+    static identifier = "ups-next-day-air"
     protected options_: UPSOptions
     private accessToken: string | null = null
     private tokenExpiry: number = 0
@@ -74,7 +74,9 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
     }
 
     async canCalculate(data: any): Promise<boolean> {
-        return Boolean(data.cart?.shipping_address)
+        // Always return true to allow Admin to save shipping options
+        // The actual price calculation will handle missing data gracefully
+        return true
     }
 
     async calculatePrice(
@@ -86,12 +88,15 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
 
         // Enhanced logging for debugging
         console.log("\n🔵 UPS calculatePrice called:", {
+            identifier: 'ups-01',
             serviceCode: this.options_.serviceCode,
             serviceName: this.options_.serviceName,
             hasCart: !!cart,
             hasAddress: !!cart?.shipping_address,
             cartId: cart?.id,
-            addressCity: cart?.shipping_address?.city
+            cartTotal: cart?.total,
+            addressCity: cart?.shipping_address?.city,
+            fullData: JSON.stringify(data, null, 2)
         })
 
         // If no cart or address (e.g. Admin UI validation), return a dummy price to pass validation
@@ -199,7 +204,8 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
                 serviceCode: this.options_.serviceCode,
                 serviceName: this.options_.serviceName,
                 rateUSD: rate,
-                priceInCents: priceInCents
+                priceInCents: priceInCents,
+                rawResponse: JSON.stringify(ratedShipment, null, 2)
             })
 
             // Return price in cents
@@ -263,4 +269,4 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
     }
 }
 
-export default UPSShippingService
+export default UPSNextDayAirService

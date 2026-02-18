@@ -22,6 +22,7 @@ export async function GET(
                 free_shipping_minimum,
                 regular_ground_shipping_price,
                 long_item_ground_shipping_price,
+                override_ups_ground,
                 created_at,
                 updated_at
             FROM shipping_settings
@@ -34,7 +35,8 @@ export async function GET(
                 settings: {
                     free_shipping_minimum: 0,
                     regular_ground_shipping_price: 0,
-                    long_item_ground_shipping_price: 0
+                    long_item_ground_shipping_price: 0,
+                    override_ups_ground: false
                 }
             })
             return
@@ -70,11 +72,13 @@ export async function POST(
         const {
             free_shipping_minimum,
             regular_ground_shipping_price,
-            long_item_ground_shipping_price
+            long_item_ground_shipping_price,
+            override_ups_ground
         } = req.body as {
             free_shipping_minimum?: number
             regular_ground_shipping_price?: number
             long_item_ground_shipping_price?: number
+            override_ups_ground?: boolean
         }
 
         // Validation - all values must be non-negative numbers if provided
@@ -128,6 +132,12 @@ export async function POST(
             paramIndex++
         }
 
+        if (override_ups_ground !== undefined) {
+            updates.push(`override_ups_ground = $${paramIndex}`)
+            values.push(override_ups_ground)
+            paramIndex++
+        }
+
         if (updates.length === 0) {
             res.status(400).json({
                 error: "No fields to update"
@@ -144,14 +154,16 @@ export async function POST(
                 INSERT INTO shipping_settings (
                     free_shipping_minimum,
                     regular_ground_shipping_price,
-                    long_item_ground_shipping_price
-                ) VALUES ($1, $2, $3)
+                    long_item_ground_shipping_price,
+                    override_ups_ground
+                ) VALUES ($1, $2, $3, $4)
                 RETURNING *
             `
             result = await client.query(insertQuery, [
                 free_shipping_minimum || 0,
                 regular_ground_shipping_price || 0,
-                long_item_ground_shipping_price || 0
+                long_item_ground_shipping_price || 0,
+                override_ups_ground || false
             ])
         } else {
             // Update existing settings

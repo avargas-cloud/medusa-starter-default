@@ -20,6 +20,9 @@ const ShippingSettings = model.define("shipping_settings", {
     // Price for ground shipping when order contains "long" items (in cents)
     long_item_ground_shipping_price: model.number().default(0),
 
+    // Override UPS Ground Shipping - when false, uses UPS native ground; when true, uses custom pricing
+    override_ups_ground: model.boolean().default(false),
+
     // Timestamps
     created_at: model.dateTime(),
     updated_at: model.dateTime(),

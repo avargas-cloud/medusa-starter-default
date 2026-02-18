@@ -14,8 +14,8 @@ type UPSOptions = {
     shipperCountry: string
 }
 
-class UPSShippingService extends AbstractFulfillmentProviderService {
-    static identifier = "ups-shipping"
+class UPS2ndDayAirService extends AbstractFulfillmentProviderService {
+    static identifier = "ups-2nd-day-air"
     protected options_: UPSOptions
     private accessToken: string | null = null
     private tokenExpiry: number = 0
@@ -74,7 +74,9 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
     }
 
     async canCalculate(data: any): Promise<boolean> {
-        return Boolean(data.cart?.shipping_address)
+        // Always return true to allow Admin to save shipping options
+        // The actual price calculation will handle missing data gracefully
+        return true
     }
 
     async calculatePrice(
@@ -263,4 +265,4 @@ class UPSShippingService extends AbstractFulfillmentProviderService {
     }
 }
 
-export default UPSShippingService
+export default UPS2ndDayAirService

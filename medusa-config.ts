@@ -225,9 +225,26 @@ module.exports = defineConfig({
             id: "ground-shipping",
             options: {},
           },
+          // UPS Ground - Native UPS Ground Service
+          {
+            resolve: "./src/modules/ups-ground-shipping",
+            id: "ups-ground",
+            options: {
+              clientId: process.env.UPS_CLIENT_ID,
+              clientSecret: process.env.UPS_CLIENT_SECRET,
+              serviceCode: "03",
+              serviceName: "UPS Ground",
+              shipperName: process.env.UPS_SHIPPER_NAME || "Ecopowertech",
+              shipperAddressLine1: process.env.UPS_SHIPPER_ADDRESS_LINE1 || "",
+              shipperCity: process.env.UPS_SHIPPER_CITY || "",
+              shipperState: process.env.UPS_SHIPPER_STATE || "",
+              shipperPostalCode: process.env.UPS_SHIPPER_POSTAL_CODE || "",
+              shipperCountry: process.env.UPS_SHIPPER_COUNTRY || "US",
+            },
+          },
           // UPS Next Day Air
           {
-            resolve: "./src/modules/ups-shipping",
+            resolve: "./src/modules/ups-next-day-air",
             id: "ups-next-day-air",
             options: {
               clientId: process.env.UPS_CLIENT_ID,
@@ -244,7 +261,7 @@ module.exports = defineConfig({
           },
           // UPS 2nd Day Air
           {
-            resolve: "./src/modules/ups-shipping",
+            resolve: "./src/modules/ups-2nd-day-air",
             id: "ups-2nd-day-air",
             options: {
               clientId: process.env.UPS_CLIENT_ID,
@@ -261,7 +278,7 @@ module.exports = defineConfig({
           },
           // UPS 3 Day Select
           {
-            resolve: "./src/modules/ups-shipping",
+            resolve: "./src/modules/ups-3-day-select",
             id: "ups-3-day-select",
             options: {
               clientId: process.env.UPS_CLIENT_ID,
