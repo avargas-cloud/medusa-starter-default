@@ -20,6 +20,10 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
     private accessToken: string | null = null
     private tokenExpiry: number = 0
 
+    // Hardcoded service details to avoid Awilix resolution issues
+    private readonly serviceCode = "01"
+    private readonly serviceName = "Next Day Air"
+
     constructor(options: UPSOptions) {
         super()
         this.options_ = options
@@ -85,12 +89,14 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
         _context: any
     ): Promise<{ calculated_amount: number; is_calculated_price_tax_inclusive: boolean }> {
         const cart = data?.cart
+        const serviceCode = this.serviceCode
+        const serviceName = this.serviceName
 
         // Enhanced logging for debugging
         console.log("\n🔵 UPS calculatePrice called:", {
             identifier: 'ups-01',
-            serviceCode: this.options_.serviceCode,
-            serviceName: this.options_.serviceName,
+            serviceCode,
+            serviceName,
             hasCart: !!cart,
             hasAddress: !!cart?.shipping_address,
             cartId: cart?.id,
@@ -150,7 +156,7 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
                             }
                         },
                         Service: {
-                            Code: this.options_.serviceCode,
+                            Code: this.serviceCode,
                             Description: this.options_.serviceName
                         },
                         Package: [{
@@ -201,8 +207,8 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
             const priceInCents = Math.round(rate * 100)
 
             console.log("✅ UPS API SUCCESS:", {
-                serviceCode: this.options_.serviceCode,
-                serviceName: this.options_.serviceName,
+                serviceCode,
+                serviceName,
                 rateUSD: rate,
                 priceInCents: priceInCents,
                 rawResponse: JSON.stringify(ratedShipment, null, 2)
@@ -213,7 +219,7 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
 
         } catch (error: any) {
             console.error("❌ UPS Rate API error:", {
-                serviceCode: this.options_.serviceCode,
+                serviceCode,
                 error: error.response?.data || error.message
             })
 
@@ -224,7 +230,7 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
                 "12": 2500  // 3 Day Select: $25
             }
 
-            const fallbackPrice = fallbackPrices[this.options_.serviceCode] || 2500
+            const fallbackPrice = fallbackPrices[serviceCode] || 2500
             console.log("⚠️  Using fallback price:", fallbackPrice, "cents")
 
             return { calculated_amount: fallbackPrice, is_calculated_price_tax_inclusive: false }
@@ -240,7 +246,7 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
         // TODO: Implement shipping label generation
         return {
             data: {
-                method: `ups-${this.options_.serviceCode}`,
+                method: `ups-${this.serviceCode}`,
                 service: this.options_.serviceName,
                 tracking_number: ""
             }
@@ -255,7 +261,7 @@ class UPSNextDayAirService extends AbstractFulfillmentProviderService {
     async getFulfillmentOptions(): Promise<any[]> {
         return [
             {
-                id: `ups-${this.options_.serviceCode}`,
+                id: `ups-${this.serviceCode}`,
                 name: this.options_.serviceName,
             }
         ]

@@ -2,6 +2,16 @@ import { AbstractFulfillmentProviderService } from "@medusajs/framework/utils"
 
 class GroundShippingService extends AbstractFulfillmentProviderService {
     static identifier = "ground-shipping"
+    protected options_: GroundShippingOptions
+
+    // Hardcoded service details
+    private readonly serviceCode = "GROUND"
+    private readonly serviceName = "Ground Shipping"
+
+    constructor(options: GroundShippingOptions) {
+        super()
+        this.options_ = options
+    }
 
     async validateOption(_data: any): Promise<boolean> {
         return true

@@ -20,6 +20,10 @@ class UPSGroundShippingService extends AbstractFulfillmentProviderService {
     private accessToken: string | null = null
     private tokenExpiry: number = 0
 
+    // Hardcoded service details to avoid Awilix resolution issues
+    private readonly serviceCode = "03"
+    private readonly serviceName = "Ground"
+
     constructor(options: UPSOptions) {
         super()
         this.options_ = options
@@ -83,12 +87,13 @@ class UPSGroundShippingService extends AbstractFulfillmentProviderService {
         _context: any
     ): Promise<{ calculated_amount: number; is_calculated_price_tax_inclusive: boolean }> {
         const cart = data?.cart
+        const serviceCode = this.serviceCode
 
         // Start logging for debugging
         console.log("UPS calculatePrice called with:", {
             hasCart: !!cart,
             hasAddress: !!cart?.shipping_address,
-            serviceCode: this.options_.serviceCode
+            serviceCode
         })
 
         // If no cart or address (e.g. Admin UI validation), return a dummy price to pass validation
