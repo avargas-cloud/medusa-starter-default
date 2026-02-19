@@ -90,8 +90,10 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
                         }
                     }
 
-                    // ⭐ Get child's available filters to validate inheritance
-                    const childAvailableIds = (config.available_filters || []).map((f: any) => f.attribute_id)
+                    // ⭐ Parse child's available_filters: handles both string[] and object[]
+                    const childAvailableIds = (config.available_filters || []).map((f: any) =>
+                        typeof f === 'string' ? f : f.attribute_id
+                    )
 
                     // console.log('🔍 [Inheritance Debug]', {
                     //     category: category.name,
@@ -170,7 +172,10 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
 
             // ⭐ Get child's available filters to validate inheritance
             const config = category.metadata?.filter_config
-            const childAvailableIds = (config?.available_filters || []).map((f: any) => f.attribute_id)
+            // ⭐ Parse child's available_filters: handles both string[] and object[]
+            const childAvailableIds = (config?.available_filters || []).map((f: any) =>
+                typeof f === 'string' ? f : f.attribute_id
+            )
 
             // ⭐ Only inherit filters that exist in child's products (intersection)
             // Keep the parent's array order (position 0 is first, position 1 is second, etc.)
@@ -189,7 +194,12 @@ export function useCategoryConfig(selectedCategoryId: string | null, categories:
             if (!selectedCategoryId) throw new Error("No category selected")
 
             // Call generate-filters endpoint
-            const activeFiltersArray = Array.from(activeFilters)
+            // ⭐ FIX: When not overriding, send inheritedFilters (from parent) as the active list.
+            // activeFilters is empty when override=false because the UI shows inheritedFilters instead.
+            const filtersToSave = !overrideInheritance && inheritedFilters.size > 0
+                ? Array.from(inheritedFilters)
+                : Array.from(activeFilters)
+            const activeFiltersArray = filtersToSave
             const res = await fetch(`/admin/product-categories/${selectedCategoryId}/generate-filters`, {
                 method: "POST",
                 headers: {
