@@ -29,7 +29,7 @@ module.exports = defineConfig({
       // ✅ Smart CORS: Use env vars with fallbacks
       storeCors: process.env.STORE_CORS || (
         process.env.NODE_ENV === "production"
-          ? "https://ecopowertech.com,https://www.ecopowertech.com"
+          ? "https://ecopowertech.com,https://www.ecopowertech.com,https://ecopowertech-headless-medusa.vercel.app"
           : "http://localhost:4321,http://localhost:8000,https://docs.medusajs.com"
       ),
 
