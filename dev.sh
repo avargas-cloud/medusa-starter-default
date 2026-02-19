@@ -59,4 +59,4 @@ exec npx nodemon \
   --ignore "dist" \
   --ignore "node_modules" \
   --ext ts,tsx,js,jsx \
-  --exec "medusa develop"
+  --exec "medusa develop 2>&1 | grep -v 'ECONNRESET\|errno: -104\|syscall.*read\|at TCP.onStreamRead\|at TCP.callbackTrampoline'"

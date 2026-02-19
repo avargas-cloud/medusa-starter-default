@@ -1,25 +1,17 @@
 import { AbstractFulfillmentProviderService } from "@medusajs/framework/utils"
 import { getUPSRate } from "../ups-rate-cache"
+import { packItems } from "../box-packing"
 
 // UPS Service Code: 12 = 3 Day Select
 const SERVICE_CODE = "12"
 const SERVICE_NAME = "UPS 3 Day Select®"
-const FALLBACK_PRICE_CENTS = 2800 // $28.00
 
 class UPS3DaySelectService extends AbstractFulfillmentProviderService {
     static identifier = "ups-3-day-select"
 
-    async validateOption(_data: any): Promise<boolean> {
-        return true
-    }
-
-    async validateFulfillmentData(_optionData: any, data: any, _context: any): Promise<any> {
-        return data
-    }
-
-    async canCalculate(_data: any): Promise<boolean> {
-        return true
-    }
+    async validateOption(_data: any): Promise<boolean> { return true }
+    async validateFulfillmentData(_optionData: any, data: any, _context: any): Promise<any> { return data }
+    async canCalculate(_data: any): Promise<boolean> { return true }
 
     async calculatePrice(
         _optionData: any,
@@ -29,13 +21,21 @@ class UPS3DaySelectService extends AbstractFulfillmentProviderService {
         const cart = context?.id ? context : data?.cart
 
         if (!cart?.shipping_address?.postal_code) {
-            return { calculated_amount: FALLBACK_PRICE_CENTS, is_calculated_price_tax_inclusive: false }
+            throw new Error(`${SERVICE_NAME}: no shipping address postal code`)
         }
 
-        let totalWeight = (cart.items || []).reduce((acc: number, item: any) => {
-            return acc + ((item.variant?.weight || 1) * item.quantity)
-        }, 0)
-        if (totalWeight < 0.1) totalWeight = 0.1
+        const rawItems = (cart.items || []).map((item: any) => {
+            const inv = item.variant?.inventory_items?.[0]?.inventory_item
+            return {
+                weight: parseFloat(inv?.weight ?? item.variant?.weight ?? 1),
+                length: parseFloat(inv?.length ?? item.variant?.length ?? 1),
+                width: parseFloat(inv?.width ?? item.variant?.width ?? 1),
+                height: parseFloat(inv?.height ?? item.variant?.height ?? 1),
+                quantity: item.quantity || 1,
+            }
+        })
+
+        const packages = packItems(rawItems)
 
         const fromLocation = context?.from_location
         const fromAddress = fromLocation?.address
@@ -44,7 +44,7 @@ class UPS3DaySelectService extends AbstractFulfillmentProviderService {
             const price = await getUPSRate(SERVICE_CODE, {
                 cartId: cart.id,
                 postalCode: cart.shipping_address.postal_code,
-                totalWeight,
+                packages,
                 shipperName: fromLocation?.name || process.env.UPS_ORIGIN_NAME || "",
                 shipperAddress: fromAddress?.address_1 || process.env.UPS_ORIGIN_ADDRESS || "",
                 shipperCity: fromAddress?.city || process.env.UPS_ORIGIN_CITY || "",
@@ -66,25 +66,15 @@ class UPS3DaySelectService extends AbstractFulfillmentProviderService {
             console.error(`❌ ${SERVICE_NAME} rate error:`, err.message)
         }
 
-        console.warn(`⚠️  ${SERVICE_NAME}: using fallback $${(FALLBACK_PRICE_CENTS / 100).toFixed(2)}`)
-        return { calculated_amount: FALLBACK_PRICE_CENTS, is_calculated_price_tax_inclusive: false }
+        throw new Error(`${SERVICE_NAME}: rate unavailable for cart ${cart.id}`)
     }
 
     async createFulfillment(_data: any, _items: any, _order: any, _fulfillment: any): Promise<any> {
         return { data: { method: `ups-${SERVICE_CODE}`, service: SERVICE_NAME, tracking_number: "" } }
     }
-
-    async cancelFulfillment(_fulfillment: any): Promise<any> {
-        return {}
-    }
-
-    async getFulfillmentOptions(): Promise<any[]> {
-        return [{ id: `ups-3-day-select`, name: SERVICE_NAME }]
-    }
-
-    async retrieveDocuments(_fulfillmentData: any, _documentType: string): Promise<any> {
-        return null
-    }
+    async cancelFulfillment(_fulfillment: any): Promise<any> { return {} }
+    async getFulfillmentOptions(): Promise<any[]> { return [{ id: `ups-3-day-select`, name: SERVICE_NAME }] }
+    async retrieveDocuments(_fulfillmentData: any, _documentType: string): Promise<any> { return null }
 }
 
 export default UPS3DaySelectService

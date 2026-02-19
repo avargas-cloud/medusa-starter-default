@@ -1,10 +1,10 @@
 import { AbstractFulfillmentProviderService } from "@medusajs/framework/utils"
 import { getUPSRate } from "../ups-rate-cache"
+import { packItems } from "../box-packing"
 
 // UPS Service Code: 02 = 2nd Day Air
 const SERVICE_CODE = "02"
 const SERVICE_NAME = "UPS 2nd Day Air®"
-const FALLBACK_PRICE_CENTS = 4000 // $40.00
 
 class UPS2ndDayAirService extends AbstractFulfillmentProviderService {
     static identifier = "ups-2nd-day-air"
@@ -29,13 +29,23 @@ class UPS2ndDayAirService extends AbstractFulfillmentProviderService {
         const cart = context?.id ? context : data?.cart
 
         if (!cart?.shipping_address?.postal_code) {
-            return { calculated_amount: FALLBACK_PRICE_CENTS, is_calculated_price_tax_inclusive: false }
+            throw new Error(`${SERVICE_NAME}: no shipping address postal code`)
         }
 
-        let totalWeight = (cart.items || []).reduce((acc: number, item: any) => {
-            return acc + ((item.variant?.weight || 1) * item.quantity)
-        }, 0)
-        if (totalWeight < 0.1) totalWeight = 0.1
+        // ── Extract dimensions from inventory items (synced from product) ─────
+        const rawItems = (cart.items || []).map((item: any) => {
+            const inv = item.variant?.inventory_items?.[0]?.inventory_item
+            return {
+                weight: parseFloat(inv?.weight ?? item.variant?.weight ?? 1),
+                length: parseFloat(inv?.length ?? item.variant?.length ?? 1),
+                width: parseFloat(inv?.width ?? item.variant?.width ?? 1),
+                height: parseFloat(inv?.height ?? item.variant?.height ?? 1),
+                quantity: item.quantity || 1,
+            }
+        })
+
+        // ── Box packing: determine optimal package(s) ─────────────────────────
+        const packages = packItems(rawItems)
 
         const fromLocation = context?.from_location
         const fromAddress = fromLocation?.address
@@ -44,7 +54,7 @@ class UPS2ndDayAirService extends AbstractFulfillmentProviderService {
             const price = await getUPSRate(SERVICE_CODE, {
                 cartId: cart.id,
                 postalCode: cart.shipping_address.postal_code,
-                totalWeight,
+                packages,
                 shipperName: fromLocation?.name || process.env.UPS_ORIGIN_NAME || "",
                 shipperAddress: fromAddress?.address_1 || process.env.UPS_ORIGIN_ADDRESS || "",
                 shipperCity: fromAddress?.city || process.env.UPS_ORIGIN_CITY || "",
@@ -66,8 +76,7 @@ class UPS2ndDayAirService extends AbstractFulfillmentProviderService {
             console.error(`❌ ${SERVICE_NAME} rate error:`, err.message)
         }
 
-        console.warn(`⚠️  ${SERVICE_NAME}: using fallback $${(FALLBACK_PRICE_CENTS / 100).toFixed(2)}`)
-        return { calculated_amount: FALLBACK_PRICE_CENTS, is_calculated_price_tax_inclusive: false }
+        throw new Error(`${SERVICE_NAME}: rate unavailable for cart ${cart.id}`)
     }
 
     async createFulfillment(_data: any, _items: any, _order: any, _fulfillment: any): Promise<any> {

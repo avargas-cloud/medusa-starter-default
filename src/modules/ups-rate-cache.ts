@@ -1,4 +1,5 @@
 import axios from "axios"
+import { PackageSpec } from "./box-packing"
 
 interface CachedRates {
     rates: Record<string, number> // serviceCode -> price in cents
@@ -8,7 +9,7 @@ interface CachedRates {
 interface ShopRateRequest {
     cartId: string
     postalCode: string
-    totalWeight: number
+    packages: PackageSpec[]   // one or more packages (from box-packing)
     shipperZip: string
     shipperAddress: string
     shipperCity: string
@@ -33,8 +34,8 @@ let sharedTokenExpiry: number = 0
 // In-flight promise deduplication — if multiple providers call simultaneously, only one HTTP request fires
 const inFlightRequests = new Map<string, Promise<Record<string, number>>>()
 
-function getCacheKey(cartId: string, postalCode: string): string {
-    return `${cartId}:${postalCode}`
+function getCacheKey(cartId: string, postalCode: string, pkgCount: number): string {
+    return `${cartId}:${postalCode}:${pkgCount}`
 }
 
 async function getAccessToken(): Promise<string> {
@@ -65,6 +66,9 @@ async function getAccessToken(): Promise<string> {
 async function fetchShopRates(req: ShopRateRequest): Promise<Record<string, number>> {
     const token = await getAccessToken()
 
+    const totalWeight = req.packages.reduce((s, p) => s + p.weight, 0)
+    console.log(`🚀 UPS Shop API — cart ${req.cartId} → ${req.postalCode} | ${req.packages.length} pkg(s), ${totalWeight.toFixed(2)}lbs total`)
+
     const shopRequest = {
         RateRequest: {
             Request: {
@@ -92,18 +96,23 @@ async function fetchShopRates(req: ShopRateRequest): Promise<Record<string, numb
                         CountryCode: req.shipToCountry
                     }
                 },
-                Package: [{
+                // Multiple packages — UPS sums the cost of all packages
+                Package: req.packages.map(pkg => ({
                     PackagingType: { Code: "02", Description: "Package" },
                     PackageWeight: {
                         UnitOfMeasurement: { Code: "LBS", Description: "Pounds" },
-                        Weight: req.totalWeight.toFixed(1)
+                        Weight: pkg.weight.toFixed(2)
+                    },
+                    Dimensions: {
+                        UnitOfMeasurement: { Code: "IN", Description: "Inches" },
+                        Length: pkg.length.toFixed(2),
+                        Width: pkg.width.toFixed(2),
+                        Height: pkg.height.toFixed(2)
                     }
-                }]
+                }))
             }
         }
     }
-
-    console.log(`🚀 UPS Shop API call for cart ${req.cartId} → ${req.postalCode} (weight: ${req.totalWeight}lbs)`)
 
     // Use /Shop endpoint — returns ALL services in one call
     const response = await axios.post(
@@ -140,10 +149,10 @@ async function fetchShopRates(req: ShopRateRequest): Promise<Record<string, numb
 
 /**
  * Get UPS rate for a specific service code.
- * Uses shared cache — only 1 HTTP call per cart+zip combo within 30 seconds.
+ * Uses shared cache — only 1 HTTP call per cart+zip+pkgCount combo within 30 seconds.
  */
 export async function getUPSRate(serviceCode: string, req: ShopRateRequest): Promise<number | null> {
-    const cacheKey = getCacheKey(req.cartId, req.postalCode)
+    const cacheKey = getCacheKey(req.cartId, req.postalCode, req.packages.length)
 
     // Check cache first
     const cached = rateCache.get(cacheKey)
