@@ -611,6 +611,27 @@ export default defineMiddlewares({
             middlewares: [authenticate("customer", ["session", "bearer"])],
         },
         {
+            // 🛒 CART WHOLESALE PRICING: Enable customer auth context for cart operations.
+            // This allows Medusa's pricing engine to use the customer's group (e.g. Wholesale)
+            // when adding line items to the cart, so the correct price list is applied.
+            // allowUnauthenticated: true ensures guest checkout still works without a token.
+            matcher: "/store/carts*",
+            middlewares: [
+                authenticate("customer", ["session", "bearer"], {
+                    allowUnauthenticated: true
+                }),
+            ],
+        },
+        {
+            // 🛒 CUSTOM ADD-ITEM: Authenticate for the wholesale-aware add-item endpoint
+            matcher: "/store/carts/:id/add-item",
+            middlewares: [
+                authenticate("customer", ["session", "bearer"], {
+                    allowUnauthenticated: true
+                }),
+            ],
+        },
+        {
             // 💰 CUSTOMER-SPECIFIC PRICING: Enable authentication for price endpoints
             // Allows both authenticated (specific price lists) and anonymous users (default pricing)
             // Used by ProductDynamicPricing component and product pages
