@@ -16,7 +16,7 @@ import { addToCartWorkflow } from "@medusajs/core-flows"
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     try {
-        const { id: cartId } = req.params
+        const cartId = req.params.id as string
         const body = req.body as { variant_id: string; quantity: number; metadata?: Record<string, any> }
 
         if (!body.variant_id || !body.quantity) {
@@ -63,10 +63,11 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
                             { context: pricingContext }
                         )
 
-                        if (calculatedPrices.length > 0) {
-                            const calculatedAmount = calculatedPrices[0].calculated_amount
+                        const firstPrice = calculatedPrices[0]
+                        if (firstPrice && firstPrice.calculated_amount !== null && firstPrice.calculated_amount !== undefined) {
+                            const calculatedAmount = firstPrice.calculated_amount
                             console.log(`[ADD-ITEM] 💰 Calculated price: $${calculatedAmount}`)
-                            wholesalePrice = parseFloat(calculatedAmount)
+                            wholesalePrice = parseFloat(String(calculatedAmount))
                         }
                     }
                 }
@@ -87,13 +88,14 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
             }
         })
 
-        let cart = result
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let cart: any = result
 
         // Step 4: If we have a wholesale price, update the line item price
         if (wholesalePrice !== null) {
             try {
                 // Find the newly added line item (the one with our variant_id)
-                const newItem = cart.items?.find((item: any) => item.variant_id === body.variant_id)
+                const newItem = (cart as any)?.items?.find((item: any) => item.variant_id === body.variant_id)
 
                 if (newItem && newItem.unit_price !== wholesalePrice) {
                     console.log(`[ADD-ITEM] 🔄 Overriding price from $${newItem.unit_price} to $${wholesalePrice} (wholesale)`)
