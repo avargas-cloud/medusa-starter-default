@@ -53,6 +53,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             client.query(`
                 SELECT
                     cli.product_id,
+                    cli.variant_id,
                     cli.unit_price,
                     cli.quantity
                 FROM cart_line_item cli
@@ -77,11 +78,26 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
         const isFree = cartTotalCents >= settings.free_shipping_minimum
 
-        // 3. Check for long items via junction table (same logic as ground-shipping service)
+        // 3. Check for long items via variant_id → product join (variant_id is always populated)
         let isLong = false
         if (!isFree && items.length > 0) {
+            // Use variant_id (always populated) as primary lookup, product_id as fallback
+            const variantIds = items.map((i: any) => i.variant_id).filter(Boolean)
             const productIds = items.map((i: any) => i.product_id).filter(Boolean)
-            if (productIds.length > 0) {
+
+            if (variantIds.length > 0) {
+                const longResult = await client.query(`
+                    SELECT pv.product_id
+                    FROM product_variant pv
+                    JOIN product_shipping_profile psp ON psp.product_id = pv.product_id
+                    JOIN shipping_profile sp ON sp.id = psp.shipping_profile_id
+                    WHERE pv.id = ANY($1)
+                      AND LOWER(sp.name) LIKE '%long%'
+                    LIMIT 1
+                `, [variantIds])
+                isLong = longResult.rows.length > 0
+            } else if (productIds.length > 0) {
+                // fallback: use product_id directly if variant_id not available
                 const longResult = await client.query(`
                     SELECT p.id
                     FROM product p
@@ -107,7 +123,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
         res.json({
             ground: {
-                price_cents: priceCents,
+                price: priceCents / 100,      // dollars — what frontend reads via preview.ground.price
+                price_cents: priceCents,       // kept for reference
                 is_free: isFree,
                 is_long: isLong
             },
