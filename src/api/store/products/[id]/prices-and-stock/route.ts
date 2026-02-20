@@ -22,10 +22,15 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             region_id: "reg_01KFS28SNF1MT1MRHRAFQ6ZGK1"
         }
 
-        // Get customer groups for wholesale pricing
+        // 💰 SINGLE PRICE MODE GUARD
+        // When ENABLE_DYNAMIC_PRICING=false, everyone gets the same base (retail) price.
+        // Skip customer group resolution so no wholesale price list is ever matched.
+        const dynamicPricingEnabled = process.env.ENABLE_DYNAMIC_PRICING !== 'false';
+
+        // Get customer groups for wholesale pricing (only in Dynamic Pricing mode)
         const customerId = (req as any).auth_context?.actor_id
 
-        if (customerId) {
+        if (dynamicPricingEnabled && customerId) {
             try {
                 const customerModule = req.scope.resolve(Modules.CUSTOMER)
                 const customer = await customerModule.retrieveCustomer(customerId, {

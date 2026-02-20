@@ -38,11 +38,16 @@ export async function POST(
             region_id: "reg_01KFS28SNF1MT1MRHRAFQ6ZGK1" // Default region
         };
 
+        // 💰 SINGLE PRICE MODE GUARD
+        // When ENABLE_DYNAMIC_PRICING=false, skip customer group resolution.
+        // Everyone gets the same base (retail) price.
+        const dynamicPricingEnabled = process.env.ENABLE_DYNAMIC_PRICING !== 'false';
+
         // Get customer and check for wholesale group
         const customerId = (req as any).auth_context?.actor_id;
         let isWholesale = false;
 
-        if (customerId) {
+        if (dynamicPricingEnabled && customerId) {
             try {
                 const customer = await customerModule.retrieveCustomer(customerId, {
                     relations: ["groups"]
@@ -59,6 +64,8 @@ export async function POST(
             } catch (error) {
                 console.error('[Batch Prices] Could not fetch customer groups:', error);
             }
+        } else if (!dynamicPricingEnabled) {
+            console.log(`[Batch Prices] Single Price Mode — using retail prices for all customers.`);
         } else {
             console.log(`[Batch Prices] Guest user - using retail prices`);
         }

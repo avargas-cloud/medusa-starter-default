@@ -15,6 +15,14 @@ import { Modules } from "@medusajs/framework/utils"
  */
 addToCartWorkflow.hooks.setPricingContext(
     async ({ cart }, { container }) => {
+        // 💰 SINGLE PRICE MODE GUARD (Backend)
+        // When ENABLE_DYNAMIC_PRICING=false, everyone uses the same price list.
+        // Skip customer group resolution — return empty context for default (retail) pricing.
+        if (process.env.ENABLE_DYNAMIC_PRICING === 'false') {
+            console.log("[PRICING-HOOK] 🔇 Single Price Mode — skipping group-based pricing")
+            return new StepResponse({})
+        }
+
         // If cart has no customer, return empty context (guest pricing)
         if (!cart?.customer_id) {
             console.log("[PRICING-HOOK] 🛒 Guest cart — using default pricing")
@@ -57,6 +65,11 @@ addToCartWorkflow.hooks.setPricingContext(
  */
 updateLineItemInCartWorkflow.hooks.setPricingContext(
     async ({ cart }, { container }) => {
+        // 💰 SINGLE PRICE MODE GUARD (Backend)
+        if (process.env.ENABLE_DYNAMIC_PRICING === 'false') {
+            return new StepResponse({})
+        }
+
         if (!cart?.customer_id) {
             return new StepResponse({})
         }
