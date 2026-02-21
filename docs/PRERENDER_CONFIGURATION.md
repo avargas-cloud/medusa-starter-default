@@ -1,3 +1,12 @@
+---
+**Purpose:** Backend-side prerender configuration reference — covers which endpoints the backend must serve for the Astro frontend's SSG build, specifically the product and category data endpoints that `getStaticPaths` calls at build time.
+
+**Solves:** Vercel builds were failing because Astro's `getStaticPaths` called backend endpoints that were either not deployed yet or returning incorrect data shapes during CI. This doc records which endpoints are critical for builds and what they must return.
+
+**Expected Result:** Vercel builds succeed consistently. All SSG pages (product, category, landing) are prerendered using data from the production backend, without any build-time fetch failures.
+
+---
+
 # Pre-Render Configuration Guide
 
 ## Overview

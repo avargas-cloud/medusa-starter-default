@@ -1,3 +1,12 @@
+---
+**Purpose:** Document a critical Medusa v2 bug where event subscribers fail silently when initialized before the DI container is ready, and the middleware-based solution that replaced all affected subscribers.
+
+**Solves:** Medusa v2 subscribers for events like `product.created` and `order.placed` were not executing because they were registered before the application container was fully initialized — a framework-level timing issue. The fix replaces those subscribers with Express middleware that intercepts the same events reliably.
+
+**Expected Result:** All event-driven workflows (Meilisearch sync, order notifications, etc.) execute reliably. No silent subscriber failures. The middleware solution is immune to the initialization-order bug.
+
+---
+
 # Medusa v2 Subscriber Bug: Deep Dive and Middleware Solution
 
 ## Executive Summary

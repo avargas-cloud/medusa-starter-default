@@ -1,3 +1,12 @@
+---
+**Purpose:** Document the migration from npm to Yarn as the package manager for the EcoPowerTech backend — why the switch was made, the migration steps, and the environment stabilization changes that came with it.
+
+**Solves:** npm was causing lockfile conflicts, inconsistent installs across environments, and slow CI builds. Yarn's lockfile is deterministic and faster. This doc records the exact migration steps to avoid re-doing the research if the issue recurs.
+
+**Expected Result:** All backend dependencies are managed with Yarn. `yarn.lock` is committed and consistent across all environments. `npm install` is no longer used in any scripts or CI configuration.
+
+---
+
 # NPM to Yarn Migration & Environment Stabilization Guide
 
 ## Executive Summary

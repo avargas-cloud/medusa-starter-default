@@ -1,3 +1,12 @@
+---
+**Purpose:** Document the correct way to obtain and display product prices in Medusa v2 — the API endpoint, required context headers (`x-publishable-api-key`, region ID), the unit format change from v1 (cents) to v2 (dollars), and the `calculated_price` vs `amount` distinction.
+
+**Solves:** Medusa v2 stores prices as major units (dollars), breaking all v1 price-display code that divided by 100. Also documents that prices require the `region_id` context in the API call, and that `calculated_price` (not `amount`) is the field to display.
+
+**Expected Result:** All price displays in the storefront show correct dollar amounts. The `calculated_price` field from the Medusa pricing context is used consistently, with no division-by-100 errors.
+
+---
+
 # Cómo Obtener Precios de Productos en Medusa v2
 
 ## ⚠️ IMPORTANTE: Medusa v2 usa Major Units (Dólares)

@@ -1,3 +1,12 @@
+---
+**Purpose:** Document the widget injected into the Category Detail Page (`product_category.details.after`) that provides inline editing of filter configuration (active/available filters, inheritance toggle) without navigating to the dedicated Filters page at `/app/filters`.
+
+**Solves:** (1) The modal was showing all 121 system attributes instead of the curated list from nuclear sync. (2) Inconsistent naming between "Inactive Filters" and "Available Filters" across pages. (3) The need for quick filter management directly from the category detail view.
+
+**Expected Result:** Category managers can configure filters from the category detail page. The widget shows only curated attributes (from `filter_config.available_filters`), not all system attributes.
+
+---
+
 # Category Filters Widget - Admin UI Component
 
 > **Last Updated**: 2026-01-31  
@@ -137,9 +146,9 @@ The widget normalizes both formats internally.
 
 ## Related Documentation
 
-- [CATEGORY_FILTERS.md](file:///home/alejo/medusa-starter-default/docs/CATEGORY_FILTERS.md) - Complete filter system
-- [CATEGORY_FILTERS_NUCLEAR_SYNC.md](file:///home/alejo/medusa-starter-default/docs/CATEGORY_FILTERS_NUCLEAR_SYNC.md) - Nuclear sync algorithm
-- [product-attributes-architecture.md](file:///home/alejo/medusa-starter-default/docs/product-attributes-architecture.md) - Attribute architecture
+- [CATEGORY_FILTERS.md](./CATEGORY_FILTERS.md) - Complete filter system
+- [CATEGORY_FILTERS_NUCLEAR_SYNC.md](./CATEGORY_FILTERS_NUCLEAR_SYNC.md) - Nuclear sync algorithm
+- [PRODUCT_ATTRIBUTES_ARCHITECTURE.md](./PRODUCT_ATTRIBUTES_ARCHITECTURE.md) - Attribute architecture
 
 ---
 

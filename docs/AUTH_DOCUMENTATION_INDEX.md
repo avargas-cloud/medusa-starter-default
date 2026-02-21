@@ -1,3 +1,12 @@
+---
+**Purpose:** Navigation index for all authentication-related documents — maps each doc to its audience, use case, and best entry point for developers. Also contains a quick-start guide and critical implementation notes.
+
+**Solves:** Prevents developers from reading the wrong doc first (e.g., reading the API spec when they need the implementation guide, or searching across 5 auth docs for the scrypt-kdf pattern).
+
+**Expected Result:** Any developer starting work on auth can immediately find the right document for their task. Includes links to all auth-related test scripts and implementation files.
+
+---
+
 # Authentication Documentation Index
 
 **EcoPowerTech Medusa v2 Backend**  
@@ -26,7 +35,7 @@ This directory contains complete documentation for the authentication system.
 
 ---
 
-#### 2. [`backend_api_spec.md`](./backend_api_spec.md)
+#### 2. [`AUTHENTICATION_BACKEND_API_SPEC.md`](./AUTHENTICATION_BACKEND_API_SPEC.md)
 
 **Technical API specification** - Detailed API reference:
 - All endpoint specifications
@@ -41,7 +50,7 @@ This directory contains complete documentation for the authentication system.
 
 ---
 
-#### 3. [`customer-authentication.md`](./customer-authentication.md)
+#### 3. [`CUSTOMER_AUTH_3_CASES_COMPLETE_GUIDE.md`](./CUSTOMER_AUTH_3_CASES_COMPLETE_GUIDE.md)
 
 **Spanish comprehensive guide** - Documentación completa en español:
 - Sistema de autenticación detallado
@@ -83,7 +92,7 @@ Google OAuth integration guide:
 
 ---
 
-#### [`frontend_customer_api_guide.md`](./frontend_customer_api_guide.md)
+#### [`FRONTEND_CUSTOMER_API_GUIDE.md`](./FRONTEND_CUSTOMER_API_GUIDE.md)
 
 Frontend integration patterns:
 - API calling conventions
@@ -98,8 +107,8 @@ Frontend integration patterns:
 ### For New Developers
 
 1. **Start here**: [`AUTHENTICATION_COMPLETE_GUIDE.md`](./AUTHENTICATION_COMPLETE_GUIDE.md)
-2. **API reference**: [`backend_api_spec.md`](./backend_api_spec.md)
-3. **Frontend integration**: [`frontend_customer_api_guide.md`](./frontend_customer_api_guide.md)
+2. **API reference**: [`AUTHENTICATION_BACKEND_API_SPEC.md`](./AUTHENTICATION_BACKEND_API_SPEC.md)
+3. **Frontend integration**: [`FRONTEND_CUSTOMER_API_GUIDE.md`](./FRONTEND_CUSTOMER_API_GUIDE.md)
 
 ### For Testing
 
@@ -208,14 +217,14 @@ STOREFRONT_URL=http://localhost:4321
 ## 🆘 Need Help?
 
 1. **Troubleshooting**: See "Troubleshooting" section in [`AUTHENTICATION_COMPLETE_GUIDE.md`](./AUTHENTICATION_COMPLETE_GUIDE.md)
-2. **API errors**: Check [`backend_api_spec.md`](./backend_api_spec.md) error handling section
+2. **API errors**: Check [`AUTHENTICATION_BACKEND_API_SPEC.md`](./AUTHENTICATION_BACKEND_API_SPEC.md) error handling section
 3. **Password reset issues**: Verify scrypt-kdf implementation in main guide
 
 ---
 
 ## 📝 Deprecated Documents
 
-- `authentication_walkthrough.md.deprecated` - Consolidated into `AUTHENTICATION_COMPLETE_GUIDE.md`
+- `authentication_walkthrough.md.deprecated` - Deleted (Feb 2026). Content consolidated into `AUTHENTICATION_COMPLETE_GUIDE.md`
 
 ---
 

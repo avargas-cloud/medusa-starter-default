@@ -1,3 +1,12 @@
+---
+**Purpose:** Document the specific bug fix (Feb 2026) for batch variant price sync in Meilisearch Inventory — where variant prices were not being updated in the Meilisearch index during bulk price updates via the Admin Panel.
+
+**Solves:** Bulk price updates were firing a single `product.updated` event for the parent product, but Meilisearch sync was only re-indexing the product title/description, not iterating the variant-level prices. The fix updates the sync handler to re-fetch and re-index all variant prices on the product.updated event.
+
+**Expected Result:** After any price update in the Admin Panel (single or bulk), Meilisearch inventory index reflects the updated prices within seconds. Price-based search filters on the storefront return accurate results.
+
+---
+
 # MeiliSearch Inventory Sync - Batch Variant Price Update Fix (Feb 2026)
 
 ## Issue Summary

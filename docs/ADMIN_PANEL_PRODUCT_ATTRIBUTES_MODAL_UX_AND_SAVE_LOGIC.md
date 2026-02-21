@@ -1,3 +1,12 @@
+---
+**Purpose:** Document the UX overhaul of the `ManageAttributesModal` and the debugging journey that uncovered a critical Many-to-Many link configuration bug in Medusa v2, plus the hard-delete policy implemented to prevent ghost/soft-deleted data.
+
+**Solves:** (1) UX was unusable with large attribute lists — fixed with Combobox searchable selector and inline quick-add. (2) `isList: true` was missing from the link definition causing "Cannot create multiple links" errors. (3) Soft-deleted attribute records were polluting queries, causing duplicate values in the UI.
+
+**Expected Result:** The modal supports many-to-many attribute assignment reliably. No ghost/soft-deleted records. Developers know to always set `isList: true` for M2M links in Medusa v2.
+
+---
+
 # Product Attributes: UX Refinement & Save Logic Transformation
 
 > [!NOTE]

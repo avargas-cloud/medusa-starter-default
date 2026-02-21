@@ -1,3 +1,12 @@
+---
+**Purpose:** Precise technical spec for all authentication API endpoints — request/response schemas, HTTP status codes, implementation code snippets, database schema, and scrypt-kdf password hashing details for the 3-case registration system.
+
+**Solves:** Provides a contract-level reference for frontend and backend developers integrating with the auth system, including edge cases like metadata parsing (string vs. array vs. object), password reuse validation, and the exact field name (`provider_metadata.password`, not `password_hash`).
+
+**Expected Result:** Any developer can implement or debug any auth endpoint using this spec without needing to read the application code, with full visibility into database schema, error codes, and security behaviors.
+
+---
+
 # Backend API Specification - Customer Authentication
 
 ## Overview

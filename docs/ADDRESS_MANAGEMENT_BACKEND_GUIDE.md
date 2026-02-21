@@ -1,3 +1,12 @@
+---
+**Purpose:** Document the custom backend route for updating customer addresses (`POST /store/customers/me/addresses/:address_id`), including the dual-field update strategy (native Medusa fields + metadata) and the automatic default-swap logic.
+
+**Solves:** Medusa v2 does not natively support setting `is_default_billing` / `is_default_shipping` on addresses while simultaneously unsetting previous defaults. The custom route handles the swap atomically within one API call.
+
+**Expected Result:** When a customer marks an address as their default billing or shipping, only that address gets the flag — all other addresses are automatically unset. Both native fields and `metadata` stay in sync, compatible with any frontend using radio buttons or checkboxes.
+
+---
+
 # 📍 Address Management - Backend Implementation Guide
 
 > **Version**: 2.0 (Medusa v2 Custom Routes)  
@@ -109,8 +118,8 @@ Address C: is_default_billing = false
 Create `backend/src/api/store/customers/me/addresses/[address_id]/route.ts`:
 
 ```typescript
-import { MedusaRequest, MedusaResponse } from "@medusajs/medusa";
-import { updateCustomerAddressesWorkflow } from "@medusajs/core-flows";
+import { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+import { updateCustomerAddressesWorkflow } from "@medusajs/medusa/core-flows";
 
 export async function POST(
     req: MedusaRequest,

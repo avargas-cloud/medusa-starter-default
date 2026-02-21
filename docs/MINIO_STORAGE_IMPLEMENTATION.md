@@ -1,3 +1,12 @@
+---
+**Purpose:** Implementation guide for MinIO S3-compatible object storage as the Medusa file service backend — covering bucket creation, policy configuration, the `@medusajs/file-s3` plugin setup, and Railway deployment considerations.
+
+**Solves:** Railway's Railway volumes are ephemeral — local file uploads are lost on redeploy. MinIO (or any S3-compatible service) provides persistent, production-grade file storage. This doc covers the exact `medusa-config.ts` plugin configuration and the required MinIO bucket policies for public access.
+
+**Expected Result:** All file uploads (product images, documents) are stored in MinIO and remain persistent across Railway deployments. URLs are publicly accessible and served directly from the MinIO endpoint.
+
+---
+
 # MinIO/S3 Storage Implementation Guide
 
 ## Overview

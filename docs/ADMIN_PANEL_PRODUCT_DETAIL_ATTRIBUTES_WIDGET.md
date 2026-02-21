@@ -1,3 +1,12 @@
+---
+**Purpose:** Document the custom Medusa widget injected into the Product Detail Page (PDP) at `product.details.after`, allowing merchants to view and manage the custom Many-to-Many relationship between a product and its attribute values.
+
+**Solves:** The need to manage product attributes (e.g., "Color: Red, Blue", "Wattage: 12W") without navigating away from the product page. Also documents the dual-fetch strategy and the `groupAttributesByKey` helper pattern.
+
+**Expected Result:** Developers understand how to build and extend PDP widgets in Medusa v2, manage Many-to-Many attribute links, and display grouped attribute data in the admin UI.
+
+---
+
 # Product Attributes Widget (PDP)
 
 > [!NOTE]
@@ -29,7 +38,7 @@ The **Product Attributes Widget** (`src/admin/widgets/product-attributes-widget.
 - **Visual Indicator**: Shows a purple "Variant" badge for keys that drive SKU differentiation.
 
 ### D. Atomic Management
-- **Edit Modal**: Launches `ManageAttributesModal` (the complex modal detailed in [03-attribute-modal-refinement.md](./03-attribute-modal-refinement.md)).
+- **Edit Modal**: Launches `ManageAttributesModal` (the complex modal detailed in [ADMIN_PANEL_PRODUCT_ATTRIBUTES_MODAL_UX_AND_SAVE_LOGIC.md](./ADMIN_PANEL_PRODUCT_ATTRIBUTES_MODAL_UX_AND_SAVE_LOGIC.md)).
 - **Atomic Saving**: The widget handles the final persistence via `handleSave`.
   - It constructs a `POST` payload with `value_ids` (all linked values) and `variant_keys` (metadata flags).
   - It sends this to the custom endpoint `/admin/products/:id/attributes` which executes the workflow `updateProductAttributesWorkflow`.

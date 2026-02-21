@@ -1,3 +1,12 @@
+---
+**Purpose:** Frontend developer guide for all customer account API endpoints in Medusa v2 — covering profile retrieval, address management, order history, and authenticated request patterns for the Astro storefront.
+
+**Solves:** Medusa v2's customer API routes and authentication header requirements differ significantly from v1. This guide documents the exact fetch patterns, JWT header usage, and response shapes for each customer-related endpoint.
+
+**Expected Result:** Frontend developers can implement any customer account feature (profile edit, address book, order history) using the patterns in this guide without needing to reverse-engineer the Medusa API or the backend implementation.
+
+---
+
 # 🔐 Customer Account API Guide - Frontend Integration
 
 > **Version**: Medusa v2  

@@ -1,3 +1,12 @@
+---
+**Purpose:** Guide for frontend developers on how to access and display the `long_description` field on product pages — the API endpoint, response field name, and rendering considerations for rich HTML content.
+
+**Solves:** The `long_description` field is stored in `product.metadata.long_description` and requires special handling: it contains HTML markup that must be rendered as innerHTML, not plain text. Frontend developers were confused about where to find the field and how to render it safely.
+
+**Expected Result:** Product detail pages display the full long description with correct HTML formatting (bullet lists, bold text, paragraphs) sourced from the Medusa product metadata field.
+
+---
+
 # 📝 Cómo Obtener Long Description de Productos
 
 ## TL;DR (Para el Agente Frontend)

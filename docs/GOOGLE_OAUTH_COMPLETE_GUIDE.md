@@ -1,3 +1,12 @@
+---
+**Purpose:** Complete implementation guide for Google OAuth social login in Medusa v2 — covering Google Cloud Console setup, OAuth callback handling, customer linking, and JWT token issuance for auto-login after Google authentication.
+
+**Solves:** Medusa v2's Google OAuth plugin requires specific Google Cloud Console configuration (authorized redirect URIs, consent screen) that's not documented. Also covers the Medusa-side setup: provider registration in `medusa-config.ts` and the callback route for linking Google accounts to existing customers.
+
+**Expected Result:** Customers can click "Sign in with Google", authorize via Google OAuth, and be automatically logged in (or have their existing account linked) with a valid JWT token returned to the storefront.
+
+---
+
 # Google OAuth Authentication - Complete Implementation Guide
 
 **Last Updated:** February 5, 2026  
@@ -316,7 +325,7 @@ User is logged in ✅
 ## 📚 Related Documentation
 
 - `AUTHENTICATION_COMPLETE_GUIDE.md` - Complete auth system overview
-- `customer-authentication.md` - Password-based authentication
+- `CUSTOMER_AUTH_3_CASES_COMPLETE_GUIDE.md` - Password-based authentication
 - `AUTH_DOCUMENTATION_INDEX.md` - Auth documentation index
 
 ---

@@ -1,3 +1,12 @@
+---
+**Purpose:** Document improvements to transactional email templates — activation email and password reset email — including design, content, and SendGrid template ID updates.
+
+**Solves:** The original email templates were plain-text without branding. This doc tracks the HTML redesign, subject line changes, and the correct template IDs to use in `SENDGRID_TEMPLATE_ID_*` env vars.
+
+**Expected Result:** Customers receive well-branded, clear activation and password reset emails from EcoPowerTech with correct links, proper copy, and the noreply@ecopowertech.com sender.
+
+---
+
 # Email Template Improvements
 
 ## Current Templates

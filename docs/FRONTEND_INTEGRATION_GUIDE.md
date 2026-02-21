@@ -1,3 +1,12 @@
+---
+**Purpose:** Master frontend integration guide written by the backend team — documents all available Medusa v2 API endpoints, authentication patterns, CORS configuration requirements, and Astro-specific integration notes for the storefront developers.
+
+**Solves:** Coordination gap between frontend and backend teams regarding which endpoints exist, what auth headers are required, what response shapes to expect, and what environment variables to configure for local vs. production environments.
+
+**Expected Result:** Frontend and backend teams share a common contract. Any Astro developer can connect to any backend endpoint using the patterns in this guide without needing to ask the backend team.
+
+---
+
 # Frontend Integration Guide - Medusa v2 Backend
 
 **Para:** Agente Frontend / Desarrollador Frontend  

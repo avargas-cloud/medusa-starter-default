@@ -1,3 +1,12 @@
+---
+**Purpose:** Overview and navigation entry point for the 3-case customer authentication system documentation — maps each doc to its specific role and provides the recommended reading order for new developers.
+
+**Solves:** The `backend/docs/` directory contains multiple auth-related documents, and it's unclear which to read first. This README serves as the starting point for the auth subdirectory.
+
+**Expected Result:** Any developer landing in this documentation directory can orient themselves immediately and navigate to the right document for their task.
+
+---
+
 # Customer Authentication Documentation
 
 This directory contains complete documentation for the 3-case customer authentication system.

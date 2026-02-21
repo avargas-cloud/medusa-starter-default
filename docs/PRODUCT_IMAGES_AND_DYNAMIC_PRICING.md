@@ -1,3 +1,12 @@
+---
+**Purpose:** Document the February 2026 fixes for product image display and dynamic price calculation on product detail pages — specifically the field name corrections and the image URL resolution from Medusa v2 response shape.
+
+**Solves:** Product images weren't displaying because the image array field from Medusa v2 changed to `product.images[].url` (not `product.thumbnail`). Dynamic prices showed undefined because the pricing context wasn't passed correctly in the Astro SSR endpoint.
+
+**Expected Result:** All product images load correctly using the `images` array from Medusa v2. Prices display based on the customer's active cart region, with correct wholesale/retail pricing based on customer group membership.
+
+---
+
 # Product Images & Dynamic Pricing Fix
 
 ## Changes Made (2026-02-01)

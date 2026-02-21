@@ -1,3 +1,12 @@
+---
+**Purpose:** Complete system guide for the Category Filters feature — covers data model, admin configuration UI, store API endpoint, frontend integration, mass sync (nuclear sync), soft-delete filtering, and attribute deletion cascade.
+
+**Solves:** Product categories needed dynamic, configurable filter sidebars (by wattage, color, IP rating, etc.) that are inheritable from parent categories and reconfigurable per category. Medusa v2 has no native filter system for categories.
+
+**Expected Result:** Each category has a `filter_config` in its metadata with `available_filters` (curated via nuclear sync) and `active_filters` (user-configured). The store API serves filter options, and the frontend renders the filter sidebar dynamically.
+
+---
+
 # Category Filters - Complete System Guide
 
 > **Last Updated**: 2026-01-30  

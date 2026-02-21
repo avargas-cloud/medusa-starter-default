@@ -1,3 +1,12 @@
+---
+**Purpose:** Step-by-step guide to install and run the EcoPowerTech backend locally — prerequisites, environment setup, database migration, seeding, and starting the Medusa dev server.
+
+**Solves:** New developers spend hours debugging local setup because of missing environment variables, wrong Node version, or unrun migrations. This guide provides a precise checklist to get the backend running on a fresh machine in one session.
+
+**Expected Result:** Backend runs locally at `http://localhost:9000`, admin panel accessible at `http://localhost:9000/app`, and all integrations (PostgreSQL, Redis, MinIO, Meilisearch) connected correctly.
+
+---
+
 # Instalación Local Completa - Ecopowertech Backend
 
 Guía paso a paso para instalar el backend de Ecopowertech en tu máquina local.

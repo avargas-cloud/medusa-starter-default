@@ -1,3 +1,12 @@
+---
+**Purpose:** Complete technical reference for the Dynamic Product Variants system — a custom implementation allowing products to have variant-specific attribute combinations (e.g., "5W / Black / E26"), displayed and selectable on the PDP without Medusa's native variant option UI.
+
+**Solves:** Medusa v2's native variant UI treats all variants equally without grouping by attribute dimensions. The dynamic variants system enables attribute-driven variant selection (color swatch + size selector) and maps selections to specific variant SKUs for cart/inventory purposes.
+
+**Expected Result:** Product pages show attribute-based variant selectors (e.g., color swatches, wattage dropdowns). Selecting a combination highlights the matching variant and enables Add to Cart. Unavailable combinations are greyed out.
+
+---
+
 # Dynamic Variants System - Complete Technical Documentation
 
 > **Purpose**: This document provides a complete technical reference for the Dynamic Product Variants system. Use this to recreate the entire system from scratch if needed.

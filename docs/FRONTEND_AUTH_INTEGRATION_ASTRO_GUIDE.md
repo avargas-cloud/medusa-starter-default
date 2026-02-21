@@ -1,3 +1,12 @@
+---
+**Purpose:** Practical frontend integration guide (with working Astro component examples) for the 3-case customer authentication backend — covering registration form, activation page handler, state management, and the testing checklist for each case.
+
+**Solves:** Provides ready-to-use Astro component code for the auth flows so frontend developers don't have to write from scratch. Also documents the critical ordering bug: always check `needs_activation` before `token` in the registration response.
+
+**Expected Result:** Frontend developers can copy-paste the registration form and activation page handlers, run through the 3 test cases, and confirm the full auth flow works in the Astro storefront without backend knowledge.
+
+---
+
 # Frontend Integration Guide - Customer Authentication
 
 ## 🎯 Overview

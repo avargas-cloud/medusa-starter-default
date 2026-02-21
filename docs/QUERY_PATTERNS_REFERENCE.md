@@ -1,3 +1,12 @@
+---
+**Purpose:** Decision guide for choosing between `remoteQuery` (Medusa's data layer) and raw Knex when querying data — covering when each approach is appropriate, performance tradeoffs, and code examples for each pattern.
+
+**Solves:** Developers were inconsistently mixing `remoteQuery` (high-level, type-safe, slower) and Knex (raw SQL, fast) without understanding the tradeoffs. This doc establishes team standards for which pattern to use in which scenario.
+
+**Expected Result:** All new backend queries use the correct pattern. Performance-critical paths use Knex. Cross-module queries use `remoteQuery`. No more ad-hoc mixing that causes maintainability issues.
+
+---
+
 # Query Pattern Reference: remoteQuery vs Knex
 
 **Project**: Medusa v2 E-Commerce Platform  

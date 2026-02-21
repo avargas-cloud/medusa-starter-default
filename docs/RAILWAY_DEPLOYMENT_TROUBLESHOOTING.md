@@ -1,3 +1,12 @@
+---
+**Purpose:** Troubleshooting guide for Railway deployment failures — covers the most common errors encountered during EcoPowerTech Railway deploys, their root causes, and the specific fixes applied.
+
+**Solves:** Railway deployments were failing with cryptic error messages related to missing native binaries, wrong Node version, memory limits, and Docker layer caching issues. This doc maps each error message to the exact fix.
+
+**Expected Result:** Developers can diagnose and fix any Railway deployment failure within minutes using this guide. No more searching across Railway docs and GitHub issues for the same errors.
+
+---
+
 # 🚨 Railway Deployment Failed - Troubleshooting
 
 ## Error Observado

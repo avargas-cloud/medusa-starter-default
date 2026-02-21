@@ -1,3 +1,12 @@
+---
+**Purpose:** Complete implementation guide for checkout and payment processing using Authorize.net as the payment provider in Medusa v2, integrated with the Astro storefront — from cart creation through order confirmation.
+
+**Solves:** Medusa v2 payment integration with Authorize.net is not documented in the official docs. This covers the custom payment provider plugin, webhook handling, and the Astro frontend steps to render a payment form and handle 3DS redirects.
+
+**Expected Result:** End-to-end checkout works: cart → shipping → payment → order creation. Authorize.net processes the card charge, the webhook confirms the order, and the customer receives a confirmation email.
+
+---
+
 # Checkout + Payment Implementation Guide
 ## Medusa v2 + Authorize.net + Astro Storefront
 
@@ -59,9 +68,10 @@ export default defineConfig({
 ### 1.2 Required Environment Variables
 
 ```bash
-# Authorize.net
-AUTHORIZE_NET_API_LOGIN_ID=your_login_id
-AUTHORIZE_NET_TRANSACTION_KEY=your_transaction_key
+# Authorize.net (note: prefix is AUTHORIZENET_ not AUTHORIZE_NET_)
+AUTHORIZENET_API_LOGIN_ID=your_login_id
+AUTHORIZENET_TRANSACTION_KEY=your_transaction_key
+AUTHORIZENET_ENVIRONMENT=sandbox  # or 'production'
 
 # Medusa
 MEDUSA_BACKEND_URL=https://your-backend.railway.app
@@ -504,8 +514,8 @@ Use Authorize.net test card numbers:
 
 ### Production Checklist
 
-- [ ] Switch `AUTHORIZE_NET_API_LOGIN_ID` and `AUTHORIZE_NET_TRANSACTION_KEY` to live credentials
-- [ ] Set `sandbox: false` in payment provider config (or use `NODE_ENV=production`)
+- [ ] Switch `AUTHORIZENET_API_LOGIN_ID` and `AUTHORIZENET_TRANSACTION_KEY` to live credentials
+- [ ] Set `AUTHORIZENET_ENVIRONMENT=production` in production environment
 - [ ] Verify CORS allows production frontend domain
 - [ ] Test order creation end-to-end with a real card ($1 test charge)
 - [ ] Verify order appears in Medusa Admin
@@ -521,4 +531,4 @@ Use Authorize.net test card numbers:
 - `backend/docs/DYNAMIC_PRICING_ENDPOINT.md` — Custom price endpoint for product pages
 - `backend/WHOLESALE_PRICING.md` — Scripts to add/remove wholesale prices
 - `backend/docs/GETTING_PRODUCT_PRICES.md` — How product prices are fetched
-- `SHIPPING_IMPLEMENTATION.md` — Shipping options setup
+- `SHIPPING_IMPLEMENTATION_GUIDE.md` — Shipping options setup

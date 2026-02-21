@@ -1,3 +1,12 @@
+---
+**Purpose:** Post-development checklist for Railway deployment — environment variables to set, services to configure, and validation steps to confirm the backend is running correctly in the Railway production environment.
+
+**Solves:** During the initial Railway deployment, critical environment variables were missing and services (Redis, MinIO, Meilisearch) were not connected correctly. This checklist documents the exact configuration state needed to avoid revisiting those issues.
+
+**Expected Result:** Backend deployed to Railway with all services connected, all env vars set, migrations run, and the admin panel and store API accessible from production URLs.
+
+---
+
 # 🎯 Next Steps - Railway Deployment
 
 ## Where We Are Now

@@ -1,3 +1,12 @@
+---
+**Purpose:** Master reference for the entire EcoPowerTech authentication system in Medusa v2 — covering customer registration (3 cases), email/password login, password reset, Google OAuth, and frontend integration.
+
+**Solves:** Medusa v2's default auth module doesn't natively handle: (1) legacy QuickBooks customers who need email activation, (2) customers who try to re-register with an existing email and correct password (auto-login), (3) password reset using the native `scrypt-kdf` algorithm (not bcrypt).
+
+**Expected Result:** A complete, production-ready authentication system where all 3 registration cases are handled automatically at `/store/auth/register`, password reset works end-to-end with scrypt-kdf, and tokens are valid for both `/store/auth/login` and `/auth/customer/emailpass`.
+
+---
+
 # Medusa v2 Authentication - Complete Implementation Guide
 
 **EcoPowerTech Backend**  

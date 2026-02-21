@@ -1,3 +1,12 @@
+---
+**Purpose:** Complete documentation for the image management system — covering MinIO storage setup, automatic folder routing by media type, the Admin UI media library integration, and the upload API endpoints.
+
+**Solves:** Medusa v2's default file upload uses local disk storage (not persistent in Railway). MinIO provides S3-compatible persistent object storage. The folder routing ensures product images, category images, and other media are organized under structured prefixes automatically.
+
+**Expected Result:** All image uploads from the Admin Panel are stored in MinIO under organized prefixes (`products/`, `categories/`). Images are served via public MinIO URLs. The Medusa storage file-service plugin handles the integration transparently.
+
+---
+
 # Image Management System
 
 Complete documentation for the Medusa image management system with MinIO storage, automatic folder routing, and integrated media library.

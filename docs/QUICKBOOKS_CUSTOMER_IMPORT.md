@@ -1,3 +1,12 @@
+---
+**Purpose:** Operational guide for importing customer data from QuickBooks into Medusa — including the import script, field mapping (QuickBooks customer fields → Medusa customer fields), error handling, and verification steps.
+
+**Solves:** EcoPowerTech had an existing customer base in QuickBooks (with company names, tax codes, pricing tiers, and contact info) that needed to be migrated to Medusa v2 without losing data fidelity. This guide documents how the import was done and how to re-run it cleanly.
+
+**Expected Result:** All QuickBooks customers are present in Medusa with matched email, name, company, phone, and pricing group associations. Duplicate detection prevents re-importing existing customers on subsequent runs.
+
+---
+
 # QuickBooks Customer Import Guide
 
 ## Overview

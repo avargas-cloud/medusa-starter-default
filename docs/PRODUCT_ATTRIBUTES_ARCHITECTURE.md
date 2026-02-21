@@ -1,3 +1,12 @@
+---
+**Purpose:** Architecture document for the Product Attributes system — covering the data model (AttributeSet → AttributeKey → AttributeValue), the Medusa module structure, API routes, link definitions, and the relationship between products and attribute values.
+
+**Solves:** The Medusa v2 module system for custom entities is complex and underdocumented. This doc provides the complete mental model for the custom attributes module, including how to define modules, create links, and query data across the module boundary.
+
+**Expected Result:** Any developer can understand the full attributes system architecture from this doc, recreate the module structure, and understand why `isList: true` is required for the product-attribute link.
+
+---
+
 # Product Attributes Architecture (v3.0)
 
 > [!WARNING]

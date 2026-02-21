@@ -1,3 +1,12 @@
+---
+**Purpose:** Document the February 2026 update to the Meilisearch sync architecture — specifically the move from Medusa subscribers to Express middleware as the sync trigger mechanism, and why this change was necessary.
+
+**Solves:** The previous subscriber-based approach suffered from the Medusa v2 initialization-order bug (documented in `MEDUSA_V2_SUBSCRIBER_BUG_AND_MIDDLEWARE_FIX.md`). The middleware approach intercepts admin API calls directly, bypassing the broken subscriber system.
+
+**Expected Result:** Production-ready Meilisearch sync that reliably updates indexes on every create/update/delete via middleware interceptors, with no dependency on the fragile Medusa subscriber lifecycle.
+
+---
+
 # Medusa v2 MeiliSearch Sync: Middleware Solution (Updated Feb 2026)
 
 **Status:** ✅ Production-Ready | **Last Updated:** February 4, 2026

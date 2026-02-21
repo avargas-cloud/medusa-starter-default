@@ -1,3 +1,12 @@
+---
+**Purpose:** Document the Admin UI page at `/app/attributes` that allows merchants to create, organize, and manage all product attribute keys and attribute sets (e.g., "Color", "Wattage", "IP Rating" grouped under "Electrical Specs").
+
+**Solves:** The need to organize product specifications into a structured, searchable dashboard without modifying Medusa core views. Also documents the bulk-move, accordion UI, and modal integration patterns.
+
+**Expected Result:** Developers can recreate or extend the Attributes Management Page from scratch, understanding its data model, component structure, and React Query patterns.
+
+---
+
 # Attributes Management Page (Admin UI)
 
 > [!NOTE]

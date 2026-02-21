@@ -1,3 +1,12 @@
+---
+**Purpose:** Document the advanced Inventory admin page — a complete replacement for Medusa's native Inventory page, with Meilisearch-powered search, 3-layer auto-sync (subscriber + middleware + API), and batch Meilisearch indexing for inventory items and stock locations.
+
+**Solves:** Medusa v2's native inventory page has no instant search for inventory items or stock locations. The custom page integrates Meilisearch, with auto-sync triggered on all inventory CRUD events so stock levels are always searchable in real time.
+
+**Expected Result:** Admins can search inventory items and stock locations in real-time via Meilisearch. Sync is automatic — no manual re-indexing needed after stock level changes, new items, or location updates.
+
+---
+
 # Inventory Advanced - Complete Auto-Sync Architecture
 
 ## Resumen Ejecutivo

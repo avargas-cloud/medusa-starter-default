@@ -1,3 +1,12 @@
+---
+**Purpose:** Document the Node.js v12 compatibility changes made to the QuickBooks Bridge for deployment on the client's Windows Server 2008 environment, which cannot upgrade beyond Node v12.
+
+**Solves:** The bridge originally used optional chaining (`?.`), nullish coalescing (`??`), and `Array.flat()` — all unsupported in Node.js v12. This doc tracks every syntax change made to restore compatibility and prevent regression.
+
+**Expected Result:** QuickBooks Bridge runs on Node.js v12 in the client's Windows Server 2008 environment without any syntax errors. All ES2020+ features replaced with ES2015-compatible equivalents.
+
+---
+
 # Node.js v12 Compatibility Notes
 
 ## Changes Made for Windows Server 2008

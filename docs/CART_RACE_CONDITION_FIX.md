@@ -1,3 +1,12 @@
+---
+**Purpose:** Document the root cause, fix, and prevention strategy for a race condition in the frontend cart store (`cartStore.ts`) that caused incorrect item quantities during rapid user interactions (e.g., fast double-clicks on quantity +/- buttons).
+
+**Solves:** Multiple near-simultaneous API calls to update cart quantities were completing out of order, causing the UI to render a stale quantity. The fix implements request debouncing and optimistic UI rollback.
+
+**Expected Result:** Cart quantity updates are stable and accurate even during rapid user input. No ghost requests left in flight. Stale responses are discarded if a newer request has already completed.
+
+---
+
 # Cart Race Condition Fix - Technical Documentation
 
 **Date**: February 12, 2026  

@@ -1,3 +1,12 @@
+---
+**Purpose:** Documentación completa en español del sistema de autenticación con los 3 casos de registro/login, incluyendo el flujo de activación para clientes legacy importados de QuickBooks. Incluye diagramas de arquitectura, código de implementación, y guía de integración con Astro frontend.
+
+**Solves:** (1) Clientes legacy (QuickBooks) sin cuenta activa — requieren flujo de activación por email antes del primer login. (2) Campos limitados que Medusa no expone via sus módulos (`has_account`, `auth_identity.app_metadata`) — resuelto con SQL directo. (3) Documentar el patrón exacto de `generateJwtToken` con `app_metadata.customer_id` que el login endpoint requiere obligatoriamente.
+
+**Expected Result:** Un desarrollador de habla hispana puede implementar el sistema de autenticación completo desde cero usando esta guía, con todos los endpoints, payloads, y código real de implementación por caso.
+
+---
+
 # Sistema de Autenticación de Clientes - Documentación Completa
 
 ## Tabla de Contenidos

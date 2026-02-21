@@ -1,3 +1,12 @@
+---
+**Purpose:** API reference for the Medusa-facing endpoints of the QuickBooks Bridge service — covering all endpoints the Medusa backend calls to import customers, sync products, and verify QuickBooks connection status.
+
+**Solves:** The bridge service exposes a REST API that Medusa uses to pull QuickBooks data. This reference documents every endpoint, its authentication requirements, request/response schemas, and error codes so the Medusa side can integrate correctly.
+
+**Expected Result:** Backend developers can integrate any Medusa workflow with the QuickBooks Bridge using this reference, without needing to inspect the bridge's source code.
+
+---
+
 # 📘 QuickBooks Bridge API Reference for Medusa Integration
 
 **Version:** 1.0 (Production)

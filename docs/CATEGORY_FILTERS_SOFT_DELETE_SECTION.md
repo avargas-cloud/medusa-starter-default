@@ -1,3 +1,12 @@
+---
+**Purpose:** Document the critical fix (2026-01-30) that added soft-delete filtering to all filter generation queries, and the mass sync operation that re-processed all categories with the corrected logic.
+
+**Solves:** Soft-deleted attribute links (`deleted_at IS NOT NULL`) were being included in filter generation, causing deleted attribute values to appear as filter options in the storefront. The fix adds `whereNull('deleted_at')` to all Knex queries in the filter pipeline.
+
+**Expected Result:** Filter options in the storefront only reflect active (non-deleted) attribute values. Mass sync was run to recompute `available_filters` for all categories using the corrected query.
+
+---
+
 # Soft-Delete Filtering & Mass Sync
 
 > [!WARNING]

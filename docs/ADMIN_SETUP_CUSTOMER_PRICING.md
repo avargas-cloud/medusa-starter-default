@@ -1,3 +1,12 @@
+---
+**Purpose:** Guide for configuring customer-specific pricing (Wholesale vs. Retail) using Medusa v2 Admin Panel price lists, including setup steps, price list creation, and customer group assignment.
+
+**Solves:** Medusa v2 doesn't surface price list setup intuitively — this doc maps the exact menu navigation, form fields, and customer group linking needed to activate tiered pricing for specific customers.
+
+**Expected Result:** A store admin can create a Wholesale price list, assign products with custom prices, and link specific customer groups so those customers see wholesale prices automatically on checkout.
+
+---
+
 # Admin Panel Setup Guide - Customer-Specific Pricing
 
 ## 🎯 Overview
@@ -139,4 +148,4 @@ After completing this setup, you can test the pricing in the storefront:
 2. **Login as `retail@test.com`**: Should see $60.99 (no group = default)
 3. **Login as `wholesale@test.com`**: Should see $45.99 (wholesale price!)
 
-See testing guide in [`customer_pricing_implementation.md`](file:///home/alejo/.gemini/antigravity/brain/e7c60ee6-f3d0-483f-ab88-9ef283e80e93/customer_pricing_implementation.md#testing-plan)
+See testing guide in [`CHECKOUT_PAYMENT_IMPLEMENTATION_GUIDE.md`](./CHECKOUT_PAYMENT_IMPLEMENTATION_GUIDE.md#part-8-wholesale-pricing-in-cart-critical-for-b2b)

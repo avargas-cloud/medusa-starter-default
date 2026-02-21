@@ -1,3 +1,12 @@
+---
+**Purpose:** Technical reference for category image management — covering the Admin API limitation (images can't be set directly on categories), the metadata-based workaround, and the MinIO folder routing strategy for category vs. product images.
+
+**Solves:** Medusa v2's Admin API does not support setting images on categories natively. This doc documents the discovery and the accepted workaround using `category.metadata.image_url` plus direct MinIO upload with the `categories/` prefix folder.
+
+**Expected Result:** Category images are stored in MinIO under `categories/<category-handle>/` and referenced via metadata. Frontend reads `category.metadata.image_url` to display the category hero image.
+
+---
+
 # Category Images - Technical Reference
 
 ## Overview
@@ -261,9 +270,8 @@ headers: {
 
 ## Related Documentation
 
-- [Image Management System](./image-management.md)
-- [MinIO Storage Implementation](./minio-storage-implementation.md)
-- [Metadata Safety Audit](../brain/.../metadata_safety_audit.md)
+- [IMAGE_MANAGEMENT_MINIO_SYSTEM.md](./IMAGE_MANAGEMENT_MINIO_SYSTEM.md) - Image management system
+- [MINIO_STORAGE_IMPLEMENTATION.md](./MINIO_STORAGE_IMPLEMENTATION.md) - MinIO storage implementation
 
 ---
 
