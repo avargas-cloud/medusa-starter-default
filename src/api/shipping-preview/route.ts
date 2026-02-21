@@ -5,7 +5,11 @@ import { Client } from "pg"
 function setCorsHeaders(req: MedusaRequest, res: MedusaResponse) {
     const origin = req.headers.origin || ""
     const allowedOrigins = (process.env.STORE_CORS || "http://localhost:4321,http://localhost:8000").split(",")
-    if (allowedOrigins.includes(origin) || origin.startsWith("http://localhost")) {
+    if (
+        allowedOrigins.includes(origin) ||
+        origin.startsWith("http://localhost") ||
+        origin.startsWith("https://localhost")
+    ) {
         res.setHeader("Access-Control-Allow-Origin", origin)
     }
     res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS")

@@ -63,6 +63,14 @@ async function getAccessToken(): Promise<string> {
     return sharedAccessToken!
 }
 
+/** Prevents duplicate state codes (e.g. "FLFL" → "FL") that cause UPS 400 errors */
+function sanitizeState(state: string): string {
+    if (!state) return ""
+    const trimmed = state.trim().toUpperCase()
+    // State codes are always 2 chars; if longer it's likely a duplication bug
+    return trimmed.length > 2 ? trimmed.slice(0, 2) : trimmed
+}
+
 async function fetchShopRates(req: ShopRateRequest): Promise<Record<string, number>> {
     const token = await getAccessToken()
 
@@ -81,7 +89,7 @@ async function fetchShopRates(req: ShopRateRequest): Promise<Record<string, numb
                     Address: {
                         AddressLine: [req.shipperAddress],
                         City: req.shipperCity,
-                        StateProvinceCode: req.shipperState,
+                        StateProvinceCode: sanitizeState(req.shipperState),
                         PostalCode: req.shipperZip,
                         CountryCode: req.shipperCountry
                     }
@@ -91,7 +99,7 @@ async function fetchShopRates(req: ShopRateRequest): Promise<Record<string, numb
                     Address: {
                         AddressLine: [req.shipToAddress],
                         City: req.shipToCity,
-                        StateProvinceCode: req.shipToState,
+                        StateProvinceCode: sanitizeState(req.shipToState),
                         PostalCode: req.postalCode,
                         CountryCode: req.shipToCountry
                     }
@@ -114,37 +122,47 @@ async function fetchShopRates(req: ShopRateRequest): Promise<Record<string, numb
         }
     }
 
-    // Use /Shop endpoint — returns ALL services in one call
-    const response = await axios.post(
-        "https://onlinetools.ups.com/api/rating/v1/Shop",
-        shopRequest,
-        {
-            headers: {
-                "Authorization": `Bearer ${token}`,
-                "Content-Type": "application/json",
-                "transId": `shop_${Date.now()}`,
-                "transactionSrc": "medusa"
+    try {
+        const response = await axios.post(
+            "https://onlinetools.ups.com/api/rating/v1/Shop",
+            shopRequest,
+            {
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json",
+                    "transId": `shop_${Date.now()}`,
+                    "transactionSrc": "medusa"
+                }
             }
+        )
+
+        const ratedShipments = response.data.RateResponse?.RatedShipment || []
+        const rates: Record<string, number> = {}
+
+        for (const shipment of ratedShipments) {
+            const serviceCode = shipment.Service?.Code
+            if (!serviceCode) continue
+
+            const rateStr =
+                shipment.NegotiatedRateCharges?.TotalCharge?.MonetaryValue ||
+                shipment.TotalCharges?.MonetaryValue ||
+                "0"
+
+            rates[serviceCode] = Math.round(parseFloat(rateStr) * 100) // store in cents
         }
-    )
 
-    const ratedShipments = response.data.RateResponse?.RatedShipment || []
-    const rates: Record<string, number> = {}
+        console.log(`✅ UPS Shop returned ${Object.keys(rates).length} services:`, rates)
+        return rates
 
-    for (const shipment of ratedShipments) {
-        const serviceCode = shipment.Service?.Code
-        if (!serviceCode) continue
-
-        const rateStr =
-            shipment.NegotiatedRateCharges?.TotalCharge?.MonetaryValue ||
-            shipment.TotalCharges?.MonetaryValue ||
-            "0"
-
-        rates[serviceCode] = Math.round(parseFloat(rateStr) * 100) // store in cents
+    } catch (error: any) {
+        console.error("❌ UPS Shop API Error Dumps:",
+            error.response?.data?.response?.errors ||
+            error.response?.data ||
+            error.message
+        )
+        // Re-throw so the provider catches it and marks the option unavailable
+        throw error
     }
-
-    console.log(`✅ UPS Shop returned ${Object.keys(rates).length} services:`, rates)
-    return rates
 }
 
 /**

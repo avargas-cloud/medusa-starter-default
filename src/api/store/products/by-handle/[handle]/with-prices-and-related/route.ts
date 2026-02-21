@@ -94,23 +94,41 @@ export const GET = async (
         if (breadcrumbs && breadcrumbs.length > 0) {
         }
 
-        // Get attributes - handle gracefully if table doesn't exist (local dev)
+        // Get attributes via Medusa module link table (same pattern as /store/products)
         let attributes: any[] = []
         try {
-            const attributeResults = await knex("product_to_attribute")
-                .select("attribute_key", "attribute_value")
+            // Step 1: Get attribute value IDs linked to this product
+            const links = await knex("product_product_productattributes_attribute_value")
+                .select("attribute_value_id")
                 .where("product_id", mainProduct.id)
                 .whereNull("deleted_at")
-                .orderBy("attribute_key")
 
-            attributes = attributeResults || []
-        } catch (error: any) {
-            // Table might not exist in local dev environment
-            if (error.message?.includes('does not exist')) {
-                // Silently handle missing table in local dev
-            } else {
-                throw error // Re-throw if it's a different error
+            if (links.length > 0) {
+                const attributeValueIds = links.map((l: any) => l.attribute_value_id)
+
+                // Step 2: Fetch attribute values with their keys via query.graph
+                const { data: attributeValues } = await query.graph({
+                    entity: "attribute_value",
+                    fields: [
+                        "id",
+                        "value",
+                        "attribute_key.id",
+                        "attribute_key.handle",
+                        "attribute_key.label"
+                    ],
+                    filters: { id: attributeValueIds }
+                })
+
+                // Step 3: Transform to frontend format {handle, label, value}
+                attributes = attributeValues.map((av: any) => ({
+                    handle: av.attribute_key?.handle || av.id,
+                    label: av.attribute_key?.label || av.attribute_key?.handle || av.id,
+                    value: av.value
+                }))
             }
+        } catch (error: any) {
+            // Silently handle if attribute tables don't exist in local dev
+            console.warn("[WITH-PRICES-RELATED] Could not fetch attributes:", error.message)
         }
 
         // 2. Calculate prices for main product using Pricing Module
