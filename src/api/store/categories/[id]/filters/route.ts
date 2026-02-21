@@ -142,7 +142,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             filters.sort((a, b) => a.order - b.order)
 
             // ⭐ Calculate product counts for this specific category
-            console.log(`🔢 Calculating product counts for category: ${id}`)
+            // console.log(`🔢 Calculating product counts for category: ${id}`)
 
             // Extract category info for response
             const category_name = categoryResult.data[0].name
@@ -164,10 +164,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             })
 
             const products = productsResult?.data || []
-            console.log(`📦 Found ${products.length} products in category`)
+            // console.log(`📦 Found ${products.length} products in category`)
 
             if (products.length === 0) {
-                console.log(`⚠️  No products in category, returning filters with 0 counts`)
+                // console.log(`⚠️  No products in category, returning filters with 0 counts`)
                 // Return filters with zero counts
                 // @ts-expect-error - Type uses 'options' not 'values'
                 filters = filters.map(filter => ({
@@ -192,10 +192,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 .whereIn("product_id", productIds)
                 .whereNull("deleted_at")
 
-            console.log(`🔗 Found ${allLinks.length} total attribute links for ${productIds.length} products`)
+            // console.log(`🔗 Found ${allLinks.length} total attribute links for ${productIds.length} products`)
 
             if (allLinks.length === 0) {
-                console.log(`⚠️  No attributes found for products, returning filters with 0 counts`)
+                // console.log(`⚠️  No attributes found for products, returning filters with 0 counts`)
                 // @ts-expect-error - Type uses 'options' not 'values'
                 filters = filters.map(filter => ({
                     ...filter,
@@ -223,7 +223,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 filters: { id: allAttributeValueIds }
             })
 
-            console.log(`📋 Fetched ${allAttributeValues.length} attribute values`)
+            // console.log(`📋 Fetched ${allAttributeValues.length} attribute values`)
 
             // Count products per filter value
             filters = filters.map(filter => {
@@ -246,8 +246,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 })
 
                 // @ts-expect-error - Type uses 'name' property
-                console.log(`\n🔍 Processing filter: ${filter.name} (${filter.attribute})`)
-                console.log(`  Possible options:`, originalOptions.slice(0, 5))
+                // console.log(`\n🔍 Processing filter: ${filter.name} (${filter.attribute})`)
+                // console.log(`  Possible options:`, originalOptions.slice(0, 5))
 
                 // For each product, check if it has this attribute
                 products.forEach((product: any) => {
@@ -266,18 +266,18 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                     matchingValues.forEach((av: any) => {
                         const optionValue = av.value
                         // @ts-expect-error - Type uses 'name' property
-                        console.log(`    ✓ Product "${product.title}": ${filter.name} = "${optionValue}"`)
+                        // console.log(`    ✓ Product "${product.title}": ${filter.name} = "${optionValue}"`)
 
                         if (optionCounts.hasOwnProperty(optionValue)) {
                             optionCounts[optionValue]++
                         } else {
-                            console.log(`      ⚠️ Option "${optionValue}" not in available options list`)
+                            // console.log(`      ⚠️ Option "${optionValue}" not in available options list`)
                         }
                     })
                 })
 
                 // @ts-expect-error - Type uses 'name' property
-                console.log(`  Filter "${filter.name}" counts:`, optionCounts)
+                // console.log(`  Filter "${filter.name}" counts:`, optionCounts)
 
                 // Transform options array to include counts
                 return {

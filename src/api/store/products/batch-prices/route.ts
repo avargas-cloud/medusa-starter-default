@@ -60,14 +60,14 @@ export async function POST(
                     );
                 }
 
-                console.log(`[Batch Prices] Customer ${customerId} is ${isWholesale ? 'WHOLESALE' : 'RETAIL'}`);
+                // console.log(`[Batch Prices] Customer ${customerId} is ${isWholesale ? 'WHOLESALE' : 'RETAIL'}`);
             } catch (error) {
                 console.error('[Batch Prices] Could not fetch customer groups:', error);
             }
         } else if (!dynamicPricingEnabled) {
-            console.log(`[Batch Prices] Single Price Mode — using retail prices for all customers.`);
+            // console.log(`[Batch Prices] Single Price Mode — using retail prices for all customers.`);
         } else {
-            console.log(`[Batch Prices] Guest user - using retail prices`);
+            // console.log(`[Batch Prices] Guest user - using retail prices`);
         }
 
         // Fetch products with variants and price_set_id
@@ -89,7 +89,7 @@ export async function POST(
             return;
         }
 
-        console.log(`[Batch Prices] Fetched ${products.length} products`);
+        // console.log(`[Batch Prices] Fetched ${products.length} products`);
 
         // Get price_set_ids from first variants
         const priceSetData: Array<{ productId: string; priceSetId: string; variantId: string }> = [];
@@ -118,7 +118,7 @@ export async function POST(
 
         const priceSetIds = priceSetData.map(p => p.priceSetId);
 
-        console.log(`[Batch Prices] Calculating prices for ${priceSetIds.length} price sets with context:`, pricingContext);
+        // console.log(`[Batch Prices] Calculating prices for ${priceSetIds.length} price sets with context:`, pricingContext);
 
         // Calculate prices using correct Medusa v2 API
         const calculatedPrices = await pricingModule.calculatePrices(
@@ -126,7 +126,7 @@ export async function POST(
             { context: pricingContext } // IMPORTANT: context wrapped in object
         );
 
-        console.log(`[Batch Prices] ✅ Calculated ${calculatedPrices.length} prices`);
+        // console.log(`[Batch Prices] ✅ Calculated ${calculatedPrices.length} prices`);
 
         // Map prices back to products
         const prices: Record<string, any> = {};
@@ -147,7 +147,7 @@ export async function POST(
             };
         }
 
-        console.log(`[Batch Prices] Returning prices for ${Object.keys(prices).length} products`);
+        // console.log(`[Batch Prices] Returning prices for ${Object.keys(prices).length} products`);
 
         res.json({
             prices,
