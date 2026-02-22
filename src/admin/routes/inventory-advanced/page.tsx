@@ -1,6 +1,7 @@
 import { Container, Toaster } from "@medusajs/ui"
 import { useInventorySearch } from "./hooks/use-inventory-search"
 import { useCategories } from "./hooks/use-categories"
+import { useFeatureFlags } from "./hooks/use-feature-flags"
 import { InventoryHeader } from "./components/inventory-header"
 import { InventoryTable } from "./components/inventory-table"
 import { InventoryPagination } from "./components/inventory-pagination"
@@ -19,6 +20,7 @@ const InventoryPage = () => {
     const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
 
     const { categories, isLoading: isLoadingCategories } = useCategories()
+    const { enableDynamicPricing, priceLists } = useFeatureFlags()
 
     // MeiliSearch hook
     const {
@@ -73,6 +75,8 @@ const InventoryPage = () => {
                     isLoading={isLoading}
                     sortBy={sortBy}
                     onSortChange={handleSortChange}
+                    enableDynamicPricing={enableDynamicPricing}
+                    priceLists={priceLists}
                 />
                 <InventoryPagination
                     currentPage={currentPage}

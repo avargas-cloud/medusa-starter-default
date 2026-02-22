@@ -26,6 +26,7 @@ export async function GET(
                 customer_interval_minutes,
                 last_inventory_sync,
                 last_price_sync,
+                last_customer_sync,
                 bridge_url,
                 created_at,
                 updated_at

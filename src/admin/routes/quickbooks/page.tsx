@@ -2,6 +2,7 @@ import { defineRouteConfig } from "@medusajs/admin-sdk"
 import { BuildingStorefront } from "@medusajs/icons"
 import { Container, Heading, Button, Text, Select, Label } from "@medusajs/ui"
 import { useState, useEffect } from "react"
+import { SyncReportModal } from "./components/SyncReportModal"
 
 const QuickBooksPage = () => {
     const [inventorySyncing, setInventorySyncing] = useState(false)
@@ -13,11 +14,18 @@ const QuickBooksPage = () => {
     const [priceTimeOfDay, setPriceTimeOfDay] = useState("00:00")
     const [customerTimeOfDay, setCustomerTimeOfDay] = useState("00:00")
     const [showAuditModal, setShowAuditModal] = useState(false)
-    const [auditData, setAuditData] = useState<any>(null)
+    const [auditData] = useState<any>(null)
     const [qbEnabled, setQbEnabled] = useState<boolean | null>(null)  // null = loading
     const [qbToggling, setQbToggling] = useState(false)
+    // Last sync timestamps
+    const [lastInventorySync, setLastInventorySync] = useState<string | null>(null)
+    const [lastPriceSync, setLastPriceSync] = useState<string | null>(null)
+    const [lastCustomerSync, setLastCustomerSync] = useState<string | null>(null)
+    // Sync report modal
+    const [reportModal, setReportModal] = useState<{ jobId: string | null; title: string } | null>(null)
+    const [lastJobIds, setLastJobIds] = useState<{ inventory?: string; prices?: string; customers?: string }>({})
 
-    // Load saved config on mount
+    // Load saved config AND last job IDs on mount
     useEffect(() => {
         const loadConfig = async () => {
             try {
@@ -32,6 +40,11 @@ const QuickBooksPage = () => {
 
                 // Load master toggle
                 setQbEnabled(config.integration_enabled ?? true)
+
+                // Load last sync timestamps from DB
+                if (config.last_inventory_sync) setLastInventorySync(config.last_inventory_sync)
+                if (config.last_price_sync) setLastPriceSync(config.last_price_sync)
+                if (config.last_customer_sync) setLastCustomerSync(config.last_customer_sync)
 
                 // Load intervals (convert from minutes to display format)
                 if (config.inventory_interval_minutes !== null && config.inventory_interval_minutes !== undefined) {
@@ -57,7 +70,27 @@ const QuickBooksPage = () => {
                 console.error('Failed to load config:', error)
             }
         }
+
+        // Load last job IDs so View Report works after page refresh
+        const loadLastJobs = async () => {
+            try {
+                const [inv, prices, cust] = await Promise.all([
+                    fetch('/admin/quickbooks/sync/last-job?type=inventory', { credentials: 'include' }).then(r => r.json()),
+                    fetch('/admin/quickbooks/sync/last-job?type=prices', { credentials: 'include' }).then(r => r.json()),
+                    fetch('/admin/quickbooks/sync/last-job?type=customers', { credentials: 'include' }).then(r => r.json()),
+                ])
+                setLastJobIds({
+                    inventory: inv.job_id ?? undefined,
+                    prices: prices.job_id ?? undefined,
+                    customers: cust.job_id ?? undefined,
+                })
+            } catch {
+                // Non-blocking if backend just restarted and has no jobs yet
+            }
+        }
+
         loadConfig()
+        loadLastJobs()
     }, [])
 
     // Inventory intervals in minutes
@@ -103,6 +136,17 @@ const QuickBooksPage = () => {
             minute: '2-digit',
             hour12: false
         })
+    }
+
+    // Format a timestamp for display
+    const formatSyncDate = (dateStr: string | null): string => {
+        if (!dateStr) return ''
+        try {
+            return new Date(dateStr).toLocaleString('en-US', {
+                month: 'short', day: 'numeric', year: 'numeric',
+                hour: '2-digit', minute: '2-digit', hour12: true,
+            })
+        } catch { return dateStr }
     }
 
     const calculateNextPriceSync = (intervalHours: string, timeOfDay: string): string => {
@@ -240,11 +284,13 @@ const QuickBooksPage = () => {
                 credentials: 'include',
             })
 
-            if (!res.ok) throw new Error('Sync failed')
-
-            alert(`✅ Inventory sync initiated successfully`)
+            if (!res.ok) throw new Error('Failed to start sync')
+            const data = await res.json()
+            const jobId = data.job_id
+            setLastJobIds(prev => ({ ...prev, inventory: jobId }))
+            setReportModal({ jobId, title: '📦 Inventory Sync Report' })
         } catch (error) {
-            alert(`❌ Sync failed: ${(error as Error).message}`)
+            alert(`❌ Sync failed to start: ${(error as Error).message}`)
         } finally {
             setInventorySyncing(false)
         }
@@ -258,11 +304,13 @@ const QuickBooksPage = () => {
                 credentials: 'include',
             })
 
-            if (!res.ok) throw new Error('Sync failed')
-
-            alert(`✅ Price sync initiated successfully`)
+            if (!res.ok) throw new Error('Failed to start sync')
+            const data = await res.json()
+            const jobId = data.job_id
+            setLastJobIds(prev => ({ ...prev, prices: jobId }))
+            setReportModal({ jobId, title: '💵 Price Sync Report' })
         } catch (error) {
-            alert(`❌ Sync failed: ${(error as Error).message}`)
+            alert(`❌ Sync failed to start: ${(error as Error).message}`)
         } finally {
             setPriceSyncing(false)
         }
@@ -298,30 +346,6 @@ const QuickBooksPage = () => {
         }
     }
 
-    const handleViewLastReport = async () => {
-        try {
-            const res = await fetch('/admin/quickbooks/check/customers', {
-                method: 'GET',
-                credentials: 'include',
-                headers: {
-                    'Content-Type': 'application/json',
-                }
-            })
-
-            if (res.status === 404) {
-                alert('❌ No audit results found. Run "Check Now" first.')
-                return
-            }
-
-            if (!res.ok) throw new Error('Failed to fetch audit')
-
-            const data = await res.json()
-            setAuditData(data.audit)
-            setShowAuditModal(true)
-        } catch (error) {
-            alert(`❌ Failed to load report: ${(error as Error).message}`)
-        }
-    }
 
     const handleCustomerSync = async () => {
         setCustomerSyncing(true)
@@ -334,12 +358,13 @@ const QuickBooksPage = () => {
                 }
             })
 
-            if (!res.ok) throw new Error('Sync failed')
-
+            if (!res.ok) throw new Error('Failed to start sync')
             const data = await res.json()
-            alert(`✅ Customer sync completed!\n\nImported: ${data.stats.imported}\nAlready in Medusa: ${data.stats.alreadyInMedusa}`)
+            const jobId = data.job_id
+            setLastJobIds(prev => ({ ...prev, customers: jobId }))
+            setReportModal({ jobId, title: '👥 Customer Sync Report' })
         } catch (error) {
-            alert(`❌ Failed to sync: ${(error as Error).message}`)
+            alert(`❌ Failed to start: ${(error as Error).message}`)
         } finally {
             setCustomerSyncing(false)
         }
@@ -363,7 +388,7 @@ const QuickBooksPage = () => {
                         </div>
                         <div className="flex items-center gap-3">
                             <span className={`text-xs font-semibold px-2 py-1 rounded-full ${qbEnabled === null ? 'bg-gray-100 text-gray-500' :
-                                    qbEnabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                                qbEnabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
                                 }`}>
                                 {qbEnabled === null ? 'Loading...' : qbEnabled ? '● ENABLED' : '● DISABLED'}
                             </span>
@@ -424,6 +449,13 @@ const QuickBooksPage = () => {
                                 Save
                             </Button>
                             <Button
+                                variant="secondary"
+                                onClick={() => setReportModal({ jobId: lastJobIds.inventory ?? null, title: '📦 Inventory Sync Report' })}
+                                className="flex-1"
+                            >
+                                View Report
+                            </Button>
+                            <Button
                                 onClick={handleInventorySync}
                                 isLoading={inventorySyncing}
                                 disabled={inventorySyncing}
@@ -431,6 +463,18 @@ const QuickBooksPage = () => {
                             >
                                 {inventorySyncing ? 'Syncing...' : 'Sync Now'}
                             </Button>
+                        </div>
+
+                        {/* Last sync timestamp */}
+                        <div className="flex items-center gap-1.5 text-xs text-ui-fg-subtle pt-1 border-t border-ui-border-base">
+                            {lastInventorySync ? (
+                                <>
+                                    <span className="text-green-600">✅</span>
+                                    <span>Last sync: <span className="font-medium text-ui-fg-base">{formatSyncDate(lastInventorySync)}</span></span>
+                                </>
+                            ) : (
+                                <span className="text-ui-fg-muted">No sync recorded yet</span>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -496,6 +540,13 @@ const QuickBooksPage = () => {
                                 Save
                             </Button>
                             <Button
+                                variant="secondary"
+                                onClick={() => setReportModal({ jobId: lastJobIds.prices ?? null, title: '💵 Price Sync Report' })}
+                                className="flex-1"
+                            >
+                                View Report
+                            </Button>
+                            <Button
                                 onClick={handlePriceSync}
                                 isLoading={priceSyncing}
                                 disabled={priceSyncing}
@@ -503,6 +554,18 @@ const QuickBooksPage = () => {
                             >
                                 {priceSyncing ? 'Syncing...' : 'Sync Now'}
                             </Button>
+                        </div>
+
+                        {/* Last sync timestamp */}
+                        <div className="flex items-center gap-1.5 text-xs text-ui-fg-subtle pt-1 border-t border-ui-border-base">
+                            {lastPriceSync ? (
+                                <>
+                                    <span className="text-green-600">✅</span>
+                                    <span>Last sync: <span className="font-medium text-ui-fg-base">{formatSyncDate(lastPriceSync)}</span></span>
+                                </>
+                            ) : (
+                                <span className="text-ui-fg-muted">No sync recorded yet</span>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -569,10 +632,10 @@ const QuickBooksPage = () => {
                             </Button>
                             <Button
                                 variant="secondary"
-                                onClick={handleViewLastReport}
+                                onClick={() => setReportModal({ jobId: lastJobIds.customers ?? null, title: '👥 Customer Sync Report' })}
                                 className="flex-1"
                             >
-                                View Last Report
+                                View Report
                             </Button>
                             <Button
                                 onClick={handleCustomerSync}
@@ -583,11 +646,30 @@ const QuickBooksPage = () => {
                                 {customerSyncing ? 'Syncing...' : 'Sync Now'}
                             </Button>
                         </div>
+
+                        {/* Last sync timestamp */}
+                        <div className="flex items-center gap-1.5 text-xs text-ui-fg-subtle pt-1 border-t border-ui-border-base">
+                            {lastCustomerSync ? (
+                                <>
+                                    <span className="text-green-600">✅</span>
+                                    <span>Last sync: <span className="font-medium text-ui-fg-base">{formatSyncDate(lastCustomerSync)}</span></span>
+                                </>
+                            ) : (
+                                <span className="text-ui-fg-muted">No sync recorded yet</span>
+                            )}
+                        </div>
                     </div>
                 </div>
             </Container>
 
-            {/* Customer Audit Modal */}
+            {/* Sync Report Modal (all 3 sync types) */}
+            {reportModal && (
+                <SyncReportModal
+                    jobId={reportModal.jobId}
+                    title={reportModal.title}
+                    onClose={() => setReportModal(null)}
+                />
+            )}
             {showAuditModal && auditData && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowAuditModal(false)}>
                     <div className="bg-white rounded-lg p-6 max-w-4xl max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>

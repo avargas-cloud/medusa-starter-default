@@ -93,6 +93,15 @@ export type MeiliInventoryItem = {
 
     /** Product status */
     status: "published" | "draft";
+
+    /** Prices indexed by price_list_id (for dynamic price columns).
+     *  Key = price_list_id, Value = amount in dollars.
+     *  Fallback: if a product has no price in a given list, use `price` (retail). */
+    pricesByList?: Record<string, number>;
+
+    /** Timestamps for sync tracking */
+    created_at: number;
+    updated_at: number;
 };
 
 /**

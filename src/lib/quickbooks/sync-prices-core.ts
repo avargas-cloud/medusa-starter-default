@@ -1,6 +1,7 @@
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import { IPricingModuleService } from "@medusajs/types"
 import { isQbIntegrationEnabled } from "./qb-integration-guard"
+import { syncInventoryWorkflow } from "../../workflows/sync-inventory"
 
 // Config — URLs and keys from env vars, no hardcoded secrets
 const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://ecopower-qb.loca.lt"
@@ -45,13 +46,13 @@ export interface SyncPricesResult {
  */
 export async function syncPricesCore(
     container: any,
-    options: { dryRun?: boolean } = {}
+    options: { dryRun?: boolean; onLog?: (line: string) => void } = {}
 ): Promise<SyncPricesResult> {
     const dryRun = options.dryRun || process.env.QB_DRY_RUN === "true"
 
     // Master integration kill switch — check DB + env var
     if (!(await isQbIntegrationEnabled())) {
-        console.log("[QB] Integration is DISABLED (QB_INTEGRATION=false or toggled off in admin). Skipping price sync.")
+        options.onLog?.("[QB] Integration is DISABLED. Skipping price sync.")
         return {
             success: false,
             dryRun,
@@ -60,6 +61,8 @@ export async function syncPricesCore(
         }
     }
     const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+    const log = (line: string) => { logger.info(line); options.onLog?.(line) }
+    const warn = (line: string) => { logger.warn(line); options.onLog?.(`⚠️ ${line}`) }
     const pricingModule: IPricingModuleService = container.resolve(Modules.PRICING)
     const query = container.resolve(ContainerRegistrationKeys.QUERY)
 
@@ -75,25 +78,35 @@ export async function syncPricesCore(
     }
 
     try {
-        logger.info(`💰 Starting QuickBooks PRICE Sync (ONLY)...${dryRun ? " [DRY RUN — no changes will be written]" : ""}`)
+        log(`💰 Starting QuickBooks PRICE Sync (ONLY)...${dryRun ? " [DRY RUN — no changes will be written]" : ""}`)
 
-        // Fetch Wholesale Price List once (used for every price update)
+        // Fetch Wholesale Price List + Customer Group ID once (used for every price update)
         let wholesalePriceListId: string | null = null
+        let wholesaleGroupId: string | null = null
         try {
             const allPriceLists = await pricingModule.listPriceLists()
             const wPriceList = allPriceLists.find((pl: any) => pl.title === "Wholesale Pricing")
             wholesalePriceListId = wPriceList?.id ?? null
             if (wholesalePriceListId) {
-                logger.info(`🏷️  Wholesale Price List found: ${wholesalePriceListId}`)
+                log(`🏷️  Wholesale Price List found: ${wholesalePriceListId}`)
+                // Fetch Wholesale customer group
+                const customerModule = container.resolve(Modules.CUSTOMER)
+                const wholesaleGroups = await customerModule.listCustomerGroups({ name: ["Wholesale"] })
+                wholesaleGroupId = wholesaleGroups[0]?.id ?? null
+                if (wholesaleGroupId) {
+                    log(`👥 Wholesale Customer Group ID: ${wholesaleGroupId}`)
+                } else {
+                    warn(`⚠️  Wholesale customer group not found — prices will still be stored in price list but without customer group rule`)
+                }
             } else {
-                logger.warn(`⚠️  Wholesale Price List "Wholesale Pricing" not found — wholesale prices will NOT be updated`)
+                warn(`⚠️  Wholesale Price List "Wholesale Pricing" not found — wholesale prices will NOT be updated`)
             }
         } catch (e: any) {
-            logger.warn(`⚠️  Could not fetch wholesale price list: ${e.message}`)
+            warn(`⚠️  Could not fetch wholesale price list: ${e.message}`)
         }
 
         // 1. Fetch Medusa Products with QB ID
-        logger.info("🔍 Fetching Medusa Products with QuickBooks ID...")
+        log("🔍 Fetching Medusa Products with QuickBooks ID...")
         const { data: variants } = await query.graph({
             entity: "variant",
             fields: [
@@ -106,15 +119,15 @@ export async function syncPricesCore(
 
         const qbVariants = variants.filter((v: any) => v.metadata?.quickbooks_id)
         stats.totalLinkedVariants = qbVariants.length
-        logger.info(`📊 Found ${qbVariants.length} variants linked to QuickBooks.`)
+        log(`📊 Found ${qbVariants.length} variants linked to QuickBooks.`)
 
         if (qbVariants.length === 0) {
-            logger.info("⚠️ No linked products found. Run 'assign-quickbooks-ids' first.")
+            log("⚠️ No linked products found. Run 'assign-quickbooks-ids' first.")
             return { success: false, stats, error: "No linked products found" }
         }
 
         // 2. Initiate Bulk Sync
-        logger.info("📡 Requesting Bulk Data from Bridge...")
+        log("📡 Requesting Bulk Data from Bridge...")
         const initRes = await fetch(`${BRIDGE_URL}/api/products`, {
             headers: { "x-api-key": API_KEY }
         })
@@ -127,7 +140,7 @@ export async function syncPricesCore(
 
         const initJson: any = await initRes.json()
         const operationId = initJson.operationId
-        logger.info(`✅ Operation Queued! ID: ${operationId}`)
+        log(`✅ Operation Queued! ID: ${operationId}`)
 
         // 3. Polling Loop
         let qbData: any[] = []
@@ -135,7 +148,7 @@ export async function syncPricesCore(
 
         while (attempts < MAX_POLL_ATTEMPTS) {
             attempts++
-            logger.info(`⏳ Polling Status (${attempts}/${MAX_POLL_ATTEMPTS})...`)
+            log(`⏳ Polling Status (${attempts}/${MAX_POLL_ATTEMPTS})...`)
 
             await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
 
@@ -144,7 +157,7 @@ export async function syncPricesCore(
             })
 
             if (!statusRes.ok) {
-                logger.warn(`   Bridge Status Error: ${statusRes.status}`)
+                warn(`   Bridge Status Error: ${statusRes.status}`)
                 continue
             }
 
@@ -152,8 +165,14 @@ export async function syncPricesCore(
 
             if (statusJson.success && statusJson.operation) {
                 if (statusJson.operation.status === "completed") {
-                    qbData = statusJson.data || []
-                    logger.info(`✅ Data Received! ${qbData.length} items from QuickBooks.`)
+                    // Bridge returns parsed XML in operation.result
+                    // Structure: result.QBXML.QBXMLMsgsRs.ItemQueryRs.ItemInventoryRet[]
+                    const queryRs = statusJson.operation?.result?.QBXML?.QBXMLMsgsRs?.ItemQueryRs
+                    if (queryRs) {
+                        const inventoryItems = queryRs.ItemInventoryRet || []
+                        qbData = Array.isArray(inventoryItems) ? inventoryItems : [inventoryItems]
+                    }
+                    log(`✅ Data Received! ${qbData.length} items from QuickBooks.`)
                     break
                 }
 
@@ -172,9 +191,11 @@ export async function syncPricesCore(
         }
 
         // 4. Update ONLY Prices (with comparison)
-        logger.info("\n💵 Processing Price Updates...")
+        log("\n💵 Processing Price Updates...")
 
         const qbMap = new Map(qbData.map((item: any) => [item.ListID, item]))
+
+
 
         for (const variant of qbVariants) {
             const qbId = (variant.metadata as any)?.quickbooks_id
@@ -182,7 +203,7 @@ export async function syncPricesCore(
 
             if (!qbItem) {
                 stats.missingInQb++
-                logger.warn(`   ⚠️ ${variant.sku} not found in QB Response.`)
+                warn(`   ⚠️ ${variant.sku} not found in QB Response.`)
                 continue
             }
 
@@ -190,13 +211,13 @@ export async function syncPricesCore(
 
             if (!variant.price_set) {
                 stats.skippedNoPrice++
-                logger.warn(`   ❌ ${variant.sku}: No Price Set linked.`)
+                warn(`   ❌ ${variant.sku}: No Price Set linked.`)
                 continue
             }
 
             if (isNaN(newPrice)) {
                 stats.skippedNoPrice++
-                logger.warn(`   ⚠️ ${variant.sku}: Invalid price in QB`)
+                warn(`   ⚠️ ${variant.sku}: Invalid price in QB`)
                 continue
             }
 
@@ -218,15 +239,9 @@ export async function syncPricesCore(
                 // So we compare dollars to dollars directly — no conversion needed.
                 // Reference: sync-qb-inventory.ts line 194: "v2: Store dollars directly, NO × 100"
 
-                // ANOMALY GUARD: skip if change is absurd (>10x or <0.1x)
-                if (currentAmount > 0) {
-                    const ratio = newPrice / currentAmount
-                    if (ratio > 10 || ratio < 0.1) {
-                        logger.warn(`   ⚠️ PRICE ANOMALY ${variant.sku || variant.id}: Medusa=$${currentAmount.toFixed(2)} QB=$${newPrice.toFixed(2)} (ratio=${ratio.toFixed(2)}) — SKIPPED`)
-                        stats.skippedAnomaly++
-                        continue
-                    }
-                }
+                // NOTE: Anomaly guard removed — QB prices are authoritative.
+                // High Medusa prices (e.g. $607 vs QB $7.49) are the historical
+                // cents-as-dollars bug. We trust QB and overwrite.
 
                 // Compare dollars to dollars — skip if unchanged (within $0.01 tolerance)
                 if (Math.abs(currentAmount - newPrice) < 0.01) {
@@ -236,7 +251,7 @@ export async function syncPricesCore(
 
                 if (dryRun) {
                     const wsPreview = wholesalePriceListId ? ` (wholesale would be: $${smartRound(newPrice * 0.9).toFixed(2)})` : ""
-                    logger.info(`   [DRY RUN] Would update ${variant.sku || variant.id}: $${currentAmount.toFixed(2)} → $${newPrice.toFixed(2)}${wsPreview}`)
+                    log(`   [DRY RUN] Would update ${variant.sku || variant.id}: $${currentAmount.toFixed(2)} → $${newPrice.toFixed(2)}${wsPreview}`)
                     stats.updatedPrice++
                     if (wholesalePriceListId) stats.updatedWholesale++
                     continue
@@ -253,48 +268,70 @@ export async function syncPricesCore(
                     ]
                 })
                 stats.updatedPrice++
+                log(`   💵 Retail updated ${variant.sku || variant.id}: $${currentAmount.toFixed(2)} → $${newPrice.toFixed(2)}`)
 
-                // Auto-update wholesale: 10% off retail, smartRound to .25/.50/.75/.99
-                if (wholesalePriceListId) {
+                // Update wholesale for THIS variant only — per-variant, no delete-all
+                if (wholesalePriceListId && variant.price_set) {
                     const wholesalePrice = smartRound(newPrice * 0.9)
                     try {
-                        await pricingModule.addPrices({
-                            priceSetId: variant.price_set.id,
-                            prices: [{
-                                amount: wholesalePrice,    // already in dollars
-                                currency_code: "usd",
-                                rules: { price_list_id: wholesalePriceListId }
-                            }]
+                        // Find and delete only THIS variant's existing wholesale price
+                        const existingWholesale = await pricingModule.listPrices({
+                            price_set_id: [variant.price_set.id],
+                            price_list_id: [wholesalePriceListId]
                         })
+                        if (existingWholesale.length > 0) {
+                            await (pricingModule as any).deletePrices(existingWholesale.map((p: any) => p.id))
+                        }
+                        // Create new wholesale price for this variant
+                        await (pricingModule as any).createPrices([{
+                            price_set_id: variant.price_set.id,
+                            price_list_id: wholesalePriceListId,
+                            currency_code: "usd",
+                            amount: wholesalePrice,
+                            rules: wholesaleGroupId ? { customer_group_id: wholesaleGroupId } : {}
+                        }])
                         stats.updatedWholesale++
-                        logger.info(`   🏷️  Wholesale updated: $${wholesalePrice.toFixed(2)} (10% off $${newPrice.toFixed(2)})`)
+                        log(`   🏷️  Wholesale updated ${variant.sku || variant.id}: $${wholesalePrice.toFixed(2)} (10% off)`)
                     } catch (wsErr: any) {
-                        logger.warn(`   ⚠️ Wholesale update failed for ${variant.sku}: ${wsErr.message}`)
+                        warn(`   ⚠️  Wholesale update failed for ${variant.sku}: ${wsErr.message}`)
                     }
                 }
 
                 if (stats.updatedPrice % 25 === 0) {
-                    logger.info(`   ✅ Progress: ${stats.updatedPrice} prices updated...`)
+                    log(`   ✅ Progress: ${stats.updatedPrice} prices updated...`)
                 }
             } catch (err: any) {
                 logger.error(`   ❌ ${variant.sku}: Price Update Failed - ${err.message}`)
             }
         }
 
-        stats.foundInQb = qbVariants.length - stats.missingInQb
+        log(`\n${"=".repeat(50)}`)
+        log(`✅ PRICE SYNC SUMMARY${dryRun ? " [DRY RUN]" : ""}`)
+        log(`${"=".repeat(50)}`)
+        log(`Total Linked Variants: ${stats.totalLinkedVariants}`)
+        log(`Found in QB:           ${stats.foundInQb}`)
+        log(`Missing in QB:         ${stats.missingInQb}`)
+        log(`Updated (Retail):      ${stats.updatedPrice}${dryRun ? " (would update)" : ""}`)
+        log(`Updated (Wholesale):   ${stats.updatedWholesale}${dryRun ? " (would update)" : ""} — auto-calculated at 10% off`)
+        log(`Skipped (Unchanged):   ${stats.skippedNoChange}`)
+        log(`Skipped (No Price):    ${stats.skippedNoPrice}`)
+        log(`Skipped (Anomaly 10x): ${stats.skippedAnomaly}`)
+        log(`${"=".repeat(50)}\n`)
 
-        logger.info(`\n${"=".repeat(50)}`)
-        logger.info(`✅ PRICE SYNC SUMMARY${dryRun ? " [DRY RUN]" : ""}`)
-        logger.info(`${"=".repeat(50)}`)
-        logger.info(`Total Linked Variants: ${stats.totalLinkedVariants}`)
-        logger.info(`Found in QB:           ${stats.foundInQb}`)
-        logger.info(`Missing in QB:         ${stats.missingInQb}`)
-        logger.info(`Updated (Retail):      ${stats.updatedPrice}${dryRun ? " (would update)" : ""}`)
-        logger.info(`Updated (Wholesale):   ${stats.updatedWholesale}${dryRun ? " (would update)" : ""} — auto-calculated at 10% off`)
-        logger.info(`Skipped (Unchanged):   ${stats.skippedNoChange}`)
-        logger.info(`Skipped (No Price):    ${stats.skippedNoPrice}`)
-        logger.info(`Skipped (Anomaly 10x): ${stats.skippedAnomaly}`)
-        logger.info(`${"=".repeat(50)}\n`)
+        // ─── Auto-update Meilisearch Inventory Index ──────────────────────────────
+        // If prices were actually written to DB, re-index inventory so the
+        // inventory-advanced UI reflects the new prices immediately.
+        // Skip on dry run (no DB changes were made).
+        if (!dryRun && stats.updatedPrice > 0) {
+            log(`\n🔍 Re-indexing Meilisearch inventory with updated prices...`)
+            try {
+                const meiliResult = await syncInventoryWorkflow(container).run({ input: {} })
+                log(`✅ Meilisearch re-indexed ${meiliResult.result.synced} inventory items`)
+            } catch (meiliErr: any) {
+                // Don't fail the whole sync if Meilisearch fails
+                warn(`⚠️ Meilisearch re-index failed (non-blocking): ${meiliErr.message}`)
+            }
+        }
 
         return { success: true, dryRun, stats }
 

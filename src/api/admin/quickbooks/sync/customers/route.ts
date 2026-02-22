@@ -1,36 +1,49 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { syncCustomersCore } from "../../../../../lib/quickbooks/sync-customers-core"
+import { createSyncJob, appendLog, finishJob } from "../../../../../lib/quickbooks/sync-jobs"
+import { Client } from "pg"
 
 /**
  * POST /admin/quickbooks/sync/customers
- * Syncs customers from QuickBooks to Medusa
+ * Returns {started, job_id} immediately — sync streams logs via SSE.
  */
 export async function POST(
     req: MedusaRequest,
     res: MedusaResponse
 ): Promise<void> {
-    try {
-        // TODO: Move to background job for production
-        const result = await syncCustomersCore(req.scope)
+    const job = createSyncJob("customers")
 
-        if (!result.success) {
-            res.status(500).json({
-                error: result.error || "Sync failed",
-                stats: result.stats
-            })
-            return
+    res.json({
+        success: true,
+        started: true,
+        job_id: job.id,
+        message: "Customer sync started — stream logs at /admin/quickbooks/sync/stream?job_id=" + job.id
+    })
+
+    setImmediate(async () => {
+        const client = new Client({ connectionString: process.env.DATABASE_URL })
+        try {
+            await client.connect()
+            appendLog(job, "🚀 Customer sync started...")
+
+            const result = await syncCustomersCore(req.scope)
+
+            if (result.success) {
+                const msg = `✅ Done: ${result.stats?.imported ?? 0} imported, ${result.stats?.alreadyInMedusa ?? 0} already existed`
+                appendLog(job, msg)
+                await client.query(
+                    `UPDATE quickbooks_config SET last_customer_sync = NOW(), updated_at = NOW() WHERE id = 'default'`
+                ).catch((err: any) => appendLog(job, `⚠️ Could not update last_customer_sync: ${err.message}`))
+                finishJob(job, "done")
+            } else {
+                appendLog(job, `❌ Sync failed: ${result.error}`)
+                finishJob(job, "error")
+            }
+        } catch (error: any) {
+            appendLog(job, `❌ Error: ${error.message}`)
+            finishJob(job, "error")
+        } finally {
+            await client.end()
         }
-
-        res.json({
-            success: true,
-            stats: result.stats,
-            message: "Customer sync completed successfully"
-        })
-
-    } catch (error: any) {
-        console.error("Error syncing customers:", error)
-        res.status(500).json({
-            error: "Failed to execute customer sync"
-        })
-    }
+    })
 }

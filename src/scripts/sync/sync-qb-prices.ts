@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types"
-import { syncPricesCore } from "../lib/quickbooks/sync-prices-core"
+import { syncPricesCore } from "../../lib/quickbooks/sync-prices-core"
 
 /**
  * Sync ONLY PRICES from QuickBooks

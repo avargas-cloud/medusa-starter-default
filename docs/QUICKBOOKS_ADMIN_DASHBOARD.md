@@ -15,12 +15,13 @@
 The QuickBooks Admin Dashboard (`/admin/quickbooks`) is a custom Medusa v2 admin route that provides manual and automated synchronization controls for QuickBooks Desktop integration via the Bridge API.
 
 **Key Features:**
-- ✅ Inventory sync (stock levels)
-- ✅ Price sync (product pricing)
+- ✅ Inventory sync (stock levels from QuickBooks)
+- ✅ Price sync (retail + wholesale pricing from QB) → **auto re-indexes Meilisearch**
 - ✅ Customer sync (audit + import)
 - ✅ Configurable intervals with "Disabled" option
 - ✅ Manual "Sync Now" triggers
 - ✅ Compact, professional UI
+- ✅ Master QB Integration Enable/Disable toggle
 
 ---
 
@@ -564,6 +565,18 @@ User clicks → handleSync() → setSyncing(true) → POST /sync/[type] → Core
                                                    Alert result
 ```
 
+**Price Sync Extended Flow:**
+```
+POST /sync/prices
+  → syncPricesCore()
+      → Fetch items from QB Bridge
+      → Update retail prices in Medusa DB
+      → Auto-calculate wholesale at 10% off
+      → if (!dryRun && updatedPrice > 0)
+            → syncInventoryWorkflow().run() → Re-index Meilisearch ✔
+      → Return stats
+```
+
 ### Customer Audit Flow
 
 ```
@@ -698,7 +711,52 @@ if (interval !== undefined) {
 - No real-time progress feedback
 - Alert-based notifications (not ideal UX)
 - No retry mechanism for failed syncs
-- Manual sync only (no automated scheduling yet)
+- Meilisearch re-index only fires on price sync (not on inventory sync)
+
+---
+
+## Meilisearch Auto Re-index After Price Sync
+
+**Archivo:** `src/lib/quickbooks/sync-prices-core.ts` (línea 346-358)
+
+### Comportamiento
+
+Despues de un **Price Sync exitoso**, el sistema automáticamente re-indexa el índice Meilisearch `inventory` para que el `inventory-advanced` UI refleje los nuevos precios **de inmediato** sin esperar al reconciliation job de 5 minutos.
+
+```typescript
+// src/lib/quickbooks/sync-prices-core.ts
+// After prices are written to DB:
+if (!dryRun && stats.updatedPrice > 0) {
+    logger.info(`⭐ Re-indexing Meilisearch inventory with updated prices...`)
+    try {
+        const meiliResult = await syncInventoryWorkflow(container).run({ input: {} })
+        logger.info(`✅ Meilisearch re-indexed ${meiliResult.result.synced} inventory items`)
+    } catch (meiliErr: any) {
+        // Non-blocking — price sync succeeds even if Meilisearch fails
+        logger.warn(`⚠️ Meilisearch re-index failed (non-blocking): ${meiliErr.message}`)
+    }
+}
+```
+
+### Condiciones de disparo
+
+| Condición | Resultado |
+|-----------|----------|
+| `dryRun=false` AND `updatedPrice > 0` | ✅ Re-index disparado |
+| `dryRun=true` | ❌ Skipped (no hubo cambios en DB) |
+| `updatedPrice === 0` | ❌ Skipped (sin cambios, re-index es innecesario) |
+| Meilisearch falla | ⚠️ Warning log, price sync retorna `success: true` igual |
+
+### Relación con inventory-advanced
+
+| Cola de sync | Qué lo dispara | Cuándo llega |
+|-------------|----------------|-------------|
+| Middleware (Layer 1) | Cambios de stock en UI | ~500ms |
+| QB Price Sync | Price sync QB → Medusa | Al final del sync |
+| Reconciliation Job (Layer 2) | Cron cada 5 min | ≤5 min |
+| Manual Sync (Layer 3) | Botón en inventory-advanced | On-demand |
+
+> **⚠️ Nota:** El Meilisearch re-index tras price sync incluye los nuevos `pricesByList` para que las **Dynamic Pricing Columns** en `inventory-advanced` reflejen los precios actualizados inmediatamente.
 
 ---
 
@@ -721,6 +779,6 @@ API_KEY=your-bridge-api-key
 
 ---
 
-**Last Updated:** 2026-02-01  
-**Version:** 1.0  
+**Last Updated:** 2026-02-22  
+**Version:** 1.1 — Added Meilisearch Auto Re-index section  
 **Status:** ✅ Production Ready

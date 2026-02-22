@@ -1,16 +1,17 @@
 import { ExecArgs } from "@medusajs/framework/types"
 import { Modules } from "@medusajs/framework/utils"
-import { PricingTypes } from "@medusajs/types"
 
 /**
  * Script to fix pricing configuration:
  * 1. Remove broken price_rules from base prices
  * 2. Set up wholesale pricing correctly with 7.5% discount
  * 
- * Run with: npx medusa exec ./src/scripts/fix-wholesale-pricing.ts
+ * Run with: npx medusa exec ./src/scripts/fix/fix-wholesale-pricing.ts
  */
 export default async function fixWholesalePricing({ container }: ExecArgs) {
-    const pricingService = container.resolve(Modules.PRICING)
+    // Cast to any — deletePrices/createPrices/createRuleTypes exist at runtime
+    // but are not declared in the IPricingModuleService interface typings
+    const pricingService = container.resolve(Modules.PRICING) as any
     const logger = container.resolve("logger")
 
     logger.info("=== FIXING PRICING CONFIGURATION ===\n")
@@ -30,12 +31,13 @@ export default async function fixWholesalePricing({ container }: ExecArgs) {
     const pricesToCreate: any[] = []
 
     for (const priceSet of priceSets) {
-        for (const price of priceSet.prices) {
+        for (const price of (priceSet.prices ?? [])) {
             // Check if price has rules (from failed wholesale attempt)
-            const hasRules = price.price_rules && price.price_rules.length > 0
+            const rules = (price.price_rules ?? [])
+            const hasRules = rules.length > 0
 
             if (hasRules) {
-                logger.info(`  ⚠️  Price ${price.id} has ${price.price_rules.length} rules - marking for cleanup`)
+                logger.info(`  ⚠️  Price ${price.id} has ${rules.length} rules - marking for cleanup`)
 
                 // Delete the broken price
                 pricesToDelete.push(price.id)
@@ -44,7 +46,7 @@ export default async function fixWholesalePricing({ container }: ExecArgs) {
                 pricesToCreate.push({
                     price_set_id: priceSet.id,
                     currency_code: price.currency_code,
-                    amount: price.amount, // Keep original $60.99
+                    amount: price.amount, // Keep original amount
                     min_quantity: price.min_quantity,
                     max_quantity: price.max_quantity,
                     rules: {} // EMPTY = base price, no conditions
@@ -79,7 +81,7 @@ export default async function fixWholesalePricing({ container }: ExecArgs) {
             }
         ])
         logger.info("  ✅ Created customer_group_id rule type")
-    } catch (e) {
+    } catch {
         logger.info("  ℹ️  customer_group_id rule type already exists")
     }
 
@@ -99,14 +101,14 @@ export default async function fixWholesalePricing({ container }: ExecArgs) {
     logger.info(`  ✅ Found Wholesale group: ${wholesaleGroupId}`)
 
     // Check if Wholesale price list already exists
-    const existingPriceLists = await pricingService.listPriceLists({
-        title: ["Wholesale Pricing"]
-    })
+    // listPriceLists filter by name — use raw query to avoid typing issues
+    const existingPriceLists = await pricingService.listPriceLists({})
+    const wholesaleListMatch = existingPriceLists.filter((pl: any) => pl.title === "Wholesale Pricing")
 
-    let wholesaleList
-    if (existingPriceLists.length > 0) {
+    let wholesaleList: any
+    if (wholesaleListMatch.length > 0) {
         logger.info("  ℹ️  Wholesale Pricing list already exists - updating...")
-        wholesaleList = existingPriceLists[0]
+        wholesaleList = wholesaleListMatch[0]
 
         // Update it to ensure it has correct rules
         await pricingService.updatePriceLists([{
@@ -144,17 +146,18 @@ export default async function fixWholesalePricing({ container }: ExecArgs) {
         relations: ["prices"]
     })
 
-    const wholesalePrices: PricingTypes.CreatePriceDTO[] = []
+    const wholesalePrices: any[] = []
 
     for (const priceSet of cleanPriceSets) {
-        // Find USD base price
-        const basePrice = priceSet.prices.find(p =>
+        // Find USD base price (no price_list_id = not a price list price)
+        const basePrice = (priceSet.prices ?? []).find((p: any) =>
             p.currency_code === "usd" && !p.price_list_id
         )
 
         if (basePrice) {
-            // Calculate 7.5% discount: $60.99 * 0.925 = $56.42
-            const discountedAmount = Number((basePrice.amount * 0.925).toFixed(2))
+            // Calculate 7.5% discount
+            const baseAmount = Number(basePrice.amount ?? 0)
+            const discountedAmount = Number((baseAmount * 0.925).toFixed(2))
 
             wholesalePrices.push({
                 price_set_id: priceSet.id,
@@ -166,7 +169,7 @@ export default async function fixWholesalePricing({ container }: ExecArgs) {
                 }
             })
 
-            logger.info(`  💰 ${priceSet.id}: $${basePrice.amount} → $${discountedAmount} (wholesale)`)
+            logger.info(`  💰 ${priceSet.id}: $${baseAmount} → $${discountedAmount} (wholesale)`)
         }
     }
 
@@ -177,7 +180,7 @@ export default async function fixWholesalePricing({ container }: ExecArgs) {
         })
 
         if (existingWholesalePrices.length > 0) {
-            const idsToDelete = existingWholesalePrices.map(p => p.id)
+            const idsToDelete = existingWholesalePrices.map((p: any) => p.id)
             await pricingService.deletePrices(idsToDelete)
             logger.info(`  🗑️  Removed ${idsToDelete.length} old wholesale prices`)
         }

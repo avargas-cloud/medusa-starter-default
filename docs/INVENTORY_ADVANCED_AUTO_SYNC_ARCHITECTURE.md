@@ -5,10 +5,10 @@
 
 | Campo | Detalle |
 |-------|---------|
-| **Propósito** | Document the advanced Inventory admin page — a complete replacement for Medusa's native Inventory page, with Meilisearch-powered search, 3-layer auto-sync (subscriber + middleware + API), and batch Meilisearch indexing for inventory items and stock locations. |
-| **Problemas que resuelve** | Medusa v2's native inventory page has no instant search for inventory items or stock locations. The custom page integrates Meilisearch, with auto-sync triggered on all inventory CRUD events so stock levels are always searchable in real time. |
-| **Resultado esperado** | Admins can search inventory items and stock locations in real-time via Meilisearch. Sync is automatic — no manual re-indexing needed after stock level changes, new items, or location updates. |
-| **Scripts Creados** | `setup/setup-meilisearch-customers.ts` |
+| **Propósito** | Document the advanced Inventory admin page — a complete replacement for Medusa's native Inventory page, with Meilisearch-powered search, 3-layer auto-sync, dynamic pricing columns per price list, and an inline stock levels modal per location. |
+| **Problemas que resuelve** | Medusa v2's native inventory page has no instant search, no multi-price display, and no per-location stock breakdown without leaving the page. |
+| **Resultado esperado** | Admins can search inventory items in real-time, see Retail + Wholesale (and any custom price list) columns side-by-side, click prices to edit them in a new tab, and click stock numbers to see a per-location breakdown modal without navigating away. |
+| **Scripts Creados** | `setup/setup-meilisearch-customers.ts`, `sync/sync-meili-inventory.ts` |
 
 ## Resumen Ejecutivo
 
@@ -23,6 +23,10 @@ Este documento detalla la arquitectura completa del sistema de búsqueda avanzad
 ✅ **Relaciones complejas** - Variants + Inventory Items + Prices  
 ✅ **Cache invalidation automática** - Datos frescos al cargar página  
 ✅ **Navegación SPA** - Sin recargas de página  
+✅ **Dynamic Pricing Columns** - Columnas de precios por price list (`ENABLE_DYNAMIC_PRICING`)  
+✅ **Columna Available** - In Stock − Reserved calculado en frontend  
+✅ **Stock Level Modal** - Breakdown por location al dar clic en Reserved/In Stock/Available  
+✅ **Click-to-edit prices** - Retail Price y Price List prices abren editor en nueva pestaña  
 
 ---
 
@@ -37,8 +41,10 @@ Este documento detalla la arquitectura completa del sistema de búsqueda avanzad
 7. [Capa 3: Sync Manual](#capa-3-sync-manual)
 8. [Cache Invalidation Frontend](#cache-invalidation-frontend)
 9. [Hijacking del Sidebar](#hijacking-del-sidebar)
-10. [Flujo Completo de Datos](#flujo-completo-de-datos)
-11. [Troubleshooting](#troubleshooting)
+10. [Dynamic Pricing Columns](#dynamic-pricing-columns)
+11. [Stock Level Modal](#stock-level-modal)
+12. [Flujo Completo de Datos](#flujo-completo-de-datos)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -104,32 +110,43 @@ variant: {
 // 2. InventoryItem (stock físico)
 inventory_item: {
     id: "iitem_123",
-    sku: "ECB-18-2-STR-WH",  // Puede diferir de variant.sku
-    title: "18/2 AWG Wire",  // Descripción alterna
+    sku: "ECB-18-2-STR-WH",
+    title: "18/2 AWG Wire",
     stocked_quantity: 500,
     reserved_quantity: 25,
 }
 
-// 3. Price (via PriceSet)
+// 3. Price (via PriceSet) — RETAIL = max USD amount
 price: {
-    amount: 1250,  // $12.50 en centavos
+    amount: 110.75,   // ya en dólares (Medusa v2)
     currency_code: "USD"
 }
 
-// Resultado en MeiliSearch:
+// 4. pricesByList — bulk loaded desde todas las price lists
+prices_by_list: {
+    "plist_01...WHOLESALE": 99.75,
+    "plist_01...DISTRIBUTOR": 88.50,
+}
+
+// Resultado en MeiliSearch (tipo MeiliInventoryItem):
 {
     id: "iitem_123",
     sku: "ECB-18-2-STR-WH",
     title: "18/2 AWG Wire",
     totalStock: 500,
     totalReserved: 25,
-    price: 12.50,
+    price: 110.75,          // ← RETAIL (max USD)
     currencyCode: "USD",
+    pricesByList: {         // ← por price list ID
+        "plist_01...WS": 99.75,
+    },
     variantId: "variant_123",
     productId: "prod_123",
     thumbnail: "url",
     category_handles: ["wire", "electrical"],
-    status: "published"
+    status: "published",
+    created_at: 1708000000000,
+    updated_at: 1708000000000,
 }
 ```
 
@@ -142,6 +159,9 @@ const { data: variants } = await query.graph({
     fields: [
         "id",
         "sku",
+        "created_at",
+        "updated_at",
+        "price_set.id",              // ← para lookup en pricesByPriceSet
         "product.id",
         "product.title",
         "product.thumbnail",
@@ -151,9 +171,12 @@ const { data: variants } = await query.graph({
         "product.categories.parent_category.handle",
         "prices.amount",
         "prices.currency_code",
+        "prices.price_list_id",      // siempre null desde query.graph, esperado
         "inventory_items.inventory.id",
         "inventory_items.inventory.sku",
         "inventory_items.inventory.title",
+        "inventory_items.inventory.created_at",
+        "inventory_items.inventory.updated_at",
         "inventory_items.inventory.stocked_quantity",
         "inventory_items.inventory.reserved_quantity",
     ],
@@ -169,34 +192,39 @@ src/
 ├── admin/
 │   ├── routes/
 │   │   └── inventory-advanced/
-│   │       ├── page.tsx                        # Página principal
+│   │       ├── page.tsx                          # Página principal — usa useFeatureFlags
 │   │       ├── components/
-│   │       │   ├── inventory-header.tsx        # Header con filtros
-│   │       │   └── inventory-table.tsx         # Tabla de inventory
+│   │       │   ├── inventory-header.tsx          # Header con filtros y categorías
+│   │       │   ├── inventory-table.tsx           # ⭐ Tabla principal con columnas dinámicas
+│   │       │   └── inventory-stock-modal.tsx     # ⭐ Modal de stock por location
 │   │       └── hooks/
-│   │           ├── use-inventory-page-state.tsx  # Estado
-│   │           └── use-inventory-search.ts       # Query MeiliSearch
+│   │           ├── use-inventory-search.ts       # Query Meilisearch
+│   │           ├── use-categories.ts             # Categorías para filtro
+│   │           └── use-feature-flags.ts          # ⭐ NUEVO: flags + price lists
 │   ├── widgets/
-│   │   └── sidebar-hijacker.tsx                # ⭐ Hijacker global
+│   │   └── sidebar-hijacker.tsx                  # Hijacker global (Inventory → advanced)
 │   └── lib/
-│       ├── meili-client.ts                     # Cliente frontend
-│       └── meili-types.ts                      # Types TypeScript
+│       ├── meili-client.ts                       # Cliente frontend
+│       └── meili-types.ts                        # Types (incl. pricesByList)
 │
 ├── api/
-│   ├── middlewares.ts                          # ⭐ Middleware auto-sync
+│   ├── middlewares.ts                            # ⭐ Middleware auto-sync
 │   └── admin/
+│       ├── config/
+│       │   └── features/
+│       │       └── route.ts                      # ⭐ NUEVO: GET /admin/config/features
 │       └── search/
 │           └── inventory/
 │               ├── sync/
-│               │   └── route.ts                # Endpoint sync manual
+│               │   └── route.ts                  # Endpoint sync manual
 │               └── query/
-│                   └── route.ts                # Proxy search
+│                   └── route.ts                  # Proxy search Meilisearch
 │
 ├── jobs/
-│   └── reconcile-inventory.ts                  # ⭐ Job cada 5 min
+│   └── reconcile-inventory.ts                    # ⭐ Job cada 5 min
 │
 └── workflows/
-    └── sync-inventory.ts                       # ⭐ Workflow completo
+    └── sync-inventory.ts                         # ⭐ Workflow completo (incl. pricesByList)
 ```
 
 ---
@@ -210,55 +238,49 @@ src/
 ### Implementación Completa
 
 ```typescript
-import { createWorkflow, WorkflowResponse } from "@medusajs/framework/workflows-sdk"
-import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
-
 export const syncInventoryToMeiliStep = createStep(
     "sync-to-meili-step",
     async (_, { container }) => {
         const { MeiliSearch } = await import("meilisearch")
         const query = container.resolve("query") as any
+        const pricingService: any = container.resolve(Modules.PRICING)
 
-        // ⭐ GraphQL query para obtener TODA la info
-        const { data: variants } = await query.graph({
-            entity: "product_variant",
-            fields: [
-                "id",
-                "sku",
-                "product.id",
-                "product.title",
-                "product.thumbnail",
-                "product.status",
-                "product.categories.id",
-                "product.categories.handle",
-                "product.categories.parent_category.handle",
-                "product.categories.parent_category.parent_category.handle",
-                "prices.amount",
-                "prices.currency_code",
-                "inventory_items.inventory.id",
-                "inventory_items.inventory.sku",
-                "inventory_items.inventory.title",
-                "inventory_items.inventory.stocked_quantity",
-                "inventory_items.inventory.reserved_quantity",
-            ],
-        })
+        // ⭐ BULK: Load ALL price list prices at once — O(1) lookup per variant
+        // Avoids N+1 queries; single call for all price lists
+        const pricesByPriceSet = new Map<string, Record<string, number>>()
+        const allPriceLists = await pricingService.listPriceLists()
+        const priceListIds = allPriceLists.map((pl: any) => pl.id)
+        if (priceListIds.length > 0) {
+            const priceListPrices = await pricingService.listPrices({
+                price_list_id: priceListIds,
+            })
+            for (const p of priceListPrices) {
+                if (!p.price_set_id || !p.price_list_id || p.currency_code !== "usd") continue
+                if (!pricesByPriceSet.has(p.price_set_id)) {
+                    pricesByPriceSet.set(p.price_set_id, {})
+                }
+                pricesByPriceSet.get(p.price_set_id)![p.price_list_id] = p.amount
+            }
+        }
 
-        // ⭐ Transform: Variant → Inventory Items
+        // ⭐ GraphQL query — all variants + inventory + prices
+        const { data: variants } = await query.graph({ entity: "product_variant", fields: [...] })
+
         const meiliInventoryItems = variants.flatMap((variant: any) => {
             const product = variant.product
-            const priceObj = variant.prices?.[0]
 
-            // Flatten category handles (including parents)
-            const allCategoryHandles = new Set<string>()
-            product?.categories?.forEach((c: any) => {
-                if (c.handle) allCategoryHandles.add(c.handle)
-                if (c.parent_category?.handle) 
-                    allCategoryHandles.add(c.parent_category.handle)
-                if (c.parent_category?.parent_category?.handle) 
-                    allCategoryHandles.add(c.parent_category.parent_category.handle)
-            })
+            // RETAIL = max USD price (price_list_id is null from query.graph)
+            const usdPrices = (variant.prices || []).filter((p: any) => p.currency_code === "usd")
+            const retailPrice = usdPrices.length > 0
+                ? usdPrices.reduce((max: any, p: any) => p.amount > max.amount ? p : max)
+                : null
 
-            // Map cada inventory item vinculado a este variant
+            // pricesByList: { [price_list_id]: amount } from bulk map
+            const priceSetId = variant.price_set?.id
+            const pricesByList = priceSetId
+                ? pricesByPriceSet.get(priceSetId) ?? {}
+                : {}
+
             return (variant.inventory_items || []).map((invItem: any) => {
                 const inventory = invItem.inventory
                 return {
@@ -268,72 +290,23 @@ export const syncInventoryToMeiliStep = createStep(
                     thumbnail: product?.thumbnail || null,
                     totalStock: inventory.stocked_quantity || 0,
                     totalReserved: inventory.reserved_quantity || 0,
-                    price: priceObj?.amount || 0,  // v2: ya en dólares
-                    currencyCode: priceObj?.currency_code?.toUpperCase() || "USD",
+                    price: retailPrice?.amount || 0,   // RETAIL
+                    currencyCode: "USD",
+                    pricesByList,                       // ← Dynamic columns data
                     variantId: variant.id,
                     productId: product?.id || null,
-                    category_handles: Array.from(allCategoryHandles),
+                    category_handles: [...],
                     status: product?.status || "draft",
+                    created_at: new Date(inventory.created_at).getTime(),
+                    updated_at: new Date(inventory.updated_at).getTime(),
                 }
             })
         })
 
-        // Filter orphaned items (sin variantId/productId)
-        const validItems = meiliInventoryItems.filter(
-            (item: any) => item.variantId && item.productId
-        )
-
-        // ⭐ Sync to MeiliSearch
-        const client = new MeiliSearch({
-            host: process.env.MEILISEARCH_HOST!,
-            apiKey: process.env.MEILISEARCH_API_KEY!,
-        })
-        const index = client.index("inventory")
-
-        // Update settings (idempotent)
-        await index.updateSettings({
-            filterableAttributes: [
-                "category_handles",
-                "status",
-                "id",
-                "sku"
-            ],
-            sortableAttributes: [
-                "title",
-                "sku",
-                "totalStock",
-                "price",
-                "totalReserved"
-            ],
-            searchableAttributes: [
-                "title",
-                "sku"
-            ]
-        })
-
-        // ⭐ ATOMIC: Delete all + Add all
+        // Atomic replace + wait for indexing
         await index.deleteAllDocuments()
         const result = await index.addDocuments(validItems, { primaryKey: "id" })
-
-        // ⭐ BLOCKING: Wait for indexing to complete
         await (client as any).tasks.waitForTask(result.taskUid)
-
-        const withCategory = validItems.filter((i: any) => i.category_handles.length > 0)
-
-        return new StepResponse({
-            success: true,
-            synced: validItems.length,
-            itemsWithCategory: withCategory.length,
-            taskUid: result.taskUid
-        })
-    }
-)
-
-export const syncInventoryWorkflow = createWorkflow(
-    "sync-inventory-workflow",
-    () => {
-        const result = syncInventoryToMeiliStep()
-        return new WorkflowResponse(result)
     }
 )
 ```
@@ -584,6 +557,127 @@ if (typeof window !== 'undefined' && !(window as any).__hijackerInstalled) {
 
 ---
 
+## Dynamic Pricing Columns
+
+### Feature Flag
+
+Controlado por variable de entorno. Sin restart no aplica cambio.
+
+```bash
+# backend/.env
+ENABLE_DYNAMIC_PRICING=true   # muestra columnas por price list
+ENABLE_DYNAMIC_PRICING=false  # solo columna Retail Price
+```
+
+### Endpoint: `GET /admin/config/features`
+
+**Archivo:** `src/api/admin/config/features/route.ts`
+
+Expone el feature flag y las price lists disponibles al frontend:
+
+```typescript
+export const GET = async (req, res) => {
+    const pricingService = req.scope.resolve(Modules.PRICING)
+    const priceLists = await pricingService.listPriceLists()
+    return res.json({
+        enableDynamicPricing: process.env.ENABLE_DYNAMIC_PRICING === "true",
+        priceLists: priceLists.map(pl => ({ id: pl.id, title: pl.name }))
+    })
+}
+```
+
+### Hook: `use-feature-flags.ts`
+
+```typescript
+export const useFeatureFlags = (): FeatureFlags => {
+    const { data } = useQuery({
+        queryKey: ["feature-flags"],
+        queryFn: async () => {
+            const response = await fetch("/admin/config/features", {
+                credentials: "include",
+            })
+            return response.json()
+        },
+        staleTime: Infinity,  // env vars no cambian en runtime
+    })
+    return data ?? { enableDynamicPricing: false, priceLists: [] }
+}
+```
+
+### Columnas de la Tabla
+
+| Columna | Siempre | Condición | Click |
+|---------|---------|-----------|-------|
+| Image | ✅ | — | — |
+| Title | ✅ | — | Inventory item detail |
+| SKU | ✅ | — | Inventory item detail |
+| Reserved | ✅ | — | Abre Stock Modal |
+| In Stock | ✅ | — | Abre Stock Modal |
+| Available | ✅ | `In Stock − Reserved` | Abre Stock Modal |
+| **Retail Price** | ✅ | — | `/products/{id}/variants/{id}/prices` (nueva pestaña) |
+| **{Price List name}** | ❌ | `ENABLE_DYNAMIC_PRICING=true` | `/price-lists/{id}/products/edit?ids[]={product_id}` (nueva pestaña) |
+
+### Fallback Logic
+
+Si un producto **no tiene precio** en una price list específica:
+- Se muestra el Retail Price en **gris/italic** para indicar que es fallback
+- Nunca muestra celda vacía
+
+```typescript
+const listPrice = item.pricesByList?.[pl.id]
+const displayPrice = listPrice ?? item.price  // fallback = retail
+const isFallback = listPrice === undefined
+```
+
+### Scroll Horizontal
+
+Habilitado automáticamente vía `overflow-x-auto` en el contenedor. Con Retail + 1 price list cabe sin scroll. Con 3+ price lists activa scroll.
+
+---
+
+## Stock Level Modal
+
+**Archivo:** `src/admin/routes/inventory-advanced/components/inventory-stock-modal.tsx`
+
+### Qué es
+
+Modal compacto centrado que muestra stock por location cuando el usuario hace clic en cualquiera de las columnas numéricas (**Reserved**, **In Stock**, **Available**).
+
+### API Utilizada
+
+```
+GET /admin/inventory-items/{id}/location-levels?fields=+stock_locations.id,+stock_locations.name
+```
+
+> ⚠️ El nombre correcto del campo es `stock_locations` (plural, **array**). Confirmado del código fuente de `@medusajs/dashboard` (location-list-table.tsx line 164833).
+> El error común es usar `*stock_location` (singular) — no funciona.
+
+### Datos que muestra
+
+| Columna | Fuente |
+|---------|--------|
+| Location | `level.stock_locations[0].name` |
+| Reserved | `level.reserved_quantity` |
+| In Stock | `level.stocked_quantity` |
+| Available | `level.available_quantity` |
+| **Total** (footer) | Suma de todos los locations (solo si hay > 1) |
+
+### Header del Modal
+
+Muestra **SKU** (monospace) + **nombre del producto**. Se cierra con X o haciendo clic en el backdrop.
+
+```typescript
+// Estado que se pasa al modal
+{ id: item.id, title: item.title, sku: item.sku }
+```
+
+### Implementación (overlay CSS puro)
+
+No usa `FocusModal` ni `Dialog` de `@medusajs/ui` (no exportados en esta versión).
+Usa `fixed inset-0 z-50` backdrop + card `max-w-lg`, `stopPropagation` en el contenido.
+
+---
+
 ## Flujo Completo de Datos
 
 ```mermaid
@@ -705,7 +799,7 @@ Si no aparece, verificar:
 
 ---
 
-## Conclusión
+### Conclusión
 
 ### Arquitectura de 3 Capas para Inventory
 
@@ -715,27 +809,35 @@ Si no aparece, verificar:
 | Reconciliation Job | 5 min | Workflow completo | Red de seguridad |
 | Manual Sync | On-demand | Workflow completo | Control del usuario |
 
-### Complejidad vs Simplicidad
+### Features de la Tabla
 
-**Trade-off aceptado:**
-- ❌ Más lento que sync granular (~500ms vs ~100ms)
-- ✅ Mucho más simple de mantener
-- ✅ Siempre consistente (no partial updates)
-- ✅ Reutiliza mismo workflow en 3 capas
+| Feature | Estado | Descripción |
+|---------|--------|-------------|
+| Búsqueda Meilisearch | ✅ | Real-time, proxy server-side |
+| Columnas de precio dinámicas | ✅ | Por price list, controlado por `.env` |
+| Columna Available | ✅ | In Stock − Reserved |
+| Stock Modal por location | ✅ | Click en Reserved/In Stock/Available |
+| Click-to-edit Retail Price | ✅ | Nueva pestaña → variant prices editor |
+| Click-to-edit Price List | ✅ | Nueva pestaña → price list product editor |
+| Scroll horizontal | ✅ | Automático cuando no cabe |
+| Fallback pricing | ✅ | Retail si no hay precio en price list |
 
 ### Garantías del Sistema
 
-✅ **Relaciones completas** - Variants + Inventory + Prices  
+✅ **Relaciones completas** - Variants + Inventory + Prices (retail + por price list)  
 ✅ **Categories flatteadas** - Búsqueda por categoria funciona  
 ✅ **Datos siempre frescos** - Cache invalidation automática  
 ✅ **Resistente a fallos** - 3 capas de redundancia  
 ✅ **UX perfecta** - Navegación SPA sin reloads  
 ✅ **Workflow-based** - Consistencia garantizada  
+✅ **Dynamic Pricing** - Columnas adaptadables a cualquier precio list  
+✅ **Stock por location** - Modal inline sin salir de inventory-advanced  
 
 ---
 
 **Fecha de creación:** 2026-01-28  
-**Versión:** 2.0 (Auto-Sync Architecture con Workflow)  
+**Última actualización:** 2026-02-22  
+**Versión:** 3.0 (Dynamic Pricing + Stock Modal + Available Column)  
 **Medusa:** v2.x  
 **MeiliSearch:** v1.x  
-**Sync Approach:** Full Workflow (Atomic Replace)
+**Sync Approach:** Full Workflow (Atomic Replace) + Bulk Price List Loading

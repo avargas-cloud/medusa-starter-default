@@ -1,17 +1,44 @@
 import { createWorkflow, WorkflowResponse } from "@medusajs/framework/workflows-sdk"
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
+import { Modules } from "@medusajs/framework/utils"
 
 export const syncInventoryToMeiliStep = createStep(
     "sync-to-meili-step",
     async (_, { container }) => {
         const { MeiliSearch } = await import("meilisearch")
         const query = container.resolve("query") as any
+        const pricingService: any = container.resolve(Modules.PRICING)
 
         // Initialize MeiliSearch client
         const client = new MeiliSearch({
             host: process.env.MEILISEARCH_HOST!,
             apiKey: process.env.MEILISEARCH_API_KEY!,
         })
+
+        // ─── BULK: Load all price list prices once ──────────────────────────────
+        // Result: Map<price_set_id, Record<price_list_id, amount>>
+        // Used for O(1) lookup per variant — no per-variant queries.
+        const pricesByPriceSet = new Map<string, Record<string, number>>()
+        try {
+            const allPriceLists = await pricingService.listPriceLists()
+            const priceListIds = allPriceLists.map((pl: any) => pl.id)
+
+            if (priceListIds.length > 0) {
+                const priceListPrices = await pricingService.listPrices({
+                    price_list_id: priceListIds,
+                })
+                for (const p of priceListPrices) {
+                    if (!p.price_set_id || !p.price_list_id || p.currency_code !== "usd") continue
+                    if (!pricesByPriceSet.has(p.price_set_id)) {
+                        pricesByPriceSet.set(p.price_set_id, {})
+                    }
+                    pricesByPriceSet.get(p.price_set_id)![p.price_list_id] = p.amount
+                }
+            }
+        } catch (e: any) {
+            // Non-blocking: if price list fetch fails, pricesByList will be empty
+            console.warn("[sync-inventory] Could not load price list prices:", e.message)
+        }
 
         // Fetch all variants with their inventory items, prices, and product info
         const { data: variants } = await query.graph({
@@ -21,6 +48,7 @@ export const syncInventoryToMeiliStep = createStep(
                 "sku",
                 "created_at",
                 "updated_at",
+                "price_set.id",
                 "product.id",
                 "product.title",
                 "product.thumbnail",
@@ -31,6 +59,7 @@ export const syncInventoryToMeiliStep = createStep(
                 "product.categories.parent_category.parent_category.handle",
                 "prices.amount",
                 "prices.currency_code",
+                "prices.price_list_id",   // always null from query graph — kept for future
                 "inventory_items.inventory.id",
                 "inventory_items.inventory.sku",
                 "inventory_items.inventory.title",
@@ -44,7 +73,20 @@ export const syncInventoryToMeiliStep = createStep(
         // Transform variants → inventory items for MeiliSearch
         const meiliInventoryItems = variants.flatMap((variant: any) => {
             const product = variant.product
-            const priceObj = variant.prices?.[0]
+
+            // RETAIL = highest USD price (query graph returns price_list_id as null always,
+            // so max amount = retail since wholesale is always 10% less)
+            const usdPrices = (variant.prices || []).filter((p: any) => p.currency_code === "usd")
+            const retailPrice = usdPrices.length > 0
+                ? usdPrices.reduce((max: any, p: any) => p.amount > max.amount ? p : max)
+                : null
+
+            // Prices by price list for dynamic columns
+            // Empty object if no price list prices found — frontend uses retail as fallback
+            const priceSetId = variant.price_set?.id
+            const pricesByList = priceSetId
+                ? pricesByPriceSet.get(priceSetId) ?? {}
+                : {}
 
             // Flatten all category handles (including parents)
             const allCategoryHandles = new Set<string>()
@@ -64,8 +106,9 @@ export const syncInventoryToMeiliStep = createStep(
                     thumbnail: product?.thumbnail || null,
                     totalStock: inventory.stocked_quantity || 0,
                     totalReserved: inventory.reserved_quantity || 0,
-                    price: priceObj?.amount || 0, // v2: already in dollars
-                    currencyCode: priceObj?.currency_code?.toUpperCase() || "USD",
+                    price: retailPrice?.amount || 0,       // RETAIL (base, max USD)
+                    currencyCode: retailPrice?.currency_code?.toUpperCase() || "USD",
+                    pricesByList,                           // { [price_list_id]: amount }
                     variantId: variant.id,
                     productId: product?.id || null,
                     category_handles: Array.from(allCategoryHandles),
@@ -110,7 +153,6 @@ export const syncInventoryToMeiliStep = createStep(
         const result = await index.addDocuments(validItems, { primaryKey: "id" })
 
         // BLOCKING: Wait for MeiliSearch to finish indexing before returning
-        // This ensures the frontend gets fresh results immediately after this call succeeds
         await (client as any).tasks.waitForTask(result.taskUid)
 
         const withCategory = validItems.filter((i: any) => i.category_handles.length > 0)
