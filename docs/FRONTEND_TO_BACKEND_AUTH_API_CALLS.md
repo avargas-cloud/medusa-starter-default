@@ -1,13 +1,14 @@
----
-**Purpose:** Tracking document mapping all frontend-to-backend API calls specifically for the customer authentication and registration flows — including call signatures, expected responses, and status as of last verification.
-
-**Solves:** During the authentication implementation, it was easy to lose track of which frontend component was calling which backend endpoint and what response format it expected. This doc serves as a living audit trail.
-
-**Expected Result:** At any point, a developer can open this doc and see every auth-related API call the frontend makes, whether it's been tested, and what the response contract is.
-
----
-
 # Frontend to Backend API Calls - Customer Authentication
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Tracking document mapping all frontend-to-backend API calls specifically for the customer authentication and registration flows — including call signatures, expected responses, and status as of last verification. |
+| **Problemas que resuelve** | During the authentication implementation, it was easy to lose track of which frontend component was calling which backend endpoint and what response format it expected. This doc serves as a living audit trail. |
+| **Resultado esperado** | At any point, a developer can open this doc and see every auth-related API call the frontend makes, whether it's been tested, and what the response contract is. |
+| **Scripts Creados** | `tests/test-auth-e2e.ts`, `tests/test-2step-registration.ts`, `tests/test-case3-registration.ts`, `get/get-activation-token.ts`, `verify/verify-activation.ts` |
 
 This document tracks all frontend-to-backend API calls for customer authentication and registration flows.
 

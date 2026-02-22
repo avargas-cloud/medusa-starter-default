@@ -1,13 +1,14 @@
----
-**Purpose:** Complete investigation log for the Railway cold-start performance issue — covers the diagnosed causes of slow startup (unnecessary migration checks on every deploy, heavy module loading) and the fixes that reduced startup time.
-
-**Solves:** Railway health checks were timing out during cold starts because Medusa was running all pending migrations synchronously at startup, causing 60+ second startup times. The fix separates migration from startup and caches the migration state.
-
-**Expected Result:** Cold-start time reduced to under 30 seconds. Railway health checks pass consistently. Migrations only run when there are pending changes, not on every restart.
-
----
-
 # Medusa Railway Startup Optimization - Complete Investigation Log
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Complete investigation log for the Railway cold-start performance issue — covers the diagnosed causes of slow startup (unnecessary migration checks on every deploy, heavy module loading) and the fixes that reduced startup time. |
+| **Problemas que resuelve** | Railway health checks were timing out during cold starts because Medusa was running all pending migrations synchronously at startup, causing 60+ second startup times. The fix separates migration from startup and caches the migration state. |
+| **Resultado esperado** | Cold-start time reduced to under 30 seconds. Railway health checks pass consistently. Migrations only run when there are pending changes, not on every restart. |
+| **Scripts Creados** | — |
 
 ## Final Status: ✅ RESOLVED
 
@@ -701,4 +702,3 @@ A NEW critical issue was discovered and resolved:
 - ✅ All services verified working
 
 **Ready for production! 🚀**
-

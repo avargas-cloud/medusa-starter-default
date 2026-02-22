@@ -1,9 +1,13 @@
 ---
-**Purpose:** Document the CORS and environment variable fix for Google OAuth on the Railway production environment — specifically the `MEDUSA_ADMIN_CORS` allowlist update and the Railway-specific redirect URI configuration.
 
-**Solves:** Google OAuth was working in development but failing in production because the Railway URL (`*.up.railway.app`) wasn't in the `MEDUSA_ADMIN_CORS` or `MEDUSA_STORE_CORS` env vars, causing the OAuth callback to be rejected with a CORS error.
+## 📋 Descripción del Documento
 
-**Expected Result:** Google OAuth works in both development and Railway production environments. The CORS vars include all allowed origins (localhost + Railway URL + custom domain).
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Document the CORS and environment variable fix for Google OAuth on the Railway production environment — specifically the `MEDUSA_ADMIN_CORS` allowlist update and the Railway-specific redirect URI configuration. |
+| **Problemas que resuelve** | Google OAuth was working in development but failing in production because the Railway URL (`*.up.railway.app`) wasn't in the `MEDUSA_ADMIN_CORS` or `MEDUSA_STORE_CORS` env vars, causing the OAuth callback to be rejected with a CORS error. |
+| **Resultado esperado** | Google OAuth works in both development and Railway production environments. The CORS vars include all allowed origins (localhost + Railway URL + custom domain). |
+| **Scripts Creados** | `tests/test-google-oauth-setup.ts`, `verify/verify-google-oauth-jwt.ts` |
 
 ---
 

@@ -1,13 +1,14 @@
----
-**Purpose:** Explain why the Medusa Worker process is a critical component of the EcoPowerTech backend, what it does, and what breaks if it's disabled or not deployed alongside the main server.
-
-**Solves:** A developer turned off the worker process to reduce Railway costs, not realizing it handles background jobs (order processing, email sending, scheduled tasks). This doc explains concretely which features stop working without the worker and why running it is non-negotiable.
-
-**Expected Result:** All team members understand that the worker must always be deployed alongside the main Medusa server. Order fulfillment, email notifications, and background sync jobs all depend on it.
-
----
-
 # ¿Es Necesario Mantener el Medusa Worker?
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Explain why the Medusa Worker process is a critical component of the EcoPowerTech backend, what it does, and what breaks if it's disabled or not deployed alongside the main server. |
+| **Problemas que resuelve** | A developer turned off the worker process to reduce Railway costs, not realizing it handles background jobs (order processing, email sending, scheduled tasks). This doc explains concretely which features stop working without the worker and why running it is non-negotiable. |
+| **Resultado esperado** | All team members understand that the worker must always be deployed alongside the main Medusa server. Order fulfillment, email notifications, and background sync jobs all depend on it. |
+| **Scripts Creados** | — |
 
 ## Respuesta Corta: **SÍ, es CRÍTICO mantenerlo**
 

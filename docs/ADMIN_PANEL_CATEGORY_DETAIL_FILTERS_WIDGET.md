@@ -1,16 +1,18 @@
----
-**Purpose:** Document the widget injected into the Category Detail Page (`product_category.details.after`) that provides inline editing of filter configuration (active/available filters, inheritance toggle) without navigating to the dedicated Filters page at `/app/filters`.
-
-**Solves:** (1) The modal was showing all 121 system attributes instead of the curated list from nuclear sync. (2) Inconsistent naming between "Inactive Filters" and "Available Filters" across pages. (3) The need for quick filter management directly from the category detail view.
-
-**Expected Result:** Category managers can configure filters from the category detail page. The widget shows only curated attributes (from `filter_config.available_filters`), not all system attributes.
-
----
-
 # Category Filters Widget - Admin UI Component
 
 > **Last Updated**: 2026-01-31  
 > **Status**: ✅ Production Ready (Bug Fixes Applied)
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Document the widget injected into the Category Detail Page (`product_category.details.after`) that provides inline editing of filter configuration (active/available filters, inheritance toggle) without navigating to the dedicated Filters page at `/app/filters`. |
+| **Problemas que resuelve** | (1) The modal was showing all 121 system attributes instead of the curated list from nuclear sync. (2) Inconsistent naming between "Inactive Filters" and "Available Filters" across pages. (3) The need for quick filter management directly from the category detail view. |
+| **Resultado esperado** | Category managers can configure filters from the category detail page. The widget shows only curated attributes (from `filter_config.available_filters`), not all system attributes. |
+| **Scripts Creados** | `sync/smart-sync-filters.ts`, `force/force-resync-filters.ts`, `force/force-filter-regeneration.ts`, `verify/verify-category-filters.ts`, `trigger/trigger-filter-resync.ts`, `show/show-category-filters.ts` |
+| **Última verificación** | 2026-01-31 |
 
 ## Overview
 

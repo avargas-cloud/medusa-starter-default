@@ -1,18 +1,19 @@
----
-**Purpose:** Document the custom Medusa widget injected into the Product Detail Page (PDP) at `product.details.after`, allowing merchants to view and manage the custom Many-to-Many relationship between a product and its attribute values.
-
-**Solves:** The need to manage product attributes (e.g., "Color: Red, Blue", "Wattage: 12W") without navigating away from the product page. Also documents the dual-fetch strategy and the `groupAttributesByKey` helper pattern.
-
-**Expected Result:** Developers understand how to build and extend PDP widgets in Medusa v2, manage Many-to-Many attribute links, and display grouped attribute data in the admin UI.
-
----
-
 # Product Attributes Widget (PDP)
 
 > [!NOTE]
 > This document details the **Details Widget** injected into the Product Detail Page (PDP), allowing merchants to view and manage attributes for a specific product.
 
 ---
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Document the custom Medusa widget injected into the Product Detail Page (PDP) at `product.details.after`, allowing merchants to view and manage the custom Many-to-Many relationship between a product and its attribute values. |
+| **Problemas que resuelve** | The need to manage product attributes (e.g., "Color: Red, Blue", "Wattage: 12W") without navigating away from the product page. Also documents the dual-fetch strategy and the `groupAttributesByKey` helper pattern. |
+| **Resultado esperado** | Developers understand how to build and extend PDP widgets in Medusa v2, manage Many-to-Many attribute links, and display grouped attribute data in the admin UI. |
+| **Scripts Creados** | `inspect/inspect-attribute-sets.ts`, `show/show-product-attrs.ts`, `verify/verify-product-attrs.ts`, `verify/verify-links.ts`, `verify/verify-links-correctly.ts` |
 
 ## 1. Overview
 The **Product Attributes Widget** (`src/admin/widgets/product-attributes-widget.tsx`) injects a dedicated section into the generic Product Details page (`product.details.after`). It fetches, displays, and manages the custom many-to-many relationships between the current Product and its Attributes.

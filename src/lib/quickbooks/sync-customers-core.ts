@@ -1,9 +1,10 @@
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import { ICustomerModuleService } from "@medusajs/types"
+import { isQbIntegrationEnabled } from "./qb-integration-guard"
 
-// Config
-const BRIDGE_URL = "https://ecopower-qb.loca.lt"
-const API_KEY = "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD"
+// Config — from env vars
+const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://ecopower-qb.loca.lt"
+const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD"
 const POLL_INTERVAL_MS = 30000
 const MAX_POLL_ATTEMPTS = 20
 
@@ -38,6 +39,15 @@ export async function syncCustomersCore(container: any): Promise<SyncCustomersRe
     }
 
     try {
+        // Master integration kill switch
+        if (!(await isQbIntegrationEnabled())) {
+            logger.info("[QB] Integration is DISABLED. Skipping customer sync.")
+            return {
+                success: false,
+                stats: { totalInQb: 0, alreadyInMedusa: 0, imported: 0, errors: 0 },
+                error: "QB integration is disabled"
+            }
+        }
         logger.info(`👥 Starting QuickBooks Customer Sync...`)
 
         // 1. Fetch QB Customers
@@ -152,6 +162,7 @@ export async function syncCustomersCore(container: any): Promise<SyncCustomersRe
                     has_account: false,
                     metadata: {
                         qb_list_id: qb.ListID,
+                        qb_display_name: qb.Name,    // Exact name as stored in QB
                         qb_customer_type: qb.CustomerType,
                         qb_price_level: priceLevel,
                         email_is_placeholder: isDummyEmail,

@@ -1,15 +1,17 @@
----
-**Purpose:** Complete technical reference for the Dynamic Product Variants system — a custom implementation allowing products to have variant-specific attribute combinations (e.g., "5W / Black / E26"), displayed and selectable on the PDP without Medusa's native variant option UI.
-
-**Solves:** Medusa v2's native variant UI treats all variants equally without grouping by attribute dimensions. The dynamic variants system enables attribute-driven variant selection (color swatch + size selector) and maps selections to specific variant SKUs for cart/inventory purposes.
-
-**Expected Result:** Product pages show attribute-based variant selectors (e.g., color swatches, wattage dropdowns). Selecting a combination highlights the matching variant and enables Add to Cart. Unavailable combinations are greyed out.
-
----
-
 # Dynamic Variants System - Complete Technical Documentation
 
 > **Purpose**: This document provides a complete technical reference for the Dynamic Product Variants system. Use this to recreate the entire system from scratch if needed.
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Complete technical reference for the Dynamic Product Variants system — a custom implementation allowing products to have variant-specific attribute combinations (e.g., "5W / Black / E26"), displayed and selectable on the PDP without Medusa's native variant option UI. |
+| **Problemas que resuelve** | Medusa v2's native variant UI treats all variants equally without grouping by attribute dimensions. The dynamic variants system enables attribute-driven variant selection (color swatch + size selector) and maps selections to specific variant SKUs for cart/inventory purposes. |
+| **Resultado esperado** | Product pages show attribute-based variant selectors (e.g., color swatches, wattage dropdowns). Selecting a combination highlights the matching variant and enables Add to Cart. Unavailable combinations are greyed out. |
+| **Última verificación** | 2026-01-24 |
+| **Scripts Creados** | `inspect/inspect-wc-attributes.ts`, `inspect/inspect-attribute-sets.ts`, `verify/verify-product-attrs.ts`, `verify/verify-links.ts`, `show/show-product-attrs.ts` |
 
 ## Table of Contents
 1. [System Overview](#system-overview)

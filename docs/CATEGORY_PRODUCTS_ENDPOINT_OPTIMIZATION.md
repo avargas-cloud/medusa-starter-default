@@ -1,13 +1,14 @@
----
-**Purpose:** Document all optimizations applied to the `/store/categories/:id/products-with-filters` endpoint — including batch pricing via raw Knex, optimized SQL counts, and PostgreSQL Recursive CTEs for category tree traversal.
-
-**Solves:** The original endpoint had unacceptable performance (7,936ms for categories with 125+ descendants) due to N+1 queries for pricing and ORM overhead. Raw Knex batch pricing reduced latency to sub-400ms cached state.
-
-**Expected Result:** The products-with-filters endpoint responds in under 400ms for cached requests and under 800ms for uncached, supporting categories with large product inventories and deep subcategory trees.
-
----
-
 # Category Products Endpoint Optimization Guide
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Document all optimizations applied to the `/store/categories/:id/products-with-filters` endpoint — including batch pricing via raw Knex, optimized SQL counts, and PostgreSQL Recursive CTEs for category tree traversal. |
+| **Problemas que resuelve** | The original endpoint had unacceptable performance (7,936ms for categories with 125+ descendants) due to N+1 queries for pricing and ORM overhead. Raw Knex batch pricing reduced latency to sub-400ms cached state. |
+| **Resultado esperado** | The products-with-filters endpoint responds in under 400ms for cached requests and under 800ms for uncached, supporting categories with large product inventories and deep subcategory trees. |
+| **Scripts Creados** | `tests/test-api-performance.ts`, `tests/test-category-products.ts`, `diagnostics/diagnose-led-strips-filters.ts` |
 
 This document explains the optimizations implemented in the `/store/categories/:id/products-with-filters` endpoint to improve page load performance.
 

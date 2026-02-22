@@ -1,13 +1,14 @@
----
-**Purpose:** Quick-start guide for getting the EcoPowerTech backend running on a new machine — the fastest path from zero to a running development server, skipping full installation details and focusing on the minimum required steps.
-
-**Solves:** The full `LOCAL_INSTALLATION.md` is comprehensive but slow to read when you just need to get the backend running quickly on a new PC. This quickstart distills the process to its essential commands.
-
-**Expected Result:** Backend running locally in under 15 minutes on a new machine with all prerequisites installed. Developer can access the Admin Panel and start working immediately.
-
----
-
 # 🚀 Quick Start Guide
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Quick-start guide for getting the EcoPowerTech backend running on a new machine — the fastest path from zero to a running development server, skipping full installation details and focusing on the minimum required steps. |
+| **Problemas que resuelve** | The full `LOCAL_INSTALLATION.md` is comprehensive but slow to read when you just need to get the backend running quickly on a new PC. This quickstart distills the process to its essential commands. |
+| **Resultado esperado** | Backend running locally in under 15 minutes on a new machine with all prerequisites installed. Developer can access the Admin Panel and start working immediately. |
+| **Scripts Creados** | — |
 
 ## Primera Vez en una Máquina Nueva
 

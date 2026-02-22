@@ -1,13 +1,14 @@
----
-**Purpose:** Backend configuration guide for enabling Google OAuth in the Medusa backend — covering `medusa-config.ts` plugin registration, environment variables, and the initial "Backend Configured" state that must be verified before frontend integration.
-
-**Solves:** The 403/404 errors when testing OAuth URLs directly in the browser are expected and not actual errors. This guide clarifies that the backend is correctly configured when those errors appear, and documents what the actual OAuth flow looks like when initiated from the frontend.
-
-**Expected Result:** Backend is fully configured for Google OAuth with the correct plugin in `medusa-config.ts`, correct `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_CALLBACK_URL` environment variables set.
-
----
-
 # Google OAuth Implementation - Complete Guide
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Backend configuration guide for enabling Google OAuth in the Medusa backend — covering `medusa-config.ts` plugin registration, environment variables, and the initial "Backend Configured" state that must be verified before frontend integration. |
+| **Problemas que resuelve** | The 403/404 errors when testing OAuth URLs directly in the browser are expected and not actual errors. This guide clarifies that the backend is correctly configured when those errors appear, and documents what the actual OAuth flow looks like when initiated from the frontend. |
+| **Resultado esperado** | Backend is fully configured for Google OAuth with the correct plugin in `medusa-config.ts`, correct `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_CALLBACK_URL` environment variables set. |
+| **Scripts Creados** | `tests/test-google-oauth-setup.ts`, `verify/verify-google-oauth-jwt.ts` |
 
 ## ✅ Status: Backend Configured
 

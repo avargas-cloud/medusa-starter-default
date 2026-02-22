@@ -1,12 +1,3 @@
----
-**Purpose:** Document the custom backend route for updating customer addresses (`POST /store/customers/me/addresses/:address_id`), including the dual-field update strategy (native Medusa fields + metadata) and the automatic default-swap logic.
-
-**Solves:** Medusa v2 does not natively support setting `is_default_billing` / `is_default_shipping` on addresses while simultaneously unsetting previous defaults. The custom route handles the swap atomically within one API call.
-
-**Expected Result:** When a customer marks an address as their default billing or shipping, only that address gets the flag — all other addresses are automatically unset. Both native fields and `metadata` stay in sync, compatible with any frontend using radio buttons or checkboxes.
-
----
-
 # 📍 Address Management - Backend Implementation Guide
 
 > **Version**: 2.0 (Medusa v2 Custom Routes)  
@@ -14,6 +5,17 @@
 > **Audience**: Backend Developers (Medusa v2)
 
 ---
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Document the custom backend route for updating customer addresses (`POST /store/customers/me/addresses/:address_id`), including the dual-field update strategy (native Medusa fields + metadata) and the automatic default-swap logic. |
+| **Problemas que resuelve** | Medusa v2 does not natively support setting `is_default_billing` / `is_default_shipping` on addresses while simultaneously unsetting previous defaults. The custom route handles the swap atomically within one API call. |
+| **Resultado esperado** | When a customer marks an address as their default billing or shipping, only that address gets the flag — all other addresses are automatically unset. Both native fields and `metadata` stay in sync, compatible with any frontend using radio buttons or checkboxes. |
+| **Scripts Creados** | `verify/verify-address-defaults.ts`, `verify/verify-native-defaults.ts`, `verify/verify-native-fields.ts`, `verify/test-default-addresses.ts`, `verify/investigate-billing.ts`, `tests/test-native-addresses.ts` |
+| **Última verificación** | 2026-02-08 |
 
 ## 📋 Table of Contents
 

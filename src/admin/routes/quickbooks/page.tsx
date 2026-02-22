@@ -14,6 +14,8 @@ const QuickBooksPage = () => {
     const [customerTimeOfDay, setCustomerTimeOfDay] = useState("00:00")
     const [showAuditModal, setShowAuditModal] = useState(false)
     const [auditData, setAuditData] = useState<any>(null)
+    const [qbEnabled, setQbEnabled] = useState<boolean | null>(null)  // null = loading
+    const [qbToggling, setQbToggling] = useState(false)
 
     // Load saved config on mount
     useEffect(() => {
@@ -27,6 +29,9 @@ const QuickBooksPage = () => {
 
                 const data = await res.json()
                 const config = data.config
+
+                // Load master toggle
+                setQbEnabled(config.integration_enabled ?? true)
 
                 // Load intervals (convert from minutes to display format)
                 if (config.inventory_interval_minutes !== null && config.inventory_interval_minutes !== undefined) {
@@ -205,6 +210,28 @@ const QuickBooksPage = () => {
         }
     }
 
+    const handleQbToggle = async () => {
+        const newValue = !qbEnabled
+        setQbToggling(true)
+        try {
+            const res = await fetch('/admin/quickbooks/config', {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ integration_enabled: newValue })
+            })
+            if (!res.ok) throw new Error('Failed to toggle')
+            setQbEnabled(newValue)
+            alert(newValue
+                ? '✅ QuickBooks Integration ENABLED. All syncs will now run normally.'
+                : '🔴 QuickBooks Integration DISABLED. All syncs are paused until re-enabled.')
+        } catch (error) {
+            alert(`❌ Failed to toggle: ${(error as Error).message}`)
+        } finally {
+            setQbToggling(false)
+        }
+    }
+
     const handleInventorySync = async () => {
         setInventorySyncing(true)
         try {
@@ -324,7 +351,44 @@ const QuickBooksPage = () => {
                 <Heading level="h1">QuickBooks Desktop Integration</Heading>
             </div>
 
-            {/* Inventory Sync */}
+            {/* ─── MASTER INTEGRATION TOGGLE ─── */}
+            <Container>
+                <div className="p-4">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <Heading level="h3" className="text-sm font-medium">⚡ QuickBooks Integration</Heading>
+                            <Text className="text-xs text-ui-fg-subtle mt-1">
+                                Master kill switch. When disabled, all QB syncs and order flows are paused immediately.
+                            </Text>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <span className={`text-xs font-semibold px-2 py-1 rounded-full ${qbEnabled === null ? 'bg-gray-100 text-gray-500' :
+                                    qbEnabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                                }`}>
+                                {qbEnabled === null ? 'Loading...' : qbEnabled ? '● ENABLED' : '● DISABLED'}
+                            </span>
+                            <Button
+                                variant={qbEnabled ? 'danger' : 'primary'}
+                                onClick={handleQbToggle}
+                                isLoading={qbToggling}
+                                disabled={qbToggling || qbEnabled === null}
+                                size="small"
+                            >
+                                {qbEnabled ? 'Disable QB' : 'Enable QB'}
+                            </Button>
+                        </div>
+                    </div>
+                    {qbEnabled === false && (
+                        <div className="mt-3 p-2 rounded bg-red-50 border border-red-200">
+                            <Text className="text-xs text-red-600">
+                                🔴 Integration is disabled. Syncs and order flows will not run. Re-enable to resume.
+                            </Text>
+                        </div>
+                    )}
+                </div>
+            </Container>
+
+            {/* ─── Inventory Sync ─── */}
             <Container>
                 <div className="p-4 space-y-3">
                     <Heading level="h3" className="text-sm font-medium">📦 Inventory Sync</Heading>

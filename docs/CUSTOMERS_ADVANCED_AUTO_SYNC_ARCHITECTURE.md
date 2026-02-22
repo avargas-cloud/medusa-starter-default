@@ -1,13 +1,14 @@
----
-**Purpose:** Document the advanced Customers admin page — a complete replacement for Medusa's native Customers page, featuring Meilisearch-powered instant search, 3-layer automatic sync (subscriber + middleware + API), and batch Meilisearch indexing.
-
-**Solves:** Medusa v2's native customers page has limited search (no instant search, no full-text). The custom page integrates Meilisearch for real-time customer lookup and adds auto-sync so Meilisearch stays current whenever customers are created, updated, or deleted.
-
-**Expected Result:** Admins can search customers by name, email, company in real-time via Meilisearch. Customer records sync automatically to the Meilisearch index via webhooks and middleware — no manual re-indexing needed.
-
----
-
 # Customers Advanced - Complete Auto-Sync Architecture
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Document the advanced Customers admin page — a complete replacement for Medusa's native Customers page, featuring Meilisearch-powered instant search, 3-layer automatic sync (subscriber + middleware + API), and batch Meilisearch indexing. |
+| **Problemas que resuelve** | Medusa v2's native customers page has limited search (no instant search, no full-text). The custom page integrates Meilisearch for real-time customer lookup and adds auto-sync so Meilisearch stays current whenever customers are created, updated, or deleted. |
+| **Resultado esperado** | Admins can search customers by name, email, company in real-time via Meilisearch. Customer records sync automatically to the Meilisearch index via webhooks and middleware — no manual re-indexing needed. |
+| **Scripts Creados** | `tests/test-reconciliation.ts`, `setup/setup-meilisearch-customers.ts` |
 
 ## Resumen Ejecutivo
 

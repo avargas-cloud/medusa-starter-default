@@ -1,13 +1,14 @@
----
-**Purpose:** Quick PC-specific setup guide (in Spanish) for running the EcoPowerTech backend from a home machine — tailored for the specific Windows/Mac setup at home, with the shortcuts and assumptions relevant to that specific environment.
-
-**Solves:** The generic `QUICKSTART.md` assumes a clean Linux environment. This doc handles the specific home-PC setup with Docker Desktop, Windows WSL quirks, or Mac-specific PATH issues that come up repeatedly on the developer's home machine.
-
-**Expected Result:** Backend starts correctly from the home PC in under 5 minutes using the specific shortcuts documented here, without needing to consult the full installation guide.
-
----
-
 # 🚀 Setup Rápido - PC de Casa
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Quick PC-specific setup guide (in Spanish) for running the EcoPowerTech backend from a home machine — tailored for the specific Windows/Mac setup at home, with the shortcuts and assumptions relevant to that specific environment. |
+| **Problemas que resuelve** | The generic `QUICKSTART.md` assumes a clean Linux environment. This doc handles the specific home-PC setup with Docker Desktop, Windows WSL quirks, or Mac-specific PATH issues that come up repeatedly on the developer's home machine. |
+| **Resultado esperado** | Backend starts correctly from the home PC in under 5 minutes using the specific shortcuts documented here, without needing to consult the full installation guide. |
+| **Scripts Creados** | — |
 
 ## Pre-requisitos
 

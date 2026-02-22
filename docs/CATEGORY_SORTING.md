@@ -1,13 +1,14 @@
----
-**Purpose:** Document the custom Category Sorting System that lets admins manually define the display order of subcategories and products within each category via a drag-and-drop interface in the Admin UI.
-
-**Solves:** Medusa v2 has no native support for custom subcategory/product ordering within categories. The system follows the same metadata-driven architecture as Category Filters, storing sort order in `category.metadata.sort_config`.
-
-**Expected Result:** Category admins can drag-and-drop subcategories and products into a custom display order. The sort configuration is stored in metadata and served by the store API, with automatic sync when categories or products are modified.
-
----
-
 # Category Sorting System
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Document the custom Category Sorting System that lets admins manually define the display order of subcategories and products within each category via a drag-and-drop interface in the Admin UI. |
+| **Problemas que resuelve** | Medusa v2 has no native support for custom subcategory/product ordering within categories. The system follows the same metadata-driven architecture as Category Filters, storing sort order in `category.metadata.sort_config`. |
+| **Resultado esperado** | Category admins can drag-and-drop subcategories and products into a custom display order. The sort configuration is stored in metadata and served by the store API, with automatic sync when categories or products are modified. |
+| **Scripts Creados** | `sync/resync-all-category-attributes.ts`, `verify/verify-category-filters.ts` |
 
 ## Overview
 

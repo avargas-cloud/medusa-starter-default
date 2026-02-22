@@ -1,33 +1,23 @@
-import { ExecArgs } from "@medusajs/framework/types"
-import { IProductModuleService } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import { ExecArgs } from "@medusajs/framework/types";
 
+/**
+ * Inspect products to find where WC ID is stored
+ * Run with: npx medusa exec ./src/scripts/inspect-metadata.ts
+ */
 export default async function inspectMetadata({ container }: ExecArgs) {
-    const productService: IProductModuleService = container.resolve(Modules.PRODUCT)
+    const query = container.resolve("query");
 
-    console.log("🔍 Inspecting Metadata for first 5 products...")
+    console.log("\n🔍 Inspecting Product Metadata...\n");
 
-    const [products] = await productService.listAndCountProducts(
-        {},
-        {
-            select: ["id", "title", "handle", "metadata", "variants.id", "variants.sku", "variants.metadata"],
-            take: 5,
-            relations: ["variants"]
-        }
-    )
+    const { data: products } = await query.graph({
+        entity: "product",
+        fields: ["id", "title", "metadata"],
+        pagination: { take: 5 }
+    });
 
-    products.forEach(p => {
-        console.log(`\n📦 Product: ${p.title} (${p.handle})`)
-        console.log("Product Metadata:", JSON.stringify(p.metadata, null, 2))
-
-        if (p.variants && p.variants.length > 0) {
-            console.log(`🔹 Variants (${p.variants.length}):`)
-            p.variants.forEach(v => {
-                console.log(`   - SKU: ${v.sku} | ID: ${v.id}`)
-                console.log(`     Metadata:`, JSON.stringify(v.metadata, null, 2))
-            })
-        } else {
-            console.log("⚠️ No variants found for this product.")
-        }
-    })
+    products.forEach((p: any) => {
+        console.log(`Product: ${p.title}`);
+        console.log(`Metadata:`, p.metadata);
+        console.log("---");
+    });
 }

@@ -1,42 +1,55 @@
-#!/usr/bin/env tsx
-import { Client } from 'pg';
-import dotenv from 'dotenv';
-dotenv.config();
+import { ExecArgs } from "@medusajs/framework/types";
+import { Modules } from "@medusajs/framework/utils";
 
-async function checkSchema() {
-    const c = new Client({ connectionString: process.env.DATABASE_URL });
-    await c.connect();
+/**
+ * Check column types for product_variant table
+ * Run with: npx medusa exec ./src/scripts/check-schema.ts
+ */
+export default async function checkSchema({ container }: ExecArgs) {
+    console.log("\n🔍 Checking ProductVariant Schema via remote query...\n");
 
-    // Check schema
-    const schema = await c.query(`
-        SELECT column_name, data_type 
-        FROM information_schema.columns 
-        WHERE table_name = 'product_category' 
-        ORDER BY ordinal_position
-    `);
+    // We don't have direct SQL access easily exposed in simple exec context typically without knex
+    // But we can try to inspect the entity metadata from the MikroORM manager if available
+    // or just assume standard Medusa v2 schema.
 
-    console.log('\n📋 TABLE: product_category');
-    console.log('='.repeat(50));
-    schema.rows.forEach(col => {
-        const marker = col.column_name === 'thumbnail' ? ' ← ⭐ FOUND!' : '';
-        console.log(`  ${col.column_name.padEnd(30)} ${col.data_type}${marker}`);
-    });
+    // However, the effective behavior is what matters.
+    // If I update with 1.5 and get 1, it's an integer.
 
-    // Check if LED Strips has thumbnail
-    const led = await c.query(`
-        SELECT id, name, thumbnail 
-        FROM product_category 
-        WHERE handle = 'led-strips'
-    `);
+    const productModuleService = container.resolve(Modules.PRODUCT);
+    const query = container.resolve("query");
 
-    console.log('\n📦 LED Strips Category:');
-    console.log('='.repeat(50));
-    console.log('  ID:', led.rows[0].id);
-    console.log('  Name:', led.rows[0].name);
-    console.log('  Thumbnail:', led.rows[0].thumbnail);
-    console.log('');
+    // Let's create a dummy variant with decimal and see what happens (we already saw it truncating earlier)
+    // Confirming truncation IS confirming integer type effectively.
 
-    await c.end();
+    console.log("We observed 1.3125 -> 1 truncation earlier.");
+    console.log("This strongly implies INTEGER / NUMERIC(x,0) columns.");
+
+    // In Medusa v2, the default product schema defines these as:
+    // weight: number (nullable)
+    // length: number (nullable)
+    // width: number (nullable)
+    // height: number (nullable)
+
+    // But MikroORM / Postgres type matters.
+    // By default Medusa v1 used integers. v2 might have kept it for compatibility or default.
+
+    // If we want decimals, we likely need to alter the column type.
+
+    // Let's try to fetch the raw db config or do a raw query if possible?
+    try {
+        const pgConnection = container.resolve("db_connection"); // this might not exist with this name
+        // Usually 'mikro-orm' entity manager
+        const manager = container.resolve("manager");
+        if (manager) {
+            const knex = manager.getKnex();
+            const info = await knex.raw(`
+                SELECT column_name, data_type, numeric_precision, numeric_scale 
+                FROM information_schema.columns 
+                WHERE table_name = 'product_variant';
+            `);
+            console.table(info.rows.filter(r => ['weight', 'length', 'width', 'height'].includes(r.column_name)));
+        }
+    } catch (e) {
+        console.log("Could not access Knex directly:", e.message);
+    }
 }
-
-checkSchema();

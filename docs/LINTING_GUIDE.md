@@ -1,13 +1,14 @@
----
-**Purpose:** ESLint and TypeScript linting setup guide for the EcoPowerTech backend — configured tools, `.eslintrc` rules, and how to run lint checks before committing.
-
-**Solves:** Inconsistent code style and undetected type errors across the backend codebase. Provides a shared linting baseline that catches common issues (unused variables, implicit `any`, missing return types) before they reach production.
-
-**Expected Result:** Running `yarn lint` catches type errors and style violations across all TypeScript files. CI rejects commits that fail lint. All developers follow the same code quality standards.
-
----
-
 # 🛡️ Guía de Linting y Calidad de Código
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | ESLint and TypeScript linting setup guide for the EcoPowerTech backend — configured tools, `.eslintrc` rules, and how to run lint checks before committing. |
+| **Problemas que resuelve** | Inconsistent code style and undetected type errors across the backend codebase. Provides a shared linting baseline that catches common issues (unused variables, implicit `any`, missing return types) before they reach production. |
+| **Resultado esperado** | Running `yarn lint` catches type errors and style violations across all TypeScript files. CI rejects commits that fail lint. All developers follow the same code quality standards. |
+| **Scripts Creados** | — |
 
 ## Herramientas Instaladas
 

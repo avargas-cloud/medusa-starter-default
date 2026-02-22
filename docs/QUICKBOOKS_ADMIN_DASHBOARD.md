@@ -1,13 +1,14 @@
----
-**Purpose:** Document the QuickBooks Admin Dashboard feature — a custom Admin Panel page showing QuickBooks sync status, last import timestamps, customer import progress, and reconciliation tools for the QuickBooks-Medusa data bridge.
-
-**Solves:** Without visibility into the QuickBooks sync state, admins can't tell if customer/product data has been imported or if the bridge is failing silently. The dashboard provides real-time sync status and manual trigger controls.
-
-**Expected Result:** Admins can see at a glance when the last QuickBooks sync ran, how many records were imported, and trigger a manual re-sync if needed, all from the Medusa Admin Panel.
-
----
-
 # QuickBooks Admin Dashboard - Complete Documentation
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Document the QuickBooks Admin Dashboard feature — a custom Admin Panel page showing QuickBooks sync status, last import timestamps, customer import progress, and reconciliation tools for the QuickBooks-Medusa data bridge. |
+| **Problemas que resuelve** | Without visibility into the QuickBooks sync state, admins can't tell if customer/product data has been imported or if the bridge is failing silently. The dashboard provides real-time sync status and manual trigger controls. |
+| **Resultado esperado** | Admins can see at a glance when the last QuickBooks sync ran, how many records were imported, and trigger a manual re-sync if needed, all from the Medusa Admin Panel. |
+| **Scripts Creados** | `import-customers-from-qb.ts`, `setup/setup-meilisearch-customers.ts` |
 
 ## Overview
 

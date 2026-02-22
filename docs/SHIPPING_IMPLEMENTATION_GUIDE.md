@@ -1,17 +1,18 @@
----
-**Purpose:** Complete implementation guide for shipping in Medusa v2 with the Astro storefront — covering 4 UPS service modules (Ground/serviceCode:03, Next Day Air/01, 2nd Day Air/02, 3 Day Select/12), custom flat-rate ground shipping, store pickup, and intelligent multi-box packing logic.
-
-**Solves:** Medusa v2 has no out-of-the-box UPS integration. All UPS services are implemented as custom `ModuleProvider(Modules.FULFILLMENT)` modules in `src/modules/ups-*`. This guide documents those custom modules, UPS API OAuth credentials (CLIENT_ID + CLIENT_SECRET), the box packing algorithm, and the Astro checkout integration.
-
-**Expected Result:** Checkout offers up to 5 shipping options (UPS Ground, Next Day Air, 2nd Day Air, 3 Day Select, flat-rate ground, store pickup), with rates fetched live from UPS API per order weight/destination, and the selected fulfillment provider attached to the Medusa order.
-
----
-
 # Shipping Implementation Guide: Medusa v2 + Astro
 
 > **Purpose:** Complete guide documenting how to implement real-time UPS shipping rates, custom flat-rate ground shipping, store pickup, and intelligent box packing in a Medusa v2 + Astro storefront. Detailed enough to replicate from scratch on a new project.
 
 ---
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Complete implementation guide for shipping in Medusa v2 with the Astro storefront — covering 4 UPS service modules (Ground/serviceCode:03, Next Day Air/01, 2nd Day Air/02, 3 Day Select/12), custom flat-rate ground shipping, store pickup, and intelligent multi-box packing logic. |
+| **Problemas que resuelve** | Medusa v2 has no out-of-the-box UPS integration. All UPS services are implemented as custom `ModuleProvider(Modules.FULFILLMENT)` modules in `src/modules/ups-*`. This guide documents those custom modules, UPS API OAuth credentials (CLIENT_ID + CLIENT_SECRET), the box packing algorithm, and the Astro checkout integration. |
+| **Resultado esperado** | Checkout offers up to 5 shipping options (UPS Ground, Next Day Air, 2nd Day Air, 3 Day Select, flat-rate ground, store pickup), with rates fetched live from UPS API per order weight/destination, and the selected fulfillment provider attached to the Medusa order. |
+| **Scripts Creados** | — |
 
 ## Table of Contents
 

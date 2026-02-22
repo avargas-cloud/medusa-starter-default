@@ -1,18 +1,19 @@
----
-**Purpose:** Document the UX overhaul of the `ManageAttributesModal` and the debugging journey that uncovered a critical Many-to-Many link configuration bug in Medusa v2, plus the hard-delete policy implemented to prevent ghost/soft-deleted data.
-
-**Solves:** (1) UX was unusable with large attribute lists — fixed with Combobox searchable selector and inline quick-add. (2) `isList: true` was missing from the link definition causing "Cannot create multiple links" errors. (3) Soft-deleted attribute records were polluting queries, causing duplicate values in the UI.
-
-**Expected Result:** The modal supports many-to-many attribute assignment reliably. No ghost/soft-deleted records. Developers know to always set `isList: true` for M2M links in Medusa v2.
-
----
-
 # Product Attributes: UX Refinement & Save Logic Transformation
 
 > [!NOTE]
 > This session focused on refining the **Product Attributes Management** experience. We moved from a basic UI to a searchable, user-friendly interface and resolved critical backend architectural issues to ensure reliable saving of data.
 
 ---
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Document the UX overhaul of the `ManageAttributesModal` and the debugging journey that uncovered a critical Many-to-Many link configuration bug in Medusa v2, plus the hard-delete policy implemented to prevent ghost/soft-deleted data. |
+| **Problemas que resuelve** | (1) UX was unusable with large attribute lists — fixed with Combobox searchable selector and inline quick-add. (2) `isList: true` was missing from the link definition causing "Cannot create multiple links" errors. (3) Soft-deleted attribute records were polluting queries, causing duplicate values in the UI. |
+| **Resultado esperado** | The modal supports many-to-many attribute assignment reliably. No ghost/soft-deleted records. Developers know to always set `isList: true` for M2M links in Medusa v2. |
+| **Scripts Creados** | `tests/test-save-config.ts`, `tests/test-save-flow.ts`, `tests/test-save-preservation.ts`, `verify/verify-product-attrs.ts`, `show/show-product-attrs.ts`, `verify/verify-links.ts`, `cleanup/` (cleanup de soft-deleted links) |
 
 ## 1. UX Enhancements (The "Wow" Factor)
 

@@ -1,18 +1,19 @@
----
-**Purpose:** Quick-reference card for Google OAuth configuration in production — environment variables, redirect URIs, authorized domains, and the most common setup mistakes, without the full implementation narrative.
-
-**Solves:** After reading the complete guide once, developers need a fast lookup for the specific env var names, redirect URI format, and production vs. development differences when configuring or debugging Google OAuth.
-
-**Expected Result:** A developer can verify or fix Google OAuth configuration in under 2 minutes using this reference without reopening the full implementation guide.
-
----
-
 # Google OAuth Authentication - Quick Reference
 
 **Status:** ✅ Production Ready  
 **Last Updated:** February 5, 2026
 
 ---
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Quick-reference card for Google OAuth configuration in production — environment variables, redirect URIs, authorized domains, and the most common setup mistakes, without the full implementation narrative. |
+| **Problemas que resuelve** | After reading the complete guide once, developers need a fast lookup for the specific env var names, redirect URI format, and production vs. development differences when configuring or debugging Google OAuth. |
+| **Resultado esperado** | A developer can verify or fix Google OAuth configuration in under 2 minutes using this reference without reopening the full implementation guide. |
+| **Scripts Creados** | `tests/test-google-oauth-setup.ts`, `verify/verify-google-oauth-jwt.ts` |
 
 ## 🎯 What It Does
 

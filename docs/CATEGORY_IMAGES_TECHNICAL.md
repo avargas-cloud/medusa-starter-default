@@ -1,13 +1,14 @@
----
-**Purpose:** Technical reference for category image management — covering the Admin API limitation (images can't be set directly on categories), the metadata-based workaround, and the MinIO folder routing strategy for category vs. product images.
-
-**Solves:** Medusa v2's Admin API does not support setting images on categories natively. This doc documents the discovery and the accepted workaround using `category.metadata.image_url` plus direct MinIO upload with the `categories/` prefix folder.
-
-**Expected Result:** Category images are stored in MinIO under `categories/<category-handle>/` and referenced via metadata. Frontend reads `category.metadata.image_url` to display the category hero image.
-
----
-
 # Category Images - Technical Reference
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Technical reference for category image management — covering the Admin API limitation (images can't be set directly on categories), the metadata-based workaround, and the MinIO folder routing strategy for category vs. product images. |
+| **Problemas que resuelve** | Medusa v2's Admin API does not support setting images on categories natively. This doc documents the discovery and the accepted workaround using `category.metadata.image_url` plus direct MinIO upload with the `categories/` prefix folder. |
+| **Resultado esperado** | Category images are stored in MinIO under `categories/<category-handle>/` and referenced via metadata. Frontend reads `category.metadata.image_url` to display the category hero image. |
+| **Scripts Creados** | `migrations/migrate-category-images.ts`, `migrations/rename-woocommerce-image.ts`, `migrations/copy-minio-urls-to-metadata.ts` |
 
 ## Overview
 

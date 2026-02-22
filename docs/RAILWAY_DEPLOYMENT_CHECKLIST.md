@@ -1,13 +1,14 @@
----
-**Purpose:** Pre-deployment checklist for Railway — all required environment variables with descriptions, Railway service configuration steps, and confirmation commands to verify the backend is serving correctly before going live.
-
-**Solves:** Missing environment variables on Railway caused silently broken functionality (auth, image uploads, search) that was hard to debug post-deploy. This checklist ensures every required variable is set before marking the deployment complete.
-
-**Expected Result:** All env vars are set in Railway before deploy. Backend starts correctly, migrations auto-run on startup, and all integrations (PostgreSQL, Redis, MinIO, Meilisearch, SendGrid) are verified working.
-
----
-
 # ⚠️ IMPORTANTE: Variables de Entorno para Railway (Producción)
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Pre-deployment checklist for Railway — all required environment variables with descriptions, Railway service configuration steps, and confirmation commands to verify the backend is serving correctly before going live. |
+| **Problemas que resuelve** | Missing environment variables on Railway caused silently broken functionality (auth, image uploads, search) that was hard to debug post-deploy. This checklist ensures every required variable is set before marking the deployment complete. |
+| **Resultado esperado** | All env vars are set in Railway before deploy. Backend starts correctly, migrations auto-run on startup, and all integrations (PostgreSQL, Redis, MinIO, Meilisearch, SendGrid) are verified working. |
+| **Scripts Creados** | `tests/test-google-oauth-setup.ts`, `verify/verify-google-oauth-jwt.ts` |
 
 Antes de hacer el deployment, **DEBES agregar estas variables en Railway**:
 

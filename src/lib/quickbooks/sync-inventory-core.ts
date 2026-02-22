@@ -1,9 +1,10 @@
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import { IInventoryService, IStockLocationService } from "@medusajs/types"
+import { isQbIntegrationEnabled } from "./qb-integration-guard"
 
-// Config
-const BRIDGE_URL = "https://ecopower-qb.loca.lt"
-const API_KEY = "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD"
+// Config — URLs and keys from env vars
+const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://ecopower-qb.loca.lt"
+const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD"
 const POLL_INTERVAL_MS = 30000 // 30 seconds
 const MAX_POLL_ATTEMPTS = 20 // 10 minutes max
 
@@ -15,6 +16,10 @@ export interface SyncInventoryResult {
         missingInQb: number
         updatedStock: number
         skippedNoInventoryItem: number
+    }
+    discrepancyReport?: {
+        onlyInQb: string[]      // QB items with no matching quickbooks_id in Medusa
+        onlyInMedusa: string[]  // Medusa variants with QB ID not found in QB response
     }
     error?: string
 }
@@ -28,6 +33,16 @@ export async function syncInventoryCore(container: any): Promise<SyncInventoryRe
     const inventoryService: IInventoryService = container.resolve(Modules.INVENTORY)
     const stockLocationService: IStockLocationService = container.resolve(Modules.STOCK_LOCATION)
     const query = container.resolve(ContainerRegistrationKeys.QUERY)
+
+    // Master integration kill switch
+    if (!(await isQbIntegrationEnabled())) {
+        logger.info("[QB] Integration is DISABLED. Skipping inventory sync.")
+        return {
+            success: false,
+            stats: { totalLinkedVariants: 0, foundInQb: 0, missingInQb: 0, updatedStock: 0, skippedNoInventoryItem: 0 },
+            error: "QB integration is disabled"
+        }
+    }
 
     const stats = {
         totalLinkedVariants: 0,
@@ -158,8 +173,15 @@ export async function syncInventoryCore(container: any): Promise<SyncInventoryRe
             return { success: false, stats, error }
         }
 
-        // 5. Update ONLY Inventory
-        logger.info("\n📦 Processing Inventory Updates...")
+        // Build discrepancy report
+        const medusaQbIds = new Set(qbVariants.map((v: any) => v.metadata?.quickbooks_id))
+        const allQbIds = new Set(qbData.map((item: any) => item.ListID))
+        const onlyInQb = qbData
+            .filter((item: any) => !medusaQbIds.has(item.ListID))
+            .map((item: any) => `${item.Name || item.ListID}`)
+        const onlyInMedusa = qbVariants
+            .filter((v: any) => !allQbIds.has(v.metadata?.quickbooks_id))
+            .map((v: any) => v.sku || v.id)
 
         const qbMap = new Map(qbData.map((item: any) => [item.ListID, item]))
 
@@ -230,9 +252,14 @@ export async function syncInventoryCore(container: any): Promise<SyncInventoryRe
         logger.info(`Missing in QB:          ${stats.missingInQb}`)
         logger.info(`Updated Inventory:      ${stats.updatedStock}`)
         logger.info(`Skipped (No Inv Item):  ${stats.skippedNoInventoryItem}`)
+        if (onlyInQb.length > 0) {
+            logger.info(`\n📊 DISCREPANCY: ${onlyInQb.length} items in QB with no Medusa match (not on website):`)
+            onlyInQb.slice(0, 10).forEach(name => logger.info(`   • ${name}`))
+            if (onlyInQb.length > 10) logger.info(`   ... and ${onlyInQb.length - 10} more`)
+        }
         logger.info(`${"=".repeat(50)}\n`)
 
-        return { success: true, stats }
+        return { success: true, stats, discrepancyReport: { onlyInQb, onlyInMedusa } }
 
     } catch (error: any) {
         logger.error(`❌ Sync failed: ${error.message}`)

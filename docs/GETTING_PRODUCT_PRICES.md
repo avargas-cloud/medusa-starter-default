@@ -1,13 +1,14 @@
----
-**Purpose:** Document the correct way to obtain and display product prices in Medusa v2 — the API endpoint, required context headers (`x-publishable-api-key`, region ID), the unit format change from v1 (cents) to v2 (dollars), and the `calculated_price` vs `amount` distinction.
-
-**Solves:** Medusa v2 stores prices as major units (dollars), breaking all v1 price-display code that divided by 100. Also documents that prices require the `region_id` context in the API call, and that `calculated_price` (not `amount`) is the field to display.
-
-**Expected Result:** All price displays in the storefront show correct dollar amounts. The `calculated_price` field from the Medusa pricing context is used consistently, with no division-by-100 errors.
-
----
-
 # Cómo Obtener Precios de Productos en Medusa v2
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Document the correct way to obtain and display product prices in Medusa v2 — the API endpoint, required context headers (`x-publishable-api-key`, region ID), the unit format change from v1 (cents) to v2 (dollars), and the `calculated_price` vs `amount` distinction. |
+| **Problemas que resuelve** | Medusa v2 stores prices as major units (dollars), breaking all v1 price-display code that divided by 100. Also documents that prices require the `region_id` context in the API call, and that `calculated_price` (not `amount`) is the field to display. |
+| **Resultado esperado** | All price displays in the storefront show correct dollar amounts. The `calculated_price` field from the Medusa pricing context is used consistently, with no division-by-100 errors. |
+| **Scripts Creados** | `verify/verify-wholesale-pricing.ts`, `verify/verify-price-list-assignments.ts`, `verify/verify-customer-group.ts` |
 
 ## ⚠️ IMPORTANTE: Medusa v2 usa Major Units (Dólares)
 - **v1**: $10.00 se guardaba como `1000` (centavos)

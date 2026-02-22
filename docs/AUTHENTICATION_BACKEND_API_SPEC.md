@@ -1,13 +1,15 @@
----
-**Purpose:** Precise technical spec for all authentication API endpoints — request/response schemas, HTTP status codes, implementation code snippets, database schema, and scrypt-kdf password hashing details for the 3-case registration system.
-
-**Solves:** Provides a contract-level reference for frontend and backend developers integrating with the auth system, including edge cases like metadata parsing (string vs. array vs. object), password reuse validation, and the exact field name (`provider_metadata.password`, not `password_hash`).
-
-**Expected Result:** Any developer can implement or debug any auth endpoint using this spec without needing to read the application code, with full visibility into database schema, error codes, and security behaviors.
-
----
-
 # Backend API Specification - Customer Authentication
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Precise technical spec for all authentication API endpoints — request/response schemas, HTTP status codes, implementation code snippets, database schema, and scrypt-kdf password hashing details for the 3-case registration system. |
+| **Problemas que resuelve** | Provides a contract-level reference for frontend and backend developers integrating with the auth system, including edge cases like metadata parsing (string vs. array vs. object), password reuse validation, and the exact field name (`provider_metadata.password`, not `password_hash`). |
+| **Resultado esperado** | Any developer can implement or debug any auth endpoint using this spec without needing to read the application code, with full visibility into database schema, error codes, and security behaviors. |
+| **Scripts Creados** | `tests/test-auth-e2e.ts`, `tests/test-2step-registration.ts`, `tests/test-case3-registration.ts`, `tests/test-case3-simple.ts`, `get/get-activation-token.ts`, `verify/verify-hash-format.ts`, `verify/verify-password-hash.ts` |
+| **Última verificación** | 2026-02-03 |
 
 ## Overview
 
@@ -741,4 +743,3 @@ COOKIE_SECRET=your-cookie-secret
 - ✅ Login (custom + gold standard) - Tested 2026-02-03
 
 **Last Updated**: 2026-02-03
-

@@ -1,12 +1,3 @@
----
-**Purpose:** Redis cache configuration and database query optimization guide — covering cache-aside patterns for expensive endpoints, Redis TTL strategies, and PostgreSQL query optimizations (indexes, query plans) that collectively establish the sub-400ms response time target.
-
-**Solves:** Several endpoints (notably the category products endpoint) were too slow for production use. This guide documents the specific Redis caching layers added, the cache key strategies, and the database indexes added to queries that were doing sequential scans.
-
-**Expected Result:** Cached endpoints respond in under 400ms. Uncached endpoints (cache miss) respond in under 800ms. Redis hit rates above 80% for high-traffic endpoints. No sequential table scans on hot paths.
-
----
-
 # Redis Cache & Database Performance Optimization Guide
 
 **Author:** Performance Optimization Team  
@@ -15,6 +6,16 @@
 **Medusa Version:** v2.x
 
 ---
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Redis cache configuration and database query optimization guide — covering cache-aside patterns for expensive endpoints, Redis TTL strategies, and PostgreSQL query optimizations (indexes, query plans) that collectively establish the sub-400ms response time target. |
+| **Problemas que resuelve** | Several endpoints (notably the category products endpoint) were too slow for production use. This guide documents the specific Redis caching layers added, the cache key strategies, and the database indexes added to queries that were doing sequential scans. |
+| **Resultado esperado** | Cached endpoints respond in under 400ms. Uncached endpoints (cache miss) respond in under 800ms. Redis hit rates above 80% for high-traffic endpoints. No sequential table scans on hot paths. |
+| **Scripts Creados** | `create-performance-indexes.ts`, `enable-prerender-all-categories.ts`, `verify/verify-performance-indexes.ts` |
 
 ## 📋 Table of Contents
 

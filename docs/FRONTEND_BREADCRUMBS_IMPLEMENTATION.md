@@ -1,13 +1,14 @@
----
-**Purpose:** Backend-authored guide for the frontend team on how to implement category breadcrumbs in the Astro storefront — including the correct Medusa v2 API endpoint, the category ancestry traversal pattern, and the update that deprecated the old product-metadata approach.
-
-**Solves:** The original breadcrumb implementation stored parent category info in product metadata (fragile, gets stale). The updated approach queries the category hierarchy directly from Medusa's `category.parent_category` chain, which is always accurate.
-
-**Expected Result:** Breadcrumbs on product and category pages accurately reflect the full category path (e.g., Lighting > LED Lighting > Smart Bulbs) using live Medusa data, not cached metadata.
-
----
-
 # Category Breadcrumbs - Storefront Integration Guide
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Backend-authored guide for the frontend team on how to implement category breadcrumbs in the Astro storefront — including the correct Medusa v2 API endpoint, the category ancestry traversal pattern, and the update that deprecated the old product-metadata approach. |
+| **Problemas que resuelve** | The original breadcrumb implementation stored parent category info in product metadata (fragile, gets stale). The updated approach queries the category hierarchy directly from Medusa's `category.parent_category` chain, which is always accurate. |
+| **Resultado esperado** | Breadcrumbs on product and category pages accurately reflect the full category path (e.g., Lighting > LED Lighting > Smart Bulbs) using live Medusa data, not cached metadata. |
+| **Scripts Creados** | `verify/verify-category-filters.ts`, `show/show-category-filters.ts` |
 
 ## ⚠️ IMPORTANT UPDATE (2026-02-04)
 

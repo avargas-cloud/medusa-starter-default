@@ -1,15 +1,16 @@
----
-**Purpose:** Complete guide for the Meilisearch auto-sync system — covering all indexed entities (products, customers, inventory), the 2-layer sync architecture (middleware auto-sync + manual sync API), and the batch re-index scripts.
-
-**Solves:** Meilisearch indexes go stale when products/customers/inventory are modified via the Admin Panel. Medusa v2 subscribers were unreliable (see MEDUSA_V2_SUBSCRIBER_BUG_AND_MIDDLEWARE_FIX.md), so the system uses Express middleware to intercept admin API responses and sync incrementally (~50ms per item, non-blocking).
-
-**Expected Result:** All Meilisearch indexes (products, customers, inventory) stay in sync automatically via middleware. The -Advanced admin pages always reflect current data. Manual re-indexing via sync buttons is only needed after direct SQL scripts or bulk imports.
-
----
-
 # 🔍 MeiliSearch Auto-Sync Complete Guide
 
 **Last Updated:** February 6, 2026
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Complete guide for the Meilisearch auto-sync system — covering all indexed entities (products, customers, inventory), the 2-layer sync architecture (middleware auto-sync + manual sync API), and the batch re-index scripts. |
+| **Problemas que resuelve** | Meilisearch indexes go stale when products/customers/inventory are modified via the Admin Panel. Medusa v2 subscribers were unreliable (see MEDUSA_V2_SUBSCRIBER_BUG_AND_MIDDLEWARE_FIX.md), so the system uses Express middleware to intercept admin API responses and sync incrementally (~50ms per item, non-blocking). |
+| **Resultado esperado** | All Meilisearch indexes (products, customers, inventory) stay in sync automatically via middleware. The -Advanced admin pages always reflect current data. Manual re-indexing via sync buttons is only needed after direct SQL scripts or bulk imports. |
+| **Scripts Creados** | `tests/test-reconciliation.ts`, `setup/setup-meilisearch-customers.ts` |
 
 This document covers the complete MeiliSearch synchronization system, including automatic incremental updates via middleware and manual sync buttons.
 

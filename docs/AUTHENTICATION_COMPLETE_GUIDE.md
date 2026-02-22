@@ -1,12 +1,3 @@
----
-**Purpose:** Master reference for the entire EcoPowerTech authentication system in Medusa v2 — covering customer registration (3 cases), email/password login, password reset, Google OAuth, and frontend integration.
-
-**Solves:** Medusa v2's default auth module doesn't natively handle: (1) legacy QuickBooks customers who need email activation, (2) customers who try to re-register with an existing email and correct password (auto-login), (3) password reset using the native `scrypt-kdf` algorithm (not bcrypt).
-
-**Expected Result:** A complete, production-ready authentication system where all 3 registration cases are handled automatically at `/store/auth/register`, password reset works end-to-end with scrypt-kdf, and tokens are valid for both `/store/auth/login` and `/auth/customer/emailpass`.
-
----
-
 # Medusa v2 Authentication - Complete Implementation Guide
 
 **EcoPowerTech Backend**  
@@ -14,6 +5,17 @@
 **Status**: 100% Gold Standard Medusa v2
 
 ---
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Master reference for the entire EcoPowerTech authentication system in Medusa v2 — covering customer registration (3 cases), email/password login, password reset, Google OAuth, and frontend integration. |
+| **Problemas que resuelve** | Medusa v2's default auth module doesn't natively handle: (1) legacy QuickBooks customers who need email activation, (2) customers who try to re-register with an existing email and correct password (auto-login), (3) password reset using the native `scrypt-kdf` algorithm (not bcrypt). |
+| **Resultado esperado** | A complete, production-ready authentication system where all 3 registration cases are handled automatically at `/store/auth/register`, password reset works end-to-end with scrypt-kdf, and tokens are valid for both `/store/auth/login` and `/auth/customer/emailpass`. |
+| **Scripts Creados** | `tests/test-auth-e2e.ts`, `tests/test-2step-registration.ts`, `tests/test-case3-registration.ts`, `tests/test-legacy-customer.mjs`, `tests/test-password-reset-e2e.ts`, `tests/test-google-oauth-setup.ts`, `get/get-activation-token.ts`, `verify/verify-activation.ts`, `verify/verify-auth-direct.ts`, `verify/verify-password-hash.ts`, `tests/test-sendgrid.ts` |
+| **Última verificación** | 2026-02-03 |
 
 ## Table of Contents
 

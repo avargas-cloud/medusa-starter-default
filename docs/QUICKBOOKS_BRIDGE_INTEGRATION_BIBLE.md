@@ -1,17 +1,18 @@
----
-**Purpose:** Master reference (in Spanish) for the custom QuickBooks-Medusa Bridge — the complete integration bible covering architecture, data mapping, authentication, sync logic, and all operational procedures for the EcoPowerTech QuickBooks connection.
-
-**Solves:** The QuickBooks integration required a custom Node.js bridge service because there's no off-the-shelf Medusa v2 QuickBooks connector. This doc is the authoritative reference for everything about how the bridge works, how data flows between systems, and how to troubleshoot it.
-
-**Expected Result:** Any developer can understand, operate, or extend the QuickBooks Bridge from this document. Covers customer import, product sync, and the OAuth flow for QuickBooks Online API authentication.
-
----
-
 # 📘 QuickBooks Bridge: La Biblia de Integración (Manual Completo)
 
 > **Versión:** 1.0 (Producción)
 > **Tecnología:** Node.js + Direct COM (Sin Web Connector)
 > **Compatibilidad:** QuickBooks Desktop 2012 - 2024 (Enterprise, Pro, Premier)
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Master reference (in Spanish) for the custom QuickBooks-Medusa Bridge — the complete integration bible covering architecture, data mapping, authentication, sync logic, and all operational procedures for the EcoPowerTech QuickBooks connection. |
+| **Problemas que resuelve** | The QuickBooks integration required a custom Node.js bridge service because there's no off-the-shelf Medusa v2 QuickBooks connector. This doc is the authoritative reference for everything about how the bridge works, how data flows between systems, and how to troubleshoot it. |
+| **Resultado esperado** | Any developer can understand, operate, or extend the QuickBooks Bridge from this document. Covers customer import, product sync, and the OAuth flow for QuickBooks Online API authentication. |
+| **Scripts Creados** | `import-customers-from-qb.ts` |
 
 Este documento es la **fuente de verdad absoluta**. Sigue estos pasos para instalar el sistema desde CERO en un servidor Windows virgen.
 

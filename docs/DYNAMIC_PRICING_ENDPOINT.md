@@ -1,12 +1,3 @@
----
-**Purpose:** Step-by-step guide (in Spanish) for implementing dynamic product pricing on the storefront — including how to fetch prices from the Medusa pricing API, handle the v2 major units format (dollars, not cents), and display wholesale vs. retail prices based on customer group.
-
-**Solves:** Medusa v2 changed from minor units (cents) to major units (dollars) for price storage, breaking price display in any code copied from v1. This guide documents the correct API call pattern, field names, and unit handling for the v2 pricing module.
-
-**Expected Result:** Product pages display the correct price in the customer's currency and customer group tier. The `calculated_price` field is used (not `amount`), and prices render as human-readable dollar amounts without manual division by 100.
-
----
-
 # Cómo Implementar Precios Dinámicos en Páginas de Producto
 
 **Guía Paso a Paso para Nuevos Desarrolladores**  
@@ -15,6 +6,16 @@
 > **⚠️ IMPORTANTE PARA WHOLESALE PRICING**: Este endpoint soporta precios wholesale/mayorista cuando el cliente está autenticado. Ver sección [Wholesale Pricing con JWT](#wholesale-pricing-con-jwt-authentication) abajo para detalles críticos.
 
 ---
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Step-by-step guide (in Spanish) for implementing dynamic product pricing on the storefront — including how to fetch prices from the Medusa pricing API, handle the v2 major units format (dollars, not cents), and display wholesale vs. retail prices based on customer group. |
+| **Problemas que resuelve** | Medusa v2 changed from minor units (cents) to major units (dollars) for price storage, breaking price display in any code copied from v1. This guide documents the correct API call pattern, field names, and unit handling for the v2 pricing module. |
+| **Resultado esperado** | Product pages display the correct price in the customer's currency and customer group tier. The `calculated_price` field is used (not `amount`), and prices render as human-readable dollar amounts without manual division by 100. |
+| **Scripts Creados** | `verify/verify-wholesale-pricing.ts`, `verify/verify-customer-group.ts`, `verify/verify-price-list-assignments.ts` |
 
 ## ¿Qué vamos a lograr?
 

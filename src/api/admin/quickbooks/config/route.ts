@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Client } from "pg"
+import { invalidateQbIntegrationCache } from "../../../../lib/quickbooks/qb-integration-guard"
 
 /**
  * GET /admin/quickbooks/config
@@ -19,8 +20,10 @@ export async function GET(
         const result = await client.query(`
             SELECT 
                 id,
+                integration_enabled,
                 inventory_interval_minutes,
                 price_interval_minutes,
+                customer_interval_minutes,
                 last_inventory_sync,
                 last_price_sync,
                 bridge_url,
@@ -65,10 +68,11 @@ export async function POST(
     })
 
     try {
-        const { inventory_sync_interval_minutes, price_sync_interval_minutes, customer_sync_interval_minutes } = req.body as {
+        const { inventory_sync_interval_minutes, price_sync_interval_minutes, customer_sync_interval_minutes, integration_enabled } = req.body as {
             inventory_sync_interval_minutes?: number | null
             price_sync_interval_minutes?: number | null
             customer_sync_interval_minutes?: number | null
+            integration_enabled?: boolean
         }
 
         // Validation (only validate non-null numbers)
@@ -140,6 +144,12 @@ export async function POST(
             return
         }
 
+        if (integration_enabled !== undefined) {
+            updates.push(`integration_enabled = $${paramIndex}`)
+            values.push(integration_enabled)
+            paramIndex++
+        }
+
         updates.push(`updated_at = NOW()`)
 
         const query = `
@@ -150,6 +160,11 @@ export async function POST(
         `
 
         const result = await client.query(query, values)
+
+        // Invalidate in-process cache so the toggle takes effect immediately
+        if (integration_enabled !== undefined) {
+            invalidateQbIntegrationCache()
+        }
 
         res.json({
             config: result.rows[0],

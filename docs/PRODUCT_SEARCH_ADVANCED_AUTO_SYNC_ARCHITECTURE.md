@@ -1,13 +1,14 @@
----
-**Purpose:** Document the advanced Products admin page — a full replacement of Medusa's native Products page, featuring Meilisearch-powered instant search, 3-layer auto-sync (subscriber + middleware + API), and Meilisearch indexing schemas optimized for product discovery.
-
-**Solves:** Medusa v2's native products page is slow and has limited filtering. The custom page uses Meilisearch for real-time product search by title, SKU, handle, and category, with auto-sync ensuring the index reflects all admin changes immediately.
-
-**Expected Result:** Admins can search and filter products in real-time via Meilisearch. Product indexes sync automatically on every create/update/delete. Search is available across all product fields including variants and categories.
-
----
-
 # Products Advanced - Complete Auto-Sync Architecture
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Document the advanced Products admin page — a full replacement of Medusa's native Products page, featuring Meilisearch-powered instant search, 3-layer auto-sync (subscriber + middleware + API), and Meilisearch indexing schemas optimized for product discovery. |
+| **Problemas que resuelve** | Medusa v2's native products page is slow and has limited filtering. The custom page uses Meilisearch for real-time product search by title, SKU, handle, and category, with auto-sync ensuring the index reflects all admin changes immediately. |
+| **Resultado esperado** | Admins can search and filter products in real-time via Meilisearch. Product indexes sync automatically on every create/update/delete. Search is available across all product fields including variants and categories. |
+| **Scripts Creados** | `sync/sync-meilisearch-force.ts`, `verify/verify-meilisearch-sync.ts`, `tests/test-reconciliation.ts` |
 
 ## Resumen Ejecutivo
 

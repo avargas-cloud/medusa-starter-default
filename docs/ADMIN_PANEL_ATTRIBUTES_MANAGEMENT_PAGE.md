@@ -1,18 +1,19 @@
----
-**Purpose:** Document the Admin UI page at `/app/attributes` that allows merchants to create, organize, and manage all product attribute keys and attribute sets (e.g., "Color", "Wattage", "IP Rating" grouped under "Electrical Specs").
-
-**Solves:** The need to organize product specifications into a structured, searchable dashboard without modifying Medusa core views. Also documents the bulk-move, accordion UI, and modal integration patterns.
-
-**Expected Result:** Developers can recreate or extend the Attributes Management Page from scratch, understanding its data model, component structure, and React Query patterns.
-
----
-
 # Attributes Management Page (Admin UI)
 
 > [!NOTE]
 > This document details the implementation of the main **Attributes Dashboard** located at `/app/attributes`, which serves as the central hub for organizing product specifications.
 
 ---
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Document the Admin UI page at `/app/attributes` that allows merchants to create, organize, and manage all product attribute keys and attribute sets (e.g., "Color", "Wattage", "IP Rating" grouped under "Electrical Specs"). |
+| **Problemas que resuelve** | The need to organize product specifications into a structured, searchable dashboard without modifying Medusa core views. Also documents the bulk-move, accordion UI, and modal integration patterns. |
+| **Resultado esperado** | Developers can recreate or extend the Attributes Management Page from scratch, understanding its data model, component structure, and React Query patterns. |
+| **Scripts Creados** | `inspect/inspect-attribute-sets.ts`, `inspect/inspect-wc-attributes.ts`, `list/list-all-attributes.ts`, `show/show-available-attributes.ts`, `organize/organize-attributes.ts` |
 
 ## 1. Overview
 The **Attributes Management Page** (`src/admin/routes/attributes/page.tsx`) allows admins to create, organize, and manage product attributes (e.g., Color, Size, Material) and group them into **Attribute Sets** (e.g., "Electrical Specs", "Physical Dimensions").

@@ -1,13 +1,14 @@
----
-**Purpose:** Document the Nuclear Filter Sync algorithm that scans all products under a category tree and computes the curated set of `available_filters` using relational table JOINs and recursive application-level category scanning.
-
-**Solves:** Previous sync queries timed out or hung indefinitely on large category trees because they used inefficient N+1 database calls or PostgreSQL recursive CTEs that couldn't handle 125+ descendants. The nuclear sync uses Knex JOINs + app-level recursion to reduce latency from 7,936ms to ~225ms.
-
-**Expected Result:** Calling the nuclear sync endpoint on any category correctly propagates available filters down the entire tree in under 500ms, even for high-descendant categories. Distinguishes between `available_filters` (curated) vs. `active_filters` (user-configured).
-
----
-
 # Nuclear Filter Sync Algorithm
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Document the Nuclear Filter Sync algorithm that scans all products under a category tree and computes the curated set of `available_filters` using relational table JOINs and recursive application-level category scanning. |
+| **Problemas que resuelve** | Previous sync queries timed out or hung indefinitely on large category trees because they used inefficient N+1 database calls or PostgreSQL recursive CTEs that couldn't handle 125+ descendants. The nuclear sync uses Knex JOINs + app-level recursion to reduce latency from 7,936ms to ~225ms. |
+| **Resultado esperado** | Calling the nuclear sync endpoint on any category correctly propagates available filters down the entire tree in under 500ms, even for high-descendant categories. Distinguishes between `available_filters` (curated) vs. `active_filters` (user-configured). |
+| **Scripts Creados** | `nuclear/nuclear-sync-dry-run.ts`, `nuclear/true-nuclear-sync.ts`, `sync/resync-all-category-attributes.ts`, `force/force-resync-filters.ts`, `tests/test-nuclear-sync-compare.ts`, `diagnostics/diagnose-led-strips-filters.ts`, `verify/verify-led-strips-filters.ts` |
 
 ## Problem Statement
 

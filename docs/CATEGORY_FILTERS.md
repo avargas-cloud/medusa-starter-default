@@ -1,12 +1,3 @@
----
-**Purpose:** Complete system guide for the Category Filters feature — covers data model, admin configuration UI, store API endpoint, frontend integration, mass sync (nuclear sync), soft-delete filtering, and attribute deletion cascade.
-
-**Solves:** Product categories needed dynamic, configurable filter sidebars (by wattage, color, IP rating, etc.) that are inheritable from parent categories and reconfigurable per category. Medusa v2 has no native filter system for categories.
-
-**Expected Result:** Each category has a `filter_config` in its metadata with `available_filters` (curated via nuclear sync) and `active_filters` (user-configured). The store API serves filter options, and the frontend renders the filter sidebar dynamically.
-
----
-
 # Category Filters - Complete System Guide
 
 > **Last Updated**: 2026-01-30  
@@ -14,6 +5,17 @@
 
 > [!WARNING]
 > **CRITICAL:** Filter generation MUST exclude soft-deleted attribute links. All queries to `product_product_productattributes_attribute_value` must include `.whereNull("deleted_at")` to prevent ghost values.
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Complete system guide for the Category Filters feature — covers data model, admin configuration UI, store API endpoint, frontend integration, mass sync (nuclear sync), soft-delete filtering, and attribute deletion cascade. |
+| **Problemas que resuelve** | Product categories needed dynamic, configurable filter sidebars (by wattage, color, IP rating, etc.) that are inheritable from parent categories and reconfigurable per category. Medusa v2 has no native filter system for categories. |
+| **Resultado esperado** | Each category has a `filter_config` in its metadata with `available_filters` (curated via nuclear sync) and `active_filters` (user-configured). The store API serves filter options, and the frontend renders the filter sidebar dynamically. |
+| **Scripts Creados** | `nuclear/true-nuclear-sync.ts`, `nuclear/nuclear-sync-dry-run.ts`, `sync/mass-sync-all-filters.ts`, `sync/smart-sync-filters.ts`, `sync/populate-inherited-filters.ts`, `verify/verify-category-filters.ts`, `verify/verify-led-strips-filters.ts`, `show/show-category-filters.ts`, `diagnostics/diagnose-led-strips-filters.ts`, `tests/test-conditional-filters.ts` |
+| **Última verificación** | 2026-01-30 |
 
 ## Table of Contents
 - [Overview](#overview)

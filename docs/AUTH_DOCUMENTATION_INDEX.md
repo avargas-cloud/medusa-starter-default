@@ -1,18 +1,20 @@
----
-**Purpose:** Navigation index for all authentication-related documents — maps each doc to its audience, use case, and best entry point for developers. Also contains a quick-start guide and critical implementation notes.
-
-**Solves:** Prevents developers from reading the wrong doc first (e.g., reading the API spec when they need the implementation guide, or searching across 5 auth docs for the scrypt-kdf pattern).
-
-**Expected Result:** Any developer starting work on auth can immediately find the right document for their task. Includes links to all auth-related test scripts and implementation files.
-
----
-
 # Authentication Documentation Index
 
 **EcoPowerTech Medusa v2 Backend**  
 **Last Updated**: 2026-02-03
 
 ---
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Navigation index for all authentication-related documents — maps each doc to its audience, use case, and best entry point for developers. Also contains a quick-start guide and critical implementation notes. |
+| **Problemas que resuelve** | Prevents developers from reading the wrong doc first (e.g., reading the API spec when they need the implementation guide, or searching across 5 auth docs for the scrypt-kdf pattern). |
+| **Resultado esperado** | Any developer starting work on auth can immediately find the right document for their task. Includes links to all auth-related test scripts and implementation files. |
+| **Scripts Creados** | `tests/test-auth-e2e.ts`, `get/get-activation-token.ts`, `_deprecated/auth-scripts/unregister-customer.ts` |
+| **Última verificación** | 2026-02-03 |
 
 ## 📚 Documentation Overview
 

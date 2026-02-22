@@ -1,13 +1,14 @@
----
-**Purpose:** Complete implementation guide for checkout and payment processing using Authorize.net as the payment provider in Medusa v2, integrated with the Astro storefront — from cart creation through order confirmation.
-
-**Solves:** Medusa v2 payment integration with Authorize.net is not documented in the official docs. This covers the custom payment provider plugin, webhook handling, and the Astro frontend steps to render a payment form and handle 3DS redirects.
-
-**Expected Result:** End-to-end checkout works: cart → shipping → payment → order creation. Authorize.net processes the card charge, the webhook confirms the order, and the customer receives a confirmation email.
-
----
-
 # Checkout + Payment Implementation Guide
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Complete implementation guide for checkout and payment processing using Authorize.net as the payment provider in Medusa v2, integrated with the Astro storefront — from cart creation through order confirmation. |
+| **Problemas que resuelve** | Medusa v2 payment integration with Authorize.net is not documented in the official docs. This covers the custom payment provider plugin, webhook handling, and the Astro frontend steps to render a payment form and handle 3DS redirects. |
+| **Resultado esperado** | End-to-end checkout works: cart → shipping → payment → order creation. Authorize.net processes the card charge, the webhook confirms the order, and the customer receives a confirmation email. |
+| **Scripts Creados** | `tests/test-cart-tax.ts`, `setup/setup-price-tiers.ts`, `verify/verify-wholesale-pricing.ts` |
+
 ## Medusa v2 + Authorize.net + Astro Storefront
 
 > **Purpose:** This guide walks through the complete checkout and payment implementation as built for the EcoPowerTech storefront. If you're starting from scratch, follow these steps in order.

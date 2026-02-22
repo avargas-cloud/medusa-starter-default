@@ -1,13 +1,14 @@
----
-**Purpose:** Guide for configuring customer-specific pricing (Wholesale vs. Retail) using Medusa v2 Admin Panel price lists, including setup steps, price list creation, and customer group assignment.
-
-**Solves:** Medusa v2 doesn't surface price list setup intuitively — this doc maps the exact menu navigation, form fields, and customer group linking needed to activate tiered pricing for specific customers.
-
-**Expected Result:** A store admin can create a Wholesale price list, assign products with custom prices, and link specific customer groups so those customers see wholesale prices automatically on checkout.
-
----
-
 # Admin Panel Setup Guide - Customer-Specific Pricing
+
+
+## 📋 Descripción del Documento
+
+| Campo | Detalle |
+|-------|---------|
+| **Propósito** | Guide for configuring customer-specific pricing (Wholesale vs. Retail) using Medusa v2 Admin Panel price lists, including setup steps, price list creation, and customer group assignment. |
+| **Problemas que resuelve** | Medusa v2 doesn't surface price list setup intuitively — this doc maps the exact menu navigation, form fields, and customer group linking needed to activate tiered pricing for specific customers. |
+| **Resultado esperado** | A store admin can create a Wholesale price list, assign products with custom prices, and link specific customer groups so those customers see wholesale prices automatically on checkout. |
+| **Scripts Creados** | `setup/setup-price-tiers.ts`, `migrations/migrate-customers-to-price-groups.ts`, `verify/verify-customer-group.ts`, `verify/verify-wholesale-pricing.ts`, `verify/verify-price-list-assignments.ts` |
 
 ## 🎯 Overview
 
