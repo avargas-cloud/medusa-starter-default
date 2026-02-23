@@ -27,7 +27,7 @@ async function resetLegacyCustomer() {
       RETURNING id, email, has_account;
     `, [email]);
 
-        if (res.rowCount > 0) {
+        if ((res.rowCount ?? 0) > 0) {
             console.log('✅ Cliente Legacy Reiniciado con Éxito:');
             console.log(JSON.stringify(res.rows[0], null, 2));
             console.log('\n✅ Puedes probar el Login de Google ahora!');
