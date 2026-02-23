@@ -152,20 +152,35 @@ function sanitizeState(state: string, postalCode?: string): string {
     if (!state) return ""
     const trimmed = state.trim().toUpperCase()
 
-    // Detect if a country code was mistakenly passed as state
+    // Handle Medusa province format: "us-fl", "US-FL", "us-florida" → extract part after "-"
+    if (trimmed.includes("-")) {
+        const parts = trimmed.split("-")
+        // "US-FL" → ["US","FL"] → take last non-empty part (the state)
+        const statePart = parts[parts.length - 1].trim()
+        if (statePart.length === 2) {
+            console.log(`📍 sanitizeState: Medusa format "${trimmed}" → "${statePart}"`)
+            return statePart
+        }
+        // "us-florida" → "FLORIDA" (too long, try first 2 chars of last segment)
+        if (statePart.length > 2) {
+            const abbrev = statePart.slice(0, 2)
+            console.log(`📍 sanitizeState: Medusa long format "${trimmed}" → "${abbrev}"`)
+            return abbrev
+        }
+    }
+
+    // Plain country code sent as state (e.g., province was not set and country_code leaked)
     if (COUNTRY_CODES.has(trimmed)) {
-        // Try to derive US state from ZIP
         if (trimmed === "US" && postalCode) {
-            const derived = zipToUsState(postalCode)
-            console.warn(`⚠️  sanitizeState: received country code "${trimmed}" as state, derived "${derived}" from ZIP ${postalCode}`)
+            const derived = zipToUsState(postalCode ?? "")
+            console.warn(`⚠️  sanitizeState: country code "${trimmed}" as state → derived "${derived}" from ZIP ${postalCode}`)
             return derived
         }
-        // For non-US countries or no ZIP: pass empty string (UPS accepts blank for non-US destinations)
-        console.warn(`⚠️  sanitizeState: received country code "${trimmed}" as state, passing empty string`)
+        console.warn(`⚠️  sanitizeState: country code "${trimmed}" as state, passing empty`)
         return ""
     }
 
-    // State codes are always 2 chars; if longer it's likely a duplication bug (e.g. "FLFL")
+    // Duplicate state bug: "FLFL" → "FL"
     return trimmed.length > 2 ? trimmed.slice(0, 2) : trimmed
 }
 
