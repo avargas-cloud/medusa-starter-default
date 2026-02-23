@@ -279,6 +279,45 @@ Singleton module handling all UPS API communication, shared across all provider 
 | OAuth 2.0 token | Fetched once, cached 58 min, shared across all providers |
 | Rate caching | 30s in-memory cache keyed by `cartId:postalCode:pkgCount` |
 | Request deduplication | All 4 providers triggered simultaneously → only 1 HTTP request fires |
+| Province sanitization | `sanitizeState()` normalizes Medusa's `"us-fl"` format → `"FL"` for UPS |
+
+### `sanitizeState()` — Province Format Normalization
+
+> **⚠️ Critical:** Medusa v2 stores `shipping_address.province` in ISO 3166-2 format (`"us-fl"`, `"us-ny"`, `"us-tx"`). Sending this raw to UPS causes **error 111286** (`US is not a valid state`). This function normalizes all formats before building the UPS request.
+
+```typescript
+function sanitizeState(state: string, postalCode?: string): string {
+    if (!state) return ""
+    const trimmed = state.trim().toUpperCase()
+
+    // Medusa province format: "us-fl" / "US-FL" → "FL"
+    if (trimmed.includes("-")) {
+        const parts = trimmed.split("-")
+        const statePart = (parts[parts.length - 1] ?? "").trim()
+        if (statePart.length === 2) return statePart          // "US-FL" → "FL"
+        if (statePart.length > 2)  return statePart.slice(0, 2) // "us-florida" → "FL"
+    }
+
+    // Country code leaked as state: "US" + zip 32163 → "FL"
+    if (COUNTRY_CODES.has(trimmed)) {
+        if (trimmed === "US" && postalCode) return zipToUsState(postalCode ?? "")
+        return ""
+    }
+
+    // Duplicate state bug: "FLFL" → "FL"
+    return trimmed.length > 2 ? trimmed.slice(0, 2) : trimmed
+}
+```
+
+| Input (`province` field) | Output (`StateProvinceCode`) | Source |
+|--------------------------|------------------------------|--------|
+| `"us-fl"` (Medusa default) | `"FL"` | dash-split |
+| `"US-FL"` | `"FL"` | dash-split |
+| `"US"` + ZIP 33016 | `"FL"` | ZIP→state lookup |
+| `"FLFL"` | `"FL"` | truncate-2 |
+| `""` or null | `""` | passthrough |
+
+See also: [`FIXES/ups-province-format-fix-feb-2026.md`](./FIXES/ups-province-format-fix-feb-2026.md)
 
 ### Cache Key
 
@@ -838,9 +877,21 @@ For long items, LENGTH is constant across all units. Adding more units to a bund
 | Symptom | Likely Cause | Fix |
 |---------|-------------|-----|
 | UPS auth errors / empty rates | Wrong `UPS_CLIENT_ID` / `UPS_CLIENT_SECRET` | Verify credentials; check Rating API access in UPS Developer Portal |
+| **UPS error 111286: "US is not a valid state"** | Medusa `province` in format `"us-fl"` → `sanitizeState` trunca a `"US"` | Fixed in `ups-rate-cache.ts` — `sanitizeState` now handles dash format. See [`FIXES/ups-province-format-fix-feb-2026.md`](./FIXES/ups-province-format-fix-feb-2026.md) |
+| Expedited options (Next Day, 2nd Day, 3 Day) missing from checkout | UPS `/calculate` returning 500 (rate unavailable) | Check backend logs for UPS error code. Most common: wrong state (`"US"`), invalid ZIP, or missing address. Also check sessionStorage cache — if stale cache has 0 expedited, increment cache key version (`ept_shipping_options_vN`) |
 | Ground always $14.99 (never long-item rate) | Shipping profile not matching or product not assigned | Run `SELECT * FROM shipping_profile WHERE name ILIKE '%long%'` and `SELECT * FROM product_shipping_profile WHERE product_id = 'prod_xxx'` |
 | "Rate unavailable" in Medusa logs | UPS can't price that service for that address/package | Normal — Medusa hides the option automatically |
 | Rates take 2+ seconds on every visit | sessionStorage cache not working | Check DevTools → Application → sessionStorage for `ship_` keys |
 | Wrong box size selected | Inventory item dimensions are 0 or null | Set weight/length/width/height on the Inventory Item in Medusa Admin |
 | "Cart is Empty" flash on checkout | `cartReady` cycle not completing | Check `cartLoading` nanostore subscription sees `true → false` |
 | `box-packing` log shows wrong dimensions | `packItems()` receiving 0 for dimensions | Check that inventory items have dimensions set; default fallback is `1` inch |
+
+---
+
+## 19. Known Bugs Fixed
+
+| Bug | Date | File | Description |
+|-----|------|------|-------------|
+| UPS error 111286 — `"us-fl"` sent as state | 2026-02-23 | `ups-rate-cache.ts` | Medusa stores province as `"us-fl"`. Old `slice(0,2)` made it `"US"`. Fix: detect dash format and extract state part. |
+| sessionStorage cache retaining failed UPS results | 2026-02-23 | `medusa-client.ts` | Cache key incremented `v1→v2` to auto-invalidate stale caches with missing expedited options. |
+| Build error TS18047 in `reset-legacy.ts` | 2026-02-23 | `reset-legacy.ts` (root) | `res.rowCount > 0` with pg@8+ where rowCount is `number \| null`. Fixed with `(res.rowCount ?? 0) > 0`. |
