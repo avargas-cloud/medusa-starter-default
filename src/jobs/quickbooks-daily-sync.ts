@@ -42,18 +42,16 @@ export default async function qbDailySyncHandler(container: MedusaContainer) {
         }
 
         const cfg = rows[0]
-        const now = new Date()
 
-        /** True if the configured interval has elapsed since the last sync. */
-        const isDue = (intervalMinutes: number | null, lastSync: string | null): boolean => {
-            if (!intervalMinutes) return false
-            if (!lastSync) return true
-            const elapsed = now.getTime() - new Date(lastSync).getTime()
-            return elapsed >= intervalMinutes * 60_000
-        }
+        /**
+         * The cron schedule controls WHEN to run — we only check if the module is enabled.
+         * We intentionally ignore last_sync so that a manual "Sync Now" earlier in the day
+         * does NOT prevent the scheduled cron from running at its configured time.
+         */
+        const hasInterval = (intervalMinutes: number | null): boolean => !!intervalMinutes
 
         // ─── Price Sync ────────────────────────────────────────────────────
-        if (isDue(cfg.price_interval_minutes, cfg.last_price_sync)) {
+        if (hasInterval(cfg.price_interval_minutes)) {
             console.log(`${TAG} ⏰ Running price sync (this may take several minutes while QB processes the request)...`)
             try {
                 const result = await syncPricesCore(container as any)
@@ -71,7 +69,7 @@ export default async function qbDailySyncHandler(container: MedusaContainer) {
         }
 
         // ─── Customer Sync ─────────────────────────────────────────────────
-        if (isDue(cfg.customer_interval_minutes, cfg.last_customer_sync)) {
+        if (hasInterval(cfg.customer_interval_minutes)) {
             console.log(`${TAG} ⏰ Running customer sync...`)
             try {
                 const result = await syncCustomersCore(container as any)

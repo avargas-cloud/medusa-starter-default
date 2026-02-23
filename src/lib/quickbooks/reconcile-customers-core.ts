@@ -63,6 +63,7 @@ export async function reconcileCustomersCore(
             log("🔍 DRY RUN MODE: No DB changes will occur")
             log("=========================================\n")
         }
+        log(`⏰ Reconcile initiated: ${new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short' })}`)
 
         // 1. Fetch QB Customers
         log("📡 Requesting Customer Data from Bridge for Reconciliation...")
@@ -264,16 +265,19 @@ export async function reconcileCustomersCore(
             log(`💾 Applying ${updates.length} fixes to the Medusa database...`)
             for (const fix of updates) {
                 try {
-                    // Pull current metadata safely to merge
-                    const [c] = await customerModule.listCustomers({ id: [fix.id] })
-                    const existingMeta = c?.metadata || {}
+                    // listAndCountCustomers returns [Customer[], count]
+                    const [customers] = await customerModule.listAndCountCustomers(
+                        { id: [fix.id] },
+                        { select: ["id", "metadata"], take: 1 }
+                    )
+                    const existingMeta = (customers[0]?.metadata || {}) as Record<string, unknown>
 
                     await customerModule.updateCustomers([{
                         id: fix.id,
                         metadata: {
                             ...existingMeta,
                             qb_list_id: fix.qb_id
-                        } as Record<string, unknown>
+                        }
                     }])
                 } catch (e: any) {
                     warn(`❌ Failed to update ID for medusa_id ${fix.id}: ${e.message}`)

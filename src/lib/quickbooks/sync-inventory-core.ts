@@ -87,6 +87,7 @@ export async function syncInventoryCore(
 
     try {
         log(`📦 Starting QuickBooks INVENTORY Sync (Dry Run: ${dryRun})...`)
+        log(`⏰ Sync initiated: ${new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short' })}`)
 
         // 1. Get Default Stock Location
         const locations = await stockLocationService.listStockLocations({}, { take: 1 })
@@ -161,24 +162,18 @@ export async function syncInventoryCore(
 
             if (statusJson.success && statusJson.operation) {
                 if (statusJson.operation.status === "completed") {
-                    const rawXml = statusJson.operation.qbxmlResponse
-                    if (rawXml) {
-                        log("📦 Received XML from QB — parsing...")
-                        const itemBlocks = rawXml.match(/<Item[a-zA-Z]+Ret>[\s\S]*?<\/Item[a-zA-Z]+Ret>/g) || []
-
-                        qbData = itemBlocks.map((block: string) => {
-                            const listId = block.match(/<ListID>([^<]+)<\/ListID>/)?.[1]
-                            const stock = block.match(/<QuantityOnHand>([^<]+)<\/QuantityOnHand>/)?.[1]
-                            const name = block.match(/<Name>([^<]+)<\/Name>/)?.[1]
-                            return { ListID: listId, QuantityOnHand: stock, Name: name }
-                        }).filter((i: any) => i.ListID)
-
-                        log(`🎉 Parsed ${qbData.length} items from QB XML.`)
+                    // Bridge returns parsed QB XML as JSON (same structure as price sync)
+                    // Path: operation.result.QBXML.QBXMLMsgsRs.ItemQueryRs.ItemInventoryRet[]
+                    const queryRs = statusJson.operation?.result?.QBXML?.QBXMLMsgsRs?.ItemQueryRs
+                    if (queryRs) {
+                        const raw = queryRs.ItemInventoryRet || []
+                        qbData = Array.isArray(raw) ? raw : [raw]
+                        // ItemInventoryRet fields: ListID, Name, QuantityOnHand, SalesPrice, IsActive
+                        log(`✅ Data received: ${qbData.length} items from QuickBooks`)
                     } else {
-                        qbData = statusJson.data || []
+                        warn(`⚠️ Unexpected Bridge response shape — no ItemQueryRs found`)
+                        log(`   Raw operation keys: ${Object.keys(statusJson.operation?.result?.QBXML?.QBXMLMsgsRs || {}).join(', ')}`)
                     }
-
-                    log(`✅ Data received: ${qbData.length} QB items`)
                     break
                 }
 
@@ -187,6 +182,8 @@ export async function syncInventoryCore(
                     logger.error(`❌ ${error}`)
                     return { success: false, stats, error }
                 }
+
+                log(`   Status: ${statusJson.operation.status} — waiting...`)
             }
         }
 

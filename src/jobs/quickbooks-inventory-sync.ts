@@ -43,7 +43,7 @@ export default async function qbInventorySyncHandler(container: MedusaContainer)
             return
         }
 
-        const { inventory_interval_minutes, last_inventory_sync } = rows[0]
+        const { inventory_interval_minutes } = rows[0]
 
         // Respect the "Disabled" setting in the UI
         if (!inventory_interval_minutes) {
@@ -51,18 +51,7 @@ export default async function qbInventorySyncHandler(container: MedusaContainer)
             return
         }
 
-        // Check if interval has elapsed since last sync
-        const now = new Date()
-        if (last_inventory_sync) {
-            const elapsed = now.getTime() - new Date(last_inventory_sync).getTime()
-            const intervalMs = inventory_interval_minutes * 60_000
-            if (elapsed < intervalMs) {
-                console.log(`${TAG} Interval not elapsed yet (${Math.round(elapsed / 60000)}m < ${inventory_interval_minutes}m). Skipping.`)
-                return
-            }
-        }
-
-        // Run the sync — same code as the manual Sync Now button
+        // Run the sync — cron schedule controls frequency, not elapsed time
         console.log(`${TAG} ⏰ Running inventory sync (interval: ${inventory_interval_minutes}m)...`)
         const result = await syncInventoryCore(container as any)
 

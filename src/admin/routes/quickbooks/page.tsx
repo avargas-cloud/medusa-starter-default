@@ -27,6 +27,19 @@ const QuickBooksPage = () => {
     const [reportModal, setReportModal] = useState<{ jobId: string | null; title: string } | null>(null)
     const [lastJobIds, setLastJobIds] = useState<{ inventory?: string; prices?: string; customers?: string; reconcile?: string }>({})
 
+    // Refresh only the last-sync timestamps from DB (called after each sync completes)
+    const refreshTimestamps = async () => {
+        try {
+            const res = await fetch('/admin/quickbooks/config', { method: 'GET', credentials: 'include' })
+            if (!res.ok) return
+            const data = await res.json()
+            const config = data.config
+            if (config.last_inventory_sync) setLastInventorySync(config.last_inventory_sync)
+            if (config.last_price_sync) setLastPriceSync(config.last_price_sync)
+            if (config.last_customer_sync) setLastCustomerSync(config.last_customer_sync)
+        } catch { /* non-blocking */ }
+    }
+
     // Load saved config AND last job IDs on mount
     useEffect(() => {
         const loadConfig = async () => {
@@ -293,6 +306,7 @@ const QuickBooksPage = () => {
             const jobId = data.job_id
             setLastJobIds(prev => ({ ...prev, inventory: jobId }))
             setReportModal({ jobId, title: '📦 Inventory Sync Report' })
+            await refreshTimestamps()
         } catch (error) {
             alert(`❌ Sync failed to start: ${(error as Error).message}`)
         } finally {
@@ -313,6 +327,7 @@ const QuickBooksPage = () => {
             const jobId = data.job_id
             setLastJobIds(prev => ({ ...prev, prices: jobId }))
             setReportModal({ jobId, title: '💵 Price Sync Report' })
+            await refreshTimestamps()
         } catch (error) {
             alert(`❌ Sync failed to start: ${(error as Error).message}`)
         } finally {
@@ -391,6 +406,7 @@ const QuickBooksPage = () => {
             const jobId = data.job_id
             setLastJobIds(prev => ({ ...prev, customers: jobId }))
             setReportModal({ jobId, title: '👥 Customer Sync Report' })
+            await refreshTimestamps()
         } catch (error) {
             alert(`❌ Failed to start: ${(error as Error).message}`)
         } finally {

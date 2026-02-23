@@ -1,9 +1,9 @@
 import { AuthenticatedMedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { reconcileCustomersCore } from "../../../../../lib/quickbooks/reconcile-customers-core"
-import { createJob, updateJob, completeJob, failJob } from "../../../../../lib/quickbooks/sync-jobs"
+import { reconcileCustomersCore } from "../../../../../../lib/quickbooks/reconcile-customers-core"
+import { createSyncJob, appendLog, finishJob } from "../../../../../../lib/quickbooks/sync-jobs"
 
 /**
- * Executes the Customer ID Reconciliation process as an async Job (Server-Sent Events).
+ * Executes the Customer ID Reconciliation process as an async Job.
  * 
  * Supports dry_run mode to preview matches without changing Medusa DB.
  */
@@ -13,32 +13,33 @@ export async function POST(
 ) {
     const { dry_run = false } = req.body as { dry_run?: boolean }
 
-    const jobId = createJob(
-        dry_run ? "customer_reconcile_dry" : "customer_reconcile",
-        `Started Customer Reconciliation (Dry Run: ${dry_run})...`
-    )
+    const job = createSyncJob("customers")
+    appendLog(job, `Started Customer Reconciliation (Dry Run: ${dry_run})...`)
 
         // Fire and forget
         ; (async () => {
             try {
-                updateJob(jobId, "Initializing Quickbooks Bridge Connection...")
+                appendLog(job, "Initializing Quickbooks Bridge Connection...")
 
                 const result = await reconcileCustomersCore(req.scope, {
                     dryRun: dry_run,
                     onLog: (msg) => {
-                        updateJob(jobId, msg)
+                        appendLog(job, msg)
                     }
                 })
 
                 if (result.success) {
-                    completeJob(jobId, result)
+                    appendLog(job, "✅ Reconciliation completed successfully.")
+                    finishJob(job, "done")
                 } else {
-                    failJob(jobId, result.error || "Unknown reconciliation error")
+                    appendLog(job, `❌ ${result.error || "Unknown reconciliation error"}`)
+                    finishJob(job, "error")
                 }
             } catch (error: any) {
-                failJob(jobId, error.message)
+                appendLog(job, `❌ Fatal error: ${error.message}`)
+                finishJob(job, "error")
             }
         })()
 
-    res.json({ success: true, job_id: jobId })
+    res.json({ success: true, job_id: job.id })
 }

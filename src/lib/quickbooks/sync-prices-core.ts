@@ -79,6 +79,7 @@ export async function syncPricesCore(
 
     try {
         log(`💰 Starting QuickBooks PRICE Sync (ONLY)...${dryRun ? " [DRY RUN — no changes will be written]" : ""}`)
+        log(`⏰ Sync initiated: ${new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short' })}`)
 
         // Fetch Wholesale Price List + Customer Group ID once (used for every price update)
         let wholesalePriceListId: string | null = null
