@@ -26,7 +26,9 @@ export async function POST(
             await client.connect()
             appendLog(job, "🚀 Customer sync started...")
 
-            const result = await syncCustomersCore(req.scope)
+            const result = await syncCustomersCore(req.scope, {
+                onLog: (line) => appendLog(job, line)
+            })
 
             if (result.success) {
                 const msg = `✅ Done: ${result.stats?.imported ?? 0} imported, ${result.stats?.alreadyInMedusa ?? 0} already existed`

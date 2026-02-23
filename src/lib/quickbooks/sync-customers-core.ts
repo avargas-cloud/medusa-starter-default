@@ -5,8 +5,9 @@ import { isQbIntegrationEnabled } from "./qb-integration-guard"
 // Config — from env vars
 const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://ecopower-qb.loca.lt"
 const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD"
-const POLL_INTERVAL_MS = 30000
-const MAX_POLL_ATTEMPTS = 20
+const POLL_INTERVAL_MS = 2 * 60 * 1000  // 2 minutes — 7200 customers take time to process
+const INITIAL_WAIT_MS = 2 * 60 * 1000   // wait 2 min before first poll
+const MAX_POLL_ATTEMPTS = 8              // up to 16 min total
 
 export interface SyncCustomersResult {
     success: boolean
@@ -27,9 +28,14 @@ export interface SyncCustomersResult {
  * import-customers-from-qb.ts includes address parsing, name parsing, etc.
  * For now, this imports basic customer data and saves for Phase 2.
  */
-export async function syncCustomersCore(container: any): Promise<SyncCustomersResult> {
+export async function syncCustomersCore(
+    container: any,
+    options: { onLog?: (line: string) => void } = {}
+): Promise<SyncCustomersResult> {
     const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
     const customerModule: ICustomerModuleService = container.resolve(Modules.CUSTOMER)
+    const log = (line: string) => { logger.info(line); options.onLog?.(line) }
+    const warn = (line: string) => { logger.warn(line); options.onLog?.(`⚠️ ${line}`) }
 
     const stats = {
         totalInQb: 0,
@@ -52,7 +58,7 @@ export async function syncCustomersCore(container: any): Promise<SyncCustomersRe
 
         // 1. Fetch QB Customers
         logger.info("📡 Requesting Customer Data from Bridge...")
-        const initRes = await fetch(`${BRIDGE_URL}/api/customers`, {
+        const initRes = await fetch(`${BRIDGE_URL}/api/customers?MaxReturned=99999&ActiveStatus=All`, {
             headers: { "x-api-key": API_KEY }
         })
 
@@ -66,22 +72,25 @@ export async function syncCustomersCore(container: any): Promise<SyncCustomersRe
         const operationId = initJson.operationId
         logger.info(`✅ Operation Queued! ID: ${operationId}`)
 
-        // 2. Poll for Results
+        // 2. Poll for Results (7200 customers = QB takes ~10 min to process)
         let qbCustomers: any[] = []
         let attempts = 0
 
+        // Wait before first poll — QB needs time to pull all 7200 customers
+        log(`⏳ Waiting 2 minutes before first poll (large dataset)...`)
+        await new Promise(r => setTimeout(r, INITIAL_WAIT_MS))
+
         while (attempts < MAX_POLL_ATTEMPTS) {
             attempts++
-            logger.info(`⏳ Polling Status (${attempts}/${MAX_POLL_ATTEMPTS})...`)
-
-            await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
+            log(`⏳ Polling Status (${attempts}/${MAX_POLL_ATTEMPTS})...`)
 
             const statusRes = await fetch(`${BRIDGE_URL}/api/sync/status/${operationId}`, {
                 headers: { "x-api-key": API_KEY }
             })
 
             if (!statusRes.ok) {
-                logger.warn(`   Bridge Status Error: ${statusRes.status}`)
+                warn(`   Bridge Status Error: ${statusRes.status}`)
+                await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
                 continue
             }
 
@@ -89,8 +98,11 @@ export async function syncCustomersCore(container: any): Promise<SyncCustomersRe
 
             if (statusJson.success && statusJson.operation) {
                 if (statusJson.operation.status === "completed") {
-                    qbCustomers = statusJson.data || []
-                    logger.info(`✅ Data Received! ${qbCustomers.length} customers from QuickBooks.`)
+                    // Data is in operation.result.QBXML.QBXMLMsgsRs.CustomerQueryRs.CustomerRet
+                    // (xml2js parsed QB XML, explicitArray: false — single item = object, multi = array)
+                    const raw = statusJson.operation.result?.QBXML?.QBXMLMsgsRs?.CustomerQueryRs?.CustomerRet
+                    qbCustomers = !raw ? [] : Array.isArray(raw) ? raw : [raw]
+                    log(`✅ Data Received! ${qbCustomers.length} customers from QuickBooks.`)
                     break
                 }
 
@@ -99,7 +111,11 @@ export async function syncCustomersCore(container: any): Promise<SyncCustomersRe
                     logger.error(`❌ ${error}`)
                     return { success: false, stats, error }
                 }
+
+                log(`   Status: ${statusJson.operation.status} — waiting...`)
             }
+
+            await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
         }
 
         if (qbCustomers.length === 0) {
@@ -149,9 +165,10 @@ export async function syncCustomersCore(container: any): Promise<SyncCustomersRe
                 const firstName = qb.FirstName || qb.Name?.split(' ')[0] || 'Customer'
                 const lastName = qb.LastName || qb.Name?.split(' ').slice(1).join(' ') || ''
 
-                // Map price level: Standard→Retail, Distributor→Wholesale
-                const priceLevel = qb.PriceLevel === "Standard" ? "Retail" :
-                    (qb.PriceLevel === "Distributor" ? "Wholesale" : qb.PriceLevel)
+                // Map price level: All non-wholesale are Retail, Distributor -> Wholesale
+                const qbPriceLevel = (qb.PriceLevelRef?.FullName || qb.PriceLevel || '').toLowerCase()
+                const priceLevel = (qbPriceLevel.includes('wholesale') || qbPriceLevel.includes('distributor')) ? "Wholesale" : "Retail"
+                const customerType = qb.CustomerTypeRef?.FullName || qb.CustomerType || ''
 
                 await customerModule.createCustomers({
                     email,
@@ -162,8 +179,8 @@ export async function syncCustomersCore(container: any): Promise<SyncCustomersRe
                     has_account: false,
                     metadata: {
                         qb_list_id: qb.ListID,
-                        qb_display_name: qb.Name,    // Exact name as stored in QB
-                        qb_customer_type: qb.CustomerType,
+                        qb_display_name: qb.Name,
+                        qb_customer_type: customerType,
                         qb_price_level: priceLevel,
                         email_is_placeholder: isDummyEmail,
                         qb_original_email: isDummyEmail ? qb.Email || '' : email
@@ -173,23 +190,23 @@ export async function syncCustomersCore(container: any): Promise<SyncCustomersRe
                 stats.imported++
 
                 if (stats.imported % 50 === 0) {
-                    logger.info(`   ✅ Progress: ${stats.imported} customers imported...`)
+                    log(`   ✅ Progress: ${stats.imported} customers imported...`)
                 }
 
             } catch (err: any) {
-                logger.error(`   ❌ Failed to import ${qb.Email}: ${err.message}`)
+                warn(`   ❌ Failed to import ${qb.Email}: ${err.message}`)
                 stats.errors++
             }
         }
 
-        logger.info(`\n${"=".repeat(50)}`)
-        logger.info("✅ CUSTOMER SYNC SUMMARY")
-        logger.info(`${"=".repeat(50)}`)
-        logger.info(`Total in QB:           ${stats.totalInQb}`)
-        logger.info(`Already in Medusa:     ${stats.alreadyInMedusa}`)
-        logger.info(`Newly Imported:        ${stats.imported}`)
-        logger.info(`Errors:                ${stats.errors}`)
-        logger.info(`${"=".repeat(50)}\n`)
+        log(`\n${"=".repeat(50)}`)
+        log("✅ CUSTOMER SYNC SUMMARY")
+        log(`${"-".repeat(50)}`)
+        log(`Total in QB:           ${stats.totalInQb}`)
+        log(`Already in Medusa:     ${stats.alreadyInMedusa}`)
+        log(`Newly Imported:        ${stats.imported}`)
+        log(`Errors:                ${stats.errors}`)
+        log(`${"=".repeat(50)}\n`)
 
         return { success: true, stats }
 

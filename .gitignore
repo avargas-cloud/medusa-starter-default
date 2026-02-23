@@ -33,3 +33,4 @@ _reference_upload/
 # Local binaries and data
 google-chrome-stable_current_amd64.deb
 .env.backup
+.data/

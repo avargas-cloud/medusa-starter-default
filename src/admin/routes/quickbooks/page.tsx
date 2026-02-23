@@ -8,6 +8,8 @@ const QuickBooksPage = () => {
     const [inventorySyncing, setInventorySyncing] = useState(false)
     const [priceSyncing, setPriceSyncing] = useState(false)
     const [customerSyncing, setCustomerSyncing] = useState(false)
+    const [reconciling, setReconciling] = useState(false)
+    const [reconcilingDry, setReconcilingDry] = useState(false)
     const [inventoryInterval, setInventoryInterval] = useState("disabled")
     const [priceInterval, setPriceInterval] = useState("disabled")
     const [customerInterval, setCustomerInterval] = useState("disabled")
@@ -23,7 +25,7 @@ const QuickBooksPage = () => {
     const [lastCustomerSync, setLastCustomerSync] = useState<string | null>(null)
     // Sync report modal
     const [reportModal, setReportModal] = useState<{ jobId: string | null; title: string } | null>(null)
-    const [lastJobIds, setLastJobIds] = useState<{ inventory?: string; prices?: string; customers?: string }>({})
+    const [lastJobIds, setLastJobIds] = useState<{ inventory?: string; prices?: string; customers?: string; reconcile?: string }>({})
 
     // Load saved config AND last job IDs on mount
     useEffect(() => {
@@ -74,15 +76,17 @@ const QuickBooksPage = () => {
         // Load last job IDs so View Report works after page refresh
         const loadLastJobs = async () => {
             try {
-                const [inv, prices, cust] = await Promise.all([
+                const [inv, prices, cust, recon] = await Promise.all([
                     fetch('/admin/quickbooks/sync/last-job?type=inventory', { credentials: 'include' }).then(r => r.json()),
                     fetch('/admin/quickbooks/sync/last-job?type=prices', { credentials: 'include' }).then(r => r.json()),
                     fetch('/admin/quickbooks/sync/last-job?type=customers', { credentials: 'include' }).then(r => r.json()),
+                    fetch('/admin/quickbooks/sync/last-job?type=reconcile', { credentials: 'include' }).then(r => r.json()).catch(() => ({ job_id: null })),
                 ])
                 setLastJobIds({
                     inventory: inv.job_id ?? undefined,
                     prices: prices.job_id ?? undefined,
                     customers: cust.job_id ?? undefined,
+                    reconcile: recon.job_id ?? undefined,
                 })
             } catch {
                 // Non-blocking if backend just restarted and has no jobs yet
@@ -347,17 +351,41 @@ const QuickBooksPage = () => {
     }
 
 
+    const handleReconcile = async (isDryRun: boolean = false) => {
+        const setLoadState = isDryRun ? setReconcilingDry : setReconciling
+        setLoadState(true)
+        try {
+            const res = await fetch('/admin/quickbooks/sync/customers/reconcile', {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dry_run: isDryRun })
+            })
+
+            const data = await res.json()
+            if (!data.success) throw new Error(data.message || 'Failed to start reconcilation')
+
+            setReportModal({ jobId: data.job_id, title: `🔍 QB Reconcile ${isDryRun ? '(Dry Run)' : ''}` })
+            // Re-fetch jobs so the latest shows up
+            const recon = await fetch('/admin/quickbooks/sync/last-job?type=reconcile', { credentials: 'include' }).then(r => r.json()).catch(() => ({ job_id: null }))
+            if (recon.job_id) {
+                setLastJobIds(prev => ({ ...prev, reconcile: recon.job_id }))
+            }
+        } catch (error) {
+            alert(`❌ Reconciliation failed: ${(error as Error).message}`)
+        } finally {
+            setLoadState(false)
+        }
+    }
+
     const handleCustomerSync = async () => {
         setCustomerSyncing(true)
         try {
             const res = await fetch('/admin/quickbooks/sync/customers', {
                 method: 'POST',
                 credentials: 'include',
-                headers: {
-                    'Content-Type': 'application/json',
-                }
+                headers: { 'Content-Type': 'application/json' }
             })
-
             if (!res.ok) throw new Error('Failed to start sync')
             const data = await res.json()
             const jobId = data.job_id
@@ -644,6 +672,34 @@ const QuickBooksPage = () => {
                                 className="flex-1"
                             >
                                 {customerSyncing ? 'Syncing...' : 'Sync Now'}
+                            </Button>
+                        </div>
+
+                        {/* QB ID Reconciliation — separate from sync */}
+                        <div className="flex gap-2 pt-3 mt-3 border-t border-ui-border-base">
+                            <Button
+                                variant="secondary"
+                                onClick={() => handleReconcile(true)}
+                                isLoading={reconcilingDry}
+                                disabled={reconciling || reconcilingDry}
+                                className="flex-1"
+                            >
+                                {reconcilingDry ? 'Loading...' : 'Dry Run Reconcile'}
+                            </Button>
+                            <Button
+                                variant="secondary"
+                                onClick={() => setReportModal({ jobId: lastJobIds.reconcile ?? null, title: '🔍 QB Reconcile Report' })}
+                                className="flex-1"
+                            >
+                                View Report
+                            </Button>
+                            <Button
+                                onClick={() => handleReconcile(false)}
+                                isLoading={reconciling}
+                                disabled={reconciling || reconcilingDry}
+                                className="flex-1"
+                            >
+                                {reconciling ? 'Reconciling...' : 'Live Reconcile IDs'}
                             </Button>
                         </div>
 
