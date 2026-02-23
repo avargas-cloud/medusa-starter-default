@@ -141,6 +141,22 @@ export async function POST(
         `
         console.log('✅ Customer activated')
 
+        // Sync to MeiliSearch — raw SQL bypasses Medusa events so subscriber never fires
+        try {
+            const { MeiliSearch } = await import('meilisearch');
+            const meili = new MeiliSearch({
+                host: process.env.MEILISEARCH_HOST!,
+                apiKey: process.env.MEILISEARCH_API_KEY!
+            });
+            await meili.index('customers').updateDocuments([{
+                id: customer.id,
+                status: 'Registered'
+            }]);
+            console.log('✅ MeiliSearch status updated → Registered');
+        } catch (meiliError: any) {
+            console.warn('⚠️  MeiliSearch sync failed (non-fatal):', (meiliError as Error).message);
+        }
+
         // Generate JWT token
         const config = req.scope.resolve(ContainerRegistrationKeys.CONFIG_MODULE)
         const { http } = config.projectConfig

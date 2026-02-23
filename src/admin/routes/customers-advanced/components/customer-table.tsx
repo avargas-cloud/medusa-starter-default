@@ -115,9 +115,21 @@ export const CustomerTable = ({
                                     to={`/customers/${customer.id}`}
                                     className="flex items-center w-full h-full"
                                 >
-                                    <Badge size="small" color={customer.price_level === 'Wholesale' ? 'green' : 'grey'}>
-                                        {customer.price_level}
-                                    </Badge>
+                                    {(() => {
+                                        // Derive from actual Medusa group membership (groups array)
+                                        // Falls back to price_level metadata if no groups synced yet
+                                        const groupLevel = customer.groups?.includes('Wholesale')
+                                            ? 'Wholesale'
+                                            : customer.groups?.length > 0
+                                                ? 'Retail'
+                                                : null
+                                        const level = groupLevel ?? customer.price_level ?? 'Retail'
+                                        return (
+                                            <Badge size="small" color={level === 'Wholesale' ? 'green' : 'grey'}>
+                                                {level}
+                                            </Badge>
+                                        )
+                                    })()}
                                 </Link>
                             </Table.Cell>
 

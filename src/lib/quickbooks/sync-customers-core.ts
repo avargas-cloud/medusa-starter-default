@@ -1,6 +1,7 @@
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import { ICustomerModuleService } from "@medusajs/types"
 import { isQbIntegrationEnabled } from "./qb-integration-guard"
+import postgres from "postgres"
 
 // Config — from env vars
 const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://ecopower-qb.loca.lt"
@@ -15,6 +16,7 @@ export interface SyncCustomersResult {
         totalInQb: number
         alreadyInMedusa: number
         imported: number
+        emailsUpdated: number
         errors: number
     }
     error?: string
@@ -41,6 +43,7 @@ export async function syncCustomersCore(
         totalInQb: 0,
         alreadyInMedusa: 0,
         imported: 0,
+        emailsUpdated: 0,
         errors: 0
     }
 
@@ -50,7 +53,7 @@ export async function syncCustomersCore(
             logger.info("[QB] Integration is DISABLED. Skipping customer sync.")
             return {
                 success: false,
-                stats: { totalInQb: 0, alreadyInMedusa: 0, imported: 0, errors: 0 },
+                stats: { totalInQb: 0, alreadyInMedusa: 0, imported: 0, emailsUpdated: 0, errors: 0 },
                 error: "QB integration is disabled"
             }
         }
@@ -127,28 +130,82 @@ export async function syncCustomersCore(
 
         stats.totalInQb = qbCustomers.length
 
-        // 3. Fetch Existing Medusa Customers
+        // 3. Fetch Existing Medusa Customers (indexed by qb_list_id)
         logger.info("🔍 Checking existing customers in Medusa...")
         const [medusaCustomers] = await customerModule.listAndCountCustomers(
             {},
             {
                 take: 10000,
-                select: ["id", "metadata"]
+                select: ["id", "email", "metadata"]
             }
         )
 
-        const existingQbIds = new Set(
+        // Map qb_list_id → { medusa_id, medusa_email }
+        const qbIdToMedusa = new Map<string, { id: string; email: string }>(
             medusaCustomers
                 .filter((c: any) => c.metadata?.qb_list_id)
-                .map((c: any) => c.metadata.qb_list_id)
+                .map((c: any) => [c.metadata.qb_list_id, { id: c.id, email: c.email }])
         )
+        const existingQbIds = new Set(qbIdToMedusa.keys())
 
         logger.info(`📊 Found ${existingQbIds.size} customers already in Medusa`)
 
-        // 4. Filter and Import New Customers
-        const newCustomers = qbCustomers.filter(c => !existingQbIds.has(c.ListID))
-        stats.alreadyInMedusa = qbCustomers.length - newCustomers.length
+        // Pre-load customer group IDs (once, before the loop)
+        let wholesaleGroupId: string | null = null
+        let retailGroupId: string | null = null
+        try {
+            const sql = postgres(process.env.DATABASE_URL!)
+            const groups = await sql<{ id: string; name: string }[]>`
+                SELECT id, name FROM customer_group WHERE deleted_at IS NULL AND name IN ('Wholesale', 'Retail')
+            `
+            for (const g of groups) {
+                if (g.name === 'Wholesale') wholesaleGroupId = g.id
+                if (g.name === 'Retail') retailGroupId = g.id
+            }
+            await sql.end()
+            log(`📦 Customer groups loaded: Wholesale=${wholesaleGroupId ? '✅' : '❌'} Retail=${retailGroupId ? '✅' : '❌'}`)
+        } catch (e: any) {
+            warn(`Could not load customer groups (group assignment will be skipped): ${e.message}`)
+        }
 
+        // 4. Detect email changes for existing customers (qb_list_id is the primary key)
+        const existingCustomers = qbCustomers.filter(c => existingQbIds.has(c.ListID))
+        const newCustomers = qbCustomers.filter(c => !existingQbIds.has(c.ListID))
+        stats.alreadyInMedusa = existingCustomers.length
+
+        logger.info(`\n🔄 Checking ${existingCustomers.length} existing customers for email changes...`)
+        let emailChangeCount = 0
+
+        for (const qb of existingCustomers) {
+            try {
+                const qbEmail = qb.Email?.trim() || ''
+                const isRealEmail = qbEmail.includes('@') && !qbEmail.toLowerCase().startsWith('customer-')
+                if (!isRealEmail) continue  // Skip placeholder/blank emails
+
+                const medusa = qbIdToMedusa.get(qb.ListID)!
+                if (!medusa) continue
+
+                const emailChanged = qbEmail.toLowerCase() !== medusa.email?.toLowerCase()
+
+                if (emailChanged) {
+                    log(`   📧 Email changed for QB ${qb.ListID}: ${medusa.email} → ${qbEmail}`)
+                    await customerModule.updateCustomers(medusa.id, { email: qbEmail })
+                    stats.emailsUpdated++
+                    emailChangeCount++
+                }
+            } catch (err: any) {
+                warn(`   ❌ Failed to update email for QB ${qb.ListID}: ${err.message}`)
+                stats.errors++
+            }
+        }
+
+        if (emailChangeCount > 0) {
+            log(`   ✅ Updated emails for ${emailChangeCount} customers`)
+        } else {
+            log(`   ✅ No email changes detected`)
+        }
+
+        // 5. Import New Customers
         logger.info(`\n🔄 Importing ${newCustomers.length} new customers...`)
 
         for (const qb of newCustomers) {
@@ -171,7 +228,7 @@ export async function syncCustomersCore(
                 const priceLevel = (qbPriceLevel.includes('wholesale') || qbPriceLevel.includes('distributor')) ? "Wholesale" : "Retail"
                 const customerType = qb.CustomerTypeRef?.FullName || qb.CustomerType || ''
 
-                await customerModule.createCustomers({
+                const newCustomer = await customerModule.createCustomers({
                     email,
                     first_name: firstName,
                     last_name: lastName,
@@ -187,7 +244,23 @@ export async function syncCustomersCore(
                         email_is_placeholder: isDummyEmail,
                         qb_original_email: isDummyEmail ? qb.Email || '' : email
                     }
-                })
+                }) as any
+
+                // Assign to correct Medusa customer group
+                const targetGroupId = priceLevel === 'Wholesale' ? wholesaleGroupId : retailGroupId
+                if (targetGroupId && newCustomer?.id) {
+                    try {
+                        const sql = postgres(process.env.DATABASE_URL!)
+                        await sql`
+                            INSERT INTO customer_group_customer (customer_id, customer_group_id)
+                            VALUES (${newCustomer.id}, ${targetGroupId})
+                            ON CONFLICT DO NOTHING
+                        `
+                        await sql.end()
+                    } catch (groupErr: any) {
+                        warn(`   ⚠️  Could not assign group to ${email}: ${groupErr.message}`)
+                    }
+                }
 
                 stats.imported++
 

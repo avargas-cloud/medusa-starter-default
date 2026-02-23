@@ -1,7 +1,9 @@
-import { Input, Select, Heading } from "@medusajs/ui";
+import { Input, Select, Heading, Button } from "@medusajs/ui";
+import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
     MagnifyingGlass,
+    ArrowPath,
 } from "@medusajs/icons";
 import { SyncStatusButton } from "../../../components/shared/sync-status-button";
 
@@ -44,6 +46,7 @@ export const CustomerHeader = ({
                             entity="customers"
                             onSyncComplete={() => queryClient.invalidateQueries({ queryKey: ["meili-customers"] })}
                         />
+                        <ResyncGroupsButton onComplete={() => queryClient.invalidateQueries({ queryKey: ["meili-customers"] })} />
                     </div>
                     <div className="flex items-center gap-x-2 mt-1">
                         <span className="text-ui-fg-subtle text-small">
@@ -134,3 +137,60 @@ export const CustomerHeader = ({
         </>
     );
 };
+
+// ─────────────────────────────────────────────────────────────
+// Resync Groups Button
+// Calls /admin/customers/resync-meili in batches using the admin session
+// ─────────────────────────────────────────────────────────────
+function ResyncGroupsButton({ onComplete }: { onComplete: () => void }) {
+    const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle")
+    const [message, setMessage] = useState("")
+
+    const handleResync = async () => {
+        setStatus("loading")
+        setMessage("Resyncing...")
+
+        try {
+            const PAGE = 500
+            let offset = 0
+            let total = Infinity
+            let synced = 0
+
+            while (offset < total) {
+                const res = await fetch("/admin/customers/resync-meili", {
+                    method: "POST",
+                    credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ limit: PAGE, offset })
+                })
+                if (!res.ok) throw new Error(`HTTP ${res.status}`)
+                const data = await res.json()
+                synced += data.synced ?? 0
+                total = data.total ?? 0
+                offset += PAGE
+                setMessage(`Syncing... ${Math.min(synced, total)}/${total}`)
+                if (!data.has_more) break
+            }
+
+            setStatus("done")
+            setMessage(`✅ ${synced} synced`)
+            onComplete()
+        } catch (err: any) {
+            setStatus("error")
+            setMessage(`Error: ${err.message}`)
+        }
+    }
+
+    return (
+        <Button
+            variant="secondary"
+            size="small"
+            onClick={handleResync}
+            disabled={status === "loading"}
+            className="gap-2"
+        >
+            {status === "loading" && <ArrowPath className="animate-spin" />}
+            <span>{status === "idle" ? "Resync Groups" : message}</span>
+        </Button>
+    )
+}

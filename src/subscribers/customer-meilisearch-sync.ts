@@ -61,17 +61,20 @@ export default async function customerMeilisearchSubscriber({
         }
 
         // Build Meilisearch document
+        const meta = (customer.metadata as any) || {}
         const meiliDoc = {
             id: customer.id,
             email: customer.email,
             first_name: customer.first_name || "",
             last_name: customer.last_name || "",
-            company: (customer as any).company_name || "",
+            company_name: (customer as any).company_name || "",
             phone: customer.phone || "",
-            customer_type: existingCustomerType, // Keep existing type from metadata
-            price_level: priceLevel,              // Update based on groups
+            has_account: customer.has_account,
+            customer_type: existingCustomerType,
+            price_level: priceLevel,
             status: customer.has_account ? "Registered" : "Guest",
-            customer_groups: customer.groups?.map(g => g.name) || [],
+            list_id: meta.qb_list_id || "",
+            groups: customer.groups?.map(g => g.name) || [],
             updated_at: new Date(customer.updated_at).getTime(),
             created_at: new Date(customer.created_at).getTime(),
         }
@@ -87,7 +90,7 @@ export default async function customerMeilisearchSubscriber({
         await index.updateDocuments([meiliDoc])
 
         logger.info(
-            `[MEILI-CUSTOMER-SYNC] ✅ ${customer.email} - Type: ${existingCustomerType}, Price: ${priceLevel}, Groups: ${meiliDoc.customer_groups.join(', ') || 'none'}`
+            `[MEILI-CUSTOMER-SYNC] ✅ ${customer.email} - Type: ${existingCustomerType}, Price: ${priceLevel}, Groups: ${meiliDoc.groups.join(', ') || 'none'}`
         )
 
     } catch (error: any) {

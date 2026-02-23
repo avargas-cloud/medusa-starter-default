@@ -99,6 +99,22 @@ export async function GET(
 
                     await sql.end();
                     console.log('[Google OAuth Callback] ✅ Case 3 activation complete');
+
+                    // Sync to MeiliSearch — raw SQL bypasses Medusa events so subscriber never fires
+                    try {
+                        const { MeiliSearch } = await import('meilisearch');
+                        const meili = new MeiliSearch({
+                            host: process.env.MEILISEARCH_HOST!,
+                            apiKey: process.env.MEILISEARCH_API_KEY!
+                        });
+                        await meili.index('customers').updateDocuments([{
+                            id: customer.id,
+                            status: 'Registered'
+                        }]);
+                        console.log('[Google OAuth Callback] ✅ MeiliSearch status updated → Registered');
+                    } catch (meiliError: any) {
+                        console.warn('[Google OAuth Callback] ⚠️  MeiliSearch sync failed (non-fatal):', meiliError.message);
+                    }
                 } catch (activationError: any) {
                     console.error('[Google OAuth Callback] ❌ Case 3 activation failed:', activationError.message);
                     // Continue anyway — JWT will still be issued with existing customer.id

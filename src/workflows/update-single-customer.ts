@@ -71,12 +71,14 @@ const updateSingleCustomerStep = createStep(
                 email: customer.email,
                 first_name: customer.first_name,
                 last_name: customer.last_name,
-                company: customer.company_name || "",
+                company_name: customer.company_name || "",
                 phone: customer.phone,
-                customer_type: existingCustomerType,     // ← From metadata (preserved)
-                price_level: priceLevel,                  // ← Calculated from groups
+                has_account: customer.has_account,
+                customer_type: existingCustomerType,
+                price_level: priceLevel,
                 status: customer.has_account ? "Registered" : "Guest",
-                customer_groups: customerGroups,
+                list_id: customer.metadata?.qb_list_id || "",
+                groups: customerGroups,
                 updated_at: new Date(customer.updated_at).getTime(),
                 created_at: new Date(customer.created_at).getTime(),
             }
