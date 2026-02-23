@@ -19,15 +19,18 @@ function mapProvince(state?: string): string {
 
 // ─── Resolve optimistic/frontend shipping ID → real Medusa option ID
 // Tries multiple strategies in order:
-//   1. HTTP store API with publishable key (fastest, proven to work)
+//   1. HTTP store API with publishable key + cart_id (fastest)
 //   2. Medusa query.graph (native fallback)
 //   3. FulfillmentModuleService list (direct DB fallback)
-async function resolveShippingOptions(scope: any): Promise<any[]> {
-    // Strategy 1: HTTP store API — fastest, uses the same endpoint the frontend uses
+async function resolveShippingOptions(scope: any, cartId?: string): Promise<any[]> {
+    // Strategy 1: HTTP store API — fastest
     try {
         const MEDUSA_URL = process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
         const PUBLISHABLE_KEY = process.env.PUBLISHABLE_API_KEY || ""
-        const res = await fetch(`${MEDUSA_URL}/store/shipping-options`, {
+        const url = cartId
+            ? `${MEDUSA_URL}/store/shipping-options?cart_id=${cartId}`
+            : `${MEDUSA_URL}/store/shipping-options`
+        const res = await fetch(url, {
             headers: {
                 "Content-Type": "application/json",
                 "x-publishable-api-key": PUBLISHABLE_KEY,
@@ -62,10 +65,11 @@ async function resolveShippingOptions(scope: any): Promise<any[]> {
 
 async function resolveShippingOptionId(
     shippingMethodId: string,
-    scope: any
+    scope: any,
+    cartId?: string
 ): Promise<string | null> {
     try {
-        const options = await resolveShippingOptions(scope)
+        const options = await resolveShippingOptions(scope, cartId)
 
         if (!options || options.length === 0) {
             console.warn("[fast-checkout] resolveShippingOptionId: No shipping options found")
@@ -162,7 +166,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
         // ── STEP 3: Resolve and apply shipping method ──────────────────────────
         if (shippingMethodId) {
-            const resolvedOptionId = await resolveShippingOptionId(shippingMethodId, req.scope)
+            const resolvedOptionId = await resolveShippingOptionId(shippingMethodId, req.scope, cartId)
             if (resolvedOptionId) {
                 await addShippingMethodToCartWorkflow(req.scope).run({
                     input: {
@@ -219,13 +223,19 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             // Cart already has a payment collection from a previous attempt — fetch and reuse it
             if (pcErr?.message?.toLowerCase().includes("already has a payment collection")) {
                 try {
-                    const paymentModule = req.scope.resolve("payment") as any
-                    const existing = await paymentModule.listPaymentCollections(
-                        { cart_id: cartId },
-                        { select: ["id", "status", "amount"], take: 1 }
-                    )
-                    paymentCollection = existing?.[0]
-                    console.log(`[fast-checkout] ✅ Reusing existing payment collection: ${paymentCollection?.id}`)
+                    // Use query.graph through the cart entity — the correct Medusa v2 way
+                    const query = req.scope.resolve("query") as any
+                    const { data: [cartWithPayment] } = await query.graph({
+                        entity: "cart",
+                        filters: { id: cartId },
+                        fields: ["id", "payment_collection.id", "payment_collection.status"],
+                    })
+                    paymentCollection = cartWithPayment?.payment_collection
+                    if (paymentCollection?.id) {
+                        console.log(`[fast-checkout] ✅ Reusing existing payment collection: ${paymentCollection.id}`)
+                    } else {
+                        throw new Error("Could not locate existing payment collection")
+                    }
                 } catch (_) {
                     throw pcErr  // rethrow original if we can't recover
                 }
