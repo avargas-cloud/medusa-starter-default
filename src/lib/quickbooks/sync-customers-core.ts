@@ -179,6 +179,7 @@ export async function syncCustomersCore(
                     phone: qb.Phone || null,
                     has_account: false,
                     metadata: {
+                        legacy_customer: true,          // <- Marks as QB-imported, triggers Case 3 registration
                         qb_list_id: qb.ListID,
                         qb_display_name: qb.Name,
                         qb_customer_type: customerType,
