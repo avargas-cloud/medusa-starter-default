@@ -1,5 +1,5 @@
 import { defineRouteConfig } from "@medusajs/admin-sdk"
-import { TagSolid, EllipsisHorizontal, PencilSquare, Trash, Plus, ChevronDown, ChevronRight } from "@medusajs/icons"
+import { TagSolid, PencilSquare, Trash, Plus, ChevronDown, ChevronRight } from "@medusajs/icons"
 import {
     Container,
     Heading,
@@ -10,7 +10,6 @@ import {
     Checkbox,
     DropdownMenu,
     Badge,
-    clx
 } from "@medusajs/ui"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState, useMemo } from "react"

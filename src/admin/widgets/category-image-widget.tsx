@@ -72,7 +72,7 @@ const MediaLibraryModal = ({
             const newHistory = [...pageHistory]
             newHistory.pop()
             setPageHistory(newHistory)
-            setContinuationToken(newHistory[newHistory.length - 1])
+            setContinuationToken(newHistory[newHistory.length - 1] ?? null)
         }
     }
 

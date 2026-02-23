@@ -175,7 +175,7 @@ const QuickBooksPage = () => {
             // For 24 hours, use the specific time of day
             const [targetHour, targetMinute] = timeOfDay.split(':').map(Number)
             const nextSync = new Date()
-            nextSync.setHours(targetHour, targetMinute, 0, 0)
+            nextSync.setHours(targetHour ?? 0, targetMinute ?? 0, 0, 0)
 
             // If the time has already passed today, schedule for tomorrow
             if (nextSync <= now) {

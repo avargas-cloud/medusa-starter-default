@@ -25,7 +25,7 @@ const UploadContextInterceptor = () => {
         const originalOpen = XMLHttpRequest.prototype.open
         const originalSend = XMLHttpRequest.prototype.send
 
-        XMLHttpRequest.prototype.open = function (method, url) {
+        XMLHttpRequest.prototype.open = function (_method: string, url: string | URL) {
             // Save URL to check it in send method
             // @ts-ignore
             this._urlTarget = url
@@ -61,7 +61,7 @@ const UploadContextInterceptor = () => {
             XMLHttpRequest.prototype.send = originalSend
         }
     }, [])
-    
+
     return null // Invisible widget
 }
 
@@ -70,8 +70,8 @@ export const config = defineWidgetConfig({
     zone: [
         "product.details.before",
         "product.list.before",
-        "category.details.before",
-        "category.list.before",
+        "product_category.details.before",
+        "product_category.list.before",
     ],
 })
 

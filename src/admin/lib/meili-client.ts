@@ -1,4 +1,5 @@
-import { MeiliSearch } from "meilisearch";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { MeiliSearch } = require("meilisearch");
 
 /**
  * MeiliSearch Client Configuration
@@ -7,8 +8,8 @@ import { MeiliSearch } from "meilisearch";
  * Configured via Vite environment variables for security.
  */
 
-const HOST = import.meta.env.VITE_MEILISEARCH_HOST || "";
-const API_KEY = import.meta.env.VITE_MEILISEARCH_SEARCH_KEY || "";
+const HOST: string = (typeof process !== "undefined" ? process.env.VITE_MEILISEARCH_HOST : undefined) || "";
+const API_KEY: string = (typeof process !== "undefined" ? process.env.VITE_MEILISEARCH_SEARCH_KEY : undefined) || "";
 
 if (!HOST || !API_KEY) {
     console.warn(

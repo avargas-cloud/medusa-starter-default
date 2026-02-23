@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState } from "react";
 import { useCustomerSearch } from "./use-customer-search";
 import { useGlobalHijacker } from "./use-global-hijacker";
 
@@ -6,8 +6,6 @@ export const useCustomerPageState = () => {
     // Global Hijackers
     useGlobalHijacker();
 
-    // StrictMode Guard for Sync
-    const hasSynced = useRef(false);
 
     // State
     const [searchQuery, setSearchQuery] = useState("");

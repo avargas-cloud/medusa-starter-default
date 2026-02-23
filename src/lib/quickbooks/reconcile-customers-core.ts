@@ -272,13 +272,12 @@ export async function reconcileCustomersCore(
                     )
                     const existingMeta = (customers[0]?.metadata || {}) as Record<string, unknown>
 
-                    await customerModule.updateCustomers([{
-                        id: fix.id,
+                    await customerModule.updateCustomers(fix.id, {
                         metadata: {
                             ...existingMeta,
                             qb_list_id: fix.qb_id
                         }
-                    }])
+                    })
                 } catch (e: any) {
                     warn(`❌ Failed to update ID for medusa_id ${fix.id}: ${e.message}`)
                 }

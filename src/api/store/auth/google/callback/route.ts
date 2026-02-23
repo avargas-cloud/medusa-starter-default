@@ -72,11 +72,37 @@ export async function GET(
         } else {
             console.log('[Google OAuth Callback] Found existing customer:', customer.id);
 
-            // Case 3: Legacy customer activation (if has_account is false)
+            // Case 3: Legacy customer activation (QB-imported, has_account = false)
             if (!customer.has_account) {
-                console.log('[Google OAuth Callback] Case 3: Activating legacy customer');
-                // TODO: Implement SQL activation if needed
-                // UPDATE customer SET has_account = true WHERE id = customer.id
+                console.log('[Google OAuth Callback] Case 3: Activating legacy QB customer via Google OAuth');
+
+                try {
+                    const postgres = await import('postgres');
+                    const sql = postgres.default(process.env.DATABASE_URL!);
+
+                    // 1. Upgrade customer to registered (has_account = true)
+                    await sql`
+                        UPDATE customer
+                        SET has_account = true,
+                            first_name = COALESCE(NULLIF(first_name, ''), ${(authResponse.authIdentity as any)?.provider_metadata?.given_name || customer.first_name}),
+                            last_name  = COALESCE(NULLIF(last_name, ''), ${(authResponse.authIdentity as any)?.provider_metadata?.family_name || customer.last_name})
+                        WHERE id = ${customer.id}
+                    `;
+                    console.log('[Google OAuth Callback] ✅ Customer upgraded to registered:', customer.id);
+
+                    // 2. Refresh customer object so JWT uses updated data
+                    const [updatedCustomer] = await sql`
+                        SELECT id, email, first_name, last_name, has_account
+                        FROM customer WHERE id = ${customer.id}
+                    `;
+                    customer = updatedCustomer;
+
+                    await sql.end();
+                    console.log('[Google OAuth Callback] ✅ Case 3 activation complete');
+                } catch (activationError: any) {
+                    console.error('[Google OAuth Callback] ❌ Case 3 activation failed:', activationError.message);
+                    // Continue anyway — JWT will still be issued with existing customer.id
+                }
             } else {
                 console.log('[Google OAuth Callback] Case 2: Existing active customer');
             }

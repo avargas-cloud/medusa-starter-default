@@ -36,7 +36,7 @@ const deleteCustomerStep = createStep(
         })
 
         if (customers.length > 0) {
-            const customer = customers[0]
+            const customer = customers[0]!
             await customerModule.deleteCustomers([customer.id])
             return new StepResponse({ deleted: true, id: customer.id })
         }

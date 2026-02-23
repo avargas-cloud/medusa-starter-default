@@ -90,7 +90,6 @@ export const ProductsList = ({
                                     id={product.id}
                                     name={product.title}
                                     subtitle={product.handle}
-                                    thumbnail={product.thumbnail}
                                 />
                             ))}
                         </div>

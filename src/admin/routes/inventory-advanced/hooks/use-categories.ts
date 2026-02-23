@@ -35,7 +35,7 @@ export const useCategories = () => {
                 }
 
                 // 4. Custom Sorting
-                const { CATEGORY_PRIORITY_LIST } = await import("../../products-advanced/category-sorting");
+                const { CATEGORY_PRIORITY_LIST } = await import("../../products-advanced/category-sorting.js");
 
                 return categoriesShim.sort((a, b) => {
                     const nameA = a.name.toLowerCase();
