@@ -156,7 +156,7 @@ function sanitizeState(state: string, postalCode?: string): string {
     if (trimmed.includes("-")) {
         const parts = trimmed.split("-")
         // "US-FL" → ["US","FL"] → take last non-empty part (the state)
-        const statePart = parts[parts.length - 1].trim()
+        const statePart = (parts[parts.length - 1] ?? "").trim()
         if (statePart.length === 2) {
             console.log(`📍 sanitizeState: Medusa format "${trimmed}" → "${statePart}"`)
             return statePart
