@@ -3,6 +3,22 @@ import { Modules, ContainerRegistrationKeys, MedusaError } from "@medusajs/frame
 import * as jwt from "jsonwebtoken"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
+    console.log('\n\n======================================================');
+    console.log('🚨 [GOOGLE OAUTH CALLBACK] REQUEST RECEIVED 🚨');
+    console.log('======================================================');
+    console.log('Timestamp:', new Date().toISOString());
+    console.log('Method:', req.method);
+    console.log('URL:', req.url);
+
+    // Loguear que estamos recibiendo la petición para diagnosticar si Medusa
+    // la intercepta o si efectivamente llega a nuestro handler custom.
+    const safeQuery = req.query || {};
+    console.log('Query parameters present:', Object.keys(safeQuery));
+    if ((safeQuery as any).error) {
+        console.log('⚠️ GOOGLE RETURNED ERROR IN QUERY:', (safeQuery as any).error);
+    }
+    console.log('======================================================\n\n');
+
     const config = req.scope.resolve(ContainerRegistrationKeys.CONFIG_MODULE)
     const authService = req.scope.resolve(Modules.AUTH)
     const query = req.scope.resolve("query")
@@ -82,10 +98,28 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         metadata = metadata - 'legacy_customer' - 'temporary_password' - 'activation_token' - 'activation_expires'
       WHERE id = ${customer.id}
     `
+        // CRITICAL FIX: Link the auth_identity to this customer in the DB!
+        // Optimized to only write if the link doesn't already exist or is different
+        await sql`
+      UPDATE auth_identity
+      SET app_metadata = jsonb_set(COALESCE(app_metadata, '{}'::jsonb), '{customer_id}', to_jsonb(${customer.id}::text))
+      WHERE id = ${authIdentity.id} 
+        AND (app_metadata->>'customer_id' IS NULL OR app_metadata->>'customer_id' != ${customer.id})
+    `
         await sql.end()
     }
 
     else if (customer && customer.has_account) {
+        // Just link the auth identity in case it's a new login or previous linking failed
+        const postgres = await import('postgres')
+        const sql = postgres.default(process.env.DATABASE_URL!)
+        await sql`
+      UPDATE auth_identity
+      SET app_metadata = jsonb_set(COALESCE(app_metadata, '{}'::jsonb), '{customer_id}', to_jsonb(${customer.id}::text))
+      WHERE id = ${authIdentity.id} 
+        AND (app_metadata->>'customer_id' IS NULL OR app_metadata->>'customer_id' != ${customer.id})
+    `
+        await sql.end()
     }
 
     else if (!customer) {
@@ -108,6 +142,17 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
                 `Customer not found after Google OAuth for email: ${googleEmail}`
             )
         }
+
+        // Link the auth_identity to the newly created customer
+        const postgres = await import('postgres')
+        const sql = postgres.default(process.env.DATABASE_URL!)
+        await sql`
+      UPDATE auth_identity
+      SET app_metadata = jsonb_set(COALESCE(app_metadata, '{}'::jsonb), '{customer_id}', to_jsonb(${customer.id}::text))
+      WHERE id = ${authIdentity.id} 
+        AND (app_metadata->>'customer_id' IS NULL OR app_metadata->>'customer_id' != ${customer.id})
+    `
+        await sql.end()
     }
 
     // Generar JWT token

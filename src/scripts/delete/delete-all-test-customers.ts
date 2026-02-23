@@ -38,11 +38,19 @@ async function deleteAllTestCustomers() {
                 // Delete provider identities first
                 const identities = await sql`
                     DELETE FROM provider_identity
-                    WHERE entity_id = ${customer.email}
+                    WHERE auth_identity_id IN (
+                        SELECT id FROM auth_identity WHERE app_metadata->>'email' = ${customer.email}
+                    ) OR user_metadata->>'email' = ${customer.email}
                     RETURNING id
                 `
 
                 deletedIdentitiesCount += identities.length
+
+                // Delete auth identity
+                await sql`
+                    DELETE FROM auth_identity
+                    WHERE app_metadata->>'email' = ${customer.email}
+                `
 
                 // Delete customer
                 await sql`

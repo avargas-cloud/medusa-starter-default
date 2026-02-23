@@ -4,23 +4,29 @@ import { loadEnv } from '@medusajs/framework/utils'
 loadEnv('development', process.cwd())
 const sql = postgres(process.env.DATABASE_URL!)
 
-async function recreateCustomer() {
-    const email = 'customtest_1740685200@test.com'
+async function deleteAndRecreateCustomer() {
+    // Check for --email argument
+    const emailArgIndex = process.argv.indexOf('--email')
+    const emailPassed = emailArgIndex > -1 ? process.argv[emailArgIndex + 1] : null
 
-    console.log('🗑️  Deleting customer and auth data for:', email)
+    const baseEmail = 'customtest'
+    // Use passed email or generate timestamped one
+    const email = emailPassed || `${baseEmail}_${Math.floor(Date.now() / 1000)}@test.com`
+
+    console.log(`🗑️  Deleting customer and auth data for: ${email}`)
 
     try {
         // Delete all related data
         await sql`
             DELETE FROM provider_identity
-            WHERE entity_id = ${email}
+            WHERE auth_identity_id IN (
+                SELECT id FROM auth_identity WHERE app_metadata->>'email' = ${email}
+            ) OR user_metadata->>'email' = ${email}
         `
 
         await sql`
             DELETE FROM auth_identity
-            WHERE app_metadata->>'customer_id' IN (
-                SELECT id FROM customer WHERE email = ${email}
-            )
+            WHERE app_metadata->>'email' = ${email}
         `
 
         await sql`
@@ -48,4 +54,4 @@ async function recreateCustomer() {
     }
 }
 
-recreateCustomer()
+deleteAndRecreateCustomer()

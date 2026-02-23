@@ -45,15 +45,23 @@ export default async function deleteTestCustomer(container: MedusaContainer) {
         const knex = container.resolve('__pg_connection__') as any
 
         if (knex) {
-            const deletedIdentities = await knex('provider_identity')
-                .where('entity_id', email)
-                .del()
-                .returning('id')
+            const deletedIdentities = await knex.raw(`
+                DELETE FROM provider_identity 
+                WHERE auth_identity_id IN (
+                    SELECT id FROM auth_identity WHERE app_metadata->>'email' = ?
+                ) OR user_metadata->>'email' = ?
+                RETURNING id
+            `, [email, email])
 
-            if (deletedIdentities.length > 0) {
+            await knex.raw(`
+                DELETE FROM auth_identity 
+                WHERE app_metadata->>'email' = ?
+            `, [email])
+
+            if (deletedIdentities && deletedIdentities.rows && deletedIdentities.rows.length > 0) {
                 authDeleted = true
-                authId = deletedIdentities[0].id
-                console.log(`✅ Provider identities deleted: ${deletedIdentities.length}`)
+                authId = deletedIdentities.rows[0].id
+                console.log(`✅ Provider identities deleted: ${deletedIdentities.rows.length}`)
             }
         }
 

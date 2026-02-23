@@ -6,7 +6,9 @@ loadEnv('development', process.cwd())
 const sql = postgres(process.env.DATABASE_URL!)
 
 async function createLegacyCustomer() {
-    const email = 'legacy_test@test.com'
+    const emailArgIndex = process.argv.indexOf('--email')
+    const emailPassed = emailArgIndex > -1 ? process.argv[emailArgIndex + 1] : null
+    const email = emailPassed || 'legacy_test@test.com'
 
     console.log('🗑️  Deleting any existing customer with this email...')
 

@@ -42,11 +42,22 @@ async function deleteCustomer() {
         // Delete provider identities first (auth identity)
         const deleteIdentities = await client.query(
             `DELETE FROM provider_identity 
-             WHERE entity_id = $1 
+             WHERE auth_identity_id IN (
+                 SELECT id FROM auth_identity WHERE app_metadata->>'email' = $1
+             ) OR user_metadata->>'email' = $1
              RETURNING id`,
             [email]
         )
         console.log(`✅ Provider identities deleted: ${deleteIdentities.rowCount}`)
+
+        // Delete auth identity
+        const deleteAuthIdentities = await client.query(
+            `DELETE FROM auth_identity 
+             WHERE app_metadata->>'email' = $1 
+             RETURNING id`,
+            [email]
+        )
+        console.log(`✅ Auth identities deleted: ${deleteAuthIdentities.rowCount}`)
 
         // Delete customer
         const deleteCustomer = await client.query(
