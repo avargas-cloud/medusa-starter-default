@@ -1,6 +1,6 @@
 # Authentication Scripts Reference
 
-**Last Updated**: 2026-02-03  
+**Last Updated**: 2026-02-23  
 **Location**: `/src/scripts/`
 
 ---
@@ -63,24 +63,65 @@ npx -y tsx src/scripts/check-reset-tokens.ts
 
 ### Account Management
 
-#### `force-reset-legacy.ts` ⭐ **RESET ACCOUNT**
-Robust script to force-reset account to clean legacy state.
+#### `force/force-reset-legacy.ts` ⭐ **RESET ACCOUNT**
+Forza el reset de una cuenta específica a estado legacy limpio. Email hardcodeado: `a.vargas@ecopowertech.com`.
 
 **Usage**:
 ```bash
-npx -y tsx src/scripts/force-reset-legacy.ts
+npx -y tsx src/scripts/force/force-reset-legacy.ts
 ```
 
 **What it does**:
-1. Deletes all `provider_identity` records
-2. Deletes all `auth_identity` records
+1. Deletes all `provider_identity` records (by `entity_id`)
+2. Deletes all `auth_identity` records (by `app_metadata.customer_id`)
 3. Sets `has_account = false`
-4. Clears metadata to clean legacy state
-5. Verifies final state
+4. Clears metadata to `{ legacy_customer: true, reset_at: ... }`
+5. Verifies final state via SELECT
 
 **Use when**: Need to test Case 3 (legacy activation) from scratch
 
 ---
+
+#### `delete/delete-and-recreate-customer.ts` ⭐ **DELETE for TESTING** *(nuevo, Feb 2026)*
+Elimina todos los registros de auth y customer por email, opcionalmente con un email personalizado. Después imprime el CURL para recrear el usuario limpio.
+
+**Usage**:
+```bash
+# Con email generado automáticamente (timestamp)
+npx -y tsx src/scripts/delete/delete-and-recreate-customer.ts
+
+# Con email específico
+npx -y tsx src/scripts/delete/delete-and-recreate-customer.ts --email test@example.com
+```
+
+**What it does**:
+1. Borra `provider_identity` donde `entity_id` o `user_metadata.email` = email
+2. Borra `auth_identity` donde `app_metadata.email` = email
+3. Borra `customer` donde `email` = email
+4. Imprime CURL para re-registrar el usuario via `/store/auth/register`
+
+**Use when**: Testing fresh registration flow; need a clean slate for a test email
+
+---
+
+#### `reset-legacy.ts` *(raíz de `/backend/`)* — **SCRIPT DE EMERGENCIA**
+Script de una sola vez (usa `pg` directamente, no `postgres`). Hardcodeado para `alejosvp@gmail.com`. Se creó para resolver un caso urgente de auth. **No mover:** Railway podría necesitar ejecutarlo con `tsx reset-legacy.ts`.
+
+**Usage**:
+```bash
+# Desde el directorio backend/
+cd backend && npx tsx reset-legacy.ts
+```
+
+**What it does**:
+1. Borra `provider_identity` del email (por `entity_id` y `provider_metadata`)
+2. Hace UPDATE en `customer`: `has_account = false`, metadata `{legacy_customer: true}`
+
+**Note (Feb 2026):** Corregido bug TS18047 — `res.rowCount ?? 0 > 0` en lugar de `res.rowCount > 0` para compatibilidad con `pg@8+` (Railway build).
+
+---
+
+### Get Utilities
 
 #### `get-activation-token.ts`
 Extract activation token from customer metadata.
@@ -191,13 +232,15 @@ npx -y tsx src/scripts/diagnose-customer.ts
 
 | Task | Script | Expected Result |
 |------|--------|----------------|
-| Test complete auth flow | `test-auth-e2e.ts` | All 5 steps pass |
-| Check account status | `diagnose-customer.ts` | Full account details |
-| Reset to legacy | `force-reset-legacy.ts` | Clean legacy state |
-| Check reset tokens | `check-reset-tokens.ts` | Active tokens list |
-| Get activation token | `get-activation-token.ts` | Token from metadata |
+| Test complete auth flow | `tests/test-auth-e2e.ts` | All 5 steps pass |
+| Check account status | `diagnostics/diagnose-customer.ts` | Full account details |
+| Reset to legacy (a.vargas) | `force/force-reset-legacy.ts` | Clean legacy state |
+| Delete + recreate test customer | `delete/delete-and-recreate-customer.ts [--email x]` | Cuenta limpia para test |
+| Emergency reset (alejosvp) | `../reset-legacy.ts` (raíz backend) | Legacy state |
+| Check reset tokens | `checks/check-reset-tokens.ts` | Active tokens list |
+| Get activation token | `get/get-activation-token.ts` | Token from metadata |
 
 ---
 
 **Maintained by**: EcoPowerTech Development Team  
-**Last Verified**: 2026-02-03
+**Last Verified**: 2026-02-23
