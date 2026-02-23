@@ -191,7 +191,9 @@ module.exports = defineConfig({
               callbackUrl: process.env.GOOGLE_CALLBACK_URL || (
                 process.env.NODE_ENV === 'production'
                   ? 'https://medusa-starter-default-production-b69e.up.railway.app/auth/customer/google/callback'
-                  : `${process.env.MEDUSA_BACKEND_URL || 'http://localhost:9000'}/auth/customer/google/callback`
+                  // Dev: Route through HTTPS frontend proxy to avoid Chrome HTTPS-First mode issues
+                  // (backend is HTTP-only, Chrome auto-upgrades http://localhost:9000 → https → ERR_SSL)
+                  : `${process.env.STOREFRONT_URL || 'https://localhost:4321'}/api/auth/google/callback`
               )
             }
           }] : [])

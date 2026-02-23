@@ -1,5 +1,5 @@
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { MeiliSearch } = require("meilisearch");
+// @ts-ignore — import.meta.env is valid in Vite/admin SPA context (TS1479 false positive)
+import { MeiliSearch } from "meilisearch";
 
 /**
  * MeiliSearch Client Configuration
@@ -8,8 +8,10 @@ const { MeiliSearch } = require("meilisearch");
  * Configured via Vite environment variables for security.
  */
 
-const HOST: string = (typeof process !== "undefined" ? process.env.VITE_MEILISEARCH_HOST : undefined) || "";
-const API_KEY: string = (typeof process !== "undefined" ? process.env.VITE_MEILISEARCH_SEARCH_KEY : undefined) || "";
+// @ts-ignore
+const HOST: string = import.meta.env?.VITE_MEILISEARCH_HOST || "";
+// @ts-ignore
+const API_KEY: string = import.meta.env?.VITE_MEILISEARCH_SEARCH_KEY || "";
 
 if (!HOST || !API_KEY) {
     console.warn(
