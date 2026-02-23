@@ -63,11 +63,109 @@ async function getAccessToken(): Promise<string> {
     return sharedAccessToken!
 }
 
-/** Prevents duplicate state codes (e.g. "FLFL" → "FL") that cause UPS 400 errors */
-function sanitizeState(state: string): string {
+// Country codes that might accidentally arrive as the "state" field
+const COUNTRY_CODES = new Set(["US", "CA", "MX", "GB", "AU", "DE", "FR", "ES", "IT", "BR"])
+
+/**
+ * Derive US state from ZIP code prefix.
+ * Used as fallback when `province` field contains a country code instead of state.
+ */
+function zipToUsState(zip: string): string {
+    const n = parseInt(zip?.slice(0, 3) ?? "0", 10)
+    if (n >= 990) return "AK"
+    if (n >= 988) return "WA"
+    if (n >= 970) return "OR"
+    if (n >= 900) return "CA"
+    if (n >= 850) return "AZ"
+    if (n >= 830) return "ID"
+    if (n >= 820) return "WY"
+    if (n >= 800) return "CO"
+    if (n >= 787) return "TX"
+    if (n >= 780) return "TX"
+    if (n >= 770) return "TX"
+    if (n >= 760) return "TX"
+    if (n >= 750) return "TX"
+    if (n >= 730) return "OK"
+    if (n >= 700) return "LA"
+    if (n >= 690) return "NE"
+    if (n >= 680) return "NE"
+    if (n >= 670) return "KS"
+    if (n >= 660) return "KS"
+    if (n >= 650) return "MO"
+    if (n >= 630) return "MO"
+    if (n >= 620) return "IL"
+    if (n >= 600) return "IL"
+    if (n >= 590) return "MT"
+    if (n >= 580) return "ND"
+    if (n >= 570) return "SD"
+    if (n >= 560) return "MN"
+    if (n >= 550) return "MN"
+    if (n >= 540) return "WI"
+    if (n >= 530) return "WI"
+    if (n >= 520) return "IA"
+    if (n >= 500) return "IA"
+    if (n >= 490) return "MI"
+    if (n >= 480) return "MI"
+    if (n >= 470) return "IN"
+    if (n >= 460) return "IN"
+    if (n >= 450) return "OH"
+    if (n >= 430) return "OH"
+    if (n >= 420) return "KY"
+    if (n >= 400) return "KY"
+    if (n >= 397) return "MS"
+    if (n >= 386) return "MS"
+    if (n >= 380) return "TN"
+    if (n >= 370) return "TN"
+    if (n >= 360) return "AL"
+    if (n >= 350) return "AL"
+    if (n >= 320) return "FL"
+    if (n >= 300) return "GA"
+    if (n >= 290) return "SC"
+    if (n >= 280) return "NC"
+    if (n >= 270) return "NC"
+    if (n >= 260) return "WV"
+    if (n >= 250) return "WV"
+    if (n >= 240) return "VA"
+    if (n >= 220) return "VA"
+    if (n >= 210) return "MD"
+    if (n >= 200) return "DC"
+    if (n >= 190) return "PA"
+    if (n >= 150) return "PA"
+    if (n >= 140) return "NY"
+    if (n >= 100) return "NY"
+    if (n >= 90) return "MA"
+    if (n >= 60) return "CT"
+    if (n >= 50) return "RI"
+    if (n >= 30) return "NH"
+    if (n >= 20) return "MA"
+    if (n >= 10) return "NJ"
+    return "ME"
+}
+
+/**
+ * Sanitize state/province for UPS API.
+ * Handles:
+ * - Duplicate state codes: "FLFL" → "FL"
+ * - Country codes arriving as state: "US" → derived from ZIP
+ */
+function sanitizeState(state: string, postalCode?: string): string {
     if (!state) return ""
     const trimmed = state.trim().toUpperCase()
-    // State codes are always 2 chars; if longer it's likely a duplication bug
+
+    // Detect if a country code was mistakenly passed as state
+    if (COUNTRY_CODES.has(trimmed)) {
+        // Try to derive US state from ZIP
+        if (trimmed === "US" && postalCode) {
+            const derived = zipToUsState(postalCode)
+            console.warn(`⚠️  sanitizeState: received country code "${trimmed}" as state, derived "${derived}" from ZIP ${postalCode}`)
+            return derived
+        }
+        // For non-US countries or no ZIP: pass empty string (UPS accepts blank for non-US destinations)
+        console.warn(`⚠️  sanitizeState: received country code "${trimmed}" as state, passing empty string`)
+        return ""
+    }
+
+    // State codes are always 2 chars; if longer it's likely a duplication bug (e.g. "FLFL")
     return trimmed.length > 2 ? trimmed.slice(0, 2) : trimmed
 }
 
@@ -89,7 +187,7 @@ async function fetchShopRates(req: ShopRateRequest): Promise<Record<string, numb
                     Address: {
                         AddressLine: [req.shipperAddress],
                         City: req.shipperCity,
-                        StateProvinceCode: sanitizeState(req.shipperState),
+                        StateProvinceCode: sanitizeState(req.shipperState, req.shipperZip),
                         PostalCode: req.shipperZip,
                         CountryCode: req.shipperCountry
                     }
@@ -99,7 +197,7 @@ async function fetchShopRates(req: ShopRateRequest): Promise<Record<string, numb
                     Address: {
                         AddressLine: [req.shipToAddress],
                         City: req.shipToCity,
-                        StateProvinceCode: sanitizeState(req.shipToState),
+                        StateProvinceCode: sanitizeState(req.shipToState, req.postalCode),
                         PostalCode: req.postalCode,
                         CountryCode: req.shipToCountry
                     }
