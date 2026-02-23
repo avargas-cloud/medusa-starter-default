@@ -207,11 +207,36 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             })
         }
 
-        // ── STEP 5: Create payment collection (idempotent) ────────────────────
-        const { result: paymentCollection } = await createPaymentCollectionForCartWorkflow(req.scope).run({
-            input: { cart_id: cartId }
-        })
-        console.log(`[fast-checkout] ✅ Payment collection: ${paymentCollection?.id}`)
+        // ── STEP 5: Create payment collection (idempotent — handles retries) ─────
+        let paymentCollection: any
+        try {
+            const { result } = await createPaymentCollectionForCartWorkflow(req.scope).run({
+                input: { cart_id: cartId }
+            })
+            paymentCollection = result
+            console.log(`[fast-checkout] ✅ Payment collection created: ${paymentCollection?.id}`)
+        } catch (pcErr: any) {
+            // Cart already has a payment collection from a previous attempt — fetch and reuse it
+            if (pcErr?.message?.toLowerCase().includes("already has a payment collection")) {
+                try {
+                    const paymentModule = req.scope.resolve("payment") as any
+                    const existing = await paymentModule.listPaymentCollections(
+                        { cart_id: cartId },
+                        { select: ["id", "status", "amount"], take: 1 }
+                    )
+                    paymentCollection = existing?.[0]
+                    console.log(`[fast-checkout] ✅ Reusing existing payment collection: ${paymentCollection?.id}`)
+                } catch (_) {
+                    throw pcErr  // rethrow original if we can't recover
+                }
+            } else {
+                throw pcErr
+            }
+        }
+
+        if (!paymentCollection?.id) {
+            return res.status(500).json({ error: "Could not obtain payment collection. Please try again." })
+        }
 
         // ── STEP 6: Create Authorize.net payment session ───────────────────────
         // Plugin reads: session.data.opaqueData, session.data.billingAddress, session.data.amount

@@ -116,10 +116,11 @@
 
 | Document | Description |
 |---|---|
-| [CHECKOUT_PAYMENT_IMPLEMENTATION_GUIDE.md](CHECKOUT_PAYMENT_IMPLEMENTATION_GUIDE.md) | Authorize.net + Medusa v2 + Astro — cart to order confirmation |
+| [CHECKOUT_PAYMENT_IMPLEMENTATION_GUIDE.md](CHECKOUT_PAYMENT_IMPLEMENTATION_GUIDE.md) | **Fast Checkout** (single POST) + Authorize.net Accept.js + Medusa v2 — cart to order |
 | [CART_RACE_CONDITION_FIX.md](CART_RACE_CONDITION_FIX.md) | Fix: qty debouncing to prevent stale cart updates on rapid clicks |
 | [SHIPPING_IMPLEMENTATION_GUIDE.md](SHIPPING_IMPLEMENTATION_GUIDE.md) | UPS real-time rates + flat-rate + store pickup + box packing logic |
 | [ADMIN_SETUP_CUSTOMER_PRICING.md](ADMIN_SETUP_CUSTOMER_PRICING.md) | Setting up price lists in Admin (Wholesale / Retail) |
+| [FIXES/fast-checkout-architecture.md](FIXES/fast-checkout-architecture.md) | Fix: checkout 10-15s → 2-3s via single Medusa endpoint + all deploy bugs |
 
 ---
 
