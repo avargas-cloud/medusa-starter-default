@@ -1,5 +1,4 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import pg from "pg"
 import {
     updateCartWorkflow,
     addShippingMethodToCartWorkflow,
@@ -281,6 +280,41 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             })
         }
 
+        // ── STEP 4b: Fix raw_unit_price / raw_quantity on cart line items ─────────
+        // completeCartWorkflow reads raw_unit_price (BigNumber JSONB), NOT unit_price,
+        // to compute order_summary. Customer-group pricing sometimes sets unit_price
+        // correctly but leaves raw_unit_price null or {value:"0"}, causing order_summary
+        // to compute shipping+tax only. Fixing these BEFORE the workflow runs ensures
+        // the RAM cache gets the correct total from the very first write.
+        if (cartItemsForValidation.length > 0) {
+            try {
+                const cartModule = req.scope.resolve("cart") as any
+                const rawFixes: any[] = []
+                for (const item of cartItemsForValidation) {
+                    const rawUpValue = parseFloat((item.raw_unit_price as any)?.value ?? "0")
+                    const rawQtyValue = parseFloat((item.raw_quantity as any)?.value ?? "0")
+                    const needsPriceFix = (item.unit_price ?? 0) > 0 && rawUpValue <= 0
+                    const needsQtyFix = (item.quantity ?? 0) > 0 && rawQtyValue <= 0
+                    if (needsPriceFix || needsQtyFix) {
+                        const patch: Record<string, unknown> = { id: item.id }
+                        if (needsPriceFix) patch.raw_unit_price = { value: String(item.unit_price), precision: 20 }
+                        if (needsQtyFix) patch.raw_quantity = { value: String(item.quantity), precision: 20 }
+                        rawFixes.push(patch)
+                        console.log(`[fast-checkout] 🔧 Cart raw fix needed: "${item.title || item.variant_id}" price=${item.unit_price} qty=${item.quantity}`)
+                    }
+                }
+                if (rawFixes.length > 0) {
+                    await cartModule.updateLineItems(rawFixes)
+                    console.log(`[fast-checkout] ✅ Fixed ${rawFixes.length} cart item(s) raw BigNumber fields → completeCartWorkflow will compute correct totals`)
+                } else {
+                    console.log(`[fast-checkout] ✅ Cart items raw_unit_price already correct — no fix needed`)
+                }
+            } catch (rawFixErr: any) {
+                // Non-fatal: log and continue. The updateOrderItem in step 7b will compensate.
+                console.warn(`[fast-checkout] ⚠️ Cart raw BigNumber fix failed (non-fatal): ${rawFixErr.message}`)
+            }
+        }
+
         // ── STEP 5: Create payment collection (idempotent — handles retries) ─────
         let paymentCollection: any
         try {
@@ -427,37 +461,19 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     // recomputation. The Admin reads order_summary.totals.current_order_total.
                     // We must explicitly compute and write the correct totals.
                     if (fixedCount > 0) {
-                        // ── Direct SQL UPDATE on order_summary.totals JSONB ──────────────
-                        // updateOrders() ignores unknown fields — must use raw SQL.
-                        // The Admin list reads from order_summary.totals.current_order_total.
+                        // ── Emit order.updated to invalidate OrderModule in-memory cache ──
+                        // updateOrderItem creates correct order_item versions in DB, but the
+                        // production Medusa process holds the initial wrong value in its RAM
+                        // cache. Emitting order.updated signals the module to re-read from DB
+                        // on next Admin access — no SQL bypass required.
                         try {
-                            const orderTotalDollars = (amountCents ?? 0) / 100
-                            const rawOrderTotal = { value: String(orderTotalDollars), precision: 20 }
-                            const newTotals = {
-                                current_order_total: orderTotalDollars,
-                                original_order_total: orderTotalDollars,
-                                accounting_total: orderTotalDollars,
-                                raw_current_order_total: rawOrderTotal,
-                                raw_original_order_total: rawOrderTotal,
-                                raw_accounting_total: rawOrderTotal,
-                            }
-                            const pgClient = new pg.Client({ connectionString: process.env.DATABASE_URL })
-                            await pgClient.connect()
-                            try {
-                                await pgClient.query(
-                                    `UPDATE order_summary
-                                      SET totals = totals || $1::jsonb,
-                                          updated_at = NOW()
-                                     WHERE order_id = $2`,
-                                    [JSON.stringify(newTotals), orderId]
-                                )
-                                console.log(`[fast-checkout] 🔧 Fixed ${fixedCount} order_item(s) + order_summary.totals → $${orderTotalDollars.toFixed(2)}`)
-                            } finally {
-                                await pgClient.end()
-                            }
-                        } catch (summaryErr: any) {
-                            console.warn(`[fast-checkout] ⚠️ order_summary SQL update failed: ${summaryErr.message}`)
+                            const eventBus = req.scope.resolve("eventBusModuleService") as any
+                            await eventBus.emit([{ name: "order.updated", data: { id: orderId } }])
+                            console.log(`[fast-checkout] 🔄 OrderModule cache invalidated via event bus for order ${orderId}`)
+                        } catch (ebErr: any) {
+                            console.warn(`[fast-checkout] ⚠️ Event bus emit failed (non-fatal): ${ebErr.message}`)
                         }
+                        console.log(`[fast-checkout] ✅ Fixed ${fixedCount} order_item(s) natively — order_summary will recompute on next read`)
                     }
                 }
             } catch (fixErr: any) {

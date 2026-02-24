@@ -17,5 +17,5 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         }
     })
 
-    res.json({ debug_orders: result.rows })
+    res.json({ debug_orders: result })
 }
