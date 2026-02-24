@@ -1,108 +1,95 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { Pool } from "pg"
 
 /**
  * POST /store/carts/:id/reprice
  *
- * Reprices ALL cart items to a customer's context (retail or wholesale) in a SINGLE request.
+ * Reprices ALL items in a cart to match the current customer's pricing context.
  *
- * 🧠 WHY THIS EXISTS:
- * Medusa doesn't auto-reprice existing line items when a customer is associated with a cart.
- * The normal flow would be to call updateLineItemInCartWorkflow for each item individually,
- * which takes ~2.3s per item (1 HTTP round-trip + full workflow per item).
+ * CALLED IN TWO SCENARIOS:
+ *   1. LOGIN  (with auth token):  customer group resolved → wholesale prices
+ *   2. LOGOUT (no auth token):    no customer group → retail base prices
  *
- * This endpoint:
- * 1. Resolves the customer's group (once — not N times)
- * 2. Batch calculates the correct price for ALL variants using the Pricing Module
- * 3. Updates ALL line item prices directly via cartModule.updateLineItems (skips workflow overhead)
- * 4. Returns the refreshed cart
+ * WHY NOT updateLineItemInCartWorkflow IN PARALLEL:
+ *   Medusa's workflow engine acquires a per-cart Redis lock for each workflow run.
+ *   Running multiple workflows for the same cart in parallel causes all but one to
+ *   fail with "Failed to acquire lock". There is no parallelism-safe native workflow.
  *
- * Result: O(1) HTTP calls instead of O(N), ~0.5-2s total instead of N × 2.3s.
+ * APPROACH:
+ *   1. Batch-fetch prices from Pricing Module (no locks, 1 fast DB call)
+ *   2. Update all line items via cartModule.updateLineItems (fast direct DB, no locks)
+ *   3. Immediately patch is_custom_price = false on those items via raw SQL
+ *      (cartModule.updateLineItems sets is_custom_price=true, which breaks Admin totals)
+ *
+ * This gives us: O(1) latency, no lock contention, correct prices, correct is_custom_price.
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     try {
         const cartId = req.params.id as string
-        const dynamicPricingEnabled = process.env.ENABLE_DYNAMIC_PRICING !== 'false'
 
-        console.log(`[REPRICE] 🔄 Repricing cart ${cartId} | dynamic=${dynamicPricingEnabled}`)
+        console.log(`[REPRICE] 🔄 Repricing cart ${cartId}`)
 
-        // --- Resolve modules ---
         const cartModule = req.scope.resolve(Modules.CART)
         const pricingModule = req.scope.resolve(Modules.PRICING)
         const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)
 
-        // --- Fetch current cart with line items ---
-        const cart = await cartModule.retrieveCart(cartId, {
-            relations: ["items"]
-        }) as any
+        const cart = await cartModule.retrieveCart(cartId, { relations: ["items"] }) as any
 
         if (!cart?.items?.length) {
-            console.log(`[REPRICE] Cart ${cartId} has no items — nothing to reprice.`)
-            return res.json({ cart })
+            console.log(`[REPRICE] No items — skipping.`)
+            return res.json({ success: true, updatesApplied: 0 })
         }
 
         // --- Resolve pricing context ---
         const pricingContext: Record<string, any> = {
             currency_code: cart.currency_code || "usd",
-            region_id: cart.region_id || "reg_01KFS28SNF1MT1MRHRAFQ6ZGK1"
+            region_id: cart.region_id
         }
 
-        // Resolve customer group (once) if dynamic pricing is enabled
         const customerId = (req as any).auth_context?.actor_id
         let isWholesale = false
 
-        if (dynamicPricingEnabled && customerId) {
+        if (customerId) {
             try {
                 const customerModule = req.scope.resolve(Modules.CUSTOMER)
-                const customer = await customerModule.retrieveCustomer(customerId, {
-                    relations: ["groups"]
-                })
+                const customer = await customerModule.retrieveCustomer(customerId, { relations: ["groups"] })
                 if (customer.groups?.length) {
                     pricingContext.customer_group_id = customer.groups.map((g: any) => g.id)
                     isWholesale = true
-                    console.log(`[REPRICE] 👑 Wholesale customer — groups:`, pricingContext.customer_group_id)
-                } else {
-                    console.log(`[REPRICE] Retail customer — no wholesale groups`)
+                    console.log(`[REPRICE] 👑 Wholesale — groups:`, pricingContext.customer_group_id)
                 }
             } catch (err: any) {
                 console.warn(`[REPRICE] Could not resolve customer groups:`, err.message)
             }
+        } else {
+            console.log(`[REPRICE] No auth — repricing to retail`)
         }
 
-        // --- Collect all unique variant IDs from cart items ---
-        const variantIds = [...new Set(cart.items.map((item: any) => item.variant_id).filter(Boolean))] as string[]
-
-        console.log(`[REPRICE] Fetching price sets for ${variantIds.length} variants...`)
-
-        // --- Batch fetch price_set_id for all variants in one query ---
+        // --- Batch fetch price sets ---
+        const variantIds = [...new Set(cart.items.map((i: any) => i.variant_id).filter(Boolean))] as string[]
         const { data: variants } = await query.graph({
             entity: "variant",
             fields: ["id", "price_set.id"],
             filters: { id: variantIds }
         })
 
-        // Build map: variantId → priceSetId
         const variantToPriceSet: Record<string, string> = {}
         for (const v of variants || []) {
-            if (v.price_set?.id) {
-                variantToPriceSet[v.id] = v.price_set.id
-            }
+            if (v.price_set?.id) variantToPriceSet[v.id] = v.price_set.id
         }
 
         const priceSetIds = Object.values(variantToPriceSet)
         if (!priceSetIds.length) {
-            console.warn(`[REPRICE] No price sets found for variants — skipping price update.`)
-            return res.json({ cart })
+            return res.json({ success: true, updatesApplied: 0 })
         }
 
-        // --- Batch calculate prices for ALL price sets at once ---
-        console.log(`[REPRICE] Calculating prices for ${priceSetIds.length} price sets...`)
+        // --- Batch calculate prices ---
         const calculatedPrices = await pricingModule.calculatePrices(
             { id: priceSetIds },
             { context: pricingContext }
         )
 
-        // Build map: priceSetId → calculated_amount
         const priceSetToAmount: Record<string, number> = {}
         for (const p of calculatedPrices || []) {
             if (p.id && p.calculated_amount !== null && p.calculated_amount !== undefined) {
@@ -110,42 +97,54 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
             }
         }
 
-        // --- Update each line item price if it changed ---
-        const updatePromises: Promise<any>[] = []
-        let updatesQueued = 0
-
+        // --- Update changed items ---
+        const updatesNeeded: { itemId: string; newPrice: number }[] = []
         for (const item of cart.items) {
             const priceSetId = variantToPriceSet[item.variant_id]
             if (!priceSetId) continue
-
             const newPrice = priceSetToAmount[priceSetId]
             if (newPrice === undefined) continue
-
             if (item.unit_price !== newPrice) {
-                console.log(`[REPRICE] Item ${item.id}: $${item.unit_price} → $${newPrice} (${isWholesale ? 'wholesale' : 'retail'})`)
-                updatePromises.push(
-                    cartModule.updateLineItems(item.id, { unit_price: newPrice })
-                )
-                updatesQueued++
-            } else {
-                console.log(`[REPRICE] Item ${item.id}: price unchanged at $${item.unit_price}`)
+                console.log(`[REPRICE] ${item.id}: $${item.unit_price} → $${newPrice} (${isWholesale ? 'wholesale' : 'retail'})`)
+                updatesNeeded.push({ itemId: item.id, newPrice })
             }
         }
 
-        if (updatePromises.length) {
-            // Fire all price updates in parallel — cartModule.updateLineItems is a direct DB call,
-            // not a workflow, so no Redis lock serialization. This is safe.
-            await Promise.all(updatePromises)
-            console.log(`[REPRICE] ✅ Updated ${updatesQueued} line item prices in parallel.`)
-        } else {
-            console.log(`[REPRICE] ℹ️ No price changes needed.`)
+        if (!updatesNeeded.length) {
+            console.log(`[REPRICE] No price changes needed.`)
+            return res.json({ success: true, updatesApplied: 0 })
         }
 
-        // Return success — the frontend will call GET /store/carts/:id to get the properly
-        // formatted cart with calculated totals. We don't attempt retrieveCart here because
-        // cartModule.retrieveCart uses a different schema than the HTTP API.
-        console.log(`[REPRICE] ✅ Done. ${updatesQueued} price(s) updated.`)
-        return res.json({ success: true, updatesApplied: updatesQueued })
+        // Step 1: Update prices (this sets is_custom_price=true — we'll fix that next)
+        await Promise.all(
+            updatesNeeded.map(({ itemId, newPrice }) =>
+                cartModule.updateLineItems(itemId, { unit_price: newPrice })
+            )
+        )
+
+        // Step 2: Reset is_custom_price=false so Admin totals are correct.
+        // cartModule.updateLineItems always sets is_custom_price=true when unit_price is passed.
+        // We patch it immediately to false since these prices come from Medusa's own Pricing Module,
+        // not from manual user input.
+        try {
+            const pool = new Pool({
+                connectionString: process.env.DATABASE_URL,
+                ssl: process.env.DATABASE_URL?.includes('railway') ? { rejectUnauthorized: false } : false
+            })
+            const itemIds = updatesNeeded.map(u => u.itemId)
+            await pool.query(
+                `UPDATE cart_line_item SET is_custom_price = false WHERE id = ANY($1)`,
+                [itemIds]
+            )
+            await pool.end()
+            console.log(`[REPRICE] ✅ Reset is_custom_price=false on ${itemIds.length} item(s).`)
+        } catch (patchErr: any) {
+            // Non-fatal: prices are correct, is_custom_price flag not patched
+            console.warn(`[REPRICE] ⚠️ Could not reset is_custom_price:`, patchErr.message)
+        }
+
+        console.log(`[REPRICE] ✅ Done. ${updatesNeeded.length} price(s) updated.`)
+        return res.json({ success: true, updatesApplied: updatesNeeded.length })
 
     } catch (error: any) {
         console.error("[REPRICE] ❌ Error:", error.message, error.stack)
