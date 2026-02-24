@@ -5,6 +5,7 @@ import {
     createPaymentCollectionForCartWorkflow,
     createPaymentSessionsWorkflow,
     completeCartWorkflow,
+    refreshCartItemsWorkflow,
 } from "@medusajs/medusa/core-flows"
 
 // ─── Florida province mapping (must match exact Tax Region province_code in DB) 
@@ -188,17 +189,39 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             }
         }
 
-        // ── STEP 4: Get authoritative cart total via Store API ───────────────
+        // ── STEP 4: Reprice cart items before charging ────────────────────────
+        // WHY: If any line item has unit_price=0 (e.g. missing retail price list, timing
+        // race during cart creation, or guest cart with no price list match), the order
+        // would be created with $0 items and only show shipping in Medusa Admin.
+        // Calling refreshCartItemsWorkflow here corrects all prices before checkout.
+        // The setPricingContext hook reads cart.customer_id to apply wholesale vs retail.
+        try {
+            await refreshCartItemsWorkflow(req.scope).run({
+                input: {
+                    cart_id: cartId,
+                    force_refresh: true,
+                    additional_data: { force_retail: false }  // respects customer group if linked
+                }
+            })
+            console.log(`[fast-checkout] ✅ Cart items repriced before checkout`)
+        } catch (repriceErr: any) {
+            // Non-fatal: log and continue. completeCartWorkflow will use current prices.
+            console.warn(`[fast-checkout] ⚠️ Reprice step failed (continuing): ${repriceErr.message}`)
+        }
+
+        // ── STEP 5: Get authoritative cart total via Store API ───────────────
+        // AFTER reprice — totals now reflect corrected item prices + shipping.
         // We use the Store API (not cartModule.listCarts) because:
         //   1. The module service returns a stale floating-point total before the
         //      full price engine recalculates post-shipping.
         //   2. The Store API goes through Medusa's full price engine and returns
         //      a correct integer total in cents AFTER the shipping just applied.
         let amountCents: number | null = null
+        let cartItemsForValidation: any[] = []
         try {
             const MEDUSA_URL = process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
             const PUBLISHABLE_KEY = process.env.PUBLISHABLE_API_KEY || ""
-            const cartRes = await fetch(`${MEDUSA_URL}/store/carts/${cartId}`, {
+            const cartRes = await fetch(`${MEDUSA_URL}/store/carts/${cartId}?fields=*items,items.unit_price,items.quantity,total,subtotal`, {
                 headers: {
                     "Content-Type": "application/json",
                     "x-publishable-api-key": PUBLISHABLE_KEY,
@@ -206,6 +229,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             })
             if (cartRes.ok) {
                 const { cart: cartData } = await cartRes.json()
+                cartItemsForValidation = cartData?.items ?? []
+
                 // Store API returns totals in DOLLARS (e.g. 150.0568 for $150.06)
                 // Multiply × 100 → round to integer cents for Authorize.net
                 if (cartData?.total && cartData.total > 0) {
@@ -217,6 +242,23 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             }
         } catch (err: any) {
             console.warn("[fast-checkout] Store API cart total fetch failed:", err.message)
+        }
+
+        // ── GUARD: Validate item prices are non-zero ──────────────────────────
+        // If items still have unit_price=0 after reprice, block checkout.
+        // This prevents charging only shipping and creating $0-item orders.
+        if (cartItemsForValidation.length > 0) {
+            const zeroPriceItems = cartItemsForValidation.filter(
+                (item: any) => !item.unit_price || item.unit_price <= 0
+            )
+            if (zeroPriceItems.length > 0) {
+                const names = zeroPriceItems.map((i: any) => i.title || i.variant_id).join(", ")
+                console.error(`[fast-checkout] ❌ Items with unit_price=0 after reprice: ${names}`)
+                return res.status(400).json({
+                    error: "Some items in your cart could not be priced. Please remove them and try again, or contact support.",
+                    code: "ZERO_PRICE_ITEMS"
+                })
+            }
         }
 
         // Fallback: frontend dollar amount → cents
