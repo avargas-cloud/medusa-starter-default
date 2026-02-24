@@ -63,7 +63,8 @@ class GroundShippingService extends AbstractFulfillmentProviderService {
             throw new Error("Ground Shipping: override disabled")
         }
 
-        // unit_price is in dollars, quantity is units → multiply by 100 for cents
+        // In calculatePrice context, unit_price is in DOLLARS (e.g. 0.85 for $0.85)
+        // Multiply by 100 to compare against DB cents thresholds (free_shipping_minimum is stored in cents)
         const itemsTotal = Math.round(
             (cart.items || []).reduce((sum: number, item: any) => {
                 return sum + (item.unit_price * (item.quantity || 1))
@@ -82,19 +83,43 @@ class GroundShippingService extends AbstractFulfillmentProviderService {
 
 
 
-        // Query DB: check if any product in this cart has a 'long' shipping profile
+        // Detect long items by dimensions (> 30") — same criterion as box-packing.ts
+        // Reads from inventory_item first (where the widget saves), then product_variant fallback.
         let hasLongItems = false
         if (productIds.length > 0) {
             try {
-                // Medusa v2 uses a junction table: product_shipping_profile
-                const longProducts = await this.knex('product')
-                    .join('product_shipping_profile as psp', 'psp.product_id', 'product.id')
-                    .join('shipping_profile', 'shipping_profile.id', 'psp.shipping_profile_id')
-                    .whereIn('product.id', productIds)
-                    .whereRaw("LOWER(shipping_profile.name) LIKE '%long%'")
-                    .select('product.id', 'shipping_profile.name')
+                const LONG_ITEM_THRESHOLD_INCHES = 30
+                // Check inventory_item dimensions first (primary source via widget)
+                const longViaInventory = await this.knex('product_variant as pv')
+                    .join('product_variant_inventory_item as pvii', 'pvii.variant_id', 'pv.id')
+                    .join('inventory_item as ii', 'ii.id', 'pvii.inventory_item_id')
+                    .whereIn('pv.product_id', productIds)
+                    .where(function () {
+                        this.where('ii.length', '>', LONG_ITEM_THRESHOLD_INCHES)
+                            .orWhere('ii.width', '>', LONG_ITEM_THRESHOLD_INCHES)
+                            .orWhere('ii.height', '>', LONG_ITEM_THRESHOLD_INCHES)
+                    })
+                    .select('pv.id', 'pv.sku')
 
-                hasLongItems = longProducts.length > 0
+                if (longViaInventory.length > 0) {
+                    hasLongItems = true
+                    console.log(`📏 Ground Shipping: long item (inventory_item) — ${longViaInventory.map((v: any) => v.sku).join(', ')}`)
+                } else {
+                    // Fallback: check product_variant dimensions directly
+                    const longViaVariant = await this.knex('product_variant')
+                        .whereIn('product_id', productIds)
+                        .where(function () {
+                            this.where('length', '>', LONG_ITEM_THRESHOLD_INCHES)
+                                .orWhere('width', '>', LONG_ITEM_THRESHOLD_INCHES)
+                                .orWhere('height', '>', LONG_ITEM_THRESHOLD_INCHES)
+                        })
+                        .select('id', 'sku')
+
+                    hasLongItems = longViaVariant.length > 0
+                    if (hasLongItems) {
+                        console.log(`📏 Ground Shipping: long item (variant) — ${longViaVariant.map((v: any) => v.sku).join(', ')}`)
+                    }
+                }
             } catch (dbErr) {
                 console.error(`❌ Ground Shipping: DB query for long items failed:`, dbErr)
                 hasLongItems = false
@@ -110,16 +135,20 @@ class GroundShippingService extends AbstractFulfillmentProviderService {
         }
 
         // 2. Long item rate
+        // DB value is in cents → divide by 100 to return dollars (calculatePrice contract)
         if (hasLongItems) {
-            const price = settings.long_item_ground_shipping_price  // already in cents
-            console.log(`📦 Ground Shipping: LONG ITEM $${price / 100}`)
-            return { calculated_amount: price, is_calculated_price_tax_inclusive: false }
+            const priceCents = settings.long_item_ground_shipping_price
+            const priceDollars = priceCents / 100
+            console.log(`📦 Ground Shipping: LONG ITEM $${priceDollars.toFixed(2)}`)
+            return { calculated_amount: priceDollars, is_calculated_price_tax_inclusive: false }
         }
 
         // 3. Regular flat rate
-        const price = settings.regular_ground_shipping_price  // already in cents
-        console.log(`🚢 Ground Shipping: REGULAR $${price / 100}`)
-        return { calculated_amount: price, is_calculated_price_tax_inclusive: false }
+        // DB value is in cents → divide by 100 to return dollars (calculatePrice contract)
+        const priceCents = settings.regular_ground_shipping_price
+        const priceDollars = priceCents / 100
+        console.log(`🚢 Ground Shipping: REGULAR $${priceDollars.toFixed(2)}`)
+        return { calculated_amount: priceDollars, is_calculated_price_tax_inclusive: false }
     }
 
     async createFulfillment(_data: any, _items: any, _order: any, _fulfillment: any): Promise<any> {

@@ -97,14 +97,17 @@ async function resolveShippingOptionId(
         }
 
         if (isGround) {
-            // Most expensive ground option → covers Long Item profiles too
-            const groundOptions = options
-                .filter((o: any) =>
-                    o.name?.toLowerCase().includes("ground") || o.provider_id?.includes("ground")
-                )
-                .sort((a: any, b: any) => (b.amount ?? 0) - (a.amount ?? 0))
-            console.log(`[fast-checkout] Shipping: ground → ${groundOptions[0]?.id}`)
-            return groundOptions[0]?.id ?? null
+            const groundOptions = options.filter((o: any) =>
+                o.name?.toLowerCase().includes("ground") || o.provider_id?.includes("ground")
+            )
+            // Prefer the base "Ground Shipping" provider (custom flat-rate) over UPS Ground
+            // since calculatePrice gives the correct dynamic price. Fall back to cheapest.
+            const baseGround = groundOptions.find((o: any) =>
+                o.provider_id?.includes("ground-shipping") || o.name?.toLowerCase() === "ground shipping"
+            )
+            const chosen = baseGround ?? groundOptions.sort((a: any, b: any) => (a.amount ?? 0) - (b.amount ?? 0))[0]
+            console.log(`[fast-checkout] Shipping: ground → ${chosen?.id} (${chosen?.name})`)
+            return chosen?.id ?? null
         }
 
         // 3. Last resort: most expensive (safest to avoid shipping profile mismatches)
@@ -185,24 +188,41 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             }
         }
 
-        // ── STEP 4: Get authoritative cart total from Medusa DB ───────────────
-        // Never trust the frontend amount — only Medusa knows the real total (post-tax, post-shipping).
+        // ── STEP 4: Get authoritative cart total via Store API ───────────────
+        // We use the Store API (not cartModule.listCarts) because:
+        //   1. The module service returns a stale floating-point total before the
+        //      full price engine recalculates post-shipping.
+        //   2. The Store API goes through Medusa's full price engine and returns
+        //      a correct integer total in cents AFTER the shipping just applied.
         let amountCents: number | null = null
         try {
-            const cartModule = req.scope.resolve("cart") as any
-            const [cart] = await cartModule.listCarts({ id: [cartId] }, { select: ["total"] })
-            if (cart?.total && cart.total > 0) {
-                amountCents = cart.total
-                console.log(`[fast-checkout] 💰 Authoritative total: ${amountCents} cents`)
+            const MEDUSA_URL = process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
+            const PUBLISHABLE_KEY = process.env.PUBLISHABLE_API_KEY || ""
+            const cartRes = await fetch(`${MEDUSA_URL}/store/carts/${cartId}`, {
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-publishable-api-key": PUBLISHABLE_KEY,
+                }
+            })
+            if (cartRes.ok) {
+                const { cart: cartData } = await cartRes.json()
+                // Store API returns totals in DOLLARS (e.g. 150.0568 for $150.06)
+                // Multiply × 100 → round to integer cents for Authorize.net
+                if (cartData?.total && cartData.total > 0) {
+                    amountCents = Math.round(cartData.total * 100)
+                    console.log(`[fast-checkout] 💰 Authoritative total (Store API): ${amountCents} cents = $${(amountCents / 100).toFixed(2)}`)
+                }
+            } else {
+                console.warn(`[fast-checkout] Store API cart fetch returned ${cartRes.status}`)
             }
         } catch (err: any) {
-            console.warn("[fast-checkout] cartModuleService not available:", err.message)
+            console.warn("[fast-checkout] Store API cart total fetch failed:", err.message)
         }
 
         // Fallback: frontend dollar amount → cents
         if (!amountCents && frontendAmountDollars) {
             amountCents = Math.round(Number(frontendAmountDollars) * 100)
-            console.warn(`[fast-checkout] ⚠️ Using frontend fallback amount: ${amountCents} cents`)
+            console.warn(`[fast-checkout] ⚠️ Using frontend fallback amount: ${amountCents} cents = $${(amountCents / 100).toFixed(2)}`)
         }
 
         if (!amountCents || amountCents <= 0) {
@@ -293,7 +313,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const msg = error?.message ?? "Unknown error"
         console.error("[fast-checkout] ❌ Error:", msg)
 
-        // Specific error routing
+        // Cart already completed (user retried after successful order, stale cart ID)
+        if (msg.includes("already completed")) {
+            return res.status(409).json({
+                error: "This order has already been placed. Please refresh the page.",
+                code: "CART_ALREADY_COMPLETED"
+            })
+        }
         if (msg.includes("shipping profile") || msg.includes("shipping method")) {
             return res.status(400).json({
                 error: "The selected shipping method is not available for all items. Please go back and select a different shipping option."

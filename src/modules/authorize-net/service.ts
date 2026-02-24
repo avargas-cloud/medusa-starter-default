@@ -202,24 +202,16 @@ class AuthorizeNetPaymentService extends AbstractPaymentProvider<AuthnetOptions>
         // _medusaAmount is set by authorizePayment() from (data as any).amount
         const amountSource = (sessionData?._medusaAmount as number | undefined) ?? (sessionData?.amount as number | undefined);
 
-        console.log(`[AuthorizeNet] DEBUG AUDIT: Capture raw amount input: ${amountSource}, type: ${typeof amountSource}`);
-        console.log(`[AuthorizeNet] DEBUG AUDIT: Capture medusaAmount param: ${(data as any).amount}, type: ${typeof (data as any).amount}`);
-
-        const amountCents: number =
-            (sessionData?._medusaAmount as number | undefined) ??
-            (sessionData?.amount as number | undefined) ??
-            0;
-
+        // Medusa v2 payment session amounts are in DOLLARS (not cents)
+        // Do NOT divide by 100 — Authorize.net also expects dollars
+        if (!amountSource) {
+            throw new Error("No amount in payment session or input")
+        }
         if (!opaqueData?.dataValue) {
             throw new Error("No Accept.js opaqueData — card not tokenized")
         }
-
-        if (!amountCents) {
-            throw new Error("No amount in payment session or input")
-        }
-
-        const amountDollars = (amountCents / 100).toFixed(2)
-        console.log(`[AuthorizeNet] Charging $${amountDollars} (${amountCents} cents)`)
+        const amountDollars = Number(amountSource).toFixed(2)
+        console.log(`[AuthorizeNet] Charging $${amountDollars} from session amount ${amountSource}`)
 
         const payload: any = {
             createTransactionRequest: {
@@ -314,7 +306,8 @@ class AuthorizeNetPaymentService extends AbstractPaymentProvider<AuthnetOptions>
             throw new Error("No transaction ID to refund")
         }
 
-        const amountDollars = (Number(refundAmount) / 100).toFixed(2)
+        // Medusa v2 refund amounts are in DOLLARS (not cents) — use directly
+        const amountDollars = Number(refundAmount).toFixed(2)
         const last4 = (sessionData?.card_last4 as string) ?? "0000"
 
         const response = await this.authnetRequest({

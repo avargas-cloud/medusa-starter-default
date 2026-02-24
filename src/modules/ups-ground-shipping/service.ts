@@ -69,8 +69,10 @@ class UPSGroundShippingService extends AbstractFulfillmentProviderService {
             })
 
             if (price !== null) {
-                console.log(`✅ ${SERVICE_NAME}: $${(price / 100).toFixed(2)}`)
-                return { calculated_amount: price, is_calculated_price_tax_inclusive: false }
+                // getUPSRate returns cents → divide by 100 for the dollars that calculatePrice requires
+                const priceDollars = price / 100
+                console.log(`✅ ${SERVICE_NAME}: $${priceDollars.toFixed(2)}`)
+                return { calculated_amount: priceDollars, is_calculated_price_tax_inclusive: false }
             }
         } catch (err: any) {
             console.error(`❌ ${SERVICE_NAME} rate error:`, err.message)

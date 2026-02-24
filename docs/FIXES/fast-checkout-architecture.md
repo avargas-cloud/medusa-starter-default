@@ -30,14 +30,14 @@ Frontend (Vercel)  ──── 1 POST ────▶  Medusa (Railway) /store/
                                     updateCartWorkflow
                                     resolveShippingOptionId
                                     addShippingMethodToCartWorkflow
-                                    cart.listCarts (authoritative total)
+                                    GET /store/carts/:id  (Store API — authoritative total in DOLLARS)
                                     createPaymentCollectionForCartWorkflow
                                     createPaymentSessionsWorkflow
                                     completeCartWorkflow
                                              │
-                                        Authorize.net
+                                         Authorize.net  (amount already in dollars — no ÷100)
                                              │
-                                        Order Created
+                                         Order Created
 ```
 
 **Tiempo en producción:** ~2-3 segundos (vs 10-15 segundos antes).

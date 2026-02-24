@@ -8,7 +8,7 @@
 | **Problemas que resuelve** | Medusa v2 payment integration with Authorize.net is not well documented. This covers the custom payment provider plugin, the fast-checkout backend endpoint, and the Astro frontend steps. |
 | **Resultado esperado** | End-to-end checkout works: cart → shipping → payment → order creation in ~2-3 seconds from the user's perspective. Authorize.net charges the card, Medusa creates the order, and the customer receives a confirmation. |
 | **Scripts Creados** | `src/scripts/test/test-fast-checkout.ts` — end-to-end checkout test with real Authorize.net token generation |
-| **Última actualización** | 2026-02-23 — Migrated to Fast Checkout architecture (single network hop) |
+| **Última actualización** | 2026-02-24 — Currency unit fixes: Medusa v2 uses DOLLARS throughout; Authorize.net service no longer divides by 100. Store API used for authoritative cart total. Frontend display fixed. |
 
 ---
 
@@ -31,13 +31,14 @@
      ├── updateCartWorkflow          (email + shipping address)
      ├── resolveShippingOptionId     (exact → pickup → ground → cost-sorted fallback)
      ├── addShippingMethodToCartWorkflow
-     ├── cart.listCarts              (authoritative total — never trust frontend)
+     ├── GET /store/carts/:id        (Store API — authoritative total in DOLLARS)
      ├── createPaymentCollectionForCartWorkflow
      ├── createPaymentSessionsWorkflow  (stores opaqueData + billingAddress + amount)
      └── completeCartWorkflow        → authorizePayment → capturePayment → Order created
                 │
                 ▼
           [Authorize.net]  chargeCard($amount, opaqueData)
+                │              amount is already in DOLLARS — no unit conversion needed
                 │
                 ▼
           [Order Created in Medusa]
@@ -76,9 +77,16 @@ Key methods and what they do:
   billingAddress: {
     firstName, lastName, address1, city, state, zip, country
   },
-  amount: 11364  // cents — Medusa authoritative cart total
+  amount: 76.76  // DOLLARS — Medusa v2 stores and passes monetary amounts in dollars (not cents)
 }
 ```
+
+> **⚠️ CRITICAL — Currency Units:**
+> Medusa v2 stores ALL monetary values (cart total, payment session amount, refund amount) in **DOLLARS**
+> as floating-point numbers (e.g. `76.7618`). The `capturePayment` and `refundPayment` methods
+> in `authorize-net/service.ts` use the amount **directly** without dividing by 100.
+> Authorize.net also expects dollars, so no conversion is needed.
+> **Never divide Medusa amounts by 100** — doing so results in charging cents instead of dollars.
 
 ### 1.2 Required Environment Variables
 
@@ -309,6 +317,94 @@ addToCartWorkflow.hooks.setPricingContext(async ({ cart }, { container }) => {
 
 ## Part 5: Common Gotchas
 
+### ⚠️ Currency Units — The #1 Source of Subtle Bugs
+
+Medusa v2 stores ALL monetary values in **DOLLARS** (not cents). This applies to:
+- `cart.total`, `cart.item_subtotal`, `cart.shipping_subtotal`, `cart.tax_total`
+- `payment_session.data.amount`
+- The `data.amount` passed to `authorizePayment()` / `capturePayment()`
+- Refund amounts passed to `refundPayment()`
+
+The Authorize.net API also expects **dollars**. No unit conversion is needed.
+
+**Wrong (caused $0.77 charge instead of $76.76):**
+```typescript
+// ❌ WRONG: divides dollars by 100, charges cents
+const amountDollars = (sessionData.amount / 100).toFixed(2)  // 76.76 → $0.77
+```
+
+**Correct:**
+```typescript
+// ✅ CORRECT: amount is already in dollars
+const amountDollars = Number(sessionData.amount).toFixed(2)  // 76.76 → $76.76
+```
+
+### Authoritative Cart Total — Use Store API, Not listCarts
+
+`cartModule.listCarts()` can return stale totals before shipping is applied.
+Always use the Store API for the authoritative total after shipping is set:
+
+```typescript
+// ✅ Authoritative total (use this)
+const res = await fetch(`${MEDUSA_BACKEND_URL}/store/carts/${cartId}`, {
+  headers: { 'x-publishable-api-key': PUBLISHABLE_API_KEY }
+})
+const { cart: cartData } = await res.json()
+const amountCents = Math.round(cartData.total * 100)  // for logging only
+console.log(`[fast-checkout] 💰 Total: $${cartData.total.toFixed(2)}`)
+```
+
+> The Store API returns `total`, `item_subtotal`, `shipping_subtotal`, `tax_total` all in **dollars**.
+
+### Shipping Display: shipping_subtotal vs shipping_total
+
+Medusa's order object has two shipping fields:
+
+| Field | Value | What it contains |
+|-------|-------|------------------|
+| `shipping_subtotal` | $14.99 | Base shipping cost (no tax) |
+| `shipping_total` | $16.04 | Base + shipping tax ($1.05) |
+
+**Always display `shipping_subtotal`** in the UI. `tax_total` already includes the shipping tax.
+Using `shipping_total` + `tax_total` double-counts the shipping tax (+$1.05 in FL).
+
+```typescript
+// ✅ Correct — tax_total includes shipping tax
+const shipping = order.shipping_subtotal  // $14.99
+const tax = order.tax_total              // $5.02 (covers items + shipping)
+// Total = subtotal + shipping + tax = $56.75 + $14.99 + $5.02 = $76.76 ✅
+
+// ❌ Wrong — double counts shipping tax
+const shipping = order.shipping_total    // $16.04 (already includes $1.05 tax)
+const tax = order.tax_total             // $5.02 (also includes that $1.05)
+// Total = $56.75 + $16.04 + $5.02 = $77.81 ❌
+```
+
+### Florida Tax — 7% on Items + Shipping
+
+Florida law (F.S. 212.02) taxes the shipping cost along with items. Medusa's tax engine
+calculates this correctly if the province is set to `us-fl`. The frontend mirrors this:
+
+```typescript
+// Client-side calculation in CheckoutLayout.tsx:
+const FL_TAX_RATE = 0.07
+const taxableBase = subtotal + shippingCost  // includes shipping!
+const tax = taxableBase * FL_TAX_RATE
+```
+
+### Cart Drawer Doesn't Open on First Item Add
+
+The `ept:cart-updated` event that opens the cart drawer must fire for the empty-cart case.
+The optimistic update branch (`else if (previousCart)`) only fires when a cart already exists.
+For the first item ever added (no `previousCart`), dispatch the event after the API call:
+
+```typescript
+// cartStore.ts — after apiAddToCart succeeds:
+if (!product.silent && !previousCart) {
+  window.dispatchEvent(new CustomEvent('ept:cart-updated', { detail: { action: 'add' } }));
+}
+```
+
 ### Cart completion fails with "No shipping method selected"
 
 - The `shippingMethodId` from the frontend couldn't be resolved to a real `so_...` ID
@@ -335,6 +431,19 @@ addToCartWorkflow.hooks.setPricingContext(async ({ cart }, { container }) => {
 - A product has the "Long Item Ground" shipping profile but the selected option doesn't cover it
 - The shipping resolution now uses the most expensive ground option as fallback, which should cover it
 - Check which shipping profiles are assigned to the products in Medusa Admin
+
+### Shipping providers: calculatePrice returns DOLLARS
+
+Medusa's `calculatePrice` contract requires the returned `calculated_amount` to be in **dollars**.
+Both `ground-shipping/service.ts` and `ups-ground-shipping/service.ts` store prices in the DB
+as cents and divide by 100 before returning:
+
+```typescript
+// ✅ Correct — DB stores cents, calculatePrice must return dollars
+const priceCents = settings.regular_ground_shipping_price  // e.g. 1499 for $14.99
+const priceDollars = priceCents / 100
+return { calculated_amount: priceDollars, is_calculated_price_tax_inclusive: false }
+```
 
 ---
 

@@ -82,35 +82,44 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
         const isFree = cartTotalCents >= settings.free_shipping_minimum
 
-        // 3. Check for long items via variant_id → product join (variant_id is always populated)
+        // 3. Check for long items by dimensions (> 30") — reads inventory_item first, then variant fallback
         let isLong = false
         if (!isFree && items.length > 0) {
-            // Use variant_id (always populated) as primary lookup, product_id as fallback
             const variantIds = items.map((i: any) => i.variant_id).filter(Boolean)
             const productIds = items.map((i: any) => i.product_id).filter(Boolean)
+            const LONG_THRESHOLD = 30  // inches — same as box-packing.ts
 
             if (variantIds.length > 0) {
-                const longResult = await client.query(`
-                    SELECT pv.product_id
+                // Primary: inventory_item dimensions (where the admin widget saves)
+                const longViaInv = await client.query(`
+                    SELECT pv.id, pv.sku, ii.length, ii.width, ii.height
                     FROM product_variant pv
-                    JOIN product_shipping_profile psp ON psp.product_id = pv.product_id
-                    JOIN shipping_profile sp ON sp.id = psp.shipping_profile_id
+                    JOIN product_variant_inventory_item pvii ON pvii.variant_id = pv.id
+                    JOIN inventory_item ii ON ii.id = pvii.inventory_item_id
                     WHERE pv.id = ANY($1)
-                      AND LOWER(sp.name) LIKE '%long%'
+                      AND (ii.length > $2 OR ii.width > $2 OR ii.height > $2)
                     LIMIT 1
-                `, [variantIds])
-                isLong = longResult.rows.length > 0
+                `, [variantIds, LONG_THRESHOLD])
+
+                if (longViaInv.rows.length > 0) {
+                    isLong = true
+                } else {
+                    // Fallback: product_variant dimensions
+                    const longViaVariant = await client.query(`
+                        SELECT id FROM product_variant
+                        WHERE id = ANY($1)
+                          AND (length > $2 OR width > $2 OR height > $2)
+                        LIMIT 1
+                    `, [variantIds, LONG_THRESHOLD])
+                    isLong = longViaVariant.rows.length > 0
+                }
             } else if (productIds.length > 0) {
-                // fallback: use product_id directly if variant_id not available
                 const longResult = await client.query(`
-                    SELECT p.id
-                    FROM product p
-                    JOIN product_shipping_profile psp ON psp.product_id = p.id
-                    JOIN shipping_profile sp ON sp.id = psp.shipping_profile_id
-                    WHERE p.id = ANY($1)
-                      AND LOWER(sp.name) LIKE '%long%'
+                    SELECT pv.id FROM product_variant pv
+                    WHERE pv.product_id = ANY($1)
+                      AND (pv.length > $2 OR pv.width > $2 OR pv.height > $2)
                     LIMIT 1
-                `, [productIds])
+                `, [productIds, LONG_THRESHOLD])
                 isLong = longResult.rows.length > 0
             }
         }
