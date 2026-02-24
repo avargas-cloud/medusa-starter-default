@@ -22,6 +22,8 @@ async function main() {
                 oi.version       AS oi_version,
                 oi.unit_price    AS oi_unit_price,
                 oi.raw_unit_price::text AS oi_raw_unit_price,
+                oi.quantity      AS oi_quantity,
+                oi.raw_quantity::text   AS oi_raw_quantity,
                 oli.unit_price   AS oli_unit_price,
                 oli.raw_unit_price::text AS oli_raw_unit_price,
                 oli.title
@@ -43,8 +45,11 @@ async function main() {
             console.log(`   │  order_item.version:       ${row.oi_version}`)
             console.log(`   │  order_item.unit_price:    ${row.oi_unit_price}`)
             console.log(`   │  order_item.raw_unit_price: ${row.oi_raw_unit_price}`)
+            console.log(`   │  order_item.quantity:       ${row.oi_quantity}`)
+            console.log(`   │  order_item.raw_quantity:   ${row.oi_raw_quantity}`)
             console.log(`   │  order_line_item.unit_price:    ${row.oli_unit_price}`)
             console.log(`   │  order_line_item.raw_unit_price: ${row.oli_raw_unit_price}`)
+
             console.log(`   │`)
             if (row.oi_version !== row.order_version) {
                 console.log(`   │  ⚠️  order_item version (${row.oi_version}) ≠ order.version (${row.order_version})`)

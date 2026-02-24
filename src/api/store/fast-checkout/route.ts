@@ -1,4 +1,5 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import pg from "pg"
 import {
     updateCartWorkflow,
     addShippingMethodToCartWorkflow,
@@ -426,31 +427,36 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     // recomputation. The Admin reads order_summary.totals.current_order_total.
                     // We must explicitly compute and write the correct totals.
                     if (fixedCount > 0) {
-                        // ── Recompute order_summary.totals JSONB ─────────────────────────
-                        // updateOrderItem does NOT auto-recompute order_summary.
-                        // The Admin reads order_summary.totals.current_order_total.
-                        // We must write the correct value explicitly.
-                        // NOTE: the JSONB column is called "totals" (not "summary").
+                        // ── Direct SQL UPDATE on order_summary.totals JSONB ──────────────
+                        // updateOrders() ignores unknown fields — must use raw SQL.
+                        // The Admin list reads from order_summary.totals.current_order_total.
                         try {
                             const orderTotalDollars = (amountCents ?? 0) / 100
                             const rawOrderTotal = { value: String(orderTotalDollars), precision: 20 }
-
-                            await orderModule.updateOrders(
-                                { id: orderId },
-                                {
-                                    totals: {
-                                        current_order_total: orderTotalDollars,
-                                        original_order_total: orderTotalDollars,
-                                        accounting_total: orderTotalDollars,
-                                        raw_current_order_total: rawOrderTotal,
-                                        raw_original_order_total: rawOrderTotal,
-                                        raw_accounting_total: rawOrderTotal,
-                                    }
-                                }
-                            )
-                            console.log(`[fast-checkout] 🔧 Fixed ${fixedCount} order_item(s) + order_summary.totals → $${orderTotalDollars.toFixed(2)}`)
+                            const newTotals = {
+                                current_order_total: orderTotalDollars,
+                                original_order_total: orderTotalDollars,
+                                accounting_total: orderTotalDollars,
+                                raw_current_order_total: rawOrderTotal,
+                                raw_original_order_total: rawOrderTotal,
+                                raw_accounting_total: rawOrderTotal,
+                            }
+                            const pgClient = new pg.Client({ connectionString: process.env.DATABASE_URL })
+                            await pgClient.connect()
+                            try {
+                                await pgClient.query(
+                                    `UPDATE order_summary
+                                      SET totals = totals || $1::jsonb,
+                                          updated_at = NOW()
+                                     WHERE order_id = $2`,
+                                    [JSON.stringify(newTotals), orderId]
+                                )
+                                console.log(`[fast-checkout] 🔧 Fixed ${fixedCount} order_item(s) + order_summary.totals → $${orderTotalDollars.toFixed(2)}`)
+                            } finally {
+                                await pgClient.end()
+                            }
                         } catch (summaryErr: any) {
-                            console.warn(`[fast-checkout] ⚠️ order_summary update failed: ${summaryErr.message}`)
+                            console.warn(`[fast-checkout] ⚠️ order_summary SQL update failed: ${summaryErr.message}`)
                         }
                     }
                 }
