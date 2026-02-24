@@ -660,5 +660,16 @@ export default defineMiddlewares({
                 }),
             ],
         },
+        {
+            // 🔐 FAST CHECKOUT AUTH: Populate req.auth_context when customer is logged in.
+            // This lets the route ensure the order is linked to the authenticated customer.
+            // allowUnauthenticated: true so guests can still checkout without a token.
+            matcher: "/store/fast-checkout",
+            middlewares: [
+                authenticate("customer", ["session", "bearer"], {
+                    allowUnauthenticated: true
+                }),
+            ],
+        },
     ],
 })

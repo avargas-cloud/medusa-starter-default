@@ -5,7 +5,6 @@ import {
     createPaymentCollectionForCartWorkflow,
     createPaymentSessionsWorkflow,
     completeCartWorkflow,
-    refreshCartItemsWorkflow,
 } from "@medusajs/medusa/core-flows"
 
 // ─── Florida province mapping (must match exact Tax Region province_code in DB) 
@@ -168,6 +167,25 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             console.log(`[fast-checkout] ✅ Cart updated (email=${email})`)
         }
 
+        // ── STEP 2b: Ensure customer_id linked ────────────────────────────────
+        // If the customer is authenticated (JWT or session), make sure the cart
+        // has customer_id set so completeCartWorkflow creates an order that appears
+        // in their order history. guests (no auth_context) skip this step.
+        const authenticatedCustomerId = (req as any).auth_context?.actor_id
+        if (authenticatedCustomerId) {
+            try {
+                await updateCartWorkflow(req.scope).run({
+                    input: { id: cartId, customer_id: authenticatedCustomerId }
+                })
+                console.log(`[fast-checkout] ✅ Customer linked: ${authenticatedCustomerId}`)
+            } catch (linkErr: any) {
+                // Non-fatal: log but continue — cart may already have the correct customer_id
+                console.warn(`[fast-checkout] ⚠️ Could not link customer to cart: ${linkErr.message}`)
+            }
+        } else {
+            console.log(`[fast-checkout] 👤 Guest checkout — no customer_id to link`)
+        }
+
         // ── STEP 3: Resolve and apply shipping method ──────────────────────────
         if (shippingMethodId) {
             const resolvedOptionId = await resolveShippingOptionId(shippingMethodId, req.scope, cartId)
@@ -189,39 +207,21 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             }
         }
 
-        // ── STEP 4: Reprice cart items before charging ────────────────────────
-        // WHY: If any line item has unit_price=0 (e.g. missing retail price list, timing
-        // race during cart creation, or guest cart with no price list match), the order
-        // would be created with $0 items and only show shipping in Medusa Admin.
-        // Calling refreshCartItemsWorkflow here corrects all prices before checkout.
-        // The setPricingContext hook reads cart.customer_id to apply wholesale vs retail.
-        try {
-            await refreshCartItemsWorkflow(req.scope).run({
-                input: {
-                    cart_id: cartId,
-                    force_refresh: true,
-                    additional_data: { force_retail: false }  // respects customer group if linked
-                }
-            })
-            console.log(`[fast-checkout] ✅ Cart items repriced before checkout`)
-        } catch (repriceErr: any) {
-            // Non-fatal: log and continue. completeCartWorkflow will use current prices.
-            console.warn(`[fast-checkout] ⚠️ Reprice step failed (continuing): ${repriceErr.message}`)
-        }
-
-        // ── STEP 5: Get authoritative cart total via Store API ───────────────
-        // AFTER reprice — totals now reflect corrected item prices + shipping.
+        // ── STEP 4: Get authoritative cart total via Store API ───────────────
         // We use the Store API (not cartModule.listCarts) because:
         //   1. The module service returns a stale floating-point total before the
         //      full price engine recalculates post-shipping.
         //   2. The Store API goes through Medusa's full price engine and returns
         //      a correct integer total in cents AFTER the shipping just applied.
+        // NOTE: No reprice is done here intentionally — the customer saw these
+        // prices in their cart and that is what must be charged. Any repricing
+        // must happen before the customer reaches the payment step.
         let amountCents: number | null = null
         let cartItemsForValidation: any[] = []
         try {
             const MEDUSA_URL = process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
             const PUBLISHABLE_KEY = process.env.PUBLISHABLE_API_KEY || ""
-            const cartRes = await fetch(`${MEDUSA_URL}/store/carts/${cartId}?fields=*items,items.unit_price,items.quantity,total,subtotal`, {
+            const cartRes = await fetch(`${MEDUSA_URL}/store/carts/${cartId}?fields=*items,items.unit_price,items.raw_unit_price,items.quantity,items.raw_quantity,items.variant_id,total,subtotal,item_subtotal`, {
                 headers: {
                     "Content-Type": "application/json",
                     "x-publishable-api-key": PUBLISHABLE_KEY,
@@ -230,6 +230,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             if (cartRes.ok) {
                 const { cart: cartData } = await cartRes.json()
                 cartItemsForValidation = cartData?.items ?? []
+
+                // Log full cart state for diagnostics
+                console.log(`[fast-checkout] 🛒 Cart state: items=${cartItemsForValidation.length}, total=${cartData?.total}, subtotal=${cartData?.subtotal}, item_subtotal=${cartData?.item_subtotal}`)
+                cartItemsForValidation.forEach((item: any) => {
+                    console.log(`[fast-checkout]   - "${item.title}" qty=${item.quantity} unit_price=${item.unit_price} line_total=${(item.unit_price ?? 0) * (item.quantity ?? 0)}`)
+                })
 
                 // Store API returns totals in DOLLARS (e.g. 150.0568 for $150.06)
                 // Multiply × 100 → round to integer cents for Authorize.net
@@ -245,17 +251,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
 
         // ── GUARD: Validate item prices are non-zero ──────────────────────────
-        // If items still have unit_price=0 after reprice, block checkout.
-        // This prevents charging only shipping and creating $0-item orders.
+        // Block checkout if any item has unit_price=0 — this means a pricing
+        // configuration error (not a reprice scenario). The customer would be
+        // charged only shipping, which is wrong.
         if (cartItemsForValidation.length > 0) {
             const zeroPriceItems = cartItemsForValidation.filter(
                 (item: any) => !item.unit_price || item.unit_price <= 0
             )
             if (zeroPriceItems.length > 0) {
                 const names = zeroPriceItems.map((i: any) => i.title || i.variant_id).join(", ")
-                console.error(`[fast-checkout] ❌ Items with unit_price=0 after reprice: ${names}`)
+                console.error(`[fast-checkout] ❌ Items with unit_price=0: ${names}`)
                 return res.status(400).json({
-                    error: "Some items in your cart could not be priced. Please remove them and try again, or contact support.",
+                    error: "Some items in your cart could not be priced. Please remove them and add them again, or contact support.",
                     code: "ZERO_PRICE_ITEMS"
                 })
             }
@@ -345,6 +352,112 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 displayId = fullOrder?.display_id ?? null
             } catch (_) {
                 // non-critical — order was created, display_id is cosmetic
+            }
+        }
+
+        // ── STEP 7b: Fix order_item unit_prices (Admin display fix) ──────────────
+        // PROBLEM: Medusa v2's completeCartWorkflow creates order_item v1 with
+        // unit_price=$0 (pricing engine runs without customer group context).
+        // The Admin reads v1 and shows only shipping+tax ($16.04 instead of $43.32).
+        // The Store API correctly reads order_line_item.unit_price ($12.75) and
+        // computes the right total, but the Admin uses order_item.unit_price.
+        //
+        // FIX: call orderModule.updateOrderItem() with the correct prices from the
+        // cart (captured before completeCart ran). Per Medusa v2 event sourcing,
+        // this creates a NEW version of each order_item that the Admin then reads.
+        if (orderId && cartItemsForValidation.length > 0) {
+            try {
+                // Build variant_id → price object map from the pre-checkout cart snapshot
+                const variantPriceMap = new Map<string, any>(
+                    cartItemsForValidation
+                        .filter((i: any) => i.variant_id && (i.unit_price ?? 0) > 0)
+                        .map((i: any) => [
+                            i.variant_id as string,
+                            {
+                                // ── Price fields ──────────────────────────────────────────────
+                                unit_price: i.unit_price,
+                                raw_unit_price: i.raw_unit_price ?? { value: String(i.unit_price), precision: 20 },
+                                compare_at_unit_price: i.compare_at_unit_price ?? i.unit_price,
+                                raw_compare_at_unit_price: i.raw_compare_at_unit_price ?? i.raw_unit_price ?? { value: String(i.unit_price), precision: 20 },
+                                // ── Quantity fields ───────────────────────────────────────────
+                                // CRITICAL FIX: transformPropertiesToBigNumber() reads raw_quantity
+                                // JSONB and overwrites item.quantity. order_item.raw_quantity defaults
+                                // to {"value":"0"} → quantity=0 → decorateCartTotals gives subtotal=0
+                                // → Admin shows only shipping+tax ($16.04). Must set both fields.
+                                quantity: i.quantity,
+                                raw_quantity: i.raw_quantity ?? { value: String(i.quantity), precision: 20 },
+                            }
+                        ])
+                )
+
+                if (variantPriceMap.size > 0) {
+                    // Get order line items' IDs and variant_ids via query.graph
+                    // order.items → OrderLineItemDTO[] (order_line_item table)
+                    // item.id   = order_line_item.id = order_item.item_id (FK)
+                    const query = req.scope.resolve("query") as any
+                    const { data: [orderWithItems] } = await query.graph({
+                        entity: "order",
+                        filters: { id: orderId },
+                        fields: ["id", "items.id", "items.variant_id"],
+                    })
+
+                    const orderModule = req.scope.resolve("order") as any
+                    const orderItems: any[] = orderWithItems?.items ?? []
+                    let fixedCount = 0
+
+                    for (const item of orderItems) {
+                        const correctPrice = variantPriceMap.get(item.variant_id)
+                        if (correctPrice) {
+                            // Selector matches order_item records for this order + line item
+                            // UpdateOrderItemDTO will update unit_price AND raw_unit_price JSONB
+                            // Medusa v2 event sourcing will create a new version of the record
+                            await orderModule.updateOrderItem(
+                                { order_id: orderId, item_id: item.id },
+                                correctPrice
+                            )
+                            fixedCount++
+                            console.log(`[fast-checkout] ✅ Corrected order_item: ${item.variant_id} → $${correctPrice.unit_price} × ${correctPrice.quantity}`)
+                        }
+                    }
+
+                    // ── Recompute order_summary JSONB ────────────────────────────────
+                    // CRITICAL: updateOrderItem creates a new order_item version with
+                    // correct prices + quantities, but does NOT trigger order_summary
+                    // recomputation. The Admin reads order_summary.totals.current_order_total.
+                    // We must explicitly compute and write the correct totals.
+                    if (fixedCount > 0) {
+                        // ── Recompute order_summary.totals JSONB ─────────────────────────
+                        // updateOrderItem does NOT auto-recompute order_summary.
+                        // The Admin reads order_summary.totals.current_order_total.
+                        // We must write the correct value explicitly.
+                        // NOTE: the JSONB column is called "totals" (not "summary").
+                        try {
+                            const orderTotalDollars = (amountCents ?? 0) / 100
+                            const rawOrderTotal = { value: String(orderTotalDollars), precision: 20 }
+
+                            await orderModule.updateOrders(
+                                { id: orderId },
+                                {
+                                    totals: {
+                                        current_order_total: orderTotalDollars,
+                                        original_order_total: orderTotalDollars,
+                                        accounting_total: orderTotalDollars,
+                                        raw_current_order_total: rawOrderTotal,
+                                        raw_original_order_total: rawOrderTotal,
+                                        raw_accounting_total: rawOrderTotal,
+                                    }
+                                }
+                            )
+                            console.log(`[fast-checkout] 🔧 Fixed ${fixedCount} order_item(s) + order_summary.totals → $${orderTotalDollars.toFixed(2)}`)
+                        } catch (summaryErr: any) {
+                            console.warn(`[fast-checkout] ⚠️ order_summary update failed: ${summaryErr.message}`)
+                        }
+                    }
+                }
+            } catch (fixErr: any) {
+                // Non-fatal: order is created + payment charged correctly.
+                // Only the Admin display may still show the wrong total.
+                console.warn(`[fast-checkout] ⚠️ order_item price fix skipped: ${fixErr.message}`)
             }
         }
 
