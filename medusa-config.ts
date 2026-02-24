@@ -22,7 +22,7 @@ module.exports = defineConfig({
       }
     },
     // TEMPORARY: Disabled Redis to debug Order API Cache issue
-    // redisUrl: process.env.REDIS_URL,
+    redisUrl: process.env.REDIS_URL,
     // CRITICAL: Enable subscribers by setting workerMode to 'shared'
     // Without this, subscribers will NOT load (even if code is correct)
     workerMode: (process.env.WORKER_MODE || "shared") as "shared" | "worker" | "server",
