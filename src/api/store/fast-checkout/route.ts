@@ -368,9 +368,52 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         console.log(`[fast-checkout] ✅ Payment session created`)
 
         // ── STEP 7: Complete cart → authorize + capture + create order ─────────
-        const { result: orderResult } = await completeCartWorkflow(req.scope).run({
-            input: { id: cartId }
-        })
+        let orderResult: any
+        try {
+            const { result } = await completeCartWorkflow(req.scope).run({
+                input: { id: cartId }
+            })
+            orderResult = result
+        } catch (workflowErr: any) {
+            const msg: string = workflowErr?.message ?? ""
+
+            // ── Stock / inventory error → return user-friendly 400 ──────────────
+            // Medusa throws: "Not enough stock available for item iitem_XXX at location sloc_YYY"
+            const stockMatch = msg.match(/Not enough stock available for item (\S+)/i)
+            if (stockMatch) {
+                const itemId = stockMatch[1]
+                let productName = "one or more products"
+                let sku = ""
+                try {
+                    // Look up the inventory item to get the SKU / product title via cart items
+                    const cartModule = req.scope.resolve("cart") as any
+                    // itemId might be an inventory_item id (iitem_) or order_item id
+                    // Try to match against the cart's line items by variant
+                    const cartDetail = await cartModule.retrieveCart(cartId, {
+                        relations: ["items", "items.variant", "items.variant.inventory_items"]
+                    }).catch(() => null)
+                    const matchedItem = cartDetail?.items?.find((i: any) =>
+                        i.variant?.inventory_items?.some((ii: any) => ii.inventory_item_id === itemId || ii.id === itemId)
+                    )
+                    if (matchedItem) {
+                        productName = matchedItem.title ?? matchedItem.variant?.title ?? productName
+                        sku = matchedItem.variant?.sku ?? ""
+                    }
+                } catch (_) { /* non-critical */ }
+
+                const skuPart = sku ? ` (SKU: ${sku})` : ""
+                console.warn(`[fast-checkout] ⚠️ Stock error for "${productName}"${skuPart}: ${msg}`)
+                return res.status(400).json({
+                    error: `Not enough stock available for "${productName}"${skuPart}. Please reduce the quantity or contact support.`,
+                    code: "INSUFFICIENT_STOCK",
+                    item: productName,
+                    sku,
+                })
+            }
+
+            // Re-throw other workflow errors (will be caught by outer catch)
+            throw workflowErr
+        }
 
         const order = (orderResult as any)?.order ?? orderResult
         let orderId = order?.id ?? null
