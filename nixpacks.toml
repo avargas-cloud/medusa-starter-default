@@ -6,7 +6,7 @@ NODE_OPTIONS = "--max-old-space-size=4096"
 nixPkgs = ["nodejs-20_x", "yarn", "python3", "gnumake", "gcc", "g++"]
 
 [phases.install]
-cmds = ["echo '--- STARTING CUSTOM YARN INSTALL ---'", "yarn install --frozen-lockfile"]
+cmds = ["echo '--- INSTALL v2 (with patches) ---'", "yarn install --frozen-lockfile", "npx patch-package"]
 
 [phases.build]
-cmds = ["echo '--- APPLYING PATCHES ---'", "npx patch-package", "yarn build"]
+cmds = ["yarn build"]
