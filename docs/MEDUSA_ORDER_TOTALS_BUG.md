@@ -198,37 +198,24 @@ Se aplican automáticamente vía `patch-package` gracias a:
 { "scripts": { "postinstall": "patch-package" } }
 ```
 
-**Y explícitamente en Railway** — `patch-package` corre en la **fase install** (no en build) para que quede **baked-in en el cache de Nixpacks**:
+**Explícitamente en Railway (Railpack)**
 
-```toml
-# backend/nixpacks.toml
-[phases.install]
-# El texto del echo es parte de la clave de cache de Nixpacks.
-# Si necesitas re-aplicar patches (ej. al cambiar un .patch file),
-# cambia el número de versión (v2 → v3) para invalidar el cache.
-cmds = ["echo '--- INSTALL v2 (with patches) ---'", "yarn install --frozen-lockfile", "npx patch-package"]
+Railway usa `Railpack`, cuyo comportamiento estándar (para Node) es:
+1. `yarn install --frozen-lockfile` (fase install)
+2. `npm run build` (fase build)
+3. `cd .medusa/server && npm install --omit=dev && npm start` (fase deploy)
 
-[phases.build]
-cmds = ["yarn build"]
-```
+**El problema:** El paso 3 (`npm install` dentro de `.medusa/server`) borra cualquier patch aplicado globalmente, descargando el código original de Medusa de npm.
 
-**¿Por qué en install y no en build?**
+**La solución:** Implementamos un script `post-build` que se inyecta en el ciclo de build de Medusa.
 
-Nixpacks cachea el resultado de la **fase install** (incluye `node_modules` patched). La **fase build** no se cachea. Si `patch-package` estuviera en build, correría en **cada deployment** (~10s de overhead). Al ponerlo en install:
-- **1er deploy después de un cambio**: cache miss → install fresh + patch-package → cache guardado con patches ✅
-- **Deploys siguientes**: cache hit → `node_modules` ya parchado, `patch-package` no corre → rápido ✅
+1. **`scripts/post-build.js`**: Este script copia el directorio `patches/` hacia `.medusa/server/patches/` y agrega el script `"postinstall": "npx --yes patch-package"` al `package.json` generado en `.medusa/server`.
+2. **`package.json` (raíz)**: Actualizamos el script de build:
+   ```json
+   "build": "medusa build && node scripts/post-build.js"
+   ```
 
-**¿Cuándo necesitas invalidar el cache?**
-
-Solo cuando cambies los archivos `.patch` (ej. al actualizar Medusa). Para eso, cambia el echo en `nixpacks.toml`:
-```toml
-# Antes:
-"echo '--- INSTALL v2 (with patches) ---'"
-# Después del cambio:  
-"echo '--- INSTALL v3 (with patches) ---'"
-```
-
-Esto cambia el hash del comando de install → Railway hace fresh install → patches nuevos se aplican → nuevo cache guardado.
+De esta manera, cuando Railpack ejecuta paso 3 (`npm install` en `.medusa/server`), dispara automáticamente el `postinstall` adentro y re-aplica los patches *sobre la nueva instalación limpia* justo antes de levantar el servidor.
 
 ---
 
