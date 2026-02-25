@@ -9,4 +9,4 @@ nixPkgs = ["nodejs-20_x", "yarn", "python3", "gnumake", "gcc", "g++"]
 cmds = ["echo '--- STARTING CUSTOM YARN INSTALL ---'", "yarn install --frozen-lockfile"]
 
 [phases.build]
-cmds = ["yarn build"]
+cmds = ["echo '--- APPLYING PATCHES ---'", "npx patch-package", "yarn build"]
