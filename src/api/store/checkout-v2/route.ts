@@ -280,6 +280,34 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             })
         }
 
+        // ── STEP 4b: Fix raw_unit_price on cart items (prevent $0 order items) ──────
+        // Medusa uses raw_unit_price (BigNumber backing field) for all internal price
+        // calculations. If it is null (our fast-checkout pricing path), completeCartWorkflow
+        // creates order items with unit_price = null and item totals = $0.
+        // Fix: sync raw_unit_price from unit_price on every cart item before the workflow.
+        if (cartItemsForValidation.length > 0) {
+            try {
+                const cartModule = req.scope.resolve("cart") as any
+                const itemsNeedingFix = cartItemsForValidation.filter(
+                    (item: any) => item.unit_price != null && item.raw_unit_price == null
+                )
+                if (itemsNeedingFix.length > 0) {
+                    await cartModule.updateLineItems(
+                        itemsNeedingFix.map((item: any) => ({
+                            id: item.id,
+                            raw_unit_price: { value: String(item.unit_price), precision: 20 },
+                        }))
+                    )
+                    console.log(`[checkout-v2] ✅ Fixed raw_unit_price for ${itemsNeedingFix.length} item(s)`)
+                } else {
+                    console.log(`[checkout-v2] ℹ️ All items already have raw_unit_price set`)
+                }
+            } catch (rawPriceErr: any) {
+                // Non-fatal: log and continue — totals may still be correct
+                console.warn(`[checkout-v2] ⚠️ Could not fix raw_unit_price: ${rawPriceErr.message}`)
+            }
+        }
+
         // ── STEP 5: Create payment collection (idempotent — handles retries) ─────
         let paymentCollection: any
         try {
@@ -346,61 +374,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         console.log(`[checkout-v2] 🔍 orderResultRef properties:`, Object.keys(orderResultRef || {}))
         console.log(`[checkout-v2] 🔍 extracted orderId: ${orderId}`)
 
-        // display_id is not always included in the completeCart result — fetch it directly
-        // at the same time, we'll fetch the items so we can fix the prices immediately
+        // display_id is not always included in the completeCart result — fetch it
         if (orderId) {
             try {
                 const [fullOrder] = await orderModule.listOrders(
                     { id: [orderId] },
-                    { select: ["id", "display_id", "items.*", "items.item.*"] }
+                    { select: ["id", "display_id"] }
                 )
-
                 if (fullOrder) {
                     displayId = fullOrder.display_id ?? displayId
                 }
-
-                // ── V2 NATIVE PATCH: Fix missing unit_price on order_items by mimicking Cart ──
-                // Because order.items drop unit_price from the cart, we fetch the cart items,
-                // map their known prices by variant, and push an update to the order items natively.
-                const cartModule = req.scope.resolve("cart") as any
-                const cartItems = await cartModule.listLineItems({ cart_id: cartId })
-                const orderItems = await orderModule.listOrderItems({ order_id: orderId })
-
-                console.log(`[checkout-v2] 🔍 Cart Items count:`, cartItems?.length)
-                if (cartItems?.length) console.log(`[checkout-v2] 🔍 Cart Item [0]:`, JSON.stringify(cartItems[0], null, 2))
-
-                console.log(`[checkout-v2] 🔍 Order Items count:`, orderItems?.length)
-                if (orderItems?.length) console.log(`[checkout-v2] 🔍 Order Item [0]:`, JSON.stringify(orderItems[0], null, 2))
-
-                if (cartItems?.length && orderItems?.length) {
-                    const itemsToUpdate = orderItems.map((oi: any) => {
-                        // Match by variant_id because cart_item and order_item don't share identical IDs
-                        const matchedCartItem = cartItems.find((ci: any) => ci.variant_id === oi.variant_id)
-
-                        // Using JS implicit conversion for null checks to safely catch undefined/null
-                        if (oi.unit_price == null && matchedCartItem && matchedCartItem.unit_price != null) {
-                            return {
-                                id: oi.id,
-                                unit_price: matchedCartItem.unit_price
-                            }
-                        }
-                        return null
-                    }).filter(Boolean)
-
-                    if (itemsToUpdate.length > 0) {
-                        try {
-                            console.log(`[checkout-v2] 🔧 Restoring prices natively for ${itemsToUpdate.length} order items from Cart...`)
-                            await orderModule.updateOrderItems(itemsToUpdate)
-                            console.log(`[checkout-v2] ✅ Prices synced natively.`)
-                        } catch (err: any) {
-                            console.error(`[checkout-v2] ❌ Failed to natively sync prices:`, err.message)
-                        }
-                    } else {
-                        console.log(`[checkout-v2] ℹ️ No items needed price restoration or no matching cart variants found.`)
-                    }
-                }
             } catch (err: any) {
-                console.error(`[checkout-v2] ⚠️ Failed to explicitly restore item prices: ${err.message}`)
+                console.warn(`[checkout-v2] ⚠️ Could not fetch display_id: ${err.message}`)
             }
         }
 

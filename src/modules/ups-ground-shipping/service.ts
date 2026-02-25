@@ -28,6 +28,16 @@ class UPSGroundShippingService extends AbstractFulfillmentProviderService {
     ): Promise<{ calculated_amount: number; is_calculated_price_tax_inclusive: boolean }> {
         const cart = context?.id ? context : data?.cart
 
+        console.log(`[UPS Ground] calculatePrice invoked.`)
+        console.log(`[UPS Ground] context keys:`, Object.keys(context || {}))
+        console.log(`[UPS Ground] data keys:`, Object.keys(data || {}))
+        if (cart) {
+            console.log(`[UPS Ground] cart structure:`, Object.keys(cart || {}))
+            console.log(`[UPS Ground] shipping_address:`, cart.shipping_address)
+        } else {
+            console.log(`[UPS Ground] cart is completely null or undefined in args!`)
+        }
+
         if (!cart?.shipping_address?.postal_code) {
             throw new Error(`${SERVICE_NAME}: no shipping address postal code`)
         }

@@ -433,128 +433,27 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             }
         }
 
-        // ── STEP 7b: Fix order_item unit_prices (Admin display fix) ──────────────
-        // PROBLEM: Medusa v2's completeCartWorkflow creates order_item v1 with
-        // unit_price=$0 (pricing engine runs without customer group context).
-        // The Admin reads v1 and shows only shipping+tax ($16.04 instead of $43.32).
-        // The Store API correctly reads order_line_item.unit_price ($12.75) and
-        // computes the right total, but the Admin uses order_item.unit_price.
-        //
-        // FIX: call orderModule.updateOrderItem() with the correct prices from the
-        // cart (captured before completeCart ran). Per Medusa v2 event sourcing,
-        // this creates a NEW version of each order_item that the Admin then reads.
-        if (orderId && cartItemsForValidation.length > 0) {
-            try {
-                // Build variant_id → price object map from the pre-checkout cart snapshot
-                const variantPriceMap = new Map<string, any>(
-                    cartItemsForValidation
-                        .filter((i: any) => i.variant_id && (i.unit_price ?? 0) > 0)
-                        .map((i: any) => [
-                            i.variant_id as string,
-                            {
-                                // ── Price fields ──────────────────────────────────────────────
-                                unit_price: i.unit_price,
-                                raw_unit_price: i.raw_unit_price ?? { value: String(i.unit_price), precision: 20 },
-                                compare_at_unit_price: i.compare_at_unit_price ?? i.unit_price,
-                                raw_compare_at_unit_price: i.raw_compare_at_unit_price ?? i.raw_unit_price ?? { value: String(i.unit_price), precision: 20 },
-                                // ── Quantity fields ───────────────────────────────────────────
-                                // CRITICAL FIX: transformPropertiesToBigNumber() reads raw_quantity
-                                // JSONB and overwrites item.quantity. order_item.raw_quantity defaults
-                                // to {"value":"0"} → quantity=0 → decorateCartTotals gives subtotal=0
-                                // → Admin shows only shipping+tax ($16.04). Must set both fields.
-                                quantity: i.quantity,
-                                raw_quantity: i.raw_quantity ?? { value: String(i.quantity), precision: 20 },
-                            }
-                        ])
-                )
+        console.log(`\n================================================`)
+        console.log(`Evento 0: fast-checkout FINALIZADO MÓDULO CART (Antes de retorno al cliente)`)
+        console.log(`================================================`)
+        console.log(`Order ID:      ${orderId}`)
+        console.log(`Display ID:    #${displayId}`)
+        console.log(`Cart Total:    $${amountCents ? amountCents / 100 : 'N/A'}`)
+        console.log(`Items in Cart: ${cartItemsForValidation.length || 0}`)
 
-                if (variantPriceMap.size > 0) {
-                    // Get order line items' IDs and variant_ids via query.graph
-                    // order.items → OrderLineItemDTO[] (order_line_item table)
-                    // item.id   = order_line_item.id = order_item.item_id (FK)
-                    const query = req.scope.resolve("query") as any
-                    const { data: [orderWithItems] } = await query.graph({
-                        entity: "order",
-                        filters: { id: orderId },
-                        fields: ["id", "items.id", "items.variant_id"],
-                    })
-
-                    const orderModule = req.scope.resolve("order") as any
-                    const orderItems: any[] = orderWithItems?.items ?? []
-                    let fixedCount = 0
-
-                    for (const item of orderItems) {
-                        const correctPrice = variantPriceMap.get(item.variant_id)
-                        if (correctPrice) {
-                            // Selector matches order_item records for this order + line item
-                            // UpdateOrderItemDTO will update unit_price AND raw_unit_price JSONB
-                            // Medusa v2 event sourcing will create a new version of the record
-                            await orderModule.updateOrderItem(
-                                { order_id: orderId, item_id: item.id },
-                                correctPrice
-                            )
-                            fixedCount++
-                            console.log(`[fast-checkout] ✅ Corrected order_item: ${item.variant_id} → $${correctPrice.unit_price} × ${correctPrice.quantity}`)
-                        }
-                    }
-
-                    // ── Persist correct prices to DB (order_item v1 + order_summary) ──────
-                    // ACTUAL ROOT CAUSE: Medusa computes order total from order_item v1
-                    // (created by createOrdersStep with unit_price=null). It recomputes
-                    // order_summary asynchronously from orditem_ v1 → overwrites any
-                    // order_summary SQL we write. Admin reads that recomputed value → $16.04.
-                    //
-                    // FIX: Directly UPDATE order_item v1 rows, copying unit_price + raw_unit_price
-                    // from order_line_item (which DOES have the correct prices from STEP 4b).
-                    // When Medusa's async recomputation reads orditem_ v1, it sees correct
-                    // prices → computes correct total → writes correct order_summary.
-                    if (fixedCount > 0 && amountCents && amountCents > 0) {
-                        const correctTotal = amountCents / 100
-                        try {
-                            const { Client } = await import("pg")
-                            const pgClient = new Client({ connectionString: process.env.DATABASE_URL })
-                            await pgClient.connect()
-
-                            // STEP A: Fix order_item v1 — copy correct prices from order_line_item
-                            const fixResult = await pgClient.query(`
-                                UPDATE order_item oi
-                                SET
-                                    unit_price = oli.unit_price,
-                                    raw_unit_price = oli.raw_unit_price
-                                FROM order_line_item oli
-                                WHERE oi.item_id = oli.id
-                                  AND oi.order_id = $1
-                                  AND oi.version = 1
-                                  AND oi.unit_price IS NULL
-                                  AND oli.unit_price IS NOT NULL
-                            `, [orderId])
-                            console.log(`[fast-checkout] ✅ Fixed ${fixResult.rowCount} order_item v1 row(s) prices from ordli_`)
-
-                            // STEP B: Also directly update order_summary as an extra safety net.
-                            // Even if Medusa re-reads orditem_ correctly, this ensures no window
-                            // where the wrong total is visible.
-                            await pgClient.query(`
-                                UPDATE order_summary
-                                SET totals = jsonb_set(
-                                    jsonb_set(totals, '{current_order_total}', to_jsonb($1::float8)),
-                                    '{accounting_total}', to_jsonb($1::float8)
-                                )
-                                WHERE order_id = $2
-                            `, [correctTotal, orderId])
-                            await pgClient.end()
-                            console.log(`[fast-checkout] ✅ order_summary synced: $${correctTotal} for order ${orderId}`)
-                        } catch (dbErr: any) {
-                            console.warn(`[fast-checkout] ⚠️ DB fix failed (non-fatal): ${dbErr.message}`)
-                        }
-                        console.log(`[fast-checkout] ✅ Fixed ${fixedCount} order_item(s) — totals synced to DB`)
-                    }
-                }
-            } catch (fixErr: any) {
-                // Non-fatal: order is created + payment charged correctly.
-                // Only the Admin display may still show the wrong total.
-                console.warn(`[fast-checkout] ⚠️ order_item price fix skipped: ${fixErr.message}`)
-            }
+        if (cartItemsForValidation && cartItemsForValidation.length > 0) {
+            cartItemsForValidation.forEach((item: any, i: number) => {
+                console.log(`\n--- [Cart Item ${i + 1}] Estado pre-creation ===`)
+                console.log(`  Título:         ${item.title}`)
+                console.log(`  Variant ID:     ${item.variant_id}`)
+                console.log(`  Quantity:       ${item.quantity}`)
+                console.log(`  Raw Quantity:   `, JSON.stringify(item.raw_quantity))
+                console.log(`  Unit Price:     ${item.unit_price}`)
+                console.log(`  Raw Unit Price: `, JSON.stringify(item.raw_unit_price))
+                console.log(`------------------------------------\n`)
+            })
         }
+        console.log(`================================================\n`)
 
         console.log(`[fast-checkout] 🎉 Order created: ${orderId} (#${displayId})`)
         return res.json({ ok: true, orderId, displayId })

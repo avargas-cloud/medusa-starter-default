@@ -1,0 +1,12 @@
+diff --git a/node_modules/@medusajs/core-flows/dist/order/workflows/get-orders-list.js b/node_modules/@medusajs/core-flows/dist/order/workflows/get-orders-list.js
+index 21eb9dd..dd65c33 100644
+--- a/node_modules/@medusajs/core-flows/dist/order/workflows/get-orders-list.js
++++ b/node_modules/@medusajs/core-flows/dist/order/workflows/get-orders-list.js
+@@ -54,6 +54,7 @@ exports.getOrdersListWorkflow = (0, workflows_sdk_1.createWorkflow)(exports.getO
+             "status",
+             "version",
+             "items.*",
++            "summary",
+             "payment_collections.status",
+             "payment_collections.amount",
+             "payment_collections.captured_amount",
