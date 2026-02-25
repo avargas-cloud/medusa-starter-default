@@ -498,22 +498,41 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                         }
                     }
 
-                    // ── Persist correct total to order_summary in DB ─────────────────────
-                    // ROOT CAUSE FIX: updateOrderItem() updates the in-process entity manager
-                    // (so local Admin reads correctly), but does NOT update order_summary in DB.
-                    // Railway restarts the Medusa process → fresh process reads from DB →
-                    // order_summary still has $16.04 (shipping+tax only from completeCartWorkflow).
-                    // We write the correct total directly to DB so cross-process/post-restart
-                    // reads also return the right value.
+                    // ── Persist correct prices to DB (order_item v1 + order_summary) ──────
+                    // ACTUAL ROOT CAUSE: Medusa computes order total from order_item v1
+                    // (created by createOrdersStep with unit_price=null). It recomputes
+                    // order_summary asynchronously from orditem_ v1 → overwrites any
+                    // order_summary SQL we write. Admin reads that recomputed value → $16.04.
+                    //
+                    // FIX: Directly UPDATE order_item v1 rows, copying unit_price + raw_unit_price
+                    // from order_line_item (which DOES have the correct prices from STEP 4b).
+                    // When Medusa's async recomputation reads orditem_ v1, it sees correct
+                    // prices → computes correct total → writes correct order_summary.
                     if (fixedCount > 0 && amountCents && amountCents > 0) {
                         const correctTotal = amountCents / 100
                         try {
                             const { Client } = await import("pg")
                             const pgClient = new Client({ connectionString: process.env.DATABASE_URL })
                             await pgClient.connect()
-                            // Update the most recent order_summary row for this order.
-                            // jsonb_set patches only current_order_total + accounting_total;
-                            // transaction_total, paid_total, etc. remain as set by completeCartWorkflow.
+
+                            // STEP A: Fix order_item v1 — copy correct prices from order_line_item
+                            const fixResult = await pgClient.query(`
+                                UPDATE order_item oi
+                                SET
+                                    unit_price = oli.unit_price,
+                                    raw_unit_price = oli.raw_unit_price
+                                FROM order_line_item oli
+                                WHERE oi.item_id = oli.id
+                                  AND oi.order_id = $1
+                                  AND oi.version = 1
+                                  AND oi.unit_price IS NULL
+                                  AND oli.unit_price IS NOT NULL
+                            `, [orderId])
+                            console.log(`[fast-checkout] ✅ Fixed ${fixResult.rowCount} order_item v1 row(s) prices from ordli_`)
+
+                            // STEP B: Also directly update order_summary as an extra safety net.
+                            // Even if Medusa re-reads orditem_ correctly, this ensures no window
+                            // where the wrong total is visible.
                             await pgClient.query(`
                                 UPDATE order_summary
                                 SET totals = jsonb_set(
@@ -523,9 +542,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                                 WHERE order_id = $2
                             `, [correctTotal, orderId])
                             await pgClient.end()
-                            console.log(`[fast-checkout] ✅ order_summary persisted to DB: $${correctTotal} for order ${orderId}`)
+                            console.log(`[fast-checkout] ✅ order_summary synced: $${correctTotal} for order ${orderId}`)
                         } catch (dbErr: any) {
-                            console.warn(`[fast-checkout] ⚠️ order_summary DB persist failed (non-fatal): ${dbErr.message}`)
+                            console.warn(`[fast-checkout] ⚠️ DB fix failed (non-fatal): ${dbErr.message}`)
                         }
                         console.log(`[fast-checkout] ✅ Fixed ${fixedCount} order_item(s) — totals synced to DB`)
                     }
