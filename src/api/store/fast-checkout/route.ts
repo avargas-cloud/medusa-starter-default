@@ -498,25 +498,36 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                         }
                     }
 
-                    // ── Recompute order_summary JSONB ────────────────────────────────
-                    // CRITICAL: updateOrderItem creates a new order_item version with
-                    // correct prices + quantities, but does NOT trigger order_summary
-                    // recomputation. The Admin reads order_summary.totals.current_order_total.
-                    // We must explicitly compute and write the correct totals.
-                    if (fixedCount > 0) {
-                        // ── Emit order.updated to invalidate OrderModule in-memory cache ──
-                        // updateOrderItem creates correct order_item versions in DB, but the
-                        // production Medusa process holds the initial wrong value in its RAM
-                        // cache. Emitting order.updated signals the module to re-read from DB
-                        // on next Admin access — no SQL bypass required.
+                    // ── Persist correct total to order_summary in DB ─────────────────────
+                    // ROOT CAUSE FIX: updateOrderItem() updates the in-process entity manager
+                    // (so local Admin reads correctly), but does NOT update order_summary in DB.
+                    // Railway restarts the Medusa process → fresh process reads from DB →
+                    // order_summary still has $16.04 (shipping+tax only from completeCartWorkflow).
+                    // We write the correct total directly to DB so cross-process/post-restart
+                    // reads also return the right value.
+                    if (fixedCount > 0 && amountCents && amountCents > 0) {
+                        const correctTotal = amountCents / 100
                         try {
-                            const eventBus = req.scope.resolve("eventBusModuleService") as any
-                            await eventBus.emit([{ name: "order.updated", data: { id: orderId } }])
-                            console.log(`[fast-checkout] 🔄 OrderModule cache invalidated via event bus for order ${orderId}`)
-                        } catch (ebErr: any) {
-                            console.warn(`[fast-checkout] ⚠️ Event bus emit failed (non-fatal): ${ebErr.message}`)
+                            const { Client } = await import("pg")
+                            const pgClient = new Client({ connectionString: process.env.DATABASE_URL })
+                            await pgClient.connect()
+                            // Update the most recent order_summary row for this order.
+                            // jsonb_set patches only current_order_total + accounting_total;
+                            // transaction_total, paid_total, etc. remain as set by completeCartWorkflow.
+                            await pgClient.query(`
+                                UPDATE order_summary
+                                SET totals = jsonb_set(
+                                    jsonb_set(totals, '{current_order_total}', to_jsonb($1::float8)),
+                                    '{accounting_total}', to_jsonb($1::float8)
+                                )
+                                WHERE order_id = $2
+                            `, [correctTotal, orderId])
+                            await pgClient.end()
+                            console.log(`[fast-checkout] ✅ order_summary persisted to DB: $${correctTotal} for order ${orderId}`)
+                        } catch (dbErr: any) {
+                            console.warn(`[fast-checkout] ⚠️ order_summary DB persist failed (non-fatal): ${dbErr.message}`)
                         }
-                        console.log(`[fast-checkout] ✅ Fixed ${fixedCount} order_item(s) natively — order_summary will recompute on next read`)
+                        console.log(`[fast-checkout] ✅ Fixed ${fixedCount} order_item(s) — totals synced to DB`)
                     }
                 }
             } catch (fixErr: any) {
