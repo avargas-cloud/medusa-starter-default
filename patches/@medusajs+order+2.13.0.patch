@@ -1,5 +1,5 @@
 diff --git a/node_modules/@medusajs/order/dist/services/order-module-service.js b/node_modules/@medusajs/order/dist/services/order-module-service.js
-index 9cfeb59..7f1e513 100644
+index 9cfeb59..4d008cf 100644
 --- a/node_modules/@medusajs/order/dist/services/order-module-service.js
 +++ b/node_modules/@medusajs/order/dist/services/order-module-service.js
 @@ -1,18 +1,18 @@
@@ -35,34 +35,43 @@ index 9cfeb59..7f1e513 100644
          ownKeys = Object.getOwnPropertyNames || function (o) {
              var ar = [];
              for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-@@ -199,12 +199,33 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
+@@ -199,12 +199,42 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
              "shipping_methods.tax_lines",
              "shipping_methods.adjustments",
          ];
-+        // Fix ecopowertech: ensure item fields needed for total calculation
-+        // are always in the select when client only requests "total" without items.*.
-+        // Without these, MikroORM may not load quantity/unit_price/version and
-+        // decorateCartTotals produces NaN (shipping-only total), and loadItemAdjustments
-+        // throws "Item version is required to load adjustments".
-+        // Guard: skip if request already has *items wildcard (detail view already loads all fields)
-+        const hasWildcardItems = (config.select ?? []).some((f) => f.includes("items.*") || f.startsWith("*items"));
++        // Fix ecopowertech: ensure item fields needed for total calculation AND
++        // fulfillment display are always in the select.
++        // These fields live on the order_item junction table, not line_item.
++        // MikroORM doesn't auto-select them even with *items wildcard.
 +        const requiredItemFieldsForTotals = [
 +            "items.version",
 +            "items.quantity",
 +            "items.raw_quantity",
 +            "items.unit_price",
 +            "items.raw_unit_price",
++            "items.fulfilled_quantity",
++            "items.raw_fulfilled_quantity",
++            "items.delivered_quantity",
++            "items.raw_delivered_quantity",
++            "items.shipped_quantity",
++            "items.raw_shipped_quantity",
++            "items.return_requested_quantity",
++            "items.raw_return_requested_quantity",
++            "items.return_received_quantity",
++            "items.raw_return_received_quantity",
++            "items.return_dismissed_quantity",
++            "items.raw_return_dismissed_quantity",
++            "items.written_off_quantity",
++            "items.raw_written_off_quantity",
 +        ];
          config.relations = (0, utils_1.deduplicate)([
              ...config.relations,
              ...requiredRelationsForTotals,
          ]);
-+        if (!hasWildcardItems) {
-+            config.select = (0, utils_1.deduplicate)([
-+                ...config.select,
-+                ...requiredItemFieldsForTotals,
-+            ]);
-+        }
++        config.select = (0, utils_1.deduplicate)([
++            ...config.select,
++            ...requiredItemFieldsForTotals,
++        ]);
          config.select = config.select.filter((field) => {
 -            return (!requiredRelationsForTotals.some((val) => val.startsWith(field)) && !totalFields.includes(field));
 +            // Fix #14628: only strip exact matches, not sub-fields like items.quantity
@@ -70,7 +79,7 @@ index 9cfeb59..7f1e513 100644
          });
      }
      // @ts-expect-error
-@@ -569,6 +590,14 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
+@@ -569,6 +599,14 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
                      version: toCreate.version ?? 1,
                      item_id: item.id,
                      quantity: toCreate.quantity,
@@ -85,7 +94,7 @@ index 9cfeb59..7f1e513 100644
                  });
              }
          }
-@@ -1059,7 +1088,7 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
+@@ -1059,7 +1097,7 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
          const { itemsToUpsert, shippingMethodsToUpsert, calculatedOrders, lineItemAdjustmentsToCreate, } = await (0, utils_2.applyChangesToOrder)([order], { [order.id]: sortedActions }, { addActionReferenceToObject: true });
          const calculated = calculatedOrders[order.id];
          await this.includeTaxLinesAndAdjustmentsToPreview(calculated.order, itemsToUpsert, shippingMethodsToUpsert, lineItemAdjustmentsToCreate, // this will add "virtual" adjustments for the preview version but no actual adjustments will be created in the DB
@@ -94,7 +103,7 @@ index 9cfeb59..7f1e513 100644
          const calcOrder = calculated.order;
          const orderWithTotals = (0, utils_1.decorateCartTotals)(calcOrder);
          calcOrder.summary = calculated.getSummaryFromOrder(orderWithTotals);
-@@ -1508,12 +1537,12 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
+@@ -1508,12 +1546,12 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
          const orderChangeMap = {};
          const orderChangeIds = dataArr
              .map((data, idx) => {
@@ -113,7 +122,7 @@ index 9cfeb59..7f1e513 100644
              .filter(Boolean);
          if (orderChangeIds.length) {
              const ordChanges = await this.getAndValidateOrderChange_(orderChangeIds, false, sharedContext);
-@@ -1588,9 +1617,9 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
+@@ -1588,9 +1626,9 @@ class OrderModuleService extends utils_1.ModulesSdkUtils.MedusaService(generateM
                  : null,
              lineItemAdjustmentsToCreate.length
                  ? this.orderLineItemAdjustmentService_.create(
@@ -127,10 +136,10 @@ index 9cfeb59..7f1e513 100644
          ]);
          return {
 diff --git a/node_modules/@medusajs/order/dist/utils/transform-order.js b/node_modules/@medusajs/order/dist/utils/transform-order.js
-index aa2f3f5..65f7bba 100644
+index aa2f3f5..cd20cae 100644
 --- a/node_modules/@medusajs/order/dist/utils/transform-order.js
 +++ b/node_modules/@medusajs/order/dist/utils/transform-order.js
-@@ -147,11 +147,16 @@ function mapRepositoryToOrderModel(config, isRelatedEntity = false) {
+@@ -147,11 +147,25 @@ function mapRepositoryToOrderModel(config, isRelatedEntity = false) {
              return;
          }
          return (0, utils_1.deduplicate)(obj[type].sort().map((rel) => {
@@ -138,7 +147,16 @@ index aa2f3f5..65f7bba 100644
 +            const protectedItemFields = [
 +                "items.quantity", "items.raw_quantity",
 +                "items.version",
-+                "items.unit_price", "items.raw_unit_price"
++                "items.unit_price", "items.raw_unit_price",
++                "items.compare_at_unit_price", "items.raw_compare_at_unit_price",
++                "items.fulfilled_quantity", "items.raw_fulfilled_quantity",
++                "items.delivered_quantity", "items.raw_delivered_quantity",
++                "items.shipped_quantity", "items.raw_shipped_quantity",
++                "items.return_requested_quantity", "items.raw_return_requested_quantity",
++                "items.return_received_quantity", "items.raw_return_received_quantity",
++                "items.return_dismissed_quantity", "items.raw_return_dismissed_quantity",
++                "items.written_off_quantity", "items.raw_written_off_quantity",
++                "items.metadata",
 +            ];
 +            if (protectedItemFields.includes(rel)) {
                  if (type === "fields") {

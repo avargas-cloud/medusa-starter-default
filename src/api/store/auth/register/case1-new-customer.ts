@@ -1,5 +1,6 @@
 import { Modules } from '@medusajs/framework/utils'
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { buildWelcomeEmail } from "../../../../utils/email-templates"
 
 /**
  * CASE 1: New Customer Registration
@@ -132,6 +133,24 @@ export async function handleNewCustomerRegistration(
 
         console.log('✅ Auth identity updated for future logins')
         console.log('✅ Registration complete - customer auto-logged in')
+
+        // Step 5: Send welcome email (non-blocking)
+        try {
+            const sgMail = await import("@sendgrid/mail")
+            const apiKey = process.env.SENDGRID_API_KEY
+            if (apiKey) {
+                sgMail.default.setApiKey(apiKey)
+                await sgMail.default.send({
+                    to: email,
+                    from: { email: process.env.SENDGRID_FROM || 'noreply@ecopowertech.com', name: 'EcoPowerTech' },
+                    subject: `Welcome to EcoPowerTech, ${first_name}!`,
+                    html: buildWelcomeEmail(first_name),
+                })
+                console.log('📧 Welcome email sent to', email)
+            }
+        } catch (emailErr) {
+            console.error('⚠️  Welcome email failed (non-critical):', emailErr)
+        }
 
         console.log('✅ Registration complete - customer linked to auth identity')
 

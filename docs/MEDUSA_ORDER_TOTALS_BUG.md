@@ -119,7 +119,17 @@ if (rel == "items.quantity") {
 const protectedItemFields = [
     "items.quantity", "items.raw_quantity",
     "items.version",      // ← crítico para loadItemAdjustments
-    "items.unit_price", "items.raw_unit_price"
+    "items.unit_price", "items.raw_unit_price",
+    "items.compare_at_unit_price", "items.raw_compare_at_unit_price",
+    // Fulfillment fields (viven en order_item, NO en line_item)
+    "items.fulfilled_quantity", "items.raw_fulfilled_quantity",
+    "items.delivered_quantity", "items.raw_delivered_quantity",
+    "items.shipped_quantity", "items.raw_shipped_quantity",
+    "items.return_requested_quantity", "items.raw_return_requested_quantity",
+    "items.return_received_quantity", "items.raw_return_received_quantity",
+    "items.return_dismissed_quantity", "items.raw_return_dismissed_quantity",
+    "items.written_off_quantity", "items.raw_written_off_quantity",
+    "items.metadata",
 ];
 if (protectedItemFields.includes(rel)) {
     if (type === "fields") {
@@ -132,24 +142,27 @@ if (protectedItemFields.includes(rel)) {
 **Archivo 2**: `dist/services/order-module-service.js` — `addRelationsToCalculateTotals`
 
 ```js
-// NUEVO: agrega campos explícitos cuando no hay *items wildcard
-const hasWildcardItems = (config.select ?? []).some(
-    f => f.includes("items.*") || f.startsWith("*items")
-);
+// NUEVO: agrega campos explícitos SIEMPRE (sin guard de *items wildcard)
 const requiredItemFieldsForTotals = [
     "items.version",       // ← necesario para loadItemAdjustments
     "items.quantity",      // ← necesario para decorateCartTotals
     "items.raw_quantity",
     "items.unit_price",    // ← necesario para decorateCartTotals
     "items.raw_unit_price",
+    // Fulfillment fields — necesarios para la sección de Fulfillment en Admin
+    "items.fulfilled_quantity", "items.raw_fulfilled_quantity",
+    "items.delivered_quantity", "items.raw_delivered_quantity",
+    "items.shipped_quantity", "items.raw_shipped_quantity",
+    "items.return_requested_quantity", "items.raw_return_requested_quantity",
+    "items.return_received_quantity", "items.raw_return_received_quantity",
+    "items.return_dismissed_quantity", "items.raw_return_dismissed_quantity",
+    "items.written_off_quantity", "items.raw_written_off_quantity",
 ];
-if (!hasWildcardItems) {
-    config.select = deduplicate([...config.select, ...requiredItemFieldsForTotals]);
-}
+config.select = deduplicate([...config.select, ...requiredItemFieldsForTotals]);
 // ... filter mantiene como includes() en vez de startsWith() (fix #14628)
 ```
 
-**Por qué el guard `!hasWildcardItems`?** — El Admin Detail solicita `*items` (todos los campos de items). En ese caso, MikroORM cargaría TODOS los campos por defecto. Agregar campos explícitos **restringe** MikroORM a solo esos campos, rompiendo la carga de otros que el Detail necesita. El guard evita este conflicto.
+**Nota**: se removió el guard `!hasWildcardItems` porque MikroORM no auto-carga los campos de fulfillment del order_item junction table incluso con `*items` wildcard. Los campos siempre deben ser explícitos.
 
 **Archivo 3**: `dist/services/order-module-service.js` — `createOrderLineItemsBulk_`
 
@@ -314,3 +327,6 @@ Un script TypeScript para esto existe en `backend/src/scripts/checks/check-cance
 | 2026-02-25 | `addRelationsToCalculateTotals` con campos explícitos (sin `items.version`) | List mejoró transitoriamente; Detail dio 500 ("Item version...") |
 | 2026-02-25 | Agregado `items.version` a `protectedItemFields` y a `requiredItemFieldsForTotals` | Ambas vistas funcionan correctamente ✅ |
 | 2026-02-25 | `nixpacks.toml` con `npx patch-package` en fase build | Patches se aplican en Railway aunque haya cache de node_modules ✅ |
+| 2026-02-25 | Fulfillment fields (`fulfilled_quantity`, `shipped_quantity`, etc.) agregados a `protectedItemFields` y `requiredItemFieldsForTotals` | Admin muestra sección "Unfulfilled Items" + botón "Fulfill Items" ✅ |
+| 2026-02-25 | Removido guard `hasWildcardItems` — campos de fulfillment siempre se inyectan | Fix aplica tanto a Admin List como Admin Detail ✅ |
+| 2026-02-25 | Patch para `validateDOMNesting` warning en Admin (`Cost` component `Text` → `span`) | Solo cosmético, dev-only — aplicado en `.medusa/server/public/admin/assets/` |

@@ -1,5 +1,6 @@
 import { Modules as _Modules } from '@medusajs/framework/utils'
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { buildActivationEmail } from "../../../../utils/email-templates"
 
 /**
  * CASE 3: Legacy Customer Activation
@@ -53,14 +54,9 @@ export async function handleLegacyCustomerActivation(
 
         await sgMail.default.send({
             to: existingCustomer.email,
-            from: fromEmail,
-            subject: 'Activate Your Account',
-            html: `
-                <h2>Welcome ${existingCustomer.first_name}!</h2>
-                <p>Click the link below to activate your account:</p>
-                <a href="${activationLink}">Activate Account</a>
-                <p>This link expires in 24 hours.</p>
-            `
+            from: process.env.SENDGRID_FROM || 'noreply@ecopowertech.com',
+            subject: 'Activate Your Account – EcoPowerTech',
+            html: buildActivationEmail(existingCustomer.first_name || '', activationLink),
         })
 
         console.log('✅ Activation email sent successfully')

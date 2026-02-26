@@ -1,6 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Modules } from "@medusajs/framework/utils"
 import crypto from "crypto"
+import { buildPasswordResetEmail } from "../../../../utils/email-templates"
 
 export const POST = async (
     req: MedusaRequest,
@@ -94,22 +95,9 @@ export const POST = async (
             const emailContent = {
                 to: email,
                 from: process.env.SENDGRID_FROM || "noreply@ecopowertech.com",
-                subject: "Reset Your Password - Ecopower Tech",
-                text: `Hi ${customer.first_name || 'there'},\n\nClick the link below to reset your password:\n\n${resetLink}\n\nThis link will expire in 1 hour.\n\nIf you didn't request this, please ignore this email.\n\nEcopower Tech Team`,
-                html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2>Reset Your Password</h2>
-            <p>Hi ${customer.first_name || 'there'},</p>
-            <p>Click the button below to reset your password:</p>
-            <div style="text-align: center; margin: 30px 0;">
-              <a href="${resetLink}" style="background-color: #0070f3; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">Reset Password</a>
-            </div>
-            <p style="color: #666; font-size: 14px;">This link will expire in 1 hour.</p>
-            <p style="color: #666; font-size: 14px;">If you didn't request this, please ignore this email.</p>
-            <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
-            <p style="color: #999; font-size: 12px;">Ecopower Tech - Lighting Solutions</p>
-          </div>
-        `
+                subject: "Reset Your Password – EcoPowerTech",
+                text: `Hi ${customer.first_name || 'there'},\n\nClick the link below to reset your password:\n\n${resetLink}\n\nThis link will expire in 1 hour.\n\nIf you didn't request this, please ignore this email.\n\nEcoPowerTech Team`,
+                html: buildPasswordResetEmail(customer.first_name || '', resetLink),
             }
 
             console.log('   Sending email to:', emailContent.to)

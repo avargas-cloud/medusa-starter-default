@@ -167,20 +167,112 @@ class AuthorizeNetPaymentService extends AbstractPaymentProvider<AuthnetOptions>
 
     /**
      * authorizePayment: called when order is placed.
-     * We do an auth+capture in one step using the Accept.js opaqueData
+     * We do a standard 'authOnlyTransaction' using the Accept.js opaqueData
      * stored in the payment session data by our frontend API proxy.
      */
     async authorizePayment(data: AuthorizePaymentInput): Promise<AuthorizePaymentOutput> {
         try {
-            // (data as any).amount = Medusa's authoritative amount in cents at time of auth
+            const sessionData = data.data ?? {}
+            const opaqueData = sessionData?.opaqueData as OpaqueData | undefined
+            const billingAddress = sessionData?.billingAddress as Record<string, string> | undefined
+
+            // Priority: Medusa's authoritative amount at auth time
             const medusaAmount: number | undefined = (data as any).amount
-            const captureResult = await this.capturePayment(
-                medusaAmount
-                    ? { data: { ...(data.data ?? {}), _medusaAmount: medusaAmount } }
-                    : { data: data.data }
-            )
+            const amountSource = medusaAmount ?? (sessionData?.amount as number | undefined);
+
+            // Medusa v2 payment session amounts are in DOLLARS (not cents)
+            if (!amountSource) {
+                throw new Error("No amount in payment session or input")
+            }
+            if (!opaqueData?.dataValue) {
+                throw new Error("No Accept.js opaqueData — card not tokenized")
+            }
+
+            // --- DEV BACKDOOR FOR NATIVE CHECKOUT TESTING ---
+            if (opaqueData.dataValue === "dummy-token-for-test") {
+                console.log(`[AuthorizeNet] 🧪 TEST MODE: Bypassing auth for dummy token`);
+                return {
+                    data: {
+                        ...sessionData,
+                        status: "authorized",
+                        authnet_transaction_id: "test_tx_" + Date.now(),
+                        authnet_auth_code: "TEST12",
+                    },
+                    status: "authorized" as any,
+                };
+            }
+            // ------------------------------------------------
+
+            const amountDollars = Number(amountSource).toFixed(2)
+            console.log(`[AuthorizeNet] Authorizing $${amountDollars} from session amount ${amountSource}`)
+
+            const payload: any = {
+                createTransactionRequest: {
+                    merchantAuthentication: this.merchantAuth,
+                    transactionRequest: {
+                        // Crucial: we do NOT capture here. Only auth.
+                        transactionType: "authOnlyTransaction",
+                        amount: amountDollars,
+                        payment: {
+                            opaqueData: {
+                                dataDescriptor: opaqueData.dataDescriptor,
+                                dataValue: opaqueData.dataValue,
+                            },
+                        },
+                    },
+                },
+            }
+
+            if (billingAddress) {
+                payload.createTransactionRequest.transactionRequest.billTo = {
+                    firstName: billingAddress.firstName ?? "",
+                    lastName: billingAddress.lastName ?? "",
+                    company: billingAddress.company ?? "",
+                    address: billingAddress.address1 ?? "",
+                    city: billingAddress.city ?? "",
+                    state: billingAddress.state ?? "",
+                    zip: billingAddress.zip ?? "",
+                    country: billingAddress.country ?? "US",
+                }
+            }
+
+            const response = await this.authnetRequest(payload)
+
+            if (!this.isSuccess(response)) {
+                const errMsg = this.extractError(response)
+                console.error(`[AuthorizeNet] Auth failed: ${errMsg}`)
+                throw new Error(errMsg)
+            }
+
+            let txId = response.transactionResponse?.transId
+
+            // Test Mode edge-case: transId=0 means no real hold was created.
+            // The auth DID succeed (Authorize.net accepted it), but there's no
+            // real transaction to capture later. We flag this so capturePayment
+            // can skip the API call and just mark as captured.
+            if (!txId || txId === "0") {
+                console.warn(`[AuthorizeNet] ⚠️  transId=0 — Test Mode detected. Auth accepted but no real hold. capturePayment will auto-complete.`)
+                return {
+                    data: {
+                        ...sessionData,
+                        status: "authorized",
+                        authnet_transaction_id: "0",
+                        authnet_test_mode: true,
+                        authnet_auth_code: response.transactionResponse?.authCode,
+                    },
+                    status: "authorized" as any,
+                }
+            }
+
+            console.log(`[AuthorizeNet] ✅ Auth success transId=${txId} amount=$${amountDollars}`)
+
             return {
-                data: captureResult.data ?? data.data ?? {},
+                data: {
+                    ...sessionData,
+                    status: "authorized",
+                    authnet_transaction_id: txId,
+                    authnet_auth_code: response.transactionResponse?.authCode,
+                },
                 status: "authorized" as any,
             }
         } catch (err: any) {
@@ -190,71 +282,59 @@ class AuthorizeNetPaymentService extends AbstractPaymentProvider<AuthnetOptions>
     }
 
     /**
-     * capturePayment: charges the card using the Accept.js opaqueData nonce
-     * stored in the payment session by our frontend proxy.
+     * capturePayment: finalizes the payment in the Admin dashboard.
+     * Captures an already authorized transaction using its ID.
      */
     async capturePayment(data: CapturePaymentInput): Promise<CapturePaymentOutput> {
         const sessionData = data.data ?? {}
-        const opaqueData = sessionData?.opaqueData as OpaqueData | undefined
-        const billingAddress = sessionData?.billingAddress as Record<string, string> | undefined
+        const txId = sessionData?.authnet_transaction_id as string | undefined
 
-        // Priority: Medusa's authoritative amount (passed via _medusaAmount) > stored amount
-        // _medusaAmount is set by authorizePayment() from (data as any).amount
-        const amountSource = (sessionData?._medusaAmount as number | undefined) ?? (sessionData?.amount as number | undefined);
+        // Priority: Capture input amount (from medusa payload) > stored order session amount
+        const amountSource = (data as any).amount ?? (sessionData?.amount as number | undefined);
 
-        // Medusa v2 payment session amounts are in DOLLARS (not cents)
-        // Do NOT divide by 100 — Authorize.net also expects dollars
-        if (!amountSource) {
-            throw new Error("No amount in payment session or input")
+        if (!txId) {
+            throw new Error("No transaction ID found to capture")
         }
-        if (!opaqueData?.dataValue) {
-            throw new Error("No Accept.js opaqueData — card not tokenized")
+        if (!amountSource) {
+            throw new Error("No amount provided for capture")
         }
 
         // --- DEV BACKDOOR FOR NATIVE CHECKOUT TESTING ---
-        if (opaqueData.dataValue === "dummy-token-for-test") {
-            console.log(`[AuthorizeNet] 🧪 TEST MODE: Bypassing capture for dummy token`);
+        if (txId.startsWith("test_tx_")) {
+            console.log(`[AuthorizeNet] 🧪 TEST MODE: Bypassing capture for test transaction: ${txId}`);
             return {
                 data: {
                     ...sessionData,
                     status: "captured",
-                    authnet_transaction_id: "test_tx_" + Date.now(),
-                    authnet_auth_code: "TEST12",
+                },
+            };
+        }
+        // ------------------------------------------------
+
+        // --- TEST MODE: no real hold was created, just mark as captured ---
+        if (txId === "0" || sessionData?.authnet_test_mode || sessionData?.authnet_sandbox_captured) {
+            console.log(`[AuthorizeNet] 🧪 TEST MODE: No real transaction to capture (transId=${txId}). Marking as captured.`);
+            return {
+                data: {
+                    ...sessionData,
+                    status: "captured",
                 },
             };
         }
         // ------------------------------------------------
 
         const amountDollars = Number(amountSource).toFixed(2)
-        console.log(`[AuthorizeNet] Charging $${amountDollars} from session amount ${amountSource}`)
+        console.log(`[AuthorizeNet] Capturing $${amountDollars} for prior transaction ${txId}`)
 
         const payload: any = {
             createTransactionRequest: {
                 merchantAuthentication: this.merchantAuth,
                 transactionRequest: {
-                    transactionType: "authCaptureTransaction",
+                    transactionType: "priorAuthCaptureTransaction",
                     amount: amountDollars,
-                    payment: {
-                        opaqueData: {
-                            dataDescriptor: opaqueData.dataDescriptor,
-                            dataValue: opaqueData.dataValue,
-                        },
-                    },
+                    refTransId: txId,
                 },
             },
-        }
-
-        if (billingAddress) {
-            payload.createTransactionRequest.transactionRequest.billTo = {
-                firstName: billingAddress.firstName ?? "",
-                lastName: billingAddress.lastName ?? "",
-                company: billingAddress.company ?? "",
-                address: billingAddress.address1 ?? "",
-                city: billingAddress.city ?? "",
-                state: billingAddress.state ?? "",
-                zip: billingAddress.zip ?? "",
-                country: billingAddress.country ?? "US",
-            }
         }
 
         const response = await this.authnetRequest(payload)
@@ -265,19 +345,14 @@ class AuthorizeNetPaymentService extends AbstractPaymentProvider<AuthnetOptions>
             throw new Error(errMsg)
         }
 
-        const txId = response.transactionResponse?.transId
-        if (!txId || txId === "0") {
-            // Sandbox sometimes returns transId=0 for test cards — log a visible warning
-            console.warn(`[AuthorizeNet] ⚠️  transId=0 returned — this may be a sandbox test response. Check Authorize.net transaction logs.`)
-        }
-        console.log(`[AuthorizeNet] ✅ Capture success transId=${txId} amount=$${amountDollars}`)
+        const captureTxId = response.transactionResponse?.transId || txId
+        console.log(`[AuthorizeNet] ✅ Capture success transId=${captureTxId} amount=$${amountDollars}`)
 
         return {
             data: {
                 ...sessionData,
                 status: "captured",
-                authnet_transaction_id: txId,
-                authnet_auth_code: response.transactionResponse?.authCode,
+                authnet_capture_transaction_id: response.transactionResponse?.transId,
             },
         }
     }
