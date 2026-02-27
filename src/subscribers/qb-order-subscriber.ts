@@ -177,7 +177,7 @@ async function handleFulfillmentCreated(
     let fulfillmentAmount = order.total || 0
     if (data.items && Array.isArray(data.items) && data.items.length > 0) {
         // data.items are the fulfillment items: { item_id, quantity }
-        const orderItemsMap = new Map((order.items || []).map((i: any) => [i.id, i]))
+        const orderItemsMap = new Map<string, any>((order.items || []).map((i: any) => [i.id, i]))
         const partialTotal = data.items.reduce((sum: number, fi: any) => {
             const orderItem = orderItemsMap.get(fi.item_id || fi.id)
             if (!orderItem) return sum
