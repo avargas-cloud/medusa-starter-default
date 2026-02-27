@@ -123,18 +123,21 @@ For initial migration to Medusa V2, use the dedicated export script.
 
 ## 3. Order Processing Flow (The "Prepayment" Flow)
 
+> **⚠️ IMPORTANT:** ALL operations below use `customerId` (QB ListID, e.g. `"8000004E-1342117388"`) to identify customers.
+> This is more reliable than `customerName` which is ambiguous. The Bridge QBXML builders support both, but **always prefer `customerId`**.
+
 ### Step 1: Create Sales Order
 Reserves stock but does not create accounting impact.
 *   **Endpoint:** `POST /api/sales-orders`
 *   **Payload:**
 ```json
 {
-  "customerName": "Juan Perez",
-  "templateRef": "Sales Order Original", // Controls the form template
+  "customerId": "8000004E-1342117388",
+  "templateRef": "Sales Order Original",
   "date": "2026-01-26",
   "items": [
     {
-      "productId": "8000ABCD-12345678", // ListID from Product Lookup
+      "productId": "8000ABCD-12345678",
       "quantity": 1,
       "price": 25.00,
       "desc": "T-Shirt Red Size M"
@@ -142,7 +145,7 @@ Reserves stock but does not create accounting impact.
   ]
 }
 ```
-**Response:** Returns `TxnID` (e.g., `1A-12345`). **Store `qb_so_txnid`.**
+**Response (async):** Returns `operationId`. Poll `GET /api/sync/status/{operationId}` for `TxnID`. **Store `qb_so_txnid`.**
 
 ### Step 2: Receive Payment (Unapplied Credit)
 High-volume E-commerce: Record the payment immediately as a Credit.
@@ -150,27 +153,29 @@ High-volume E-commerce: Record the payment immediately as a Credit.
 *   **Payload:**
 ```json
 {
-  "customerName": "Juan Perez",
-  "amount": "25.00",
-  "paymentMethod": "Cash", // 'Visa', 'MasterCard', etc.
+  "customerId": "8000004E-1342117388",
+  "amount": 25.00,
+  "paymentMethod": "Credit Card",
+  "refNumber": "PAY-ord_01JFXYZ",
   "memo": "Web Order #1001",
-  "autoApply": false  // CRITICAL: Tells QB to keep it as open credit
+  "autoApply": false,
+  "depositAccount": "Undeposited Funds"
 }
 ```
-**Response:** Returns `TxnID` (e.g., `2B-67890`). **Store `qb_payment_txnid`.**
+**Response (async):** Returns `operationId`. Poll for `txnId` + `refNumber`. **Store `qb_payment_txn_id` + `qb_payment_ref`.**
 
 ### Step 3: Create Invoice (Fulfillment)
 When shipping, create the official Invoice linked to the Sales Order.
 *   **Endpoint:** `POST /api/invoices`
-*   **Payload:**
+*   **Payload (linked to SO):**
 ```json
 {
-  "customerName": "Juan Perez",
-  "templateRef": "Invoice Ecopowertech", // Controls the form template
-  "LinkToTxnID": "1A-12345" // The Sales Order TxnID
+  "customerId": "8000004E-1342117388",
+  "date": "2026-02-26",
+  "LinkToTxnID": "1BA799-1772123423"
 }
 ```
-**Response:** Returns `TxnID` (e.g., `3C-11223`). **Store `qb_invoice_txnid`.**
+**Response (async):** Returns `operationId`. Poll for `txnId` + `refNumber`. **Store `qb_invoice_txn_id` + `qb_invoice_ref`.**
 
 ### Step 4: Apply Payment to Invoice (Close the Loop)
 Tell QuickBooks to use the Credit setup in Step 2 to pay the Invoice from Step 3.
@@ -178,23 +183,128 @@ Tell QuickBooks to use the Credit setup in Step 2 to pay the Invoice from Step 3
 *   **Payload:**
 ```json
 {
-  "customerName": "Juan Perez",
-  "amount": "25.00",        // Amount to apply
-  "invoiceId": "3C-11223",  // Invoice TxnID
-  "creditTxnId": "2B-67890" // Payment TxnID (The Credit)
+  "customerId": "8000004E-1342117388",
+  "amount": 25.00,
+  "invoiceId": "3C-11223",
+  "creditTxnId": "2B-67890"
 }
 ```
 
 ---
 
-## 4. Sales Receipt (Immediate Sale)
+## 5. Estimates (Draft Order Flow)
+
+### 5.1 Create Estimate
+
+**When**: A Draft Order is created in Medusa Admin.
+
+*   **Endpoint:** `POST /api/estimates`
+*   **Payload:**
+```json
+{
+  "customerId": "8000004E-1342117388",
+  "date": "2026-02-26",
+  "items": [
+    {
+      "productId": "800019EA-1715274093",
+      "quantity": 2,
+      "price": 22.95,
+      "desc": "EAP-AS1-8S — 8ft Aluminum Channel Silver"
+    }
+  ],
+  "memo": "Draft Order #draft_01JFXYZ",
+  "templateRef": "Custom Estimate",
+  "poNumber": "PO-12345"
+}
+```
+
+**Response (async — queued for Web Connector):**
+```json
+{
+  "success": true,
+  "operationId": "uuid-here",
+  "message": "Estimate creation queued"
+}
+```
+
+**Poll for result:** `GET /api/sync/status/{operationId}` (see Section 6).
+The result contains `operation.txnId` + `operation.refNumber` → **Save as `qb_estimate_txn_id` + `qb_estimate_ref`** in draft order metadata.
+
+### 5.2 Convert Estimate → Sales Order
+
+**When**: A Draft Order is confirmed / converted to a real Order in Medusa.
+
+> **IMPORTANT:** `items[]` IS required — pass the same items from the Estimate. QB links via `estimateTxnId` in the memo for traceability.
+
+*   **Endpoint:** `POST /api/sales-orders/convert-from-estimate`
+*   **Payload:**
+```json
+{
+  "estimateTxnId": "1BA7A7-1772123940",
+  "customerId": "8000004E-1342117388",
+  "date": "2026-02-26",
+  "items": [
+    {
+      "productId": "800019EA-1715274093",
+      "quantity": 2,
+      "desc": "EAP-AS1-8S 8ft Aluminum Channel Silver"
+    }
+  ],
+  "memo": "From Estimate E18024525"
+}
+```
+
+**Response (async):**
+```json
+{
+  "success": true,
+  "operationId": "uuid-here",
+  "message": "Estimate → Sales Order conversion queued"
+}
+```
+
+The result contains `operation.txnId` + `operation.refNumber` → **Save as `qb_sales_order_txn_id` + `qb_sales_order_ref`**.
+
+### 5.3 Required Fields Reference
+
+| Field | Estimate | Sales Order | Convert |
+|-------|----------|-------------|---------|
+| `customerId` OR `customerName` | ✅ | ✅ | ✅ |
+| `items[]` | ✅ | ✅ | ❌ (from estimate) |
+| `estimateTxnId` | — | — | ✅ |
+| `date` | optional | optional | optional |
+| `memo` | optional | optional | optional |
+| `templateRef` | optional | optional | optional |
+| `poNumber` | optional | optional | optional |
+| `refNumber` | optional | optional | optional |
+
+---
+
+## 6. Async Operation Polling
+
+All Bridge write operations are **asynchronous** — they are queued and processed via QuickBooks Web Connector (~1 min polling interval).
+
+*   **Endpoint:** `GET /api/sync/status/{operationId}`
+
+| Status | Meaning |
+|--------|---------|
+| `pending` | Queued, waiting for Web Connector |
+| `processing` | Being sent to QuickBooks |
+| `completed` | Success — check `result` field for TxnID |
+| `failed` | Error — check `error` field |
+
+**Typical wait time:** 1-2 minutes after submission.
+
+---
+
+## 7. Sales Receipt (Immediate Sale)
 Alternative Flow: If NO inventory reservation is needed (Walk-in / POS).
 *   **Endpoint:** `POST /api/sales-receipts`
 *   **Payload:**
 ```json
 {
-  "customerName": "Unknown Customer", // Or generic "Web Customer"
-  "templateRef": "Sales Receipt Ecopowerte", // Controls the form template
+  "customerName": "Unknown Customer",
+  "templateRef": "Sales Receipt Ecopowerte",
   "items": [
     {
       "productId": "8000ABCD-12345678",
@@ -208,11 +318,14 @@ Alternative Flow: If NO inventory reservation is needed (Walk-in / POS).
 
 ---
 
-## 5. Troubleshooting (For Medusa Devs)
+## 8. Troubleshooting (For Medusa Devs)
 
 *   **Error 3140 (Invalid Reference):** You sent a `ListID` (Product or Customer) that doesn't exist in QB. Always sync IDs first.
 *   **No Response / Timeout:** The Bridge might be blocked by a popup in QuickBooks. Retry logic should be exponential backoff.
 *   **Fields:** Never send `&`, `<`, `>` in names. Use standard ASCII if possible (though Bridge has escaping logic).
+*   **Async Results:** Remember all write operations return an `operationId`. You must poll `GET /api/sync/status/{operationId}` to get the actual TxnID.
 
-**Generated by:** Auto-Integration Module
-**Date:** Jan 26, 2026
+**Generated by:** Auto-Integration Module  
+**Date:** Jan 26, 2026  
+**Updated:** Feb 26, 2026 — Added Estimates API (Section 5) and Async Polling (Section 6)
+
