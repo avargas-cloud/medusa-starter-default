@@ -135,6 +135,8 @@ export async function ensureCustomerInQb(
 
     const createResult = await createCustomerInQb({
         Name: qbName,
+        FirstName: customer.first_name || undefined,
+        LastName: customer.last_name || undefined,
         CompanyName: customer.company_name || undefined,
         Email: customer.email,
         Phone: customer.phone || undefined,

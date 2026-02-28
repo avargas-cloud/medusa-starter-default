@@ -1,69 +1,96 @@
 # 📘 QuickBooks Bridge API Reference for Medusa Integration
 
-**Version:** 1.0 (Production)
-**Base URL:** `http://<SERVER_IP>:3000/api`
+**Version:** 2.1 (Production)
+**Base URL:** `https://ecopower-qb.loca.lt/api`
 **Auth Header:** `x-api-key: mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD`
+**QBXML Version:** `10.0` (required for Inventory Site support)
+**Last Updated:** Feb 27, 2026
 
 ---
-
 
 ## 📋 Descripción del Documento
 
 | Campo | Detalle |
 |-------|---------|
-| **Propósito** | API reference for the Medusa-facing endpoints of the QuickBooks Bridge service — covering all endpoints the Medusa backend calls to import customers, sync products, and verify QuickBooks connection status. |
-| **Problemas que resuelve** | The bridge service exposes a REST API that Medusa uses to pull QuickBooks data. This reference documents every endpoint, its authentication requirements, request/response schemas, and error codes so the Medusa side can integrate correctly. |
+| **Propósito** | API reference for the Medusa-facing endpoints of the QuickBooks Bridge service — covering all endpoints the Medusa backend calls to sync orders, customers, products, and payments. |
+| **Problemas que resuelve** | The bridge service exposes a REST API that Medusa uses to create QB documents. This reference documents every endpoint, request/response schemas, and error codes so the Medusa side can integrate correctly. |
 | **Resultado esperado** | Backend developers can integrate any Medusa workflow with the QuickBooks Bridge using this reference, without needing to inspect the bridge's source code. |
 | **Scripts Creados** | `import-customers-from-qb.ts` |
 
-## 0. System Verification (Health Check)
-Before sending heavy requests, verify the API is online.
-*   **Endpoint:** `GET /health`
-*   **Action:** Returns 200 OK if the Bridge NodeJS Service is running.
-*   **Note:** This does NOT guarantee QuickBooks is open, only that the Bridge is listening.
+---
 
-**Response:**
+## 0. System Verification
+
+```bash
+GET /health
+```
+Returns `200 OK` if the Bridge is running. Does **not** guarantee QuickBooks is open.
+
 ```json
-{
-  "status": "healthy",
-  "queueSize": 0
-}
+{ "status": "healthy", "queueSize": 0 }
 ```
 
 ---
 
-## 1. Product & Inventory Management
+## 1. Async Operation Pattern
 
-### Get Single Product Info (Read)
-Retrieve price and stock.
-*   **Strategy:** Use `FullName` (SKU) first to discover the ID. Once you have the `ListID`, always use that for future queries (it's faster).
+All write endpoints (`POST`) are **async** — they return an `operationId` immediately and process via QBWC on the next sync cycle (every ~60s).
 
-**Option A: Find by SKU (First time)**
-*   **Endpoint:** `GET /api/products?FullName=TSHIRT-001`
+**Queue an operation:**
+```json
+{ "success": true, "data": { "operationId": "50643fe7-2a39-4ebc-86d6-6c8e7a2e101a" } }
+```
 
-**Option B: Find by ID (Recommended)**
-*   **Endpoint:** `GET /api/products?ListID=8000ABCD-12345678`
-
-**Response:**
+**Poll for result:**
+```bash
+GET /api/sync/status/{operationId}
+```
 ```json
 {
-  "ListID": "8000ABCD-12345678",
-  "Name": "TSHIRT-001",
-  "FullName": "TSHIRT-001",
-  "SalesPrice": "25.00",
-  "QuantityOnHand": "150"
+  "success": true,
+  "operation": {
+    "status": "completed",          // "pending" | "processing" | "completed" | "failed"
+    "txnId": "1BA983-1772153827",   // Internal QB ID — use for cross-doc references
+    "refNumber": "E18024535"        // Human-readable — visible in QB UI
+  }
 }
 ```
 
-### Update Inventory (Mass Sync)
-Update stock quantities for a batch of products.
-**Note:** This uses the `ItemInventoryMod` operation. currently supports modifying `QuantityOnHand`.
-*   **Endpoint:** `POST /api/products/sync` (or `/api/sync/selective`)
-*   **Payload:**
+**Polling Strategy:**
+- Poll every **20 seconds**
+- Up to **20 attempts** (max ~7 min wait)
+- On `pending`/`processing`: keep polling
+- On `completed`: read `txnId` + `refNumber` — **both must be saved**
+- On `failed`: read `error`, handle accordingly
+
+> **Always poll for `txnId`** before chaining operations (e.g., converting Estimate → SO requires the Estimate `txnId`).
+
+---
+
+## 2. Product & Inventory Management
+
+### Get Product Info
+```bash
+GET /api/products?FullName=EAP-AS1-8S   # First time — find by SKU
+GET /api/products?ListID=800019EA-1715274093  # Recommended — faster
+```
+```json
+{
+  "ListID": "800019EA-1715274093",
+  "Name": "EAP-AS1-8S",
+  "SalesPrice": "24.50",
+  "QuantityOnHand": "89"
+}
+```
+
+### Update Inventory (Bulk Sync)
+```bash
+POST /api/products/sync
+```
 ```json
 {
   "items": [
-    { "ListID": "8000ABCD-12345678", "quantity": 149 },
+    { "ListID": "800019EA-1715274093", "quantity": 88 },
     { "ListID": "8000EFGH-90123456", "quantity": 50 }
   ]
 }
@@ -71,120 +98,222 @@ Update stock quantities for a batch of products.
 
 ---
 
-## 2. Customer Management
+## 3. Customer Management
 
 ### Create Customer
-*   **Endpoint:** `POST /api/customers`
-*   **Payload:**
+```bash
+POST /api/customers
+```
 ```json
 {
-  "Name": "Juan Perez",
-  "CompanyName": "Empresa S.A.",
-  "Email": "juan@example.com",
-  "Phone": "555-1234",
+  "Name": "Alejandro Vargas #4E1342",
+  "CompanyName": "EcoPowerTech Inc.",
+  "Email": "alejandro@ecopowertech.com",
+  "Phone": "786-123-4561",
   "BillAddress": {
-    "Addr1": "Calle 123",
-    "City": "Miami",
-    "City": "Miami",
+    "Addr1": "2760 NW 84th Street",
+    "City": "Hialeah",
     "State": "FL",
-    "PostalCode": "33100"
+    "PostalCode": "33016"
   },
-  "CustomerType": "Wholesale",       // Optional
-  "PriceLevel": "Wholesale"  // Optional
+  "CustomerType": "Wholesale"
 }
 ```
-**Response:** Returns `ListID` (e.g., `80009999-12345678`). **Store this ID.**
+**Response:** `{ "ListID": "8000004E-1342117388" }` — **Store this as `qb_list_id` in Medusa customer metadata.**
 
-### Get Customer Info
-*   **Endpoint:** `POST /api/customers` (Action: Query)
-*   **Payload:**
-```json
-{
-  "action": "query",
-  "ListID": "80009999-12345678"
-}
+### Check if Customer Exists
+```bash
+GET /api/customers?ListID=8000004E-1342117388
 ```
 
-### 2.1 Customer Migration (Bulk Export)
-For initial migration to Medusa V2, use the dedicated export script.
+### Customer Migration (Bulk Export)
+For initial migration of QB customers to Medusa V2.
 
-*   **Command:** `npx ts-node scripts/export_customers.ts`
+*   **Command (on Windows server):** `npx ts-node scripts/export_customers.ts`
 *   **Output:** `scripts/customers_export.json`
 
 **Data Points Mapped:**
-*   `ListID` -> Medusa metadata `qb_list_id`
-*   `FirstName`, `LastName` -> Customer Name
-*   `Terms` -> Payment Terms (B2B)
-*   `TaxCode` -> Tax Exemptions
-*   `CreditLimit` -> Risk Management
-*   `Billing/Shipping Address` -> Address Book
+*   `ListID` → Medusa metadata `qb_list_id`
+*   `FirstName`, `LastName` → Customer Name
+*   `Terms` → Payment Terms (B2B)
+*   `TaxCode` → Tax Exemptions
+*   `CreditLimit` → Risk Management
+*   `Billing/Shipping Address` → Address Book
 
 ---
 
-## 3. Order Processing Flow (The "Prepayment" Flow)
+## 4. Estimates (Draft Orders / Quotes)
 
-> **⚠️ IMPORTANT:** ALL operations below use `customerId` (QB ListID, e.g. `"8000004E-1342117388"`) to identify customers.
-> This is more reliable than `customerName` which is ambiguous. The Bridge QBXML builders support both, but **always prefer `customerId`**.
-
-### Step 1: Create Sales Order
-Reserves stock but does not create accounting impact.
-*   **Endpoint:** `POST /api/sales-orders`
-*   **Payload:**
-```json
-{
-  "customerId": "8000004E-1342117388",
-  "templateRef": "Sales Order Original",
-  "date": "2026-01-26",
-  "items": [
-    {
-      "productId": "8000ABCD-12345678",
-      "quantity": 1,
-      "price": 25.00,
-      "desc": "T-Shirt Red Size M"
-    }
-  ]
-}
+### Create Estimate
+```bash
+POST /api/estimates
 ```
-**Response (async):** Returns `operationId`. Poll `GET /api/sync/status/{operationId}` for `TxnID`. **Store `qb_so_txnid`.**
-
-### Step 2: Receive Payment (Unapplied Credit)
-High-volume E-commerce: Record the payment immediately as a Credit.
-*   **Endpoint:** `POST /api/payments`
-*   **Payload:**
-```json
-{
-  "customerId": "8000004E-1342117388",
-  "amount": 25.00,
-  "paymentMethod": "Credit Card",
-  "refNumber": "PAY-ord_01JFXYZ",
-  "memo": "Web Order #1001",
-  "autoApply": false,
-  "depositAccount": "Undeposited Funds"
-}
-```
-**Response (async):** Returns `operationId`. Poll for `txnId` + `refNumber`. **Store `qb_payment_txn_id` + `qb_payment_ref`.**
-
-### Step 3: Create Invoice (Fulfillment)
-When shipping, create the official Invoice linked to the Sales Order.
-*   **Endpoint:** `POST /api/invoices`
-*   **Payload (linked to SO):**
 ```json
 {
   "customerId": "8000004E-1342117388",
   "date": "2026-02-26",
-  "LinkToTxnID": "1BA799-1772123423"
+  "salesTaxCode": "Sale Tax 7%",
+  "items": [
+    {
+      "productId": "800019EA-1715274093",
+      "quantity": 2,
+      "price": 19.99,
+      "desc": "EAP-AS1-8S (SKU-001)"
+    }
+  ],
+  "memo": "Medusa Draft #draft_01JXXX"
 }
 ```
-**Response (async):** Returns `operationId`. Poll for `txnId` + `refNumber`. **Store `qb_invoice_txn_id` + `qb_invoice_ref`.**
 
-### Step 4: Apply Payment to Invoice (Close the Loop)
-Tell QuickBooks to use the Credit setup in Step 2 to pay the Invoice from Step 3.
-*   **Endpoint:** `POST /api/payments`
-*   **Payload:**
+**After polling** — save in Medusa draft order metadata:
+```
+operation.txnId      →  metadata.qb_estimate_txn_id  (e.g. "1BA7A7-1772123940")
+operation.refNumber  →  metadata.qb_estimate_ref      (e.g. "E18024527")
+```
+
+### Pricing & Tax Notes — ⚠️ CRITICAL
+
+#### Price: Always use `price` (sends as `<Amount>`, not `<Rate>`)
+The Bridge sends `<Amount>` = `quantity × price` directly in QBXML. This **bypasses QuickBooks' UOM conversion factors**.
+
+| Field | QBXML Tag | Behavior |
+|-------|-----------|----------|
+| `price` | `<Amount>qty×price</Amount>` | ✅ Exact amount, ignores UOM |
+| *(omit price)* | *(none)* | QB uses product's Sales Price |
+
+> **Why Amount and not Rate?** Products with UOM Sets (e.g., "By the each") store an internal conversion factor. Sending `<Rate>19.99</Rate>` gets multiplied by that factor (e.g., 7.4×). Sending `<Amount>39.98</Amount>` is used as-is.
+
+#### Tax: Use `salesTaxCode` or `taxExempt`
+
+| Payload field | QB result |
+|--------------|-----------|
+| `salesTaxCode: "Sale Tax 7%"` | Miami-Dade 7% tax |
+| `salesTaxCode: "Sale Tax 6%"` | Broward 6% tax |
+| `salesTaxCode: "Exempt"` | $0 tax (exempt) |
+| `taxExempt: true` | Shorthand for `Exempt` |
+| *(omit both)* | QB uses customer's default tax code |
+
+The QB field used is `<ItemSalesTaxRef>` in the document header.
+> ⚠️ **Never use `<CustomerSalesTaxCodeRef>`** — that's for tax codes, not items. The correct element is `<ItemSalesTaxRef>`.
+
+### Modify Estimate
+```bash
+PUT /api/estimates/{txnId}
+```
+> The bridge automatically re-queries the EditSequence before modifying. No need to store EditSequence in Medusa.
+
+```json
+{
+  "items": [
+    {
+      "TxnLineID": "1BAE30-1772237128",
+      "productId": "800019EA-1715274093",
+      "quantity": 3,
+      "price": 42.99
+    }
+  ],
+  "memo": "Updated Draft Order #draft_01JFXYZ"
+}
+```
+
+---
+
+## 5. Sales Orders
+
+### Create Sales Order
+```bash
+POST /api/sales-orders
+```
 ```json
 {
   "customerId": "8000004E-1342117388",
-  "amount": 25.00,
+  "date": "2026-02-26",
+  "salesTaxCode": "Sale Tax 7%",
+  "memo": "From Estimate E18024527",
+  "items": [
+    {
+      "productId": "800019EA-1715274093",
+      "quantity": 2,
+      "price": 19.99,
+      "desc": "EAP-AS1-8S (SKU-001)",
+      "siteId": "80000001-1331053531"
+    }
+  ]
+}
+```
+
+> **`siteId`** — QB Inventory Site ListID. Required for QB Enterprise to deduct inventory from the correct warehouse.
+> Default (if omitted): `80000001-1331053531` (Principal Warehouse)
+>
+> | ListID | Name |
+> |--------|------|
+> | `80000001-1331053531` | Principal Warehouse (default) |
+> | `80000002-1331055182` | Drop Ship |
+>
+> **Memo:** Use the Estimate RefNumber (e.g. `"From Estimate E18024527"`), not the TxnID — your team sees RefNumbers in QB Desktop.
+
+**After polling** — save:
+```
+operation.txnId      →  metadata.qb_sales_order_txn_id  (e.g. "1BA799-1772123423")
+operation.refNumber  →  metadata.qb_sales_order_ref     (e.g. "6139")
+```
+
+### Convert Estimate → Sales Order
+```bash
+POST /api/sales-orders/convert-from-estimate
+```
+```json
+{
+  "estimateTxnId": "1BA983-1772153827",
+  "customerId": "8000004E-1342117388",
+  "date": "2026-02-26",
+  "salesTaxCode": "Sale Tax 7%",
+  "items": [
+    {
+      "productId": "800019EA-1715274093",
+      "quantity": 2,
+      "price": 19.99
+    }
+  ],
+  "memo": "From Draft #draft_01JXXX"
+}
+```
+> ⚠️ QB does **not** auto-copy items from the Estimate. You **must** pass `items[]` again.
+
+---
+
+## 6. Payments
+
+### Receive Payment (Unapplied Credit — E-commerce Flow)
+```bash
+POST /api/payments
+```
+```json
+{
+  "customerId": "8000004E-1342117388",
+  "amount": "39.98",
+  "paymentMethod": "Visa",
+  "memo": "Medusa Order #1023",
+  "refNumber": "PAY-ord_01JXXX",
+  "autoApply": false
+}
+```
+> `autoApply: false` keeps payment as an **open credit** until manually applied to an invoice. Use for e-commerce pre-payments.
+
+**After polling** — save:
+```
+operation.txnId      →  metadata.qb_payment_txn_id
+operation.refNumber  →  metadata.qb_payment_ref
+```
+
+### Apply Credit to Invoice
+```bash
+POST /api/payments
+```
+```json
+{
+  "customerId": "8000004E-1342117388",
+  "amount": "39.98",
   "invoiceId": "3C-11223",
   "creditTxnId": "2B-67890"
 }
@@ -192,140 +321,123 @@ Tell QuickBooks to use the Credit setup in Step 2 to pay the Invoice from Step 3
 
 ---
 
-## 5. Estimates (Draft Order Flow)
+## 7. Invoices
 
-### 5.1 Create Estimate
-
-**When**: A Draft Order is created in Medusa Admin.
-
-*   **Endpoint:** `POST /api/estimates`
-*   **Payload:**
+### Create Invoice (Linked to Sales Order)
+```bash
+POST /api/invoices
+```
 ```json
 {
   "customerId": "8000004E-1342117388",
-  "date": "2026-02-26",
-  "items": [
-    {
-      "productId": "800019EA-1715274093",
-      "quantity": 2,
-      "price": 22.95,
-      "desc": "EAP-AS1-8S — 8ft Aluminum Channel Silver"
-    }
-  ],
-  "memo": "Draft Order #draft_01JFXYZ",
-  "templateRef": "Custom Estimate",
-  "poNumber": "PO-12345"
+  "LinkToTxnID": "1BA799-1772123423",
+  "soRefNumber": "6139",
+  "memo": "Shipped — Medusa Order #1023"
 }
 ```
+> `LinkToTxnID` = the Sales Order `txnId` from Step 5.
+> `soRefNumber` — auto-generates memo: `"From SO #6139"` if no `memo` is passed.
 
-**Response (async — queued for Web Connector):**
-```json
-{
-  "success": true,
-  "operationId": "uuid-here",
-  "message": "Estimate creation queued"
-}
+**After polling** — save:
 ```
-
-**Poll for result:** `GET /api/sync/status/{operationId}` (see Section 6).
-The result contains `operation.txnId` + `operation.refNumber` → **Save as `qb_estimate_txn_id` + `qb_estimate_ref`** in draft order metadata.
-
-### 5.2 Convert Estimate → Sales Order
-
-**When**: A Draft Order is confirmed / converted to a real Order in Medusa.
-
-> **IMPORTANT:** `items[]` IS required — pass the same items from the Estimate. QB links via `estimateTxnId` in the memo for traceability.
-
-*   **Endpoint:** `POST /api/sales-orders/convert-from-estimate`
-*   **Payload:**
-```json
-{
-  "estimateTxnId": "1BA7A7-1772123940",
-  "customerId": "8000004E-1342117388",
-  "date": "2026-02-26",
-  "items": [
-    {
-      "productId": "800019EA-1715274093",
-      "quantity": 2,
-      "desc": "EAP-AS1-8S 8ft Aluminum Channel Silver"
-    }
-  ],
-  "memo": "From Estimate E18024525"
-}
-```
-
-**Response (async):**
-```json
-{
-  "success": true,
-  "operationId": "uuid-here",
-  "message": "Estimate → Sales Order conversion queued"
-}
-```
-
-The result contains `operation.txnId` + `operation.refNumber` → **Save as `qb_sales_order_txn_id` + `qb_sales_order_ref`**.
-
-### 5.3 Required Fields Reference
-
-| Field | Estimate | Sales Order | Convert |
-|-------|----------|-------------|---------|
-| `customerId` OR `customerName` | ✅ | ✅ | ✅ |
-| `items[]` | ✅ | ✅ | ❌ (from estimate) |
-| `estimateTxnId` | — | — | ✅ |
-| `date` | optional | optional | optional |
-| `memo` | optional | optional | optional |
-| `templateRef` | optional | optional | optional |
-| `poNumber` | optional | optional | optional |
-| `refNumber` | optional | optional | optional |
-
----
-
-## 6. Async Operation Polling
-
-All Bridge write operations are **asynchronous** — they are queued and processed via QuickBooks Web Connector (~1 min polling interval).
-
-*   **Endpoint:** `GET /api/sync/status/{operationId}`
-
-| Status | Meaning |
-|--------|---------|
-| `pending` | Queued, waiting for Web Connector |
-| `processing` | Being sent to QuickBooks |
-| `completed` | Success — check `result` field for TxnID |
-| `failed` | Error — check `error` field |
-
-**Typical wait time:** 1-2 minutes after submission.
-
----
-
-## 7. Sales Receipt (Immediate Sale)
-Alternative Flow: If NO inventory reservation is needed (Walk-in / POS).
-*   **Endpoint:** `POST /api/sales-receipts`
-*   **Payload:**
-```json
-{
-  "customerName": "Unknown Customer",
-  "templateRef": "Sales Receipt Ecopowerte",
-  "items": [
-    {
-      "productId": "8000ABCD-12345678",
-      "quantity": 1,
-      "rate": 25.00
-    }
-  ],
-  "paymentMethod": "Cash"
-}
+operation.txnId      →  metadata.qb_invoice_txn_id
+operation.refNumber  →  metadata.qb_invoice_ref
 ```
 
 ---
 
-## 8. Troubleshooting (For Medusa Devs)
+## 8. Order Flow Summary
 
-*   **Error 3140 (Invalid Reference):** You sent a `ListID` (Product or Customer) that doesn't exist in QB. Always sync IDs first.
-*   **No Response / Timeout:** The Bridge might be blocked by a popup in QuickBooks. Retry logic should be exponential backoff.
-*   **Fields:** Never send `&`, `<`, `>` in names. Use standard ASCII if possible (though Bridge has escaping logic).
-*   **Async Results:** Remember all write operations return an `operationId`. You must poll `GET /api/sync/status/{operationId}` to get the actual TxnID.
+```
+[ORDER PLACED]
+  → POST /api/sales-orders   → { operationId } → poll → { txnId: "SO-xxx", refNumber: "6139" }
 
-**Generated by:** Auto-Integration Module  
-**Date:** Jan 26, 2026  
-**Updated:** Feb 26, 2026 — Added Estimates API (Section 5) and Async Polling (Section 6)
+[PAYMENT CAPTURED]
+  → POST /api/payments (autoApply:false)  → { operationId } → poll → { txnId: "PAY-xxx" }
 
+[FULFILLMENT CREATED]
+  → POST /api/invoices (LinkToTxnID: SO txnId)  → { operationId } → poll → { txnId: "INV-xxx" }
+  → POST /api/payments (invoiceId + creditTxnId)  → applies the credit to close the loop
+```
+
+---
+
+## 9. Metadata to Store in Medusa
+
+```typescript
+// Draft Order metadata
+metadata.qb_estimate_txn_id = "1BA7A7-1772123940"   // for API calls
+metadata.qb_estimate_ref    = "E18024527"            // visible in QB, for cross-reference
+
+// Order metadata
+metadata.qb_sales_order_txn_id = "1BA799-1772123423"
+metadata.qb_sales_order_ref    = "6139"
+metadata.qb_invoice_txn_id     = "..."
+metadata.qb_invoice_ref        = "..."
+metadata.qb_payment_txn_id     = "..."
+metadata.qb_payment_ref        = "..."
+
+// Customer metadata
+metadata.qb_list_id = "8000004E-1342117388"
+```
+
+> **`refNumber`** is the number your team sees in QuickBooks (e.g. Estimate `E18024527`, Sales Order `6139`).
+> **`txnId`** is the internal QB ID used for all API calls (MOD, query, link).
+> Store both — `refNumber` for human cross-reference, `txnId` for API operations.
+
+---
+
+## 10. Field Reference
+
+| Field | Type | Where Used | Description |
+|-------|------|------------|-------------|
+| `customerId` | string | All | QB Customer ListID (e.g. `8000004E-1342117388`) |
+| `customerName` | string | All | Fallback — QB FullName (e.g. `Alejandro Vargas`) |
+| `items[].productId` | string | EST, SO, INV | QB Item ListID (e.g. `800019EA-1715274093`) |
+| `items[].productName` | string | EST, SO, INV | Fallback — QB Item FullName (e.g. `EAP-AS1-8S`) |
+| `items[].quantity` | number | EST, SO, INV | Quantity |
+| `items[].price` | number | EST, SO, INV | Unit price — bridge sends `Amount = price × qty` to QB |
+| `items[].desc` | string | EST, SO, INV | Line description |
+| `items[].siteId` | string | **SO, INV** | QB Inventory Site ListID — **required for inventory deduction** |
+| `date` | string | All | Transaction date `YYYY-MM-DD` |
+| `memo` | string | All | Free text memo — use RefNumbers, not TxnIDs |
+| `salesTaxCode` | string | EST, SO | Tax item name (e.g. `"Sale Tax 7%"`, `"Exempt"`) |
+| `taxExempt` | boolean | EST, SO | Shorthand for `salesTaxCode: "Exempt"` |
+| `soRefNumber` | string | INV | SO RefNumber for auto-memo (`"From SO #6139"`) |
+| `refNumber` | string | All | Custom reference number for the document |
+| `poNumber` | string | EST, SO | Purchase order number |
+| `LinkToTxnID` | string | INV | TxnID of SO to link invoice to |
+| `estimateTxnId` | string | SO (convert) | TxnID of estimate being converted |
+| `autoApply` | boolean | PAY | `false` = open credit, `true` = auto-apply to oldest invoice |
+
+> **Always use `customerId` and `productId` (ListIDs) over name-based references.** ListIDs are permanent; names can change.
+
+---
+
+## 11. Troubleshooting
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `0x80040400` XML parse error | Invalid field order in QBXML | `InventorySiteRef` must come **after** `Amount`/`Rate` in line items |
+| Error 3140 Invalid Reference | `ListID` or site name doesn't exist in QB | Use `siteId` (ListID) not site name — names can have typos in QB |
+| Price multiplied by ~7.4× | Sending `<Rate>` with UOM set product | Use `<Amount>` instead (price × qty) — bridge does this automatically |
+| No Response / Timeout | QB popup blocking QBWC | Dismiss popup; retry; exponential backoff |
+| `status: pending` forever | QBWC not running or QB not open | Check QB Web Connector app on Windows |
+| WC stuck at 20% | Stale pending ops in queue | Delete `queue-state.json` and restart bridge |
+| Error 3070 String too long | `RefNumber` exceeds 11 characters | Omit `RefNumber` (QB auto-assigns) or shorten to ≤11 chars |
+
+---
+
+## 12. Environment Variables (Bridge)
+
+| Variable | Example | Description |
+|----------|---------|-------------|
+| `PORT` | `3000` | Bridge HTTP port |
+| `API_KEY` | `mQb-7k9Pzx4...` | Auth key for all requests |
+| `TUNNEL_SUBDOMAIN` | `ecopower-qb` | localtunnel/Cloudflare subdomain |
+
+---
+
+**Generated by:** Medusa-QB Integration Team
+**Date:** Jan 26, 2026
+**Updated:** Feb 27, 2026 — v2.1: Added salesTaxCode, taxExempt, Modify Estimate, convert-from-estimate fix (items[] required), autoApply, full troubleshooting table, inventory site rules, metadata section.

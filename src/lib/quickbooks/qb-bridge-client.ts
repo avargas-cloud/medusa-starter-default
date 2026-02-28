@@ -32,7 +32,9 @@ export interface QbOrderItem {
 }
 
 export interface QbCreateCustomerPayload {
-    Name: string         // Built by buildQbCustomerName()
+    Name: string         // Unique QB identifier — built by buildQbCustomerName()
+    FirstName?: string   // Individual's given name (separate from Name field)
+    LastName?: string    // Individual's family name (separate from Name field)
     CompanyName?: string
     Email?: string
     Phone?: string
@@ -117,7 +119,7 @@ export interface QbBridgeResult<T = any> {
 // ─── Internal fetch helper ─────────────────────────────────────────────────────
 
 async function bridgeFetch(
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     body?: object
 ): Promise<any> {
@@ -420,6 +422,151 @@ export async function adjustInventoryInQb(items: Array<{
             items: items.map(i => ({ ListID: i.listId, quantity: i.quantity }))
         })
         return { success: true }
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}
+
+// ─── Void / Cancel / Close ─────────────────────────────────────────────────────
+
+/**
+ * Closes a Sales Order in QuickBooks (IsManuallyClosed = true).
+ * Called when a Medusa order is cancelled before fulfillment.
+ * Requires a two-step flow: GET EditSequence → DELETE (close).
+ */
+export async function closeSalesOrderInQb(
+    soTxnId: string,
+    editSequence: string,
+    log: (msg: string) => void = console.log
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        log(`[QB DRY RUN] Would close Sales Order ${soTxnId}`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN" } }
+    }
+
+    try {
+        const data = await bridgeFetch("DELETE", `/api/sales-orders/${soTxnId}`, { EditSequence: editSequence })
+        const operationId = data?.operationId
+        if (!operationId) throw new Error("Bridge did not return operationId for Sales Order close")
+        log(`[QB] Sales Order ${soTxnId} close queued (op: ${operationId})`)
+        return { success: true, data: { operationId } }
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}
+
+/**
+ * Voids an Invoice in QuickBooks (TxnVoidRq — no EditSequence required).
+ * Called when a Medusa order is cancelled after invoice was created.
+ */
+export async function voidInvoiceInQb(
+    invoiceTxnId: string,
+    log: (msg: string) => void = console.log
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        log(`[QB DRY RUN] Would void Invoice ${invoiceTxnId}`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN" } }
+    }
+
+    try {
+        const data = await bridgeFetch("DELETE", `/api/invoices/${invoiceTxnId}`)
+        const operationId = data?.operationId
+        if (!operationId) throw new Error("Bridge did not return operationId for Invoice void")
+        log(`[QB] Invoice ${invoiceTxnId} void queued (op: ${operationId})`)
+        return { success: true, data: { operationId } }
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}
+
+/**
+ * Cancels an Estimate in QuickBooks (zeros all line quantities via EstimateMod).
+ * Called when a Medusa Draft Order is deleted before confirmation.
+ *
+ * @param estimateTxnId - QB TxnID of the estimate
+ * @param editSequence  - Fetch this first via GET /api/estimates/:txnId
+ * @param lines         - [{TxnLineID: string}] — from the estimate query result
+ */
+export async function cancelEstimateInQb(
+    estimateTxnId: string,
+    editSequence: string,
+    lines: Array<{ TxnLineID: string }>,
+    log: (msg: string) => void = console.log
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        log(`[QB DRY RUN] Would cancel Estimate ${estimateTxnId}`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN" } }
+    }
+
+    try {
+        const data = await bridgeFetch("DELETE", `/api/estimates/${estimateTxnId}`, {
+            EditSequence: editSequence,
+            lines,
+        })
+        const operationId = data?.operationId
+        if (!operationId) throw new Error("Bridge did not return operationId for Estimate cancel")
+        log(`[QB] Estimate ${estimateTxnId} cancel queued (op: ${operationId})`)
+        return { success: true, data: { operationId } }
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}
+
+/**
+ * Voids a Sales Receipt in QuickBooks (TxnVoidRq — no EditSequence required).
+ * Use case: cancelled in-store sale in the seller admin panel.
+ */
+export async function voidSalesReceiptInQb(
+    receiptTxnId: string,
+    log: (msg: string) => void = console.log
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        log(`[QB DRY RUN] Would void Sales Receipt ${receiptTxnId}`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN" } }
+    }
+
+    try {
+        const data = await bridgeFetch("DELETE", `/api/sales-receipts/${receiptTxnId}`)
+        const operationId = data?.operationId
+        if (!operationId) throw new Error("Bridge did not return operationId for Sales Receipt void")
+        log(`[QB] Sales Receipt ${receiptTxnId} void queued (op: ${operationId})`)
+        return { success: true, data: { operationId } }
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}
+
+/**
+ * Reassigns the customer on a QB document (SO or Invoice).
+ * Called when Medusa fires a "Transfer Ownership" on an order.
+ *
+ * @param docType       - 'sales-order' | 'invoice'
+ * @param txnId         - QB TxnID of the document
+ * @param editSequence  - Fetch this first via GET /api/<docType>/:txnId
+ * @param newCustomerId - New customer QB ListID
+ */
+export async function transferDocumentCustomer(
+    docType: "sales-order" | "invoice",
+    txnId: string,
+    editSequence: string,
+    newCustomerId: string,
+    log: (msg: string) => void = console.log
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        log(`[QB DRY RUN] Would transfer ${docType} ${txnId} to customer ${newCustomerId}`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN" } }
+    }
+
+    try {
+        const endpoint = docType === "sales-order" ? "/api/sales-orders" : "/api/invoices"
+        const data = await bridgeFetch("PATCH", `${endpoint}/${txnId}/customer`, {
+            customerId: newCustomerId,
+            EditSequence: editSequence,
+        })
+        const operationId = data?.operationId
+        if (!operationId) throw new Error(`Bridge did not return operationId for ${docType} customer transfer`)
+        log(`[QB] ${docType} ${txnId} customer transfer queued → ${newCustomerId} (op: ${operationId})`)
+        return { success: true, data: { operationId } }
     } catch (err: any) {
         return { success: false, error: err.message }
     }

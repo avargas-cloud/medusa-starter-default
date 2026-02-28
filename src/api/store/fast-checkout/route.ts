@@ -155,16 +155,31 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             country_code: (shippingAddress.country || "us").toLowerCase(),
         } : undefined
 
-        // ── STEP 2: Update cart (email + address in 1 call) ───────────────────
-        if (email || medusaShippingAddress) {
+        // Billing: use provided billingAddress (even if "same as shipping" the frontend copies
+        // the shipping fields into billingAddress). Fallback to shipping if not provided.
+        const billingSource = billingAddress || shippingAddress
+        const medusaBillingAddress = billingSource ? {
+            first_name: billingSource.firstName,
+            last_name: billingSource.lastName,
+            company: billingSource.company || "",
+            address_1: billingSource.address1,
+            city: billingSource.city,
+            province: mapProvince(billingSource.state),
+            postal_code: billingSource.postcode || billingSource.zip,
+            country_code: (billingSource.country || "us").toLowerCase(),
+        } : undefined
+
+        // ── STEP 2: Update cart (email + shipping + billing in 1 call) ─────────
+        if (email || medusaShippingAddress || medusaBillingAddress) {
             await updateCartWorkflow(req.scope).run({
                 input: {
                     id: cartId,
                     ...(email ? { email } : {}),
                     ...(medusaShippingAddress ? { shipping_address: medusaShippingAddress } : {}),
+                    ...(medusaBillingAddress ? { billing_address: medusaBillingAddress } : {}),
                 }
             })
-            console.log(`[fast-checkout] ✅ Cart updated (email=${email})`)
+            console.log(`[fast-checkout] ✅ Cart updated (email=${email}, billing=${medusaBillingAddress?.city ?? 'n/a'})`)
         }
 
         // ── STEP 2b: Ensure customer_id linked ────────────────────────────────

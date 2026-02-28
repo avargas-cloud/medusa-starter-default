@@ -25,6 +25,11 @@ import {
     processPaymentCaptureInQb,
     processInvoiceInQb,
 } from "../lib/quickbooks/order-flow-core"
+import {
+    closeSalesOrderInQb,
+    voidInvoiceInQb,
+    transferDocumentCustomer,
+} from "../lib/quickbooks/qb-bridge-client"
 
 const LOG_PREFIX = "[QB-ORDER]"
 
@@ -46,6 +51,12 @@ async function qbOrderSubscriber({ event, container }: SubscriberArgs<any>) {
             case "order.fulfillment_created":
                 await handleFulfillmentCreated(event.data, orderModule, logger)
                 break
+            case "order.canceled":
+                await handleOrderCanceled(event.data, orderModule, logger)
+                break
+            case "order.customer_transferred":
+                await handleCustomerTransferred(event.data, orderModule, logger)
+                break
             default:
                 logger.warn(`${LOG_PREFIX} Unhandled event: ${event.name}`)
         }
@@ -66,12 +77,28 @@ async function handleOrderPlaced(
     const orderId = data.id
     logger.info(`${LOG_PREFIX} order.placed → ${orderId}`)
 
-    // Fetch full order with items + customer
+    // In Medusa v2, orderModule cannot join cross-module relations (customer, items.variant)
+    // because they live in separate modules. Fetch only order-native data first.
     const order = await orderModule.retrieveOrder(orderId, {
-        relations: ["items", "items.variant", "customer", "customer.addresses"],
+        relations: ["items"],
     })
 
-    const result = await processOrderInQb(order, customerModule)
+    // Separately fetch the customer with their addresses (via customer module)
+    let customer = null
+    if (order.customer_id) {
+        try {
+            customer = await customerModule.retrieveCustomer(order.customer_id, {
+                relations: ["addresses"],
+            })
+        } catch (custErr: any) {
+            logger.warn(`${LOG_PREFIX} Could not fetch customer ${order.customer_id}: ${custErr.message}`)
+        }
+    }
+
+    // Attach customer to order object so processOrderInQb can use it
+    const orderWithCustomer = { ...order, customer }
+
+    const result = await processOrderInQb(orderWithCustomer, customerModule)
 
     if (result.skipped) {
         logger.info(`${LOG_PREFIX} Skipped: ${result.skipReason}`)
@@ -219,6 +246,100 @@ async function handleFulfillmentCreated(
     }
 }
 
+// ─── Cancel Order Handler ────────────────────────────────────────────────────
+
+async function handleOrderCanceled(
+    data: any,
+    orderModule: any,
+    logger: any
+) {
+    const orderId = data.id || data.order_id
+    logger.info(`${LOG_PREFIX} order.canceled → ${orderId}`)
+
+    const order = await orderModule.retrieveOrder(orderId)
+    const meta = order.metadata || {}
+
+    const soTxnId = meta.qb_sales_order_txn_id as string | undefined
+    const soEditSeq = meta.qb_sales_order_edit_sequence as string | undefined
+    const invoiceTxnId = meta.qb_invoice_txn_id as string | undefined
+
+    // Void Invoice if it exists (takes priority — SO is implicitly closed when invoice is issued)
+    if (invoiceTxnId) {
+        logger.info(`${LOG_PREFIX} Voiding QB Invoice ${invoiceTxnId} for order ${orderId}`)
+        const result = await voidInvoiceInQb(invoiceTxnId, (msg) => logger.info(msg))
+        if (!result.success) {
+            logger.error(`${LOG_PREFIX} ⚠️ Failed to void invoice: ${result.error}`)
+        } else {
+            logger.info(`${LOG_PREFIX} ✅ Invoice void queued (op: ${result.data?.operationId})`)
+        }
+    }
+
+    // Close Sales Order (requires EditSequence — skip if not stored)
+    if (soTxnId && soEditSeq) {
+        logger.info(`${LOG_PREFIX} Closing QB SO ${soTxnId} for order ${orderId}`)
+        const result = await closeSalesOrderInQb(soTxnId, soEditSeq, (msg) => logger.info(msg))
+        if (!result.success) {
+            logger.error(`${LOG_PREFIX} ⚠️ Failed to close SO: ${result.error}`)
+        } else {
+            logger.info(`${LOG_PREFIX} ✅ SO close queued (op: ${result.data?.operationId})`)
+        }
+    } else if (soTxnId && !soEditSeq) {
+        logger.warn(`${LOG_PREFIX} SO ${soTxnId} found but no EditSequence stored — cannot close SO automatically. Close manually in QB.`)
+    }
+
+    if (!soTxnId && !invoiceTxnId) {
+        logger.info(`${LOG_PREFIX} Order ${orderId} has no QB documents — nothing to cancel`)
+    }
+}
+
+// ─── Customer Transfer Handler ───────────────────────────────────────────────
+
+async function handleCustomerTransferred(
+    data: any,
+    orderModule: any,
+    logger: any
+) {
+    const orderId = data.id || data.order_id
+    logger.info(`${LOG_PREFIX} order.customer_transferred → ${orderId}`)
+
+    const order = await orderModule.retrieveOrder(orderId, { relations: ["customer"] })
+    const meta = order.metadata || {}
+
+    // Get new customer's QB ListID
+    const newQbCustomerId = order.customer?.metadata?.qb_list_id as string | undefined
+    if (!newQbCustomerId) {
+        logger.warn(`${LOG_PREFIX} New customer has no qb_list_id — cannot transfer QB documents`)
+        return
+    }
+
+    const soTxnId = meta.qb_sales_order_txn_id as string | undefined
+    const soEditSeq = meta.qb_sales_order_edit_sequence as string | undefined
+    const invoiceTxnId = meta.qb_invoice_txn_id as string | undefined
+    const invEditSeq = meta.qb_invoice_edit_sequence as string | undefined
+
+    // Transfer SO customer
+    if (soTxnId && soEditSeq) {
+        logger.info(`${LOG_PREFIX} Transferring SO ${soTxnId} to customer ${newQbCustomerId}`)
+        const result = await transferDocumentCustomer("sales-order", soTxnId, soEditSeq, newQbCustomerId, (msg) => logger.info(msg))
+        if (!result.success) {
+            logger.error(`${LOG_PREFIX} ⚠️ Failed to transfer SO customer: ${result.error}`)
+        }
+    }
+
+    // Transfer Invoice customer
+    if (invoiceTxnId && invEditSeq) {
+        logger.info(`${LOG_PREFIX} Transferring Invoice ${invoiceTxnId} to customer ${newQbCustomerId}`)
+        const result = await transferDocumentCustomer("invoice", invoiceTxnId, invEditSeq, newQbCustomerId, (msg) => logger.info(msg))
+        if (!result.success) {
+            logger.error(`${LOG_PREFIX} ⚠️ Failed to transfer invoice customer: ${result.error}`)
+        }
+    }
+
+    if (!soTxnId && !invoiceTxnId) {
+        logger.info(`${LOG_PREFIX} Order ${orderId} has no QB documents — nothing to transfer`)
+    }
+}
+
 // ─── Subscriber Configuration ────────────────────────────────────────────────
 
 export default qbOrderSubscriber
@@ -228,6 +349,8 @@ export const config: SubscriberConfig = {
         "order.placed",
         "order.payment_captured",
         "order.fulfillment_created",
+        "order.canceled",
+        "order.customer_transferred",
     ],
     context: {
         subscriberId: "qb-order-subscriber",
