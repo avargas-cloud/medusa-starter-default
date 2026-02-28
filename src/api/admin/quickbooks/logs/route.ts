@@ -3,77 +3,85 @@ import { Client } from "pg"
 
 /**
  * GET /admin/quickbooks/logs
- * Returns recent sync logs with pagination
+ * Returns QB process logs from qb_sync_log with filtering and pagination.
+ *
+ * Query params:
+ *   limit    — rows per page (default 25)
+ *   offset   — for pagination (default 0)
+ *   category — 'order' | 'sync' | all (default: all)
+ *   status   — 'processing' | 'completed' | 'failed' | 'skipped' (optional)
  */
 export async function GET(
     req: MedusaRequest,
     res: MedusaResponse
 ): Promise<void> {
-    const client = new Client({
-        connectionString: process.env.DATABASE_URL
-    })
+    const client = new Client({ connectionString: process.env.DATABASE_URL })
 
     try {
-        const limit = parseInt(req.query.limit as string) || 10
+        const limit = Math.min(parseInt(req.query.limit as string) || 25, 100)
         const offset = parseInt(req.query.offset as string) || 0
-        const type = req.query.type as string | undefined
+        const category = req.query.category as string | undefined  // 'order' | 'sync'
+        const status = req.query.status as string | undefined
 
         await client.connect()
 
-        // Build query with optional type filter
-        let whereClause = ""
+        const conditions: string[] = []
         const values: any[] = []
+        let p = 1
 
-        if (type) {
-            whereClause = "WHERE type = $1"
-            values.push(type)
-            values.push(limit, offset)
-        } else {
-            values.push(limit, offset)
+        // Category filter: order ops vs batch syncs
+        if (category === 'order') {
+            conditions.push(`operation IN ('sales_order','estimate','payment','invoice','cancel','customer_transfer')`)
+        } else if (category === 'sync') {
+            conditions.push(`operation IN ('inventory_sync','price_sync','customer_sync')`)
         }
 
-        const query = `
-            SELECT 
+        if (status) {
+            conditions.push(`status = $${p++}`)
+            values.push(status)
+        }
+
+        const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+
+        const rows = await client.query(`
+            SELECT
                 id,
-                type,
+                operation,
                 status,
+                order_id,
+                order_display_id,
+                draft_order_id,
+                event_type,
+                sync_type,
+                triggered_by,
                 message,
-                stats,
-                started_at,
+                error,
+                qb_txn_id,
+                qb_ref_number,
+                duration_ms,
+                initiated_at,
                 completed_at,
-                created_at
-            FROM quickbooks_logs
-            ${whereClause}
-            ORDER BY created_at DESC
-            LIMIT $${values.length - 1} OFFSET $${values.length}
-        `
+                metadata
+            FROM qb_sync_log
+            ${where}
+            ORDER BY initiated_at DESC
+            LIMIT $${p} OFFSET $${p + 1}
+        `, [...values, limit, offset])
 
-        const result = await client.query(query, values)
-
-        // Get total count
-        const countQuery = type
-            ? "SELECT COUNT(*) FROM quickbooks_logs WHERE type = $1"
-            : "SELECT COUNT(*) FROM quickbooks_logs"
-
-        const countValues = type ? [type] : []
-        const countResult = await client.query(countQuery, countValues)
+        const countResult = await client.query(
+            `SELECT COUNT(*) FROM qb_sync_log ${where}`,
+            values
+        )
         const total = parseInt(countResult.rows[0].count)
 
         res.json({
-            logs: result.rows,
-            pagination: {
-                total,
-                limit,
-                offset,
-                hasMore: offset + result.rows.length < total
-            }
+            logs: rows.rows,
+            pagination: { total, limit, offset, hasMore: offset + rows.rows.length < total }
         })
 
     } catch (error: any) {
-        console.error("Error fetching logs:", error)
-        res.status(500).json({
-            error: "Failed to fetch logs"
-        })
+        console.error("Error fetching QB logs:", error)
+        res.status(500).json({ error: "Failed to fetch logs" })
     } finally {
         await client.end()
     }

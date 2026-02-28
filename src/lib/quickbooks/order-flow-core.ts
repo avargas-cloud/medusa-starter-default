@@ -46,6 +46,7 @@ import {
     QbOrderItem,
 } from "./qb-bridge-client"
 import { isQbIntegrationEnabled } from "./qb-integration-guard"
+import { QbSyncLogger } from "./qb-sync-logger"
 
 const ORDER_FLOW_ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
 const DRY_RUN = process.env.QB_DRY_RUN === "true"
@@ -226,22 +227,34 @@ export async function processOrderInQb(
     const prefix = DRY_RUN ? "[QB DRY RUN]" : "[QB]"
     console.log(`${prefix} Processing order #${order.display_id || order.id} in QuickBooks...`)
 
+    const logId = await QbSyncLogger.start({
+        operation: "sales_order",
+        orderId: order.id,
+        orderDisplayId: order.display_id,
+        eventType: "order.placed",
+        triggeredBy: "event",
+        message: `Creating Sales Order for order #${order.display_id || order.id}`,
+    })
+
     try {
         // 1. Health check
         const healthy = await checkBridgeHealth()
         if (!healthy && !DRY_RUN) {
             console.warn(`[QB] ⚠️ Bridge health check failed. Order #${order.display_id} will NOT be sent to QB.`)
+            await QbSyncLogger.skip(logId, "Bridge unreachable")
             return { enabled: true, skipped: true, skipReason: "Bridge unreachable" }
         }
 
         // 2. Ensure customer exists in QB
         const customer = order.customer
         if (!customer) {
+            await QbSyncLogger.skip(logId, "Order has no customer data")
             return { enabled: true, skipped: true, skipReason: "Order has no customer data" }
         }
 
         const custResult = await ensureCustomerInQb(customer, customerModule)
         if (!custResult.success) {
+            await QbSyncLogger.fail(logId, custResult.error || "Customer creation failed")
             return { enabled: true, error: custResult.error }
         }
         const qbCustomerId = custResult.qbCustomerId!
@@ -251,6 +264,7 @@ export async function processOrderInQb(
 
         if (soItems.length === 0) {
             console.warn(`${prefix} ⚠️ Order #${order.display_id} has no items with quickbooks_id — skipping SO creation`)
+            await QbSyncLogger.skip(logId, "No QB-linked items in order")
             return { enabled: true, dryRun: DRY_RUN, customerId: qbCustomerId, skipReason: "No QB-linked items in order" }
         }
 
@@ -260,7 +274,6 @@ export async function processOrderInQb(
         let soResult
 
         if (estimateTxnId) {
-            // Convert Estimate → Sales Order
             console.log(`${prefix} Order derived from estimate ${estimateTxnId} — converting to Sales Order...`)
             soResult = await convertEstimateToSalesOrder({
                 estimateTxnId,
@@ -271,7 +284,6 @@ export async function processOrderInQb(
                 memo: `Medusa Order #${order.display_id || order.id} — from Estimate ${order.metadata?.qb_estimate_ref || estimateTxnId}`,
             })
         } else {
-            // Standalone Sales Order
             const orderDate = getDateString(order.created_at)
             soResult = await createSalesOrderInQb({
                 customerId: qbCustomerId,
@@ -284,6 +296,7 @@ export async function processOrderInQb(
 
         if (!soResult.success) {
             console.error(`[QB] ❌ Failed to create Sales Order: ${soResult.error}`)
+            await QbSyncLogger.fail(logId, `SO creation failed: ${soResult.error}`)
             return { enabled: true, dryRun: DRY_RUN, customerId: qbCustomerId, error: `SO creation failed: ${soResult.error}` }
         }
 
@@ -308,6 +321,16 @@ export async function processOrderInQb(
             console.log(`${prefix} ✅ Sales Order created. TxnID: ${txnId}, Ref: ${refNumber || "pending"}`)
         }
 
+        await QbSyncLogger.complete(logId, {
+            qbTxnId: txnId,
+            qbRefNumber: refNumber,
+            qbOperationId: asyncData.operationId,
+            message: txnId
+                ? `Sales Order created — TxnID: ${txnId}, Ref: ${refNumber || "pending"}`
+                : `Sales Order queued — OperationID: ${asyncData.operationId}`,
+            metadata: { qbCustomerId, dryRun: DRY_RUN },
+        })
+
         return {
             enabled: true,
             dryRun: DRY_RUN,
@@ -319,6 +342,7 @@ export async function processOrderInQb(
 
     } catch (err: any) {
         console.error(`[QB] ❌ Unexpected error in processOrderInQb: ${err.message}`)
+        await QbSyncLogger.fail(logId, err.message)
         return { enabled: true, error: err.message }
     }
 }
@@ -333,8 +357,8 @@ export async function processPaymentCaptureInQb(capture: {
     orderId: string
     orderDisplayId?: number
     amount: number        // in cents (Medusa v2)
-    paymentMethod: string // e.g., "Credit Card", "Visa", "MasterCard"
-    qbCustomerId: string  // QB ListID of the customer
+    paymentMethod: string
+    qbCustomerId: string
 }): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
@@ -343,6 +367,16 @@ export async function processPaymentCaptureInQb(capture: {
     const amountDollars = (capture.amount / 100)
 
     console.log(`${prefix} Recording payment of $${amountDollars.toFixed(2)} for order #${capture.orderDisplayId || capture.orderId}...`)
+
+    const logId = await QbSyncLogger.start({
+        operation: "payment",
+        orderId: capture.orderId,
+        orderDisplayId: capture.orderDisplayId,
+        eventType: "order.payment_captured",
+        triggeredBy: "event",
+        message: `Recording payment of $${amountDollars.toFixed(2)} for order #${capture.orderDisplayId || capture.orderId}`,
+        metadata: { amount: amountDollars, paymentMethod: capture.paymentMethod },
+    })
 
     const result = await receivePaymentInQb({
         customerId: capture.qbCustomerId,
@@ -355,13 +389,13 @@ export async function processPaymentCaptureInQb(capture: {
 
     if (!result.success) {
         console.error(`[QB] ❌ Failed to record payment: ${result.error}`)
+        await QbSyncLogger.fail(logId, result.error || "Payment failed")
         return { enabled: true, error: result.error }
     }
 
     const asyncData = result.data!
     console.log(`${prefix} ✅ Payment queued. OperationID: ${asyncData.operationId}`)
 
-    // Poll for txnId + refNumber
     let txnId = asyncData.txnId
     let refNumber = asyncData.refNumber
 
@@ -379,6 +413,15 @@ export async function processPaymentCaptureInQb(capture: {
         console.log(`${prefix} ✅ Payment recorded. TxnID: ${txnId}, Ref: ${refNumber || "pending"}`)
     }
 
+    await QbSyncLogger.complete(logId, {
+        qbTxnId: txnId,
+        qbRefNumber: refNumber,
+        qbOperationId: asyncData.operationId,
+        message: txnId
+            ? `Payment recorded — $${amountDollars.toFixed(2)}, TxnID: ${txnId}`
+            : `Payment queued — OperationID: ${asyncData.operationId}`,
+    })
+
     return { enabled: true, operationId: asyncData.operationId, txnId, refNumber }
 }
 
@@ -392,16 +435,25 @@ export async function processInvoiceInQb(invoice: {
     orderId: string
     orderDisplayId?: number
     qbCustomerId: string
-    qbSoTxnId: string          // Sales Order TxnID to link
-    qbPaymentTxnId?: string    // Payment TxnID to apply
-    paymentAmount?: number     // in cents (Medusa v2)
+    qbSoTxnId: string
+    qbPaymentTxnId?: string
+    paymentAmount?: number
 }): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
 
     const prefix = DRY_RUN ? "[QB DRY RUN]" : "[QB]"
 
-    // Step 1: Create Invoice linked to Sales Order
+    const logId = await QbSyncLogger.start({
+        operation: "invoice",
+        orderId: invoice.orderId,
+        orderDisplayId: invoice.orderDisplayId,
+        eventType: "order.fulfillment_created",
+        triggeredBy: "event",
+        message: `Creating Invoice for order #${invoice.orderDisplayId || invoice.orderId} linked to SO: ${invoice.qbSoTxnId}`,
+        metadata: { qbSoTxnId: invoice.qbSoTxnId, qbPaymentTxnId: invoice.qbPaymentTxnId },
+    })
+
     console.log(`${prefix} Creating Invoice for order #${invoice.orderDisplayId || invoice.orderId} linked to SO: ${invoice.qbSoTxnId}...`)
 
     const invResult = await createInvoiceInQb({
@@ -412,13 +464,13 @@ export async function processInvoiceInQb(invoice: {
 
     if (!invResult.success) {
         console.error(`[QB] ❌ Failed to create Invoice: ${invResult.error}`)
+        await QbSyncLogger.fail(logId, invResult.error || "Invoice creation failed")
         return { enabled: true, error: invResult.error }
     }
 
     const asyncData = invResult.data!
     console.log(`${prefix} ✅ Invoice queued. OperationID: ${asyncData.operationId}`)
 
-    // Poll for Invoice txnId + refNumber
     let invTxnId = asyncData.txnId
     let invRefNumber = asyncData.refNumber
 
@@ -436,7 +488,6 @@ export async function processInvoiceInQb(invoice: {
         console.log(`${prefix} ✅ Invoice created. TxnID: ${invTxnId}, Ref: ${invRefNumber || "pending"}`)
     }
 
-    // Step 2: Apply Payment to Invoice (if we have both IDs)
     if (invTxnId && invoice.qbPaymentTxnId && invoice.paymentAmount) {
         console.log(`${prefix} Applying payment ${invoice.qbPaymentTxnId} to invoice ${invTxnId}...`)
 
@@ -453,6 +504,15 @@ export async function processInvoiceInQb(invoice: {
             console.log(`${prefix} ✅ Payment applied to Invoice.`)
         }
     }
+
+    await QbSyncLogger.complete(logId, {
+        qbTxnId: invTxnId,
+        qbRefNumber: invRefNumber,
+        qbOperationId: asyncData.operationId,
+        message: invTxnId
+            ? `Invoice created — TxnID: ${invTxnId}${invoice.qbPaymentTxnId ? " + payment applied" : ""}`
+            : `Invoice queued — OperationID: ${asyncData.operationId}`,
+    })
 
     return { enabled: true, operationId: asyncData.operationId, txnId: invTxnId, refNumber: invRefNumber }
 }
@@ -476,8 +536,17 @@ export async function processEstimateInQb(draft: {
     const prefix = DRY_RUN ? "[QB DRY RUN]" : "[QB]"
     console.log(`${prefix} Creating Estimate for draft order ${draft.draftOrderId}...`)
 
+    const logId = await QbSyncLogger.start({
+        operation: "estimate",
+        draftOrderId: draft.draftOrderId,
+        eventType: "draft_order.created",
+        triggeredBy: "event",
+        message: `Creating Estimate for draft order ${draft.draftOrderId}`,
+    })
+
     if (draft.items.length === 0) {
         console.warn(`${prefix} ⚠️ Draft order has no QB-linked items — skipping Estimate`)
+        await QbSyncLogger.skip(logId, "No QB-linked items in draft order")
         return { enabled: true, skipped: true }
     }
 
@@ -490,13 +559,13 @@ export async function processEstimateInQb(draft: {
 
     if (!estResult.success) {
         console.error(`[QB] ❌ Failed to create Estimate: ${estResult.error}`)
+        await QbSyncLogger.fail(logId, estResult.error || "Estimate creation failed")
         return { enabled: true, error: estResult.error }
     }
 
     const asyncData = estResult.data!
     console.log(`${prefix} ✅ Estimate queued. OperationID: ${asyncData.operationId}`)
 
-    // Poll for txnId + refNumber
     let txnId = asyncData.txnId
     let refNumber = asyncData.refNumber
 
@@ -513,6 +582,15 @@ export async function processEstimateInQb(draft: {
     if (txnId) {
         console.log(`${prefix} ✅ Estimate created. TxnID: ${txnId}, Ref: ${refNumber || "pending"}`)
     }
+
+    await QbSyncLogger.complete(logId, {
+        qbTxnId: txnId,
+        qbRefNumber: refNumber,
+        qbOperationId: asyncData.operationId,
+        message: txnId
+            ? `Estimate created — TxnID: ${txnId}, Ref: ${refNumber || "pending"}`
+            : `Estimate queued — OperationID: ${asyncData.operationId}`,
+    })
 
     return { enabled: true, operationId: asyncData.operationId, txnId, refNumber }
 }
