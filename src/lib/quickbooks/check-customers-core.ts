@@ -1,4 +1,4 @@
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 import { ICustomerModuleService } from "@medusajs/types"
 import { Client } from "pg"
 
@@ -64,7 +64,7 @@ export async function checkCustomersCore(container: any): Promise<CheckCustomers
         // 1. Fetch QB Customers via Bridge
         logger.info("📡 Requesting Customer Data from Bridge...")
         const initRes = await fetch(`${BRIDGE_URL}/api/customers`, {
-            headers: { "x-api-key": API_KEY }
+            headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" }
         })
 
         if (!initRes.ok) {
@@ -88,7 +88,7 @@ export async function checkCustomersCore(container: any): Promise<CheckCustomers
             await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
 
             const statusRes = await fetch(`${BRIDGE_URL}/api/sync/status/${operationId}`, {
-                headers: { "x-api-key": API_KEY }
+                headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" }
             })
 
             if (!statusRes.ok) {

@@ -1,4 +1,4 @@
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 import { IPricingModuleService } from "@medusajs/types"
 import { isQbIntegrationEnabled } from "./qb-integration-guard"
 import { syncInventoryWorkflow } from "../../workflows/sync-inventory"
@@ -130,7 +130,7 @@ export async function syncPricesCore(
         // 2. Initiate Bulk Sync
         log("📡 Requesting Bulk Data from Bridge...")
         const initRes = await fetch(`${BRIDGE_URL}/api/products`, {
-            headers: { "x-api-key": API_KEY }
+            headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" }
         })
 
         if (!initRes.ok) {
@@ -154,7 +154,7 @@ export async function syncPricesCore(
             await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
 
             const statusRes = await fetch(`${BRIDGE_URL}/api/sync/status/${operationId}`, {
-                headers: { "x-api-key": API_KEY }
+                headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" }
             })
 
             if (!statusRes.ok) {

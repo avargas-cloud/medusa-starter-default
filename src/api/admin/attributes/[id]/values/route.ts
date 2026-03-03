@@ -1,15 +1,13 @@
 
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { PRODUCT_ATTRIBUTES_MODULE } from "../../../../../modules/product-attributes"
-import ProductAttributesModuleService from "../../../../../modules/product-attributes/service"
 
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     const { id } = req.params
     const { value } = req.body as { value: string }
 
-    const service: ProductAttributesModuleService = req.scope.resolve(
-        PRODUCT_ATTRIBUTES_MODULE
-    )
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE) as any
 
     try {
         const result = await service.createAttributeValues({

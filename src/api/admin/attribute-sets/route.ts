@@ -1,10 +1,10 @@
 
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { PRODUCT_ATTRIBUTES_MODULE } from "../../../modules/product-attributes"
-import ProductAttributesService from "../../../modules/product-attributes/service"
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
-    const service: ProductAttributesService = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE) as any
 
     // Fetch all sets
     const attribute_sets = await service.listAttributeSets({}, {
@@ -18,7 +18,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 }
 
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
-    const service: ProductAttributesService = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE) as any
     const body = req.body as any
 
     // Auto-generate handle if missing

@@ -1,5 +1,5 @@
 import { ICustomerModuleService } from "@medusajs/framework/types"
-import { Modules, ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { Modules, ContainerRegistrationKeys } from "@medusajs/utils"
 import { isQbIntegrationEnabled } from "./qb-integration-guard"
 // using native fetch
 
@@ -68,7 +68,7 @@ export async function reconcileCustomersCore(
         // 1. Fetch QB Customers
         log("📡 Requesting Customer Data from Bridge for Reconciliation...")
         const initRes = await fetch(`${BRIDGE_URL}/api/customers?MaxReturned=99999&ActiveStatus=All`, {
-            headers: { "x-api-key": API_KEY }
+            headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" }
         })
 
         if (!initRes.ok) {
@@ -93,7 +93,7 @@ export async function reconcileCustomersCore(
             log(`⏳ Polling Status (${attempts}/${MAX_POLL_ATTEMPTS})...`)
 
             const statusRes = await fetch(`${BRIDGE_URL}/api/sync/status/${operationId}`, {
-                headers: { "x-api-key": API_KEY }
+                headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" }
             })
 
             if (!statusRes.ok) {

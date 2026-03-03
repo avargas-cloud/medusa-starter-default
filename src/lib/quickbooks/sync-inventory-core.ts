@@ -1,4 +1,4 @@
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 import { IInventoryService, IStockLocationService } from "@medusajs/types"
 import { isQbIntegrationEnabled } from "./qb-integration-guard"
 import { syncInventoryWorkflow } from "../../workflows/sync-inventory"
@@ -126,7 +126,7 @@ export async function syncInventoryCore(
         // 3. Initiate Bulk Sync via QB Bridge
         log("📡 Requesting Bulk Data from QB Bridge...")
         const initRes = await fetch(`${BRIDGE_URL}/api/products`, {
-            headers: { "x-api-key": API_KEY }
+            headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" }
         })
 
         if (!initRes.ok) {
@@ -150,7 +150,7 @@ export async function syncInventoryCore(
             await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
 
             const statusRes = await fetch(`${BRIDGE_URL}/api/sync/status/${operationId}`, {
-                headers: { "x-api-key": API_KEY }
+                headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" }
             })
 
             if (!statusRes.ok) {

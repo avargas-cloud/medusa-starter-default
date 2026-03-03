@@ -1,6 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
 import { PRODUCT_ATTRIBUTES_MODULE } from "../../../../modules/product-attributes"
-import ProductAttributesService from "../../../../modules/product-attributes/service"
 
 // POST - Update/Rename attribute set
 export async function POST(
@@ -13,7 +12,8 @@ export async function POST(
         return res.status(400).json({ error: "id parameter is required" })
     }
 
-    const service: ProductAttributesService = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE) as any
 
     try {
         // Standard Medusa V2 update expects selector + data, or upsert method
@@ -42,7 +42,8 @@ export async function DELETE(
         return res.status(400).json({ error: "id parameter is required" })
     }
 
-    const service: ProductAttributesService = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE) as any
 
     try {
         // MedusaService default delete

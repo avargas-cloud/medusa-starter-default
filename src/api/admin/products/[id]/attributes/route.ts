@@ -125,7 +125,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
                     const productWithOptions = await productService.retrieveProduct(productId, {
                         relations: ["options"]
                     })
-                    const optionToDelete = productWithOptions.options?.find(o => o.title === keyLabel)
+                    const optionToDelete = productWithOptions.options?.find((o: any) => o.title === keyLabel)
 
                     if (optionToDelete) {
                         try {
@@ -210,7 +210,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
             for (const attr of variantAttributes) {
                 const optionTitle = attr.label
                 const optionValues = attr.values.map(v => v.value)
-                const existingOption = productWithOptions.options?.find(o => o.title === optionTitle)
+                const existingOption = productWithOptions.options?.find((o: any) => o.title === optionTitle)
 
                 if (!existingOption) {
                     console.log(`   Creating option: ${optionTitle}`)
@@ -237,17 +237,17 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
             const variantsToCreate = combinations
                 .map(combo => {
-                    const optionsMap = combo.reduce((acc: any, v: any) => {
+                    const optionsMap = combo.reduce((acc: Record<string, string>, v: any) => {
                         acc[v.attribute_key.label] = v.value
                         return acc
                     }, {} as Record<string, string>)
 
                     // Check if variant with these exact options already exists
-                    const isDuplicate = existingVariants.some(variant => {
+                    const isDuplicate = existingVariants.some((variant: any) => {
                         if (!variant.options || variant.options.length === 0) return false
 
                         // Compare all option values
-                        const variantOptions = variant.options.reduce((acc, opt) => {
+                        const variantOptions = variant.options.reduce((acc: Record<string, string>, opt: any) => {
                             acc[opt.option?.title || ''] = opt.value
                             return acc
                         }, {} as Record<string, string>)

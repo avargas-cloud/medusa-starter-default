@@ -1,4 +1,4 @@
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 import { ICustomerModuleService } from "@medusajs/types"
 import { isQbIntegrationEnabled } from "./qb-integration-guard"
 import postgres from "postgres"
@@ -63,7 +63,7 @@ export async function syncCustomersCore(
         // 1. Fetch QB Customers
         logger.info("📡 Requesting Customer Data from Bridge...")
         const initRes = await fetch(`${BRIDGE_URL}/api/customers?MaxReturned=99999&ActiveStatus=All`, {
-            headers: { "x-api-key": API_KEY }
+            headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" }
         })
 
         if (!initRes.ok) {
@@ -89,7 +89,7 @@ export async function syncCustomersCore(
             log(`⏳ Polling Status (${attempts}/${MAX_POLL_ATTEMPTS})...`)
 
             const statusRes = await fetch(`${BRIDGE_URL}/api/sync/status/${operationId}`, {
-                headers: { "x-api-key": API_KEY }
+                headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" }
             })
 
             if (!statusRes.ok) {
