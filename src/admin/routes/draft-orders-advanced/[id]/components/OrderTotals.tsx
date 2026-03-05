@@ -9,9 +9,11 @@ interface Props {
     total: number
     itemCount: number
     curr: string
+    /** Tax rate as a percentage (e.g. 7 for 7%). If provided shows "Tax (7%)" label. */
+    taxRate?: number
 }
 
-export const OrderTotals = ({ subtotal, shippingTotal, discountTotal, taxTotal, total, itemCount, curr }: Props) => (
+export const OrderTotals = ({ subtotal, shippingTotal, discountTotal, taxTotal, total, itemCount, curr, taxRate }: Props) => (
     <Container className="p-0 overflow-hidden">
         <div className="px-6 py-4 border-b border-ui-border-base">
             <Heading level="h2">Order Total</Heading>
@@ -21,7 +23,7 @@ export const OrderTotals = ({ subtotal, shippingTotal, discountTotal, taxTotal, 
                 ["Subtotal", subtotal, `${itemCount} item${itemCount !== 1 ? "s" : ""}`],
                 ["Shipping", shippingTotal, null],
                 ["Discount", discountTotal, null],
-                ["Tax", taxTotal, null],
+                [taxRate != null ? `Tax (${taxRate}%)` : "Tax", taxTotal, null],
             ] as const).map(([lbl, val, note]) => (
                 <div key={lbl as string} className="flex justify-between">
                     <Text size="small" className="text-ui-fg-subtle">

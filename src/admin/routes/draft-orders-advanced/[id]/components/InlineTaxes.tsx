@@ -21,6 +21,8 @@ interface Props {
     curr: string
     triggerKey?: any
     onTaxChange?: (amount: number) => void
+    /** Called with the effective rate % (e.g. 7 for 7%) whenever tax is computed */
+    onTaxRateChange?: (rate: number) => void
 }
 
 const MODE_LABELS: Record<TaxMode, string> = {
@@ -29,7 +31,7 @@ const MODE_LABELS: Record<TaxMode, string> = {
     auto: "Auto",
 }
 
-export const InlineTaxes = ({ orderId, curr, triggerKey, onTaxChange }: Props) => {
+export const InlineTaxes = ({ orderId, curr, triggerKey, onTaxChange, onTaxRateChange }: Props) => {
     const [tax, setTax] = useState<TaxResult | null>(null)
     const [loading, setLoading] = useState(false)
     const [saving, setSaving] = useState(false)
@@ -43,6 +45,7 @@ export const InlineTaxes = ({ orderId, curr, triggerKey, onTaxChange }: Props) =
                 const data: TaxResult = await r.json()
                 setTax(data)
                 onTaxChange?.(data.amount)
+                onTaxRateChange?.(data.exempt ? 0 : (data.rate ?? 0))
             }
         } catch { /* silent */ } finally { setLoading(false) }
     }, [orderId, onTaxChange])
@@ -59,6 +62,7 @@ export const InlineTaxes = ({ orderId, curr, triggerKey, onTaxChange }: Props) =
             : tax.amount)
         setTax(prev => prev ? { ...prev, mode: newMode, amount: optimisticAmount, exempt: newMode === "exempt" } : prev)
         onTaxChange?.(optimisticAmount)
+        onTaxRateChange?.(newMode === "exempt" ? 0 : 7)
 
         setSaving(true)
         try {
