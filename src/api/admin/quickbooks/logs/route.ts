@@ -61,7 +61,8 @@ export async function GET(
                 duration_ms,
                 initiated_at,
                 completed_at,
-                metadata
+                metadata,
+                server_host
             FROM qb_sync_log
             ${where}
             ORDER BY initiated_at DESC

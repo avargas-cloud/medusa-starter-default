@@ -25,6 +25,14 @@
  */
 
 import { Client } from "pg"
+import os from "os"
+
+/** Identifies where this code is running: Railway service name or local hostname */
+const SERVER_LABEL: string = process.env.RAILWAY_SERVICE_NAME
+    ? `Railway:${process.env.RAILWAY_SERVICE_NAME}`
+    : process.env.RAILWAY_ENVIRONMENT
+        ? `Railway:${process.env.RAILWAY_ENVIRONMENT}`
+        : os.hostname()
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -104,12 +112,12 @@ export const QbSyncLogger = {
                     operation, status,
                     order_id, order_display_id, draft_order_id, event_type,
                     sync_type, triggered_by,
-                    message, metadata, initiated_at
+                    message, metadata, server_host, initiated_at
                 ) VALUES (
                     $1, 'processing',
                     $2, $3, $4, $5,
                     $6, $7,
-                    $8, $9, NOW()
+                    $8, $9, $10, NOW()
                 )
                 RETURNING id
             `, [
@@ -122,6 +130,7 @@ export const QbSyncLogger = {
                 opts.triggeredBy ?? "event",
                 opts.message ?? null,
                 opts.metadata ? JSON.stringify(opts.metadata) : null,
+                SERVER_LABEL,
             ])
             return rows[0]!.id
         })

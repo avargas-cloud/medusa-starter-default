@@ -24,6 +24,7 @@ interface LogEntry {
     duration_ms: number | null
     initiated_at: string
     completed_at: string | null
+    server_host: string | null
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -115,7 +116,16 @@ const LogRow = ({ log }: { log: LogEntry }) => {
                         )}
                     </div>
                     {log.message && (
-                        <Text className="text-xs text-ui-fg-subtle truncate">{log.message}</Text>
+                        <Text className="text-xs text-ui-fg-subtle">{log.message}</Text>
+                    )}
+                    {/* Server badge — 3rd line */}
+                    {log.server_host && (
+                        <Text className="text-xs text-ui-fg-muted">
+                            {log.server_host.startsWith('Railway')
+                                ? <span style={{ color: '#f97316' }}>⚡ {log.server_host}</span>
+                                : <span style={{ color: '#94a3b8' }}>💻 {log.server_host}</span>
+                            }
+                        </Text>
                     )}
                 </div>
 
