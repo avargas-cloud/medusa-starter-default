@@ -65,61 +65,76 @@ export default async function qbDailySyncHandler(container: MedusaContainer) {
 
         // ─── Price Sync ────────────────────────────────────────────────────────
         if (cfg.price_interval_minutes) {
-            const targetHour: number = cfg.price_sync_hour ?? 0
+            const isDaily = cfg.price_interval_minutes >= 1440
+            let shouldRunPrice = false
 
-            // Only run in the target hour window
-            if (currentHour !== targetHour) {
-                console.log(
-                    `${TAG} Price sync not due yet (target: ${targetHour}:00, current: ${currentHour}:xx ${tz}).`
-                )
-            } else {
-                // Anti-duplicate: check if already ran today at this hour
-                let alreadyRan = false
-                if (cfg.last_price_sync) {
-                    const lastSyncDateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz })
-                        .format(new Date(cfg.last_price_sync))
-                    const lastSyncHour = parseInt(
-                        new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: false, timeZone: tz })
-                            .format(new Date(cfg.last_price_sync)),
-                        10
-                    )
-                    // Only skip if still within the same target-hour window (same day + same hour)
-                    if (lastSyncDateStr === todayStr && lastSyncHour === targetHour) {
-                        alreadyRan = true
-                        console.log(
-                            `${TAG} Price sync already completed today at ${targetHour}:00 ${tz}. Skipping.`
+            if (isDaily) {
+                // ── Daily mode: run once a day at the configured hour ──────────
+                const targetHour: number = cfg.price_sync_hour ?? 0
+
+                if (currentHour !== targetHour) {
+                    console.log(`${TAG} Price sync not due yet (Daily: target ${targetHour}:00, current ${currentHour}:xx ${tz}).`)
+                } else {
+                    let alreadyRan = false
+                    if (cfg.last_price_sync) {
+                        const lastDateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz })
+                            .format(new Date(cfg.last_price_sync))
+                        const lastHour = parseInt(
+                            new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: false, timeZone: tz })
+                                .format(new Date(cfg.last_price_sync)),
+                            10
                         )
+                        if (lastDateStr === todayStr && lastHour === targetHour) {
+                            alreadyRan = true
+                            console.log(`${TAG} Price sync already completed today at ${targetHour}:00 ${tz}. Skipping.`)
+                        }
+                    }
+                    if (!alreadyRan) shouldRunPrice = true
+                }
+            } else {
+                // ── Interval mode: run every X hours based on elapsed time ─────
+                const intervalMs = cfg.price_interval_minutes * 60 * 1000
+                if (!cfg.last_price_sync) {
+                    shouldRunPrice = true // never synced before
+                } else {
+                    const elapsedMs = Date.now() - new Date(cfg.last_price_sync).getTime()
+                    if (elapsedMs >= intervalMs) {
+                        shouldRunPrice = true
+                    } else {
+                        const remainingMin = Math.round((intervalMs - elapsedMs) / 60000)
+                        console.log(`${TAG} Price sync not due yet — next in ~${remainingMin} min.`)
                     }
                 }
+            }
 
-                if (!alreadyRan) {
-                    console.log(
-                        `${TAG} ⏰ Running price sync at ${targetHour}:00 ${tz} (this may take several minutes)...`
-                    )
-                    const logId = await QbSyncLogger.start({
-                        operation: "price_sync",
-                        syncType: "price",
-                        triggeredBy: "auto",
-                        message: `Scheduled price sync started (daily at ${targetHour}:00 ${tz})`,
-                        db: client,
-                    })
-                    try {
-                        const result = await syncPricesCore(container as any)
-                        if (result.success) {
-                            await client.query(
-                                `UPDATE quickbooks_config SET last_price_sync = NOW(), updated_at = NOW() WHERE id = 'default'`
-                            )
-                            const msg = `Prices: ${result.stats.updatedPrice} retail + ${result.stats.updatedWholesale ?? 0} wholesale updated`
-                            console.log(`${TAG} ✅ ${msg}`)
-                            await QbSyncLogger.complete(logId, { message: msg, db: client })
-                        } else {
-                            console.error(`${TAG} ❌ Price sync failed: ${result.error}`)
-                            await QbSyncLogger.fail(logId, result.error || "Unknown error", { db: client })
-                        }
-                    } catch (e: any) {
-                        console.error(`${TAG} ❌ Price sync threw: ${e.message}`)
-                        await QbSyncLogger.fail(logId, e.message, { db: client })
+            if (shouldRunPrice) {
+                const modeLabel = isDaily
+                    ? `daily at ${cfg.price_sync_hour ?? 0}:00 ${tz}`
+                    : `every ${cfg.price_interval_minutes}min`
+                console.log(`${TAG} ⏰ Running price sync (${modeLabel})...`)
+                const logId = await QbSyncLogger.start({
+                    operation: "price_sync",
+                    syncType: "price",
+                    triggeredBy: "auto",
+                    message: `Scheduled price sync started (${modeLabel})`,
+                    db: client,
+                })
+                try {
+                    const result = await syncPricesCore(container as any)
+                    if (result.success) {
+                        await client.query(
+                            `UPDATE quickbooks_config SET last_price_sync = NOW(), updated_at = NOW() WHERE id = 'default'`
+                        )
+                        const msg = `Prices: ${result.stats.updatedPrice} retail + ${result.stats.updatedWholesale ?? 0} wholesale updated`
+                        console.log(`${TAG} ✅ ${msg}`)
+                        await QbSyncLogger.complete(logId, { message: msg, db: client })
+                    } else {
+                        console.error(`${TAG} ❌ Price sync failed: ${result.error}`)
+                        await QbSyncLogger.fail(logId, result.error || "Unknown error", { db: client })
                     }
+                } catch (e: any) {
+                    console.error(`${TAG} ❌ Price sync threw: ${e.message}`)
+                    await QbSyncLogger.fail(logId, e.message, { db: client })
                 }
             }
         }

@@ -29,7 +29,7 @@ const HOUR_INTERVALS = [
     { value: "2", label: "2 hours" },
     { value: "5", label: "5 hours" },
     { value: "10", label: "10 hours" },
-    { value: "24", label: "24 hours" },
+    { value: "24", label: "Daily" },
 ]
 const TIME_OF_DAY = Array.from({ length: 24 }, (_, i) => {
     const h = i.toString().padStart(2, '0')
@@ -366,7 +366,7 @@ const QuickBooksPage = () => {
                 isSyncing={priceSyncing}
                 lastSync={lastPriceSync}
                 formatSyncDate={formatSyncDate}
-                showTimePicker
+                showTimePicker={priceInterval === "24"}
                 timeValue={priceTimeOfDay}
                 onTimeChange={setPriceTimeOfDay}
                 timeOptions={TIME_OF_DAY}
@@ -386,7 +386,7 @@ const QuickBooksPage = () => {
                 isSyncing={customerSyncing}
                 lastSync={lastCustomerSync}
                 formatSyncDate={formatSyncDate}
-                showTimePicker
+                showTimePicker={customerInterval === "24"}
                 timeValue={customerTimeOfDay}
                 onTimeChange={setCustomerTimeOfDay}
                 timeOptions={TIME_OF_DAY}
