@@ -1,14 +1,9 @@
 import { Container, Heading, Badge, Text, Label, Button, Select } from "@medusajs/ui"
 import { PencilSquare, ArrowUpRightOnBox } from "@medusajs/icons"
+import { useState } from "react"
 import { fmtRel } from "../helpers"
-import { ESTIMATE_STATUSES, STATUS_COLOR } from "../types"
+import { ESTIMATE_STATUSES, STATUS_COLOR, TimelineEvent } from "../types"
 
-interface TimelineEvent {
-    id: string
-    title: string
-    description?: string
-    created_at: string
-}
 
 interface Props {
     id: string
@@ -26,6 +21,8 @@ interface Props {
     onOpenModal: (modal: string) => void
 }
 
+const ACTIVITY_INITIAL = 3
+
 export const OrderSidebar = ({
     id, estimateRef, estimateTxnId, isSynced,
     estimateStatus, statusSaving, syncing, syncError,
@@ -33,6 +30,7 @@ export const OrderSidebar = ({
     onStatusChange, onSync, onOpenModal,
 }: Props) => {
     const badgeColor = estimateStatus ? (STATUS_COLOR as Record<string, string>)[estimateStatus] ?? "grey" : "grey"
+    const [activityExpanded, setActivityExpanded] = useState(false)
 
     return (
         <div className="w-[340px] shrink-0 flex flex-col gap-4">
@@ -92,27 +90,72 @@ export const OrderSidebar = ({
                     <Heading level="h2">Activity</Heading>
                 </div>
                 <div className="px-6 py-4 space-y-3">
-                    {timeline.length > 0 ? timeline.map(e => (
-                        <div key={e.id} className="flex items-start gap-3">
-                            <div className="w-2 h-2 rounded-full bg-ui-fg-muted mt-1.5 shrink-0" />
-                            <div className="flex-1 min-w-0">
-                                <Text size="small" weight="plus" className="capitalize">{e.title}</Text>
-                                {e.description && <Text size="xsmall" className="text-ui-fg-subtle">{e.description}</Text>}
+                    {timeline.length > 0 ? (() => {
+                        const head = timeline.slice(0, ACTIVITY_INITIAL)
+                        const tail = timeline.slice(ACTIVITY_INITIAL, timeline.length - 1)
+                        const last = timeline[timeline.length - 1]
+                        const hasMore = tail.length > 0
+
+                        const renderEvent = (e: TimelineEvent) => (
+                            <div key={e.id} className="flex items-start gap-3">
+                                <div className="w-2 h-2 rounded-full bg-ui-fg-muted mt-1.5 shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                    <Text size="small" weight="plus" className="capitalize">{e.title}</Text>
+                                    {e.description && <Text size="xsmall" className="text-ui-fg-subtle">{e.description}</Text>}
+                                    {e.user && <Text size="xsmall" className="text-ui-fg-muted italic">by {e.user}</Text>}
+                                </div>
+                                <Text
+                                    size="xsmall"
+                                    className="text-ui-fg-muted whitespace-nowrap cursor-default"
+                                    title={new Date(e.created_at).toLocaleString("en-US", {
+                                        month: "short", day: "numeric", year: "numeric",
+                                        hour: "2-digit", minute: "2-digit", second: "2-digit"
+                                    })}
+                                >
+                                    {fmtRel(e.created_at)}
+                                </Text>
                             </div>
-                            <Text size="xsmall" className="text-ui-fg-muted whitespace-nowrap">{fmtRel(e.created_at)}</Text>
-                        </div>
-                    )) : (
+                        )
+
+                        return (
+                            <>
+                                {head.map(renderEvent)}
+                                {hasMore && (
+                                    <>
+                                        {activityExpanded && tail.map(renderEvent)}
+                                        <button
+                                            onClick={() => setActivityExpanded(v => !v)}
+                                            className="text-ui-fg-muted hover:text-ui-fg-subtle text-xs py-0.5 transition-colors"
+                                        >
+                                            {activityExpanded ? "Show less" : `Show ${tail.length} more activit${tail.length === 1 ? "y" : "ies"}`}
+                                        </button>
+                                    </>
+                                )}
+                                {last && timeline.length > ACTIVITY_INITIAL && renderEvent(last)}
+                            </>
+                        )
+                    })() : (
                         <div className="flex items-start gap-3">
                             <div className="w-2 h-2 rounded-full bg-ui-fg-muted mt-1.5 shrink-0" />
                             <div className="flex-1">
                                 <Text size="small" weight="plus">Created</Text>
                                 <Text size="xsmall" className="text-ui-fg-subtle">Draft order created</Text>
                             </div>
-                            <Text size="xsmall" className="text-ui-fg-muted whitespace-nowrap">{fmtRel(orderCreatedAt)}</Text>
+                            <Text
+                                size="xsmall"
+                                className="text-ui-fg-muted whitespace-nowrap cursor-default"
+                                title={new Date(orderCreatedAt).toLocaleString("en-US", {
+                                    month: "short", day: "numeric", year: "numeric",
+                                    hour: "2-digit", minute: "2-digit", second: "2-digit"
+                                })}
+                            >
+                                {fmtRel(orderCreatedAt)}
+                            </Text>
                         </div>
                     )}
                 </div>
             </Container>
+
 
             {/* More */}
             <Container className="p-0 overflow-hidden">

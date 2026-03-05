@@ -2,6 +2,31 @@ import { useState, useEffect, useRef } from "react"
 import { Heading, Text, Button, Badge } from "@medusajs/ui"
 import { toast } from "@medusajs/ui"
 
+interface Address {
+    id: string
+    first_name?: string
+    last_name?: string
+    company?: string
+    address_1?: string
+    address_2?: string
+    city?: string
+    country_code?: string
+    province?: string
+    postal_code?: string
+    phone?: string
+    is_default_shipping?: boolean
+    is_default_billing?: boolean
+}
+
+interface Customer {
+    id: string
+    first_name?: string
+    last_name?: string
+    email?: string
+    company_name?: string
+    phone?: string
+}
+
 interface CreateDraftOrderModalProps {
     onClose: () => void
     onCreated: (id: string) => void
@@ -13,10 +38,11 @@ export const CreateDraftOrderModal = ({ onClose, onCreated }: CreateDraftOrderMo
     const [selectedRegion, setSelectedRegion] = useState("")
     const [selectedSc, setSelectedSc] = useState("")
     const [customerQuery, setCustomerQuery] = useState("")
-    const [customers, setCustomers] = useState<{ id: string; first_name?: string; last_name?: string; email?: string; company_name?: string; phone?: string }[]>([])
-    const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; label: string } | null>(null)
+    const [customers, setCustomers] = useState<Customer[]>([])
+    const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; label: string; email: string } | null>(null)
     const [showCustomerDrop, setShowCustomerDrop] = useState(false)
-    const [email, setEmail] = useState("")
+    const [shippingAddress, setShippingAddress] = useState<Address | null>(null)
+    const [billingAddress, setBillingAddress] = useState<Address | null>(null)
     const [saving, setSaving] = useState(false)
     const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
     const custRef = useRef<HTMLDivElement>(null)
@@ -35,57 +61,174 @@ export const CreateDraftOrderModal = ({ onClose, onCreated }: CreateDraftOrderMo
         }).catch(() => { })
     }, [])
 
+    const fetchByTerm = async (term: string): Promise<Customer[]> => {
+        const r = await fetch(
+            `/admin/customers?q=${encodeURIComponent(term)}&limit=20&fields=id,first_name,last_name,email,company_name,phone`,
+            { credentials: "include" }
+        )
+        if (!r.ok) return []
+        const j = await r.json()
+        return j.customers ?? []
+    }
+
     const searchCustomers = (q: string) => {
         setCustomerQuery(q)
         setSelectedCustomer(null)
+        setShippingAddress(null)
+        setBillingAddress(null)
         if (searchTimer.current) clearTimeout(searchTimer.current)
         searchTimer.current = setTimeout(async () => {
-            if (!q) { setCustomers([]); setShowCustomerDrop(false); return }
-            // Request phone + company_name fields explicitly for rich display
-            const r = await fetch(
-                `/admin/customers?q=${encodeURIComponent(q)}&limit=10&fields=id,first_name,last_name,email,company_name,phone`,
-                { credentials: "include" }
-            )
-            if (r.ok) { const j = await r.json(); setCustomers(j.customers ?? []); setShowCustomerDrop(true) }
+            const trimmed = q.trim()
+            if (!trimmed) { setCustomers([]); setShowCustomerDrop(false); return }
+
+            // Split query into individual words
+            const parts = trimmed.split(/\s+/).filter(Boolean)
+
+            // When multi-word (e.g. "alejandro v"), search full query + each word in parallel
+            // so the API can match across first_name and last_name independently
+            const searches = parts.length > 1
+                ? [fetchByTerm(trimmed), ...parts.map(p => fetchByTerm(p))]
+                : [fetchByTerm(trimmed)]
+
+            const results = await Promise.all(searches)
+
+            // Merge and deduplicate by id
+            const seen = new Set<string>()
+            const merged: Customer[] = []
+            for (const list of results) {
+                for (const c of list) {
+                    if (!seen.has(c.id)) { seen.add(c.id); merged.push(c) }
+                }
+            }
+
+            // Client-side filter: every search word must appear somewhere in the customer data
+            const lowerParts = parts.map(p => p.toLowerCase())
+            const filtered = merged.filter(c => {
+                const haystack = [c.first_name, c.last_name, c.email, c.company_name, c.phone]
+                    .filter(Boolean).join(" ").toLowerCase()
+                return lowerParts.every(p => haystack.includes(p))
+            })
+
+            setCustomers(filtered.slice(0, 10))
+            setShowCustomerDrop(true)
         }, 300)
     }
 
-    const pickCustomer = (c: typeof customers[0]) => {
+    const fetchCustomerAddresses = async (customerId: string) => {
+        try {
+            const r = await fetch(
+                `/admin/customers/${customerId}?fields=*addresses`,
+                { credentials: "include" }
+            )
+            if (!r.ok) return
+            const j = await r.json()
+            const addresses: Address[] = j.customer?.addresses ?? []
+
+            const shipping = addresses.find(a => a.is_default_shipping) ?? addresses[0] ?? null
+            const billing = addresses.find(a => a.is_default_billing) ?? shipping
+
+            setShippingAddress(shipping)
+            setBillingAddress(billing ?? null)
+        } catch {
+            // No addresses — that's fine
+        }
+    }
+
+    const pickCustomer = async (c: Customer) => {
         const fullName = [c.first_name, c.last_name].filter(Boolean).join(" ")
-        const displayLabel = [fullName || null, c.company_name ? `(${c.company_name})` : null].filter(Boolean).join(" ") || c.email || c.id
-        setSelectedCustomer({ id: c.id, label: displayLabel })
-        setEmail(c.email ?? "")
+        const displayLabel = [
+            fullName || null,
+            c.company_name ? `(${c.company_name})` : null
+        ].filter(Boolean).join(" ") || c.email || c.id
+
+        setSelectedCustomer({ id: c.id, label: displayLabel, email: c.email ?? "" })
         setCustomerQuery(fullName || c.email || "")
-        setCustomers([]); setShowCustomerDrop(false)
+        setCustomers([])
+        setShowCustomerDrop(false)
+
+        await fetchCustomerAddresses(c.id)
+    }
+
+    const formatAddress = (addr: Address | null): string => {
+        if (!addr) return ""
+        const parts = [addr.address_1, addr.city, addr.country_code?.toUpperCase()].filter(Boolean)
+        return parts.join(", ")
     }
 
     const handleCreate = async () => {
         if (!selectedRegion) { toast.error("Select a region"); return }
-        if (!email && !selectedCustomer) { toast.error("Enter customer email or select a customer"); return }
+        if (!selectedCustomer) { toast.error("Please select a customer"); return }
+
         setSaving(true)
         try {
-            const body: Record<string, any> = { region_id: selectedRegion }
+            const body: Record<string, any> = {
+                region_id: selectedRegion,
+                customer_id: selectedCustomer.id,
+                email: selectedCustomer.email,
+            }
+
             if (selectedSc) body.sales_channel_id = selectedSc
-            if (selectedCustomer) { body.customer_id = selectedCustomer.id; body.email = email }
-            else if (email) { body.email = email }
+
+            if (shippingAddress) {
+                body.shipping_address = {
+                    first_name: shippingAddress.first_name,
+                    last_name: shippingAddress.last_name,
+                    company: shippingAddress.company,
+                    address_1: shippingAddress.address_1,
+                    address_2: shippingAddress.address_2,
+                    city: shippingAddress.city,
+                    country_code: shippingAddress.country_code,
+                    province: shippingAddress.province,
+                    postal_code: shippingAddress.postal_code,
+                    phone: shippingAddress.phone,
+                }
+            }
+
+            if (billingAddress) {
+                body.billing_address = {
+                    first_name: billingAddress.first_name,
+                    last_name: billingAddress.last_name,
+                    company: billingAddress.company,
+                    address_1: billingAddress.address_1,
+                    address_2: billingAddress.address_2,
+                    city: billingAddress.city,
+                    country_code: billingAddress.country_code,
+                    province: billingAddress.province,
+                    postal_code: billingAddress.postal_code,
+                    phone: billingAddress.phone,
+                }
+            }
+
             const r = await fetch("/admin/draft-orders", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 credentials: "include",
                 body: JSON.stringify(body)
             })
-            if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.message || `HTTP ${r.status}`) }
+
+            if (!r.ok) {
+                const j = await r.json().catch(() => ({}))
+                throw new Error(j.message || `HTTP ${r.status}`)
+            }
+
             const j = await r.json()
             const newId = j.draft_order?.id ?? j.order?.id
             if (newId) { toast.success("Draft order created"); onCreated(newId) }
             else throw new Error("No ID returned")
-        } catch (e: any) { toast.error(e.message) } finally { setSaving(false) }
+        } catch (e: any) {
+            toast.error(e.message)
+        } finally {
+            setSaving(false)
+        }
     }
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
             <div className="absolute inset-0 bg-black/40" />
-            <div className="relative bg-ui-bg-base border border-ui-border-base rounded-xl shadow-2xl w-full max-w-md mx-4 p-6 z-10" onClick={e => e.stopPropagation()}>
+            <div
+                className="relative bg-ui-bg-base border border-ui-border-base rounded-xl shadow-2xl w-full max-w-md mx-4 p-6 z-10"
+                onClick={e => e.stopPropagation()}
+            >
                 <Heading level="h2" className="mb-5">New Draft Order</Heading>
 
                 {/* Region */}
@@ -115,8 +258,8 @@ export const CreateDraftOrderModal = ({ onClose, onCreated }: CreateDraftOrderMo
                 )}
 
                 {/* Customer Search */}
-                <div className="mb-4 relative" ref={custRef}>
-                    <Text size="small" weight="plus" className="mb-1 block">Customer</Text>
+                <div className="mb-6 relative" ref={custRef}>
+                    <Text size="small" weight="plus" className="mb-1 block">Customer *</Text>
                     <input
                         type="text"
                         value={customerQuery}
@@ -124,14 +267,37 @@ export const CreateDraftOrderModal = ({ onClose, onCreated }: CreateDraftOrderMo
                         placeholder="Search by name, company, email or phone..."
                         className="w-full border border-ui-border-base rounded-md px-3 py-2 text-sm bg-ui-bg-base text-ui-fg-base placeholder:text-ui-fg-muted focus:outline-none focus:ring-1 focus:ring-ui-border-interactive"
                     />
-                    {selectedCustomer && <Badge size="small" color="blue" className="mt-1">{selectedCustomer.label}</Badge>}
+
+                    {selectedCustomer && (
+                        <div className="mt-2 space-y-1">
+                            <Badge size="small" color="blue">{selectedCustomer.label} · {selectedCustomer.email}</Badge>
+                            {shippingAddress && (
+                                <p className="text-xs text-ui-fg-muted">
+                                    📦 Shipping: {formatAddress(shippingAddress)}
+                                </p>
+                            )}
+                            {billingAddress && (
+                                <p className="text-xs text-ui-fg-muted">
+                                    🧾 Billing: {formatAddress(billingAddress)}
+                                </p>
+                            )}
+                            {!shippingAddress && (
+                                <p className="text-xs text-ui-fg-muted italic">No saved addresses — will be set in order detail</p>
+                            )}
+                        </div>
+                    )}
+
                     {showCustomerDrop && customers.length > 0 && (
                         <div className="absolute top-full left-0 right-0 mt-1 bg-ui-bg-base border border-ui-border-base rounded-md shadow-lg z-20 max-h-48 overflow-y-auto">
                             {customers.map(c => {
                                 const fullName = [c.first_name, c.last_name].filter(Boolean).join(" ")
                                 const line2Parts = [c.email, c.phone].filter(Boolean)
                                 return (
-                                    <button key={c.id} className="w-full text-left px-3 py-2.5 hover:bg-ui-bg-subtle border-b border-ui-border-base last:border-0" onClick={() => pickCustomer(c)}>
+                                    <button
+                                        key={c.id}
+                                        className="w-full text-left px-3 py-2.5 hover:bg-ui-bg-subtle border-b border-ui-border-base last:border-0"
+                                        onClick={() => pickCustomer(c)}
+                                    >
                                         <div className="flex items-baseline gap-1.5">
                                             <span className="text-sm font-medium text-ui-fg-base">{fullName || c.email}</span>
                                             {c.company_name && <span className="text-xs text-ui-fg-subtle">· {c.company_name}</span>}
@@ -146,21 +312,18 @@ export const CreateDraftOrderModal = ({ onClose, onCreated }: CreateDraftOrderMo
                     )}
                 </div>
 
-                {/* Email (editable, prefilled from customer) */}
-                <div className="mb-6">
-                    <Text size="small" weight="plus" className="mb-1 block">Email {!selectedCustomer && "*"}</Text>
-                    <input
-                        type="email"
-                        value={email}
-                        onChange={e => setEmail(e.target.value)}
-                        placeholder="customer@example.com"
-                        className="w-full border border-ui-border-base rounded-md px-3 py-2 text-sm bg-ui-bg-base text-ui-fg-base placeholder:text-ui-fg-muted focus:outline-none focus:ring-1 focus:ring-ui-border-interactive"
-                    />
-                </div>
-
                 <div className="flex items-center gap-3 justify-end">
-                    <button onClick={onClose} className="px-4 py-2 text-sm text-ui-fg-subtle hover:text-ui-fg-base transition-colors">Cancel</button>
-                    <Button size="small" disabled={saving || !selectedRegion} onClick={handleCreate}>
+                    <button
+                        onClick={onClose}
+                        className="px-4 py-2 text-sm text-ui-fg-subtle hover:text-ui-fg-base transition-colors"
+                    >
+                        Cancel
+                    </button>
+                    <Button
+                        size="small"
+                        disabled={saving || !selectedRegion || !selectedCustomer}
+                        onClick={handleCreate}
+                    >
                         {saving ? "Creating…" : "Create Draft Order"}
                     </Button>
                 </div>

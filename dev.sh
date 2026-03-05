@@ -50,8 +50,14 @@ else
 fi
 
 
+# Force QB vars from .env to prevent stale shell exports from overriding them.
+# .env is the single source of truth. Falls back to Cloudflare URL if not set.
+unset QB_BRIDGE_URL QB_API_KEY QB_ORDER_FLOW_ENABLED QB_DRY_RUN QB_INTEGRATION
+QB_BRIDGE_URL="$(grep -m1 '^QB_BRIDGE_URL=' .env 2>/dev/null | cut -d'=' -f2-)"
+export QB_BRIDGE_URL="${QB_BRIDGE_URL:-https://qb.eptbridge.com}"
+
 # Start Medusa with explicit nodemon config
-echo "🛍️  Starting Medusa Server..."
+echo "🛍️  Starting Medusa Server... (QB Bridge: $QB_BRIDGE_URL)"
 exec npx nodemon \
   --watch src \
   --watch medusa-config.ts \

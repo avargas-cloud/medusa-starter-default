@@ -67,6 +67,7 @@
     "nodemailer": "^7.0.13",
     "passport": "^0.6.0",
     "passport-google-oauth20": "^2.0.0",
+    "puppeteer-core": "^24.37.5",
     "scrypt-kdf": "^4.0.0",
     "typeorm": "^0.3.16"
   },
@@ -78,6 +79,7 @@
     "@types/jest": "^29.5.13",
     "@types/multer": "^2.0.0",
     "@types/node": "^20.12.11",
+    "@types/nodemailer": "^7.0.11",
     "@types/react": "^18.3.2",
     "@types/react-dom": "^18.2.25",
     "@typescript-eslint/eslint-plugin": "^8.0.0",

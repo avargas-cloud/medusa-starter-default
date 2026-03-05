@@ -1,5 +1,13 @@
 // ─── Types & Constants for Draft Order Detail ─────────────────────────────────
 
+export interface TimelineEvent {
+    id: string
+    title: string
+    description?: string
+    created_at: string
+    user?: string           // Full name of the user who triggered this event
+}
+
 export const ESTIMATE_STATUSES = ["Created", "Sent", "Confirmed Reception", "Followed Up", "Approved", "Not Approved", "Duplicate"] as const
 export type EstimateStatus = typeof ESTIMATE_STATUSES[number]
 export type ModalType = "sales-channel" | "email" | "shipping-addr" | "billing-addr" | "transfer" | "add-shipping" | "edit-items" | "metadata" | null
@@ -43,4 +51,6 @@ export interface DraftOrderDetail {
 
 export interface VariantResult {
     id: string; title: string; sku?: string; variantTitle?: string; thumbnail?: string
+    /** Per-location available stock. undefined = still loading. Empty array = no locations found. */
+    locations?: { locationName: string; available: number }[]
 }

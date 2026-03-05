@@ -3,7 +3,7 @@ import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import { IInventoryService, IStockLocationService } from "@medusajs/types"
 
 // Config
-const BRIDGE_URL = "https://ecopower-qb.loca.lt"
+const BRIDGE_URL = "https://qb.eptbridge.com"
 const API_KEY = "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD"
 const POLL_INTERVAL_MS = 30000 // 30 seconds
 const MAX_POLL_ATTEMPTS = 20 // 10 minutes max

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom"
 import { toast } from "@medusajs/ui"
 import {
     EstimateStatus, ModalType, AddrForm, DraftOrderDetail,
-    VariantResult, emptyAddr
+    VariantResult, emptyAddr, TimelineEvent
 } from "../types"
 
 export const useDraftOrderDetail = (id: string | undefined) => {
@@ -12,7 +12,11 @@ export const useDraftOrderDetail = (id: string | undefined) => {
     const [order, setOrder] = useState<DraftOrderDetail | null>(null)
     const [loading, setLoading] = useState(true)
     const [fetchError, setFetchError] = useState<string | null>(null)
-    const [timeline, setTimeline] = useState<{ id: string; created_at: string; title: string; description?: string }[]>([])
+    const [timeline, setTimeline] = useState<TimelineEvent[]>([])
+    const [currentUser, setCurrentUser] = useState<string>("")
+    // Local-only events (e.g. Email Sent) stored in a ref so they survive setTimeline() calls from fetchOrder
+    const localEventsRef = useRef<TimelineEvent[]>([])
+    const [localTick, setLocalTick] = useState(0) // bumped to force re-render after adding local event
 
 
     // QB
@@ -72,14 +76,23 @@ export const useDraftOrderDetail = (id: string | undefined) => {
             const json = await oRes.json()
             const rawOrder = json.order
             const preview = dRes?.order ?? dRes?.draft_order ?? null
+            // /admin/draft-orders/:id returns unit_price in CENTS; /admin/orders/:id returns in DOLLARS.
+            // Normalize preview items so unit_price is always in dollars.
+            const normalizePrice = (cents: number) => cents > 100 ? cents / 100 : cents
+            const normalizedPreviewItems = preview?.items
+                ? (preview.items as any[]).map((i: any) => ({
+                    ...i,
+                    unit_price: normalizePrice(i.unit_price ?? 0),
+                }))
+                : null
             const merged = {
                 ...rawOrder,
-                items: preview?.items ?? rawOrder.items ?? [],
-                subtotal: preview?.subtotal ?? rawOrder.subtotal ?? 0,
-                shipping_total: preview?.shipping_total ?? rawOrder.shipping_total ?? 0,
-                discount_total: preview?.discount_total ?? rawOrder.discount_total ?? 0,
-                tax_total: preview?.tax_total ?? rawOrder.tax_total ?? 0,
-                total: preview?.total ?? rawOrder.total ?? 0,
+                items: normalizedPreviewItems ?? rawOrder.items ?? [],
+                subtotal: preview?.subtotal != null ? preview.subtotal / 100 : rawOrder.subtotal ?? 0,
+                shipping_total: preview?.shipping_total != null ? preview.shipping_total / 100 : rawOrder.shipping_total ?? 0,
+                discount_total: preview?.discount_total != null ? preview.discount_total / 100 : rawOrder.discount_total ?? 0,
+                tax_total: preview?.tax_total != null ? preview.tax_total / 100 : rawOrder.tax_total ?? 0,
+                total: preview?.total != null ? preview.total / 100 : rawOrder.total ?? 0,
             }
             // Filter out qty-0 items (soft-deleted via delete-item-force which sets qty to 0)
             if (merged.items) {
@@ -150,13 +163,29 @@ export const useDraftOrderDetail = (id: string | undefined) => {
             // Fetch rich activity from order changes
             try {
                 const chRes = await fetch(`/admin/orders/${id}/changes`, { credentials: "include" })
+                // Resolve admin user name from created_by (user ID) — best-effort cache
+                const userCache: Record<string, string> = {}
+                const resolveUser = async (userId?: string): Promise<string | undefined> => {
+                    if (!userId) return undefined
+                    if (userCache[userId]) return userCache[userId]
+                    try {
+                        const ur = await fetch(`/admin/users/${userId}`, { credentials: "include" })
+                        if (ur.ok) {
+                            const { user: u } = await ur.json()
+                            const name = `${u?.first_name ?? ""} ${u?.last_name ?? ""}`.trim() || u?.email || userId
+                            userCache[userId] = name
+                            return name
+                        }
+                    } catch { }
+                    return undefined
+                }
+
                 const created = { id: merged.id + "-created", created_at: merged.created_at, title: "Created", description: "Draft order created" }
-                const timeline: { id: string; created_at: string; title: string; description?: string }[] = [created]
+                const timeline: TimelineEvent[] = [created]
                 if (chRes.ok) {
                     const { order_changes } = await chRes.json()
                     for (const ch of (order_changes ?? [])) {
                         const actions: any[] = ch.actions ?? []
-                        // Map Medusa action types to human-readable labels
                         const itemAdds = actions.filter(a => /item_add|add_item/i.test(a.action ?? a.action_type ?? "")).length
                         const itemRems = actions.filter(a => /item_delete|item_remove|remove_item/i.test(a.action ?? a.action_type ?? "")).length
                         const itemAmends = actions.filter(a => /item_amend|item_update|amend_item/i.test(a.action ?? a.action_type ?? "")).length
@@ -167,7 +196,6 @@ export const useDraftOrderDetail = (id: string | undefined) => {
                         if (itemAmends > 0) parts.push(`Updated ${itemAmends} item${itemAmends > 1 ? "s" : ""}`)
                         if (shippingAdds > 0) parts.push("Added shipping method")
                         if (parts.length === 0 && actions.length > 0) parts.push(`${actions.length} change${actions.length > 1 ? "s" : ""}`)
-                        // Determine primary title
                         let title = "Order edited"
                         if (shippingAdds > 0 && itemAdds === 0 && itemRems === 0 && itemAmends === 0) title = "Shipping methods added"
                         else if (itemAdds > 0 && shippingAdds === 0 && itemRems === 0) title = "Items added"
@@ -175,9 +203,24 @@ export const useDraftOrderDetail = (id: string | undefined) => {
                         else if (itemAmends > 0 && itemAdds === 0 && shippingAdds === 0 && itemRems === 0) title = "Items updated"
                         if (ch.status === "pending") title += " (pending)"
                         if (parts.length > 0 || ch.status === "confirmed") {
-                            timeline.push({ id: ch.id, created_at: ch.created_at, title, description: parts.join(" · ") || undefined })
+                            // Resolve who made this change: from created_by field on the change
+                            const eventUser = (await resolveUser(ch.created_by)) ?? (currentUser || undefined)
+                            timeline.push({ id: ch.id, created_at: ch.created_at, title, description: parts.join(" · ") || undefined, user: eventUser })
                         }
                     }
+                }
+                // ── Inject "Email Sent" events from metadata (persistent across reloads) ──
+                const sentAt = merged?.metadata?.estimate_sent_at as string | undefined
+                const sentTo = merged?.metadata?.estimate_sent_to as string | undefined
+                const sentBy = merged?.metadata?.estimate_sent_by as string | undefined
+                if (sentAt) {
+                    timeline.push({
+                        id: `email-sent-${sentAt}`,
+                        created_at: sentAt,
+                        title: "Email Sent",
+                        description: sentTo ? `Estimate emailed to ${sentTo}` : "Estimate emailed to customer",
+                        user: sentBy || undefined,
+                    })
                 }
                 setTimeline(timeline.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()))
             } catch { setTimeline([{ id: merged.id, created_at: merged.created_at, title: "Created", description: "Draft order created" }]) }
@@ -186,6 +229,34 @@ export const useDraftOrderDetail = (id: string | undefined) => {
     }, [id])
 
     useEffect(() => { fetchOrder() }, [fetchOrder])
+
+    // ─── Fetch current logged-in user (for activity attribution) ─────────────
+    useEffect(() => {
+        fetch("/admin/users/me", { credentials: "include" })
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+                const u = data?.user
+                if (u) {
+                    const name = `${u.first_name ?? ""} ${u.last_name ?? ""}`.trim() || u.email || ""
+                    setCurrentUser(name)
+                }
+            })
+            .catch(() => { })
+    }, [])
+
+    // ─── Push a new event to the local timeline (no server round-trip) ────────
+    // Uses a ref so the event survives any fetchOrder() call that resets server timeline state
+    const addTimelineEvent = useCallback((title: string, description?: string, user?: string) => {
+        const event: TimelineEvent = {
+            id: `local-${Date.now()}`,
+            title,
+            description,
+            created_at: new Date().toISOString(),
+            user,
+        }
+        localEventsRef.current = [event, ...localEventsRef.current]
+        setLocalTick(t => t + 1) // trigger re-render so OrderSidebar sees the new event
+    }, [])
 
     // ─── Open modal ──────────────────────────────────────────────────────────
     const openModal = async (type: ModalType) => {
@@ -260,16 +331,47 @@ export const useDraftOrderDetail = (id: string | undefined) => {
         return r.json()
     }
 
-    // ─── Customer search ──────────────────────────────────────────────────────
+    // ─── Customer search (multi-field: name, last name, email, phone) ─────────
     const searchCustomers = (q: string) => {
         setCustomerQuery(q)
         if (searchTimer.current) clearTimeout(searchTimer.current)
         searchTimer.current = setTimeout(async () => {
-            if (!q) { setCustomers([]); return }
-            const r = await fetch(`/admin/customers?q=${encodeURIComponent(q)}&limit=10`, { credentials: "include" })
-            if (r.ok) { const j = await r.json(); setCustomers(j.customers ?? []) }
-        }, 300)
+            if (!q.trim()) { setCustomers([]); return }
+            try {
+                // Split query into tokens to build individual param sets
+                const tokens = q.trim().split(/\s+/)
+                // Always search by generic q (email / full text)
+                const params = new Set<string>()
+                params.add(`q=${encodeURIComponent(q)}&limit=10`)
+                // If two tokens, try first_name + last_name combo
+                if (tokens.length >= 2) {
+                    params.add(`first_name=${encodeURIComponent(tokens[0])}&last_name=${encodeURIComponent(tokens.slice(1).join(" "))}&limit=10`)
+                    params.add(`first_name=${encodeURIComponent(tokens.slice(0, -1).join(" "))}&last_name=${encodeURIComponent(tokens[tokens.length - 1])}&limit=10`)
+                }
+                // Single token — try first_name, last_name, email, phone individually
+                for (const tok of tokens) {
+                    params.add(`first_name=${encodeURIComponent(tok)}&limit=10`)
+                    params.add(`last_name=${encodeURIComponent(tok)}&limit=10`)
+                    params.add(`email=${encodeURIComponent(tok)}&limit=10`)
+                    params.add(`phone=${encodeURIComponent(tok)}&limit=10`)
+                }
+                const responses = await Promise.allSettled(
+                    [...params].map(p => fetch(`/admin/customers?${p}`, { credentials: "include" }))
+                )
+                const seen = new Set<string>()
+                const merged: typeof customers = []
+                for (const res of responses) {
+                    if (res.status !== "fulfilled" || !res.value.ok) continue
+                    const j = await res.value.json()
+                    for (const c of (j.customers ?? [])) {
+                        if (!seen.has(c.id)) { seen.add(c.id); merged.push(c) }
+                    }
+                }
+                setCustomers(merged.slice(0, 15))
+            } catch { setCustomers([]) }
+        }, 350)
     }
+
 
     // ─── Variant/SKU search ───────────────────────────────────────────────────
     const searchInvItems = (q: string) => {
@@ -315,6 +417,53 @@ export const useDraftOrderDetail = (id: string | undefined) => {
                     }
                 } catch { /* best-effort */ }
 
+                // 3. Fetch inventory levels per location (best-effort)
+                // Medusa supports filtering inventory-items by sku[], not variant_id[]
+                let locationMap: Record<string, { locationName: string; available: number }[]> = {}
+                try {
+                    const skus = (variants as any[]).map((v: any) => v.sku).filter(Boolean)
+                    if (skus.length > 0) {
+                        // Pre-fetch stock locations to resolve IDs → friendly names
+                        const locationNameMap: Record<string, string> = {}
+                        try {
+                            const slRes = await fetch(`/admin/stock-locations?limit=100`, { credentials: "include" })
+                            if (slRes.ok) {
+                                const { stock_locations } = await slRes.json()
+                                for (const sl of (stock_locations ?? [])) {
+                                    if (sl.id && sl.name) locationNameMap[sl.id] = sl.name
+                                }
+                            }
+                        } catch { /* name resolution is best-effort */ }
+
+                        const skuParams = skus.map((s: string) => `sku[]=${encodeURIComponent(s)}`).join("&")
+                        const invRes = await fetch(`/admin/inventory-items?${skuParams}&limit=50`, { credentials: "include" })
+                        if (invRes.ok) {
+                            const { inventory_items } = await invRes.json()
+                            // For each inventory item, fetch its location levels
+                            const levelFetches = (inventory_items ?? []).map(async (inv: any) => {
+                                const levRes = await fetch(
+                                    `/admin/inventory-items/${inv.id}/location-levels?limit=50`,
+                                    { credentials: "include" }
+                                )
+                                if (!levRes.ok) return
+                                const { inventory_levels } = await levRes.json()
+                                // Match inventory item back to variant via sku
+                                const matchedVariant = (variants as any[]).find((v: any) => v.sku === inv.sku)
+                                if (!matchedVariant) return
+                                const vid = matchedVariant.id
+                                if (!locationMap[vid]) locationMap[vid] = []
+                                for (const lev of (inventory_levels ?? [])) {
+                                    const locId: string = lev.location_id ?? ""
+                                    const locName: string = locationNameMap[locId] ?? lev.location?.name ?? lev.stock_location?.name ?? (locId || "Warehouse")
+                                    const available = (lev.stocked_quantity ?? 0) - (lev.reserved_quantity ?? 0)
+                                    locationMap[vid].push({ locationName: locName, available })
+                                }
+                            })
+                            await Promise.allSettled(levelFetches)
+                        }
+                    }
+                } catch { /* location fetch failed — show nothing */ }
+
                 const results: VariantResult[] = (variants as any[]).map((v: any) => {
                     const prod = productMap[v.product_id]
                     const varPrices = priceMap[v.id]
@@ -336,6 +485,7 @@ export const useDraftOrderDetail = (id: string | undefined) => {
                         variantTitle: v.title && v.title !== prod?.title ? v.title : undefined,
                         thumbnail: prod?.thumbnail ?? undefined,
                         prices: priceOptions.length > 0 ? priceOptions : undefined,
+                        locations: locationMap[v.id] ?? [],
                     }
                 })
                 setInvResults(results)
@@ -367,7 +517,7 @@ export const useDraftOrderDetail = (id: string | undefined) => {
             subtitle: matchedVariant?.variantTitle ?? "",
             thumbnail: matchedVariant?.thumbnail ?? null,
             quantity: 1,
-            unit_price: overridePrice !== undefined ? Math.round(overridePrice * 100) : 0,
+            unit_price: overridePrice !== undefined ? overridePrice : 0,
         }
         // ── Optimistic: show item immediately in the list
         setOrder(prev => prev ? { ...prev, items: [...(prev.items ?? []), optimisticItem as any] } : prev)
@@ -455,7 +605,8 @@ export const useDraftOrderDetail = (id: string | undefined) => {
             })
             toast.success("Item added")
             // ── Patch real ID in place: fetch the order silently and replace the optimistic item
-            // This avoids a full re-render — only the one item gets its real ID patched in
+            // Keep enriched data (title, thumbnail, unit_price in dollars) from the optimistic item —
+            // the raw API response has title = variant_id and unit_price in cents, which we don't want.
             try {
                 const freshR = await fetch(`/admin/orders/${id}?fields=+items.*`, { credentials: "include" })
                 if (freshR.ok) {
@@ -469,7 +620,22 @@ export const useDraftOrderDetail = (id: string | undefined) => {
                         setOrder(prev => prev ? {
                             ...prev,
                             items: (prev.items ?? []).map((i: any) =>
-                                i.id === optimisticItem.id ? { ...i, ...matchedReal } : i
+                                i.id === optimisticItem.id
+                                    ? {
+                                        // Merge real metadata (id, created_at, etc) from API
+                                        ...matchedReal,
+                                        // But preserve the enriched display data from the optimistic item
+                                        title: optimisticItem.title,
+                                        thumbnail: optimisticItem.thumbnail,
+                                        variant: optimisticItem.variant,
+                                        // unit_price: optimistic already has it in dollars (computed above)
+                                        // matchedReal.unit_price may be in cents from the raw API
+                                        unit_price: optimisticItem.unit_price !== 0
+                                            ? optimisticItem.unit_price
+                                            : matchedReal.unit_price,
+                                        quantity: matchedReal.quantity ?? optimisticItem.quantity,
+                                    }
+                                    : i
                             )
                         } : prev)
                     }
@@ -586,27 +752,62 @@ export const useDraftOrderDetail = (id: string | undefined) => {
                     }
                 })
 
-                if (isPickup) {
-                    fetch(`/admin/draft-orders/${id}`, {
-                        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
-                        body: JSON.stringify({ shipping_address: { first_name: "Ecopowertech", last_name: "Inc", company: "Ecopowertech Inc", address_1: "2760 W 84th St", address_2: "Unit 4", city: "Hialeah", province: "FL", postal_code: "33016", country_code: "us", phone: "" } })
-                    }).catch(e => console.warn("[pickup] address update failed:", e))
+                const isWarehouseOrPickup = isPickup || optName.includes("warehouse")
+                if (isWarehouseOrPickup) {
+                    // Fetch stock location address from DB and auto-populate shipping address
+                    ; (async () => {
+                        try {
+                            const fallbackAddr = { first_name: "Ecopowertech", last_name: "Inc", company: "Ecopowertech Inc", address_1: "2760 W 84th St", address_2: "Unit 4", city: "Hialeah", province: "FL", postal_code: "33016", country_code: "us", phone: "" }
+                            let addr = fallbackAddr
+                            try {
+                                const slRes = await fetch(`/admin/stock-locations?limit=100&fields=*,+address.*`, { credentials: "include" })
+                                if (slRes.ok) {
+                                    const { stock_locations } = await slRes.json()
+                                    // Find best-matching location by name similarity with shipping option
+                                    const words = optName.split(/\s+/).filter((w: string) => w.length > 2)
+                                    const match = (stock_locations ?? []).find((sl: any) =>
+                                        words.some((w: string) => (sl.name ?? "").toLowerCase().includes(w))
+                                    ) ?? (stock_locations ?? [])[0]
+                                    if (match?.address) {
+                                        const a = match.address
+                                        addr = {
+                                            first_name: "Ecopowertech",
+                                            last_name: "Inc",
+                                            company: a.company || match.name || "Ecopowertech Inc",
+                                            address_1: a.address_1 ?? fallbackAddr.address_1,
+                                            address_2: a.address_2 ?? fallbackAddr.address_2,
+                                            city: a.city ?? fallbackAddr.city,
+                                            province: a.province_code ?? a.province ?? fallbackAddr.province,
+                                            postal_code: a.postal_code ?? fallbackAddr.postal_code,
+                                            country_code: (a.country_code ?? "us").toLowerCase(),
+                                            phone: a.phone ?? "",
+                                        }
+                                    }
+                                }
+                            } catch { /* use fallback */ }
+                            await fetch(`/admin/draft-orders/${id}`, {
+                                method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+                                body: JSON.stringify({ shipping_address: addr }),
+                            })
+                            fetchOrder() // Refresh to show updated address in CustomerBlock
+                        } catch (e) { console.warn("[warehouse/pickup] address update failed:", e) }
+                    })()
                 }
-            }
-            // Silent background sync after 2s — only patches real shipping method IDs into state
-            // Does NOT call fetchOrder (no re-render) — just swaps the optimistic ID for the real one
-            setTimeout(async () => {
-                try {
-                    const freshR = await fetch(`/admin/orders/${id}?fields=+shipping_methods.*`, { credentials: "include" })
-                    if (freshR.ok) {
-                        const { order: freshOrder } = await freshR.json()
-                        const freshMethods: any[] = freshOrder?.shipping_methods ?? []
-                        if (freshMethods.length > 0) {
-                            setOrder(prev => prev ? { ...prev, shipping_methods: freshMethods } : prev)
+                // Silent background sync after 2s — only patches real shipping method IDs into state
+                // Does NOT call fetchOrder (no re-render) — just swaps the optimistic ID for the real one
+                setTimeout(async () => {
+                    try {
+                        const freshR = await fetch(`/admin/orders/${id}?fields=+shipping_methods.*`, { credentials: "include" })
+                        if (freshR.ok) {
+                            const { order: freshOrder } = await freshR.json()
+                            const freshMethods: any[] = freshOrder?.shipping_methods ?? []
+                            if (freshMethods.length > 0) {
+                                setOrder(prev => prev ? { ...prev, shipping_methods: freshMethods } : prev)
+                            }
                         }
-                    }
-                } catch { /* ID patch failed */ }
-            }, 1500)
+                    } catch { /* ID patch failed */ }
+                }, 1500)
+            }
         } catch (e: any) { toast.error(e.message) } finally { setSaving(false) }
     }
 
@@ -646,13 +847,33 @@ export const useDraftOrderDetail = (id: string | undefined) => {
     }
 
     const handleConvert = async () => {
+        // Note: window.confirm() can be silently suppressed by Chrome in some contexts.
+        // Using toast-based confirmation instead for reliability.
+        const toastId = toast.loading(
+            "Converting to order… (Items with 0 stock will be accepted as backorders)"
+        )
         setConverting(true)
         try {
-            const r = await fetch(`/admin/draft-orders/${id}/confirm`, { method: "POST", credentials: "include" })
+            const r = await fetch(`/admin/draft-orders/${id}/convert-force`, {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+            })
             const j = await r.json()
-            if (!r.ok) throw new Error(j.message || `HTTP ${r.status}`)
-            toast.success("Converted to order!"); navigate(`/orders/${j.order?.id ?? ""}`)
-        } catch (e: any) { toast.error(e.message) } finally { setConverting(false) }
+            if (!r.ok) throw new Error(j.message || `HTTP ${r.status}: ${r.statusText}`)
+
+            const orderId = j.order?.id ?? id
+            toast.dismiss(toastId)
+            if (j.backorder_items_enabled) {
+                toast.success("Converted to order! Some items are on backorder.")
+            } else {
+                toast.success("Converted to order! Redirecting…")
+            }
+            navigate(`/orders/${orderId}`)
+        } catch (e: any) {
+            toast.dismiss(toastId)
+            toast.error(`Convert failed: ${e.message}`)
+        } finally { setConverting(false) }
     }
 
     const handleStatusChange = async (val: string) => {
@@ -681,8 +902,13 @@ export const useDraftOrderDetail = (id: string | undefined) => {
     }
 
     return {
-        // Order data
-        order, loading, fetchError, timeline, fetchOrder,
+        // Order data — timeline is merged: local events (ref) + server events (state), newest first
+        order, loading, fetchError, fetchOrder,
+        // localTick drives re-render whenever addTimelineEvent fires so localEventsRef.current is picked up
+        timeline: (localTick >= 0 ? [...localEventsRef.current, ...timeline] : timeline).sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        ),
+        currentUser, addTimelineEvent,
         // QB state
         syncing, localRef, localTxnId, syncError,
         // Estimate status

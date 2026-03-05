@@ -2,8 +2,8 @@ import Redis from 'ioredis';
 import dotenv from 'dotenv';
 import path from 'path';
 
-// Load .env
-dotenv.config({ path: path.resolve(__dirname, '../../../../.env') });
+// Load backend/.env (3 levels up from src/scripts/fix/)
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 async function flushRedis() {
     const redisUrl = process.env.REDIS_URL;

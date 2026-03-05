@@ -43,7 +43,7 @@ async function runFullCycle() {
     console.log("=".repeat(60))
     console.log("🧪 Layer 2: Live Bridge - Full Order Lifecycle Test")
     console.log("=".repeat(60))
-    console.log(`📡 Bridge: ${process.env.QB_BRIDGE_URL || "https://ecopower-qb.loca.lt"}`)
+    console.log(`📡 Bridge: ${process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com"}`)
     console.log(`👤 Customer: ${CUSTOMER_ID}`)
     console.log(`📦 Product: ${PRODUCT_ID} × ${TEST_QTY} @ $${TEST_PRICE}`)
     console.log(`📅 Date: ${TODAY}\n`)

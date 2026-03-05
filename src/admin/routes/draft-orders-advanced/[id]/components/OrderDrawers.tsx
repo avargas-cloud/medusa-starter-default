@@ -194,6 +194,8 @@ interface OrderDrawersProps {
     saving: boolean
     itemSaving: boolean
     curr: string
+    // Customer ID — used to load saved addresses in address drawers
+    customerId?: string
     // Sales Channel
     salesChannels: { id: string; name: string }[]
     selectedSc: string; setSelectedSc: (v: string) => void
@@ -239,7 +241,7 @@ interface OrderDrawersProps {
 
 export const OrderDrawers = (props: OrderDrawersProps) => {
     const {
-        modal, closeModal, saving, itemSaving, curr,
+        modal, closeModal, saving, itemSaving, curr, customerId,
         salesChannels, selectedSc, setSelectedSc, handleSaveSalesChannel,
         emailForm, setEmailForm, handleSaveEmail,
         shippingAddrForm, setShippingAddrForm, handleSaveShippingAddr,
@@ -274,12 +276,20 @@ export const OrderDrawers = (props: OrderDrawersProps) => {
 
             {/* Edit Shipping Address */}
             <Drawer open={modal === "shipping-addr"} onClose={closeModal} title="Edit Shipping Address" onSave={handleSaveShippingAddr} saving={saving}>
-                <AddrFormFields form={shippingAddrForm} onChange={(k, v) => setShippingAddrForm(f => ({ ...f, [k]: v }))} />
+                <AddrFormFields
+                    form={shippingAddrForm}
+                    onChange={(k, v) => setShippingAddrForm(f => ({ ...f, [k]: v }))}
+                    customerId={customerId}
+                />
             </Drawer>
 
             {/* Edit Billing Address */}
             <Drawer open={modal === "billing-addr"} onClose={closeModal} title="Edit Billing Address" onSave={handleSaveBillingAddr} saving={saving}>
-                <AddrFormFields form={billingAddrForm} onChange={(k, v) => setBillingAddrForm(f => ({ ...f, [k]: v }))} />
+                <AddrFormFields
+                    form={billingAddrForm}
+                    onChange={(k, v) => setBillingAddrForm(f => ({ ...f, [k]: v }))}
+                    customerId={customerId}
+                />
             </Drawer>
 
             {/* Transfer Ownership */}

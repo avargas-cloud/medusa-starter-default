@@ -13,7 +13,7 @@
  * Bridge API Reference: docs/QUICKBOOKS_BRIDGE_MEDUSA_API_REFERENCE.md
  */
 
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://ecopower-qb.loca.lt"
+const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com"
 const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD"
 const DRY_RUN = process.env.QB_DRY_RUN === "true"
 

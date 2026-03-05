@@ -1,5 +1,5 @@
 import { Container, Heading, Badge, Text, Button, DropdownMenu } from "@medusajs/ui"
-import { EllipsisHorizontal, PencilSquare, ArrowRight, ArrowUpRightOnBox } from "@medusajs/icons"
+import { EllipsisHorizontal, PencilSquare, ArrowRight, ArrowUpRightOnBox, ArrowUpTray } from "@medusajs/icons"
 import { fmtDate } from "../helpers"
 
 interface Props {
@@ -13,11 +13,13 @@ interface Props {
     onConvert: () => void
     onOpenModal: (modal: string) => void
     onDelete: () => void
+    onSendEstimate?: () => void
+    onPrintEstimate?: () => void
 }
 
 export const OrderHeader = ({
     id, displayId, regionName, createdAt, scName,
-    converting, onNavigateBack, onConvert, onOpenModal, onDelete,
+    converting, onNavigateBack, onConvert, onOpenModal, onDelete, onSendEstimate, onPrintEstimate,
 }: Props) => (
     <Container className="p-0 overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4">
@@ -32,6 +34,16 @@ export const OrderHeader = ({
                 </Text>
             </div>
             <div className="flex items-center gap-2">
+                {onPrintEstimate && (
+                    <Button variant="secondary" size="small" onClick={onPrintEstimate}>
+                        🖨️ Print in Store
+                    </Button>
+                )}
+                {onSendEstimate && (
+                    <Button variant="secondary" size="small" onClick={onSendEstimate}>
+                        <ArrowUpTray /> Send Estimate
+                    </Button>
+                )}
                 <Button variant="primary" size="small" onClick={onConvert} isLoading={converting} disabled={converting}>
                     <ArrowRight /> Convert to Order
                 </Button>

@@ -10,6 +10,7 @@ const DraftOrdersAdvancedList = () => {
     const {
         navigate, loading, sorted, paginated, totalPages,
         search, setSearch, sort, setSort, page, setPage,
+        showNotApproved, setShowNotApproved, notApprovedCount,
     } = useDraftOrders()
     const nav = useNavigate()
     const [showCreate, setShowCreate] = useState(false)
@@ -33,7 +34,13 @@ const DraftOrdersAdvancedList = () => {
                 <Button size="small" onClick={() => setShowCreate(true)}>+ New Draft Order</Button>
             </div>
             <Container className="divide-y p-0 overflow-hidden">
-                <DraftOrdersControls search={search} onSearchChange={handleSearchChange} sort={sort} onSortChange={handleSortChange} />
+                <DraftOrdersControls
+                    search={search} onSearchChange={handleSearchChange}
+                    sort={sort} onSortChange={handleSortChange}
+                    showNotApproved={showNotApproved}
+                    onToggleNotApproved={() => { setShowNotApproved(v => !v); setPage(0) }}
+                    notApprovedCount={notApprovedCount}
+                />
                 <div className="overflow-x-auto">
                     <DraftOrdersTable loading={loading} sorted={sorted} paginated={paginated} onRowClick={id => navigate(`/draft-orders-advanced/${id}`)} />
                 </div>

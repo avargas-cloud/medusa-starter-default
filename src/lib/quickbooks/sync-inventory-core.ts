@@ -4,14 +4,44 @@ import { isQbIntegrationEnabled } from "./qb-integration-guard"
 import { syncInventoryWorkflow } from "../../workflows/sync-inventory"
 
 // Config — URLs and keys from env vars
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://ecopower-qb.loca.lt"
+const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com"
 const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD"
 const POLL_INTERVAL_MS = 30000 // 30 seconds
 const MAX_POLL_ATTEMPTS = 20 // 10 minutes max
+const QB_PRINCIPAL_WAREHOUSE_ID = "80000001-1331053531"
 
 // Anomaly thresholds
 const ANOMALY_DROP_PCT = 0.80  // Flag if stock drops more than 80%
 const ANOMALY_ZERO_FROM = 10   // Flag if stock goes to 0 from ≥ this value
+
+/**
+ * Retries a fetch up to maxRetries times on 502/503/504 errors.
+ * Handles transient Cloudflare Tunnel disconnects without failing the sync.
+ */
+async function fetchWithRetry(
+    url: string,
+    options: RequestInit,
+    maxRetries = 3,
+    retryDelayMs = 8000
+): Promise<Response> {
+    let lastRes: Response | undefined
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const res = await fetch(url, options)
+            if (res.ok || ![502, 503, 504].includes(res.status)) return res
+            lastRes = res
+            if (attempt < maxRetries) {
+                console.warn(`[QB] Bridge returned ${res.status} (attempt ${attempt}/${maxRetries}) — retrying in ${retryDelayMs / 1000}s...`)
+                await new Promise(r => setTimeout(r, retryDelayMs))
+            }
+        } catch (err: any) {
+            console.warn(`[QB] Bridge fetch error (attempt ${attempt}/${maxRetries}): ${err.message}`)
+            if (attempt === maxRetries) throw err
+            await new Promise(r => setTimeout(r, retryDelayMs))
+        }
+    }
+    return lastRes!  // return last response for caller to handle
+}
 
 export interface SyncInventoryPreviewItem {
     sku: string
@@ -123,9 +153,9 @@ export async function syncInventoryCore(
             return { success: false, stats, error: "No linked products found — run 'assign-quickbooks-ids' first" }
         }
 
-        // 3. Initiate Bulk Sync via QB Bridge
-        log("📡 Requesting Bulk Data from QB Bridge...")
-        const initRes = await fetch(`${BRIDGE_URL}/api/products`, {
+        // 3. Initiate Bulk Sync via QB Bridge (with retry for transient 503s)
+        log(`📡 Requesting Bulk Data from QB Bridge... [Site: Principal Warehouse]`)
+        const initRes = await fetchWithRetry(`${BRIDGE_URL}/api/products/site/${QB_PRINCIPAL_WAREHOUSE_ID}`, {
             headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" }
         })
 
@@ -163,15 +193,15 @@ export async function syncInventoryCore(
             if (statusJson.success && statusJson.operation) {
                 if (statusJson.operation.status === "completed") {
                     // Bridge returns parsed QB XML as JSON (same structure as price sync)
-                    // Path: operation.result.QBXML.QBXMLMsgsRs.ItemQueryRs.ItemInventoryRet[]
-                    const queryRs = statusJson.operation?.result?.QBXML?.QBXMLMsgsRs?.ItemQueryRs
+                    // Path: operation.result.QBXML.QBXMLMsgsRs.ItemSitesQueryRs.ItemSitesRet[]
+                    const queryRs = statusJson.operation?.result?.QBXML?.QBXMLMsgsRs?.ItemSitesQueryRs
                     if (queryRs) {
-                        const raw = queryRs.ItemInventoryRet || []
+                        const raw = queryRs.ItemSitesRet || []
                         qbData = Array.isArray(raw) ? raw : [raw]
-                        // ItemInventoryRet fields: ListID, Name, QuantityOnHand, SalesPrice, IsActive
-                        log(`✅ Data received: ${qbData.length} items from QuickBooks`)
+                        // ItemSitesRet fields: ItemInventoryRef.ListID, ItemInventoryRef.FullName, QuantityOnHand
+                        log(`✅ Data received: ${qbData.length} site inventory records from QuickBooks`)
                     } else {
-                        warn(`⚠️ Unexpected Bridge response shape — no ItemQueryRs found`)
+                        warn(`⚠️ Unexpected Bridge response shape — no ItemSitesQueryRs found`)
                         log(`   Raw operation keys: ${Object.keys(statusJson.operation?.result?.QBXML?.QBXMLMsgsRs || {}).join(', ')}`)
                     }
                     break
@@ -195,15 +225,15 @@ export async function syncInventoryCore(
 
         // 5. Build lookup maps
         const medusaQbIds = new Set(qbVariants.map((v: any) => v.metadata?.quickbooks_id))
-        const allQbIds = new Set(qbData.map((item: any) => item.ListID))
+        const allQbIds = new Set(qbData.map((item: any) => item.ItemInventoryRef?.ListID))
         const onlyInQb = qbData
-            .filter((item: any) => !medusaQbIds.has(item.ListID))
-            .map((item: any) => item.Name || item.ListID)
+            .filter((item: any) => !medusaQbIds.has(item.ItemInventoryRef?.ListID))
+            .map((item: any) => item.ItemInventoryRef?.FullName || item.ItemInventoryRef?.ListID)
         const onlyInMedusa = qbVariants
             .filter((v: any) => !allQbIds.has(v.metadata?.quickbooks_id))
             .map((v: any) => v.sku || v.id)
 
-        const qbMap = new Map(qbData.map((item: any) => [item.ListID, item]))
+        const qbMap = new Map(qbData.map((item: any) => [item.ItemInventoryRef?.ListID, item]))
 
         // 6. Process each variant
         const preview: SyncInventoryPreviewItem[] = []
@@ -249,6 +279,11 @@ export async function syncInventoryCore(
             const currentStock = levels[0]?.stocked_quantity ?? 0
             const delta = newStock - currentStock
 
+            // DEBUG: Log comparison for diagnostics (remove once bug is found)
+            if (variant.sku === 'EAP-AS1-8S' || stats.foundInQb <= 5) {
+                console.log(`[QB-DEBUG] ${variant.sku}: QB.QuantityOnHand="${qbItem.QuantityOnHand}" raw=${rawStock} new=${newStock} | Medusa.stocked=${currentStock} | levels.length=${levels.length} | delta=${delta}`)
+            }
+
             // Skip if no change
             if (delta === 0) {
                 stats.skippedNoChange!++
@@ -269,7 +304,7 @@ export async function syncInventoryCore(
 
             const previewItem: SyncInventoryPreviewItem = {
                 sku: variant.sku || variant.id,
-                name: qbItem.Name || variant.sku,
+                name: qbItem.ItemInventoryRef?.FullName || variant.sku,
                 currentStock,
                 newStock,
                 delta,

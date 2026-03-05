@@ -13,6 +13,7 @@ interface TaxResult {
     mode: TaxMode
     autoMode: TaxMode
     subtotal: number
+    shippingSubtotal: number
 }
 
 interface Props {
@@ -50,10 +51,11 @@ export const InlineTaxes = ({ orderId, curr, triggerKey, onTaxChange }: Props) =
 
     const handleModeChange = async (newMode: TaxMode) => {
         if (!tax || newMode === tax.mode) return
-        // Optimistic update
+        // Optimistic update — FL taxes items + shipping
         const prevTax = tax
+        const taxableBase = (tax.subtotal ?? 0) + (tax.shippingSubtotal ?? 0)
         const optimisticAmount = newMode === "exempt" ? 0 : (newMode === "florida"
-            ? Math.round(tax.subtotal * 7 / 100 * 100) / 100
+            ? Math.round(taxableBase * 7 / 100 * 100) / 100
             : tax.amount)
         setTax(prev => prev ? { ...prev, mode: newMode, amount: optimisticAmount, exempt: newMode === "exempt" } : prev)
         onTaxChange?.(optimisticAmount)
@@ -98,10 +100,10 @@ export const InlineTaxes = ({ orderId, curr, triggerKey, onTaxChange }: Props) =
                             disabled={saving || loading}
                             onClick={() => handleModeChange(m)}
                             className={`px-3 py-1.5 transition-colors disabled:opacity-50 ${currentMode === m
-                                    ? m === "exempt"
-                                        ? "bg-ui-tag-green-bg text-ui-tag-green-text font-medium"
-                                        : "bg-ui-bg-interactive text-ui-fg-on-color font-medium"
-                                    : "bg-ui-bg-base text-ui-fg-subtle hover:bg-ui-bg-subtle"
+                                ? m === "exempt"
+                                    ? "bg-ui-tag-green-bg text-ui-tag-green-text font-medium"
+                                    : "bg-ui-bg-interactive text-ui-fg-on-color font-medium"
+                                : "bg-ui-bg-base text-ui-fg-subtle hover:bg-ui-bg-subtle"
                                 }`}
                         >
                             {MODE_LABELS[m]}

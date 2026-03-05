@@ -20,7 +20,7 @@ async function runMigration() {
                 price_interval_minutes INT NOT NULL DEFAULT 1440,
                 last_inventory_sync TIMESTAMPTZ,
                 last_price_sync TIMESTAMPTZ,
-                bridge_url VARCHAR(500) NOT NULL DEFAULT 'https://ecopower-qb.loca.lt',
+                bridge_url VARCHAR(500) NOT NULL DEFAULT 'https://qb.eptbridge.com',
                 api_key VARCHAR(500),
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -70,7 +70,7 @@ async function runMigration() {
                 'default',
                 30,
                 1440,
-                'https://ecopower-qb.loca.lt',
+                'https://qb.eptbridge.com',
                 NOW(),
                 NOW()
             )

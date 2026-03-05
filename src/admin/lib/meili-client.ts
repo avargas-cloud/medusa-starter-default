@@ -39,3 +39,8 @@ export const PRODUCTS_INDEX = "products";
  * Inventory items index name (matches backend configuration)
  */
 export const INVENTORY_INDEX = "inventory";
+
+/**
+ * Customers index name (matches backend subscriber configuration)
+ */
+export const CUSTOMERS_INDEX = "customers";

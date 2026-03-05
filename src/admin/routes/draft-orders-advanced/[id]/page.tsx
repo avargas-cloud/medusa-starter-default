@@ -1,7 +1,6 @@
 import { Container, Heading, Badge, Text } from "@medusajs/ui"
-import { ArrowUpRightOnBox } from "@medusajs/icons"
 import { useParams, useNavigate } from "react-router-dom"
-import { useState } from "react"
+import { useState, useCallback, useEffect, useRef } from "react"
 import { useDraftOrderDetail } from "./hooks/use-draft-order-detail"
 import { useOrderPageState } from "./hooks/use-order-page-state"
 import { OrderDrawers } from "./components/OrderDrawers"
@@ -13,6 +12,10 @@ import { InlineShipping } from "./components/InlineShipping"
 import { InlineTaxes } from "./components/InlineTaxes"
 import { OrderTotals } from "./components/OrderTotals"
 import { OrderSidebar } from "./components/OrderSidebar"
+import { InlineNotes } from "./components/InlineNotes"
+import { SendEstimateModal } from "./components/SendEstimateModal"
+import { EstimateInfoBlock, getMissingEstimateFields } from "./components/EstimateInfoBlock"
+import type { EstimateInfo } from "./components/EstimateInfoBlock"
 import { addrToLines } from "./helpers"
 
 const DraftOrderDetail = () => {
@@ -21,7 +24,36 @@ const DraftOrderDetail = () => {
     const s = useDraftOrderDetail(id)
     const { customerPrices, inlineShippingOptions, loadShippingOptions, handleAddShippingInline } =
         useOrderPageState(s.order, s.handleAddShipping)
+    const { currentUser, addTimelineEvent } = s
     const [taxAmount, setTaxAmount] = useState(0)
+    const taxInitialized = useRef(false)
+    // Seed taxAmount immediately from the order's stored tax_total (already normalized to dollars).
+    // This prevents the 2-second flash where OrderTotals shows $199 before compute-tax returns $213.
+    useEffect(() => {
+        if (!taxInitialized.current && s.order?.tax_total != null && s.order.tax_total > 0) {
+            setTaxAmount(s.order.tax_total)
+            taxInitialized.current = true
+        }
+    }, [s.order?.tax_total])
+    const [showEstimateModal, setShowEstimateModal] = useState(false)
+    const [currentEstimateInfo, setCurrentEstimateInfo] = useState<EstimateInfo | null>(null)
+    // Increment to trigger InlineTaxes re-fetch after every confirmed item mutation
+    const [taxTrigger, setTaxTrigger] = useState(0)
+    const bumpTax = useCallback(() => setTaxTrigger(n => n + 1), [])
+
+    // Wrapped handlers: auto-refresh taxes after confirmed save
+    const handleAddItemWithTax = useCallback(async (variantId: string, overridePrice?: number) => {
+        await s.handleAddItem(variantId, overridePrice)
+        bumpTax()
+    }, [s.handleAddItem, bumpTax])
+    const handleUpdateItemWithTax = useCallback(async (itemId: string) => {
+        await s.handleUpdateItem(itemId)
+        bumpTax()
+    }, [s.handleUpdateItem, bumpTax])
+    const handleRemoveItemWithTax = useCallback(async (itemId: string) => {
+        await s.handleRemoveItem(itemId)
+        bumpTax()
+    }, [s.handleRemoveItem, bumpTax])
 
     if (s.loading) return <div className="p-6"><Text className="text-ui-fg-muted">Loading...</Text></div>
     if (s.fetchError || !s.order) return <div className="p-6"><Text className="text-ui-fg-error">Error: {s.fetchError ?? "Not found"}</Text></div>
@@ -44,6 +76,42 @@ const DraftOrderDetail = () => {
                         createdAt={order.created_at} scName={scName} converting={s.converting}
                         onNavigateBack={() => navigate("/draft-orders-advanced")}
                         onConvert={s.handleConvert} onOpenModal={s.openModal as any} onDelete={s.handleDelete}
+                        onSendEstimate={() => {
+                            const info = currentEstimateInfo
+                            if (!info) { setShowEstimateModal(true); return }
+                            const missing = getMissingEstimateFields(info)
+                            if (missing.length > 0) {
+                                // Import toast inline to avoid circular dep
+                                import("@medusajs/ui").then(({ toast }) =>
+                                    toast.error(`Please fill in: ${missing.join(", ")}`, { description: "These fields are required before sending an estimate." })
+                                )
+                                return
+                            }
+                            setShowEstimateModal(true)
+                        }}
+                        onPrintEstimate={() => {
+                            const info = currentEstimateInfo
+                            const missing = info ? getMissingEstimateFields(info) : []
+                            if (missing.length > 0) {
+                                import("@medusajs/ui").then(({ toast }) =>
+                                    toast.error(`Please fill in: ${missing.join(", ")}`, { description: "These fields are required before printing an estimate." })
+                                )
+                                return
+                            }
+                            // Hidden iframe: loads ?mode=print HTML which auto-calls window.print()
+                            // → Chrome print dialog opens directly, no new tab visible to user
+                            const iframe = document.createElement("iframe")
+                            iframe.style.cssText = "position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:0;"
+                            document.body.appendChild(iframe)
+                            iframe.onload = () => {
+                                // The autoPrint script inside the HTML calls window.print() on load
+                                // Give it a moment then clean up after the dialog would have opened
+                                setTimeout(() => {
+                                    try { document.body.removeChild(iframe) } catch { }
+                                }, 120_000) // clean up after 2 min max
+                            }
+                            iframe.src = `/admin/draft-orders/${id}/send-estimate?mode=print`
+                        }}
                     />
                     <CustomerBlock
                         customer={order.customer} customerName={customerName}
@@ -51,6 +119,26 @@ const DraftOrderDetail = () => {
                         billingLines={addrToLines(order.billing_address)}
                         onOpenModal={s.openModal as any}
                     />
+                    {/* ── Estimate Details: Rep, Order Type, Lead Time, Payment Terms, Project ── */}
+                    {(() => {
+                        const m = order.metadata ?? {}
+                        const cm: any = (order.customer as any)?.metadata ?? {}
+                        const initialInfo: EstimateInfo = {
+                            rep: (m.estimate_rep ?? cm.default_rep ?? "") as string,
+                            orderType: (m.estimate_order_type ?? cm.default_order_type ?? "") as string,
+                            leadTime: (m.estimate_lead_time ?? cm.default_lead_time ?? "") as string,
+                            paymentTerms: (m.estimate_payment_terms ?? cm.default_payment_terms ?? "") as string,
+                            project: (m.estimate_project ?? "") as string,
+                        }
+                        return (
+                            <EstimateInfoBlock
+                                orderId={id!}
+                                customerId={order.customer?.id}
+                                initialInfo={initialInfo}
+                                onInfoChange={setCurrentEstimateInfo}
+                            />
+                        )
+                    })()}
                     <Container className="p-0 overflow-visible">
                         <div className="flex items-center justify-between px-6 py-4 border-b border-ui-border-base">
                             <div className="flex items-center gap-2">
@@ -58,10 +146,6 @@ const DraftOrderDetail = () => {
                                 {order.items.length > 0 && <Badge color="grey" size="small">{order.items.length}</Badge>}
                                 {s.itemSaving && <Text size="xsmall" className="text-ui-fg-muted">Saving...</Text>}
                             </div>
-                            <button onClick={() => window.open(`/app/draft-orders/${id}/promotions`, "_blank")}
-                                className="text-xs text-ui-fg-muted hover:text-ui-fg-base flex items-center gap-1">
-                                Promotions <ArrowUpRightOnBox className="w-3 h-3" />
-                            </button>
                         </div>
                         <InlineItemsTable
                             items={order.items} curr={curr}
@@ -69,14 +153,29 @@ const DraftOrderDetail = () => {
                             itemQtys={s.itemQtys} setItemQtys={s.setItemQtys}
                             itemPrices={s.itemPrices} setItemPrices={s.setItemPrices}
                             searchInvItems={s.searchInvItems}
-                            handleAddItem={s.handleAddItem} handleUpdateItem={s.handleUpdateItem} handleRemoveItem={s.handleRemoveItem}
+                            handleAddItem={handleAddItemWithTax} handleUpdateItem={handleUpdateItemWithTax} handleRemoveItem={handleRemoveItemWithTax}
                             itemSaving={s.itemSaving} customerPrices={customerPrices}
+                            customerIsWholesale={(() => {
+                                const cust = order.customer as any
+                                return (cust?.groups ?? []).some((g: any) => (g.name ?? '').toLowerCase().includes('wholesale')) ||
+                                    (cust?.metadata?.price_level as string ?? '').toLowerCase().includes('wholesale')
+                            })()}
                         />
                     </Container>
                     <PromotionsBlock
                         orderId={id!} promotions={order.promotions ?? []}
                         discountTotal={order.discount_total ?? 0} curr={curr} onApplied={s.fetchOrder}
                     />
+                    {/* ── Notes ─────────────────────────────────────────── */}
+                    <Container className="p-0 overflow-hidden">
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-ui-border-base">
+                            <Heading level="h2">Notes</Heading>
+                        </div>
+                        <InlineNotes
+                            orderId={id!}
+                            initialNotes={(order.metadata?.estimate_notes as string | undefined) ?? ""}
+                        />
+                    </Container>
                     <Container className="p-0 overflow-hidden">
                         <div className="flex items-center justify-between px-6 py-4 border-b border-ui-border-base">
                             <Heading level="h2">Shipping</Heading>
@@ -93,13 +192,20 @@ const DraftOrderDetail = () => {
                             <Heading level="h2">Taxes</Heading>
                         </div>
                         <InlineTaxes orderId={id!} curr={curr} onTaxChange={setTaxAmount}
-                            triggerKey={`${order.items.length}-${(order.shipping_methods ?? []).length}`}
+                            triggerKey={taxTrigger}
                         />
                     </Container>
-                    {/* ── Order Totals: subtotal computed from items (unit_price is in dollars from API) ── */}
+                    {/* ── Order Totals: subtotal uses UI-selected price (itemPrices) if available,
+                         falling back to server unit_price. This ensures total reflects the
+                         dropdown selection immediately, before the 3-second autosave fires. ── */}
                     {(() => {
-                        const computedSubtotal = (order.items ?? []).reduce((sum: number, item: any) =>
-                            sum + (item.unit_price ?? 0) * (item.quantity ?? 1), 0)
+                        const computedSubtotal = (order.items ?? []).reduce((sum: number, item: any) => {
+                            const selectedPrice = s.itemPrices[item.id]
+                            const price = selectedPrice !== undefined
+                                ? parseFloat(selectedPrice)
+                                : (item.unit_price ?? 0)
+                            return sum + price * (item.quantity ?? 1)
+                        }, 0)
                         const shippingDollars = order.shipping_total ?? 0
                         const discountDollars = order.discount_total ?? 0
                         return (
@@ -130,6 +236,7 @@ const DraftOrderDetail = () => {
 
             <OrderDrawers
                 modal={s.modal} closeModal={s.closeModal} saving={s.saving} itemSaving={s.itemSaving} curr={curr}
+                customerId={order.customer?.id}
                 salesChannels={s.salesChannels} selectedSc={s.selectedSc} setSelectedSc={s.setSelectedSc} handleSaveSalesChannel={s.handleSaveSalesChannel}
                 emailForm={s.emailForm} setEmailForm={s.setEmailForm} handleSaveEmail={s.handleSaveEmail}
                 shippingAddrForm={s.shippingAddrForm} setShippingAddrForm={s.setShippingAddrForm} handleSaveShippingAddr={s.handleSaveShippingAddr}
@@ -148,6 +255,33 @@ const DraftOrderDetail = () => {
                 metaNewVal={s.metaNewVal} setMetaNewVal={s.setMetaNewVal}
                 handleSaveMetadata={s.handleSaveMetadata} handleAddMetaKey={s.handleAddMetaKey}
             />
+            {showEstimateModal && (
+                <SendEstimateModal
+                    open={showEstimateModal}
+                    onClose={() => setShowEstimateModal(false)}
+                    onSuccess={(sentTo) => {
+                        // Add Email Sent activity to timeline immediately (no re-fetch)
+                        addTimelineEvent(
+                            "Email Sent",
+                            `Estimate emailed to ${sentTo}`,
+                            currentUser || undefined
+                        )
+                        // Auto-advance status: Created → Sent
+                        if (s.estimateStatus === "Created") {
+                            s.handleStatusChange("Sent")
+                        }
+                    }}
+                    orderId={id!}
+                    displayId={order.display_id}
+                    customerEmail={order.customer?.email ?? order.email}
+                    total={(order.items ?? []).reduce((acc, i: any) => {
+                        const sel = s.itemPrices[i.id]
+                        const price = sel !== undefined ? parseFloat(sel) : (i.unit_price ?? 0)
+                        return acc + price * (i.quantity ?? 1)
+                    }, 0) + (order.shipping_total ?? 0) - (order.discount_total ?? 0) + taxAmount}
+                    curr={curr}
+                />
+            )}
         </>
     )
 }

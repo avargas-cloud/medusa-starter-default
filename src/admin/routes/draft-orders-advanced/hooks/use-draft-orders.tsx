@@ -33,6 +33,8 @@ export const useDraftOrders = () => {
     const [search, setSearch] = useState("")
     const [sort, setSort] = useState<SortKey>("display_id_desc")
     const [page, setPage] = useState(0)
+    // Default: hide "not_approved" orders — they are closed/declined estimates
+    const [showNotApproved, setShowNotApproved] = useState(false)
 
     useEffect(() => {
         const load = async () => {
@@ -54,14 +56,21 @@ export const useDraftOrders = () => {
     }, [])
 
     const filtered = useMemo(() => {
-        if (!search.trim()) return orders
+        let list = orders
+
+        // By default, hide orders with estimate_status = "not_approved" (declined estimates)
+        if (!showNotApproved) {
+            list = list.filter(o => o.metadata?.estimate_status !== "not_approved")
+        }
+
+        if (!search.trim()) return list
         const q = search.toLowerCase()
-        return orders.filter(o => {
+        return list.filter(o => {
             const name = `${o.customer?.first_name ?? ""} ${o.customer?.last_name ?? ""}`.trim().toLowerCase()
             const email = (o.customer?.email ?? o.email ?? "").toLowerCase()
             return name.includes(q) || email.includes(q) || `#${o.display_id}`.includes(q)
         })
-    }, [orders, search])
+    }, [orders, search, showNotApproved])
 
     const sorted = useMemo(() => {
         const arr = [...filtered]
@@ -72,6 +81,12 @@ export const useDraftOrders = () => {
             case "created_at_asc": return arr.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
         }
     }, [filtered, sort])
+
+    // Count of hidden "not_approved" orders (to show in the toggle label)
+    const notApprovedCount = useMemo(
+        () => orders.filter(o => o.metadata?.estimate_status === "not_approved").length,
+        [orders]
+    )
 
     const totalPages = Math.ceil(sorted.length / PAGE_SIZE)
     const paginated = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
@@ -84,5 +99,7 @@ export const useDraftOrders = () => {
         page, setPage,
         filtered, sorted, paginated,
         totalPages,
+        showNotApproved, setShowNotApproved,
+        notApprovedCount,
     }
 }

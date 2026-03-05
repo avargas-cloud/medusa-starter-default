@@ -15,7 +15,7 @@ import { loadEnv } from "@medusajs/framework/utils"
 
 loadEnv("development", process.cwd())
 
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://ecopower-qb.loca.lt"
+const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com"
 const API_KEY = process.env.QB_API_KEY || ""
 
 async function testEstimateEndpoint() {

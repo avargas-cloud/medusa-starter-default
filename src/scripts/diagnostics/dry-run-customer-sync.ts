@@ -11,7 +11,7 @@ import { Modules } from "@medusajs/framework/utils"
  * Run with: npx medusa exec ./src/scripts/diagnostics/dry-run-customer-sync.ts
  */
 
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://ecopower-qb.loca.lt"
+const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com"
 const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD"
 const INITIAL_WAIT_MS = 2 * 60 * 1000   // 2 minutes before first poll
 const POLL_INTERVAL_MS = 2 * 60 * 1000  // 2 minutes between polls

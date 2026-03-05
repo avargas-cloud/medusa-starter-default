@@ -11,6 +11,8 @@ interface VariantResult {
     variantTitle?: string
     thumbnail?: string
     prices?: PriceOption[]
+    /** Per-location available stock */
+    locations?: { locationName: string; available: number }[]
 }
 
 interface Props {
@@ -28,9 +30,18 @@ interface Props {
     handleRemoveItem: (itemId: string) => Promise<void>
     itemSaving: boolean
     customerPrices: Record<string, PriceOption[]>
+    customerIsWholesale?: boolean
 }
 
 const AUTOSAVE_DELAY = 3000 // 3 seconds debounce
+
+// Warehouse icon SVG (not always available in @medusajs/icons)
+const WarehouseIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+        <polyline points="9,22 9,12 15,12 15,22" />
+    </svg>
+)
 
 export const InlineItemsTable = ({
     items, curr,
@@ -38,7 +49,7 @@ export const InlineItemsTable = ({
     itemQtys, setItemQtys,
     itemPrices, setItemPrices,
     searchInvItems, handleAddItem, handleUpdateItem, handleRemoveItem,
-    itemSaving, customerPrices,
+    itemSaving, customerPrices, customerIsWholesale,
 }: Props) => {
     const searchRef = useRef<HTMLInputElement>(null)
     const dropdownRef = useRef<HTMLDivElement>(null)
@@ -51,18 +62,86 @@ export const InlineItemsTable = ({
     const [savingItems, setSavingItems] = useState<Set<string>>(new Set())
     const [savedItems, setSavedItems] = useState<Set<string>>(new Set())
 
-    const triggerAutoSave = useCallback((itemId: string) => {
-        // Clear existing timer for this item
-        if (autoSaveTimers.current[itemId]) {
-            clearTimeout(autoSaveTimers.current[itemId])
+    // ── Stock popover state ──────────────────────────────────────────────────
+    const [stockPopover, setStockPopover] = useState<{
+        itemId: string
+        pos: { top: number; left: number }
+        locations: { locationName: string; available: number }[]
+    } | null>(null)
+    const [stockLoading, setStockLoading] = useState<string | null>(null)
+    const stockPopoverRef = useRef<HTMLDivElement>(null)
+
+    const fetchItemStock = async (item: any, btnEl: HTMLButtonElement) => {
+        const itemId = item.id
+        const sku = item.variant?.sku
+
+        // Toggle off if same item
+        if (stockPopover?.itemId === itemId) { setStockPopover(null); return }
+
+        setStockLoading(itemId)
+        setStockPopover(null)
+
+        try {
+            // Resolve stock location names
+            const locationNameMap: Record<string, string> = {}
+            try {
+                const slRes = await fetch(`/admin/stock-locations?limit=100`, { credentials: "include" })
+                if (slRes.ok) {
+                    const { stock_locations } = await slRes.json()
+                    for (const sl of (stock_locations ?? [])) {
+                        if (sl.id && sl.name) locationNameMap[sl.id] = sl.name
+                    }
+                }
+            } catch { /* best-effort */ }
+
+            // Find inventory item by SKU
+            const invRes = await fetch(`/admin/inventory-items?${sku ? `sku[]=${encodeURIComponent(sku)}` : `limit=1`}&limit=10`, { credentials: "include" })
+            if (!invRes.ok) throw new Error("inv fetch failed")
+            const { inventory_items } = await invRes.json()
+
+            const locations: { locationName: string; available: number }[] = []
+
+            for (const inv of (inventory_items ?? [])) {
+                const levRes = await fetch(`/admin/inventory-items/${inv.id}/location-levels?limit=50`, { credentials: "include" })
+                if (!levRes.ok) continue
+                const { inventory_levels } = await levRes.json()
+                for (const lev of (inventory_levels ?? [])) {
+                    const locId: string = lev.location_id ?? ""
+                    const locName = locationNameMap[locId] ?? (locId || "Warehouse")
+                    const available = (lev.stocked_quantity ?? 0) - (lev.reserved_quantity ?? 0)
+                    locations.push({ locationName: locName, available })
+                }
+            }
+
+            const rect = btnEl.getBoundingClientRect()
+            setStockPopover({
+                itemId,
+                pos: { top: rect.bottom + 6, left: rect.left + rect.width / 2 },
+                locations,
+            })
+        } catch { /* show nothing */ } finally {
+            setStockLoading(null)
         }
-        // Schedule save after 3 seconds
+    }
+
+    // Close stock popover on outside click
+    useEffect(() => {
+        const handler = (e: MouseEvent) => {
+            if (stockPopoverRef.current && !stockPopoverRef.current.contains(e.target as Node)) {
+                setStockPopover(null)
+            }
+        }
+        document.addEventListener("mousedown", handler)
+        return () => document.removeEventListener("mousedown", handler)
+    }, [])
+
+    const triggerAutoSave = useCallback((itemId: string) => {
+        if (autoSaveTimers.current[itemId]) clearTimeout(autoSaveTimers.current[itemId])
         autoSaveTimers.current[itemId] = setTimeout(async () => {
             setSavingItems(prev => new Set([...prev, itemId]))
             await handleUpdateItem(itemId)
             setSavingItems(prev => { const s = new Set(prev); s.delete(itemId); return s })
             setSavedItems(prev => new Set([...prev, itemId]))
-            // Clear the "saved" indicator after 2s
             setTimeout(() => {
                 setSavedItems(prev => { const s = new Set(prev); s.delete(itemId); return s })
             }, 2000)
@@ -70,7 +149,6 @@ export const InlineItemsTable = ({
     }, [handleUpdateItem])
 
     const saveOnBlur = useCallback(async (itemId: string) => {
-        // If there's a pending timer, cancel it and save immediately
         if (autoSaveTimers.current[itemId]) {
             clearTimeout(autoSaveTimers.current[itemId])
             delete autoSaveTimers.current[itemId]
@@ -84,12 +162,7 @@ export const InlineItemsTable = ({
         }
     }, [handleUpdateItem])
 
-    // Cleanup timers on unmount
-    useEffect(() => {
-        return () => {
-            Object.values(autoSaveTimers.current).forEach(clearTimeout)
-        }
-    }, [])
+    useEffect(() => { return () => { Object.values(autoSaveTimers.current).forEach(clearTimeout) } }, [])
 
     // Compute dropdown fixed position when results arrive
     useEffect(() => {
@@ -156,24 +229,48 @@ export const InlineItemsTable = ({
                                         disabled={itemSaving}
                                         className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-ui-bg-subtle border-b border-ui-border-base last:border-0 text-left disabled:opacity-50"
                                         onClick={() => {
-                                            const price = contractorP ?? defaultP
+                                            // Wholesale customers get the contractor (price list) price by default;
+                                            // Retail/Standard customers get the default (retail) price by default.
+                                            const price = (customerIsWholesale && contractorP) ? contractorP : (defaultP ?? contractorP)
                                             handleAddItem(v.id, price?.amount)
                                             setShowDropdown(false)
                                         }}
                                     >
+                                        {/* Thumbnail */}
                                         {v.thumbnail ? (
                                             <img src={v.thumbnail} alt="" className="w-9 h-9 object-cover rounded border border-ui-border-base shrink-0" />
                                         ) : (
                                             <div className="w-9 h-9 bg-ui-bg-subtle rounded border border-ui-border-base shrink-0 flex items-center justify-center text-ui-fg-muted text-xs">IMG</div>
                                         )}
+
+                                        {/* Product info — flex-1 takes all remaining space on the left */}
                                         <div className="flex-1 min-w-0">
                                             <Text size="small" weight="plus" className="truncate block">{v.title}</Text>
                                             {v.variantTitle && <Text size="xsmall" className="text-ui-fg-subtle truncate block">{v.variantTitle}</Text>}
                                             {v.sku && <Text size="xsmall" className="text-ui-fg-muted font-mono">{v.sku}</Text>}
                                         </div>
-                                        <div className="text-right shrink-0 space-y-0.5">
-                                            {defaultP && <Text size="xsmall" className="text-ui-fg-muted block">Default: {fmt(defaultP.amount, "usd")}</Text>}
-                                            {contractorP && <Text size="xsmall" className="text-ui-fg-interactive font-medium block">{contractorP.label ?? "Wholesale"}: {fmt(contractorP.amount, "usd")} ✓</Text>}
+
+                                        {/* Availability — flex-1 so it truly centers between product info and prices */}
+                                        <div className="flex-1 text-center">
+                                            {v.locations && v.locations.length > 0 && (<>
+                                                <p className="text-[9px] font-semibold text-ui-fg-muted uppercase tracking-wide leading-none mb-0.5">Availability</p>
+                                                {v.locations.map((loc, i) => (
+                                                    <p key={i} className={`text-[10px] leading-tight ${loc.available <= 0 ? "text-red-400" : loc.available <= 5 ? "text-orange-400" : "text-green-400"
+                                                        }`}>
+                                                        <span className="text-ui-fg-muted">{loc.locationName}:</span> {loc.available <= 0 ? "0 units" : `${loc.available} units`}
+                                                    </p>
+                                                ))}
+                                            </>)}
+                                        </div>
+
+                                        {/* Prices — right-aligned, show ✓ on the customer-appropriate price */}
+                                        <div className="text-right shrink-0 min-w-[8rem]">
+                                            {defaultP && <Text size="xsmall" className={`block ${!customerIsWholesale ? "text-ui-fg-interactive font-medium" : "text-ui-fg-muted"}`}>
+                                                {fmt(defaultP.amount, "usd")}{!customerIsWholesale && " ✓"}
+                                            </Text>}
+                                            {contractorP && <Text size="xsmall" className={`block ${customerIsWholesale ? "text-ui-fg-interactive font-medium" : "text-ui-fg-muted"}`}>
+                                                {contractorP.label ?? "Wholesale"}: {fmt(contractorP.amount, "usd")}{customerIsWholesale && " ✓"}
+                                            </Text>}
                                         </div>
                                     </button>
                                 )
@@ -185,9 +282,10 @@ export const InlineItemsTable = ({
 
             {/* ── Column headers ── */}
             {items.length > 0 && (
-                <div className="grid grid-cols-[2.5rem_1fr_10rem_6rem_5.5rem_1.5rem] gap-x-3 px-6 py-2 border-b border-ui-border-base">
+                <div className="grid grid-cols-[2.5rem_1fr_2rem_10rem_6rem_5.5rem_1.5rem] gap-x-3 px-6 py-2 border-b border-ui-border-base">
                     <div />
                     <Text size="xsmall" weight="plus" className="text-ui-fg-muted uppercase tracking-wide">Item</Text>
+                    <div />
                     <Text size="xsmall" weight="plus" className="text-ui-fg-muted uppercase tracking-wide text-right">Price</Text>
                     <Text size="xsmall" weight="plus" className="text-ui-fg-muted uppercase tracking-wide text-center">Qty</Text>
                     <Text size="xsmall" weight="plus" className="text-ui-fg-muted uppercase tracking-wide text-right">Total</Text>
@@ -209,9 +307,11 @@ export const InlineItemsTable = ({
                 const subtotal = price * qty
                 const isSaving = savingItems.has(item.id)
                 const isSaved = savedItems.has(item.id)
+                const isLoadingStock = stockLoading === item.id
+                const hasPopover = stockPopover?.itemId === item.id
 
                 return (
-                    <div key={item.id} className="group grid grid-cols-[2.5rem_1fr_10rem_6rem_5.5rem_1.5rem] gap-x-3 items-center px-6 py-3 border-b border-ui-border-base last:border-0 hover:bg-ui-bg-subtle transition-colors">
+                    <div key={item.id} className="group grid grid-cols-[2.5rem_1fr_2rem_10rem_6rem_5.5rem_1.5rem] gap-x-3 items-center px-6 py-3 border-b border-ui-border-base last:border-0 hover:bg-ui-bg-subtle transition-colors">
                         {/* Thumbnail */}
                         {item.thumbnail ? (
                             <img src={item.thumbnail} alt="" className="w-9 h-9 object-cover rounded border border-ui-border-base" />
@@ -224,6 +324,20 @@ export const InlineItemsTable = ({
                             <Text size="small" weight="plus" className="block leading-tight">{item.title}</Text>
                             {item.variant?.title && <Text size="xsmall" className="text-ui-fg-subtle">{item.variant.title}</Text>}
                             {item.variant?.sku && <Text size="xsmall" className="text-ui-fg-muted font-mono">{item.variant.sku}</Text>}
+                        </div>
+
+                        {/* Stock availability button */}
+                        <div className="flex items-center justify-center">
+                            <button
+                                title="View stock availability"
+                                onClick={e => fetchItemStock(item, e.currentTarget as HTMLButtonElement)}
+                                className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${hasPopover
+                                    ? "text-ui-fg-interactive bg-ui-bg-interactive-hover"
+                                    : "text-ui-fg-muted hover:text-ui-fg-base hover:bg-ui-bg-base"
+                                    } ${isLoadingStock ? "animate-pulse" : ""}`}
+                            >
+                                <WarehouseIcon />
+                            </button>
                         </div>
 
                         {/* Price — auto-saves on blur or after 3s of inactivity */}
@@ -244,7 +358,6 @@ export const InlineItemsTable = ({
                                 options={options}
                                 onSelectOption={(amount) => {
                                     setItemPrices((p: any) => ({ ...p, [item.id]: amount.toFixed(2) }))
-                                    // Immediate save when selecting from dropdown
                                     if (autoSaveTimers.current[item.id]) {
                                         clearTimeout(autoSaveTimers.current[item.id])
                                         delete autoSaveTimers.current[item.id]
@@ -254,7 +367,7 @@ export const InlineItemsTable = ({
                             />
                         </div>
 
-                        {/* Qty stepper — always visible */}
+                        {/* Qty stepper */}
                         <div className="flex items-center gap-1 justify-center">
                             <button
                                 onClick={() => {
@@ -282,7 +395,7 @@ export const InlineItemsTable = ({
                             {fmt(subtotal, curr)}
                         </Text>
 
-                        {/* Delete button (always visible on hover) */}
+                        {/* Delete button */}
                         <button
                             onClick={() => handleRemoveItem(item.id)}
                             disabled={itemSaving || isSaving}
@@ -294,6 +407,39 @@ export const InlineItemsTable = ({
                     </div>
                 )
             })}
+
+            {/* ── Stock availability popover ── */}
+            {stockPopover && (
+                <div
+                    ref={stockPopoverRef}
+                    style={{
+                        position: "fixed",
+                        top: stockPopover.pos.top,
+                        left: stockPopover.pos.left,
+                        transform: "translateX(-50%)",
+                        zIndex: 9999,
+                    }}
+                    className="bg-ui-bg-overlay border border-ui-border-base rounded-lg shadow-2xl p-3 min-w-[180px] ring-1 ring-black/10"
+                >
+                    {/* Arrow */}
+                    <div
+                        style={{ position: "absolute", top: -5, left: "50%", transform: "translateX(-50%) rotate(45deg)", width: 10, height: 10 }}
+                        className="bg-ui-bg-overlay border-l border-t border-ui-border-base"
+                    />
+                    <p className="text-[9px] font-semibold text-ui-fg-muted uppercase tracking-wide mb-1.5">Availability</p>
+                    {stockPopover.locations.length === 0 ? (
+                        <p className="text-[11px] text-ui-fg-muted">No stock data found</p>
+                    ) : stockPopover.locations.map((loc, i) => (
+                        <div key={i} className="flex items-center justify-between gap-4 py-0.5">
+                            <span className="text-[11px] text-ui-fg-subtle">{loc.locationName}</span>
+                            <span className={`text-[11px] font-semibold tabular-nums ${loc.available <= 0 ? "text-red-400" : loc.available <= 5 ? "text-orange-400" : "text-green-400"
+                                }`}>
+                                {loc.available <= 0 ? "0" : loc.available} units
+                            </span>
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     )
 }
