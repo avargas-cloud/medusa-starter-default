@@ -14,6 +14,8 @@ interface Props {
     handleAddShipping: (optionId: string, customAmount?: string) => Promise<void>
     /** Called with the removed method ID so parent can patch local state optimistically */
     onRemoved?: (methodId: string) => void
+    /** Called after a shipping method is added/changed so parent can refresh taxes */
+    onShippingChanged?: () => void
 }
 
 export interface InlineShippingHandle {
@@ -27,28 +29,30 @@ const isPickup = (name: string) => PICKUP_KEYWORDS.some(k => name.toLowerCase().
 
 export const InlineShipping = forwardRef<InlineShippingHandle, Props>(function InlineShipping({
     orderId, shippingMethods, shippingOptions, curr, saving,
-    loadShippingOptions, handleAddShipping, onRemoved,
+    loadShippingOptions, handleAddShipping, onRemoved, onShippingChanged,
 }, ref) {
     const [picking, setPicking] = useState(false)
+    // When not null, we're replacing this method ID (the Change flow)
+    const [replacingMethodId, setReplacingMethodId] = useState<string | null>(null)
     const [selectedOption, setSelectedOption] = useState("")
     const [customAmount, setCustomAmount] = useState("")
     const [removingId, setRemovingId] = useState<string | null>(null)
     const [addingPickup, setAddingPickup] = useState(false)
 
-    const openPicker = async () => {
+    const openPicker = async (methodIdToReplace?: string) => {
         await loadShippingOptions()
+        setReplacingMethodId(methodIdToReplace ?? null)
         setPicking(true)
     }
 
     const applyLocalPickup = async (): Promise<boolean> => {
         await loadShippingOptions()
-        // Find Miami Store Pickup — match by name containing miami or pickup keywords
         const opt = shippingOptions.find(o =>
-            o.name.toLowerCase().includes("miami") ||
-            isPickup(o.name)
+            o.name.toLowerCase().includes("miami") || isPickup(o.name)
         )
         if (!opt) return false
         await handleAddShipping(opt.id, "0")
+        onShippingChanged?.()
         return true
     }
 
@@ -59,7 +63,6 @@ export const InlineShipping = forwardRef<InlineShippingHandle, Props>(function I
         try {
             const found = await applyLocalPickup()
             if (!found) {
-                // Fallback: open picker so user can choose
                 toast.warning("Miami Store Pickup not found — please select manually.")
                 await openPicker()
             }
@@ -81,14 +84,6 @@ export const InlineShipping = forwardRef<InlineShippingHandle, Props>(function I
         setCustomAmount(cleaned)
     }
 
-    const save = async () => {
-        if (!selectedOption) return
-        await handleAddShipping(selectedOption, customAmount)
-        setPicking(false)
-        setSelectedOption("")
-        setCustomAmount("")
-    }
-
     const handleRemove = useCallback(async (methodId: string) => {
         onRemoved?.(methodId)
         setRemovingId(methodId)
@@ -102,12 +97,42 @@ export const InlineShipping = forwardRef<InlineShippingHandle, Props>(function I
                 throw new Error(j.message || `HTTP ${r.status}`)
             }
             toast.success("Shipping method removed")
+            onShippingChanged?.()
         } catch (e: any) {
             toast.error(e.message)
         } finally {
             setRemovingId(null)
         }
-    }, [orderId, onRemoved])
+    }, [orderId, onRemoved, onShippingChanged])
+
+    const save = async () => {
+        if (!selectedOption) return
+
+        // If replacing: remove old method first, then add new one
+        if (replacingMethodId) {
+            onRemoved?.(replacingMethodId)
+            try {
+                const r = await fetch(`/admin/draft-orders/${orderId}/remove-shipping/${replacingMethodId}`, {
+                    method: "DELETE",
+                    credentials: "include",
+                })
+                if (!r.ok) {
+                    const j = await r.json().catch(() => ({}))
+                    throw new Error(j.message || `HTTP ${r.status}`)
+                }
+            } catch (e: any) {
+                toast.error(`Failed to remove old shipping: ${e.message}`)
+                return
+            }
+        }
+
+        await handleAddShipping(selectedOption, customAmount)
+        onShippingChanged?.()
+        setPicking(false)
+        setReplacingMethodId(null)
+        setSelectedOption("")
+        setCustomAmount("")
+    }
 
     return (
         <div>
@@ -119,7 +144,12 @@ export const InlineShipping = forwardRef<InlineShippingHandle, Props>(function I
                     </div>
                     <div className="flex items-center gap-3">
                         <Text size="small">{fmt(typeof m.amount === "number" ? m.amount : 0, curr)}</Text>
-                        <button onClick={openPicker} className="text-xs text-ui-fg-interactive hover:underline">Change</button>
+                        <button
+                            onClick={() => openPicker(m.id)}
+                            className="text-xs text-ui-fg-interactive hover:underline"
+                        >
+                            Change
+                        </button>
                         <button
                             onClick={() => handleRemove(m.id)}
                             disabled={removingId === m.id}
@@ -149,7 +179,7 @@ export const InlineShipping = forwardRef<InlineShippingHandle, Props>(function I
                         <Button
                             variant="secondary"
                             size="small"
-                            onClick={openPicker}
+                            onClick={() => openPicker()}
                             disabled={addingPickup || saving}
                         >
                             Add shipping
@@ -160,7 +190,9 @@ export const InlineShipping = forwardRef<InlineShippingHandle, Props>(function I
 
             {picking && (
                 <div className="px-6 py-4 border-t border-ui-border-base bg-ui-bg-subtle space-y-3">
-                    <Text size="small" weight="plus">Select shipping method</Text>
+                    <Text size="small" weight="plus">
+                        {replacingMethodId ? "Replace shipping method" : "Select shipping method"}
+                    </Text>
                     <div className="space-y-2">
                         {shippingOptions.map(o => (
                             <button key={o.id} onClick={() => handleOptionClick(o.id, o.name)}
@@ -187,8 +219,10 @@ export const InlineShipping = forwardRef<InlineShippingHandle, Props>(function I
                         </div>
                     </div>
                     <div className="flex gap-2">
-                        <Button size="small" onClick={save} isLoading={saving} disabled={!selectedOption || saving}>Apply</Button>
-                        <Button size="small" variant="secondary" onClick={() => { setPicking(false); setSelectedOption(""); setCustomAmount("") }}>Cancel</Button>
+                        <Button size="small" onClick={save} isLoading={saving} disabled={!selectedOption || saving}>
+                            {replacingMethodId ? "Replace" : "Apply"}
+                        </Button>
+                        <Button size="small" variant="secondary" onClick={() => { setPicking(false); setReplacingMethodId(null); setSelectedOption(""); setCustomAmount("") }}>Cancel</Button>
                     </div>
                 </div>
             )}

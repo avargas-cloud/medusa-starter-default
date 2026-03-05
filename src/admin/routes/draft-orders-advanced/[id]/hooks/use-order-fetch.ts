@@ -62,8 +62,9 @@ export const useOrderFetch = (
                                 const prodMap: Record<string, any> = {};
                                 (products ?? []).forEach((p: any) => { prodMap[p.id] = p })
                                 merged.items = rawItems.map((item: any) => {
-                                    const vid = item.variant_id ?? item.variant?.id
-                                    const prod = prodMap[variantProductMap[vid]]
+                                    const rawVid: string | undefined = item.variant_id ?? item.variant?.id
+                                    const productId: string | undefined = rawVid != null ? variantProductMap[rawVid] : undefined
+                                    const prod = productId != null ? prodMap[productId] : undefined
                                     return { ...item, thumbnail: item.thumbnail ?? prod?.thumbnail, title: prod?.title ?? item.title }
                                 })
                                 setOrder({ ...merged })

@@ -109,8 +109,8 @@ export const useOrderModal = ({
                 const params = new Set<string>()
                 params.add(`q=${encodeURIComponent(q)}&limit=10`)
                 if (tokens.length >= 2) {
-                    params.add(`first_name=${encodeURIComponent(tokens[0])}&last_name=${encodeURIComponent(tokens.slice(1).join(" "))}&limit=10`)
-                    params.add(`first_name=${encodeURIComponent(tokens.slice(0, -1).join(" "))}&last_name=${encodeURIComponent(tokens[tokens.length - 1])}&limit=10`)
+                    params.add(`first_name=${encodeURIComponent(tokens[0]!)}&last_name=${encodeURIComponent(tokens.slice(1).join(" "))}&limit=10`)
+                    params.add(`first_name=${encodeURIComponent(tokens.slice(0, -1).join(" "))}&last_name=${encodeURIComponent(tokens[tokens.length - 1]!)}&limit=10`)
                 }
                 for (const tok of tokens) {
                     params.add(`first_name=${encodeURIComponent(tok)}&limit=10`)
