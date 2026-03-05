@@ -6,6 +6,7 @@ import { Container, Heading, Badge, Label, Text } from "@medusajs/ui"
  * QuickBooks Order Widget  (zone: order.details.before)
  *
  * Displays QB sync info on the native Order Detail page.
+ * Layout: single row with 3 columns — Linked Estimate | Sales Order Number | QB TxnID
  *
  * Metadata keys read:
  *   qb_sales_order_ref        — QB Sales Order reference number (e.g. SO-1042)
@@ -18,7 +19,7 @@ import { Container, Heading, Badge, Label, Text } from "@medusajs/ui"
 // Small read-only field
 const QBField = ({ label, value, mono = true }: { label: string; value: string | null; mono?: boolean }) => (
     <div>
-        <Label className="mb-1 block text-sm text-ui-fg-subtle">{label}</Label>
+        <Label className="mb-1 block text-xs text-ui-fg-subtle uppercase tracking-wide">{label}</Label>
         <div className={`px-3 py-2 rounded-md bg-ui-bg-subtle border border-ui-border-base text-sm min-h-[36px] ${mono ? "font-mono" : ""}`}>
             {value
                 ? <span className="text-ui-fg-base">{value}</span>
@@ -51,60 +52,64 @@ const QuickBooksOrderWidget = ({ data }: DetailWidgetProps<any>) => {
     return (
         <Container className="p-0 overflow-hidden">
             {/* Header */}
-            <div className="flex items-center gap-2 px-6 py-4 border-b border-ui-border-base">
+            <div className="flex items-center gap-2 px-6 py-3 border-b border-ui-border-base">
                 <Heading level="h2">QuickBooks</Heading>
                 <Badge color="blue" size="small">QB Desktop</Badge>
                 {soSynced && <Badge color="green" size="small">✓ Sales Order Synced</Badge>}
                 {!soSynced && <Badge color="orange" size="small">Pending Sync</Badge>}
-            </div>
-
-            <div className="px-6 py-4 space-y-4">
-
-                {/* ── Sales Order (primary) ───────────────────────────────── */}
-                <div>
-                    <Text size="xsmall" weight="plus" className="text-ui-fg-muted uppercase tracking-wide mb-2">
-                        Sales Order
-                    </Text>
-                    <div className="space-y-3">
-                        <QBField label="Sales Order Number" value={soRef} />
-                        <QBField label="QB TxnID" value={soTxnId} />
-                    </div>
-                </div>
-
-                {/* ── Linked Estimate (only if from draft order) ─────────── */}
-                <div className="pt-2 border-t border-ui-border-base">
-                    <div className="flex items-center gap-2 mb-2">
-                        <Text size="xsmall" weight="plus" className="text-ui-fg-muted uppercase tracking-wide">
-                            Linked Estimate
-                        </Text>
-                        {fromDraftOrder
-                            ? <Badge color="purple" size="small">From Draft Order</Badge>
-                            : <Badge color="grey" size="small">Direct Order</Badge>
-                        }
-                    </div>
-                    {fromDraftOrder ? (
-                        <div className="space-y-3">
-                            <QBField label="Estimate Number" value={estimateRef} />
-                            <QBField label="Estimate TxnID" value={estimateTxnId} />
-                        </div>
-                    ) : (
-                        <div className="px-3 py-2 rounded-md bg-ui-bg-subtle border border-ui-border-base">
-                            <Text size="xsmall" className="text-ui-fg-muted italic">
-                                This order was not converted from a Draft Order — no linked QB Estimate.
-                            </Text>
-                        </div>
-                    )}
-                </div>
-
-                {/* ── Last sync timestamp ─────────────────────────────────── */}
                 {syncedAt && (
-                    <Text size="xsmall" className="text-ui-fg-muted pt-1">
+                    <span className="ml-auto text-xs text-ui-fg-muted">
                         Last synced: {new Date(syncedAt).toLocaleString("en-US", {
                             month: "short", day: "numeric", year: "numeric",
                             hour: "2-digit", minute: "2-digit"
                         })}
-                    </Text>
+                    </span>
                 )}
+            </div>
+
+            {/* ── Single-row 3-column layout ──────────────────────────────────── */}
+            <div className="px-6 py-4">
+                <div className="grid grid-cols-3 gap-4 items-start">
+
+                    {/* Col 1: Linked Estimate */}
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2 mb-2">
+                            <Text size="xsmall" weight="plus" className="text-ui-fg-muted uppercase tracking-wide">
+                                Linked Estimate
+                            </Text>
+                            {fromDraftOrder
+                                ? <Badge color="purple" size="small">Draft Order</Badge>
+                                : <Badge color="grey" size="small">Direct Order</Badge>
+                            }
+                        </div>
+                        {fromDraftOrder ? (
+                            <QBField label="Estimate Number" value={estimateRef} />
+                        ) : (
+                            <div className="px-3 py-2 rounded-md bg-ui-bg-subtle border border-ui-border-base min-h-[36px] flex items-center">
+                                <Text size="xsmall" className="text-ui-fg-muted italic">
+                                    No linked QB Estimate
+                                </Text>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Col 2: Sales Order Number */}
+                    <div>
+                        <Text size="xsmall" weight="plus" className="text-ui-fg-muted uppercase tracking-wide mb-2 block">
+                            Sales Order
+                        </Text>
+                        <QBField label="Sales Order Number" value={soRef} />
+                    </div>
+
+                    {/* Col 3: QB TxnID */}
+                    <div>
+                        <Text size="xsmall" weight="plus" className="text-ui-fg-muted uppercase tracking-wide mb-2 block">
+                            &nbsp;
+                        </Text>
+                        <QBField label="QB TxnID" value={soTxnId} />
+                    </div>
+
+                </div>
             </div>
         </Container>
     )

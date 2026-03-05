@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react"
+import { useState, useCallback, forwardRef, useImperativeHandle } from "react"
 import { Text, Button, Label } from "@medusajs/ui"
 import { Trash } from "@medusajs/icons"
 import { fmt } from "../helpers"
@@ -16,21 +16,58 @@ interface Props {
     onRemoved?: (methodId: string) => void
 }
 
-const PICKUP_KEYWORDS = ["pickup", "store pickup", "local pickup", "in store", "in-store"]
+export interface InlineShippingHandle {
+    openPicker: () => Promise<void>
+    /** Auto-apply Miami Store Pickup with $0, returns true if found */
+    applyLocalPickup: () => Promise<boolean>
+}
+
+const PICKUP_KEYWORDS = ["pickup", "store pickup", "local pickup", "in store", "in-store", "miami"]
 const isPickup = (name: string) => PICKUP_KEYWORDS.some(k => name.toLowerCase().includes(k))
 
-export const InlineShipping = ({
+export const InlineShipping = forwardRef<InlineShippingHandle, Props>(function InlineShipping({
     orderId, shippingMethods, shippingOptions, curr, saving,
     loadShippingOptions, handleAddShipping, onRemoved,
-}: Props) => {
+}, ref) {
     const [picking, setPicking] = useState(false)
     const [selectedOption, setSelectedOption] = useState("")
     const [customAmount, setCustomAmount] = useState("")
     const [removingId, setRemovingId] = useState<string | null>(null)
+    const [addingPickup, setAddingPickup] = useState(false)
 
     const openPicker = async () => {
         await loadShippingOptions()
         setPicking(true)
+    }
+
+    const applyLocalPickup = async (): Promise<boolean> => {
+        await loadShippingOptions()
+        // Find Miami Store Pickup — match by name containing miami or pickup keywords
+        const opt = shippingOptions.find(o =>
+            o.name.toLowerCase().includes("miami") ||
+            isPickup(o.name)
+        )
+        if (!opt) return false
+        await handleAddShipping(opt.id, "0")
+        return true
+    }
+
+    useImperativeHandle(ref, () => ({ openPicker, applyLocalPickup }))
+
+    const handleLocalPickup = async () => {
+        setAddingPickup(true)
+        try {
+            const found = await applyLocalPickup()
+            if (!found) {
+                // Fallback: open picker so user can choose
+                toast.warning("Miami Store Pickup not found — please select manually.")
+                await openPicker()
+            }
+        } catch (e: any) {
+            toast.error(e.message)
+        } finally {
+            setAddingPickup(false)
+        }
     }
 
     const handleOptionClick = (optId: string, optName: string) => {
@@ -53,7 +90,6 @@ export const InlineShipping = ({
     }
 
     const handleRemove = useCallback(async (methodId: string) => {
-        // Optimistically remove from parent state first (instant)
         onRemoved?.(methodId)
         setRemovingId(methodId)
         try {
@@ -68,7 +104,6 @@ export const InlineShipping = ({
             toast.success("Shipping method removed")
         } catch (e: any) {
             toast.error(e.message)
-            // Note: optimistic removal already happened — a page refresh would restore it
         } finally {
             setRemovingId(null)
         }
@@ -83,7 +118,6 @@ export const InlineShipping = ({
                         <Text size="xsmall" className="text-ui-fg-muted">{m.data?.description ?? ""}</Text>
                     </div>
                     <div className="flex items-center gap-3">
-                        {/* m.amount is in dollars (same unit as order totals from Medusa v2 API) */}
                         <Text size="small">{fmt(typeof m.amount === "number" ? m.amount : 0, curr)}</Text>
                         <button onClick={openPicker} className="text-xs text-ui-fg-interactive hover:underline">Change</button>
                         <button
@@ -99,9 +133,28 @@ export const InlineShipping = ({
                     </div>
                 </div>
             )) : (
-                <div className="px-6 py-4 flex items-center justify-between">
+                /* ── No shipping selected: show two quick-action buttons ── */
+                <div className="px-6 py-4 flex items-center justify-between gap-3">
                     <Text size="small" className="text-ui-fg-subtle">No shipping method selected.</Text>
-                    <Button variant="secondary" size="small" onClick={openPicker}>Add shipping</Button>
+                    <div className="flex items-center gap-2">
+                        <Button
+                            variant="secondary"
+                            size="small"
+                            onClick={handleLocalPickup}
+                            isLoading={addingPickup}
+                            disabled={addingPickup || saving}
+                        >
+                            🏪 Local Pickup
+                        </Button>
+                        <Button
+                            variant="secondary"
+                            size="small"
+                            onClick={openPicker}
+                            disabled={addingPickup || saving}
+                        >
+                            Add shipping
+                        </Button>
+                    </div>
                 </div>
             )}
 
@@ -141,4 +194,4 @@ export const InlineShipping = ({
             )}
         </div>
     )
-}
+})

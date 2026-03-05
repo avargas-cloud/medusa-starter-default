@@ -8,7 +8,7 @@ import { OrderHeader } from "./components/OrderHeader"
 import { CustomerBlock } from "./components/CustomerBlock"
 import { InlineItemsTable } from "./components/InlineItemsTable"
 import { PromotionsBlock } from "./components/PromotionsBlock"
-import { InlineShipping } from "./components/InlineShipping"
+import { InlineShipping, type InlineShippingHandle } from "./components/InlineShipping"
 import { InlineTaxes } from "./components/InlineTaxes"
 import { OrderTotals } from "./components/OrderTotals"
 import { OrderSidebar } from "./components/OrderSidebar"
@@ -16,6 +16,7 @@ import { InlineNotes } from "./components/InlineNotes"
 import { SendEstimateModal } from "./components/SendEstimateModal"
 import { EstimateInfoBlock, getMissingEstimateFields } from "./components/EstimateInfoBlock"
 import type { EstimateInfo } from "./components/EstimateInfoBlock"
+import { NoShippingModal } from "./components/NoShippingModal"
 import { addrToLines } from "./helpers"
 
 const DraftOrderDetail = () => {
@@ -37,6 +38,9 @@ const DraftOrderDetail = () => {
     }, [s.order?.tax_total])
     const [showEstimateModal, setShowEstimateModal] = useState(false)
     const [currentEstimateInfo, setCurrentEstimateInfo] = useState<EstimateInfo | null>(null)
+    const [showNoShippingModal, setShowNoShippingModal] = useState(false)
+    const shippingRef = useRef<InlineShippingHandle>(null)
+    const shippingSectionRef = useRef<HTMLDivElement>(null)
     // Increment to trigger InlineTaxes re-fetch after every confirmed item mutation
     const [taxTrigger, setTaxTrigger] = useState(0)
     const bumpTax = useCallback(() => setTaxTrigger(n => n + 1), [])
@@ -59,6 +63,25 @@ const DraftOrderDetail = () => {
     if (s.fetchError || !s.order) return <div className="p-6"><Text className="text-ui-fg-error">Error: {s.fetchError ?? "Not found"}</Text></div>
 
     const order = s.order
+
+    // ── Convert intercept: check for shipping method before proceeding ─────────────
+    const handleConvertClick = () => {
+        const hasShipping = (order.shipping_methods ?? []).length > 0
+        if (!hasShipping) { setShowNoShippingModal(true); return }
+        s.handleConvert()
+    }
+    const handleScrollToShipping = () => {
+        setShowNoShippingModal(false)
+        shippingSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+        setTimeout(() => shippingRef.current?.openPicker(), 500)
+    }
+    const handleAutoLocalPickup = async () => {
+        setShowNoShippingModal(false)
+        const found = await shippingRef.current?.applyLocalPickup()
+        if (!found) { handleScrollToShipping(); return }
+        setTimeout(() => s.handleConvert(), 400)
+    }
+
     const curr = order.currency_code
     const customerName = order.customer
         ? `${order.customer.first_name ?? ""} ${order.customer.last_name ?? ""}`.trim() || order.customer.email || "—"
@@ -75,7 +98,7 @@ const DraftOrderDetail = () => {
                         id={id!} displayId={order.display_id} regionName={order.region?.name}
                         createdAt={order.created_at} scName={scName} converting={s.converting}
                         onNavigateBack={() => navigate("/draft-orders-advanced")}
-                        onConvert={s.handleConvert} onOpenModal={s.openModal as any} onDelete={s.handleDelete}
+                        onConvert={handleConvertClick} onOpenModal={s.openModal as any} onDelete={s.handleDelete}
                         onSendEstimate={() => {
                             const info = currentEstimateInfo
                             if (!info) { setShowEstimateModal(true); return }
@@ -177,10 +200,11 @@ const DraftOrderDetail = () => {
                         />
                     </Container>
                     <Container className="p-0 overflow-hidden">
-                        <div className="flex items-center justify-between px-6 py-4 border-b border-ui-border-base">
+                        <div ref={shippingSectionRef} className="flex items-center justify-between px-6 py-4 border-b border-ui-border-base">
                             <Heading level="h2">Shipping</Heading>
                         </div>
                         <InlineShipping
+                            ref={shippingRef}
                             orderId={id!}
                             shippingMethods={order.shipping_methods ?? []} shippingOptions={inlineShippingOptions}
                             curr={curr} saving={s.saving} loadShippingOptions={loadShippingOptions} handleAddShipping={handleAddShippingInline}
@@ -204,7 +228,11 @@ const DraftOrderDetail = () => {
                             const price = selectedPrice !== undefined
                                 ? parseFloat(selectedPrice)
                                 : (item.unit_price ?? 0)
-                            return sum + price * (item.quantity ?? 1)
+                            // Use live itemQtys state (same as the line-item Total column)
+                            // so the subtotal updates immediately when qty stepper is clicked,
+                            // without waiting for the 3s autosave + re-fetch cycle.
+                            const qty = s.itemQtys[item.id] ?? item.quantity ?? 1
+                            return sum + price * qty
                         }, 0)
                         const shippingDollars = order.shipping_total ?? 0
                         const discountDollars = order.discount_total ?? 0
@@ -255,6 +283,14 @@ const DraftOrderDetail = () => {
                 metaNewVal={s.metaNewVal} setMetaNewVal={s.setMetaNewVal}
                 handleSaveMetadata={s.handleSaveMetadata} handleAddMetaKey={s.handleAddMetaKey}
             />
+
+            <NoShippingModal
+                showNoShippingModal={showNoShippingModal}
+                onClose={() => setShowNoShippingModal(false)}
+                onLocalPickup={handleAutoLocalPickup}
+                onChooseManually={handleScrollToShipping}
+                shippingRef={shippingRef}
+            />
             {showEstimateModal && (
                 <SendEstimateModal
                     open={showEstimateModal}
@@ -277,7 +313,8 @@ const DraftOrderDetail = () => {
                     total={(order.items ?? []).reduce((acc, i: any) => {
                         const sel = s.itemPrices[i.id]
                         const price = sel !== undefined ? parseFloat(sel) : (i.unit_price ?? 0)
-                        return acc + price * (i.quantity ?? 1)
+                        const qty = s.itemQtys[i.id] ?? i.quantity ?? 1
+                        return acc + price * qty
                     }, 0) + (order.shipping_total ?? 0) - (order.discount_total ?? 0) + taxAmount}
                     curr={curr}
                 />

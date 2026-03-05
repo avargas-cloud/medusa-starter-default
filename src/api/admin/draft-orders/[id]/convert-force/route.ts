@@ -1,5 +1,4 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
-import { Pool } from "pg"
 
 /**
  * POST /admin/draft-orders/:id/convert-force
@@ -35,30 +34,38 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             headers: authHeaders,
         })
 
-    // ── Helper: read the correct total from order_summary (our computed value) ─
-    const readOrderSummaryTotal = async (): Promise<number | null> => {
-        const dbUrl = process.env.DATABASE_URL
-        if (!dbUrl) return null
-        // connectionTimeoutMillis: fail fast if Railway is slow instead of hanging
-        const pool = new Pool({ connectionString: dbUrl, connectionTimeoutMillis: 3000 })
+    // ── Helper: compute the true order total from live order data ─────────────
+    // Reads directly from the converted order's items, shipping, and tax totals.
+    // More reliable than order_summary.current_order_total, which is stale if the
+    // user changed quantities via update-item-force without re-running compute-tax.
+    const computeTrueTotal = async (): Promise<number | null> => {
         try {
-            const res = await pool.query<{ totals: any }>(
-                `SELECT totals FROM order_summary
-                 WHERE order_id = $1 AND deleted_at IS NULL
-                 ORDER BY version DESC LIMIT 1`,
-                [id]
+            const orderRes = await fetch(
+                `${base}/admin/orders/${id}?fields=+items.*,+shipping_methods.*`,
+                { headers: authHeaders }
             )
-            if (!res.rows[0]) return null
-            const totals = res.rows[0].totals
-            const val = totals?.current_order_total
-            if (val === undefined || val === null) return null
-            return parseFloat(String(val)) || null
+            if (!orderRes.ok) return null
+            const { order } = await orderRes.json()
+            if (!order) return null
+
+            // sum unit_price × quantity for all non-zero items
+            const itemSubtotal = (order.items ?? [])
+                .filter((i: any) => (i.quantity ?? 0) > 0)
+                .reduce((acc: number, i: any) => acc + (i.unit_price ?? 0) * (i.quantity ?? 1), 0)
+
+            const shippingTotal = (order.shipping_methods ?? [])
+                .reduce((acc: number, m: any) => acc + (m.amount ?? 0), 0)
+
+            // tax_total and discount_total are in dollars in Medusa v2
+            const taxTotal = order.tax_total ?? 0
+            const discountTotal = order.discount_total ?? 0
+
+            const total = itemSubtotal + shippingTotal + taxTotal - discountTotal
+            console.log(`[convert-force] true total: items=${itemSubtotal} + shipping=${shippingTotal} + tax=${taxTotal} - discount=${discountTotal} = ${total}`)
+            return total > 0 ? total : null
         } catch (e: any) {
-            console.warn("[convert-force] Could not read order_summary:", e?.message)
+            console.warn("[convert-force] Could not compute true total:", e?.message)
             return null
-        } finally {
-            // Do NOT await pool.end() — it can hang on TCP timeout and block the whole request
-            pool.end().catch(() => { })
         }
     }
 
@@ -93,15 +100,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     }
 
     try {
-        // ── Read our computed total BEFORE conversion (order_summary stays) ────
-        const correctTotal = await readOrderSummaryTotal()
-
         // ── Step 1: Try standard conversion first ─────────────────────────────
         let cvRes = await callConvert()
         let cvJson = await cvRes.json()
 
         if (cvRes.ok) {
-            // Succeeded — fix payment collection if we have a computed total
+            // Succeeded — compute the true total from the order AFTER conversion
+            // (reads live items/shipping/tax so it reflects any qty changes made
+            // via update-item-force that may not have re-run compute-tax)
+            const correctTotal = await computeTrueTotal()
             if (correctTotal !== null) {
                 await fixPaymentCollection(correctTotal)
             }
@@ -209,6 +216,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         }
 
         // Fix payment collection post-conversion
+        const correctTotal = await computeTrueTotal()
         if (correctTotal !== null) {
             await fixPaymentCollection(correctTotal)
         }
