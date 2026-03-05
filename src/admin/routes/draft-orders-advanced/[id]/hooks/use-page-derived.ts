@@ -40,6 +40,7 @@ export const usePageDerived = ({
 }: Deps) => {
     // ── Tax state ─────────────────────────────────────────────────────────────
     const [taxAmount, setTaxAmount] = useState(0)
+    const [taxRate, setTaxRate] = useState<number | undefined>(undefined)
     const taxInitialized = useRef(false)
     // Seed from server immediately to prevent flash
     useEffect(() => {
@@ -82,11 +83,34 @@ export const usePageDerived = ({
         setTimeout(() => handleConvert(), 400)
     }, [handleConvert, handleScrollToShipping])
 
-    const handleConvertClick = useCallback(() => {
-        const hasShipping = (order?.shipping_methods ?? []).length > 0
+    const handleConvertClick = useCallback(async () => {
+        const methods: any[] = order?.shipping_methods ?? []
+        const hasShipping = methods.length > 0
         if (!hasShipping) { setShowNoShippingModal(true); return }
+
+        // If the ONLY method is a local pickup → patch shipping address to Miami Store
+        const PICKUP_KEYWORDS = ["pickup", "store pickup", "local pickup", "in store", "in-store", "miami"]
+        const isPickupMethod = (m: any) => PICKUP_KEYWORDS.some(k => (m.name ?? "").toLowerCase().includes(k))
+        if (methods.length === 1 && isPickupMethod(methods[0])) {
+            const miamiAddr = {
+                first_name: "Miami", last_name: "Store", company: "Ecopowertech Inc",
+                address_1: "2760 W 84th St", address_2: "Unit 4", city: "Hialeah",
+                province: "FL", postal_code: "33016", country_code: "us", phone: "",
+            }
+            try {
+                await fetch(`/admin/draft-orders/${id}`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "include",
+                    body: JSON.stringify({ shipping_address: miamiAddr }),
+                })
+            } catch (e) {
+                console.warn("[handleConvertClick] address patch failed:", e)
+            }
+        }
+
         handleConvert()
-    }, [order?.shipping_methods, handleConvert])
+    }, [id, order?.shipping_methods, handleConvert])
 
     // ── Estimate info state ───────────────────────────────────────────────────
     const [showEstimateModal, setShowEstimateModal] = useState(false)
@@ -140,7 +164,7 @@ export const usePageDerived = ({
 
     return {
         // Tax
-        taxAmount, setTaxAmount, taxTrigger,
+        taxAmount, setTaxAmount, taxRate, setTaxRate, taxTrigger, bumpTax,
         // Item tax wrappers
         handleAddItemWithTax, handleUpdateItemWithTax, handleRemoveItemWithTax,
         // Convert + no-shipping modal

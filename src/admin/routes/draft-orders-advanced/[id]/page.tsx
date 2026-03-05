@@ -23,8 +23,8 @@ const DraftOrderDetail = () => {
     const { id } = useParams<{ id: string }>()
     const navigate = useNavigate()
     const s = useDraftOrderDetail(id)
-    const { customerPrices, inlineShippingOptions, loadShippingOptions, handleAddShippingInline } =
-        useOrderPageState(s.order, s.handleAddShipping)
+    const { customerPrices, inlineShippingOptions, loadShippingOptions, handleAddShippingInline, handleReplaceShippingInline, handleUpdateShippingAmountInline } =
+        useOrderPageState(s.order, s.handleAddShipping, s.handleReplaceShipping, s.handleUpdateShippingAmount)
 
     const p = usePageDerived({
         id, order: s.order, estimateStatus: s.estimateStatus,
@@ -111,27 +111,28 @@ const DraftOrderDetail = () => {
                         <InlineNotes orderId={id!} initialNotes={(order.metadata?.estimate_notes as string | undefined) ?? ""} />
                     </Container>
                     <Container className="p-0 overflow-hidden">
-                        <div ref={p.shippingSectionRef} className="flex items-center justify-between px-6 py-4 border-b border-ui-border-base">
-                            <Heading level="h2">Shipping</Heading>
-                        </div>
                         <InlineShipping
                             ref={p.shippingRef}
                             orderId={id!}
                             shippingMethods={order.shipping_methods ?? []} shippingOptions={inlineShippingOptions}
-                            curr={curr} saving={s.saving} loadShippingOptions={loadShippingOptions} handleAddShipping={handleAddShippingInline}
+                            curr={curr} shippingSaving={s.shippingSaving} loadShippingOptions={loadShippingOptions} handleAddShipping={handleAddShippingInline}
                             onRemoved={s.handleRemoveShipping}
+                            onShippingChanged={p.bumpTax}
+                            onReplaceShipping={handleReplaceShippingInline}
+                            onUpdateShippingAmount={handleUpdateShippingAmountInline}
                         />
                     </Container>
                     <Container className="p-0 overflow-hidden">
                         <div className="flex items-center justify-between px-6 py-4 border-b border-ui-border-base">
                             <Heading level="h2">Taxes</Heading>
                         </div>
-                        <InlineTaxes orderId={id!} curr={curr} onTaxChange={p.setTaxAmount} triggerKey={p.taxTrigger} />
+                        <InlineTaxes orderId={id!} curr={curr} onTaxChange={p.setTaxAmount} onTaxRateChange={p.setTaxRate} triggerKey={p.taxTrigger} />
                     </Container>
                     <OrderTotals
                         subtotal={p.computedSubtotal} shippingTotal={p.shippingDollars}
                         discountTotal={p.discountDollars} taxTotal={p.taxAmount}
                         total={p.computedTotal} itemCount={order.items.length} curr={curr}
+                        taxRate={p.taxRate}
                     />
                 </div>
 

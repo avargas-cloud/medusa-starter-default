@@ -11,78 +11,101 @@ interface Deps {
     closeModal: () => void
 }
 
+/** Fallback pickup/warehouse address */
+const FALLBACK_ADDR = {
+    first_name: "Ecopowertech", last_name: "Inc", company: "Ecopowertech Inc",
+    address_1: "2760 W 84th St", address_2: "Unit 4", city: "Hialeah",
+    province: "FL", postal_code: "33016", country_code: "us", phone: "",
+}
+
 /** Owns add/remove shipping logic with optimistic state updates. */
 export const useOrderShipping = ({ id, setOrder, selectedOption, customAmount, setSaving, closeModal }: Deps) => {
 
+    /**
+     * Optimistically adds a shipping method to the UI instantly,
+     * then persists to server in background.
+     */
     const handleAddShipping = async (optionId?: string, customAmountStr?: string): Promise<void> => {
         const resolvedOption = optionId ?? selectedOption
         const resolvedAmount = customAmountStr !== undefined ? customAmountStr : customAmount
         if (!resolvedOption) { toast.error("Select a shipping option"); return }
+
+        const parsedCustom = resolvedAmount ? parseFloat(resolvedAmount) : NaN
+        const body: Record<string, any> = { shipping_option_id: resolvedOption }
+        if (!isNaN(parsedCustom) && parsedCustom >= 0) body.custom_amount = parsedCustom
+
+        // ── 1. Fetch option details FIRST so we can do instant optimistic add ──
         setSaving(true)
         try {
-            const body: Record<string, any> = { shipping_option_id: resolvedOption }
-            const parsedCustom = resolvedAmount ? parseFloat(resolvedAmount) : NaN
-            if (!isNaN(parsedCustom) && parsedCustom >= 0) body.custom_amount = parsedCustom
-            const r = await fetch(`/admin/draft-orders/${id}/add-shipping-force`, {
-                method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(body)
-            })
-            if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.message || `HTTP ${r.status}`) }
+            const shippingOptRes = await fetch(`/admin/shipping-options/${resolvedOption}`, { credentials: "include" }).catch(() => null)
+            const shipping_option = shippingOptRes?.ok ? (await shippingOptRes.json()).shipping_option : null
+            const optName: string = (shipping_option?.name ?? "Shipping").toLowerCase()
+            const newAmount = !isNaN(parsedCustom) && parsedCustom >= 0 ? parsedCustom : (shipping_option?.amount ?? 0)
+            const tempId = `optimistic-${Date.now()}`
+
+            // ── 2. Instant optimistic add ──
+            setOrder(prev => prev ? {
+                ...prev,
+                shipping_methods: [...(prev.shipping_methods ?? []), {
+                    id: tempId,
+                    name: shipping_option?.name ?? "Shipping",
+                    amount: newAmount,
+                    shipping_option_id: resolvedOption,
+                    data: {},
+                }],
+                shipping_total: (prev.shipping_total ?? 0) + newAmount,
+            } : prev)
 
             toast.success("Shipping method added"); closeModal()
 
-            // Optimistic: fetch shipping option details then patch state
-            const shippingOptRes = await fetch(`/admin/shipping-options/${resolvedOption}`, { credentials: "include" }).catch(() => null)
-            if (shippingOptRes?.ok) {
-                const { shipping_option } = await shippingOptRes.json()
-                const optName: string = (shipping_option?.name ?? "").toLowerCase()
-                const isPickup = optName.includes("pickup") || optName.includes("store")
-                const newAmount = !isNaN(parsedCustom) && parsedCustom >= 0 ? parsedCustom : (shipping_option?.amount ?? 0)
-
-                setOrder(prev => {
-                    if (!prev) return prev
-                    return {
-                        ...prev,
-                        shipping_methods: [...(prev.shipping_methods ?? []), { id: `optimistic-${Date.now()}`, name: shipping_option?.name ?? "Shipping", amount: newAmount, data: {} }],
-                        shipping_total: (prev.shipping_total ?? 0) + newAmount,
-                    }
-                })
-
-                if (isPickup || optName.includes("warehouse")) {
-                    ; (async () => {
-                        try {
-                            const fallbackAddr = { first_name: "Ecopowertech", last_name: "Inc", company: "Ecopowertech Inc", address_1: "2760 W 84th St", address_2: "Unit 4", city: "Hialeah", province: "FL", postal_code: "33016", country_code: "us", phone: "" }
-                            let addr = fallbackAddr
-                            try {
-                                const slRes = await fetch(`/admin/stock-locations?limit=100&fields=*,+address.*`, { credentials: "include" })
-                                if (slRes.ok) {
-                                    const { stock_locations } = await slRes.json()
-                                    const words = optName.split(/\s+/).filter((w: string) => w.length > 2)
-                                    const match = (stock_locations ?? []).find((sl: any) => words.some((w: string) => (sl.name ?? "").toLowerCase().includes(w))) ?? (stock_locations ?? [])[0]
-                                    if (match?.address) {
-                                        const a = match.address
-                                        addr = { first_name: "Ecopowertech", last_name: "Inc", company: a.company || match.name || "Ecopowertech Inc", address_1: a.address_1 ?? fallbackAddr.address_1, address_2: a.address_2 ?? fallbackAddr.address_2, city: a.city ?? fallbackAddr.city, province: a.province_code ?? a.province ?? fallbackAddr.province, postal_code: a.postal_code ?? fallbackAddr.postal_code, country_code: (a.country_code ?? "us").toLowerCase(), phone: a.phone ?? "" }
-                                    }
-                                }
-                            } catch { }
-                            await fetch(`/admin/draft-orders/${id}`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ shipping_address: addr }) })
-                            setOrder(prev => prev ? { ...prev, shipping_address: addr as any } : prev)
-                        } catch (e) { console.warn("[warehouse/pickup] address update failed:", e) }
-                    })()
-                }
-
-                // Swap optimistic IDs with real ones after 1.5s (background)
-                setTimeout(async () => {
+                // ── 3. Persist to server (background) ──
+                ; (async () => {
                     try {
-                        const freshR = await fetch(`/admin/orders/${id}?fields=+shipping_methods.*`, { credentials: "include" })
-                        if (freshR.ok) {
+                        const r = await fetch(`/admin/draft-orders/${id}/add-shipping-force`, {
+                            method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(body),
+                        })
+                        if (!r.ok) {
+                            const j = await r.json().catch(() => ({}))
+                            toast.error(`Shipping save failed: ${j.message || `HTTP ${r.status}`}`)
+                            // Roll back optimistic add
+                            setOrder(prev => prev ? {
+                                ...prev,
+                                shipping_methods: (prev.shipping_methods ?? []).filter(m => m.id !== tempId),
+                                shipping_total: Math.max(0, (prev.shipping_total ?? 0) - newAmount),
+                            } : prev)
+                            return
+                        }
+
+                        // Swap optimistic ID with real one
+                        const freshR = await fetch(`/admin/orders/${id}?fields=+shipping_methods.*`, { credentials: "include" }).catch(() => null)
+                        if (freshR?.ok) {
                             const { order: freshOrder } = await freshR.json()
                             const freshMethods: any[] = freshOrder?.shipping_methods ?? []
-                            if (freshMethods.length > 0) setOrder(prev => prev ? { ...prev, shipping_methods: freshMethods } : prev)
+                            if (freshMethods.length > 0) {
+                                setOrder(prev => prev ? { ...prev, shipping_methods: freshMethods } : prev)
+                            }
                         }
-                    } catch { }
-                }, 1500)
-            }
-        } catch (e: any) { toast.error(e.message) } finally { setSaving(false) }
+
+                        // ── 4. For pickup/warehouse: auto-set shipping address ──
+                        if (optName.includes("pickup") || optName.includes("store") || optName.includes("warehouse")) {
+                            // Use fallback address directly (stock-locations endpoint returns 500 in some envs)
+                            await fetch(`/admin/draft-orders/${id}`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                credentials: "include",
+                                body: JSON.stringify({ shipping_address: FALLBACK_ADDR }),
+                            }).catch(e => console.warn("[pickup] address update failed:", e))
+                            setOrder(prev => prev ? { ...prev, shipping_address: FALLBACK_ADDR as any } : prev)
+                        }
+                    } catch (e: any) {
+                        console.warn("[handleAddShipping background]", e?.message)
+                    }
+                })()
+        } catch (e: any) {
+            toast.error(e.message)
+        } finally {
+            setSaving(false)
+        }
     }
 
     const handleRemoveShipping = (methodId: string) => {
@@ -97,5 +120,46 @@ export const useOrderShipping = ({ id, setOrder, selectedOption, customAmount, s
         })
     }
 
-    return { handleAddShipping, handleRemoveShipping }
+    /**
+     * Atomically replace an existing shipping method with a new one.
+     */
+    const handleReplaceShipping = async (oldMethodId: string, newOptionId: string, customAmountStr?: string): Promise<void> => {
+        // 1. Optimistic: remove old
+        handleRemoveShipping(oldMethodId)
+        setSaving(true)
+        try {
+            // 2. Server: delete old
+            const delRes = await fetch(`/admin/draft-orders/${id}/remove-shipping/${oldMethodId}`, {
+                method: "DELETE", credentials: "include",
+            })
+            if (!delRes.ok) {
+                const j = await delRes.json().catch(() => ({}))
+                throw new Error(j.message || `Delete failed: HTTP ${delRes.status}`)
+            }
+
+            // 3. Server: add new (reuse handleAddShipping for consistent logic)
+            await handleAddShipping(newOptionId, customAmountStr)
+        } catch (e: any) { toast.error(e.message) } finally { setSaving(false) }
+    }
+
+    /**
+     * Update the custom amount of an existing shipping method:
+     * removes and re-adds with the same shipping_option_id.
+     */
+    const handleUpdateShippingAmount = async (methodId: string, shippingOptionId: string, newAmount: number): Promise<void> => {
+        handleRemoveShipping(methodId)
+        setSaving(true)
+        try {
+            const delRes = await fetch(`/admin/draft-orders/${id}/remove-shipping/${methodId}`, {
+                method: "DELETE", credentials: "include",
+            })
+            if (!delRes.ok) {
+                const j = await delRes.json().catch(() => ({}))
+                throw new Error(j.message || `Delete failed: HTTP ${delRes.status}`)
+            }
+            await handleAddShipping(shippingOptionId, String(newAmount))
+        } catch (e: any) { toast.error(e.message) } finally { setSaving(false) }
+    }
+
+    return { handleAddShipping, handleRemoveShipping, handleReplaceShipping, handleUpdateShippingAmount }
 }

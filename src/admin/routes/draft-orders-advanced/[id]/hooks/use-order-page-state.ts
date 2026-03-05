@@ -8,6 +8,8 @@ import { PriceOption } from "../components/PriceCombobox"
 export const useOrderPageState = (
     order: any | null,
     handleAddShipping: () => Promise<void>,
+    handleReplaceShipping?: (oldId: string, newOptionId: string, customAmount?: string) => Promise<void>,
+    handleUpdateShippingAmount?: (methodId: string, optionId: string, newAmount: number) => Promise<void>,
 ) => {
     const orderId: string = order?.id ?? ""
     const [customerPrices, setCustomerPrices] = useState<Record<string, PriceOption[]>>({})
@@ -70,5 +72,13 @@ export const useOrderPageState = (
         await (handleAddShipping as (id: string, amount?: string) => Promise<void>)(optionId, customAmount)
     }, [handleAddShipping])
 
-    return { customerPrices, inlineShippingOptions, loadShippingOptions, handleAddShippingInline }
+    const handleReplaceShippingInline = useCallback(async (oldMethodId: string, newOptionId: string, customAmount?: string) => {
+        await handleReplaceShipping?.(oldMethodId, newOptionId, customAmount)
+    }, [handleReplaceShipping])
+
+    const handleUpdateShippingAmountInline = useCallback(async (methodId: string, optionId: string, newAmount: number) => {
+        await handleUpdateShippingAmount?.(methodId, optionId, newAmount)
+    }, [handleUpdateShippingAmount])
+
+    return { customerPrices, inlineShippingOptions, loadShippingOptions, handleAddShippingInline, handleReplaceShippingInline, handleUpdateShippingAmountInline }
 }

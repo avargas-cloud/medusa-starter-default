@@ -56,7 +56,7 @@ export const useDraftOrderDetail = (id: string | undefined) => {
     // ── Shipping ──────────────────────────────────────────────────────────────
     const [shippingSaving, setShippingSaving] = useState(false)
     const shipping = useOrderShipping({ id, setOrder, selectedOption, customAmount, saving: shippingSaving, setSaving: setShippingSaving, closeModal })
-    const { handleAddShipping, handleRemoveShipping } = shipping
+    const { handleAddShipping, handleRemoveShipping, handleReplaceShipping, handleUpdateShippingAmount } = shipping
 
     // ── Actions ───────────────────────────────────────────────────────────────
     const actions = useOrderActions({ id, order, estimateStatus, setEstimateStatus, patchOrder })
@@ -81,7 +81,7 @@ export const useDraftOrderDetail = (id: string | undefined) => {
         // Convert
         converting,
         // Modal
-        modal, saving, itemSaving, itemActionMap,
+        modal, saving, shippingSaving, itemSaving, itemActionMap,
         salesChannels, selectedSc, setSelectedSc,
         emailForm, setEmailForm,
         shippingAddrForm, setShippingAddrForm,
@@ -99,7 +99,7 @@ export const useDraftOrderDetail = (id: string | undefined) => {
         searchCustomers, searchInvItems,
         handleSaveSalesChannel, handleSaveEmail, handleSaveShippingAddr, handleSaveBillingAddr,
         handleTransfer, handleAddItem, handleUpdateItem, handleRemoveItem,
-        handleAddShipping, handleRemoveShipping, handleSaveMetadata,
+        handleAddShipping, handleRemoveShipping, handleReplaceShipping, handleUpdateShippingAmount, handleSaveMetadata,
         handleDelete, handleConvert, handleStatusChange, handleSync, handleAddMetaKey,
     }
 }
