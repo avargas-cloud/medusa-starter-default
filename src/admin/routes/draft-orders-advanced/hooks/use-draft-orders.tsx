@@ -10,18 +10,20 @@ export interface DraftOrderListItem {
     total?: number
     created_at: string
     metadata?: Record<string, any>
-    customer?: { first_name?: string; last_name?: string; email?: string; company_name?: string }
+    customer?: { first_name?: string; last_name?: string; email?: string; company_name?: string; phone?: string }
     sales_channel?: { name?: string }
     region?: { name?: string }
 }
 
-export type SortKey = "display_id_desc" | "display_id_asc" | "created_at_desc" | "created_at_asc"
+export type SortKey = "display_id_desc" | "display_id_asc" | "created_at_desc" | "created_at_asc" | "total_desc" | "total_asc"
 
 export const SORT_OPTIONS: { value: SortKey; label: string }[] = [
     { value: "display_id_desc", label: "# (Newest first)" },
     { value: "display_id_asc", label: "# (Oldest first)" },
     { value: "created_at_desc", label: "Date (Newest)" },
     { value: "created_at_asc", label: "Date (Oldest)" },
+    { value: "total_desc", label: "Total (High → Low)" },
+    { value: "total_asc", label: "Total (Low → High)" },
 ]
 
 export const PAGE_SIZE = 20
@@ -41,7 +43,7 @@ export const useDraftOrders = () => {
             setLoading(true)
             try {
                 const resp = await fetch(
-                    `/admin/draft-orders?limit=250&fields=id,display_id,status,email,currency_code,total,created_at,metadata,+customer.first_name,+customer.last_name,+customer.email,+customer.company_name,+sales_channel.name`,
+                    `/admin/draft-orders?limit=250&fields=id,display_id,status,email,currency_code,total,created_at,metadata,+customer.first_name,+customer.last_name,+customer.email,+customer.phone,+customer.company_name,+sales_channel.name`,
                     { credentials: "include" }
                 )
                 const json = await resp.json()
@@ -68,7 +70,14 @@ export const useDraftOrders = () => {
         return list.filter(o => {
             const name = `${o.customer?.first_name ?? ""} ${o.customer?.last_name ?? ""}`.trim().toLowerCase()
             const email = (o.customer?.email ?? o.email ?? "").toLowerCase()
-            return name.includes(q) || email.includes(q) || `#${o.display_id}`.includes(q)
+            const phone = (o.customer?.phone ?? "").replace(/[^\d]/g, "")
+            const searchDigits = search.replace(/[^\d]/g, "")
+            return (
+                name.includes(q) ||
+                email.includes(q) ||
+                `#${o.display_id}`.includes(q) ||
+                (searchDigits.length > 0 && phone.includes(searchDigits))
+            )
         })
     }, [orders, search, showNotApproved])
 
@@ -79,6 +88,8 @@ export const useDraftOrders = () => {
             case "display_id_asc": return arr.sort((a, b) => a.display_id - b.display_id)
             case "created_at_desc": return arr.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
             case "created_at_asc": return arr.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+            case "total_desc": return arr.sort((a, b) => ((b.metadata?.computed_total ?? (b.total ?? 0) / 100)) - ((a.metadata?.computed_total ?? (a.total ?? 0) / 100)))
+            case "total_asc": return arr.sort((a, b) => ((a.metadata?.computed_total ?? (a.total ?? 0) / 100)) - ((b.metadata?.computed_total ?? (b.total ?? 0) / 100)))
         }
     }, [filtered, sort])
 

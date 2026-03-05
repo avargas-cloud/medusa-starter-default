@@ -95,9 +95,6 @@ const QuickBooksOrderWidget = ({ data }: DetailWidgetProps<any>) => {
 
                     {/* Col 2: Sales Order Number */}
                     <div>
-                        <Text size="xsmall" weight="plus" className="text-ui-fg-muted uppercase tracking-wide mb-2 block">
-                            Sales Order
-                        </Text>
                         <QBField label="Sales Order Number" value={soRef} />
                     </div>
 

@@ -20,7 +20,7 @@ interface Props {
     /** Atomic replace: remove old + add new (includes API calls) */
     onReplaceShipping?: (oldMethodId: string, newOptionId: string, customAmount?: string) => Promise<void>
     /** Update amount: remove + re-add with same option (includes API calls) */
-    onUpdateShippingAmount?: (methodId: string, optionId: string, newAmount: number) => Promise<void>
+    onUpdateShippingAmount?: (methodId: string, optionId: string, newAmount: number, onShippingChanged?: () => void) => Promise<void>
     /** Title for the widget header */
     title?: string
 }
@@ -157,8 +157,8 @@ export const InlineShipping = forwardRef<InlineShippingHandle, Props>(function I
         saveTimers.current[methodId] = setTimeout(async () => {
             setPriceState(prev => ({ ...prev, [methodId]: { value: String(newAmount), editing: false, saving: true } }))
             try {
-                await onUpdateShippingAmount?.(methodId, optionId, newAmount)
-                onShippingChanged?.()
+                // Pass onShippingChanged so tax re-fetches AFTER server confirms the new amount
+                await onUpdateShippingAmount?.(methodId, optionId, newAmount, onShippingChanged)
             } catch (e: any) {
                 toast.error(e.message)
             } finally {

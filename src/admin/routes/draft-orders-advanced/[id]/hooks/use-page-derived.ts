@@ -1,15 +1,4 @@
-/**
- * usePageDerived — page-level state & derived logic for the DraftOrderDetail page.
- *
- * Extracts everything that was previously inline in page.tsx:
- *   • Tax state (seed from order + compute-tax trigger)
- *   • Item-with-tax wrappers
- *   • Convert intercept (no-shipping modal)
- *   • Shipping scroll/picker helpers
- *   • Send estimate validation
- *   • Print estimate (hidden iframe)
- *   • Computed order totals (uses live itemPrices/itemQtys)
- */
+// usePageDerived — page-level state and derived logic for the DraftOrderDetail page.
 import { useState, useCallback, useEffect, useRef } from "react"
 import type { InlineShippingHandle } from "../components/InlineShipping"
 import type { EstimateInfo } from "../components/EstimateInfoBlock"

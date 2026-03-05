@@ -143,13 +143,33 @@ export const useOrderShipping = ({ id, setOrder, selectedOption, customAmount, s
     }
 
     /**
-     * Update the custom amount of an existing shipping method:
-     * removes and re-adds with the same shipping_option_id.
+     * Update the custom amount of an existing shipping method.
+     * 
+     * UI: patches the amount in-place (no flicker, no remove/re-add visible).
+     * Server: does remove + re-add in background.
+     * onShippingChanged is called AFTER server confirms the new amount,
+     * so the tax re-fetch sees the updated value.
      */
-    const handleUpdateShippingAmount = async (methodId: string, shippingOptionId: string, newAmount: number): Promise<void> => {
-        handleRemoveShipping(methodId)
+    const handleUpdateShippingAmount = async (
+        methodId: string,
+        shippingOptionId: string,
+        newAmount: number,
+        onShippingChanged?: () => void,
+    ): Promise<void> => {
+        // ── 1. Patch amount in-place in UI (no removal flicker) ──
+        setOrder(prev => prev ? {
+            ...prev,
+            shipping_methods: (prev.shipping_methods ?? []).map((m: any) =>
+                m.id === methodId ? { ...m, amount: newAmount } : m
+            ),
+            shipping_total: (prev.shipping_methods ?? []).reduce((sum: number, m: any) =>
+                sum + (m.id === methodId ? newAmount : (m.amount ?? 0)), 0
+            ),
+        } : prev)
+
         setSaving(true)
         try {
+            // ── 2. Server: delete old method ──
             const delRes = await fetch(`/admin/draft-orders/${id}/remove-shipping/${methodId}`, {
                 method: "DELETE", credentials: "include",
             })
@@ -157,8 +177,45 @@ export const useOrderShipping = ({ id, setOrder, selectedOption, customAmount, s
                 const j = await delRes.json().catch(() => ({}))
                 throw new Error(j.message || `Delete failed: HTTP ${delRes.status}`)
             }
-            await handleAddShipping(shippingOptionId, String(newAmount))
-        } catch (e: any) { toast.error(e.message) } finally { setSaving(false) }
+
+            // ── 3. Server: re-add with new amount ──
+            const body = { shipping_option_id: shippingOptionId, custom_amount: newAmount }
+            const addRes = await fetch(`/admin/draft-orders/${id}/add-shipping-force`, {
+                method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(body),
+            })
+            if (!addRes.ok) {
+                const j = await addRes.json().catch(() => ({}))
+                throw new Error(j.message || `Add failed: HTTP ${addRes.status}`)
+            }
+
+            // ── 4. Server confirmed — NOW trigger tax re-fetch (sees new amount) ──
+            onShippingChanged?.()
+
+            // ── 5. Swap temp method ID with real one in background ──
+            setTimeout(async () => {
+                try {
+                    const freshR = await fetch(`/admin/orders/${id}?fields=+shipping_methods.*`, { credentials: "include" })
+                    if (freshR.ok) {
+                        const { order: freshOrder } = await freshR.json()
+                        const freshMethods: any[] = freshOrder?.shipping_methods ?? []
+                        if (freshMethods.length > 0) {
+                            setOrder(prev => prev ? { ...prev, shipping_methods: freshMethods } : prev)
+                        }
+                    }
+                } catch { }
+            }, 1000)
+        } catch (e: any) {
+            toast.error(e.message)
+            // Roll back the optimistic amount patch
+            setOrder(prev => prev ? {
+                ...prev,
+                shipping_methods: (prev.shipping_methods ?? []).map((m: any) =>
+                    m.id === methodId ? { ...m, amount: m._originalAmount ?? m.amount } : m
+                ),
+            } : prev)
+        } finally {
+            setSaving(false)
+        }
     }
 
     return { handleAddShipping, handleRemoveShipping, handleReplaceShipping, handleUpdateShippingAmount }

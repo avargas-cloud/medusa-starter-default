@@ -9,7 +9,7 @@ export const useOrderPageState = (
     order: any | null,
     handleAddShipping: () => Promise<void>,
     handleReplaceShipping?: (oldId: string, newOptionId: string, customAmount?: string) => Promise<void>,
-    handleUpdateShippingAmount?: (methodId: string, optionId: string, newAmount: number) => Promise<void>,
+    handleUpdateShippingAmount?: (methodId: string, optionId: string, newAmount: number, onShippingChanged?: () => void) => Promise<void>,
 ) => {
     const orderId: string = order?.id ?? ""
     const [customerPrices, setCustomerPrices] = useState<Record<string, PriceOption[]>>({})
@@ -76,8 +76,8 @@ export const useOrderPageState = (
         await handleReplaceShipping?.(oldMethodId, newOptionId, customAmount)
     }, [handleReplaceShipping])
 
-    const handleUpdateShippingAmountInline = useCallback(async (methodId: string, optionId: string, newAmount: number) => {
-        await handleUpdateShippingAmount?.(methodId, optionId, newAmount)
+    const handleUpdateShippingAmountInline = useCallback(async (methodId: string, optionId: string, newAmount: number, onShippingChanged?: () => void) => {
+        await handleUpdateShippingAmount?.(methodId, optionId, newAmount, onShippingChanged)
     }, [handleUpdateShippingAmount])
 
     return { customerPrices, inlineShippingOptions, loadShippingOptions, handleAddShippingInline, handleReplaceShippingInline, handleUpdateShippingAmountInline }

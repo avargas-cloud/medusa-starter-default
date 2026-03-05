@@ -92,18 +92,18 @@ export default async function qbDailySyncHandler(container: MedusaContainer) {
                     if (!alreadyRan) shouldRunPrice = true
                 }
             } else {
-                // ── Interval mode: run every X hours based on elapsed time ─────
+                // ── Interval mode: slot-based scheduling ──────────────────────────
+                // Runs at exact clock-aligned multiples (e.g. 1h → :00, 2h → :00/:02…)
                 const intervalMs = cfg.price_interval_minutes * 60 * 1000
-                if (!cfg.last_price_sync) {
-                    shouldRunPrice = true // never synced before
+                const nowSlot = Math.floor(Date.now() / intervalMs)
+                const lastSlot = cfg.last_price_sync
+                    ? Math.floor(new Date(cfg.last_price_sync).getTime() / intervalMs)
+                    : -1
+                if (nowSlot === lastSlot) {
+                    const nextInMin = Math.round(((nowSlot + 1) * intervalMs - Date.now()) / 60000)
+                    console.log(`${TAG} Price sync: already ran in this ${cfg.price_interval_minutes}m slot — next in ~${nextInMin} min.`)
                 } else {
-                    const elapsedMs = Date.now() - new Date(cfg.last_price_sync).getTime()
-                    if (elapsedMs >= intervalMs) {
-                        shouldRunPrice = true
-                    } else {
-                        const remainingMin = Math.round((intervalMs - elapsedMs) / 60000)
-                        console.log(`${TAG} Price sync not due yet — next in ~${remainingMin} min.`)
-                    }
+                    shouldRunPrice = true
                 }
             }
 
@@ -141,47 +141,66 @@ export default async function qbDailySyncHandler(container: MedusaContainer) {
 
         // ─── Customer Sync ─────────────────────────────────────────────────────
         if (cfg.customer_interval_minutes) {
-            // Customer sync runs daily at the same price_sync_hour for simplicity
-            const targetHour: number = cfg.price_sync_hour ?? 0
-            if (currentHour !== targetHour) {
-                // skip silently — already logged for price sync
-            } else {
-                let alreadyRan = false
-                if (cfg.last_customer_sync) {
-                    const lastDateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz })
-                        .format(new Date(cfg.last_customer_sync))
-                    if (lastDateStr === todayStr) {
-                        alreadyRan = true
-                        console.log(`${TAG} Customer sync already completed today. Skipping.`)
-                    }
-                }
+            const isCustomerDaily = cfg.customer_interval_minutes >= 1440
+            let shouldRunCustomer = false
 
-                if (!alreadyRan) {
-                    console.log(`${TAG} ⏰ Running customer sync...`)
-                    const logId = await QbSyncLogger.start({
-                        operation: "customer_sync",
-                        syncType: "customer",
-                        triggeredBy: "auto",
-                        message: "Scheduled customer sync started",
-                        db: client,
-                    })
-                    try {
-                        const result = await syncCustomersCore(container as any)
-                        if (result.success) {
-                            await client.query(
-                                `UPDATE quickbooks_config SET last_customer_sync = NOW(), updated_at = NOW() WHERE id = 'default'`
-                            )
-                            const msg = `Customers: ${result.stats?.imported ?? 0} imported`
-                            console.log(`${TAG} ✅ ${msg}`)
-                            await QbSyncLogger.complete(logId, { message: msg, db: client })
-                        } else {
-                            console.error(`${TAG} ❌ Customer sync failed: ${result.error}`)
-                            await QbSyncLogger.fail(logId, result.error || "Unknown error", { db: client })
+            if (isCustomerDaily) {
+                // Daily mode: run once at the configured hour
+                const targetHour: number = cfg.price_sync_hour ?? 0
+                if (currentHour !== targetHour) {
+                    // skip silently
+                } else {
+                    let alreadyRan = false
+                    if (cfg.last_customer_sync) {
+                        const lastDateStr = new Intl.DateTimeFormat("en-CA", { timeZone: tz })
+                            .format(new Date(cfg.last_customer_sync))
+                        if (lastDateStr === todayStr) {
+                            alreadyRan = true
+                            console.log(`${TAG} Customer sync already completed today. Skipping.`)
                         }
-                    } catch (e: any) {
-                        console.error(`${TAG} ❌ Customer sync threw: ${e.message}`)
-                        await QbSyncLogger.fail(logId, e.message, { db: client })
                     }
+                    if (!alreadyRan) shouldRunCustomer = true
+                }
+            } else {
+                // Interval mode: slot-based scheduling
+                const cIntervalMs = cfg.customer_interval_minutes * 60 * 1000
+                const nowSlot = Math.floor(Date.now() / cIntervalMs)
+                const lastSlot = cfg.last_customer_sync
+                    ? Math.floor(new Date(cfg.last_customer_sync).getTime() / cIntervalMs)
+                    : -1
+                if (nowSlot === lastSlot) {
+                    const nextInMin = Math.round(((nowSlot + 1) * cIntervalMs - Date.now()) / 60000)
+                    console.log(`${TAG} Customer sync: already ran in this ${cfg.customer_interval_minutes}m slot — next in ~${nextInMin} min.`)
+                } else {
+                    shouldRunCustomer = true
+                }
+            }
+
+            if (shouldRunCustomer) {
+                console.log(`${TAG} ⏰ Running customer sync...`)
+                const logId = await QbSyncLogger.start({
+                    operation: "customer_sync",
+                    syncType: "customer",
+                    triggeredBy: "auto",
+                    message: "Scheduled customer sync started",
+                    db: client,
+                })
+                try {
+                    const result = await syncCustomersCore(container as any)
+                    if (result.success) {
+                        await client.query(
+                            `UPDATE quickbooks_config SET last_customer_sync = NOW(), updated_at = NOW() WHERE id = 'default'`
+                        )
+                        const msg = `Customers: ${result.stats?.imported ?? 0} imported`
+                        console.log(`${TAG} ✅ ${msg}`)
+                        await QbSyncLogger.complete(logId, { message: msg, db: client })
+                    } else {
+                        console.error(`${TAG} ❌ Customer sync failed: ${result.error}`)
+                        await QbSyncLogger.fail(logId, result.error || "Unknown error", { db: client })
+                    }
+                } catch (e: any) {
+                    console.error(`${TAG} ❌ Customer sync threw: ${e.message}`)
+                    await QbSyncLogger.fail(logId, e.message, { db: client })
                 }
             }
         }

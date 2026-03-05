@@ -26,20 +26,29 @@ export async function POST(
     }
 
     try {
-        const orderModule = req.scope.resolve(Modules.ORDER)
+        // Fetch via internal Medusa admin API — avoids cross-module relation errors
+        // that occur when using orderModule.retrieveOrder with variant/product relations.
         const customerModule = req.scope.resolve(Modules.CUSTOMER)
 
-        // Fetch the draft order with all needed relations
-        const order = await orderModule.retrieveOrder(orderId, {
-            relations: [
-                "items",
-                "items.variant",
-                "items.variant.product",
-                "customer",
-                "customer.addresses",
-                "shipping_address",
-            ],
-        })
+        const baseUrl = `http://localhost:${process.env.PORT || 9000}`
+        const orderResp = await fetch(
+            `${baseUrl}/admin/orders/${orderId}?fields=id,display_id,status,metadata,tax_total,+items.*,+items.variant.*,+items.variant.metadata,+customer.*`,
+            {
+                headers: {
+                    // Forward the admin auth cookie from the incoming request
+                    cookie: req.headers.cookie || "",
+                    "x-forwarded-for": "127.0.0.1",
+                },
+            }
+        )
+
+        if (!orderResp.ok) {
+            const errText = await orderResp.text()
+            res.status(orderResp.status).json({ error: `Could not fetch order: ${errText}` })
+            return
+        }
+
+        const { order } = await orderResp.json()
 
         if (!order) {
             res.status(404).json({ error: `Order ${orderId} not found` })
@@ -110,16 +119,23 @@ export async function POST(
             return
         }
 
-        // Save QB metadata to the order
+        // Save QB metadata to the order via admin API
         if (result.txnId) {
-            await orderModule.updateOrders(orderId, {
-                metadata: {
-                    ...(order.metadata as Record<string, any> || {}),
-                    qb_estimate_txn_id: result.txnId,
-                    qb_estimate_ref: result.refNumber || result.txnId,
-                    qb_list_id: qbCustomerId,
-                    qb_synced_at: new Date().toISOString(),
+            await fetch(`${baseUrl}/admin/orders/${orderId}`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    cookie: req.headers.cookie || "",
                 },
+                body: JSON.stringify({
+                    metadata: {
+                        ...(order.metadata || {}),
+                        qb_estimate_txn_id: result.txnId,
+                        qb_estimate_ref: result.refNumber || result.txnId,
+                        qb_list_id: qbCustomerId,
+                        qb_synced_at: new Date().toISOString(),
+                    },
+                }),
             })
         }
 

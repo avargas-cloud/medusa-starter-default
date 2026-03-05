@@ -13,30 +13,52 @@ interface Props {
     taxRate?: number
 }
 
-export const OrderTotals = ({ subtotal, shippingTotal, discountTotal, taxTotal, total, itemCount, curr, taxRate }: Props) => (
-    <Container className="p-0 overflow-hidden">
-        <div className="px-6 py-4 border-b border-ui-border-base">
-            <Heading level="h2">Order Total</Heading>
-        </div>
-        <div className="px-6 py-4 space-y-2">
-            {([
-                ["Subtotal", subtotal, `${itemCount} item${itemCount !== 1 ? "s" : ""}`],
-                ["Shipping", shippingTotal, null],
-                ["Discount", discountTotal, null],
-                [taxRate != null ? `Tax (${taxRate}%)` : "Tax", taxTotal, null],
-            ] as const).map(([lbl, val, note]) => (
-                <div key={lbl as string} className="flex justify-between">
-                    <Text size="small" className="text-ui-fg-subtle">
-                        {lbl as string}
-                        {note && <span className="text-ui-fg-muted ml-1 text-xs">{note}</span>}
-                    </Text>
-                    <Text size="small">{fmt(val as number, curr)}</Text>
-                </div>
-            ))}
-            <div className="flex justify-between border-t border-ui-border-base pt-2 mt-2">
-                <Text size="small" weight="plus">Total</Text>
-                <Text size="small" weight="plus">{fmt(total, curr)} {curr.toUpperCase()}</Text>
+export const OrderTotals = ({ subtotal, shippingTotal, discountTotal, taxTotal, total, itemCount, curr, taxRate }: Props) => {
+    const orderSubtotal = subtotal + shippingTotal - discountTotal
+
+    return (
+        <Container className="p-0 overflow-hidden">
+            <div className="px-6 py-4 border-b border-ui-border-base">
+                <Heading level="h2">Order Total</Heading>
             </div>
-        </div>
-    </Container>
-)
+            <div className="px-6 py-4 space-y-2">
+                {/* ── Line items ── */}
+                <div className="flex justify-between">
+                    <Text size="small" className="text-ui-fg-subtle">
+                        Item Subtotal
+                        <span className="text-ui-fg-muted ml-1 text-xs">{itemCount} item{itemCount !== 1 ? "s" : ""}</span>
+                    </Text>
+                    <Text size="small">{fmt(subtotal, curr)}</Text>
+                </div>
+                <div className="flex justify-between">
+                    <Text size="small" className="text-ui-fg-subtle">Shipping</Text>
+                    <Text size="small">{fmt(shippingTotal, curr)}</Text>
+                </div>
+                <div className="flex justify-between">
+                    <Text size="small" className="text-ui-fg-subtle">Discount</Text>
+                    <Text size="small">{fmt(discountTotal, curr)}</Text>
+                </div>
+
+                {/* ── Order Subtotal (items + shipping − discount) ── */}
+                <div className="flex justify-between border-t border-ui-border-base pt-2 mt-1">
+                    <Text size="small" weight="plus" className="text-ui-fg-subtle">Order Subtotal</Text>
+                    <Text size="small" weight="plus">{fmt(orderSubtotal, curr)}</Text>
+                </div>
+
+                {/* ── Tax ── */}
+                <div className="flex justify-between">
+                    <Text size="small" className="text-ui-fg-subtle">
+                        {taxRate != null ? `Tax (${taxRate}%)` : "Tax"}
+                    </Text>
+                    <Text size="small">{fmt(taxTotal, curr)}</Text>
+                </div>
+
+                {/* ── Grand Total ── */}
+                <div className="flex justify-between border-t border-ui-border-base pt-2 mt-1">
+                    <Text size="small" weight="plus">Total</Text>
+                    <Text size="small" weight="plus">{fmt(total, curr)} {curr.toUpperCase()}</Text>
+                </div>
+            </div>
+        </Container>
+    )
+}

@@ -60,19 +60,24 @@ export default async function qbInventorySyncHandler(container: MedusaContainer)
             return
         }
 
-        // ─── Interval check ──────────────────────────────────────────────────
-        // The cron fires every 10 min; the actual sync only runs when the
-        // configured interval (e.g. 30 min) has elapsed since last sync.
-        if (last_inventory_sync) {
-            const elapsedMs = Date.now() - new Date(last_inventory_sync).getTime()
-            const intervalMs = inventory_interval_minutes * 60 * 1000
-            if (elapsedMs < intervalMs) {
-                const remainingMin = Math.round((intervalMs - elapsedMs) / 60000)
-                console.log(
-                    `${TAG} ⏳ Not due yet — next sync in ~${remainingMin} min (interval: ${inventory_interval_minutes}m). Skipping.`
-                )
-                return
-            }
+        // ─── Slot-based interval check ────────────────────────────────────────────
+        // Runs at exact clock-aligned multiples of the interval (e.g. 10min → :00,:10,:20,…).
+        // Instead of measuring elapsed time (which drifts when syncs take ~50s), we ask:
+        // "Has a sync already run in the current Nmin time slot?"
+        // slot = floor(now_ms / interval_ms)  →  same integer = same slot, different = new slot.
+        const intervalMs = inventory_interval_minutes * 60 * 1000
+        const nowSlot = Math.floor(Date.now() / intervalMs)
+        const lastSlot = last_inventory_sync
+            ? Math.floor(new Date(last_inventory_sync).getTime() / intervalMs)
+            : -1
+
+        if (nowSlot === lastSlot) {
+            const nextSlotMs = (nowSlot + 1) * intervalMs
+            const nextInMin = Math.round((nextSlotMs - Date.now()) / 60000)
+            console.log(
+                `${TAG} ⏳ Already ran in this ${inventory_interval_minutes}m slot — next slot in ~${nextInMin} min.`
+            )
+            return
         }
         // ─────────────────────────────────────────────────────────────────────
 
