@@ -25,6 +25,20 @@ export async function GET(
 
         await client.connect()
 
+        // ── Auto-cleanup: mark stale "processing" entries as failed ──────────
+        // If a sync job crashed/errored after writing the log, it stays stuck at
+        // "processing" forever. Clean up any that are >5 minutes old.
+        await client.query(`
+            UPDATE qb_sync_log
+            SET
+                status       = 'failed',
+                completed_at = NOW(),
+                duration_ms  = EXTRACT(EPOCH FROM (NOW() - initiated_at)) * 1000,
+                error        = 'Job timed out — process may have crashed or restarted'
+            WHERE status = 'processing'
+              AND initiated_at < NOW() - INTERVAL '5 minutes'
+        `)
+
         const conditions: string[] = []
         const values: any[] = []
         let p = 1

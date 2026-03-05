@@ -118,23 +118,22 @@ const LogRow = ({ log }: { log: LogEntry }) => {
                     {log.message && (
                         <Text className="text-xs text-ui-fg-subtle">{log.message}</Text>
                     )}
-                    {/* Server badge — 3rd line */}
-                    {log.server_host && (
-                        <Text className="text-xs text-ui-fg-muted">
-                            {log.server_host.startsWith('Railway')
-                                ? <span style={{ color: '#f97316' }}>⚡ {log.server_host}</span>
-                                : <span style={{ color: '#94a3b8' }}>💻 {log.server_host}</span>
-                            }
-                        </Text>
-                    )}
                 </div>
 
-                {/* Right side: status + duration + time */}
+                {/* Right side: duration | status | server | date | arrow */}
                 <div className="flex items-center gap-3 shrink-0 text-right">
                     {log.duration_ms !== null && (
                         <Text className="text-xs text-ui-fg-muted hidden sm:block">{formatDuration(log.duration_ms)}</Text>
                     )}
                     <Badge color={color} size="xsmall">{STATUS_LABELS[log.status]}</Badge>
+                    {log.server_host && (
+                        <Text
+                            className="text-xs font-mono hidden lg:block w-28 text-right"
+                            style={{ color: log.server_host.startsWith('Railway') ? '#f97316' : '#94a3b8' }}
+                        >
+                            {log.server_host.startsWith('Railway') ? '⚡ Railway' : `💻 ${log.server_host.substring(0, 12)}`}
+                        </Text>
+                    )}
                     <Text className="text-xs text-ui-fg-muted hidden md:block w-36">{formatDate(log.initiated_at)}</Text>
                     <span className="text-ui-fg-muted text-xs">{expanded ? '▲' : '▼'}</span>
                 </div>

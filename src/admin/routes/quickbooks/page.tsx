@@ -287,7 +287,7 @@ const QuickBooksPage = () => {
 
     // ─── Render ─────────────────────────────────────────────────────────────
     return (
-        <div className="flex flex-col gap-3 p-6 max-w-2xl">
+        <div className="flex flex-col gap-3 p-6 max-w-5xl">
             <div>
                 <Heading level="h1">QuickBooks Desktop Integration</Heading>
             </div>
