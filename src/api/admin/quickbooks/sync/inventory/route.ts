@@ -2,6 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { MedusaContainer } from "@medusajs/framework/types"
 import { syncInventoryCore } from "../../../../../lib/quickbooks/sync-inventory-core"
 import { createSyncJob, appendLog, finishJob } from "../../../../../lib/quickbooks/sync-jobs"
+import { QbSyncLogger } from "../../../../../lib/quickbooks/qb-sync-logger"
 import { Client } from "pg"
 
 /**
@@ -15,6 +16,7 @@ import { Client } from "pg"
  * LIVE SYNC (dry_run: false / omitted):
  *   - Returns {started: true, job_id} immediately
  *   - Sync runs in background, logs streamed via GET /admin/quickbooks/sync/stream?job_id=xxx
+ *   - Also logs to Activity Log (qb_sync_log table) for visibility in the QB admin panel
  *   - Updates last_inventory_sync in DB on success
  */
 export async function POST(
@@ -59,9 +61,20 @@ export async function POST(
 
     setImmediate(async () => {
         const client = new Client({ connectionString: process.env.DATABASE_URL })
+        // Activity Log entry — shows this manual sync in the QB Activity Log
+        let logId: string | undefined
         try {
             await client.connect()
             appendLog(job, "🚀 Inventory sync started...")
+
+            // Create Activity Log entry before starting
+            logId = await QbSyncLogger.start({
+                operation: "inventory_sync",
+                syncType: "inventory",
+                triggeredBy: "manual",
+                message: "Inventory sync started (manual)",
+                db: client,
+            })
 
             const result = await syncInventoryCore(container, {
                 dryRun: false,
@@ -69,17 +82,23 @@ export async function POST(
             })
 
             if (result.success) {
-                appendLog(job, `✅ Done: ${result.stats.updatedStock} updated, ${result.stats.skippedNoChange} unchanged`)
+                const msg = `Done: ${result.stats.updatedStock} updated, ${result.stats.skippedNoChange} unchanged`
+                appendLog(job, `✅ ${msg}`)
                 await client.query(
                     `UPDATE quickbooks_config SET last_inventory_sync = NOW(), updated_at = NOW() WHERE id = 'default'`
                 )
+                await QbSyncLogger.complete(logId, { message: msg, db: client })
                 finishJob(job, "done")
             } else {
                 appendLog(job, `❌ Sync failed: ${result.error}`)
+                await QbSyncLogger.fail(logId, result.error || "Unknown error", { db: client })
                 finishJob(job, "error")
             }
         } catch (error: any) {
             appendLog(job, `❌ Error: ${error.message}`)
+            if (logId) {
+                await QbSyncLogger.fail(logId, error.message, { db: client }).catch(() => { })
+            }
             finishJob(job, "error")
         } finally {
             await client.end()

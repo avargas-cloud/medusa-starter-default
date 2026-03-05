@@ -160,7 +160,9 @@ export async function syncInventoryCore(
         })
 
         if (!initRes.ok) {
-            const error = `Bridge Error: ${initRes.status} ${initRes.statusText}`
+            let errorBody = ""
+            try { errorBody = await initRes.text() } catch { /* ignore */ }
+            const error = `Bridge Error: ${initRes.status} ${initRes.statusText}${errorBody ? ` — ${errorBody.slice(0, 200)}` : ""}`
             logger.error(`❌ ${error}`)
             return { success: false, stats, error }
         }

@@ -135,6 +135,12 @@ const QuickBooksPage = () => {
                 setInventoryInterval(config.inventory_interval_minutes != null ? String(config.inventory_interval_minutes) : 'disabled')
                 setPriceInterval(config.price_interval_minutes != null ? String(Math.floor(config.price_interval_minutes / 60)) : 'disabled')
                 setCustomerInterval(config.customer_interval_minutes != null ? String(Math.floor(config.customer_interval_minutes / 60)) : 'disabled')
+
+                // Price sync hour ("price_sync_hour" is 0-23 integer → "HH:00" string)
+                if (config.price_sync_hour != null) {
+                    const h = String(config.price_sync_hour).padStart(2, '0')
+                    setPriceTimeOfDay(`${h}:00`)
+                }
             } catch (e) { console.error('Failed to load config:', e) }
         }
         const loadJobs = async () => {
@@ -204,8 +210,14 @@ const QuickBooksPage = () => {
 
     const handleSavePrice = async () => {
         try {
-            await postConfig({ price_sync_interval_minutes: priceInterval === 'disabled' ? null : parseInt(priceInterval) * 60, price_respect_hours: priceRespectHours })
-            toast.success('Price sync saved')
+            // priceTimeOfDay is "HH:00" → extract hour as integer
+            const priceSyncHour = parseInt(priceTimeOfDay.split(':')[0] ?? '0', 10)
+            await postConfig({
+                price_sync_interval_minutes: priceInterval === 'disabled' ? null : parseInt(priceInterval) * 60,
+                price_respect_hours: priceRespectHours,
+                price_sync_hour: priceSyncHour,
+            })
+            toast.success('Price sync saved', { description: `Scheduled daily at ${priceTimeOfDay}.` })
         } catch (e) { toast.error('Failed to save', { description: (e as Error).message }) }
     }
 

@@ -40,6 +40,9 @@ export async function GET(
                 inventory_respect_hours,
                 price_respect_hours,
                 customer_respect_hours,
+                -- Price sync schedule
+                price_sync_hour,
+                price_sync_timezone,
                 created_at,
                 updated_at
             FROM quickbooks_config
@@ -143,6 +146,10 @@ export async function POST(
         if (inventory_respect_hours !== undefined) set('inventory_respect_hours', inventory_respect_hours)
         if (price_respect_hours !== undefined) set('price_respect_hours', price_respect_hours)
         if (customer_respect_hours !== undefined) set('customer_respect_hours', customer_respect_hours)
+
+        // Price sync schedule (daily at fixed hour)
+        if (body.price_sync_hour !== undefined) set('price_sync_hour', body.price_sync_hour)
+        if (body.price_sync_timezone !== undefined) set('price_sync_timezone', body.price_sync_timezone)
 
         if (updates.length === 0) {
             res.status(400).json({ error: "No fields to update" })

@@ -5,16 +5,14 @@ import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard"
 import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger"
 
 /**
- * QuickBooks Inventory Auto-Sync — runs every 10 minutes.
+ * QuickBooks Inventory Auto-Sync — cron fires every 10 minutes.
  *
- * Respects a store-hours time window configured in the admin panel:
- *   inventory_sync_start_hour (e.g. 9)  → don't sync before 9:00 AM
- *   inventory_sync_end_hour   (e.g. 18) → don't sync after  6:00 PM
- *   inventory_sync_timezone              → timezone for the window check
+ * The actual sync only executes when the configured interval has elapsed
+ * since the last successful sync (inventory_interval_minutes in the DB).
+ * This allows the user to configure 30/60/etc min without needing
+ * Medusa to support dynamic cron schedules.
  *
- * When both are NULL, syncs run 24/7 (original behavior).
- *
- * Schedule: every 10 minutes (skipped outside store hours)
+ * Also respects store hours if inventory_respect_hours is enabled.
  */
 export default async function qbInventorySyncHandler(container: MedusaContainer) {
     const TAG = "[QB-INVENTORY-AUTO]"
@@ -29,14 +27,15 @@ export default async function qbInventorySyncHandler(container: MedusaContainer)
             return
         }
 
-        // Read config
+        // Read config — uses store_hours_* columns (unified with config UI)
         const { rows } = await client.query(`
             SELECT
                 inventory_interval_minutes,
                 last_inventory_sync,
-                inventory_sync_start_hour,
-                inventory_sync_end_hour,
-                inventory_sync_timezone
+                inventory_respect_hours,
+                store_hours_open_hour,
+                store_hours_close_hour,
+                store_hours_timezone
             FROM quickbooks_config
             WHERE id = 'default'
         `)
@@ -48,9 +47,11 @@ export default async function qbInventorySyncHandler(container: MedusaContainer)
 
         const {
             inventory_interval_minutes,
-            inventory_sync_start_hour,
-            inventory_sync_end_hour,
-            inventory_sync_timezone,
+            last_inventory_sync,
+            inventory_respect_hours,
+            store_hours_open_hour,
+            store_hours_close_hour,
+            store_hours_timezone,
         } = rows[0]
 
         // Respect the "Disabled" setting in the UI
@@ -59,13 +60,27 @@ export default async function qbInventorySyncHandler(container: MedusaContainer)
             return
         }
 
+        // ─── Interval check ──────────────────────────────────────────────────
+        // The cron fires every 10 min; the actual sync only runs when the
+        // configured interval (e.g. 30 min) has elapsed since last sync.
+        if (last_inventory_sync) {
+            const elapsedMs = Date.now() - new Date(last_inventory_sync).getTime()
+            const intervalMs = inventory_interval_minutes * 60 * 1000
+            if (elapsedMs < intervalMs) {
+                const remainingMin = Math.round((intervalMs - elapsedMs) / 60000)
+                console.log(
+                    `${TAG} ⏳ Not due yet — next sync in ~${remainingMin} min (interval: ${inventory_interval_minutes}m). Skipping.`
+                )
+                return
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         // ─── Store hours check ────────────────────────────────────────────────
-        // If start & end hours are configured, only run within that window.
-        if (inventory_sync_start_hour != null && inventory_sync_end_hour != null) {
-            const tz = inventory_sync_timezone || "America/New_York"
+        if (inventory_respect_hours && store_hours_open_hour != null && store_hours_close_hour != null) {
+            const tz = store_hours_timezone || "America/New_York"
             const now = new Date()
 
-            // Get current hour in store timezone
             const currentHour = parseInt(
                 new Intl.DateTimeFormat("en-US", {
                     hour: "numeric",
@@ -75,8 +90,8 @@ export default async function qbInventorySyncHandler(container: MedusaContainer)
                 10
             )
 
-            const start = Number(inventory_sync_start_hour)
-            const end = Number(inventory_sync_end_hour)
+            const start = Number(store_hours_open_hour)
+            const end = Number(store_hours_close_hour)
 
             if (currentHour < start || currentHour >= end) {
                 console.log(
@@ -119,5 +134,5 @@ export default async function qbInventorySyncHandler(container: MedusaContainer)
 
 export const config = {
     name: "quickbooks-inventory-sync",
-    schedule: "*/10 * * * *",   // every 10 minutes — skipped outside store hours
+    schedule: "*/10 * * * *",   // fires every 10 min; interval check done internally
 }
