@@ -1,10 +1,40 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
 import { Modules } from "@medusajs/utils"
+import { Client } from "pg"
 import {
     ensureCustomerInQb,
     buildQbItems,
+    buildShippingQbItem,
     processEstimateInQb,
+    processUpdateEstimateInQb,
 } from "../../../../lib/quickbooks/order-flow-core"
+
+/**
+ * Reads QB order-flow settings from the DB config row.
+ * Falls back to .env values if columns are null/missing.
+ */
+async function getQbConfig(): Promise<{ shippingItemId: string; defaultSalesTaxCode: string }> {
+    const client = new Client({ connectionString: process.env.DATABASE_URL })
+    try {
+        await client.connect()
+        const res = await client.query(
+            `SELECT shipping_item_id, default_sales_tax_code FROM quickbooks_config WHERE id = 'default' LIMIT 1`
+        )
+        const row = res.rows[0] || {}
+        return {
+            shippingItemId: row.shipping_item_id || process.env.QB_SHIPPING_ITEM_ID || "800006A3-1395258131",
+            defaultSalesTaxCode: row.default_sales_tax_code || process.env.QB_DEFAULT_SALES_TAX_CODE || "Sale Tax 7%",
+        }
+    } catch {
+        // Fallback to env vars if DB fails
+        return {
+            shippingItemId: process.env.QB_SHIPPING_ITEM_ID || "800006A3-1395258131",
+            defaultSalesTaxCode: process.env.QB_DEFAULT_SALES_TAX_CODE || "Sale Tax 7%",
+        }
+    } finally {
+        await client.end()
+    }
+}
 
 /**
  * POST /admin/quickbooks/draft-order/sync
@@ -26,18 +56,20 @@ export async function POST(
     }
 
     try {
+        // Load QB order-flow config from DB (shipping item ID + default tax code)
+        const qbConfig = await getQbConfig()
+
         // Fetch via internal Medusa admin API — avoids cross-module relation errors
         // that occur when using orderModule.retrieveOrder with variant/product relations.
         const customerModule = req.scope.resolve(Modules.CUSTOMER)
 
-        const baseUrl = `http://localhost:${process.env.PORT || 9000}`
+        const baseUrl = process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
         const orderResp = await fetch(
-            `${baseUrl}/admin/orders/${orderId}?fields=id,display_id,status,metadata,tax_total,+items.*,+items.variant.*,+items.variant.metadata,+customer.*`,
+            `${baseUrl}/admin/orders/${orderId}?fields=id,display_id,status,metadata,tax_total,+items.*,+items.variant.*,+items.variant.metadata,+customer.*,+shipping_methods.*`,
             {
                 headers: {
                     // Forward the admin auth cookie from the incoming request
                     cookie: req.headers.cookie || "",
-                    "x-forwarded-for": "127.0.0.1",
                 },
             }
         )
@@ -63,8 +95,8 @@ export async function POST(
             return
         }
 
-        // Check if already synced
-        if (order.metadata?.qb_estimate_txn_id) {
+        // Check if already synced — allow force re-sync via body.force=true
+        if (order.metadata?.qb_estimate_txn_id && !(req.body as any).force) {
             res.json({
                 success: true,
                 alreadySynced: true,
@@ -93,21 +125,64 @@ export async function POST(
         const qbCustomerId = custResult.qbCustomerId!
 
         // Build QB items
-        const qbItems = buildQbItems(order.items as any)
+        // NOTE: /admin/orders API returns unit_price in DOLLARS (float), but buildQbItems
+        // divides by 100 expecting cents. Multiply back to cents before passing.
+        // Also filter out qty=0 items (soft-deleted / removed from draft order).
+        const activeItems = (order.items || [])
+            .filter((item: any) => (item.quantity ?? 0) > 0)
+            .map((item: any) => ({
+                ...item,
+                unit_price: Math.round((item.unit_price || 0) * 100), // dollars → cents for buildQbItems
+            }))
+
+        const qbItems = buildQbItems(activeItems)
+
+        // Add shipping as a QB line item (skipped if method is Pickup or amount=0)
+        const shippingItem = buildShippingQbItem((order as any).shipping_methods || [], qbConfig.shippingItemId)
+        if (shippingItem) qbItems.push(shippingItem)
+
         if (qbItems.length === 0) {
             res.status(400).json({
-                error: "No items in this draft order have a QuickBooks ID (variant.metadata.quickbooks_id). Add QB-linked products first.",
+                error: "No active items in this draft order have a QuickBooks ID (variant.metadata.quickbooks_id). Add QB-linked products first.",
             })
             return
         }
 
-        // Create Estimate in QB
-        const result = await processEstimateInQb({
-            draftOrderId: orderId,
-            qbCustomerId,
-            items: qbItems,
-            memo: `Draft Order #${(order as any).display_id || orderId} — ${customer.first_name || ""} ${customer.last_name || ""}`.trim(),
-        })
+        const isResync = !!(req.body as any).force && !!order.metadata?.qb_estimate_txn_id
+        const memo = `Draft Order #${(order as any).display_id || orderId} - ${customer.first_name || ""} ${customer.last_name || ""}`.trim()
+
+        // ── Tax state: mirror Medusa's tax decision in QB ─────────────────────
+        // Source of truth = draft order's tax_total (NOT customer defaults).
+        //   tax_total === 0  →  taxExempt = true  →  QB gets "Exempt"
+        //   tax_total  > 0  →  QB gets default_sales_tax_code from DB config
+        const taxTotal = Number((order as any).tax_total ?? 0)
+        const taxExempt = taxTotal === 0
+        const salesTaxCode = taxExempt
+            ? undefined
+            : qbConfig.defaultSalesTaxCode
+
+        let result
+        if (isResync) {
+            // ── RE-SYNC: edit existing estimate via EstimateMod ───────────────
+            result = await processUpdateEstimateInQb({
+                draftOrderId: orderId,
+                estimateTxnId: order.metadata.qb_estimate_txn_id as string,
+                items: qbItems,
+                memo,
+                taxExempt,
+                salesTaxCode,
+            })
+        } else {
+            // ── FIRST SYNC: create new estimate ───────────────────────────────
+            result = await processEstimateInQb({
+                draftOrderId: orderId,
+                qbCustomerId,
+                items: qbItems,
+                memo,
+                taxExempt,
+                salesTaxCode,
+            })
+        }
 
         if (!result.enabled) {
             res.status(503).json({ error: "QuickBooks integration is disabled. Check QB_ORDER_FLOW_ENABLED env var." })
@@ -120,33 +195,43 @@ export async function POST(
         }
 
         // Save QB metadata to the order via admin API
-        if (result.txnId) {
+        if (result.txnId || isResync) {
+            const metadataUpdate = isResync
+                // Re-sync: txnId/ref stay the same — only update timestamp
+                ? { ...(order.metadata || {}), qb_synced_at: new Date().toISOString() }
+                // New sync: save all QB identifiers
+                : {
+                    ...(order.metadata || {}),
+                    qb_estimate_txn_id: result.txnId,
+                    qb_estimate_ref: result.refNumber || result.txnId,
+                    qb_list_id: qbCustomerId,
+                    qb_synced_at: new Date().toISOString(),
+                }
+
             await fetch(`${baseUrl}/admin/orders/${orderId}`, {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    cookie: req.headers.cookie || "",
-                },
-                body: JSON.stringify({
-                    metadata: {
-                        ...(order.metadata || {}),
-                        qb_estimate_txn_id: result.txnId,
-                        qb_estimate_ref: result.refNumber || result.txnId,
-                        qb_list_id: qbCustomerId,
-                        qb_synced_at: new Date().toISOString(),
-                    },
-                }),
+                headers: { "Content-Type": "application/json", cookie: req.headers.cookie || "" },
+                body: JSON.stringify({ metadata: metadataUpdate }),
             })
         }
+
+        const txnIdToReturn = isResync
+            ? (order.metadata?.qb_estimate_txn_id as string)
+            : result.txnId
+        const refToReturn = isResync
+            ? (order.metadata?.qb_estimate_ref as string | undefined)
+            : result.refNumber
 
         res.json({
             success: true,
             alreadySynced: false,
-            qbEstimateTxnId: result.txnId,
-            qbEstimateRef: result.refNumber,
+            qbEstimateTxnId: txnIdToReturn,
+            qbEstimateRef: refToReturn,
             operationId: result.operationId,
-            message: result.txnId
-                ? `✅ Estimate created in QB! TxnID: ${result.txnId}, Ref: ${result.refNumber || "pending"}`
+            message: txnIdToReturn
+                ? (isResync
+                    ? `✅ Estimate updated in QB! TxnID: ${txnIdToReturn}, Ref: ${refToReturn || "same"}`
+                    : `✅ Estimate created in QB! TxnID: ${txnIdToReturn}, Ref: ${refToReturn || "pending"}`)
                 : `⏳ Estimate queued in QB. OperationID: ${result.operationId}`,
         })
     } catch (err: any) {

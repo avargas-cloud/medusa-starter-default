@@ -40,34 +40,28 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     // user changed quantities via update-item-force without re-running compute-tax.
     const computeTrueTotal = async (): Promise<number | null> => {
         try {
+            // Fetch order.total directly — Medusa computes this from the stored tax_lines
+            // (which were set by our compute-tax workflow in the draft stage), so it's always
+            // correct regardless of conversion timing.
+            //
+            // ⚠️  Previous approach (sum from items × qty + shipping + tax) had a race condition:
+            //     immediately after conversion, the HTTP API could return only 1 of N items
+            //     (DB not fully committed yet) → wrong total → payment collection patched incorrectly.
             const orderRes = await fetch(
-                `${base}/admin/orders/${id}?fields=+items.*,+shipping_methods.*`,
+                `${base}/admin/orders/${id}?fields=total,tax_total,subtotal,discount_total`,
                 { headers: authHeaders }
             )
             if (!orderRes.ok) return null
             const { order } = await orderRes.json()
-            if (!order) return null
-
-            // sum unit_price × quantity for all non-zero items
-            const itemSubtotal = (order.items ?? [])
-                .filter((i: any) => (i.quantity ?? 0) > 0)
-                .reduce((acc: number, i: any) => acc + (i.unit_price ?? 0) * (i.quantity ?? 1), 0)
-
-            const shippingTotal = (order.shipping_methods ?? [])
-                .reduce((acc: number, m: any) => acc + (m.amount ?? 0), 0)
-
-            // tax_total and discount_total are in dollars in Medusa v2
-            const taxTotal = order.tax_total ?? 0
-            const discountTotal = order.discount_total ?? 0
-
-            const total = itemSubtotal + shippingTotal + taxTotal - discountTotal
-            console.log(`[convert-force] true total: items=${itemSubtotal} + shipping=${shippingTotal} + tax=${taxTotal} - discount=${discountTotal} = ${total}`)
-            return total > 0 ? total : null
+            if (!order?.total) return null
+            console.log(`[convert-force] order.total from API: ${order.total} (tax=${order.tax_total}, subtotal=${order.subtotal})`)
+            return order.total > 0 ? order.total : null
         } catch (e: any) {
-            console.warn("[convert-force] Could not compute true total:", e?.message)
+            console.warn("[convert-force] Could not fetch order total:", e?.message)
             return null
         }
     }
+
 
     // ── Helper: patch payment collection to the correct amount ────────────────
     const fixPaymentCollection = async (correctTotal: number) => {

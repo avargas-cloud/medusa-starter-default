@@ -7,6 +7,15 @@ import { ArrowPath } from "@medusajs/icons"
 type LogStatus = "processing" | "completed" | "failed" | "skipped"
 type LogCategory = "all" | "order" | "sync"
 
+interface ChangedItem {
+    sku: string
+    name: string
+    prev: number
+    next: number
+    delta: number
+    anomaly?: boolean
+}
+
 interface LogEntry {
     id: string
     operation: string
@@ -25,6 +34,7 @@ interface LogEntry {
     initiated_at: string
     completed_at: string | null
     server_host: string | null
+    metadata?: { changedItems?: ChangedItem[] } | null
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -118,6 +128,12 @@ const LogRow = ({ log }: { log: LogEntry }) => {
                     {log.message && (
                         <Text className="text-xs text-ui-fg-subtle">{log.message}</Text>
                     )}
+                    {/* Show truncated error inline for failed entries */}
+                    {log.status === 'failed' && log.error && (
+                        <Text className="text-xs text-red-500 font-mono truncate max-w-[36rem]" title={log.error}>
+                            ⚠ {log.error.length > 120 ? log.error.slice(0, 120) + '…' : log.error}
+                        </Text>
+                    )}
                 </div>
 
                 {/* Right side: duration | status | server | date | arrow */}
@@ -162,6 +178,42 @@ const LogRow = ({ log }: { log: LogEntry }) => {
                             <><Text className="text-ui-fg-muted">Duration</Text><Text>{formatDuration(log.duration_ms)}</Text></>
                         )}
                     </div>
+                    {/* Inventory sync changed items */}
+                    {log.operation === 'inventory_sync' && log.metadata?.changedItems && log.metadata.changedItems.length > 0 && (
+                        <div className="mt-3">
+                            <Text className="text-xs font-semibold text-ui-fg-muted mb-1.5 block">
+                                Changed Items ({log.metadata.changedItems.length})
+                            </Text>
+                            <div className="rounded-md border border-ui-border-base overflow-hidden">
+                                <table className="w-full text-xs">
+                                    <thead>
+                                        <tr className="bg-ui-bg-subtle border-b border-ui-border-base">
+                                            <th className="text-left px-3 py-1.5 text-ui-fg-muted font-medium">SKU</th>
+                                            <th className="text-right px-3 py-1.5 text-ui-fg-muted font-medium">Before</th>
+                                            <th className="text-right px-3 py-1.5 text-ui-fg-muted font-medium">After</th>
+                                            <th className="text-right px-3 py-1.5 text-ui-fg-muted font-medium">Δ</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {log.metadata.changedItems.map((item: ChangedItem) => (
+                                            <tr key={item.sku} className="border-b border-ui-border-base/50 last:border-0 hover:bg-ui-bg-subtle/50">
+                                                <td className="px-3 py-1.5">
+                                                    <span className="font-mono">{item.sku}</span>
+                                                    {item.anomaly && <span className="ml-1.5 text-orange-400" title="Anomaly detected">⚠️</span>}
+                                                </td>
+                                                <td className="px-3 py-1.5 text-right text-ui-fg-subtle">{item.prev}</td>
+                                                <td className="px-3 py-1.5 text-right font-medium">{item.next}</td>
+                                                <td className={`px-3 py-1.5 text-right font-mono font-semibold ${item.delta > 0 ? 'text-green-500' : item.delta < 0 ? 'text-red-400' : 'text-ui-fg-muted'
+                                                    }`}>
+                                                    {item.delta > 0 ? '+' : ''}{item.delta}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
                     {log.error && (
                         <div className="mt-2 p-2 rounded bg-red-50 border border-red-200">
                             <Text className="text-xs text-red-700 font-mono">{log.error}</Text>

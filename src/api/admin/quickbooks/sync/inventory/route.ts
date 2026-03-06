@@ -87,7 +87,15 @@ export async function POST(
                 await client.query(
                     `UPDATE quickbooks_config SET last_inventory_sync = NOW(), updated_at = NOW() WHERE id = 'default'`
                 )
-                await QbSyncLogger.complete(logId, { message: msg, db: client })
+                const displayItems = (result.preview ?? [])
+                    .filter(i => !i.wasNegativeInQb)
+                    .slice(0, 200)
+                    .map(i => ({ sku: i.sku, name: i.name, prev: i.currentStock, next: i.newStock, delta: i.delta, anomaly: i.isAnomaly || undefined }))
+                await QbSyncLogger.complete(logId, {
+                    message: msg,
+                    db: client,
+                    metadata: displayItems.length > 0 ? { changedItems: displayItems } : undefined,
+                })
                 finishJob(job, "done")
             } else {
                 appendLog(job, `❌ Sync failed: ${result.error}`)

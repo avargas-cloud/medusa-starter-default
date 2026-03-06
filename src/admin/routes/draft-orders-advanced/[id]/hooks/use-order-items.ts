@@ -17,6 +17,23 @@ export const useOrderItems = ({ id, order, setOrder }: Deps) => {
     const [itemSaving, setItemSaving] = useState(false)
     const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+    // Refs so handleUpdateItem always reads the latest state (avoids stale closure)
+    const itemQtysRef = useRef<Record<string, number>>({})
+    const itemPricesRef = useRef<Record<string, string>>({})
+    const orderRef = useRef<DraftOrderDetail | null>(order)  // always current — updated on every render
+    orderRef.current = order  // keep in sync without re-creating handleUpdateItem
+
+    const setItemQtysSafe = (v: any) => {
+        const next = typeof v === "function" ? v(itemQtysRef.current) : v
+        itemQtysRef.current = next
+        setItemQtys(next)
+    }
+    const setItemPricesSafe = (v: any) => {
+        const next = typeof v === "function" ? v(itemPricesRef.current) : v
+        itemPricesRef.current = next
+        setItemPrices(next)
+    }
+
     // ── Variant/SKU search ───────────────────────────────────────────────────
     const searchInvItems = (q: string) => {
         setInvQuery(q)
@@ -188,8 +205,12 @@ export const useOrderItems = ({ id, order, setOrder }: Deps) => {
     // ── Update item ──────────────────────────────────────────────────────────
     const handleUpdateItem = async (itemId: string): Promise<void> => {
         setItemSaving(true)
-        const qty = itemQtys[itemId] ?? 1
-        const price = parseFloat(itemPrices[itemId] ?? "0")
+        // Read from refs — always has the latest value even inside stale closures
+        const qty = itemQtysRef.current[itemId] ?? 1
+        // Fallback to current item's unit_price if user hasn't explicitly set a price
+        // (prevents price from being reset to 0 when only quantity is changed)
+        const currentItem = orderRef.current?.items?.find((i: any) => i.id === itemId)
+        const price = parseFloat(itemPricesRef.current[itemId] ?? String(currentItem?.unit_price ?? 0))
         const prevOrder = order
         setOrder(prev => prev ? { ...prev, items: (prev.items ?? []).map((item: any) => item.id === itemId ? { ...item, quantity: qty, unit_price: price } : item) } : prev)
         try {
@@ -213,5 +234,5 @@ export const useOrderItems = ({ id, order, setOrder }: Deps) => {
         } catch (e: any) { toast.error(e.message) } finally { setItemSaving(false) }
     }
 
-    return { invQuery, invResults, itemQtys, setItemQtys, itemPrices, setItemPrices, itemSaving, searchInvItems, handleAddItem, handleUpdateItem, handleRemoveItem }
+    return { invQuery, invResults, itemQtys, setItemQtys: setItemQtysSafe, itemPrices, setItemPrices: setItemPricesSafe, itemSaving, searchInvItems, handleAddItem, handleUpdateItem, handleRemoveItem }
 }

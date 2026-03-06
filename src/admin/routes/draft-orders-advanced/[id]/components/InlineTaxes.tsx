@@ -54,9 +54,9 @@ export const InlineTaxes = ({ orderId, curr, triggerKey, onTaxChange, onTaxRateC
 
     const handleModeChange = async (newMode: TaxMode) => {
         if (!tax || newMode === tax.mode) return
-        // Optimistic update — FL taxes items + shipping
+        // Optimistic update — FL taxes items ONLY (shipping is not taxed)
         const prevTax = tax
-        const taxableBase = (tax.subtotal ?? 0) + (tax.shippingSubtotal ?? 0)
+        const taxableBase = tax.subtotal ?? 0
         const optimisticAmount = newMode === "exempt" ? 0 : (newMode === "florida"
             ? Math.round(taxableBase * 7 / 100 * 100) / 100
             : tax.amount)

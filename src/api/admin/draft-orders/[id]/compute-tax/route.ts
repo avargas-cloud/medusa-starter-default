@@ -220,7 +220,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
         } else if (effectiveMode === "florida") {
             const fl = await getStateRate(req, FL_PROVINCE)
             rate = fl.rate; reason = fl.reason
-            const taxableBase = itemsSubtotal + shippingSubtotal
+            // CHANGED: Only taxing itemsSubtotal to match Medusa native behavior.
+            // Shipping is no longer taxed.
+            const taxableBase = itemsSubtotal
             amount = Math.round(taxableBase * rate / 100 * 100) / 100
         } else {
             reason = "No shipping address set"

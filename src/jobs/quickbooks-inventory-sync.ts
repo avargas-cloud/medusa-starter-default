@@ -124,7 +124,20 @@ export default async function qbInventorySyncHandler(container: MedusaContainer)
             )
             const msg = `Done: ${result.stats.updatedStock} levels updated`
             console.log(`${TAG} ✅ ${msg}`)
-            await QbSyncLogger.complete(logId, { message: msg, db: client })
+
+            // Filter out QB negative-to-zero corrections (not real inventory changes)
+            // and store up to 200 changed items in the log for ActivityLog display.
+            const displayItems = (result.preview ?? [])
+                .filter(i => !i.wasNegativeInQb)
+                .slice(0, 200)
+                .map(i => ({ sku: i.sku, name: i.name, prev: i.currentStock, next: i.newStock, delta: i.delta, anomaly: i.isAnomaly || undefined }))
+
+            await QbSyncLogger.complete(logId, {
+                message: msg,
+                db: client,
+                metadata: displayItems.length > 0 ? { changedItems: displayItems } : undefined,
+            })
+
         } else {
             console.error(`${TAG} ❌ Sync failed: ${result.error}`)
             await QbSyncLogger.fail(logId, result.error || "Unknown error", { db: client })

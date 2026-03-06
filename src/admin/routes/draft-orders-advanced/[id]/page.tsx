@@ -145,6 +145,7 @@ const DraftOrderDetail = () => {
                     estimateStatus={s.estimateStatus}
                     statusSaving={s.statusSaving} syncing={s.syncing} syncError={s.syncError}
                     timeline={s.timeline} orderCreatedAt={order.created_at}
+                    total={p.computedTotal}
                     onStatusChange={s.handleStatusChange} onSync={s.handleSync} onOpenModal={s.openModal as any}
                 />
             </div>

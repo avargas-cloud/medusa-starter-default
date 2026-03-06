@@ -231,24 +231,21 @@ export const InlineShipping = forwardRef<InlineShippingHandle, Props>(function I
                             <Text size="xsmall" className="text-ui-fg-muted">{m.data?.description ?? ""}</Text>
                         </div>
                         <div className="flex items-center gap-3">
-                            {/* ── Inline editable amount — styled like Items price ── */}
-                            {ps.saving ? (
-                                <Text size="small" className="text-ui-fg-muted w-24 text-right">Saving...</Text>
-                            ) : (
-                                <div className="flex items-center border border-ui-border-base rounded-md overflow-hidden bg-ui-bg-base focus-within:ring-1 focus-within:ring-ui-border-interactive h-7">
-                                    <span className="px-2 text-xs text-ui-fg-muted border-r border-ui-border-base bg-ui-bg-subtle select-none h-full flex items-center">$</span>
-                                    <input
-                                        type="text"
-                                        inputMode="decimal"
-                                        value={ps.editing ? ps.value : String(m.amount ?? 0)}
-                                        onFocus={() => handlePriceFocus(m.id, m.amount ?? 0)}
-                                        onChange={e => handlePriceChange(m.id, e.target.value)}
-                                        onBlur={() => handlePriceBlur(m)}
-                                        className="w-16 px-2 text-xs text-right text-ui-fg-base bg-transparent focus:outline-none"
-                                        title="Click to edit shipping amount"
-                                    />
-                                </div>
-                            )}
+                            {/* ── Inline editable amount — always visible, disabled while saving ── */}
+                            <div className={`flex items-center border border-ui-border-base rounded-md overflow-hidden bg-ui-bg-base focus-within:ring-1 focus-within:ring-ui-border-interactive h-7 ${ps.saving ? "opacity-60" : ""}`}>
+                                <span className="px-2 text-xs text-ui-fg-muted border-r border-ui-border-base bg-ui-bg-subtle select-none h-full flex items-center">$</span>
+                                <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={ps.editing ? ps.value : String(m.amount ?? 0)}
+                                    disabled={ps.saving}
+                                    onFocus={() => handlePriceFocus(m.id, m.amount ?? 0)}
+                                    onChange={e => handlePriceChange(m.id, e.target.value)}
+                                    onBlur={() => handlePriceBlur(m)}
+                                    className="w-16 px-2 text-xs text-right text-ui-fg-base bg-transparent focus:outline-none disabled:cursor-not-allowed"
+                                    title={ps.saving ? "Saving..." : "Click to edit shipping amount"}
+                                />
+                            </div>
                             <button
                                 onClick={() => openPicker(m.id)}
                                 className="text-xs text-ui-fg-interactive hover:underline whitespace-nowrap"

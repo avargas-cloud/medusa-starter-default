@@ -24,11 +24,14 @@ const MAX_POLL_ATTEMPTS = 20     // ~7 min max wait
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface QbOrderItem {
-    productId: string   // QB ListID of the product
+    productId?: string  // QB ListID of the product (preferred)
+    productName?: string // QB Item FullName fallback (e.g. "SHIPPING & HANDLING")
     quantity: number
     price?: number      // in dollars (e.g., 29.99) — optional, QB uses default if omitted
     unitOfMeasure?: string  // e.g. "each" — prevents QB UOM multiplication when price is set
     desc?: string
+    /** When true, the QBXML builder skips InventorySiteRef (required for non-inventory items like shipping) */
+    noSite?: boolean
 }
 
 export interface QbCreateCustomerPayload {
@@ -398,6 +401,227 @@ export async function createEstimateInQb(
         const operationId = data?.operationId
         if (!operationId) throw new Error("Bridge did not return an operationId for Estimate")
         return { success: true, data: { operationId } }
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}
+
+/**
+ * Polls and returns the full raw operation result (for queries where we need specific fields
+ * like EditSequence and TxnLineID that pollOperationResult doesn't expose).
+ */
+async function pollRawOperationResult(operationId: string): Promise<any> {
+    for (let attempt = 1; attempt <= MAX_POLL_ATTEMPTS; attempt++) {
+        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
+        console.log(`[QB] ⏳ Polling raw operation ${operationId} (${attempt}/${MAX_POLL_ATTEMPTS})...`)
+        try {
+            const statusRes = await bridgeFetch("GET", `/api/sync/status/${operationId}`)
+            const op = statusRes?.operation
+            if (!op) continue
+            if (op.status === "completed") return op.result
+            if (op.status === "failed") throw new Error(`QB operation ${operationId} failed: ${op.error || "Unknown error"}`)
+        } catch (err: any) {
+            if (err.message.includes("failed:")) throw err
+            console.warn(`[QB] ⚠️ Raw poll error (will retry): ${err.message}`)
+        }
+    }
+    throw new Error(`Polling timed out for operation ${operationId} after ${MAX_POLL_ATTEMPTS} attempts`)
+}
+
+export interface QbUpdateEstimatePayload {
+    txnId: string          // QB TxnID of the estimate to update (qb_estimate_txn_id)
+    items: QbOrderItem[]   // Current active items — will be matched to existing QB lines by productId
+    memo?: string
+    taxExempt?: boolean    // true → <ItemSalesTaxRef>Exempt</ItemSalesTaxRef>
+    salesTaxCode?: string  // e.g. "Sale Tax 7%" — pass when order is taxable and QB default isn't used
+}
+
+/**
+ * Updates an existing QB Estimate (for Draft Order re-sync).
+ *
+ * Flow (2 async hops):
+ *   1. GET /api/estimates/:txnId → poll → get EditSequence + TxnLineID(s)
+ *   2. PUT /api/estimates/:txnId with EditSequence + items mapped by productId
+ *
+ * Items with matching productId get their TxnLineID filled in (update existing line).
+ * Items with no match are sent without TxnLineID (QB adds them as new lines — rare case).
+ */
+export async function updateEstimateInQb(
+    payload: QbUpdateEstimatePayload
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        console.log(`[QB DRY RUN] Would update Estimate ${payload.txnId} (${payload.items.length} items)`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN", txnId: payload.txnId } }
+    }
+
+    try {
+        // ── Step 1: Query estimate → get EditSequence + existing TxnLineIDs ──
+        console.log(`[QB] Querying estimate ${payload.txnId} to get EditSequence...`)
+        const queryResp = await bridgeFetch("GET", `/api/estimates/${payload.txnId}`)
+        const queryOpId = queryResp?.operationId
+        if (!queryOpId) throw new Error("Bridge did not return operationId for estimate query")
+
+        const rawResult = await pollRawOperationResult(queryOpId)
+
+        // QB wraps result in QBXMLMsgsRs → EstimateQueryRs → EstimateRet
+        const estRet =
+            rawResult?.QBXML?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+            rawResult?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+            rawResult?.EstimateRet ??
+            rawResult?.EstimateQueryRs?.EstimateRet
+
+        if (!estRet?.EditSequence) {
+            throw new Error(`Could not extract EditSequence from estimate query result. Raw: ${JSON.stringify(rawResult).slice(0, 200)}`)
+        }
+
+        const editSequence = estRet.EditSequence as string
+
+        // Build a map: QB productId (ListID) → TxnLineID for existing lines
+        const existingLines = estRet.EstimateLineRet
+        const linesArr: any[] = Array.isArray(existingLines)
+            ? existingLines
+            : (existingLines ? [existingLines] : [])
+
+        const qbLinesByProductId: Record<string, string> = {}
+        for (const line of linesArr) {
+            const productId = line?.ItemRef?.ListID
+            const txnLineId = line?.TxnLineID
+            if (productId && txnLineId) qbLinesByProductId[productId] = txnLineId
+        }
+
+        console.log(`[QB] EditSequence obtained. ${linesArr.length} existing QB lines.`)
+
+        // ── Step 2: Build mod items (match by productId → TxnLineID) ─────────
+        const modItems = payload.items.map(item => {
+            const pid = item.productId
+            const txnLineId = pid ? qbLinesByProductId[pid] : undefined
+            return {
+                ...(txnLineId ? { TxnLineID: txnLineId } : {}),
+                ...(pid ? { productId: pid } : {}),
+                ...(item.productName ? { productName: item.productName } : {}),
+                quantity: item.quantity,
+                price: item.price,
+                desc: item.desc,
+            }
+        })
+
+        // ── Step 3: PUT (EstimateMod) ─────────────────────────────────────────
+        const modResp = await bridgeFetch("PUT", `/api/estimates/${payload.txnId}`, {
+            EditSequence: editSequence,
+            items: modItems,
+            memo: payload.memo,
+            ...(payload.taxExempt === true ? { taxExempt: true } : {}),
+            ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
+        })
+
+        const operationId = modResp?.operationId
+        if (!operationId) throw new Error("Bridge did not return operationId for estimate update (mod)")
+
+        console.log(`[QB] ✅ Estimate update queued. OperationID: ${operationId}`)
+        return { success: true, data: { operationId, txnId: payload.txnId } }
+
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}
+
+export interface QbUpdateSalesOrderPayload {
+    txnId: string           // QB TxnID of the SO to update (qb_sales_order_txn_id)
+    customerId?: string     // QB Customer ListID
+    customerName?: string   // QB Customer name (fallback)
+    items: QbOrderItem[]    // Current active items — matched by productId to existing QB lines
+    memo?: string
+    salesTaxCode?: string   // e.g. "Sale Tax 7%"
+    taxExempt?: boolean
+}
+
+/**
+ * Updates an existing QB Sales Order (for Re-sync flow).
+ *
+ * Flow (2 async hops):
+ *   1. GET /api/sales-orders/:txnId → poll → get EditSequence + TxnLineID(s)
+ *   2. PUT /api/sales-orders/:txnId with EditSequence + items mapped by productId
+ *
+ * Items with matching productId get their TxnLineID filled in (update existing line).
+ * Items with no match are sent without TxnLineID (QB adds them as new lines).
+ */
+export async function updateSalesOrderInQb(
+    payload: QbUpdateSalesOrderPayload
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        console.log(`[QB DRY RUN] Would update Sales Order ${payload.txnId} (${payload.items.length} items)`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN", txnId: payload.txnId } }
+    }
+
+    try {
+        // ── Step 1: Query SO → get EditSequence + existing TxnLineIDs ──────────
+        console.log(`[QB] Querying Sales Order ${payload.txnId} to get EditSequence...`)
+        const queryResp = await bridgeFetch("GET", `/api/sales-orders/${payload.txnId}`)
+        const queryOpId = queryResp?.operationId
+        if (!queryOpId) throw new Error("Bridge did not return operationId for SO query")
+
+        const rawResult = await pollRawOperationResult(queryOpId)
+
+        // QB wraps result in QBXML.QBXMLMsgsRs.SalesOrderQueryRs.SalesOrderRet
+        const soRet =
+            rawResult?.QBXML?.QBXMLMsgsRs?.SalesOrderQueryRs?.SalesOrderRet ??
+            rawResult?.QBXMLMsgsRs?.SalesOrderQueryRs?.SalesOrderRet ??
+            rawResult?.SalesOrderRet ??
+            rawResult?.SalesOrderQueryRs?.SalesOrderRet
+
+        if (!soRet?.EditSequence) {
+            throw new Error(`Could not extract EditSequence from SO query. Raw: ${JSON.stringify(rawResult).slice(0, 200)}`)
+        }
+
+        const editSequence = soRet.EditSequence as string
+
+        // Build productId → TxnLineID map from existing SO lines
+        const existingLines = soRet.SalesOrderLineRet
+        const linesArr: any[] = Array.isArray(existingLines)
+            ? existingLines
+            : (existingLines ? [existingLines] : [])
+
+        const qbLinesByProductId: Record<string, string> = {}
+        for (const line of linesArr) {
+            const productId = line?.ItemRef?.ListID
+            const txnLineId = line?.TxnLineID
+            if (productId && txnLineId) qbLinesByProductId[productId] = txnLineId
+        }
+
+        console.log(`[QB] EditSequence obtained. ${linesArr.length} existing SO lines.`)
+
+        // ── Step 2: Build mod items (match by productId → TxnLineID) ────────────
+        const modItems = payload.items.map(item => {
+            const pid = item.productId
+            const txnLineId = pid ? qbLinesByProductId[pid] : undefined
+            return {
+                ...(txnLineId ? { TxnLineID: txnLineId } : {}),
+                ...(pid ? { productId: pid } : {}),
+                ...(item.productName ? { productName: item.productName } : {}),
+                quantity: item.quantity,
+                price: item.price,
+                desc: item.desc,
+                noSite: item.noSite,
+            }
+        })
+
+        // ── Step 3: PUT (SalesOrderMod) ──────────────────────────────────────────
+        const modResp = await bridgeFetch("PUT", `/api/sales-orders/${payload.txnId}`, {
+            EditSequence: editSequence,
+            ...(payload.customerId ? { customerId: payload.customerId } : {}),
+            ...(payload.customerName ? { customerName: payload.customerName } : {}),
+            items: modItems,
+            memo: payload.memo,
+            ...(payload.taxExempt === true ? { taxExempt: true } : {}),
+            ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
+        })
+
+        const operationId = modResp?.operationId
+        if (!operationId) throw new Error("Bridge did not return operationId for SO mod")
+
+        console.log(`[QB] ✅ Sales Order update queued. OperationID: ${operationId}`)
+        return { success: true, data: { operationId, txnId: payload.txnId } }
+
     } catch (err: any) {
         return { success: false, error: err.message }
     }

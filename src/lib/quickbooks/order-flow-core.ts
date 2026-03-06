@@ -41,6 +41,7 @@ import {
     receivePaymentInQb,
     createInvoiceInQb,
     createEstimateInQb,
+    updateEstimateInQb,
     applyPaymentToInvoiceInQb,
     pollOperationResult,
     QbOrderItem,
@@ -210,6 +211,46 @@ export function buildQbItems(items: MedusaOrderForQb["items"]): QbOrderItem[] {
         }))
 }
 
+/**
+ * Builds a QB line item for shipping (if applicable).
+ *
+ * Rules:
+ *  - If no shipping methods → return null
+ *  - If shipping method name contains "pickup" (case-insensitive) → return null (store pickup)
+ *  - Otherwise → return a QB item using the "SHIPPING & HANDLING" product name,
+ *    qty=1, price=shipping amount, desc=shipping method name
+ *
+ * @param shippingMethods - Array of shipping methods from the Medusa order (admin API, amounts in dollars)
+ */
+export function buildShippingQbItem(shippingMethods: any[], shippingItemIdOverride?: string): QbOrderItem | null {
+    if (!shippingMethods?.length) return null
+
+    const PICKUP_KEYWORDS = ["pickup", "pick up", "pick-up", "store pickup", "local pickup", "in-store"]
+
+    const nonPickup = shippingMethods.filter(m => {
+        const name = (m.name || m.shipping_option?.name || m.label || "").toLowerCase()
+        return !PICKUP_KEYWORDS.some(kw => name.includes(kw))
+    })
+
+    if (!nonPickup.length) return null
+
+    // Use the first non-pickup method
+    const method = nonPickup[0]
+    const amount = Number(method.amount || 0)   // dollars from admin API
+    const name = sanitizeForQb(method.name || method.shipping_option?.name || "Shipping")
+
+    if (amount <= 0) return null  // free shipping — no need to add a line
+
+    return {
+        // Use QB ListID from DB config, env var, or hardcoded fallback.
+        // Do NOT use productName "SHIPPING & HANDLING" — the & causes QB QBXML parser error 0x80040400.
+        productId: shippingItemIdOverride || process.env.QB_SHIPPING_ITEM_ID || "800006A3-1395258131",
+        quantity: 1,
+        price: amount,   // dollars → QB sends Amount = price * qty
+        desc: name,
+        noSite: true,   // shipping is a non-inventory item — QB error 3140 if Site is set
+    }
+}
 
 // ─── 1. Process Order → Sales Order ───────────────────────────────────────────
 
@@ -219,7 +260,8 @@ export function buildQbItems(items: MedusaOrderForQb["items"]): QbOrderItem[] {
  */
 export async function processOrderInQb(
     order: MedusaOrderForQb,
-    customerModule: any
+    customerModule: any,
+    options?: { prebuiltItems?: QbOrderItem[]; salesTaxCode?: string }
 ): Promise<OrderFlowResult> {
     const guard = await runGuards()
     if (!guard.pass) return guard.result!
@@ -260,7 +302,9 @@ export async function processOrderInQb(
         const qbCustomerId = custResult.qbCustomerId!
 
         // 3. Build Sales Order items
-        const soItems = buildQbItems(order.items)
+        // Use pre-built items if provided (allows caller to inject shipping line).
+        // Fallback: build from order.items (subscriber path — no shipping).
+        const soItems = options?.prebuiltItems ?? buildQbItems(order.items)
 
         if (soItems.length === 0) {
             console.warn(`${prefix} ⚠️ Order #${order.display_id} has no items with quickbooks_id — skipping SO creation`)
@@ -281,6 +325,7 @@ export async function processOrderInQb(
                 date: getDateString(order.created_at),
                 items: soItems,
                 taxExempt,
+                salesTaxCode: options?.salesTaxCode,
                 memo: `Medusa Order #${order.display_id || order.id} — from Estimate ${order.metadata?.qb_estimate_ref || estimateTxnId}`,
             })
         } else {
@@ -290,6 +335,7 @@ export async function processOrderInQb(
                 date: orderDate,
                 items: soItems,
                 taxExempt,
+                salesTaxCode: options?.salesTaxCode,
                 memo: `Medusa Web Order #${order.display_id || order.id}`,
             })
         }
@@ -313,7 +359,9 @@ export async function processOrderInQb(
                 txnId = pollResult.txnId
                 refNumber = pollResult.refNumber
             } catch (pollErr: any) {
-                console.error(`[QB] ⚠️ Polling failed (non-blocking): ${pollErr.message}`)
+                console.error(`[QB] ❌ Polling failed: ${pollErr.message}`)
+                await QbSyncLogger.fail(logId, `Polling failed: ${pollErr.message}`)
+                return { enabled: true, error: `Polling failed: ${pollErr.message}` }
             }
         }
 
@@ -359,7 +407,7 @@ export async function processPaymentCaptureInQb(capture: {
     amount: number        // in cents (Medusa v2)
     paymentMethod: string
     qbCustomerId: string
-}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean }> {
+}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
 
@@ -405,7 +453,9 @@ export async function processPaymentCaptureInQb(capture: {
             txnId = pollResult.txnId
             refNumber = pollResult.refNumber
         } catch (pollErr: any) {
-            console.error(`[QB] ⚠️ Payment polling failed (non-blocking): ${pollErr.message}`)
+            console.error(`[QB] ❌ Payment polling failed: ${pollErr.message}`)
+            await QbSyncLogger.fail(logId, `Polling failed: ${pollErr.message}`)
+            return { enabled: true, error: `Polling failed: ${pollErr.message}` }
         }
     }
 
@@ -438,7 +488,7 @@ export async function processInvoiceInQb(invoice: {
     qbSoTxnId: string
     qbPaymentTxnId?: string
     paymentAmount?: number
-}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean }> {
+}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
 
@@ -480,7 +530,9 @@ export async function processInvoiceInQb(invoice: {
             invTxnId = pollResult.txnId
             invRefNumber = pollResult.refNumber
         } catch (pollErr: any) {
-            console.error(`[QB] ⚠️ Invoice polling failed (non-blocking): ${pollErr.message}`)
+            console.error(`[QB] ❌ Invoice polling failed: ${pollErr.message}`)
+            await QbSyncLogger.fail(logId, `Polling failed: ${pollErr.message}`)
+            return { enabled: true, error: `Polling failed: ${pollErr.message}` }
         }
     }
 
@@ -529,7 +581,9 @@ export async function processEstimateInQb(draft: {
     items: QbOrderItem[]
     memo?: string
     date?: string
-}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean }> {
+    taxExempt?: boolean    // true if Medusa order has no tax (tax_total === 0)
+    salesTaxCode?: string  // QB sales tax code name (e.g. "Sale Tax 7%") — overrides customer default
+}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
 
@@ -555,6 +609,8 @@ export async function processEstimateInQb(draft: {
         date: draft.date || getDateString(),
         items: draft.items,
         memo: draft.memo || `Draft Order ${draft.draftOrderId}`,
+        ...(draft.taxExempt === true ? { taxExempt: true } : {}),
+        ...(draft.salesTaxCode ? { salesTaxCode: draft.salesTaxCode } : {}),
     })
 
     if (!estResult.success) {
@@ -575,7 +631,9 @@ export async function processEstimateInQb(draft: {
             txnId = pollResult.txnId
             refNumber = pollResult.refNumber
         } catch (pollErr: any) {
-            console.error(`[QB] ⚠️ Estimate polling failed (non-blocking): ${pollErr.message}`)
+            console.error(`[QB] ❌ Estimate polling failed: ${pollErr.message}`)
+            await QbSyncLogger.fail(logId, `Polling failed: ${pollErr.message}`)
+            return { enabled: true, error: `Polling failed: ${pollErr.message}` }
         }
     }
 
@@ -590,6 +648,84 @@ export async function processEstimateInQb(draft: {
         message: txnId
             ? `Estimate created — TxnID: ${txnId}, Ref: ${refNumber || "pending"}`
             : `Estimate queued — OperationID: ${asyncData.operationId}`,
+    })
+
+    return { enabled: true, operationId: asyncData.operationId, txnId, refNumber }
+}
+
+// ─── 5. Update Estimate (Draft Order Re-sync) ──────────────────────────────────
+
+/**
+ * Called when "Re-sync to QuickBooks" is pressed on a Draft Order that was
+ * already synced as an Estimate. Edits the existing QB Estimate (MOD) with
+ * the current items/prices — does NOT create a new Estimate.
+ */
+export async function processUpdateEstimateInQb(draft: {
+    draftOrderId: string
+    estimateTxnId: string  // existing qb_estimate_txn_id from order metadata
+    items: QbOrderItem[]
+    memo?: string
+    taxExempt?: boolean    // true if Medusa order has no tax (tax_total === 0)
+    salesTaxCode?: string  // QB sales tax code name — overrides customer default
+}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean; skipReason?: string }> {
+    const guard = await runGuards()
+    if (!guard.pass) return { enabled: false, skipped: true }
+
+    const prefix = DRY_RUN ? "[QB DRY RUN]" : "[QB]"
+    console.log(`${prefix} Updating Estimate ${draft.estimateTxnId} for draft order ${draft.draftOrderId}...`)
+
+    const logId = await QbSyncLogger.start({
+        operation: "estimate",
+        draftOrderId: draft.draftOrderId,
+        eventType: "draft_order.updated",
+        triggeredBy: "manual",
+        message: `Re-syncing Estimate ${draft.estimateTxnId} for draft order ${draft.draftOrderId}`,
+    })
+
+    if (draft.items.length === 0) {
+        await QbSyncLogger.skip(logId, "No QB-linked items in draft order")
+        return { enabled: true, skipped: true, skipReason: "No QB-linked items in draft order" }
+    }
+
+    const estResult = await updateEstimateInQb({
+        txnId: draft.estimateTxnId,
+        items: draft.items,
+        memo: draft.memo,
+        ...(draft.taxExempt === true ? { taxExempt: true } : {}),
+        ...(draft.salesTaxCode ? { salesTaxCode: draft.salesTaxCode } : {}),
+    })
+
+    if (!estResult.success) {
+        console.error(`[QB] ❌ Failed to update Estimate: ${estResult.error}`)
+        await QbSyncLogger.fail(logId, estResult.error || "Estimate update failed")
+        return { enabled: true, error: estResult.error }
+    }
+
+    const asyncData = estResult.data!
+    console.log(`${prefix} ✅ Estimate update queued. OperationID: ${asyncData.operationId}`)
+
+    let txnId = asyncData.txnId || draft.estimateTxnId
+    let refNumber: string | undefined
+
+    if (asyncData.operationId !== "DRY_RUN") {
+        try {
+            const pollResult = await pollOperationResult(asyncData.operationId)
+            if (pollResult.txnId) txnId = pollResult.txnId
+            refNumber = pollResult.refNumber
+        } catch (pollErr: any) {
+            console.error(`[QB] ❌ Estimate update polling failed: ${pollErr.message}`)
+            await QbSyncLogger.fail(logId, `Polling failed: ${pollErr.message}`)
+            return { enabled: true, error: `Polling failed: ${pollErr.message}` }
+        }
+    }
+
+    console.log(`${prefix} ✅ Estimate updated. TxnID: ${txnId}`)
+
+    await QbSyncLogger.complete(logId, {
+        qbTxnId: txnId,
+        qbRefNumber: refNumber,
+        qbOperationId: asyncData.operationId,
+        message: `Estimate re-synced — TxnID: ${txnId}${refNumber ? `, Ref: ${refNumber}` : ""}`,
     })
 
     return { enabled: true, operationId: asyncData.operationId, txnId, refNumber }

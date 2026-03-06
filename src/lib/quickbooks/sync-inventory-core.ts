@@ -51,6 +51,8 @@ export interface SyncInventoryPreviewItem {
     delta: number          // newStock - currentStock
     isAnomaly: boolean
     anomalyReason?: string
+    /** true when QB reported negative stock — clamped to 0 (data correction, not real change) */
+    wasNegativeInQb?: boolean
 }
 
 export interface SyncInventoryResult {
@@ -312,6 +314,7 @@ export async function syncInventoryCore(
                 delta,
                 isAnomaly,
                 anomalyReason,
+                wasNegativeInQb: rawStock < 0,
             }
 
             preview.push(previewItem)

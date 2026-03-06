@@ -16,6 +16,7 @@ interface Props {
     syncError: string | null
     timeline: TimelineEvent[]
     orderCreatedAt: string
+    total: number
     onStatusChange: (v: string) => void
     onSync: () => void
     onOpenModal: (modal: string) => void
@@ -26,9 +27,10 @@ const ACTIVITY_INITIAL = 3
 export const OrderSidebar = ({
     id, estimateRef, estimateTxnId, isSynced,
     estimateStatus, statusSaving, syncing, syncError,
-    timeline, orderCreatedAt,
+    timeline, orderCreatedAt, total,
     onStatusChange, onSync, onOpenModal,
 }: Props) => {
+    const isEmptyOrder = total <= 0
     const badgeColor = estimateStatus ? (STATUS_COLOR as Record<string, string>)[estimateStatus] ?? "grey" : "grey"
     const [activityExpanded, setActivityExpanded] = useState(false)
 
@@ -65,7 +67,7 @@ export const OrderSidebar = ({
                         </div>
                     </div>
                     <div>
-                        <Label className="mb-1 block text-sm text-ui-fg-subtle">QB TxnID</Label>
+                        <Label className="mb-1 block text-sm text-ui-fg-subtle">Estimate QB TxnID</Label>
                         <div className="font-mono text-sm px-3 py-2 rounded-md bg-ui-bg-subtle border border-ui-border-base text-ui-fg-muted min-h-[36px]">
                             {estimateTxnId ?? <span className="text-ui-fg-muted italic">Not synced yet</span>}
                         </div>
@@ -75,11 +77,23 @@ export const OrderSidebar = ({
                             <Text size="small" className="text-ui-fg-error">❌ {syncError}</Text>
                         </div>
                     )}
-                    <Button onClick={onSync} isLoading={syncing} disabled={syncing} variant={isSynced ? "secondary" : "primary"} size="small" className="w-full">
+                    <Button
+                        onClick={onSync}
+                        isLoading={syncing}
+                        disabled={syncing || (!isSynced && isEmptyOrder)}
+                        variant={isSynced ? "secondary" : "primary"}
+                        size="small"
+                        className="w-full"
+                    >
                         {isSynced ? "Re-sync to QuickBooks" : "Save to QuickBooks"}
                     </Button>
                     <Text size="xsmall" className="text-ui-fg-muted">
-                        {isSynced ? "Re-syncing creates a new Estimate if items changed." : "Creates an Estimate in QB Desktop."}
+                        {!isSynced && isEmptyOrder
+                            ? "Order total must be > $0 to save to QuickBooks."
+                            : isSynced
+                                ? "Re-syncing updates the existing QB Estimate with current items, prices & shipping."
+                                : "Creates an Estimate in QB Desktop."
+                        }
                     </Text>
                 </div>
             </Container>

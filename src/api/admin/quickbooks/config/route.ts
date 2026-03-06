@@ -43,6 +43,9 @@ export async function GET(
                 -- Price sync schedule
                 price_sync_hour,
                 price_sync_timezone,
+                -- Order flow settings
+                shipping_item_id,
+                default_sales_tax_code,
                 created_at,
                 updated_at
             FROM quickbooks_config
@@ -92,6 +95,9 @@ export async function POST(
             store_sun_open_hour,
             store_sun_close_hour,
             store_hours_timezone,
+            // Order flow settings
+            shipping_item_id,
+            default_sales_tax_code,
             // Respect hours flags
             inventory_respect_hours,
             price_respect_hours,
@@ -150,6 +156,10 @@ export async function POST(
         // Price sync schedule (daily at fixed hour)
         if (body.price_sync_hour !== undefined) set('price_sync_hour', body.price_sync_hour)
         if (body.price_sync_timezone !== undefined) set('price_sync_timezone', body.price_sync_timezone)
+
+        // Order flow settings
+        if (shipping_item_id !== undefined) set('shipping_item_id', shipping_item_id)
+        if (default_sales_tax_code !== undefined) set('default_sales_tax_code', default_sales_tax_code)
 
         if (updates.length === 0) {
             res.status(400).json({ error: "No fields to update" })

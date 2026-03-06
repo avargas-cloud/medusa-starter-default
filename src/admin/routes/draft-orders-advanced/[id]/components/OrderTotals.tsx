@@ -14,7 +14,8 @@ interface Props {
 }
 
 export const OrderTotals = ({ subtotal, shippingTotal, discountTotal, taxTotal, total, itemCount, curr, taxRate }: Props) => {
-    const orderSubtotal = subtotal + shippingTotal - discountTotal
+    // Order Subtotal = only items minus discount (shipping is shown separately below)
+    const orderSubtotal = subtotal - discountTotal
 
     return (
         <Container className="p-0 overflow-hidden">
@@ -22,7 +23,7 @@ export const OrderTotals = ({ subtotal, shippingTotal, discountTotal, taxTotal, 
                 <Heading level="h2">Order Total</Heading>
             </div>
             <div className="px-6 py-4 space-y-2">
-                {/* ── Line items ── */}
+                {/* ── Item Subtotal ── */}
                 <div className="flex justify-between">
                     <Text size="small" className="text-ui-fg-subtle">
                         Item Subtotal
@@ -30,22 +31,26 @@ export const OrderTotals = ({ subtotal, shippingTotal, discountTotal, taxTotal, 
                     </Text>
                     <Text size="small">{fmt(subtotal, curr)}</Text>
                 </div>
-                <div className="flex justify-between">
-                    <Text size="small" className="text-ui-fg-subtle">Shipping</Text>
-                    <Text size="small">{fmt(shippingTotal, curr)}</Text>
-                </div>
+
+                {/* ── Discount ── */}
                 <div className="flex justify-between">
                     <Text size="small" className="text-ui-fg-subtle">Discount</Text>
                     <Text size="small">{fmt(discountTotal, curr)}</Text>
                 </div>
 
-                {/* ── Order Subtotal (items + shipping − discount) ── */}
+                {/* ── Order Subtotal (items − discount; shipping NOT included) ── */}
                 <div className="flex justify-between border-t border-ui-border-base pt-2 mt-1">
                     <Text size="small" weight="plus" className="text-ui-fg-subtle">Order Subtotal</Text>
                     <Text size="small" weight="plus">{fmt(orderSubtotal, curr)}</Text>
                 </div>
 
-                {/* ── Tax ── */}
+                {/* ── Shipping (shown after subtotal) ── */}
+                <div className="flex justify-between">
+                    <Text size="small" className="text-ui-fg-subtle">Shipping</Text>
+                    <Text size="small">{fmt(shippingTotal, curr)}</Text>
+                </div>
+
+                {/* ── Tax (calculated on items only, not shipping) ── */}
                 <div className="flex justify-between">
                     <Text size="small" className="text-ui-fg-subtle">
                         {taxRate != null ? `Tax (${taxRate}%)` : "Tax"}

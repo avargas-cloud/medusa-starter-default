@@ -271,14 +271,16 @@ $res.operation.qbxmlResponse
 3. Reinicia la aplicación (`Ctrl + C` -> `npm start`).
 
 ### 🛑 Error: "QuickBooks found an error when parsing..."
-**Síntoma:** El log muestra `Parsing Error` en `SalesOrderAdd` o `InvoiceAdd`.
+**Síntoma:** El log muestra `Parsing Error` en `SalesOrderAdd` o `EstimateMod`/`EstimateAdd` (error código `0x80040400`).
 **Causa:**
 1.  **Orden de Campos (CRÍTICO):** QBXML es estricto.
     *   `SalesOrderLine`: `<Desc>` DEBE ir antes de `<Quantity>`.
     *   `InvoiceAdd`: `<TxnDate>` y `<RefNumber>` DEBEN ir antes de `<LinkToTxnID>`.
     *   `InventorySiteRef` DEBE ir DESPUÉS de `<Amount>` (no antes — error `0x80040400`).
-2.  **Caracteres Especiales:** `&` en nombres de clientes (ej: "A&B Corp").
-**Solución:** Usar siempre la función `escapeXml()` en los builders (ya implementada).
+2.  **Caracteres Especiales en FullName:** `&` en nombres de items o clientes (ej: "A&B Corp" o "SHIPPING & HANDLING"). Aunque el XML escape el ampersand a `&amp;`, QuickBooks Desktop **silenciosamente falla** al parsearlo, retornando `0x80040400`.
+    *   **Solución:** Mapear SIEMPRE por `ListID` (`<ItemRef><ListID>800006A3-...</ListID></ItemRef>`) en los builders en lugar de `<FullName>`, en particular para items fijos de servicio/envío.
+3.  **Amount vs Rate en Estimates:** En `<EstimateLineAdd>` o `<EstimateLineMod>`, enviar `<Amount>` en lugar de `<Rate>`. QuickBooks re-calcula el rate erróneamente multiplicándolo por el Cost si se envía el Rate.
+4. **Solución general:** Usar siempre la función `escapeXml()` en los builders (ya implementada).
 
 ### 🛑 Error 3070: "String is too long"
 **Síntoma:** Falla al crear Invoice o Payment.

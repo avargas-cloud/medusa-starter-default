@@ -21,7 +21,7 @@ export const useOrderFetch = (
         setLoading(true); setFetchError(null)
         try {
             const [oRes, dRes] = await Promise.all([
-                fetch(`/admin/orders/${id}?fields=+customer.*,+shipping_address.*,+billing_address.*,+items.*,+items.variant.*,+shipping_methods.*,+metadata,+currency_code,+email,+created_at,+display_id,+status,+sales_channel.*,+region.*`, { credentials: "include" }),
+                fetch(`/admin/orders/${id}?fields=+customer.*,+customer.groups,+shipping_address.*,+billing_address.*,+items.*,+items.variant.*,+shipping_methods.*,+metadata,+currency_code,+email,+created_at,+display_id,+status,+sales_channel.*,+region.*`, { credentials: "include" }),
                 fetch(`/admin/draft-orders/${id}`, { credentials: "include" }).then(r => r.ok ? r.json() : null).catch(() => null),
             ])
             if (!oRes.ok) throw new Error(`HTTP ${oRes.status}`)
@@ -43,6 +43,21 @@ export const useOrderFetch = (
             }
             if (merged.items) merged.items = merged.items.filter((item: any) => item.quantity > 0)
             setOrder(merged)
+
+            // Enrich customer with full data (groups + metadata) — order API may not expand all customer fields
+            const customerId: string | undefined = rawOrder.customer_id ?? rawOrder.customer?.id
+            if (customerId) {
+                try {
+                    const custRes = await fetch(`/admin/customers/${customerId}?fields=*groups,metadata,first_name,last_name,email`, { credentials: "include" })
+                    if (custRes.ok) {
+                        const { customer: fullCust } = await custRes.json()
+                        if (fullCust) {
+                            merged.customer = { ...(merged.customer ?? {}), ...fullCust }
+                            setOrder({ ...merged })
+                        }
+                    }
+                } catch { /* best-effort */ }
+            }
 
             // Enrich items with thumbnail from product
             try {

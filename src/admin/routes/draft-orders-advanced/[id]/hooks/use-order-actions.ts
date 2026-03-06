@@ -54,11 +54,19 @@ export const useOrderActions = ({ id, order, estimateStatus, setEstimateStatus, 
 
     const handleSync = async () => {
         if (!order) return; setSyncing(true); setSyncError(null)
+        const isAlreadySynced = !!(order.metadata?.qb_estimate_txn_id)
         try {
-            const r = await fetch("/admin/quickbooks/draft-order", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ orderId: order.id }) })
+            const r = await fetch("/admin/quickbooks/draft-order", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ orderId: order.id, force: isAlreadySynced }),
+            })
             const j = await r.json()
-            if (j.success) { if (j.qbEstimateTxnId) { setLocalTxnId(j.qbEstimateTxnId); setLocalRef(j.qbEstimateRef ?? j.qbEstimateTxnId) }; toast.success(j.message || "Saved to QuickBooks!") }
-            else { setSyncError(j.error || "Sync failed"); toast.error(j.error || "Sync failed") }
+            if (j.success) {
+                if (j.qbEstimateTxnId) { setLocalTxnId(j.qbEstimateTxnId); setLocalRef(j.qbEstimateRef ?? j.qbEstimateTxnId) }
+                toast.success(j.message || (isAlreadySynced ? "Re-synced to QuickBooks!" : "Saved to QuickBooks!"))
+            } else { setSyncError(j.error || "Sync failed"); toast.error(j.error || "Sync failed") }
         } catch (e: any) { setSyncError(e.message); toast.error(e.message) } finally { setSyncing(false) }
     }
 

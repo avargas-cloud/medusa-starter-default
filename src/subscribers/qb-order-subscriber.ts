@@ -21,7 +21,7 @@
  */
 
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
-import { Modules, ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { Modules, ContainerRegistrationKeys } from "@medusajs/utils"
 import {
     processOrderInQb,
     processPaymentCaptureInQb,
@@ -54,7 +54,7 @@ async function qbOrderSubscriber({ event, container }: SubscriberArgs<any>) {
     try {
         switch (event.name) {
             case "order.placed":
-                await handleOrderPlaced(event.data, orderModule, customerModule, logger)
+                await handleOrderPlaced(event.data, orderModule, customerModule, container, logger)
                 break
             case "order.payment_captured":
                 await handlePaymentCaptured(event.data, orderModule, customerModule, logger)
@@ -84,6 +84,7 @@ async function handleOrderPlaced(
     data: any,
     orderModule: any,
     customerModule: any,
+    container: any,
     logger: any
 ) {
     const orderId = data.id
@@ -98,6 +99,27 @@ async function handleOrderPlaced(
     } catch (err: any) {
         logger.error(`${LOG_PREFIX} ❌ Failed to fetch order ${orderId}: ${err.message}`)
         return
+    }
+
+    // Enrich items with variant.metadata (cross-module: orderModule can't expand variant).
+    // buildQbItems() filters by item.variant?.metadata?.quickbooks_id — without this,
+    // ALL items are filtered out → "No QB-linked items" → Skipped.
+    try {
+        const productModule = container.resolve(Modules.PRODUCT)
+        const variantIds = (order.items ?? []).map((i: any) => i.variant_id).filter(Boolean)
+        if (variantIds.length > 0) {
+            const variants = await productModule.listProductVariants({ id: variantIds })
+            const variantMap = new Map(variants.map((v: any) => [v.id, v]))
+            for (const item of order.items ?? []) {
+                const variantData = item.variant_id ? variantMap.get(item.variant_id) : undefined
+                if (variantData) {
+                    item.variant = { ...(item.variant ?? {}), ...(variantData as object) }
+                }
+            }
+            logger.info(`${LOG_PREFIX} Enriched ${variantIds.length} items with variant metadata`)
+        }
+    } catch (enrichErr: any) {
+        logger.warn(`${LOG_PREFIX} ⚠️ Could not enrich item variants: ${enrichErr.message}`)
     }
 
     // Check for draft→order path (estimate metadata on order)
