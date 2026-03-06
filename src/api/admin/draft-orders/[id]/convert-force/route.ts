@@ -100,12 +100,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
 
         if (cvRes.ok) {
             // Succeeded — compute the true total from the order AFTER conversion
-            // (reads live items/shipping/tax so it reflects any qty changes made
-            // via update-item-force that may not have re-run compute-tax)
             const correctTotal = await computeTrueTotal()
             if (correctTotal !== null) {
                 await fixPaymentCollection(correctTotal)
             }
+
+            // The order.placed event is emitted by Medusa's conversion workflow and
+            // picked up by qb-order-subscriber.ts, which creates the QB Sales Order.
+            // ⚠️  Do NOT call /admin/quickbooks/order here — that would create a duplicate SO.
+
             return void res.status(200).json(cvJson)
         }
 
@@ -215,6 +218,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             await fixPaymentCollection(correctTotal)
         }
 
+        // The order.placed event handles QB sync via subscriber — no explicit call needed.
         res.status(200).json({ ...cvJson, backorder_items_enabled: true })
     } catch (e: any) {
         console.error("[convert-force]", e?.message)

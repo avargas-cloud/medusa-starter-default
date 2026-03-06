@@ -29,7 +29,8 @@ class UPS2ndDayAirService extends AbstractFulfillmentProviderService {
         const cart = context?.id ? context : data?.cart
 
         if (!cart?.shipping_address?.postal_code) {
-            throw new Error(`${SERVICE_NAME}: no shipping address postal code`)
+            // No postal code yet — cart is in early state, silently skip
+            return { calculated_amount: 0, is_calculated_price_tax_inclusive: false }
         }
 
         // ── Extract dimensions from inventory items (synced from product) ─────

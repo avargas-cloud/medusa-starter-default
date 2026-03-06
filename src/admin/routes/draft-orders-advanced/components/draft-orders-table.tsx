@@ -16,8 +16,8 @@ const formatCurrency = (amount?: number, currency?: string) => {
     return new Intl.NumberFormat("en-US", { style: "currency", currency: (currency || "USD").toUpperCase(), minimumFractionDigits: 2 }).format(amount)
 }
 
-const COLS = "grid-cols-[80px_100px_minmax(110px,1fr)_minmax(110px,1fr)_minmax(170px,1.3fr)_120px_130px_80px_110px_88px]"
-const HEADERS = ["Ref Num", "Date", "Company", "Customer", "Email", "Sales Channel", "Status", "QB Synced", "QB Ref #", "Total"]
+const COLS = "grid-cols-[80px_110px_100px_minmax(110px,1fr)_minmax(110px,1fr)_minmax(170px,1.3fr)_120px_130px_80px_88px]"
+const HEADERS = ["Ref Num", "QB Ref #", "Date", "Company", "Customer", "Email", "Sales Channel", "Status", "QB Synced", "Total"]
 
 interface DraftOrdersTableProps {
     loading: boolean
@@ -52,6 +52,7 @@ export const DraftOrdersTable = ({ loading, sorted, paginated, onRowClick }: Dra
                         className={`grid ${COLS} gap-x-3 px-4 py-3 border-b border-ui-border-base hover:bg-ui-bg-subtle-hover transition-colors cursor-pointer items-center${isDeclined ? " opacity-50" : ""}`}
                         onClick={() => onRowClick(order.id)}>
                         <Text size="small" weight="plus">{order.display_id}</Text>
+                        <Text size="small" className="font-mono text-ui-fg-subtle truncate">{qbRef ?? "—"}</Text>
                         <Text size="small" className="text-ui-fg-subtle">{formatDate(order.created_at)}</Text>
                         <Text size="small" className="line-clamp-2 text-ui-fg-subtle leading-tight">{order.customer?.company_name ?? "—"}</Text>
                         <Text size="small" className="truncate">{name}</Text>
@@ -65,7 +66,6 @@ export const DraftOrdersTable = ({ loading, sorted, paginated, onRowClick }: Dra
                         <div className="flex justify-center">
                             <Badge color={synced ? "green" : "orange"} size="small">{synced ? "✓ Yes" : "Pending"}</Badge>
                         </div>
-                        <Text size="small" className="font-mono text-ui-fg-subtle truncate">{qbRef ?? "—"}</Text>
                         <Text size="small" className="text-right">{formatCurrency(order.metadata?.computed_total ?? (order.total != null ? order.total / 100 : undefined), order.currency_code)}</Text>
                     </div>
                 )

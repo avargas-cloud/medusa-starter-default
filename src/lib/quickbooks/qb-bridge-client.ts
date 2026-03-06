@@ -657,32 +657,56 @@ export async function adjustInventoryInQb(items: Array<{
 /**
  * Closes a Sales Order in QuickBooks (IsManuallyClosed = true).
  * Called when a Medusa order is cancelled before fulfillment.
- * Requires a two-step flow: GET EditSequence → DELETE (close).
+ * Now ALWAYS fetches the EditSequence dynamically from QB to ensure success,
+ * even if the EditSequence wasn't saved in Medusa's metadata.
  */
 export async function closeSalesOrderInQb(
     soTxnId: string,
-    editSequence: string,
     log: (msg: string) => void = console.log
 ): Promise<QbBridgeResult<QbAsyncResult>> {
     if (DRY_RUN) {
         log(`[QB DRY RUN] Would close Sales Order ${soTxnId}`)
-        return { success: true, dryRun: true, data: { operationId: "DRY_RUN" } }
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN", txnId: soTxnId } }
     }
 
     try {
+        // Step 1: Query SO to get the latest EditSequence
+        log(`[QB] Querying Sales Order ${soTxnId} to get EditSequence for closing...`)
+        const queryResp = await bridgeFetch("GET", `/api/sales-orders/${soTxnId}`)
+        const queryOpId = queryResp?.operationId
+        if (!queryOpId) throw new Error("Bridge did not return operationId for SO query")
+
+        const rawResult = await pollRawOperationResult(queryOpId)
+
+        const soRet =
+            rawResult?.QBXML?.QBXMLMsgsRs?.SalesOrderQueryRs?.SalesOrderRet ??
+            rawResult?.QBXMLMsgsRs?.SalesOrderQueryRs?.SalesOrderRet ??
+            rawResult?.SalesOrderRet ??
+            rawResult?.SalesOrderQueryRs?.SalesOrderRet
+
+        if (!soRet?.EditSequence) {
+            throw new Error(`Could not extract EditSequence from SO query. Raw: ${JSON.stringify(rawResult).slice(0, 200)}`)
+        }
+
+        const editSequence = soRet.EditSequence as string
+        log(`[QB] EditSequence obtained: ${editSequence}. Closing SO...`)
+
+        // Step 2: Send the close command with the fetched EditSequence
         const data = await bridgeFetch("DELETE", `/api/sales-orders/${soTxnId}`, { EditSequence: editSequence })
         const operationId = data?.operationId
         if (!operationId) throw new Error("Bridge did not return operationId for Sales Order close")
+
         log(`[QB] Sales Order ${soTxnId} close queued (op: ${operationId})`)
-        return { success: true, data: { operationId } }
+        return { success: true, data: { operationId, txnId: soTxnId } }
     } catch (err: any) {
         return { success: false, error: err.message }
     }
 }
 
 /**
- * Voids an Invoice in QuickBooks (TxnVoidRq — no EditSequence required).
- * Called when a Medusa order is cancelled after invoice was created.
+ * Voids an Invoice in QuickBooks.
+ * Fetches the EditSequence dynamically before voiding to ensure consistency
+ * across all cancellation functions.
  */
 export async function voidInvoiceInQb(
     invoiceTxnId: string,
@@ -690,15 +714,36 @@ export async function voidInvoiceInQb(
 ): Promise<QbBridgeResult<QbAsyncResult>> {
     if (DRY_RUN) {
         log(`[QB DRY RUN] Would void Invoice ${invoiceTxnId}`)
-        return { success: true, dryRun: true, data: { operationId: "DRY_RUN" } }
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN", txnId: invoiceTxnId } }
     }
 
     try {
+        log(`[QB] Querying Invoice ${invoiceTxnId} to get EditSequence for voiding...`)
+        const queryResp = await bridgeFetch("GET", `/api/invoices/${invoiceTxnId}`)
+        const queryOpId = queryResp?.operationId
+        if (!queryOpId) throw new Error("Bridge did not return operationId for Invoice query")
+
+        const rawResult = await pollRawOperationResult(queryOpId)
+
+        const invRet =
+            rawResult?.QBXML?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet ??
+            rawResult?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet ??
+            rawResult?.InvoiceRet ??
+            rawResult?.InvoiceQueryRs?.InvoiceRet
+
+        const editSequence = invRet?.EditSequence as string | undefined
+        // Warning if missing, though TxnVoidRq technically doesn't require it, we fetch it per policy.
+        if (!editSequence) {
+            log(`[QB] Warning: Could not extract EditSequence for Invoice ${invoiceTxnId}. Proceeding with void.`)
+        } else {
+            log(`[QB] EditSequence obtained: ${editSequence}. Voiding Invoice...`)
+        }
+
         const data = await bridgeFetch("DELETE", `/api/invoices/${invoiceTxnId}`)
         const operationId = data?.operationId
         if (!operationId) throw new Error("Bridge did not return operationId for Invoice void")
         log(`[QB] Invoice ${invoiceTxnId} void queued (op: ${operationId})`)
-        return { success: true, data: { operationId } }
+        return { success: true, data: { operationId, txnId: invoiceTxnId } }
     } catch (err: any) {
         return { success: false, error: err.message }
     }
@@ -706,40 +751,61 @@ export async function voidInvoiceInQb(
 
 /**
  * Cancels an Estimate in QuickBooks (zeros all line quantities via EstimateMod).
- * Called when a Medusa Draft Order is deleted before confirmation.
- *
- * @param estimateTxnId - QB TxnID of the estimate
- * @param editSequence  - Fetch this first via GET /api/estimates/:txnId
- * @param lines         - [{TxnLineID: string}] — from the estimate query result
+ * Fetches the EditSequence and existing lines dynamically first.
  */
 export async function cancelEstimateInQb(
     estimateTxnId: string,
-    editSequence: string,
-    lines: Array<{ TxnLineID: string }>,
     log: (msg: string) => void = console.log
 ): Promise<QbBridgeResult<QbAsyncResult>> {
     if (DRY_RUN) {
         log(`[QB DRY RUN] Would cancel Estimate ${estimateTxnId}`)
-        return { success: true, dryRun: true, data: { operationId: "DRY_RUN" } }
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN", txnId: estimateTxnId } }
     }
 
     try {
+        log(`[QB] Querying Estimate ${estimateTxnId} to get EditSequence and lines for cancellation...`)
+        const queryResp = await bridgeFetch("GET", `/api/estimates/${estimateTxnId}`)
+        const queryOpId = queryResp?.operationId
+        if (!queryOpId) throw new Error("Bridge did not return operationId for Estimate query")
+
+        const rawResult = await pollRawOperationResult(queryOpId)
+
+        const estRet =
+            rawResult?.QBXML?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+            rawResult?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+            rawResult?.EstimateRet ??
+            rawResult?.EstimateQueryRs?.EstimateRet
+
+        if (!estRet?.EditSequence) {
+            throw new Error(`Could not extract EditSequence from Estimate query. Raw: ${JSON.stringify(rawResult).slice(0, 200)}`)
+        }
+
+        const editSequence = estRet.EditSequence as string
+
+        // Extract TxnLineIDs
+        const existingLines = estRet.EstimateLineRet
+        const linesArr: any[] = Array.isArray(existingLines) ? existingLines : (existingLines ? [existingLines] : [])
+        const lines = linesArr.map(line => ({ TxnLineID: line?.TxnLineID })).filter(l => l.TxnLineID)
+
+        log(`[QB] EditSequence obtained: ${editSequence}. Extracted ${lines.length} lines. Canceling Estimate...`)
+
         const data = await bridgeFetch("DELETE", `/api/estimates/${estimateTxnId}`, {
             EditSequence: editSequence,
             lines,
         })
         const operationId = data?.operationId
         if (!operationId) throw new Error("Bridge did not return operationId for Estimate cancel")
+
         log(`[QB] Estimate ${estimateTxnId} cancel queued (op: ${operationId})`)
-        return { success: true, data: { operationId } }
+        return { success: true, data: { operationId, txnId: estimateTxnId } }
     } catch (err: any) {
         return { success: false, error: err.message }
     }
 }
 
 /**
- * Voids a Sales Receipt in QuickBooks (TxnVoidRq — no EditSequence required).
- * Use case: cancelled in-store sale in the seller admin panel.
+ * Voids a Sales Receipt in QuickBooks.
+ * Fetches the EditSequence dynamically before voiding to ensure consistency.
  */
 export async function voidSalesReceiptInQb(
     receiptTxnId: string,
@@ -747,15 +813,35 @@ export async function voidSalesReceiptInQb(
 ): Promise<QbBridgeResult<QbAsyncResult>> {
     if (DRY_RUN) {
         log(`[QB DRY RUN] Would void Sales Receipt ${receiptTxnId}`)
-        return { success: true, dryRun: true, data: { operationId: "DRY_RUN" } }
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN", txnId: receiptTxnId } }
     }
 
     try {
+        log(`[QB] Querying Sales Receipt ${receiptTxnId} to get EditSequence for voiding...`)
+        const queryResp = await bridgeFetch("GET", `/api/sales-receipts/${receiptTxnId}`)
+        const queryOpId = queryResp?.operationId
+        if (!queryOpId) throw new Error("Bridge did not return operationId for Sales Receipt query")
+
+        const rawResult = await pollRawOperationResult(queryOpId)
+
+        const receiptRet =
+            rawResult?.QBXML?.QBXMLMsgsRs?.SalesReceiptQueryRs?.SalesReceiptRet ??
+            rawResult?.QBXMLMsgsRs?.SalesReceiptQueryRs?.SalesReceiptRet ??
+            rawResult?.SalesReceiptRet ??
+            rawResult?.SalesReceiptQueryRs?.SalesReceiptRet
+
+        const editSequence = receiptRet?.EditSequence as string | undefined
+        if (!editSequence) {
+            log(`[QB] Warning: Could not extract EditSequence for Sales Receipt ${receiptTxnId}. Proceeding with void.`)
+        } else {
+            log(`[QB] EditSequence obtained: ${editSequence}. Voiding Sales Receipt...`)
+        }
+
         const data = await bridgeFetch("DELETE", `/api/sales-receipts/${receiptTxnId}`)
         const operationId = data?.operationId
         if (!operationId) throw new Error("Bridge did not return operationId for Sales Receipt void")
         log(`[QB] Sales Receipt ${receiptTxnId} void queued (op: ${operationId})`)
-        return { success: true, data: { operationId } }
+        return { success: true, data: { operationId, txnId: receiptTxnId } }
     } catch (err: any) {
         return { success: false, error: err.message }
     }

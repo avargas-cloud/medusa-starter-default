@@ -1,7 +1,7 @@
 import { defineWidgetConfig } from "@medusajs/admin-sdk"
 import { DetailWidgetProps } from "@medusajs/framework/types"
 import { Container, Heading, Badge, Text, Label, Button, toast } from "@medusajs/ui"
-import { useState } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 
 /**
  * QuickBooks Order Widget  (zone: order.details.before)
@@ -55,20 +55,68 @@ const StatusDot = ({ synced }: { synced: boolean }) => (
 
 const QuickBooksOrderWidget = ({ data }: DetailWidgetProps<any>) => {
     const [loading, setLoading] = useState(false)
+    const [refreshing, setRefreshing] = useState(false)
     const [localMeta, setLocalMeta] = useState<Record<string, any>>(data?.metadata ?? {})
+    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-    const status: string = data?.status ?? ""
-    if (["canceled", "archived"].includes(status)) return null
-
+    // Removed early return so widget is always visible even if canceled/archived
     const soTxnId: string | null = localMeta.qb_sales_order_txn_id ?? null
     const soRef: string | null = localMeta.qb_sales_order_ref ?? null
     const paymentTxnId: string | null = localMeta.qb_payment_txn_id ?? null
     const invoiceTxnId: string | null = localMeta.qb_invoice_txn_id ?? null
-    const estimateTxnId: string | null = localMeta.qb_estimate_txn_id ?? null  // from Draft Order
+    const estimateTxnId: string | null = localMeta.qb_estimate_txn_id ?? null
+    const operationId: string | null = localMeta.qb_sales_order_operation_id ?? null
     const syncedAt: string | null = localMeta.qb_synced_at ?? null
 
     const soSynced = !!soTxnId
     const fromDraft = !!estimateTxnId
+    // Pending = operation was queued but QBWC hasn't processed it yet
+    const isPending = !soSynced && !!operationId
+
+    const fetchMeta = useCallback(async () => {
+        try {
+            const resp = await fetch(`/admin/orders/${data.id}?fields=metadata`, {
+                credentials: "include",
+            })
+            if (!resp.ok) return
+            const json = await resp.json()
+            const meta = json?.order?.metadata ?? {}
+            if (meta.qb_sales_order_txn_id) {
+                setLocalMeta(meta)
+                // Stop polling once txnId is present
+                if (pollRef.current) clearInterval(pollRef.current)
+            }
+        } catch {
+            // silently ignore refresh errors
+        }
+    }, [data.id])
+
+    const handleRefresh = async () => {
+        setRefreshing(true)
+        try {
+            const resp = await fetch(`/admin/orders/${data.id}?fields=metadata`, {
+                credentials: "include",
+            })
+            if (resp.ok) {
+                const json = await resp.json()
+                setLocalMeta(json?.order?.metadata ?? localMeta)
+            }
+        } finally {
+            setRefreshing(false)
+        }
+    }
+
+    // Auto-poll every 8s whenever the SO is not yet synced (no txnId).
+    // This covers the case where the page loads before the subscriber saves the operationId.
+    // Polling stops as soon as qb_sales_order_txn_id appears in metadata.
+    useEffect(() => {
+        if (!soSynced) {
+            pollRef.current = setInterval(fetchMeta, 8_000)
+        }
+        return () => {
+            if (pollRef.current) clearInterval(pollRef.current)
+        }
+    }, [soSynced, fetchMeta])
 
     const handleSync = async (force = false) => {
         setLoading(true)
@@ -122,6 +170,8 @@ const QuickBooksOrderWidget = ({ data }: DetailWidgetProps<any>) => {
                     <StatusDot synced={soSynced} />
                     {soSynced ? (
                         <Badge color="green" size="small">Sales Order Synced</Badge>
+                    ) : isPending ? (
+                        <Badge color="orange" size="small">⏳ Pending Sync</Badge>
                     ) : (
                         <Badge color="orange" size="small">Pending Sync</Badge>
                     )}
@@ -129,18 +179,32 @@ const QuickBooksOrderWidget = ({ data }: DetailWidgetProps<any>) => {
                 {fromDraft && (
                     <Badge color="purple" size="small">From Draft Order</Badge>
                 )}
-                {syncedAt && (
-                    <span className="ml-auto text-xs text-ui-fg-muted">
-                        Synced{" "}
-                        {new Date(syncedAt).toLocaleString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            year: "numeric",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                        })}
-                    </span>
-                )}
+                <div className="ml-auto flex items-center gap-2">
+                    {isPending && (
+                        <span className="text-xs text-ui-fg-muted italic">Auto-refreshing…</span>
+                    )}
+                    <Button
+                        size="small"
+                        variant="transparent"
+                        isLoading={refreshing}
+                        onClick={handleRefresh}
+                        title="Refresh QB status"
+                    >
+                        ↻
+                    </Button>
+                    {syncedAt && (
+                        <span className="text-xs text-ui-fg-muted">
+                            Synced{" "}
+                            {new Date(syncedAt).toLocaleString("en-US", {
+                                month: "short",
+                                day: "numeric",
+                                year: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                            })}
+                        </span>
+                    )}
+                </div>
             </div>
 
             {/* ── Fields grid ────────────────────────────────────────────── */}

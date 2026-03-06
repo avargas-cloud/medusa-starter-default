@@ -21,7 +21,8 @@ class UPS3DaySelectService extends AbstractFulfillmentProviderService {
         const cart = context?.id ? context : data?.cart
 
         if (!cart?.shipping_address?.postal_code) {
-            throw new Error(`${SERVICE_NAME}: no shipping address postal code`)
+            // No postal code yet — cart is in early state, silently skip
+            return { calculated_amount: 0, is_calculated_price_tax_inclusive: false }
         }
 
         const rawItems = (cart.items || []).map((item: any) => {
@@ -66,7 +67,8 @@ class UPS3DaySelectService extends AbstractFulfillmentProviderService {
             console.error(`❌ ${SERVICE_NAME} rate error:`, err.message)
         }
 
-        throw new Error(`${SERVICE_NAME}: rate unavailable for cart ${cart.id}`)
+        // Rate unavailable — return 0 so Medusa hides this option gracefully
+        return { calculated_amount: 0, is_calculated_price_tax_inclusive: false }
     }
 
     async createFulfillment(_data: any, _items: any, _order: any, _fulfillment: any): Promise<any> {

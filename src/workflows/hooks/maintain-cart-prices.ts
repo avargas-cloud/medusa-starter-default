@@ -1,5 +1,6 @@
 import { completeCartWorkflow } from "@medusajs/medusa/core-flows"
 import { StepResponse } from "@medusajs/framework/workflows-sdk"
+import { Modules } from "@medusajs/utils"
 // Workaround for Medusa's exported types missing the internal hooks:
 const hooks = completeCartWorkflow.hooks as any
 
@@ -75,6 +76,17 @@ hooks.orderCreated(
             console.log(`Evento 2: Evaluación Completada (Ningún fix requerido)`)
             console.log(`================================================`)
             console.log(`Todos los ítems nacieron con unit_price persistido. No se necesita alterar nada.\n`)
+        }
+
+        // Re-emit order.placed so subscribers receive it reliably.
+        // Medusa's internal emitEventStep goes to Redis async and is not
+        // consistently delivered in the dev environment.
+        try {
+            const eventBusService = container.resolve(Modules.EVENT_BUS) as any
+            await eventBusService.emit({ eventName: "order.placed", data: { id: order_id } })
+            console.log(`[maintain-cart-prices] 📡 Emitted order.placed for ${order_id}`)
+        } catch (emitErr: any) {
+            console.warn(`[maintain-cart-prices] ⚠️ Could not emit order.placed: ${emitErr.message}`)
         }
 
         return new StepResponse(null)

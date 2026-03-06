@@ -203,7 +203,7 @@ export function buildQbItems(items: MedusaOrderForQb["items"]): QbOrderItem[] {
         .map(item => ({
             productId: item.variant!.metadata!.quickbooks_id as string,
             quantity: item.quantity,
-            price: (item.unit_price || 0) / 100,  // cents → dollars (actual price charged)
+            price: (item.unit_price || 0) / 100,  // unit_price is in cents → convert to dollars for QB
             unitOfMeasure: (item.variant?.metadata?.quickbooks_uom as string) || undefined,
             desc: sanitizeForQb(
                 `${item.product_title || ""}${item.variant?.sku ? ` (${item.variant.sku})` : ""}`

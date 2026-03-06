@@ -4,7 +4,7 @@
 | Campo | Detalle |
 |-------|---------|
 | **Propósito** | Advanced Draft Orders admin page — a complete replacement for Medusa's native draft order detail view, featuring inline item editing, dual-pricing (Default/Wholesale), tax management, store pickup, and a full B2B Estimate workflow with PDF generation and email delivery. |
-| **Última revisión** | 2026-03-05 |
+| **Última revisión** | 2026-03-06 |
 
 ## Resumen Ejecutivo
 
@@ -19,6 +19,8 @@
 ✅ **Activity Timeline** — "Email Sent" con usuario atribuido
 ✅ **Auto-status** — `Created` → `Sent` automáticamente al enviar correo
 ✅ **QB Sync** — crea/actualiza Estimate en QuickBooks Desktop vía QB Bridge; convierte a Sales Order al completar el draft
+✅ **Web Order → QB Sales Order** — precio correcto (unit_price desde `order_line_item`, no `order_item`)
+✅ **Cancel Order → QB Closed** — `order.canceled` cierra Sales Order y/o voidea Invoice en QB automáticamente
 ✅ **Convert-Force endpoint** — `/admin/draft-orders/:id/convert-force` con fallback de reservaciones
 ✅ **allow_backorder=true** — todos los product variants actualizados para conversión con 0 stock
 
@@ -201,7 +203,9 @@ Converts draft order to regular order with inventory backorder fallback.
 **Flow:**
 1. Calls Medusa native `/admin/draft-orders/:id/complete`
 2. If inventory error: creates reservations with `allow_backorder: true` for each item, then retries
-3. If `correctTotal` found in `order_summary`, patches payment collection amount
+3. Reads the true order total via `GET /admin/orders/:id?fields=total,...` and patches payment collection amount
+
+> ⚠️ **Does NOT call QB sync directly.** The `order.placed` event emitted by Medusa's conversion workflow is picked up by `qb-order-subscriber.ts`, which creates the QB Sales Order automatically. Calling QB manually here used to cause **duplicate Sales Orders** and has been removed.
 
 ---
 
@@ -578,7 +582,9 @@ File upload: `FileReader` → base64 → `POST /admin/uploads` (Minio) → URL s
 
 **Zone:** `order.details.before`
 
-Shows on confirmed orders (not draft). Displays QB Sales Order Number, TxnID, Payment TxnID, Invoice TxnID. Provides a "Sync Sales Order" button that calls `POST /admin/quickbooks/order`. If the order originated from a draft with a QB Estimate, it converts the Estimate to a Sales Order.
+Shows on confirmed orders (not draft). Displays QB Sales Order Number, TxnID, Payment TxnID, Invoice TxnID. Provides a **"Re-sync Sales Order"** button (calls `POST /admin/quickbooks/order`) for manual re-sync or estimate-to-SO conversion.
+
+**Auto-polling:** The widget polls `GET /admin/orders/:id?fields=metadata` every **8 seconds** while `qb_sales_order_txn_id` is absent, displaying a ⏳ badge. Stops automatically once the txnId is detected. A manual **↻ Refresh** button is also available in the header.
 
 ---
 
@@ -869,6 +875,44 @@ body { margin: 12mm 14mm; }
 
 ## 14. QuickBooks Sync
 
+### Arquitectura de Eventos QB
+
+Todos los eventos QB del ciclo de vida de órdenes pasan por **`qb-order-subscriber.ts`**:
+
+| Evento Medusa | Acción QB | Handler |
+|---|---|---|
+| `order.placed` | Crea Sales Order (o convierte Estimate→SO) | `handleOrderPlaced` |
+| `order.payment_captured` | Receive Payment (crédito sin aplicar) | `handlePaymentCaptured` |
+| `order.fulfillment_created` | Crea Invoice + aplica pago | `handleFulfillmentCreated` |
+| `order.canceled` | Cierra Sales Order + Voidea Invoice | `handleOrderCanceled` |
+| `order.customer_transferred` | Reasigna documentos QB al nuevo customer | `handleCustomerTransferred` |
+
+**Principio crítico:** QB failures NUNCA bloquean el flujo de Medusa. El subscriber captura todas las excepciones internamente.
+
+---
+
+### Reliable Event Delivery — emit-order-events.ts
+
+Medusa's internal `emitEventStep` delivers events via Redis, which is not always
+reliable in the dev environment. `src/workflows/hooks/emit-order-events.ts` re-emits
+events synchronously using `eventBusService.emit()` directly from workflow hooks:
+
+```typescript
+// cancelOrderWorkflow.hooks.orderCanceled fires AFTER cancelOrdersStep
+// Receives { order } (full object) — NOT { order_id }
+cancelHooks.orderCanceled(
+    async ({ order }: { order: any }, { container }) => {
+        const order_id = order?.id
+        const eventBusService = container.resolve(Modules.EVENT_BUS)
+        await eventBusService.emit({ eventName: "order.canceled", data: { id: order_id } })
+    }
+)
+```
+
+> ⚠️ **Critical:** The hook receives `{ order }` (full object), NOT `{ order_id }`. Using `{ order_id }` would extract `undefined` and emit the event with `id: undefined`, silently breaking all cancel processing.
+
+---
+
 ### Draft Order → QB Estimate
 
 **File:** `components/OrderSidebar.tsx` + `use-order-actions.ts`
@@ -884,13 +928,110 @@ estimateRef={s.localRef ?? (order.metadata?.qb_estimate_ref as string | null) ??
 isSynced={!!(s.localTxnId ?? order.metadata?.qb_estimate_txn_id)}
 ```
 
+---
+
 ### Draft → Order Conversion → QB Sales Order
 
-When a draft order is **converted to a regular order**, the QB Estimate is automatically converted to a Sales Order in QuickBooks. This happens via:
+When a draft order is **converted to a regular order**, a `order.placed` event is emitted by Medusa's native conversion workflow. The `qb-order-subscriber.ts` picks this up and creates the QB Sales Order automatically.
 
-1. `POST /admin/draft-orders/:id/convert-force` — converts in Medusa
-2. The `quickbooks-order-widget.tsx` on the Order detail page allows manual trigger of `POST /admin/quickbooks/order`
-3. The order endpoint detects `qb_estimate_txn_id` in metadata → calls QB Bridge to convert Estimate → Sales Order
+**Flow:**
+```
+User clicks "Convert to Order"
+  → POST /admin/draft-orders/:id/convert-force
+    → Medusa native convert-to-order workflow
+      → emits order.placed event
+        → qb-order-subscriber.ts handles it
+          → if qb_estimate_txn_id exists: EstimateToSalesOrder in QB
+          → else: SalesOrderAdd in QB
+          → saves qb_sales_order_operation_id (pending)
+          → QBWC polls → processes → saves qb_sales_order_txn_id
+```
+
+> ⚠️ `convert-force` does NOT call `/admin/quickbooks/order` directly — doing so caused duplicate Sales Orders. The subscriber is the only QB trigger.
+
+---
+
+### Web Order → QB Sales Order — Unit Price Fix
+
+**Problem:** Web orders were being created in QB with prices divided by 100 (e.g., $0.51 instead of $51.25).
+
+**Root cause:** The subscriber was using `items.unit_price` from the `order_item` join table (already in cents), then multiplying by 100 again.
+
+**Fix (qb-order-subscriber.ts):** The subscriber now fetches and uses `items.item.unit_price` — the canonical price from the `order_line_item` table (in **dollars/cents correctly handled by Medusa**):
+
+```typescript
+// ✅ Canonical price from order_line_item (used for QB)
+unit_price: Math.round((item.item?.unit_price ?? item.unit_price ?? 0) * 100)
+// items.item.unit_price = order_line_item.unit_price (canonical, in dollars)
+// items.unit_price = order_item.unit_price (may differ, avoid for QB)
+```
+
+The `query.graph` call must include `items.item.unit_price` in the fields list.
+
+---
+
+### Cancel Order → QB Close SO / Void Invoice
+
+When an order is **cancelled in Medusa**, the `order.canceled` event fires and the subscriber:
+1. Fetches the order metadata to get `qb_sales_order_txn_id` and `qb_invoice_txn_id`
+2. If an **Invoice** exists → calls `voidInvoiceInQb(invoiceTxnId)` — uses `TxnVoidRq` via bridge DELETE `/api/invoices/:txnId`
+3. If a **Sales Order** exists → calls `closeSalesOrderInQb(soTxnId)` — fetches EditSequence then sends `SalesOrderMod` with `IsManuallyClosed=true` via bridge DELETE `/api/sales-orders/:txnId`
+4. Logs the operation to Activity Log (`operation: 'cancel'`)
+
+```
+User cancels order in Admin UI
+  → cancelOrderWorkflow runs
+    → orderCanceled hook fires (emit-order-events.ts)
+      → eventBusService.emit("order.canceled", { id: order.id })
+        → qb-order-subscriber.handleOrderCanceled
+          → voidInvoiceInQb(invoiceTxnId)   // if invoice exists
+          → closeSalesOrderInQb(soTxnId)    // fetches EditSequence, then closes
+          → QbSyncLogger.complete()         // Activity Log entry
+```
+
+> **Activity Log timing:** The cancel entry appears in the Activity Log **after** QBWC processes the operation (~30-90 seconds). The entry is immediately created as `processing`, then updated to `completed` once the bridge confirms.
+
+---
+
+### Customer Transfer → QB Document Reassignment
+
+When `order.customer_transferred` fires (e.g., after order ownership change in admin):
+- Sales Order is updated to the new customer's `qb_list_id` via `PATCH /api/sales-orders/:txnId/customer`
+- Invoice is similarly reassigned
+- Both require current `EditSequence` from order metadata
+
+---
+
+### Subscriber Idempotency — 3 Layers (order.placed only)
+
+`qb-order-subscriber.ts` is protected against duplicate `order.placed` events (Redis at-least-once delivery) with three guards:
+
+```typescript
+// Layer 1: In-memory Set (module-level singleton)
+// JS single-threaded → has() + add() are atomic before first await
+// Prevents same-process concurrent duplicate processing
+const processingOrders = new Set<string>()
+if (processingOrders.has(orderId)) return  // skip
+processingOrders.add(orderId)
+try {
+    // Layer 2: txnId in DB → QBWC already processed the SO (final state)
+    if (order.metadata?.qb_sales_order_txn_id) return
+
+    // Layer 3: operationId in DB → SO already queued (QBWC in progress)
+    // This closes the race window between events arriving during QBWC polling
+    if (order.metadata?.qb_sales_order_operation_id) return
+
+    // ... create SO ...
+} finally {
+    processingOrders.delete(orderId)  // always release lock
+}
+```
+
+| Layer | Guard | Survives server restart? |
+|-------|-------|-------------------------|
+| 1 | In-memory `Set` | ❌ (process-local) |
+| 2 | `qb_sales_order_txn_id` in DB | ✅ |
+| 3 | `qb_sales_order_operation_id` in DB | ✅ |
 
 **Order Metadata Keys:**
 
@@ -898,10 +1039,13 @@ When a draft order is **converted to a regular order**, the QB Estimate is autom
 |-----|-------------|
 | `qb_estimate_txn_id` | QB Estimate TxnID (set when draft is synced) |
 | `qb_estimate_ref` | QB Estimate Reference Number |
-| `qb_sales_order_txn_id` | QB Sales Order TxnID |
+| `qb_sales_order_operation_id` | Bridge operationId — set immediately when SO is queued (QBWC pending) |
+| `qb_sales_order_txn_id` | QB Sales Order TxnID — set after QBWC processes the operation |
 | `qb_sales_order_ref` | QB Sales Order Reference Number |
 | `qb_payment_txn_id` | QB Payment TxnID |
 | `qb_invoice_txn_id` | QB Invoice TxnID |
+
+---
 
 ### QB Configuration
 
@@ -912,19 +1056,37 @@ From `quickbooks_config` DB table (fallback to env vars):
 
 **Tax precedence:** `tax_total === 0` → `taxExempt: true` → QB gets "Exempt". `tax_total > 0` → QB gets `default_sales_tax_code`.
 
+---
+
 ### Critical QBXML Rules
 
 - **ListID vs FullName**: Use `ListID` for shipping items. Using `FullName` with `&` fails (even escaped as `&amp;` — triggers silent QB error `0x80040400`)
 - **Amount**: `EstimateLineAdd` sends `<Amount>` (total), NOT `<Rate>`. QB calculates rate internally; sending `<Rate>` causes inflated prices
 - **EstimateMod**: Existing lines use `EstimateLineMod` (with `TxnLineID`); new lines use `EstimateLineAdd` (no `TxnLineID`)
 - **QB Error 3175**: "Transaction could not be locked" — occurs when QB Desktop has the estimate open. Close it in QB Desktop and re-sync
+- **close-so requires EditSequence**: `closeSalesOrderInQb()` always queries the SO first to get the current EditSequence before sending the Mod
 
-### Activity Log
+---
+
+### Activity Log (`qb_sync_log`)
 
 All QB operations log to `qb_sync_log` table and appear in the QuickBooks admin dashboard.
 
+| Operation | Triggered by |
+|-----------|-------------|
+| `sales_order` | `order.placed` |
+| `estimate` | Draft → QB Sync (manual) |
+| `payment` | `order.payment_captured` |
+| `invoice` | `order.fulfillment_created` |
+| `cancel` | `order.canceled` |
+| `customer_transfer` | `order.customer_transferred` |
+| `inventory_sync` | Scheduled (every 10 min) |
+| `price_sync` | Scheduled / manual |
+| `customer_sync` | Scheduled / manual |
+
 - Failed entries show the error message **inline** in red (truncated to 120 chars) without needing to expand
 - Click any row (▼) to see full details including the complete QB error text
+- `cancel` entries appear after QBWC processes the close-so operation (~30-90 seconds delay)
 
 ---
 
@@ -997,6 +1159,12 @@ https://bucket-production-2e09.up.railway.app/medusa-media/ecopowertech-logo.png
 | Shipping price hidden during save | Fixed: price input stays visible (disabled), "Saving..." in header |
 | QB Error 3175 (locked transaction) | Close the Estimate in QB Desktop, then re-sync |
 | QB `&` in item name → 0x80040400 | Always use `ListID` not `FullName` for shipping items |
+| **Duplicate QB Sales Orders** | **Root cause: `convert-force` had an explicit `fetch(/admin/quickbooks/order)` call AND subscriber also fires. Fixed by removing those calls — subscriber is the only QB trigger** |
+| QB widget not auto-refreshing | Fixed: widget polls every 8s until `qb_sales_order_txn_id` appears in metadata |
+| Second event slipping past txnId guard | Fixed: added `qb_sales_order_operation_id` check (Layer 3) + in-memory Set mutex (Layer 1) |
+| **Web order price ×100 in QB** | **Root cause: subscriber used `items.unit_price` (already in cents) and multiplied ×100. Fixed: now uses `items.item.unit_price` from `order_line_item` (canonical dollar amount)** |
+| **Cancel not firing → QB SO stays open** | **Root cause: `emit-order-events.ts` hook destructured `{ order_id }` but `cancelOrderWorkflow` passes `{ order }`. Fixed: now uses `order?.id`** |
+| **Activity Log cancel entry missing** | **Normal behavior: cancel entry appears ~30-90s after cancel action (QBWC polling delay). Entry starts as `processing`, completes when QB confirms** |
 
 ---
 

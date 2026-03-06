@@ -252,8 +252,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     console.log(`[fast-checkout]   - "${item.title}" qty=${item.quantity} unit_price=${item.unit_price} line_total=${(item.unit_price ?? 0) * (item.quantity ?? 0)}`)
                 })
 
-                // Store API returns totals in DOLLARS (e.g. 150.0568 for $150.06)
-                // Multiply × 100 → round to integer cents for Authorize.net
                 if (cartData?.total && cartData.total > 0) {
                     amountCents = Math.round(cartData.total * 100)
                     console.log(`[fast-checkout] 💰 Authoritative total (Store API): ${amountCents} cents = $${(amountCents / 100).toFixed(2)}`)
@@ -471,6 +469,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         console.log(`================================================\n`)
 
         console.log(`[fast-checkout] 🎉 Order created: ${orderId} (#${displayId})`)
+        // Note: order.placed event is emitted via completeCartWorkflow hook in emit-order-events.ts
+
         return res.json({ ok: true, orderId, displayId })
 
     } catch (error: any) {

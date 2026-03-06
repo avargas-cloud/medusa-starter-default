@@ -26,15 +26,39 @@ import {
     processOrderInQb,
     processPaymentCaptureInQb,
     processInvoiceInQb,
+    buildQbItems,
+    buildShippingQbItem,
 } from "../lib/quickbooks/order-flow-core"
 import {
     closeSalesOrderInQb,
     voidInvoiceInQb,
     transferDocumentCustomer,
 } from "../lib/quickbooks/qb-bridge-client"
+import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger"
 
 const LOG_PREFIX = "[QB-ORDER]"
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
+
+/**
+ * In-memory mutex for order.placed idempotency.
+ *
+ * JavaScript is single-threaded — has() + add() execute atomically before
+ * the first `await`, making it impossible for two concurrent handlers to
+ * both pass this check for the same orderId in the same process.
+ *
+ * Works in combination with the metadata guards (operationId + txnId)
+ * which survive process restarts.
+ */
+const processingOrders = new Set<string>()
+
+// Lightweight QB config reader — uses env vars directly (no DB query needed in subscriber)
+// DB-based config is used by the manual sync route (/admin/quickbooks/order) which has pg available
+function getQbConfig(): { shippingItemId: string; defaultSalesTaxCode: string } {
+    return {
+        shippingItemId: process.env.QB_SHIPPING_ITEM_ID || "800006A3-1395258131",
+        defaultSalesTaxCode: process.env.QB_DEFAULT_SALES_TAX_CODE || "Sale Tax 7%",
+    }
+}
 
 // ─── Subscriber Handler ─────────────────────────────────────────────────────
 
@@ -84,103 +108,181 @@ async function handleOrderPlaced(
     data: any,
     orderModule: any,
     customerModule: any,
-    container: any,
+    _container: any,
     logger: any
 ) {
     const orderId = data.id
     logger.info(`${LOG_PREFIX} ── order.placed → ${orderId} ──`)
 
-    // Fetch order (Medusa v2: cross-module relations need separate fetches)
+    // Read QB config (shipping item ID + sales tax code)
+    const qbConfig = await getQbConfig()
+
+    // Fetch full order via Admin HTTP API (same as manual sync button).
+    // This is the only way to get shipping_methods and fully enriched variant metadata
+    // in a single call. orderModule.retrieveOrder() cannot expand shipping_methods.
+    // Fetch full order via internal Query Service
+    // This is robust, does not require HTTP auth, and resolves cross-module relations.
     let order: any
     try {
-        order = await orderModule.retrieveOrder(orderId, { relations: ["items"] })
-        logger.info(`${LOG_PREFIX} Order fetched: #${order.display_id}, customer_id=${order.customer_id}, items=${order.items?.length ?? 0}`)
-        logger.info(`${LOG_PREFIX} Order metadata: ${JSON.stringify(order.metadata || {})}`)
+        const query = _container.resolve(ContainerRegistrationKeys.QUERY)
+        const { data: [fetchedOrder] } = await query.graph({
+            entity: "order",
+            fields: [
+                "id", "display_id", "status", "metadata", "tax_total",
+                "customer_id",
+                "items.*",
+                "items.item.unit_price",   // ← canonical price from order_line_item table
+                "items.variant.*",
+                "items.variant.metadata",
+                "customer.*",
+                "customer.metadata",
+                "shipping_methods.*"
+            ],
+            filters: { id: orderId }
+        })
+
+        if (!fetchedOrder) {
+            throw new Error(`Query returned no order for id ${orderId}`)
+        }
+        order = fetchedOrder
+        logger.info(`${LOG_PREFIX} Order fetched via Query: #${order.display_id}, items=${order.items?.length ?? 0}, shipping_methods=${order.shipping_methods?.length ?? 0}`)
+
+        // DEBUG LOG TO INSPECT VARIANT STRUCTURE
+        if (order.items && order.items[0]) {
+            logger.info(`${LOG_PREFIX} DEBUG: First item variant: ${JSON.stringify(order.items[0].variant)}`)
+        }
     } catch (err: any) {
-        logger.error(`${LOG_PREFIX} ❌ Failed to fetch order ${orderId}: ${err.message}`)
+        logger.error(`${LOG_PREFIX} ❌ Failed to fetch order ${orderId} via Query: ${err.message}`)
         return
     }
 
-    // Enrich items with variant.metadata (cross-module: orderModule can't expand variant).
-    // buildQbItems() filters by item.variant?.metadata?.quickbooks_id — without this,
-    // ALL items are filtered out → "No QB-linked items" → Skipped.
+    logger.info(`${LOG_PREFIX} Order metadata: ${JSON.stringify(order.metadata || {})}`)
+
+    // ── Idempotency guard — 3 layers ─────────────────────────────────────────
+    // Layer 1: In-memory mutex (same process, concurrent events)
+    //   Atomic in JS single-threaded runtime — zero race window.
+    if (processingOrders.has(orderId)) {
+        logger.info(`${LOG_PREFIX} ⏭️ Already processing ${orderId} in this process — skipping duplicate`)
+        return
+    }
+    processingOrders.add(orderId)
+
     try {
-        const productModule = container.resolve(Modules.PRODUCT)
-        const variantIds = (order.items ?? []).map((i: any) => i.variant_id).filter(Boolean)
-        if (variantIds.length > 0) {
-            const variants = await productModule.listProductVariants({ id: variantIds })
-            const variantMap = new Map(variants.map((v: any) => [v.id, v]))
-            for (const item of order.items ?? []) {
-                const variantData = item.variant_id ? variantMap.get(item.variant_id) : undefined
-                if (variantData) {
-                    item.variant = { ...(item.variant ?? {}), ...(variantData as object) }
-                }
+
+        // Layer 2: txnId in metadata → QBWC already processed the SO
+        if (order.metadata?.qb_sales_order_txn_id) {
+            logger.info(`${LOG_PREFIX} ⏭️ QB SO already exists (txnId=${order.metadata.qb_sales_order_txn_id}) — skipping duplicate`)
+            return
+        }
+        // Layer 3: operationId in metadata → SO already queued (QBWC processing in progress)
+        if (order.metadata?.qb_sales_order_operation_id) {
+            logger.info(`${LOG_PREFIX} ⏭️ QB SO already queued (opId=${order.metadata.qb_sales_order_operation_id}) — skipping duplicate`)
+            return
+        }
+
+        // Check for draft→order path (estimate metadata on order)
+        const estimateTxnId = order.metadata?.qb_estimate_txn_id
+        if (estimateTxnId) {
+            logger.info(`${LOG_PREFIX} ✅ Order has qb_estimate_txn_id=${estimateTxnId} — will convert Estimate→SO`)
+        } else {
+            logger.info(`${LOG_PREFIX} ℹ️ No qb_estimate_txn_id — direct order path (will check customer)`)
+        }
+
+        // Fetch customer separately if not embedded in order
+        let customer = (order as any).customer ?? null
+        if (!customer && order.customer_id) {
+            try {
+                customer = await customerModule.retrieveCustomer(order.customer_id, {
+                    relations: ["addresses"],
+                })
+                logger.info(`${LOG_PREFIX} Customer fetched separately: ${customer.email} | qb_list_id=${customer.metadata?.qb_list_id ?? "NOT SET"}`)
+            } catch (custErr: any) {
+                logger.warn(`${LOG_PREFIX} ⚠️ Could not fetch customer ${order.customer_id}: ${custErr.message}`)
             }
-            logger.info(`${LOG_PREFIX} Enriched ${variantIds.length} items with variant metadata`)
+        } else if (customer) {
+            logger.info(`${LOG_PREFIX} Customer embedded: ${customer.email} | qb_list_id=${customer.metadata?.qb_list_id ?? "NOT SET"}`)
+        } else {
+            logger.warn(`${LOG_PREFIX} ⚠️ Order ${orderId} has no customer_id`)
         }
-    } catch (enrichErr: any) {
-        logger.warn(`${LOG_PREFIX} ⚠️ Could not enrich item variants: ${enrichErr.message}`)
-    }
 
-    // Check for draft→order path (estimate metadata on order)
-    const estimateTxnId = order.metadata?.qb_estimate_txn_id
-    if (estimateTxnId) {
-        logger.info(`${LOG_PREFIX} ✅ Order has qb_estimate_txn_id=${estimateTxnId} — will convert Estimate→SO (skip customer re-check)`)
-    } else {
-        logger.info(`${LOG_PREFIX} ℹ️ No qb_estimate_txn_id — direct order path (will check customer)`)
-    }
+        // Build QB items — query.graph returns unit_price in DOLLARS (e.g. 51.25 = $51.25).
+        // buildQbItems() expects unit_price in CENTS (divides by 100 internally).
+        // Multiply ×100 here to match the same contract as the manual sync route.
+        const rawItemPrices = (order.items || []).map((i: any) => `${i.title?.slice(0, 20)}: unit_price=${i.unit_price} qty=${i.quantity}`)
+        logger.info(`${LOG_PREFIX} 🔍 RAW item prices from query.graph: ${JSON.stringify(rawItemPrices)}`)
 
-    // Fetch customer separately
-    let customer = null
-    if (order.customer_id) {
-        try {
-            customer = await customerModule.retrieveCustomer(order.customer_id, {
-                relations: ["addresses"],
-            })
-            logger.info(`${LOG_PREFIX} Customer fetched: ${customer.email} | qb_list_id=${customer.metadata?.qb_list_id ?? "NOT SET"}`)
-        } catch (custErr: any) {
-            logger.warn(`${LOG_PREFIX} ⚠️ Could not fetch customer ${order.customer_id}: ${custErr.message}`)
+        const activeItems = (order.items || [])
+            .filter((item: any) => (item.quantity ?? 0) > 0)
+            .map((item: any) => ({
+                ...item,
+                unit_price: Math.round((item.unit_price || 0) * 100), // dollars → cents for buildQbItems
+            }))
+
+        const qbItems = buildQbItems(activeItems)
+
+
+        // Add shipping line (skip pickup methods automatically)
+        const shippingItem = buildShippingQbItem(
+            (order as any).shipping_methods || [],
+            qbConfig.shippingItemId
+        )
+        if (shippingItem) {
+            qbItems.push(shippingItem)
+            logger.info(`${LOG_PREFIX} Shipping line added: $${shippingItem.price?.toFixed(2)} (${shippingItem.desc})`)
+        } else {
+            logger.info(`${LOG_PREFIX} No shipping line (pickup or $0)`)
         }
-    } else {
-        logger.warn(`${LOG_PREFIX} ⚠️ Order ${orderId} has no customer_id`)
-    }
 
-    const orderWithCustomer = { ...order, customer }
+        // Determine sales tax code
+        const hasTax = order.tax_total && order.tax_total > 0
+        const salesTaxCode = hasTax ? qbConfig.defaultSalesTaxCode : undefined
+        logger.info(`${LOG_PREFIX} tax_total=${order.tax_total} → salesTaxCode=${salesTaxCode ?? "Exempt (none passed)"}`)
 
-    const result = await processOrderInQb(orderWithCustomer, customerModule)
+        const orderWithCustomer = { ...order, customer, items: activeItems }
 
-    if (result.skipped) {
-        logger.info(`${LOG_PREFIX} ⏭️ Skipped: ${result.skipReason}`)
-        return
-    }
-    if (!result.enabled) {
-        logger.info(`${LOG_PREFIX} ⏭️ QB disabled: ${result.skipReason}`)
-        return
-    }
-    if (result.error) {
-        logger.error(`${LOG_PREFIX} ❌ processOrderInQb error: ${result.error}`)
-        return
-    }
+        const result = await processOrderInQb(orderWithCustomer, customerModule, {
+            prebuiltItems: qbItems,          // products + shipping (already built above)
+            salesTaxCode,                    // "Sale Tax 7%" or undefined (→ Exempt)
+        })
 
-    // Save QB metadata to order
-    if (result.soTxnId || result.operationId) {
-        try {
-            await orderModule.updateOrders(orderId, {
-                metadata: {
-                    ...(order.metadata || {}),
-                    qb_sales_order_txn_id: result.soTxnId || null,
-                    qb_sales_order_ref: result.soRefNumber || null,
-                    qb_sales_order_operation_id: result.operationId || null,
-                    qb_list_id: result.customerId || null,  // ← Also store on order for quick access
-                    qb_synced_at: new Date().toISOString(),
-                },
-            })
-            logger.info(`${LOG_PREFIX} ✅ Saved SO metadata — TxnID=${result.soTxnId}, Ref=${result.soRefNumber}, OpID=${result.operationId}`)
-        } catch (metaErr: any) {
-            logger.error(`${LOG_PREFIX} ⚠️ Failed to save order metadata: ${metaErr.message}`)
+        if (result.skipped) {
+            logger.info(`${LOG_PREFIX} ⏭️ Skipped: ${result.skipReason}`)
+            return
         }
-    } else {
-        logger.warn(`${LOG_PREFIX} ⚠️ No soTxnId or operationId returned — QB document may not have been created`)
+        if (!result.enabled) {
+            logger.info(`${LOG_PREFIX} ⏭️ QB disabled: ${result.skipReason}`)
+            return
+        }
+        if (result.error) {
+            logger.error(`${LOG_PREFIX} ❌ processOrderInQb error: ${result.error}`)
+            return
+        }
+
+        // Save QB metadata to order
+        if (result.soTxnId || result.operationId) {
+            try {
+                await orderModule.updateOrders(orderId, {
+                    metadata: {
+                        ...(order.metadata || {}),
+                        qb_sales_order_txn_id: result.soTxnId || null,
+                        qb_sales_order_ref: result.soRefNumber || null,
+                        qb_sales_order_operation_id: result.operationId || null,
+                        qb_list_id: result.customerId || null,
+                        qb_synced_at: new Date().toISOString(),
+                    },
+                })
+                logger.info(`${LOG_PREFIX} ✅ Saved SO metadata — TxnID=${result.soTxnId}, Ref=${result.soRefNumber}, OpID=${result.operationId}`)
+            } catch (metaErr: any) {
+                logger.error(`${LOG_PREFIX} ⚠️ Failed to save order metadata: ${metaErr.message}`)
+            }
+        } else {
+            logger.warn(`${LOG_PREFIX} ⚠️ No soTxnId or operationId returned — QB document may not have been created`)
+        }
+
+    } finally {
+        // Always release the in-memory lock so the orderId can be processed
+        // again if needed (e.g., after a manual force-resync).
+        processingOrders.delete(orderId)
     }
 }
 
@@ -388,13 +490,41 @@ async function handleOrderCanceled(
 
     const meta = order.metadata || {}
     const soTxnId = meta.qb_sales_order_txn_id as string | undefined
-    const soEditSeq = meta.qb_sales_order_edit_sequence as string | undefined
+    const soRef = meta.qb_sales_order_ref as string | undefined
     const invoiceTxnId = meta.qb_invoice_txn_id as string | undefined
+    const invoiceRef = meta.qb_invoice_ref as string | undefined
 
     if (!soTxnId && !invoiceTxnId) {
         logger.info(`${LOG_PREFIX} Order ${orderId} has no QB documents — nothing to cancel`)
         return
     }
+
+    // Build a human-readable list of what's being cancelled (e.g. "SO #6176, Invoice #5")
+    const docParts: string[] = []
+    if (soTxnId) docParts.push(`SO${soRef ? ` #${soRef}` : ` (${soTxnId})`}`)
+    if (invoiceTxnId) docParts.push(`Invoice${invoiceRef ? ` #${invoiceRef}` : ` (${invoiceTxnId})`}`)
+    const docLabel = docParts.join(', ')
+
+    // Start Activity Log entry
+    let logId: string | undefined
+    try {
+        process.stdout.write(`[QB-CANCEL-LOG] Attempting QbSyncLogger.start for order ${orderId}, display_id=${order.display_id}\n`)
+        logId = await QbSyncLogger.start({
+            operation: "cancel",
+            orderId,
+            orderDisplayId: order.display_id,
+            eventType: "order.canceled",
+            message: `Cancelling ${docLabel} for Order #${order.display_id ?? orderId}`,
+        })
+        process.stdout.write(`[QB-CANCEL-LOG] QbSyncLogger.start succeeded: logId=${logId}\n`)
+    } catch (logErr: any) {
+        process.stderr.write(`[QB-CANCEL-LOG] QbSyncLogger.start FAILED: ${logErr?.code} | ${logErr?.message} | ${logErr?.stack?.slice(0, 300)}\n`)
+        logger.warn(`${LOG_PREFIX} ⚠️ Could not start sync log: ${logErr.message}`)
+    }
+
+    let invoiceOpId: string | undefined
+    let soOpId: string | undefined
+    let errorMsg: string | undefined
 
     // Void Invoice if it exists
     if (invoiceTxnId) {
@@ -402,22 +532,46 @@ async function handleOrderCanceled(
         const result = await voidInvoiceInQb(invoiceTxnId, (msg) => logger.info(msg))
         if (!result.success) {
             logger.error(`${LOG_PREFIX} ⚠️ Failed to void invoice: ${result.error}`)
+            errorMsg = `Invoice void failed: ${result.error}`
         } else {
-            logger.info(`${LOG_PREFIX} ✅ Invoice void queued (op: ${result.data?.operationId})`)
+            invoiceOpId = result.data?.operationId
+            logger.info(`${LOG_PREFIX} ✅ Invoice void queued (op: ${invoiceOpId})`)
         }
     }
 
     // Close Sales Order
-    if (soTxnId && soEditSeq) {
+    if (soTxnId) {
         logger.info(`${LOG_PREFIX} Closing QB SO ${soTxnId}...`)
-        const result = await closeSalesOrderInQb(soTxnId, soEditSeq, (msg) => logger.info(msg))
+        const result = await closeSalesOrderInQb(soTxnId, (msg: string) => logger.info(msg))
         if (!result.success) {
             logger.error(`${LOG_PREFIX} ⚠️ Failed to close SO: ${result.error}`)
+            errorMsg = errorMsg ? `${errorMsg}; SO close failed: ${result.error}` : `SO close failed: ${result.error}`
         } else {
-            logger.info(`${LOG_PREFIX} ✅ SO close queued (op: ${result.data?.operationId})`)
+            soOpId = result.data?.operationId
+            logger.info(`${LOG_PREFIX} ✅ SO close queued (op: ${soOpId})`)
         }
-    } else if (soTxnId && !soEditSeq) {
-        logger.warn(`${LOG_PREFIX} SO ${soTxnId} found but no EditSequence stored — close manually in QB`)
+    }
+
+    // Finalize Activity Log
+    if (logId) {
+        try {
+            if (errorMsg) {
+                await QbSyncLogger.fail(logId, errorMsg, {
+                    message: `Failed to cancel ${docLabel} for Order #${order.display_id ?? orderId}`,
+                })
+            } else {
+                // Use SO ref as primary; fall back to invoice ref
+                const finalRef = soRef ?? invoiceRef
+                await QbSyncLogger.complete(logId, {
+                    qbTxnId: soTxnId ?? invoiceTxnId,
+                    qbRefNumber: finalRef,
+                    qbOperationId: soOpId ?? invoiceOpId,
+                    message: `${docLabel} closed/voided for Order #${order.display_id ?? orderId}`,
+                })
+            }
+        } catch (logErr: any) {
+            logger.warn(`${LOG_PREFIX} ⚠️ Could not finalize sync log: ${logErr.message}`)
+        }
     }
 }
 
@@ -453,20 +607,59 @@ async function handleCustomerTransferred(
     const invoiceTxnId = meta.qb_invoice_txn_id as string | undefined
     const invEditSeq = meta.qb_invoice_edit_sequence as string | undefined
 
+    if (!soTxnId && !invoiceTxnId) {
+        logger.info(`${LOG_PREFIX} Order ${orderId} has no QB documents — nothing to transfer`)
+        return
+    }
+
+    // Start Activity Log entry
+    let logId: string | undefined
+    try {
+        logId = await QbSyncLogger.start({
+            operation: "customer_transfer",
+            orderId,
+            orderDisplayId: order.display_id,
+            eventType: "order.customer_transferred",
+            message: `Transferring QB docs for Order #${order.display_id ?? orderId} → customer ${newQbCustomerId}`,
+        })
+    } catch (logErr: any) {
+        logger.warn(`${LOG_PREFIX} ⚠️ Could not start sync log: ${logErr.message}`)
+    }
+
+    let errorMsg: string | undefined
+
     if (soTxnId && soEditSeq) {
         logger.info(`${LOG_PREFIX} Transferring SO ${soTxnId} to customer ${newQbCustomerId}`)
         const result = await transferDocumentCustomer("sales-order", soTxnId, soEditSeq, newQbCustomerId, (msg) => logger.info(msg))
-        if (!result.success) logger.error(`${LOG_PREFIX} ⚠️ Failed to transfer SO customer: ${result.error}`)
+        if (!result.success) {
+            logger.error(`${LOG_PREFIX} ⚠️ Failed to transfer SO customer: ${result.error}`)
+            errorMsg = `SO transfer failed: ${result.error}`
+        }
     }
 
     if (invoiceTxnId && invEditSeq) {
         logger.info(`${LOG_PREFIX} Transferring Invoice ${invoiceTxnId} to customer ${newQbCustomerId}`)
         const result = await transferDocumentCustomer("invoice", invoiceTxnId, invEditSeq, newQbCustomerId, (msg) => logger.info(msg))
-        if (!result.success) logger.error(`${LOG_PREFIX} ⚠️ Failed to transfer invoice customer: ${result.error}`)
+        if (!result.success) {
+            logger.error(`${LOG_PREFIX} ⚠️ Failed to transfer invoice customer: ${result.error}`)
+            errorMsg = errorMsg ? `${errorMsg}; Invoice transfer failed: ${result.error}` : `Invoice transfer failed: ${result.error}`
+        }
     }
 
-    if (!soTxnId && !invoiceTxnId) {
-        logger.info(`${LOG_PREFIX} Order ${orderId} has no QB documents — nothing to transfer`)
+    // Finalize Activity Log
+    if (logId) {
+        try {
+            if (errorMsg) {
+                await QbSyncLogger.fail(logId, errorMsg)
+            } else {
+                await QbSyncLogger.complete(logId, {
+                    qbTxnId: soTxnId,
+                    message: `QB docs transferred to customer ${newQbCustomerId} for Order #${order.display_id ?? orderId}`,
+                })
+            }
+        } catch (logErr: any) {
+            logger.warn(`${LOG_PREFIX} ⚠️ Could not finalize sync log: ${logErr.message}`)
+        }
     }
 }
 

@@ -14,6 +14,7 @@ export interface OrderListItem {
     total: number
     currency_code: string
     created_at: string
+    metadata?: Record<string, unknown>
     customer?: { first_name?: string; last_name?: string; email?: string; company_name?: string; phone?: string }
     shipping_address?: { first_name?: string; last_name?: string; company?: string; phone?: string }
     sales_channel?: { name?: string }
@@ -56,7 +57,7 @@ export const useOrdersList = (fulfillmentFilters: FulfillmentFilter[]) => {
                 // Fetch all orders — filter client-side (same pattern as draft-orders-advanced)
                 const params = new URLSearchParams({
                     limit: "250",
-                    fields: "id,display_id,status,fulfillment_status,payment_status,total,currency_code,created_at,+customer.first_name,+customer.last_name,+customer.email,+customer.phone,+customer.company_name,+shipping_address.first_name,+shipping_address.last_name,+shipping_address.phone,+shipping_address.company,+sales_channel.name",
+                    fields: "id,display_id,status,fulfillment_status,payment_status,total,currency_code,created_at,+metadata,+customer.first_name,+customer.last_name,+customer.email,+customer.phone,+customer.company_name,+shipping_address.first_name,+shipping_address.last_name,+shipping_address.phone,+shipping_address.company,+sales_channel.name",
                 })
                 const r = await fetch(`/admin/orders?${params}`, { credentials: "include" })
                 if (r.ok) {

@@ -42,8 +42,8 @@ const prettyLabel = (s: string) =>
 
 // ─── Column layout ────────────────────────────────────────────────────────────
 
-const COLS = "grid-cols-[80px_110px_minmax(120px,1fr)_minmax(120px,1fr)_120px_120px_110px_110px]"
-const HEADERS = ["Order #", "Date", "Company", "Customer", "Payment", "Fulfillment", "Channel", "Total"]
+const COLS = "grid-cols-[80px_110px_110px_minmax(120px,1fr)_minmax(120px,1fr)_120px_120px_110px_110px]"
+const HEADERS = ["Order #", "QB Ref #", "Date", "Company", "Customer", "Payment", "Fulfillment", "Channel", "Total"]
 
 // ─── Table ────────────────────────────────────────────────────────────────────
 
@@ -64,7 +64,7 @@ export const OrdersTable = ({ loading, sorted, paginated, onRowClick }: OrdersTa
             <div className={`grid ${COLS} gap-x-3 px-4 py-2 bg-ui-bg-subtle border-b border-ui-border-base`}>
                 {HEADERS.map((h, i) => (
                     <Text key={i} size="xsmall" weight="plus"
-                        className={`text-ui-fg-muted uppercase tracking-wider ${i === 7 ? "text-right" : ""}`}>
+                        className={`text-ui-fg-muted uppercase tracking-wider ${i === 8 ? "text-right" : ""}`}>
                         {h}
                     </Text>
                 ))}
@@ -78,11 +78,13 @@ export const OrdersTable = ({ loading, sorted, paginated, onRowClick }: OrdersTa
                 const channel = (order.sales_channel?.name === "Default Sales Channel" || !order.sales_channel?.name)
                     ? "Default" : order.sales_channel.name!
 
+                const qbRef = (order.metadata?.qb_sales_order_ref ?? order.metadata?.qb_invoice_ref ?? null) as string | null
                 return (
                     <div key={order.id}
                         className={`grid ${COLS} gap-x-3 px-4 py-3 border-b border-ui-border-base hover:bg-ui-bg-subtle-hover transition-colors cursor-pointer items-center`}
                         onClick={() => onRowClick(order.id)}>
                         <Text size="small" weight="plus">#{order.display_id}</Text>
+                        <Text size="small" className="font-mono text-ui-fg-subtle truncate">{qbRef ?? "—"}</Text>
                         <Text size="small" className="text-ui-fg-subtle">{formatDate(order.created_at)}</Text>
                         <Text size="small" className="line-clamp-2 text-ui-fg-subtle leading-tight">{company}</Text>
                         <Text size="small" className="truncate">{customerName}</Text>

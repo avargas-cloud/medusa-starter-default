@@ -70,7 +70,7 @@ hooks.validate(
         const outOfStockItems: string[] = []
 
         for (const item of cart.items ?? []) {
-            const variantTitle = item.variant?.title ?? item.title ?? "Unknown product"
+            const variantTitle = item.title ?? item.variant?.title ?? "Unknown product"
             const requestedQty = item.quantity ?? 0
 
             // Sum stocked quantity across all inventory items for this variant

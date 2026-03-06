@@ -110,8 +110,12 @@ async function handleDraftOrderCreated(data: any, container: any, logger: any) {
 
     logger.info(`${LOG_PREFIX} ✅ Customer in QB: qb_list_id=${custResult.qbCustomerId}`)
 
-    // Build QB items
-    const qbItems = buildQbItems(draftOrder.items)
+    // Build QB items — query.graph returns unit_price in DOLLARS; buildQbItems expects CENTS
+    const itemsForQb = (draftOrder.items || []).map((item: any) => ({
+        ...item,
+        unit_price: Math.round((item.unit_price || 0) * 100), // dollars → cents for buildQbItems
+    }))
+    const qbItems = buildQbItems(itemsForQb)
     logger.info(`${LOG_PREFIX} QB-linked items: ${qbItems.length} of ${draftOrder.items?.length ?? 0} total`)
 
     if (qbItems.length === 0) {
