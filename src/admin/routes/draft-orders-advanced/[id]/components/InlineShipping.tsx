@@ -11,7 +11,7 @@ interface Props {
     curr: string
     /** True while any shipping save is in progress — suppresses concurrent actions */
     shippingSaving: boolean
-    loadShippingOptions: () => Promise<void>
+    loadShippingOptions: () => Promise<{ id: string; name: string; amount: number | null }[]>
     handleAddShipping: (optionId: string, customAmount?: string) => Promise<void>
     /** Optimistic-only remove from parent state (no API call) */
     onRemoved?: (methodId: string) => void
@@ -55,7 +55,7 @@ export const InlineShipping = forwardRef<InlineShippingHandle, Props>(function I
         priceState[methodId] ?? { value: String(defaultAmount), editing: false, saving: false }
 
     const openPicker = async (methodIdToReplace?: string) => {
-        await loadShippingOptions()
+        await loadShippingOptions()  // state update is enough here since picker renders after re-render
         setReplacingMethodId(methodIdToReplace ?? null)
         setPicking(true)
         setSelectedOption("")
@@ -63,8 +63,9 @@ export const InlineShipping = forwardRef<InlineShippingHandle, Props>(function I
     }
 
     const applyLocalPickup = async (): Promise<boolean> => {
-        await loadShippingOptions()
-        const opt = shippingOptions.find(o =>
+        // Use the RETURNED options — don't rely on shippingOptions prop (stale closure on first call)
+        const freshOptions = await loadShippingOptions()
+        const opt = freshOptions.find(o =>
             o.name.toLowerCase().includes("miami") || isPickup(o.name)
         )
         if (!opt) return false

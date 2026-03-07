@@ -1,784 +1,594 @@
-# QuickBooks Admin Dashboard - Complete Documentation
-
-
-## 📋 Descripción del Documento
+# QuickBooks Admin Dashboard — Documentación Completa
 
 | Campo | Detalle |
 |-------|---------|
-| **Propósito** | Document the QuickBooks Admin Dashboard feature — a custom Admin Panel page showing QuickBooks sync status, last import timestamps, customer import progress, and reconciliation tools for the QuickBooks-Medusa data bridge. |
-| **Problemas que resuelve** | Without visibility into the QuickBooks sync state, admins can't tell if customer/product data has been imported or if the bridge is failing silently. The dashboard provides real-time sync status and manual trigger controls. |
-| **Resultado esperado** | Admins can see at a glance when the last QuickBooks sync ran, how many records were imported, and trigger a manual re-sync if needed, all from the Medusa Admin Panel. |
-| **Scripts Creados** | `import-customers-from-qb.ts`, `setup/setup-meilisearch-customers.ts` |
+| **Propósito** | Dashboard de administración en `/app/quickbooks` — controla todos los syncs de QuickBooks Desktop, configuración de horarios, kill-switch master, y el Activity Log histórico de todas las operaciones QB. |
+| **Última revisión** | 2026-03-06 (Activity Log + Master Toggle + Store Hours + eliminado DraftOrdersSync widget) |
 
-## Overview
+## Resumen Ejecutivo
 
-The QuickBooks Admin Dashboard (`/admin/quickbooks`) is a custom Medusa v2 admin route that provides manual and automated synchronization controls for QuickBooks Desktop integration via the Bridge API.
-
-**Key Features:**
-- ✅ Inventory sync (stock levels from QuickBooks)
-- ✅ Price sync (retail + wholesale pricing from QB) → **auto re-indexes Meilisearch**
-- ✅ Customer sync (audit + import)
-- ✅ Configurable intervals with "Disabled" option
-- ✅ Manual "Sync Now" triggers
-- ✅ Compact, professional UI
-- ✅ Master QB Integration Enable/Disable toggle
+✅ **Master Kill Switch** — toggle para habilitar/deshabilitar toda la integración QB instantáneamente  
+✅ **Store Hours** — configura horario de tienda (Mon-Fri + Sat + Sun); los syncs pueden respetar este horario  
+✅ **Inventory Sync** — sincroniza stock desde QB Desktop a Medusa + Meilisearch  
+✅ **Price Sync** — sincroniza precios (retail + wholesale) desde QB + re-indexa Meilisearch automáticamente  
+✅ **Customer Sync** — importa clientes desde QB a Medusa  
+✅ **QB Reconcile** — cruza IDs de clientes entre QB y Medusa, con Dry Run y Live modes  
+✅ **Activity Log** — historial paginado de todas las operaciones QB (order events + batch syncs)  
+✅ **SyncReportModal** — popup con reporte detallado de cada job síncrono  
+❌ **DraftOrdersSync widget** — eliminado (2026-03-06). El sync de draft orders se maneja desde la página `draft-orders-advanced`  
 
 ---
 
-## Architecture
+## Table of Contents
 
-### File Structure
+1. [File Structure](#1-file-structure)
+2. [Layout de la Página](#2-layout-de-la-página)
+3. [Master Toggle (Kill Switch)](#3-master-toggle-kill-switch)
+4. [Store Hours](#4-store-hours)
+5. [SyncCard — Componente Reutilizable](#5-synccard--componente-reutilizable)
+6. [Inventory Sync](#6-inventory-sync)
+7. [Price Sync](#7-price-sync)
+8. [Customer Sync & Reconciliation](#8-customer-sync--reconciliation)
+9. [Activity Log](#9-activity-log)
+10. [SyncReportModal](#10-syncreportmodal)
+11. [API Endpoints](#11-api-endpoints)
+12. [Database Schema](#12-database-schema)
+13. [State Management](#13-state-management)
+14. [Meilisearch Auto Re-Index](#14-meilisearch-auto-re-index)
+15. [Known Issues & Gotchas](#15-known-issues--gotchas)
+
+---
+
+## 1. File Structure
 
 ```
-src/
+backend/src/
+│
 ├── admin/routes/quickbooks/
-│   └── page.tsx                              # Main dashboard UI
+│   ├── page.tsx                              ← Página principal del dashboard
+│   └── components/
+│       ├── ActivityLog.tsx                   ← Log histórico de operaciones QB
+│       ├── AuditModal.tsx                    ← Modal de auditoría de clientes
+│       ├── StoreHoursSection.tsx             ← Config de horario de tienda
+│       ├── SyncCard.tsx                      ← Componente reutilizable de sync
+│       ├── SyncReportModal.tsx               ← Modal de reporte de jobs
+│       └── DraftOrdersSync.tsx               ← ⚠️ ELIMINADO DE LA PÁGINA (archivo existe pero no se usa)
+│
 ├── api/admin/quickbooks/
-│   ├── config/route.ts                       # GET/POST config
+│   ├── config/route.ts                       ← GET/POST configuración
+│   ├── logs/route.ts                         ← GET activity log entries
 │   ├── sync/
-│   │   ├── inventory/route.ts                # POST inventory sync
-│   │   ├── prices/route.ts                   # POST price sync
-│   │   └── customers/route.ts                # POST customer sync
-│   └── check/
-│       └── customers/route.ts                # GET/POST customer audit
+│   │   ├── inventory/route.ts                ← POST inventory sync
+│   │   ├── prices/route.ts                   ← POST price sync
+│   │   ├── customers/route.ts                ← POST customer sync
+│   │   ├── customers/reconcile/route.ts      ← POST QB reconcile
+│   │   └── last-job/route.ts                 ← GET último job por tipo
+│   └── check/customers/route.ts              ← GET/POST customer audit
+│
 ├── lib/quickbooks/
-│   ├── sync-inventory-core.ts                # Inventory sync logic
-│   ├── sync-prices-core.ts                   # Price sync logic
-│   ├── sync-customers-core.ts                # Customer sync logic
-│   └── check-customers-core.ts               # Customer audit logic
-└── migrations/
-    ├── 1738425780000-AllowNullQuickBooksIntervals.ts
-    └── 1738427200000-AddCustomerIntervalToConfig.ts
+│   ├── sync-inventory-core.ts               ← Inventory sync logic
+│   ├── sync-prices-core.ts                  ← Price sync logic + Meilisearch re-index
+│   ├── sync-customers-core.ts               ← Customer sync logic
+│   └── check-customers-core.ts              ← Customer audit logic
+│
+└── jobs/
+    ├── quickbooks-daily-sync.ts             ← Cron: inventory + price sync
+    └── quickbooks-nightly-verify.ts         ← Cron: verifica ops QB de las últimas 24h
 ```
 
 ---
 
-## Database Schema
+## 2. Layout de la Página
 
-### Table: `quickbooks_config`
+```
+/app/quickbooks
+│
+├── ⚡ QuickBooks Integration (Master Toggle)
+│
+├── 🏪 Store Hours
+│
+├── 📦 Inventory Sync (SyncCard)
+│
+├── 💵 Price Sync (SyncCard)
+│
+├── 👥 Customer Sync (SyncCard)
+│   └── Footer: [Dry Run Reconcile] [View Report] [Live Reconcile IDs]
+│
+└── 📋 Activity Log
+```
 
-| Column | Type | Nullable | Description |
-|--------|------|----------|-------------|
-| `id` | VARCHAR | NO | Primary key (single row) |
-| `inventory_interval_minutes` | INTEGER | YES | Inventory sync interval (null = disabled) |
-| `price_interval_minutes` | INTEGER | YES | Price sync interval (null = disabled) |
-| `customer_interval_minutes` | INTEGER | YES | Customer sync interval (null = disabled) |
-| `last_inventory_sync` | TIMESTAMP | YES | Last inventory sync timestamp |
-| `last_price_sync` | TIMESTAMP | YES | Last price sync timestamp |
-| `bridge_url` | VARCHAR | NO | Bridge API URL |
-| `api_key` | VARCHAR | YES | Bridge API key |
-| `created_at` | TIMESTAMP | NO | Creation timestamp |
-| `updated_at` | TIMESTAMP | NO | Last update timestamp |
-
-**Design Pattern:**
-- NULL = Disabled (standard SQL pattern for optional features)
-- INTEGER columns store minutes (inventory) or minutes (price/customer converted from hours)
-- Single row configuration (id is constant)
-
-### Table: `quickbooks_customer_audit`
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | INTEGER | Primary key |
-| `total_in_qb` | INTEGER | Total customers in QuickBooks |
-| `total_in_medusa` | INTEGER | Total customers in Medusa |
-| `only_in_qb` | INTEGER | Customers only in QB |
-| `only_in_medusa` | INTEGER | Customers only in Medusa |
-| `in_both` | INTEGER | Customers in both systems |
-| `customers_only_in_qb` | JSONB | Array of QB-only customer objects |
-| `customers_only_in_medusa` | JSONB | Array of Medusa-only customer objects |
-| `last_check_at` | TIMESTAMP | Audit timestamp |
+> **¿Dónde syncronizar Draft Orders → QB Estimates?**  
+> Eso se hace desde la página de `draft-orders-advanced`. El botón "Sync to QuickBooks" en cada draft order llama a `POST /admin/quickbooks/draft-order`. No hay widget en la página QB para eso.
 
 ---
 
-## Frontend State Management
-
-### React State Variables
+## 3. Master Toggle (Kill Switch)
 
 ```typescript
-// Sync status flags
-const [inventorySyncing, setInventorySyncing] = useState(false)
-const [priceSyncing, setPriceSyncing] = useState(false)
-const [customerSyncing, setCustomerSyncing] = useState(false)
+// Estado
+const [qbEnabled, setQbEnabled] = useState<boolean | null>(null)
 
-// Interval selections (string: "disabled" | "5" | "10" | "1" | "6" | "12" | "24")
-const [inventoryInterval, setInventoryInterval] = useState("disabled")
-const [priceInterval, setPriceInterval] = useState("disabled")
-const [customerInterval, setCustomerInterval] = useState("disabled")
-
-// Time of day for 24-hour intervals (HH:MM format)
-const [priceTimeOfDay, setPriceTimeOfDay] = useState("00:00")
-const [customerTimeOfDay, setCustomerTimeOfDay] = useState("00:00")
-
-// Customer audit modal
-const [showAuditModal, setShowAuditModal] = useState(false)
-const [auditData, setAuditData] = useState<any>(null)
+// Handler
+const handleQbToggle = async () => {
+    await postConfig({ integration_enabled: !qbEnabled })
+    setQbEnabled(prev => !prev)
+    toast.success(newValue ? 'QuickBooks Integration ENABLED' : 'QuickBooks Integration DISABLED')
+}
 ```
 
-### State Initialization (useEffect)
-
-```typescript
-useEffect(() => {
-    const loadConfig = async () => {
-        const res = await fetch('/admin/quickbooks/config', {
-            method: 'GET',
-            credentials: 'include',
-        })
-        const data = await res.json()
-        const config = data.config
-        
-        // Convert DB values (null or minutes) → UI values ("disabled" or interval)
-        if (config.inventory_interval_minutes !== null) {
-            setInventoryInterval(config.inventory_interval_minutes.toString())
-        } else {
-            setInventoryInterval('disabled')
-        }
-        
-        if (config.price_interval_minutes !== null) {
-            const hours = Math.floor(config.price_interval_minutes / 60)
-            setPriceInterval(hours.toString())
-        } else {
-            setPriceInterval('disabled')
-        }
-        
-        if (config.customer_interval_minutes !== null) {
-            const hours = Math.floor(config.customer_interval_minutes / 60)
-            setCustomerInterval(hours.toString())
-        } else {
-            setCustomerInterval('disabled')
-        }
-    }
-    loadConfig()
-}, [])
-```
-
-**Design Pattern:**
-- NULL in DB → "disabled" in UI
-- Inventory: minutes → minutes (1:1)
-- Price/Customer: minutes → hours (÷60)
+**Comportamiento:**
+- `integration_enabled: true` → todos los syncs corren normalmente
+- `integration_enabled: false` → todos los syncs y order flows (subscribers) están pausados
+- Estado guardado en `quickbooks_config.integration_enabled` (boolean)
+- Badge de color: verde = Enabled, rojo = Disabled, gris = Loading
+- Banner rojo aparece cuando está disabled: "🔴 Integration is disabled..."
 
 ---
 
-## API Integration
+## 4. Store Hours
 
-### Configuration Endpoints
+**Componente:** `StoreHoursSection.tsx`
 
-#### GET `/admin/quickbooks/config`
+Configura cuándo está abierta la tienda. Los syncs individuales tienen un toggle "Respect Store Hours" que cuando está activo, skipping el sync fuera del horario configurado.
 
-**Purpose:** Load saved configuration
+**Campos configurables:**
+
+| Campo | DB Column | Descripción |
+|-------|-----------|-------------|
+| Open Hour (Mon-Fri) | `store_hours_open_hour` | Hora de apertura (0-23) |
+| Close Hour (Mon-Fri) | `store_hours_close_hour` | Hora de cierre (0-23) |
+| Saturday Open | `store_sat_open` | Boolean |
+| Saturday Hours | `store_sat_open_hour`, `store_sat_close_hour` | Solo si sat_open = true |
+| Sunday Open | `store_sun_open` | Boolean |
+| Sunday Hours | `store_sun_open_hour`, `store_sun_close_hour` | Solo si sun_open = true |
+| Timezone | `store_hours_timezone` | IANA (e.g. `"America/New_York"`) |
+
+**"Respect Hours" por sync:**
+
+| Sync | Default |
+|------|---------|
+| Inventory | ✅ Activado (`inventory_respect_hours = true`) |
+| Price | ❌ Desactivado |
+| Customer | ❌ Desactivado |
+
+---
+
+## 5. SyncCard — Componente Reutilizable
+
+**Archivo:** `components/SyncCard.tsx`
+
+Componente genérico que maneja un tipo de sync. Recibe toda la lógica vía props.
+
+**Props:**
+
+| Prop | Tipo | Descripción |
+|------|------|-------------|
+| `title` | `string` | Título del card (con emoji) |
+| `intervalValue` | `string` | Intervalo seleccionado ("disabled" o número) |
+| `onIntervalChange` | `fn` | Setter del Select |
+| `intervals` | `{value,label}[]` | Opciones del Select |
+| `respectHours` | `boolean` | Toggle "Respect Store Hours" |
+| `onRespectHoursChange` | `fn` | Setter del toggle |
+| `onSave` | `fn` | Handler de guardado |
+| `onViewReport` | `fn` | Abre SyncReportModal con último job |
+| `onSyncNow` | `fn` | Disparar sync manual |
+| `isSyncing` | `boolean` | Bloquea botón + muestra loader |
+| `lastSync` | `string | null` | Timestamp del último sync |
+| `formatSyncDate` | `fn` | Formatea el timestamp |
+| `showTimePicker` | `boolean?` | Muestra selector de hora del día |
+| `timeValue` | `string?` | "HH:00" del time picker |
+| `onTimeChange` | `fn?` | Setter del time picker |
+| `timeOptions` | `{value,label}[]?` | Opciones del time picker (00:00–23:00) |
+| `footer` | `ReactNode?` | Contenido extra al pie (botones de reconcile) |
+
+---
+
+## 6. Inventory Sync
+
+**Intervalos disponibles:** 1, 2, 3, 5, 10, 20, 25, 30, 45, 60 minutos  
+**Respeta horario de tienda:** Sí (default true)
+
+**Flujo:**
+```
+POST /admin/quickbooks/sync/inventory
+    → syncInventoryCore()
+        → Fetch items desde QB Bridge
+        → UPDATE stock en Medusa DB
+        → Retorna job_id
+            → SyncReportModal muestra el resultado
+```
+
+**Meilisearch:** El inventory sync actualiza Medusa DB pero **no** dispara automáticamente re-index de Meilisearch. El re-index ocurre en el cron de reconciliation o manualmente desde inventory-advanced.
+
+---
+
+## 7. Price Sync
+
+**Intervalos disponibles:** 1, 2, 5, 10, 24 horas  
+**Time picker:** Solo cuando el intervalo es "Daily" (24h) — elige la hora exacta del día  
+**Respeta horario de tienda:** No (default false)
+
+**Flujo:**
+```
+POST /admin/quickbooks/sync/prices
+    → syncPricesCore()
+        → Fetch retail prices desde QB
+        → UPDATE prices en Medusa DB
+        → Auto-calcula wholesale (10% off)
+        → Si se actualizaron precios → RE-INDEXA Meilisearch automáticamente
+        → Retorna job_id → SyncReportModal
+```
+
+Ver [Sección 14](#14-meilisearch-auto-re-index) para detalles del re-index.
+
+---
+
+## 8. Customer Sync & Reconciliation
+
+**Intervalos disponibles:** 1, 2, 5, 10, 24 horas  
+**Time picker:** Disponible para 24h  
+**Respeta horario:** No (default false)
+
+**Flujo de sync:**
+```
+POST /admin/quickbooks/sync/customers
+    → syncCustomersCore()
+        → Fetch customers desde QB
+        → Crea/actualiza customers en Medusa
+        → Retorna job_id → SyncReportModal
+```
+
+### Reconciliation
+
+Footer del Customer SyncCard tiene 3 botones adicionales:
+
+| Botón | Endpoint | Descripción |
+|-------|----------|-------------|
+| Dry Run Reconcile | `POST /reconcile { dry_run: true }` | Solo reporta diferencias, no escribe |
+| View Report | `setReportModal(lastJobIds.reconcile)` | Abre report del último reconcile |
+| Live Reconcile IDs | `POST /reconcile { dry_run: false }` | Actualiza IDs en Medusa para que coincidan con QB |
+
+El reconcile cruza los `ListID` de QB con los registros de Medusa para detectar y corregir desincronizaciones.
+
+---
+
+## 9. Activity Log
+
+**Archivo:** `components/ActivityLog.tsx`  
+**Endpoint:** `GET /admin/quickbooks/logs`
+
+El Activity Log es el historial completo de **todas las operaciones QuickBooks** — tanto order events (automáticos/manuales vía subscribers) como batch syncs (inventory, price, customer).
+
+### Tipos de operación
+
+| Operación | Ícono | Descripción |
+|-----------|-------|-------------|
+| `sales_order` | 🧾 | Creación/actualización de SO en QB |
+| `estimate` | 📋 | Creación/actualización de Estimate en QB |
+| `payment` | 💳 | Pago registrado en QB |
+| `invoice` | 📄 | Invoice generada en QB |
+| `cancel` | ❌ | Cancelación de SO o Estimate |
+| `customer_transfer` | 👤 | Importación de customer desde QB |
+| `inventory_sync` | 📦 | Batch sync de inventario |
+| `price_sync` | 💵 | Batch sync de precios |
+| `customer_sync` | 👥 | Batch sync de clientes |
+
+### Statuses
+
+| Status | Badge Color | Descripción |
+|--------|-------------|-------------|
+| `completed` | 🟢 Green | Operación exitosa |
+| `failed` | 🔴 Red | Falló con error |
+| `processing` | 🔵 Blue | En progreso |
+| `skipped` | ⚪ Grey | QB disabled o TxnID no encontrado |
+
+### Filtros disponibles
+
+- **Category:** All Types | Order Events | Batch Syncs
+- **Status:** All | Completed | Processing | Failed | Skipped
+
+### Paginación
+
+25 entries por página. Paginación Prev/Next. El header muestra el total de entries.
+
+### Campos por entry (expandibles)
+
+Click en una fila expande los detalles:
+
+| Campo | Descripción |
+|-------|-------------|
+| `operation` | Tipo de operación |
+| `status` | Estado |
+| `order_display_id` | `#1089` — número de orden en Medusa |
+| `qb_ref_number` | Número de ref en QB (SO, Estimate, etc.) |
+| `qb_txn_id` | TxnID interno de QB Desktop |
+| `event_type` | Evento Medusa que disparó la operación (e.g. `order.placed`) |
+| `triggered_by` | `"manual"` (badge azul) o `"event"` |
+| `message` | Mensaje descriptivo (e.g. "SO #6176 closed for Order #1087") |
+| `error` | Stack trace o mensaje de error si `status === "failed"` |
+| `duration_ms` | Tiempo de ejecución |
+| `server_host` | ⚡ Railway o 💻 local |
+| `initiated_at` / `completed_at` | Timestamps |
+| `metadata.changedItems` | Para `inventory_sync`: tabla SKU / Before / After / Δ |
+
+### Inventory Sync — Changed Items
+
+Cuando una entrada de `inventory_sync` se expande y tiene `metadata.changedItems`, muestra una tabla con:
+
+```
+SKU            Before   After    Δ
+LED-STRIP-3K   50       48       -2
+POWER-SUP-75W  12       15       +3   (⚠️ anomaly si el delta es >100)
+```
+
+### Auto-refresh
+
+El componente acepta prop `autoRefresh?: boolean`. Cuando true, hace polling cada **15 segundos**. Actualmente está desactivado (`autoRefresh={false}` por defecto o sin prop). Usar el botón **↻ Refresh** para actualizar manualmente.
+
+### Activity Log API
+
+```
+GET /admin/quickbooks/logs?limit=25&offset=0&category=order&status=failed
+```
 
 **Response:**
 ```json
 {
-  "config": {
-    "inventory_interval_minutes": 5,
-    "price_interval_minutes": 60,
-    "customer_interval_minutes": null,
-    "last_inventory_sync": "2026-02-01T12:00:00Z",
-    "last_price_sync": "2026-02-01T12:00:00Z"
-  }
+  "logs": [{ "id": "...", "operation": "sales_order", "status": "completed", ... }],
+  "pagination": { "total": 142, "limit": 25, "offset": 0 }
 }
 ```
 
-#### POST `/admin/quickbooks/config`
+---
 
-**Purpose:** Save interval configuration
+## 10. SyncReportModal
 
-**Request Body:**
-```json
+**Archivo:** `components/SyncReportModal.tsx`
+
+Modal que muestra el output completo de un job de sync. Se abre automáticamente después de un "Sync Now" exitoso, o manualmente con "View Report".
+
+```typescript
+const [reportModal, setReportModal] = useState<{ jobId: string | null; title: string } | null>(null)
+
+// Abrir tras sync manual:
+const { job_id } = await res.json()
+setReportModal({ jobId: job_id, title: '📦 Inventory Sync Report' })
+
+// Abrir último report guardado:
+setReportModal({ jobId: lastJobIds.inventory ?? null, title: '📦 Inventory Sync Report' })
+```
+
+Los `lastJobIds` se cargan al montar la página llamando a `GET /admin/quickbooks/sync/last-job?type=inventory|prices|customers|reconcile`.
+
+---
+
+## 11. API Endpoints
+
+### Configuración
+
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| GET | `/admin/quickbooks/config` | Lee configuración actual |
+| POST | `/admin/quickbooks/config` | Guarda configuración |
+
+**Campos configurables vía POST:**
+
+```typescript
 {
-  "inventory_sync_interval_minutes": 10,
-  "price_sync_interval_minutes": 120,
-  "customer_sync_interval_minutes": null
+    integration_enabled?: boolean,
+    inventory_sync_interval_minutes?: number | null,
+    inventory_respect_hours?: boolean,
+    price_sync_interval_minutes?: number | null,  // en minutos (horas × 60)
+    price_respect_hours?: boolean,
+    price_sync_hour?: number,                     // 0-23 integer
+    customer_sync_interval_minutes?: number | null,
+    customer_respect_hours?: boolean,
+    store_hours_open_hour?: number,
+    store_hours_close_hour?: number,
+    store_sat_open?: boolean,
+    store_sat_open_hour?: number,
+    store_sat_close_hour?: number,
+    store_sun_open?: boolean,
+    store_sun_open_hour?: number,
+    store_sun_close_hour?: number,
+    store_hours_timezone?: string,
 }
 ```
 
-**Validation:**
-- Only validates non-null values
-- Range: 1-10080 minutes (7 days)
-- NULL is valid (disabled state)
+> `null` = disabled (apaga el intervalo de sync). Range válido para intervalos: 1–10080 minutos.
 
-**Database Update:**
-```sql
-UPDATE quickbooks_config 
-SET 
-    inventory_interval_minutes = $1,
-    price_interval_minutes = $2,
-    customer_interval_minutes = $3,
-    updated_at = NOW()
-WHERE id = 'default'
-```
+### Syncs
 
-### Sync Endpoints
+| Método | Endpoint | Job type |
+|--------|----------|----------|
+| POST | `/admin/quickbooks/sync/inventory` | `inventory` |
+| POST | `/admin/quickbooks/sync/prices` | `prices` |
+| POST | `/admin/quickbooks/sync/customers` | `customers` |
+| POST | `/admin/quickbooks/sync/customers/reconcile` | `reconcile` |
+| GET | `/admin/quickbooks/sync/last-job?type=X` | Retorna `{ job_id }` del último job |
 
-#### POST `/admin/quickbooks/sync/inventory`
-
-Triggers immediate inventory sync using `syncInventoryCore()`.
-
-#### POST `/admin/quickbooks/sync/prices`
-
-Triggers immediate price sync using `syncPricesCore()`.
-
-#### POST `/admin/quickbooks/sync/customers`
-
-Triggers immediate customer import using `syncCustomersCore()`.
-
-### Customer Audit Endpoints
-
-#### POST `/admin/quickbooks/check/customers`
-
-Triggers customer comparison audit using `checkCustomersCore()`.
-
-#### GET `/admin/quickbooks/check/customers`
-
-Retrieves latest audit results from `quickbooks_customer_audit` table.
-
-**Response:**
+**Response de sync (exitoso):**
 ```json
-{
-  "audit": {
-    "total_in_qb": 150,
-    "total_in_medusa": 145,
-    "only_in_qb": 5,
-    "only_in_medusa": 0,
-    "in_both": 145,
-    "customers_only_in_qb": [...],
-    "customers_only_in_medusa": [],
-    "last_check_at": "2026-02-01T12:30:00Z"
-  }
-}
+{ "success": true, "job_id": "uuid-del-job" }
+```
+
+### Activity Log
+
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| GET | `/admin/quickbooks/logs` | Lista paginada con filtros |
+
+**Query params:** `limit`, `offset`, `category` (`order`\|`sync`), `status`
+
+### Customer Audit
+
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| POST | `/admin/quickbooks/check/customers` | Dispara auditoría (QB vs Medusa) |
+| GET | `/admin/quickbooks/check/customers` | Lee últimos resultados |
+
+---
+
+## 12. Database Schema
+
+### `quickbooks_config` (single-row)
+
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| `id` | VARCHAR | Primary key (constante `"default"`) |
+| `integration_enabled` | BOOLEAN | Master kill switch |
+| `inventory_interval_minutes` | INTEGER\|NULL | NULL = disabled |
+| `inventory_respect_hours` | BOOLEAN | Respetar horario de tienda |
+| `price_interval_minutes` | INTEGER\|NULL | En minutos (horas × 60) |
+| `price_respect_hours` | BOOLEAN | |
+| `price_sync_hour` | INTEGER | Hora del día para sync diario (0-23) |
+| `customer_interval_minutes` | INTEGER\|NULL | |
+| `customer_respect_hours` | BOOLEAN | |
+| `store_hours_open_hour` | INTEGER | Mon-Fri apertura |
+| `store_hours_close_hour` | INTEGER | Mon-Fri cierre |
+| `store_sat_open` | BOOLEAN | |
+| `store_sat_open_hour` | INTEGER | |
+| `store_sat_close_hour` | INTEGER | |
+| `store_sun_open` | BOOLEAN | |
+| `store_sun_open_hour` | INTEGER | |
+| `store_sun_close_hour` | INTEGER | |
+| `store_hours_timezone` | VARCHAR | IANA timezone string |
+| `last_inventory_sync` | TIMESTAMP | |
+| `last_price_sync` | TIMESTAMP | |
+| `last_customer_sync` | TIMESTAMP | |
+| `bridge_url` | VARCHAR | URL del QB Bridge |
+| `api_key` | VARCHAR | API key del QB Bridge |
+
+### `quickbooks_activity_log`
+
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| `id` | UUID | Primary key |
+| `operation` | VARCHAR | `sales_order`, `estimate`, `cancel`, `inventory_sync`, etc. |
+| `status` | VARCHAR | `completed`, `failed`, `processing`, `skipped` |
+| `order_id` | VARCHAR\|NULL | Medusa Order UUID |
+| `order_display_id` | INTEGER\|NULL | #1089 |
+| `draft_order_id` | VARCHAR\|NULL | Para operaciones de estimate |
+| `event_type` | VARCHAR\|NULL | Evento Medusa que disparó la op |
+| `sync_type` | VARCHAR\|NULL | Para syncs en batch |
+| `triggered_by` | VARCHAR\|NULL | `"manual"` o `"event"` |
+| `message` | TEXT\|NULL | Descripción del resultado |
+| `error` | TEXT\|NULL | Error si failed |
+| `qb_txn_id` | VARCHAR\|NULL | TxnID en QB Desktop |
+| `qb_ref_number` | VARCHAR\|NULL | RefNumber en QB (SO #6176, E18024591) |
+| `duration_ms` | INTEGER\|NULL | Duración de la operación |
+| `initiated_at` | TIMESTAMP | |
+| `completed_at` | TIMESTAMP\|NULL | |
+| `server_host` | VARCHAR\|NULL | Railway o hostname local |
+| `metadata` | JSONB\|NULL | `{ changedItems: [...] }` para inventory |
+
+---
+
+## 13. State Management
+
+### Conversión de intervalos (DB ↔ UI)
+
+| Tipo | DB | UI |
+|------|----|----|
+| Null | `NULL` | `"disabled"` |
+| Inventory | minutos (5) | `"5"` |
+| Price/Customer | minutos (60) | `"1"` (hora) |
+
+```typescript
+// DB → UI
+setInventoryInterval(config.inventory_interval_minutes != null
+    ? String(config.inventory_interval_minutes)
+    : 'disabled')
+
+setPriceInterval(config.price_interval_minutes != null
+    ? String(Math.floor(config.price_interval_minutes / 60))
+    : 'disabled')
+
+// UI → DB (en handlers)
+inventory_sync_interval_minutes: inventoryInterval === 'disabled' ? null : parseInt(inventoryInterval)
+price_sync_interval_minutes: priceInterval === 'disabled' ? null : parseInt(priceInterval) * 60
+```
+
+### Price Sync Hour
+
+```typescript
+// DB: integer 0-23 → UI: "HH:00"
+const h = String(config.price_sync_hour).padStart(2, '0')
+setPriceTimeOfDay(`${h}:00`)
+
+// UI → DB
+const priceSyncHour = parseInt(priceTimeOfDay.split(':')[0] ?? '0', 10)
+await postConfig({ price_sync_hour: priceSyncHour })
 ```
 
 ---
 
-## UI Components & Handlers
+## 14. Meilisearch Auto Re-Index
 
-### Inventory Sync Section
-
-**Intervals:**
-```typescript
-const inventoryIntervals = [
-    { value: "disabled", label: "Disabled" },
-    { value: "5", label: "5 minutes" },
-    { value: "10", label: "10 minutes" },
-    { value: "15", label: "15 minutes" },
-    { value: "30", label: "30 minutes" },
-    { value: "60", label: "1 hour" },
-]
-```
-
-**Save Handler:**
-```typescript
-const handleSaveInventoryInterval = async () => {
-    const nextSync = calculateNextInventorySync(inventoryInterval)
-    
-    const res = await fetch('/admin/quickbooks/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            inventory_sync_interval_minutes: 
-                inventoryInterval === 'disabled' ? null : parseInt(inventoryInterval)
-        })
-    })
-    
-    alert(`✅ Inventory interval saved: ${inventoryInterval} minutes\n\n⏰ Next sync at: ${nextSync}`)
-}
-```
-
-**Sync Now Handler:**
-```typescript
-const handleInventorySync = async () => {
-    setInventorySyncing(true)
-    const res = await fetch('/admin/quickbooks/sync/inventory', {
-        method: 'POST',
-        credentials: 'include'
-    })
-    setInventorySyncing(false)
-    alert(res.ok ? '✅ Inventory sync completed!' : '❌ Sync failed')
-}
-```
-
-### Price Sync Section
-
-**Intervals (hours):**
-```typescript
-const priceIntervals = [
-    { value: "disabled", label: "Disabled" },
-    { value: "1", label: "1 hour" },
-    { value: "6", label: "6 hours" },
-    { value: "12", label: "12 hours" },
-    { value: "24", label: "24 hours" },
-]
-```
-
-**Time Picker (conditional):**
-- Only shown when `priceInterval === '24'`
-- Generates 24 hourly options (00:00 - 23:00)
-- Stored in `priceTimeOfDay` state
-
-**Save Handler:**
-```typescript
-const handleSavePriceInterval = async () => {
-    const nextSync = calculateNextPriceSync(priceInterval, priceTimeOfDay)
-    const priceIntervalMinutes = priceInterval === 'disabled' ? null : (parseInt(priceInterval) * 60)
-    
-    const res = await fetch('/admin/quickbooks/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            price_sync_interval_minutes: priceIntervalMinutes
-        })
-    })
-    
-    const timeInfo = priceInterval === '24' ? ` at ${priceTimeOfDay}` : ''
-    alert(`✅ Price interval saved: ${priceInterval} hours${timeInfo}\n\n⏰ Next sync: ${nextSync}`)
-}
-```
-
-### Customer Sync Section
-
-**Save Handler:**
-```typescript
-const handleSaveCustomerInterval = async () => {
-    const nextSync = calculateNextPriceSync(customerInterval, customerTimeOfDay)
-    const customerIntervalMinutes = customerInterval === 'disabled' ? null : (parseInt(customerInterval) * 60)
-    
-    const res = await fetch('/admin/quickbooks/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            customer_sync_interval_minutes: customerIntervalMinutes
-        })
-    })
-    
-    alert(`✅ Customer interval saved: ${customerInterval} hours\n\n⏰ Next sync: ${nextSync}`)
-}
-```
-
-**View Last Report Handler:**
-```typescript
-const handleViewCustomerReport = async () => {
-    const res = await fetch('/admin/quickbooks/check/customers', {
-        method: 'GET',
-        credentials: 'include'
-    })
-    const data = await res.json()
-    setAuditData(data.audit)
-    setShowAuditModal(true)
-}
-```
-
-**Sync Now Handler:**
-```typescript
-const handleCustomerSync = async () => {
-    setCustomerSyncing(true)
-    const res = await fetch('/admin/quickbooks/sync/customers', {
-        method: 'POST',
-        credentials: 'include'
-    })
-    setCustomerSyncing(false)
-    alert(res.ok ? '✅ Customer sync completed!' : '❌ Sync failed')
-}
-```
-
-### Customer Audit Modal
-
-**UI Components:**
-- Summary stats (Total in QB, Total in Medusa, In Both)
-- Only in QuickBooks list (with ListNumber, DisplayName, Email)
-- Only in Medusa list (with email, first_name, last_name)
-- Last check timestamp
-
-**Structure:**
-```tsx
-<Prompt open={showAuditModal} onOpenChange={setShowAuditModal}>
-    <Prompt.Content>
-        <Prompt.Header>
-            <Prompt.Title>Customer Audit Report</Prompt.Title>
-        </Prompt.Header>
-        
-        {/* Summary Stats */}
-        <div className="grid grid-cols-3 gap-4 p-4 bg-ui-bg-subtle rounded">
-            <StatBox label="Total in QB" value={auditData.total_in_qb} />
-            <StatBox label="Total in Medusa" value={auditData.total_in_medusa} />
-            <StatBox label="In Both" value={auditData.in_both} />
-        </div>
-        
-        {/* Only in QuickBooks */}
-        {auditData.only_in_qb > 0 && (
-            <CustomerList 
-                title="Only in QuickBooks" 
-                customers={auditData.customers_only_in_qb}
-                type="qb"
-            />
-        )}
-        
-        {/* Only in Medusa */}
-        {auditData.only_in_medusa > 0 && (
-            <CustomerList 
-                title="Only in Medusa" 
-                customers={auditData.customers_only_in_medusa}
-                type="medusa"
-            />
-        )}
-        
-        <Prompt.Footer>
-            <Button onClick={() => setShowAuditModal(false)}>Close</Button>
-        </Prompt.Footer>
-    </Prompt.Content>
-</Prompt>
-```
-
----
-
-## Helper Functions
-
-### Time Calculation
-
-```typescript
-const calculateNextInventorySync = (intervalMinutes: string): string => {
-    if (intervalMinutes === 'disabled') return 'Disabled'
-    
-    const now = new Date()
-    const minutes = parseInt(intervalMinutes)
-    const nextSync = new Date(now.getTime() + minutes * 60000)
-    
-    return nextSync.toLocaleTimeString('en-US', { 
-        hour: '2-digit', 
-        minute: '2-digit',
-        hour12: false 
-    })
-}
-
-const calculateNextPriceSync = (intervalHours: string, timeOfDay: string): string => {
-    if (intervalHours === 'disabled') return 'Disabled'
-    
-    const now = new Date()
-    
-    if (intervalHours === '24') {
-        // Specific time of day
-        const [targetHour, targetMinute] = timeOfDay.split(':').map(Number)
-        const nextSync = new Date()
-        nextSync.setHours(targetHour, targetMinute, 0, 0)
-
-        // If time passed today, schedule for tomorrow
-        if (nextSync <= now) {
-            nextSync.setDate(nextSync.getDate() + 1)
-        }
-
-        const isToday = nextSync.getDate() === now.getDate()
-        const timeStr = nextSync.toLocaleTimeString('en-US', { 
-            hour: '2-digit', 
-            minute: '2-digit',
-            hour12: false 
-        })
-
-        return isToday ? `Today at ${timeStr}` : `Tomorrow at ${timeStr}`
-    } else {
-        // Relative interval
-        const hours = parseInt(intervalHours)
-        const nextSync = new Date(now.getTime() + hours * 3600000)
-
-        return nextSync.toLocaleTimeString('en-US', { 
-            hour: '2-digit', 
-            minute: '2-digit',
-            hour12: false 
-        })
-    }
-}
-```
-
----
-
-## Styling & Layout
-
-### Design Tokens
-
-**Container:**
-- `gap-3`: Vertical spacing between sections (was `gap-6`, reduced for compactness)
-- `p-6`: Page padding
-- `max-w-7xl`: Maximum width constraint
-
-**Section Cards:**
-- `p-4`: Internal padding (was `p-6`, reduced)
-- `space-y-3`: Vertical spacing within sections (was `space-y-4`, reduced)
-- `space-y-2`: Field spacing (was `space-y-3`, reduced)
-
-**Headers:**
-- `h3` with `text-sm font-medium`: Section titles (was `h2`, reduced)
-- Emoji prefixes: 📦 (Inventory), 💵 (Price), 👥 (Customer)
-
-**Labels:**
-- `text-xs`: Smaller label text (was default size)
-- `mb-1`: Minimal margin bottom (was `mb-2`)
-
-### Responsive Layout
-
-**Buttons:**
-```tsx
-<div className="grid grid-cols-2 gap-3">
-    <Button variant="secondary" onClick={handleSave}>Save</Button>
-    <Button variant="primary" onClick={handleSyncNow}>Sync Now</Button>
-</div>
-```
-
-**Customer Sync (3 buttons):**
-```tsx
-<div className="grid grid-cols-3 gap-3">
-    <Button variant="secondary" onClick={handleSave}>Save</Button>
-    <Button variant="secondary" onClick={handleViewReport}>View Last Report</Button>
-    <Button variant="primary" onClick={handleSyncNow}>Sync Now</Button>
-</div>
-```
-
----
-
-## Data Flow Diagrams
-
-### Save Interval Flow
-
-```
-User selects interval → handleSave() → Convert to API format → POST /config → DB UPDATE → Alert user
-                ↓
-          "disabled" → null
-          "5" minutes → 5
-          "1" hour → 60 minutes
-```
-
-### Load Config Flow
-
-```
-Page mount → useEffect → GET /config → DB SELECT → Parse response → setState()
-                                            ↓
-                                      null → "disabled"
-                                      5 → "5"
-                                      60 → "1" hour
-```
-
-### Sync Now Flow
-
-```
-User clicks → handleSync() → setSyncing(true) → POST /sync/[type] → Core function → Bridge API
-                                                        ↓
-                                                 setSyncing(false)
-                                                        ↓
-                                                   Alert result
-```
-
-**Price Sync Extended Flow:**
-```
-POST /sync/prices
-  → syncPricesCore()
-      → Fetch items from QB Bridge
-      → Update retail prices in Medusa DB
-      → Auto-calculate wholesale at 10% off
-      → if (!dryRun && updatedPrice > 0)
-            → syncInventoryWorkflow().run() → Re-index Meilisearch ✔
-      → Return stats
-```
-
-### Customer Audit Flow
-
-```
-POST /check/customers → checkCustomersCore() → Fetch QB customers
-                                                Fetch Medusa customers
-                                                Compare by email
-                                                Save to audit table
-                                                ↓
-GET /check/customers → Query audit table → Return latest audit → Display in modal
-```
-
----
-
-## Error Handling
-
-### API Errors
-
-```typescript
-try {
-    const res = await fetch('/admin/quickbooks/config', { ... })
-    if (!res.ok) throw new Error('Failed to save configuration')
-    alert('✅ Success')
-} catch (error) {
-    alert(`❌ Failed to save: ${(error as Error).message}`)
-}
-```
-
-### Validation Errors (Backend)
-
-```typescript
-// Range validation
-if (interval !== null && (interval < 1 || interval > 10080)) {
-    res.status(400).json({
-        error: "interval must be between 1 and 10080 (7 days)"
-    })
-    return
-}
-
-// Empty update check
-if (updates.length === 0) {
-    res.status(400).json({
-        error: "No fields to update"
-    })
-    return
-}
-```
-
----
-
-## Common Issues & Solutions
-
-### Issue: Intervals show empty after refresh
-
-**Cause:** useEffect not handling null values correctly
-
-**Solution:**
-```typescript
-// WRONG
-if (config.interval !== null) {
-    setInterval(config.interval.toString())
-}
-// Leaves state empty if null
-
-// CORRECT
-if (config.interval !== null) {
-    setInterval(config.interval.toString())
-} else {
-    setInterval('disabled')
-}
-// Always sets a value
-```
-
-### Issue: 400 error when saving "disabled"
-
-**Cause:** Backend not accepting null values
-
-**Solution:**
-```typescript
-// WRONG
-if (interval !== undefined && interval !== null) {
-    updates.push(`interval = $${paramIndex}`)
-}
-// Doesn't push if null
-
-// CORRECT
-if (interval !== undefined && interval !== null) {
-    // Validation only for non-null
-    if (interval < 1 || interval > 10080) throw error
-}
-if (interval !== undefined) {
-    // Push even if null
-    updates.push(`interval = $${paramIndex}`)
-    values.push(interval)
-}
-```
-
-### Issue: Server changes not reflected
-
-**Cause:** Server needs restart to load new code
-
-**Solution:**
-- Stop: `Ctrl+C` in terminal running `bash dev.sh`
-- Start: `bash dev.sh`
-- Hard refresh admin: `Ctrl+Shift+R`
-
----
-
-## Testing Checklist
-
-- [ ] Save each interval type ("disabled", 5 min, 1 hour, etc.)
-- [ ] Hard refresh and verify values persist
-- [ ] Test "Sync Now" for all three types
-- [ ] Verify time calculation for 24-hour intervals
-- [ ] Test customer audit modal display
-- [ ] Check responsive layout on different screen sizes
-- [ ] Verify API error handling (disconnect Bridge, etc.)
-- [ ] Test NULL handling in database queries
-
----
-
-## Future Enhancements
-
-### Planned Features
-- 🔄 Background job scheduling (replace manual sync)
-- 📊 Sync history dashboard
-- 🔔 Error notifications (replace alerts with toast)
-- 📈 Sync metrics and analytics
-- 🔐 Audit log for configuration changes
-
-### Known Limitations
-- Synchronous API calls (blocks UI during sync)
-- No real-time progress feedback
-- Alert-based notifications (not ideal UX)
-- No retry mechanism for failed syncs
-- Meilisearch re-index only fires on price sync (not on inventory sync)
-
----
-
-## Meilisearch Auto Re-index After Price Sync
-
-**Archivo:** `src/lib/quickbooks/sync-prices-core.ts` (línea 346-358)
-
-### Comportamiento
-
-Despues de un **Price Sync exitoso**, el sistema automáticamente re-indexa el índice Meilisearch `inventory` para que el `inventory-advanced` UI refleje los nuevos precios **de inmediato** sin esperar al reconciliation job de 5 minutos.
+Después de un **Price Sync exitoso** con cambios reales, el sistema re-indexa automáticamente el índice `inventory` en Meilisearch:
 
 ```typescript
 // src/lib/quickbooks/sync-prices-core.ts
-// After prices are written to DB:
 if (!dryRun && stats.updatedPrice > 0) {
-    logger.info(`⭐ Re-indexing Meilisearch inventory with updated prices...`)
-    try {
-        const meiliResult = await syncInventoryWorkflow(container).run({ input: {} })
-        logger.info(`✅ Meilisearch re-indexed ${meiliResult.result.synced} inventory items`)
-    } catch (meiliErr: any) {
-        // Non-blocking — price sync succeeds even if Meilisearch fails
-        logger.warn(`⚠️ Meilisearch re-index failed (non-blocking): ${meiliErr.message}`)
-    }
+    await syncInventoryWorkflow(container).run({ input: {} })
+    // Non-blocking: si falla, price sync igual retorna success
 }
 ```
 
-### Condiciones de disparo
+**Condiciones:**
 
 | Condición | Resultado |
-|-----------|----------|
+|-----------|---------|
 | `dryRun=false` AND `updatedPrice > 0` | ✅ Re-index disparado |
-| `dryRun=true` | ❌ Skipped (no hubo cambios en DB) |
-| `updatedPrice === 0` | ❌ Skipped (sin cambios, re-index es innecesario) |
-| Meilisearch falla | ⚠️ Warning log, price sync retorna `success: true` igual |
+| `dryRun=true` | ❌ Skipped |
+| `updatedPrice === 0` | ❌ Skipped |
+| Meilisearch falla | ⚠️ Warning log, sync = success |
 
-### Relación con inventory-advanced
-
-| Cola de sync | Qué lo dispara | Cuándo llega |
-|-------------|----------------|-------------|
-| Middleware (Layer 1) | Cambios de stock en UI | ~500ms |
-| QB Price Sync | Price sync QB → Medusa | Al final del sync |
-| Reconciliation Job (Layer 2) | Cron cada 5 min | ≤5 min |
-| Manual Sync (Layer 3) | Botón en inventory-advanced | On-demand |
-
-> **⚠️ Nota:** El Meilisearch re-index tras price sync incluye los nuevos `pricesByList` para que las **Dynamic Pricing Columns** en `inventory-advanced` reflejen los precios actualizados inmediatamente.
+Esto garantiza que las **Dynamic Pricing Columns** en `inventory-advanced` reflejen los nuevos precios inmediatamente.
 
 ---
 
-## Environment Variables
+## 15. Known Issues & Gotchas
 
-```bash
-DATABASE_URL=postgresql://...
-BRIDGE_URL=http://localhost:7000
-API_KEY=your-bridge-api-key
+### DraftOrdersSync — Componente eliminado de la UI
+
+El componente `DraftOrdersSync.tsx` existe en el filesystem pero **ya no se muestra** en la página QB.  
+El sync de Estimates se maneja desde la página de `draft-orders-advanced`.  
+Si se necesita volver a agregar, importar `DraftOrdersSync` y renderizarlo entre Customer Sync y Activity Log.
+
+### Alertas reemplazadas por Toast
+
+El código anterior usaba `window.alert()` para confirmaciones. La versión actual usa `toast.success()` / `toast.error()` de `@medusajs/ui`. No usar `window.confirm()` en el Admin — está silenciosamente bloqueado en el iframe context.
+
+### postConfig helper
+
+```typescript
+const postConfig = async (body: Record<string, unknown>) => {
+    const res = await fetch('/admin/quickbooks/config', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    })
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed to save')
+}
+```
+
+Todos los handlers usan este helper. Si falla, hace throw y el catch en el handler muestra el toast de error.
+
+### refreshTimestamps
+
+Llamado después de cada "Sync Now" exitoso para actualizar los timestamps de "Last sync" sin recargar toda la config:
+
+```typescript
+const refreshTimestamps = async () => {
+    const { config } = await fetch('/admin/quickbooks/config', { ... }).then(r => r.json())
+    if (config.last_inventory_sync) setLastInventorySync(config.last_inventory_sync)
+    if (config.last_price_sync) setLastPriceSync(config.last_price_sync)
+    if (config.last_customer_sync) setLastCustomerSync(config.last_customer_sync)
+}
 ```
 
 ---
 
-## Related Documentation
-
-- [QuickBooks Bridge Architecture](./quickbooks/bridge_architecture.md)
-- [Customer Migration Guide](./quickbooks/customer_migration.md)
-- [Bulk Sync Strategy](./quickbooks/bulk_sync_strategy.md)
-- [Medusa Admin UI Customization](../admin_ui_customization.md)
-
----
-
-**Last Updated:** 2026-02-22  
-**Version:** 1.1 — Added Meilisearch Auto Re-index section  
-**Status:** ✅ Production Ready
+**Última actualización:** 2026-03-06  
+**Versión:** 2.0 — Reescritura completa + Activity Log + Master Toggle + Store Hours + eliminación DraftOrdersSync

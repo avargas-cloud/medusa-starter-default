@@ -7,6 +7,7 @@ import {
     buildShippingQbItem,
     processEstimateInQb,
     processUpdateEstimateInQb,
+    processDeactivateEstimateInQb,
 } from "../../../../lib/quickbooks/order-flow-core"
 
 /**
@@ -124,15 +125,13 @@ export async function POST(
         }
         const qbCustomerId = custResult.qbCustomerId!
 
-        // Build QB items
-        // NOTE: /admin/orders API returns unit_price in DOLLARS (float), but buildQbItems
-        // divides by 100 expecting cents. Multiply back to cents before passing.
-        // Also filter out qty=0 items (soft-deleted / removed from draft order).
+        // ⚠️  Admin API returns unit_price in DOLLARS — pass directly to QB bridge.
+        //     Do NOT multiply by 100.
         const activeItems = (order.items || [])
             .filter((item: any) => (item.quantity ?? 0) > 0)
             .map((item: any) => ({
                 ...item,
-                unit_price: Math.round((item.unit_price || 0) * 100), // dollars → cents for buildQbItems
+                unit_price: item.unit_price || 0, // dollars — ready for QB bridge
             }))
 
         const qbItems = buildQbItems(activeItems)
@@ -149,6 +148,7 @@ export async function POST(
         }
 
         const isResync = !!(req.body as any).force && !!order.metadata?.qb_estimate_txn_id
+        const isCancelled = order.metadata?.estimate_status === "Cancelled" || order.metadata?.estimate_status === "cancelled"
         const memo = `Draft Order #${(order as any).display_id || orderId} - ${customer.first_name || ""} ${customer.last_name || ""}`.trim()
 
         // ── Tax state: mirror Medusa's tax decision in QB ─────────────────────
@@ -163,7 +163,8 @@ export async function POST(
 
         let result
         if (isResync) {
-            // ── RE-SYNC: edit existing estimate via EstimateMod ───────────────
+            // ── RE-SYNC: edit existing estimate via EstimateMod ──────────────────
+            // If the estimate was Cancelled (inactive in QB), auto-reactivate it
             result = await processUpdateEstimateInQb({
                 draftOrderId: orderId,
                 estimateTxnId: order.metadata.qb_estimate_txn_id as string,
@@ -171,6 +172,7 @@ export async function POST(
                 memo,
                 taxExempt,
                 salesTaxCode,
+                ...(isCancelled ? { isActive: true } : {}),
             })
         } else {
             // ── FIRST SYNC: create new estimate ───────────────────────────────
@@ -198,7 +200,12 @@ export async function POST(
         if (result.txnId || isResync) {
             const metadataUpdate = isResync
                 // Re-sync: txnId/ref stay the same — only update timestamp
-                ? { ...(order.metadata || {}), qb_synced_at: new Date().toISOString() }
+                // If reactivating a Cancelled estimate, also reset the estimate_status to Created
+                ? {
+                    ...(order.metadata || {}),
+                    qb_synced_at: new Date().toISOString(),
+                    ...(isCancelled ? { estimate_status: "Created" } : {}),
+                }
                 // New sync: save all QB identifiers
                 : {
                     ...(order.metadata || {}),
@@ -237,5 +244,84 @@ export async function POST(
     } catch (err: any) {
         console.error("[QB] Error in manual draft order sync:", err)
         res.status(500).json({ error: err.message || "Unknown error" })
+    }
+}
+
+/**
+ * DELETE /admin/quickbooks/draft-order
+ *
+ * Deactivates the QB Estimate linked to a Draft Order (sets IsActive=false),
+ * effectively unchecking the "Active" checkbox in QuickBooks Desktop.
+ *
+ * Called BEFORE deleting the Medusa draft order so the QB record is cleaned up.
+ * Non-fatal: if QB is disabled or no estimate TxnID exists, returns success.
+ *
+ * Body: { orderId: string }
+ */
+export async function DELETE(
+    req: MedusaRequest,
+    res: MedusaResponse
+): Promise<void> {
+    const { orderId } = req.body as { orderId: string }
+
+    if (!orderId) {
+        res.status(400).json({ error: "orderId is required" })
+        return
+    }
+
+    try {
+        const baseUrl = process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
+
+        // Fetch just the metadata we need (lightweight query)
+        const orderResp = await fetch(
+            `${baseUrl}/admin/orders/${orderId}?fields=id,display_id,status,metadata`,
+            { headers: { cookie: req.headers.cookie || "" } }
+        )
+
+        if (!orderResp.ok) {
+            // If we can't fetch the order (e.g. already deleted) — just return ok
+            console.warn(`[QB] Cannot fetch order ${orderId} for QB deactivation: ${orderResp.status}`)
+            res.json({ success: true, skipped: true, skipReason: "Order not found" })
+            return
+        }
+
+        const { order } = await orderResp.json()
+        const estimateTxnId = order?.metadata?.qb_estimate_txn_id as string | undefined
+        const estimateRef = order?.metadata?.qb_estimate_ref as string | undefined
+
+        if (!estimateTxnId) {
+            // Draft order was never synced to QB — nothing to deactivate
+            res.json({ success: true, skipped: true, skipReason: "No QB estimate linked to this draft order" })
+            return
+        }
+
+        const result = await processDeactivateEstimateInQb({
+            draftOrderId: orderId,
+            estimateTxnId,
+            estimateRef,
+        })
+
+        if (!result.enabled) {
+            res.json({ success: true, skipped: true, skipReason: "QB integration disabled" })
+            return
+        }
+
+        if (result.error) {
+            // Return error but with 200 — frontend chooses whether to block deletion
+            res.json({ success: false, error: result.error })
+            return
+        }
+
+        res.json({
+            success: true,
+            operationId: result.operationId,
+            txnId: result.txnId,
+            message: `✅ Estimate ${estimateRef || estimateTxnId} deactivated in QuickBooks`,
+        })
+
+    } catch (err: any) {
+        console.error("[QB] Error in draft order QB deactivation:", err)
+        // Non-fatal — report error but don't block deletion
+        res.json({ success: false, error: err.message || "Unknown error" })
     }
 }

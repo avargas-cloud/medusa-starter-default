@@ -2,11 +2,12 @@ import { Text, Badge, Button, Input, Select } from "@medusajs/ui"
 import type { DraftOrderListItem, SortKey } from "../hooks/use-draft-orders"
 import { SORT_OPTIONS, PAGE_SIZE } from "../hooks/use-draft-orders"
 
-type EstimateStatus = "Created" | "Sent" | "Confirmed Reception" | "Followed Up" | "Approved" | "Not Approved" | "Duplicate"
+type EstimateStatus = "Created" | "Sent" | "Confirmed Reception" | "Followed Up" | "Approved" | "Not Approved" | "Cancelled" | "Duplicate"
 
 const STATUS_BADGE_COLOR: Record<EstimateStatus, "grey" | "blue" | "purple" | "orange" | "green" | "red"> = {
     "Created": "grey", "Sent": "blue", "Confirmed Reception": "purple",
-    "Followed Up": "orange", "Approved": "green", "Not Approved": "red", "Duplicate": "grey",
+    "Followed Up": "orange", "Approved": "green", "Not Approved": "red",
+    "Cancelled": "red", "Duplicate": "grey",
 }
 
 const formatDate = (d: string) => new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
@@ -47,9 +48,10 @@ export const DraftOrdersTable = ({ loading, sorted, paginated, onRowClick }: Dra
                 const s = order.metadata?.estimate_status as EstimateStatus | undefined
 
                 const isDeclined = s === "Not Approved"
+                const isCancelled = s === "Cancelled"
                 return (
                     <div key={order.id}
-                        className={`grid ${COLS} gap-x-3 px-4 py-3 border-b border-ui-border-base hover:bg-ui-bg-subtle-hover transition-colors cursor-pointer items-center${isDeclined ? " opacity-50" : ""}`}
+                        className={`grid ${COLS} gap-x-3 px-4 py-3 border-b border-ui-border-base hover:bg-ui-bg-subtle-hover transition-colors cursor-pointer items-center${(isDeclined || isCancelled) ? " opacity-50" : ""}`}
                         onClick={() => onRowClick(order.id)}>
                         <Text size="small" weight="plus">{order.display_id}</Text>
                         <Text size="small" className="font-mono text-ui-fg-subtle truncate">{qbRef ?? "—"}</Text>
@@ -77,33 +79,33 @@ export const DraftOrdersTable = ({ loading, sorted, paginated, onRowClick }: Dra
 interface DraftOrdersHeaderProps {
     search: string; onSearchChange: (v: string) => void
     sort: SortKey; onSortChange: (v: SortKey) => void
-    showNotApproved: boolean; onToggleNotApproved: () => void
-    notApprovedCount: number
+    showNotApproved: boolean; onToggleNotApproved: () => void; notApprovedCount: number
+    showCancelled: boolean; onToggleCancelled: () => void; cancelledCount: number
 }
 
 export const DraftOrdersControls = ({
     search, onSearchChange, sort, onSortChange,
     showNotApproved, onToggleNotApproved, notApprovedCount,
+    showCancelled, onToggleCancelled, cancelledCount,
 }: DraftOrdersHeaderProps) => (
     <div className="flex items-center gap-3 flex-wrap px-4 py-3">
         <Input placeholder="Search by #, customer or email..." value={search} onChange={e => onSearchChange(e.target.value)} className="max-w-sm" />
-        {/* Show declined toggle */}
-        <label className="flex items-center gap-1.5 cursor-pointer select-none ml-1" title="Toggle visibility of declined / not-approved estimates">
-            <input
-                type="checkbox"
-                checked={showNotApproved}
-                onChange={onToggleNotApproved}
-                className="w-3.5 h-3.5 accent-ui-fg-muted rounded cursor-pointer"
-            />
-            <Text size="small" className="text-ui-fg-subtle whitespace-nowrap">
-                Show declined
-                {notApprovedCount > 0 && (
-                    <span className="ml-1 inline-flex items-center justify-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-ui-bg-base-pressed text-ui-fg-muted">
-                        {notApprovedCount}
-                    </span>
-                )}
-            </Text>
-        </label>
+        {/* Show Declined toggle */}
+        <Button
+            variant={showNotApproved ? "primary" : "secondary"}
+            size="small"
+            onClick={onToggleNotApproved}
+        >
+            {showNotApproved ? "Hide Declined" : `Show Declined${notApprovedCount ? ` (${notApprovedCount})` : ""}`}
+        </Button>
+        {/* Show Cancelled toggle */}
+        <Button
+            variant={showCancelled ? "primary" : "secondary"}
+            size="small"
+            onClick={onToggleCancelled}
+        >
+            {showCancelled ? "Hide Cancelled" : `Show Cancelled${cancelledCount ? ` (${cancelledCount})` : ""}`}
+        </Button>
         <div className="flex items-center gap-2 ml-auto">
             <Text size="small" className="text-ui-fg-subtle whitespace-nowrap">Sort by:</Text>
             <Select value={sort} onValueChange={v => onSortChange(v as SortKey)}>

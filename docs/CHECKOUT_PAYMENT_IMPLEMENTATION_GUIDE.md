@@ -8,7 +8,7 @@
 | **Problemas que resuelve** | Medusa v2 payment integration with Authorize.net is not well documented. This covers the custom payment provider plugin, the fast-checkout backend endpoint, and the Astro frontend steps. |
 | **Resultado esperado** | End-to-end checkout works: cart → shipping → payment → order creation in ~2-3 seconds from the user's perspective. Authorize.net charges the card, Medusa creates the order, and the customer receives a confirmation. |
 | **Scripts Creados** | `src/scripts/test/test-fast-checkout.ts` — end-to-end checkout test with real Authorize.net token generation |
-| **Última actualización** | 2026-02-24 — Currency unit fixes: Medusa v2 uses DOLLARS throughout; Authorize.net service no longer divides by 100. Store API used for authoritative cart total. Frontend display fixed. |
+| **Última actualización** | 2026-03-06 — Tax formula updated: shipping is now exempt from FL 7% tax (items only). Credentials fix, Authorization header, Accept.js URL, ground shipping sort order, amountCents comment corrections. Previous: 2026-02-24 — Currency unit fixes. |
 
 ---
 
@@ -77,16 +77,17 @@ Key methods and what they do:
   billingAddress: {
     firstName, lastName, address1, city, state, zip, country
   },
-  amount: 76.76  // DOLLARS — Medusa v2 stores and passes monetary amounts in dollars (not cents)
+  amount: 7676  // CENTS — fast-checkout route stores Math.round(cartData.total × 100)
+               // e.g. $76.76 → 7676
 }
 ```
 
-> **⚠️ CRITICAL — Currency Units:**
-> Medusa v2 stores ALL monetary values (cart total, payment session amount, refund amount) in **DOLLARS**
-> as floating-point numbers (e.g. `76.7618`). The `capturePayment` and `refundPayment` methods
-> in `authorize-net/service.ts` use the amount **directly** without dividing by 100.
-> Authorize.net also expects dollars, so no conversion is needed.
-> **Never divide Medusa amounts by 100** — doing so results in charging cents instead of dollars.
+> **⚠️ Currency Units:**
+> `fast-checkout/route.ts` stores `amountCents` (e.g. 7676) in `payment_session.data.amount`.
+> However, `authorizePayment()` in `service.ts` uses **Medusa's native `data.amount`** (in DOLLARS)
+> as first priority and only falls back to `sessionData.amount` if missing. This means the actual
+> charge is always in DOLLARS (Medusa framework value), not the CENTS stored in session data.
+> **Refund amounts** passed by Medusa to `refundPayment()` are in DOLLARS — used directly.
 
 ### 1.2 Required Environment Variables
 
@@ -152,9 +153,9 @@ The endpoint resolves the frontend's `shippingMethodId` to a real Medusa `so_...
 this priority ladder:
 
 1. **Exact match** — if the ID is already a valid `so_...` ID, use it directly
-2. **Alias: pickup** — matches any option with "pickup" in name/provider_id
-3. **Alias: ground** — matches "ground" options, sorted by price descending (most expensive first — covers Long Item shipping profile)
-4. **Last resort fallback** — most expensive available option
+2. **Alias: pickup** — matches any option with "pickup" in name/provider_id; falls back to `amount === 0`
+3. **Alias: ground** — prefers the base `"ground-shipping"` flat-rate provider first; fallback is cheapest ground option (ascending sort)
+4. **Last resort fallback** — most expensive available option (descending sort — covers Long Item shipping profile)
 
 Shipping options are fetched using this priority:
 1. HTTP to `/store/shipping-options` with `PUBLISHABLE_API_KEY` (fastest)
@@ -194,20 +195,29 @@ Step 3: Payment  (StepPayment.tsx + usePaymentForm.ts)
 
 ### 2.1 Accept.js Token Generation
 
-Accept.js is loaded via script tag and called client-side:
+Accept.js URL is selected dynamically based on environment:
+
+```typescript
+// usePaymentForm.ts — loads sandbox or production Accept.js
+const ACCEPT_JS_URL = import.meta.env.PUBLIC_AUTHORIZENET_ENVIRONMENT === "production"
+    ? "https://js.authorize.net/v1/Accept.js"
+    : "https://jstest.authorize.net/v1/Accept.js"  // ← TEST URL for sandbox
+```
+
+The card is tokenized entirely client-side:
 
 ```typescript
 // The card never touches our servers — it goes: browser → Authorize.net → opaqueData token
 window.Accept.dispatchData({
   authData: {
-    clientKey: import.meta.env.PUBLIC_AUTHORIZENET_CLIENT_KEY,  // Public key from Auth.net dashboard
-    apiLoginID: import.meta.env.PUBLIC_AUTHORIZENET_LOGIN_ID,  // API login ID
+    clientKey: import.meta.env.PUBLIC_AUTHORIZENET_CLIENT_KEY,
+    apiLoginID: import.meta.env.PUBLIC_AUTHORIZENET_LOGIN_ID,
   },
   cardData: {
     cardNumber: form.cardNumber.replace(/\s/g, ''),
-    month:      form.month,    // "12"
-    year:       form.year,     // "2026"
-    cardCode:   form.cvv,
+    month: form.month.padStart(2, '0'),  // "12"
+    year:  form.year.length === 2 ? `20${form.year}` : form.year,  // "2026"
+    cardCode: form.cvv,
   }
 }, (response) => {
   if (response.messages.resultCode === "Ok") {
@@ -227,15 +237,20 @@ const res = await fetch(`${MEDUSA_URL}/store/fast-checkout`, {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
-    "x-publishable-api-key": PUBLISHABLE_KEY,  // REQUIRED — Medusa rejects without this
+    "x-publishable-api-key": PUBLISHABLE_KEY,     // REQUIRED — Medusa rejects without this
+    // For authenticated customers — links order to their account
+    ...(localStorage.getItem("medusa_auth_token")
+        ? { "Authorization": `Bearer ${localStorage.getItem("medusa_auth_token")}` }
+        : {}
+    ),
   },
-  credentials: "omit",
+  credentials: "include",  // Sends session cookies alongside JWT
   body: JSON.stringify({
     cartId: medusaCartId,
     opaqueData,
     billingAddress: billing,
     shippingAddress: store.shippingAddress,
-    amount: amountDollars,       // Dollars (fallback only)
+    amount: amountDollars,       // Dollars (fallback — backend uses Store API total as priority)
     shippingMethodId,
     email,
   }),
@@ -347,11 +362,13 @@ Always use the Store API for the authoritative total after shipping is set:
 ```typescript
 // ✅ Authoritative total (use this)
 const res = await fetch(`${MEDUSA_BACKEND_URL}/store/carts/${cartId}`, {
-  headers: { 'x-publishable-api-key': PUBLISHABLE_API_KEY }
+  headers: { 'x-publishable-api-key': PUBLISHABLE_KEY }
 })
 const { cart: cartData } = await res.json()
-const amountCents = Math.round(cartData.total * 100)  // for logging only
-console.log(`[fast-checkout] 💰 Total: $${cartData.total.toFixed(2)}`)
+// amountCents is stored in payment_session.data.amount, but authorizePayment()
+// prioritizes Medusa's native data.amount (DOLLARS) — see amountCents note above.
+const amountCents = Math.round(cartData.total * 100)  // stored in session, used as fallback only
+console.log(`[fast-checkout] 💰 Total: ${amountCents} cents = $${(amountCents / 100).toFixed(2)}`)
 ```
 
 > The Store API returns `total`, `item_subtotal`, `shipping_subtotal`, `tax_total` all in **dollars**.
@@ -362,35 +379,37 @@ Medusa's order object has two shipping fields:
 
 | Field | Value | What it contains |
 |-------|-------|------------------|
-| `shipping_subtotal` | $14.99 | Base shipping cost (no tax) |
-| `shipping_total` | $16.04 | Base + shipping tax ($1.05) |
+| `shipping_subtotal` | $14.99 | Base shipping cost |
+| `shipping_total` | $14.99 | = `shipping_subtotal` (shipping tax = $0, exempt since 2026-03-06) |
 
-**Always display `shipping_subtotal`** in the UI. `tax_total` already includes the shipping tax.
-Using `shipping_total` + `tax_total` double-counts the shipping tax (+$1.05 in FL).
+**Always display `shipping_subtotal`** in the UI. Shipping is not taxed.
 
 ```typescript
-// ✅ Correct — tax_total includes shipping tax
+// ✅ Correct — shipping is tax-exempt; tax_total covers items only
 const shipping = order.shipping_subtotal  // $14.99
-const tax = order.tax_total              // $5.02 (covers items + shipping)
-// Total = subtotal + shipping + tax = $56.75 + $14.99 + $5.02 = $76.76 ✅
+const tax = order.tax_total              // e.g. $3.97 (items × 7% only)
+// Total = subtotal + shipping + tax = $56.75 + $14.99 + $3.97 = $75.71 ✅
 
-// ❌ Wrong — double counts shipping tax
-const shipping = order.shipping_total    // $16.04 (already includes $1.05 tax)
-const tax = order.tax_total             // $5.02 (also includes that $1.05)
-// Total = $56.75 + $16.04 + $5.02 = $77.81 ❌
+// ❌ Wrong — shipping_total = shipping_subtotal now but using tax_total
+// semantics from when shipping was taxed will produce wrong mental model
 ```
 
-### Florida Tax — 7% on Items + Shipping
+### Florida Tax — 7% on Items Only (Shipping Exempt)
 
-Florida law (F.S. 212.02) taxes the shipping cost along with items. Medusa's tax engine
-calculates this correctly if the province is set to `us-fl`. The frontend mirrors this:
+Shipping is **not** included in the FL taxable base. Tax applies to product subtotal only.
+This is configured natively in Medusa via `tax_rate_rule` bound to `product_type` — shipping
+methods have no matching `product_type` so they receive $0 tax automatically.
 
 ```typescript
-// Client-side calculation in CheckoutLayout.tsx:
+// Client-side calculation in CheckoutLayout.tsx (updated 2026-03-06):
 const FL_TAX_RATE = 0.07
-const taxableBase = subtotal + shippingCost  // includes shipping!
+const taxableBase = subtotal   // shipping excluded from taxable base
 const tax = taxableBase * FL_TAX_RATE
 ```
+
+> **Backend:** `tax_rate_rule` references `product_type` only (`ptyp_01KFTQDGQKTZ39J5CH3TRR7D3S`).
+> Tax rate `is_default = false` — does NOT apply to the whole cart automatically.
+> Shipping methods have no `product_type_id` → $0 tax. See KI `medusa_v2_tax_architecture`.
 
 ### Cart Drawer Doesn't Open on First Item Add
 

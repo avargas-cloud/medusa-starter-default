@@ -7,7 +7,6 @@ import { StoreHoursSection } from "./components/StoreHoursSection"
 import { SyncCard } from "./components/SyncCard"
 import { AuditModal } from "./components/AuditModal"
 import { ActivityLog } from "./components/ActivityLog"
-import { DraftOrdersSync } from "./components/DraftOrdersSync"
 
 // ─── Interval options ─────────────────────────────────────────────────────────
 const INVENTORY_INTERVALS = [
@@ -402,9 +401,6 @@ const QuickBooksPage = () => {
                     </div>
                 }
             />
-
-            {/* Draft Orders → QB Estimates */}
-            <DraftOrdersSync />
 
             {/* Activity Log */}
             <ActivityLog />

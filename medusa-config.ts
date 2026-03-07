@@ -1,3 +1,4 @@
+// @ts-ignore — loadEnv and defineConfig exist at runtime but TypeScript types are missing in this Medusa version
 import { loadEnv, defineConfig } from '@medusajs/framework/utils'
 
 console.log("🔵 Loading medusa-config.ts")
@@ -30,8 +31,8 @@ module.exports = defineConfig({
       // ✅ Smart CORS: Use env vars with fallbacks
       storeCors: process.env.STORE_CORS || (
         process.env.NODE_ENV === "production"
-          ? "https://ecopowertech.com,https://www.ecopowertech.com,https://ecopowertech-headless-medusa.vercel.app"
-          : "http://localhost:4321,https://localhost:4321,http://localhost:8000,https://docs.medusajs.com"
+          ? "https://ecopowertech.com,https://www.ecopowertech.com,https://ecopowertech-headless-medusa.vercel.app,https://pos.ecopowertech.com"
+          : "http://localhost:4321,https://localhost:4321,http://localhost:8000,https://docs.medusajs.com,http://localhost:3001"
       ),
 
       adminCors: process.env.ADMIN_CORS || (
@@ -51,6 +52,7 @@ module.exports = defineConfig({
       authMethodsPerActor: {
         user: ["emailpass"],
         customer: ["emailpass", "google"], // Enable email/password + Google OAuth
+        pos_user: ["emailpass"],           // POS-only staff accounts
       },
     },
     cookieOptions: {
@@ -203,6 +205,9 @@ module.exports = defineConfig({
     },
     {
       resolve: "./src/modules/product-attributes",
+    },
+    {
+      resolve: "./src/modules/pos-user",
     },
     {
       resolve: "@medusajs/medusa/file",

@@ -62,6 +62,8 @@ export const useDraftOrderDetail = (id: string | undefined) => {
     const actions = useOrderActions({ id, order, estimateStatus, setEstimateStatus, patchOrder })
     const {
         converting, handleConvert, handleDelete,
+        isConfirmingDelete, isDeleting, initiateDelete, cancelDelete,
+        isConfirmingCancel, isCancelling, initiateCancel, cancelCancel, handleCancel,
         statusSaving, handleStatusChange,
         syncing, localRef, localTxnId, syncError, handleSync,
         metadataForm: actMetadataForm, setMetadataForm: actSetMetadataForm,
@@ -100,6 +102,8 @@ export const useDraftOrderDetail = (id: string | undefined) => {
         handleSaveSalesChannel, handleSaveEmail, handleSaveShippingAddr, handleSaveBillingAddr,
         handleTransfer, handleAddItem, handleUpdateItem, handleRemoveItem,
         handleAddShipping, handleRemoveShipping, handleReplaceShipping, handleUpdateShippingAmount, handleSaveMetadata,
-        handleDelete, handleConvert, handleStatusChange, handleSync, handleAddMetaKey,
+        handleDelete, handleConvert, handleStatusChange, handleSync, handleAddMetaKey, handleCancel,
+        isConfirmingDelete, isDeleting, initiateDelete, cancelDelete,
+        isConfirmingCancel, isCancelling, initiateCancel, cancelCancel,
     }
 }

@@ -54,18 +54,19 @@ export const useOrderPageState = (
             })()
     }, [orderId, order?.items?.length])
 
-    const loadShippingOptions = useCallback(async () => {
+    const loadShippingOptions = useCallback(async (): Promise<{ id: string; name: string; amount: number | null }[]> => {
         const r = await fetch("/admin/shipping-options", { credentials: "include" })
         if (r.ok) {
             const j = await r.json()
-            setInlineShippingOptions(
-                (j.shipping_options ?? []).map((o: any) => ({
-                    id: o.id,
-                    name: o.name,
-                    amount: typeof o.amount === "number" ? o.amount : null,
-                }))
-            )
+            const opts = (j.shipping_options ?? []).map((o: any) => ({
+                id: o.id,
+                name: o.name,
+                amount: typeof o.amount === "number" ? o.amount : null,
+            }))
+            setInlineShippingOptions(opts)
+            return opts
         }
+        return []
     }, [])
 
     const handleAddShippingInline = useCallback(async (optionId: string, customAmount?: string) => {

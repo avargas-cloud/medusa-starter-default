@@ -49,6 +49,7 @@ export const useOrdersList = (fulfillmentFilters: FulfillmentFilter[]) => {
     const [search, setSearch] = useState("")
     const [sort, setSort] = useState<SortKey>("display_id_desc")
     const [page, setPage] = useState(0)
+    const [showCancelled, setShowCancelled] = useState(false)
 
     useEffect(() => {
         const load = async () => {
@@ -73,10 +74,18 @@ export const useOrdersList = (fulfillmentFilters: FulfillmentFilter[]) => {
         load()
     }, [])
 
-    // Client-side filter by fulfillment_status
+    // Count cancelled orders (status field, not fulfillment_status)
+    const cancelledCount = useMemo(() =>
+        orders.filter(o => o.status === "canceled").length,
+        [orders]
+    )
+
+    // Client-side filter by fulfillment_status, then hide cancelled unless toggled
     const fulfillmentFiltered = useMemo(() =>
-        orders.filter(o => fulfillmentFilters.includes(o.fulfillment_status as any)),
-        [orders, fulfillmentFilters.join(",")]
+        orders
+            .filter(o => fulfillmentFilters.includes(o.fulfillment_status as any))
+            .filter(o => showCancelled || o.status !== "canceled"),
+        [orders, fulfillmentFilters.join(","), showCancelled]
     )
 
     const filtered = useMemo(() => {
@@ -126,5 +135,7 @@ export const useOrdersList = (fulfillmentFilters: FulfillmentFilter[]) => {
         page, setPage,
         filtered, sorted, paginated,
         totalPages,
+        showCancelled, setShowCancelled,
+        cancelledCount,
     }
 }

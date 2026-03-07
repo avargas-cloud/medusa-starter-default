@@ -35,8 +35,9 @@ export const useDraftOrders = () => {
     const [search, setSearch] = useState("")
     const [sort, setSort] = useState<SortKey>("display_id_desc")
     const [page, setPage] = useState(0)
-    // Default: hide "not_approved" orders — they are closed/declined estimates
+    // Default: hide "Not Approved" and "Cancelled" orders — they are closed/declined estimates
     const [showNotApproved, setShowNotApproved] = useState(false)
+    const [showCancelled, setShowCancelled] = useState(false)
 
     useEffect(() => {
         const load = async () => {
@@ -60,9 +61,18 @@ export const useDraftOrders = () => {
     const filtered = useMemo(() => {
         let list = orders
 
-        // By default, hide orders with estimate_status = "not_approved" (declined estimates)
+        // By default, hide orders with estimate_status = "Not Approved" or "Cancelled"
         if (!showNotApproved) {
-            list = list.filter(o => o.metadata?.estimate_status !== "not_approved")
+            list = list.filter(o => {
+                const s = o.metadata?.estimate_status
+                return s !== "Not Approved" && s !== "not_approved"
+            })
+        }
+        if (!showCancelled) {
+            list = list.filter(o => {
+                const s = o.metadata?.estimate_status
+                return s !== "Cancelled" && s !== "cancelled"
+            })
         }
 
         if (!search.trim()) return list
@@ -79,7 +89,8 @@ export const useDraftOrders = () => {
                 (searchDigits.length > 0 && phone.includes(searchDigits))
             )
         })
-    }, [orders, search, showNotApproved])
+    }, [orders, search, showNotApproved, showCancelled])
+
 
     const sorted = useMemo(() => {
         const arr = [...filtered]
@@ -93,9 +104,19 @@ export const useDraftOrders = () => {
         }
     }, [filtered, sort])
 
-    // Count of hidden "not_approved" orders (to show in the toggle label)
+    // Count of hidden orders for toggle labels
     const notApprovedCount = useMemo(
-        () => orders.filter(o => o.metadata?.estimate_status === "not_approved").length,
+        () => orders.filter(o => {
+            const s = o.metadata?.estimate_status
+            return s === "Not Approved" || s === "not_approved"
+        }).length,
+        [orders]
+    )
+    const cancelledCount = useMemo(
+        () => orders.filter(o => {
+            const s = o.metadata?.estimate_status
+            return s === "Cancelled" || s === "cancelled"
+        }).length,
         [orders]
     )
 
@@ -111,6 +132,7 @@ export const useDraftOrders = () => {
         filtered, sorted, paginated,
         totalPages,
         showNotApproved, setShowNotApproved,
-        notApprovedCount,
+        showCancelled, setShowCancelled,
+        notApprovedCount, cancelledCount,
     }
 }

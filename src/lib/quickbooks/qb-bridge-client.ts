@@ -434,6 +434,7 @@ export interface QbUpdateEstimatePayload {
     memo?: string
     taxExempt?: boolean    // true → <ItemSalesTaxRef>Exempt</ItemSalesTaxRef>
     salesTaxCode?: string  // e.g. "Sale Tax 7%" — pass when order is taxable and QB default isn't used
+    isActive?: boolean     // true → reactivate a previously cancelled/inactive estimate in QB
 }
 
 /**
@@ -510,6 +511,7 @@ export async function updateEstimateInQb(
             EditSequence: editSequence,
             items: modItems,
             memo: payload.memo,
+            ...(payload.isActive !== undefined ? { IsActive: payload.isActive } : {}),
             ...(payload.taxExempt === true ? { taxExempt: true } : {}),
             ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
         })
@@ -750,6 +752,62 @@ export async function voidInvoiceInQb(
 }
 
 /**
+ * Deactivates an Estimate in QuickBooks (sets IsActive = false = unchecks the "Active" checkbox).
+ * Use this when a Draft Order is deleted in Medusa — keeps the QB history intact but
+ * hides the Estimate from active lists.
+ *
+ * Flow (2 async hops):
+ *   1. GET /api/estimates/:txnId → poll → get EditSequence
+ *   2. PUT /api/estimates/:txnId with { EditSequence, IsActive: false }
+ */
+export async function deactivateEstimateInQb(
+    estimateTxnId: string,
+    log: (msg: string) => void = console.log
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        log(`[QB DRY RUN] Would deactivate Estimate ${estimateTxnId}`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN", txnId: estimateTxnId } }
+    }
+
+    try {
+        // Step 1: Query the estimate to get the latest EditSequence
+        log(`[QB] Querying Estimate ${estimateTxnId} to get EditSequence for deactivation...`)
+        const queryResp = await bridgeFetch("GET", `/api/estimates/${estimateTxnId}`)
+        const queryOpId = queryResp?.operationId
+        if (!queryOpId) throw new Error("Bridge did not return operationId for Estimate query")
+
+        const rawResult = await pollRawOperationResult(queryOpId)
+
+        const estRet =
+            rawResult?.QBXML?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+            rawResult?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+            rawResult?.EstimateRet ??
+            rawResult?.EstimateQueryRs?.EstimateRet
+
+        if (!estRet?.EditSequence) {
+            throw new Error(`Could not extract EditSequence from Estimate query. Raw: ${JSON.stringify(rawResult).slice(0, 200)}`)
+        }
+
+        const editSequence = estRet.EditSequence as string
+        log(`[QB] EditSequence obtained: ${editSequence}. Deactivating Estimate...`)
+
+        // Step 2: PUT with IsActive=false (EstimateMod with IsActive field)
+        const modResp = await bridgeFetch("PUT", `/api/estimates/${estimateTxnId}`, {
+            EditSequence: editSequence,
+            IsActive: false,
+        })
+
+        const operationId = modResp?.operationId
+        if (!operationId) throw new Error("Bridge did not return operationId for Estimate deactivation")
+
+        log(`[QB] Estimate ${estimateTxnId} deactivation queued (op: ${operationId})`)
+        return { success: true, data: { operationId, txnId: estimateTxnId } }
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}
+
+/**
  * Cancels an Estimate in QuickBooks (zeros all line quantities via EstimateMod).
  * Fetches the EditSequence and existing lines dynamically first.
  */
@@ -877,6 +935,60 @@ export async function transferDocumentCustomer(
         const operationId = data?.operationId
         if (!operationId) throw new Error(`Bridge did not return operationId for ${docType} customer transfer`)
         log(`[QB] ${docType} ${txnId} customer transfer queued → ${newCustomerId} (op: ${operationId})`)
+        return { success: true, data: { operationId } }
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}
+
+// ─── Sales Receipt ────────────────────────────────────────────────────────────
+// Used by POS immediate-payment sales (customer pays at point of sale).
+// Unlike the Sales Order flow (→ Invoice → Receive Payment) this is a single doc.
+
+export interface QbCreateSalesReceiptPayload {
+    customerId: string           // QB customer ListID (from customer.metadata.qb_list_id)
+    refNumber?: string           // QB Ref # (usually order.display_id)
+    items: QbOrderItem[]
+    paymentMethod?: string       // QB PaymentMethod FullName or ListID (e.g. "Credit Card")
+    salesRep?: string            // QB SalesRep FullName or ListID
+    salesTaxCode?: string        // e.g. "Sale Tax 7%"
+    date?: string                // ISO date string, defaults to today in bridge
+    memo?: string
+}
+
+/**
+ * Creates a QuickBooks Sales Receipt via the bridge.
+ * This is an async bridge operation — poll operationId to confirm txnId.
+ */
+export async function createSalesReceiptInQb(
+    payload: QbCreateSalesReceiptPayload
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        console.log(`[QB DRY RUN] Would create Sales Receipt for customer ${payload.customerId} (${payload.items.length} items)`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN" } }
+    }
+
+    try {
+        const data = await bridgeFetch("POST", "/api/sales-receipts", {
+            customerId: payload.customerId,
+            refNumber: payload.refNumber,
+            date: payload.date,
+            PaymentMethod: payload.paymentMethod,
+            SalesRep: payload.salesRep,
+            memo: payload.memo,
+            items: payload.items.map(item => ({
+                productId: item.productId,
+                productName: item.productName,
+                quantity: item.quantity,
+                price: item.price,
+                desc: item.desc,
+            })),
+        })
+
+        const operationId = data?.operationId
+        if (!operationId) throw new Error("Bridge did not return operationId for Sales Receipt creation")
+
+        console.log(`[QB] Sales Receipt creation queued (op: ${operationId})`)
         return { success: true, data: { operationId } }
     } catch (err: any) {
         return { success: false, error: err.message }

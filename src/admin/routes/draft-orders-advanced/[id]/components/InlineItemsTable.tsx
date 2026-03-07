@@ -136,6 +136,8 @@ export const InlineItemsTable = ({
     }, [])
 
     const triggerAutoSave = useCallback((itemId: string) => {
+        // Skip autosave for optimistic items — they don't have a real ID yet
+        if (itemId.startsWith("optimistic-")) return
         if (autoSaveTimers.current[itemId]) clearTimeout(autoSaveTimers.current[itemId])
         autoSaveTimers.current[itemId] = setTimeout(async () => {
             setSavingItems(prev => new Set([...prev, itemId]))
@@ -374,7 +376,8 @@ export const InlineItemsTable = ({
                                     setItemQtys((q: any) => ({ ...q, [item.id]: Math.max(1, (q[item.id] ?? item.quantity) - 1) }))
                                     triggerAutoSave(item.id)
                                 }}
-                                className="w-5 h-5 flex items-center justify-center border border-ui-border-base rounded hover:bg-ui-bg-base text-ui-fg-muted"
+                                disabled={itemSaving || isSaving}
+                                className="w-5 h-5 flex items-center justify-center border border-ui-border-base rounded hover:bg-ui-bg-base text-ui-fg-muted disabled:opacity-40 disabled:cursor-not-allowed"
                             >
                                 <Minus />
                             </button>
@@ -384,7 +387,8 @@ export const InlineItemsTable = ({
                                     setItemQtys((q: any) => ({ ...q, [item.id]: (q[item.id] ?? item.quantity) + 1 }))
                                     triggerAutoSave(item.id)
                                 }}
-                                className="w-5 h-5 flex items-center justify-center border border-ui-border-base rounded hover:bg-ui-bg-base text-ui-fg-muted"
+                                disabled={itemSaving || isSaving}
+                                className="w-5 h-5 flex items-center justify-center border border-ui-border-base rounded hover:bg-ui-bg-base text-ui-fg-muted disabled:opacity-40 disabled:cursor-not-allowed"
                             >
                                 <Plus />
                             </button>

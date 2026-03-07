@@ -42,6 +42,7 @@ import {
     createInvoiceInQb,
     createEstimateInQb,
     updateEstimateInQb,
+    deactivateEstimateInQb,
     applyPaymentToInvoiceInQb,
     pollOperationResult,
     QbOrderItem,
@@ -729,6 +730,73 @@ export async function processUpdateEstimateInQb(draft: {
     })
 
     return { enabled: true, operationId: asyncData.operationId, txnId, refNumber }
+}
+
+// ─── 6. Deactivate Estimate (Draft Order Deleted) ──────────────────────────────
+
+/**
+ * Called when a Draft Order is deleted in Medusa Admin.
+ * Marks the corresponding QB Estimate as inactive (Active checkbox = false).
+ * This removes it from active QB lists without destroying the history.
+ */
+export async function processDeactivateEstimateInQb(draft: {
+    draftOrderId: string
+    estimateTxnId: string    // existing qb_estimate_txn_id from order metadata
+    estimateRef?: string     // human-readable reference (for logging)
+}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; error?: string; skipped?: boolean; skipReason?: string }> {
+    const guard = await runGuards()
+    if (!guard.pass) return { enabled: false, skipped: true }
+
+    const prefix = DRY_RUN ? "[QB DRY RUN]" : "[QB]"
+    console.log(`${prefix} Deactivating Estimate ${draft.estimateTxnId} (Ref: ${draft.estimateRef || "?"}) for deleted draft order ${draft.draftOrderId}...`)
+
+    const logId = await QbSyncLogger.start({
+        operation: "estimate",
+        draftOrderId: draft.draftOrderId,
+        eventType: "draft_order.deleted",
+        triggeredBy: "manual",
+        message: `Deactivating Estimate ${draft.estimateRef || draft.estimateTxnId} — draft order deleted`,
+    })
+
+    const result = await deactivateEstimateInQb(draft.estimateTxnId)
+
+    if (!result.success) {
+        console.error(`[QB] ❌ Failed to deactivate Estimate: ${result.error}`)
+        await QbSyncLogger.fail(logId, result.error || "Estimate deactivation failed")
+        return { enabled: true, error: result.error }
+    }
+
+    const asyncData = result.data!
+    console.log(`${prefix} ✅ Estimate deactivation queued. OperationID: ${asyncData.operationId}`)
+
+    let txnId = asyncData.txnId || draft.estimateTxnId
+
+    if (asyncData.operationId !== "DRY_RUN") {
+        try {
+            const pollResult = await pollOperationResult(asyncData.operationId)
+            if (pollResult.txnId) txnId = pollResult.txnId
+        } catch (pollErr: any) {
+            const isFailed = pollErr.message?.toLowerCase().includes("failed")
+            if (isFailed) {
+                // Real QB error (e.g. error 3175 — record open/locked in QB Desktop)
+                console.error(`${prefix} ❌ Estimate deactivation failed: ${pollErr.message}`)
+                await QbSyncLogger.fail(logId, pollErr.message)
+                return { enabled: true, error: pollErr.message }
+            }
+            // Polling timeout — deactivation was queued but QB hasn't responded yet (non-fatal)
+            console.warn(`${prefix} ⚠️ Deactivation polling timeout (non-fatal): ${pollErr.message}`)
+        }
+    }
+
+    console.log(`${prefix} ✅ Estimate deactivated. TxnID: ${txnId}`)
+
+    await QbSyncLogger.complete(logId, {
+        qbTxnId: txnId,
+        qbOperationId: asyncData.operationId,
+        message: `Estimate deactivated (Active=false) — TxnID: ${txnId}`,
+    })
+
+    return { enabled: true, operationId: asyncData.operationId, txnId }
 }
 
 // ─── Utility ──────────────────────────────────────────────────────────────────

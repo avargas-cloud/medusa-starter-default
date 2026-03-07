@@ -18,6 +18,7 @@ import { EstimateInfoBlock } from "./components/EstimateInfoBlock"
 import type { EstimateInfo } from "./components/EstimateInfoBlock"
 import { NoShippingModal } from "./components/NoShippingModal"
 import { addrToLines } from "./helpers"
+import { Trash, XCircle } from "@medusajs/icons"
 
 const DraftOrderDetail = () => {
     const { id } = useParams<{ id: string }>()
@@ -66,7 +67,9 @@ const DraftOrderDetail = () => {
                         id={id!} displayId={order.display_id} regionName={order.region?.name}
                         createdAt={order.created_at} scName={scName} converting={s.converting}
                         onNavigateBack={() => navigate("/draft-orders-advanced")}
-                        onConvert={p.handleConvertClick} onOpenModal={s.openModal as any} onDelete={s.handleDelete}
+                        onConvert={p.handleConvertClick} onOpenModal={s.openModal as any}
+                        onCancel={s.initiateCancel}
+                        onDelete={s.initiateDelete}
                         onSendEstimate={p.handleSendEstimate}
                         onPrintEstimate={p.handlePrintEstimate}
                     />
@@ -191,6 +194,118 @@ const DraftOrderDetail = () => {
                     total={p.estimateTotal}
                     curr={curr}
                 />
+            )}
+
+            {/* ── Delete Confirmation Modal ───────────────────────────────── */}
+            {s.isConfirmingDelete && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                    <div className="bg-ui-bg-base border border-ui-border-base rounded-xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+                        {/* Header */}
+                        <div className="flex items-center gap-3 px-6 py-5 border-b border-ui-border-base">
+                            <div className="flex items-center justify-center w-10 h-10 rounded-full bg-ui-bg-subtle border border-ui-border-base">
+                                <Trash className="text-ui-fg-error" />
+                            </div>
+                            <div>
+                                <Heading level="h2" className="text-ui-fg-base">Delete Draft Order #{order.display_id}?</Heading>
+                                <Text size="small" className="text-ui-fg-muted mt-0.5">This action cannot be undone</Text>
+                            </div>
+                        </div>
+                        {/* Body */}
+                        <div className="px-6 py-5">
+                            <Text className="text-ui-fg-subtle text-sm">
+                                This draft order will be permanently deleted from Medusa.
+                                {!!(s.localTxnId ?? order.metadata?.qb_estimate_txn_id) && (
+                                    <span className="block mt-2 text-ui-fg-muted">
+                                        The linked QuickBooks Estimate will be marked as <strong>inactive</strong>.
+                                    </span>
+                                )}
+                            </Text>
+                        </div>
+                        {/* Footer */}
+                        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-ui-border-base bg-ui-bg-subtle">
+                            <button
+                                onClick={s.cancelDelete}
+                                disabled={s.isDeleting}
+                                className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-lg border border-ui-border-base bg-ui-bg-base text-ui-fg-base hover:bg-ui-bg-base-hover transition-colors disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={s.handleDelete}
+                                disabled={s.isDeleting}
+                                className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-ui-button-danger text-ui-fg-on-color hover:bg-ui-button-danger-hover transition-colors disabled:opacity-50"
+                            >
+                                {s.isDeleting ? (
+                                    <span className="inline-flex items-center gap-2">
+                                        <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                                        </svg>
+                                        Deleting…
+                                    </span>
+                                ) : (
+                                    <span className="inline-flex items-center gap-2"><Trash /> Delete Draft Order</span>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Cancel Confirmation Modal ───────────────────────────────── */}
+            {s.isConfirmingCancel && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                    <div className="bg-ui-bg-base border border-ui-border-base rounded-xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+                        {/* Header */}
+                        <div className="flex items-center gap-3 px-6 py-5 border-b border-ui-border-base">
+                            <div className="flex items-center justify-center w-10 h-10 rounded-full bg-ui-bg-subtle border border-ui-border-base">
+                                <XCircle className="text-ui-fg-error" />
+                            </div>
+                            <div>
+                                <Heading level="h2" className="text-ui-fg-base">Cancel Draft Order #{order.display_id}?</Heading>
+                                <Text size="small" className="text-ui-fg-muted mt-0.5">The draft order will be kept for reference</Text>
+                            </div>
+                        </div>
+                        {/* Body */}
+                        <div className="px-6 py-5">
+                            <Text className="text-ui-fg-subtle text-sm">
+                                The draft order will remain in Medusa with status <strong>Cancelled</strong>.
+                                {!!(s.localTxnId ?? order.metadata?.qb_estimate_txn_id) && (
+                                    <span className="block mt-2 text-ui-fg-muted">
+                                        The linked QuickBooks Estimate will be marked as <strong>inactive</strong>.
+                                    </span>
+                                )}
+                            </Text>
+                        </div>
+                        {/* Footer */}
+                        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-ui-border-base bg-ui-bg-subtle">
+                            <button
+                                onClick={s.cancelCancel}
+                                disabled={s.isCancelling}
+                                className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-lg border border-ui-border-base bg-ui-bg-base text-ui-fg-base hover:bg-ui-bg-base-hover transition-colors disabled:opacity-50"
+                            >
+                                Go back
+                            </button>
+                            <button
+                                onClick={s.handleCancel}
+                                disabled={s.isCancelling}
+                                className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-ui-button-danger text-ui-fg-on-color hover:bg-ui-button-danger-hover transition-colors disabled:opacity-50"
+                            >
+                                {s.isCancelling ? (
+                                    <span className="inline-flex items-center gap-2">
+                                        <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                                        </svg>
+                                        Cancelling…
+                                    </span>
+                                ) : (
+                                    <span className="inline-flex items-center gap-2"><XCircle /> Cancel Draft Order</span>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </>
     )

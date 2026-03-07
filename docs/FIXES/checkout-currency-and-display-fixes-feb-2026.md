@@ -89,9 +89,13 @@ La página de Order Detail usaba `order.shipping_total` ($16.04 = base + shippin
 mientras que `order.tax_total` ($5.02) **ya incluye** el tax del shipping → double count de $1.05.
 
 ```
-$56.75 + $16.04 + $5.02 = $77.81  ❌  (shipping tax contado dos veces)
-$56.75 + $14.99 + $5.02 = $76.76  ✅  (shipping_subtotal sin tax)
+$56.75 + $16.04 + $5.02 = $77.81  ❌  (double-count del shipping tax — era el bug)
+$56.75 + $14.99 + $5.02 = $76.76  ✅  (fórmula correcta cuando shipping sí era gravado)
 ```
+
+> ⚠️ **Nota 2026-03-06:** Los valores anteriores ($5.02 tax) reflejan la configuración
+> cuando el shipping estaba gravado al 7%. Desde 2026-03-06, el shipping está exento:
+> `tax_total` solo cubre items. Ejemplo actual: $56.75 + $14.99 + $3.97 = $75.71
 
 ### Fix
 ```typescript
@@ -109,12 +113,14 @@ const totalDollars = Number(order.total || 0)  // desde Medusa directamente
 
 ### Referencia: shipping_subtotal vs shipping_total
 
-| Campo | Valor | Qué incluye |
+| Campo | Valor (2026-02-24) | Qué incluye |
 |-------|-------|-------------|
 | `shipping_subtotal` | $14.99 | Solo el costo base del envío |
 | `shipping_total` | $16.04 | Base + shipping tax ($1.05 @ 7% FL) |
 
-Siempre mostrar `shipping_subtotal` en la UI. `tax_total` ya cubre el tax del shipping.
+> ⚠️ **Actualización 2026-03-06:** El shipping ya NO está gravado. Desde esa fecha,
+> `shipping_total = shipping_subtotal` (ambos = $14.99). El `tax_total` cubre solo items.
+> Siempre mostrar `shipping_subtotal` en la UI. Shipping exento por `tax_rate_rule`.
 
 ---
 
@@ -143,12 +149,16 @@ if (!product.silent && !previousCart) {
 La pantalla de checkout calcula y muestra los totales client-side usando `checkoutStore`,
 ya que `medusaCart` puede no estar disponible hasta que fast-checkout termina.
 
-### Tax en FL (F.S. 212.02)
-Florida aplica 7% de tax sobre **items + shipping**:
+### Tax en FL (Actualizado 2026-03-06: Shipping Exento)
+
+Florida aplica 7% de tax sobre **items solamente** — shipping excluido del tax base:
+
 ```typescript
+// CheckoutLayout.tsx (actualizado 2026-03-06):
 const FL_TAX_RATE = 0.07
-const taxableBase = subtotal + shippingCost  // shipping incluido en la base
+const taxableBase = subtotal   // shipping NO entra en la base
 const tax = taxableBase * FL_TAX_RATE
 ```
 
-Esto coincide con el cálculo de Medusa backend (configurado por tax region `us-fl`).
+Backend: `tax_rate_rule` atado a `product_type` únicamente. Shipping methods = $0 tax.
+See `CHECKOUT_PAYMENT_IMPLEMENTATION_GUIDE.md` → "Florida Tax" section.

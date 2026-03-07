@@ -14,6 +14,11 @@
  * DISABLED BY DEFAULT: Set QB_ORDER_FLOW_ENABLED=true to activate.
  * QB failures NEVER block the Medusa flow.
  *
+ * POS SKIP: Orders placed through the POS Sales Channel are skipped.
+ *   The POS app handles QB sync directly (Sales Receipt or SO) without this subscriber.
+ *   Set QB_POS_SALES_CHANNEL_ID env var to the POS channel's ID to enable this guard.
+ *   No metadata needed — sales_channel_id is a native Medusa column on the order.
+ *
  * Metadata stored on order:
  *   qb_sales_order_txn_id, qb_sales_order_ref
  *   qb_payment_txn_id, qb_payment_ref
@@ -38,6 +43,18 @@ import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger"
 
 const LOG_PREFIX = "[QB-ORDER]"
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
+
+// Sales Channel IDs from .env
+// POS orders skip the subscriber — the POS app calls the QB bridge directly.
+// Web Store orders go through the subscriber as usual.
+const POS_CHANNEL_ID = process.env.POS_SALES_CHANNEL_ID ?? ""
+// const WEB_STORE_CHANNEL_ID = process.env.WEB_STORE_SALES_CHANNEL_ID ?? ""  // available for future use
+
+/** Returns true if the order was placed through the POS sales channel */
+function isPosOrder(order: any): boolean {
+    if (!POS_CHANNEL_ID) return false
+    return order.sales_channel_id === POS_CHANNEL_ID
+}
 
 /**
  * In-memory mutex for order.placed idempotency.
@@ -129,6 +146,7 @@ async function handleOrderPlaced(
             entity: "order",
             fields: [
                 "id", "display_id", "status", "metadata", "tax_total",
+                "sales_channel_id",        // ← used for POS channel guard
                 "customer_id",
                 "items.*",
                 "items.item.unit_price",   // ← canonical price from order_line_item table
@@ -145,7 +163,13 @@ async function handleOrderPlaced(
             throw new Error(`Query returned no order for id ${orderId}`)
         }
         order = fetchedOrder
-        logger.info(`${LOG_PREFIX} Order fetched via Query: #${order.display_id}, items=${order.items?.length ?? 0}, shipping_methods=${order.shipping_methods?.length ?? 0}`)
+        logger.info(`${LOG_PREFIX} Order fetched via Query: #${order.display_id}, items=${order.items?.length ?? 0}, shipping_methods=${order.shipping_methods?.length ?? 0}, sales_channel_id=${order.sales_channel_id ?? "none"}`)
+
+        // ── POS guard: POS orders handle QB sync directly via the POS app ────
+        if (isPosOrder(order)) {
+            logger.info(`${LOG_PREFIX} ⏭️ POS order (channel: ${order.sales_channel_id}) — QB sync handled by POS, skipping subscriber`)
+            return
+        }
 
         // DEBUG LOG TO INSPECT VARIANT STRUCTURE
         if (order.items && order.items[0]) {
@@ -306,6 +330,12 @@ async function handlePaymentCaptured(
         return
     }
 
+    // POS guard
+    if (isPosOrder(order)) {
+        logger.info(`${LOG_PREFIX} ⏭️ POS order — payment sync handled by POS, skipping`)
+        return
+    }
+
     // --- FIX: qb_list_id lookup priority ---
     // 1. Stored directly on order.metadata (set by handleOrderPlaced)
     // 2. Fetch customer and use their metadata.qb_list_id
@@ -389,6 +419,12 @@ async function handleFulfillmentCreated(
         logger.info(`${LOG_PREFIX} Order metadata: ${JSON.stringify(order.metadata || {})}`)
     } catch (err: any) {
         logger.error(`${LOG_PREFIX} ❌ Failed to fetch order ${orderId}: ${err.message}`)
+        return
+    }
+
+    // POS guard
+    if (isPosOrder(order)) {
+        logger.info(`${LOG_PREFIX} ⏭️ POS order — fulfillment/invoice sync handled by POS, skipping`)
         return
     }
 
@@ -485,6 +521,12 @@ async function handleOrderCanceled(
         logger.info(`${LOG_PREFIX} Order metadata: ${JSON.stringify(order.metadata || {})}`)
     } catch (err: any) {
         logger.error(`${LOG_PREFIX} ❌ Failed to fetch order ${orderId}: ${err.message}`)
+        return
+    }
+
+    // POS guard — POS handles its own QB cancellation (Sales Receipt void)
+    if (isPosOrder(order)) {
+        logger.info(`${LOG_PREFIX} ⏭️ POS order — cancel/void handled by POS, skipping`)
         return
     }
 
@@ -591,6 +633,12 @@ async function handleCustomerTransferred(
         logger.info(`${LOG_PREFIX} Order metadata: ${JSON.stringify(order.metadata || {})}`)
     } catch (err: any) {
         logger.error(`${LOG_PREFIX} ❌ Failed to fetch order ${orderId}: ${err.message}`)
+        return
+    }
+
+    // POS guard
+    if (isPosOrder(order)) {
+        logger.info(`${LOG_PREFIX} ⏭️ POS order — customer transfer handled by POS, skipping`)
         return
     }
 

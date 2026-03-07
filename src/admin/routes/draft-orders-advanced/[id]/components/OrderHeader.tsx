@@ -1,5 +1,5 @@
 import { Container, Heading, Badge, Text, Button, DropdownMenu } from "@medusajs/ui"
-import { EllipsisHorizontal, PencilSquare, ArrowRight, ArrowUpRightOnBox, ArrowUpTray } from "@medusajs/icons"
+import { EllipsisHorizontal, PencilSquare, ArrowRight, ArrowUpRightOnBox, ArrowUpTray, XCircle, Trash } from "@medusajs/icons"
 import { fmtDate } from "../helpers"
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
     onNavigateBack: () => void
     onConvert: () => void
     onOpenModal: (modal: string) => void
+    onCancel: () => void
     onDelete: () => void
     onSendEstimate?: () => void
     onPrintEstimate?: () => void
@@ -19,7 +20,7 @@ interface Props {
 
 export const OrderHeader = ({
     id, displayId, regionName, createdAt, scName,
-    converting, onNavigateBack, onConvert, onOpenModal, onDelete, onSendEstimate, onPrintEstimate,
+    converting, onNavigateBack, onConvert, onOpenModal, onCancel, onDelete, onSendEstimate, onPrintEstimate,
 }: Props) => (
     <Container className="p-0 overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4">
@@ -62,8 +63,11 @@ export const OrderHeader = ({
                             <ArrowUpRightOnBox className="text-ui-fg-subtle" /> Open native editor
                         </DropdownMenu.Item>
                         <DropdownMenu.Separator />
+                        <DropdownMenu.Item className="gap-x-2 text-ui-fg-error" onClick={onCancel}>
+                            <XCircle className="text-ui-fg-error" /> Cancel draft order
+                        </DropdownMenu.Item>
                         <DropdownMenu.Item className="gap-x-2 text-ui-fg-error" onClick={onDelete}>
-                            Delete draft order
+                            <Trash className="text-ui-fg-error" /> Delete draft order
                         </DropdownMenu.Item>
                     </DropdownMenu.Content>
                 </DropdownMenu>

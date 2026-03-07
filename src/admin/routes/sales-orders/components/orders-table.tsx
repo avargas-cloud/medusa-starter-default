@@ -117,11 +117,15 @@ interface OrdersControlsProps {
     sort: SortKey
     onSortChange: (v: SortKey) => void
     searchPlaceholder?: string
+    showCancelled?: boolean
+    onToggleCancelled?: () => void
+    cancelledCount?: number
 }
 
 export const OrdersControls = ({
     search, onSearchChange, sort, onSortChange,
     searchPlaceholder = "Search by #, customer, company or email...",
+    showCancelled, onToggleCancelled, cancelledCount,
 }: OrdersControlsProps) => (
     <div className="flex items-center gap-3 flex-wrap px-4 py-3">
         <Input
@@ -130,6 +134,15 @@ export const OrdersControls = ({
             onChange={e => onSearchChange(e.target.value)}
             className="max-w-sm"
         />
+        {onToggleCancelled && (
+            <Button
+                variant={showCancelled ? "primary" : "secondary"}
+                size="small"
+                onClick={onToggleCancelled}
+            >
+                {showCancelled ? "Hide Cancelled" : `Show Cancelled${cancelledCount ? ` (${cancelledCount})` : ""}`}
+            </Button>
+        )}
         <div className="flex items-center gap-2 ml-auto">
             <Text size="small" className="text-ui-fg-subtle whitespace-nowrap">Sort by:</Text>
             <Select value={sort} onValueChange={v => onSortChange(v as SortKey)}>

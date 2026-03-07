@@ -95,7 +95,8 @@ export async function POST(
             .filter((item: any) => (item.quantity ?? 0) > 0)
             .map((item: any) => ({
                 ...item,
-                unit_price: Math.round((item.unit_price || 0) * 100),
+                // ⚠️  Admin API returns unit_price in DOLLARS — pass directly to QB bridge.
+                unit_price: item.unit_price || 0,
             }))
 
         const qbItems = buildQbItems(activeItems)
@@ -166,13 +167,11 @@ export async function POST(
         }
 
         // ─── INITIAL SYNC PATH — create new SO (Add or convert from Estimate) ────
-        // IMPORTANT: pass activeItems (unit_price already in CENTS) so that
-        // buildQbItems() inside processOrderInQb correctly divides by 100.
-        // The /admin/orders API returns unit_price in dollars — activeItems
-        // already converts them to cents (lines above).
+        // IMPORTANT: pass activeItems with unit_price in DOLLARS (as returned by Admin API)
+        // so that buildQbItems() constructs correct <Amount> values for QB Desktop.
         const orderForQb = {
             ...order,
-            items: activeItems,   // ← cents (already converted above)
+            items: activeItems,   // ← dollars (Admin API values, passed directly to QB)
             customer,
             // Preserve estimate metadata so QB converts Estimate → SO (not create new)
             metadata: order.metadata || {},

@@ -4,7 +4,7 @@
 | Campo | Detalle |
 |-------|---------|
 | **Propósito** | Advanced Draft Orders admin page — a complete replacement for Medusa's native draft order detail view, featuring inline item editing, dual-pricing (Default/Wholesale), tax management, store pickup, and a full B2B Estimate workflow with PDF generation and email delivery. |
-| **Última revisión** | 2026-03-06 |
+| **Última revisión** | 2026-03-06 (Cancel Draft Order + Show Cancelled filter + QB IsActive fix + Auto-reactivate on re-sync) |
 
 ## Resumen Ejecutivo
 
@@ -19,8 +19,18 @@
 ✅ **Activity Timeline** — "Email Sent" con usuario atribuido
 ✅ **Auto-status** — `Created` → `Sent` automáticamente al enviar correo
 ✅ **QB Sync** — crea/actualiza Estimate en QuickBooks Desktop vía QB Bridge; convierte a Sales Order al completar el draft
+✅ **QB IsActive Fix** — `IsActive` field ahora incluido en `EstimateMod` QBXML (era silenciosamente ignorado antes)
+✅ **Cancel Draft Order** — botón en dropdown del header; desactiva QB Estimate + status → `Cancelled`; draft order queda en Medusa como historial
+✅ **Delete Draft Order** — botón en dropdown del header; desactiva QB Estimate + elimina permanentemente el draft order
+✅ **Show Cancelled filter** — checkbox en el listado de Draft Orders para mostrar/ocultar órdenes canceladas (con counter)
+✅ **Show Declined filter** — checkbox en el listado para mostrar/ocultar órdenes Not Approved (preexistente)
+✅ **Auto-reactivate on Re-sync** — cuando se re-sincroniza un draft order con status `Cancelled`, el bridge recibe `IsActive: true` automáticamente y el status vuelve a `Created` sin intervención manual
+✅ **Cancelled status** — nuevo status `"Cancelled"` en `ESTIMATE_STATUSES`; badge rojo en sidebar y listado; orders canceladas se muestran `opacity-50` en la tabla
 ✅ **Web Order → QB Sales Order** — precio correcto (unit_price desde `order_line_item`, no `order_item`)
 ✅ **Cancel Order → QB Closed** — `order.canceled` cierra Sales Order y/o voidea Invoice en QB automáticamente
+✅ **QB Ref # en tablas admin** — columna QB Ref # posicionada en 2da columna en Draft Orders, Sales Orders e Invoices
+✅ **Cancel Activity Log** — entrada muestra tipo de documento + ref # (e.g. "SO #6176 closed for Order #1087")
+✅ **Nightly Verification Job** — verifica operaciones QB de las últimas 24h contra el bridge y envía resumen por email
 ✅ **Convert-Force endpoint** — `/admin/draft-orders/:id/convert-force` con fallback de reservaciones
 ✅ **allow_backorder=true** — todos los product variants actualizados para conversión con 0 stock
 
@@ -70,6 +80,10 @@ backend/src/
 │   ├── order/route.ts                 ← POST: sync order as QB Sales Order (or convert Estimate→SO)
 │   └── logs/route.ts                  ← GET: activity log entries
 │
+├── jobs/
+│   ├── quickbooks-daily-sync.ts      ← Price sync + customer sync (every 30 min, runs at configured hour)
+│   └── quickbooks-nightly-verify.ts  ← Nightly QB verification + email digest (midnight EST)
+│
 └── admin/
     ├── routes/draft-orders-advanced/
     │   ├── page.tsx                          ← Draft order LIST (index page)
@@ -94,7 +108,7 @@ backend/src/
     │           ├── InlineTaxes.tsx           ← Tax mode selector + compute
     │           ├── InlineShipping.tsx        ← Shipping method selector
     │           ├── InlineNotes.tsx           ← Estimate notes field
-    │           ├── OrderHeader.tsx           ← Top bar (Print/Send/Convert buttons)
+    │           ├── OrderHeader.tsx           ← Top bar (Print/Send/Convert/Cancel/Delete buttons)
     │           ├── OrderSidebar.tsx          ← QB sync panel + timeline
     │           ├── CustomerBlock.tsx         ← Customer + address display
     │           ├── OrderTotals.tsx           ← Computed totals display
@@ -209,13 +223,36 @@ Converts draft order to regular order with inventory backorder fallback.
 
 ---
 
+### `DELETE /admin/quickbooks/draft-order`
+
+Desactiva (marca inactivo) el QB Estimate vinculado a un Draft Order en QuickBooks Desktop.
+Se llama ANTES de eliminar o cancelar el draft order para que el registro QB quede limpio.
+
+**Body:** `{ orderId: string }`
+
+**Comportamiento:**
+1. Consulta el estimate en QB para obtener el `EditSequence` actual
+2. Envía un `EstimateMod` con `IsActive: false` al bridge
+3. **Non-fatal:** si QB está deshabilitado o no hay TxnID vinculado, retorna `success: true, skipped: true`
+4. Comparte el mismo endpoint tanto para Cancel como para Delete — ambas acciones producen el mismo efecto en QB
+
+**Response:**
+```json
+{ "success": true, "operationId": "...", "txnId": "...", "message": "Estimate E18024591 deactivated in QuickBooks" }
+```
+
+---
+
 ### `POST /admin/quickbooks/draft-order`
 
 Manually triggers QB Estimate creation (first sync) or update (re-sync with `force: true`).
 
 **Body:** `{ orderId: string, force?: boolean }`
 
----
+**Auto-reactivate:** Si el draft order tiene `estimate_status === "Cancelled"` y `force: true`,
+la re-sincronización automáticamente incluye `IsActive: true` en el `EstimateMod` para reactivar
+el estimate en QB Desktop. El `estimate_status` del order también se resetea a `Created` en metadata.
+
 
 ### `POST /admin/quickbooks/order`
 
@@ -226,6 +263,31 @@ Manually triggers QB Sales Order sync for a confirmed order. If the order origin
 **Saves to order metadata:** `qb_sales_order_txn_id`, `qb_sales_order_ref`, `qb_payment_txn_id`, `qb_invoice_txn_id`
 
 ---
+
+### `POST /admin/quickbooks/sales-receipt`
+
+Creates a QuickBooks **Sales Receipt** for a **POS sale with immediate payment** (cash, card, etc.).
+Unlike the Sales Order → Invoice → Receive Payment flow, a Sales Receipt is a single, complete document.
+
+**Body:** `{ orderId: string, paymentMethod?: string, salesRep?: string }`
+- `paymentMethod`: QB PaymentMethod FullName or ListID (e.g. `"Cash"`, `"Credit Card"`, `"Check"`)
+- `salesRep`: QB SalesRep FullName or ListID (optional)
+
+**Used by:** POS app (`pos.ecopowertech.com`) after creating the order in Medusa.
+**Not triggered by:** subscriber (POS orders are in the POS sales channel → subscriber skips them).
+
+**Idempotent:** returns immediately if `qb_sales_receipt_txn_id` already set in metadata.
+
+**Saves to order metadata:** `qb_sales_receipt_operation_id`, `qb_sales_receipt_txn_id`, `qb_sales_receipt_ref`, `qb_list_id`
+
+### `DELETE /admin/quickbooks/sales-receipt`
+
+Voids a Sales Receipt in QB when a POS order is cancelled/refunded.
+
+**Body:** `{ orderId: string }` — looks up `qb_sales_receipt_txn_id` from order metadata automatically.
+
+---
+
 
 ### `GET /admin/estimate-options`
 
@@ -263,7 +325,7 @@ export const useDraftOrderDetail = (id: string | undefined) => {
 | `use-order-items.ts` | Variant search, add/update/remove items, qty/price state |
 | `use-order-modal.ts` | All edit modals (address, customer, email, shipping, metadata) |
 | `use-order-shipping.ts` | Add/remove/replace/update shipping methods |
-| `use-order-actions.ts` | QB sync, convert to order, delete, status change |
+| `use-order-actions.ts` | QB sync, convert to order, cancel draft, delete draft, status change |
 | `use-order-page-state.ts` | Customer variant prices, inline shipping options |
 | `use-page-derived.ts` | `isWholesale`, `estimateInfo`, computed totals |
 
@@ -335,13 +397,17 @@ const handleUpdateItem = async (itemId: string) => {
 ### Page Layout
 ```
 ┌─────────────────────────────────────────────────────────┬──────────────────┐
-│  OrderHeader (Print/Send/Convert/Delete buttons)        │                  │
-│  CustomerBlock (customer info + addresses)              │                  │
-│  EstimateInfoBlock (Rep/OrderType/LeadTime/Terms/Notes) │   OrderSidebar   │
-│  Items (InlineItemsTable — search + edit + price)       │   (QB Sync +     │
-│  PromotionsBlock (discount codes)                       │    Estimate      │
-│  Notes (InlineNotes)                                    │    Status +      │
-│  Shipping (InlineShipping)                              │    Timeline)     │
+│  OrderHeader (Print/Send/Convert + ··· dropdown)        │                  │
+│    ··· menu: Edit SC | Edit metadata | Open native      │                  │
+│             ──────────────────────────────              │                  │
+│             🚫 Cancel draft order  (XCircle, rojo)      │                  │
+│             🗑️ Delete draft order  (Trash, rojo)        │   OrderSidebar   │
+│  CustomerBlock (customer info + addresses)              │   (QB Sync +     │
+│  EstimateInfoBlock (Rep/OrderType/LeadTime/Terms/Notes) │    Estimate      │
+│  Items (InlineItemsTable — search + edit + price)       │    Status +      │
+│  PromotionsBlock (discount codes)                       │    Timeline)     │
+│  Notes (InlineNotes)                                    │                  │
+│  Shipping (InlineShipping)                              │                  │
 │  Taxes (InlineTaxes)                                    │                  │
 │  OrderTotals                                            │                  │
 └─────────────────────────────────────────────────────────┴──────────────────┘
@@ -919,7 +985,7 @@ cancelHooks.orderCanceled(
 
 The sidebar shows:
 - **Estimate QB TxnID** and **Estimate Ref#** (from metadata: `qb_estimate_txn_id`, `qb_estimate_ref`)
-- **"Save to QB"** button — calls `POST /admin/quickbooks/draft-order` with `force: true` for re-syncs
+- **"Save to QB"** / **"Re-sync to QuickBooks"** button — calls `POST /admin/quickbooks/draft-order`
 - **Re-sync** updates the existing Estimate in QB via `EstimateMod`
 
 ```typescript
@@ -929,6 +995,107 @@ isSynced={!!(s.localTxnId ?? order.metadata?.qb_estimate_txn_id)}
 ```
 
 ---
+
+### Cancel / Delete Draft Order → QB Estimate Deactivation
+
+**File:** `use-order-actions.ts` → `deactivateQbEstimate()` (shared helper)
+
+Ambas acciones (Cancel y Delete) llaman al mismo helper no-fatal antes de su acción principal:
+
+```typescript
+async function deactivateQbEstimate(id: string): Promise<void> {
+    try {
+        await fetch("/admin/quickbooks/draft-order", {
+            method: "DELETE",
+            credentials: "include",
+            body: JSON.stringify({ orderId: id }),
+        })
+    } catch {
+        // Network/timeout — non-fatal, caller proceeds anyway
+    }
+}
+```
+
+**Cancel flow:**
+```
+User clicks "Cancel draft order" → Cancel confirmation modal
+  → deactivateQbEstimate(id)    // QB Estimate → IsActive=false
+  → patchOrder({ metadata: { estimate_status: "Cancelled" } })
+  → setEstimateStatus("Cancelled")  // UI badge updates immediately
+  → toast.success("Draft order cancelled. QuickBooks Estimate marked inactive.")
+// Draft order STAYS in Medusa — keeps historical record
+```
+
+**Delete flow:**
+```
+User clicks "Delete draft order" → Delete confirmation modal
+  → deactivateQbEstimate(id)    // QB Estimate → IsActive=false
+  → DELETE /admin/draft-orders/:id  // Remove from Medusa permanently
+  → navigate("/draft-orders-advanced")
+```
+
+> **QB IsActive field fix:** El campo `IsActive` ahora está incluido en el QBXML `EstimateMod` del bridge
+> (`quickbooks-bridge/src/qbxml/builders/estimate.ts`). Antes era silenciosamente ignorado porque el
+> `buildEstimateMod` no lo incluía en el template. Fix: `<IsActive>${isActive}</IsActive>` añadido
+> después de `<EditSequence>`.
+
+---
+
+### Auto-Reactivate on Re-sync
+
+Cuando el draft order tiene `estimate_status === "Cancelled"` y el usuario hace Re-sync:
+
+**Backend (`POST /admin/quickbooks/draft-order` con `force: true`):**
+```typescript
+const isCancelled = order.metadata?.estimate_status === "Cancelled"
+// ...
+result = await processUpdateEstimateInQb({
+    ...,
+    ...(isCancelled ? { isActive: true } : {}),  // ← reactivate
+})
+// En metadata update:
+...(isCancelled ? { estimate_status: "Created" } : {}),  // ← reset status
+```
+
+**Frontend (`use-order-actions.ts`):**
+```typescript
+const wasCancelled = estimateStatus === "Cancelled"
+// ...
+if (j.success) {
+    if (wasCancelled && isAlreadySynced) setEstimateStatus("Created")  // instant UI update
+}
+```
+
+---
+
+### Estimate Status + List Filter
+
+**`ESTIMATE_STATUSES`** (types.ts):
+```
+"Created" | "Sent" | "Confirmed Reception" | "Followed Up"
+"Approved" | "Not Approved" | "Cancelled" | "Duplicate"
+```
+
+**List filters** (`DraftOrdersControls` + `use-draft-orders.tsx`):
+
+Dos botones toggle (`Button` de `@medusajs/ui`, igual que la página de Sales Orders):
+
+| Estado | Botón (inactivo) | Botón (activo) |
+|--------|-----------------|----------------|
+| Declined | `"Show Declined (n)"` secondary | `"Hide Declined"` primary |
+| Cancelled | `"Show Cancelled (n)"` secondary | `"Hide Cancelled"` primary |
+
+- El count `notApprovedCount` / `cancelledCount` se calcula sobre el array `orders` sin filtrar
+- Cuando no hay órdenes en esa categoría, no se muestra el número entre paréntesis
+- Filas con status `Not Approved` o `Cancelled` aparecen con `opacity-50` en la tabla
+- Ambos filtros están off (`false`) por defecto — las declined/cancelled se ocultan al entrar
+
+> ⚠️ **useMemo deps:** El `filtered` useMemo en `use-draft-orders.tsx` debe incluir AMBOS estados
+> en su dependency array: `[orders, search, showNotApproved, showCancelled]`. Si se omite uno, el
+> filtro no re-evalúa cuando el usuario hace clic en el botón (el estado cambia pero el memo es stale).
+
+---
+
 
 ### Draft → Order Conversion → QB Sales Order
 
@@ -973,10 +1140,11 @@ The `query.graph` call must include `items.item.unit_price` in the fields list.
 ### Cancel Order → QB Close SO / Void Invoice
 
 When an order is **cancelled in Medusa**, the `order.canceled` event fires and the subscriber:
-1. Fetches the order metadata to get `qb_sales_order_txn_id` and `qb_invoice_txn_id`
-2. If an **Invoice** exists → calls `voidInvoiceInQb(invoiceTxnId)` — uses `TxnVoidRq` via bridge DELETE `/api/invoices/:txnId`
-3. If a **Sales Order** exists → calls `closeSalesOrderInQb(soTxnId)` — fetches EditSequence then sends `SalesOrderMod` with `IsManuallyClosed=true` via bridge DELETE `/api/sales-orders/:txnId`
-4. Logs the operation to Activity Log (`operation: 'cancel'`)
+1. Fetches the order metadata to get `qb_sales_order_txn_id`, `qb_sales_order_ref`, `qb_invoice_txn_id`, `qb_invoice_ref`
+2. Builds a `docLabel` (e.g. `"SO #6176"` or `"SO #6176, Invoice #5"`) for human-readable log messages
+3. If an **Invoice** exists → calls `voidInvoiceInQb(invoiceTxnId)` — uses `TxnVoidRq` via bridge DELETE `/api/invoices/:txnId`
+4. If a **Sales Order** exists → calls `closeSalesOrderInQb(soTxnId)` — **polls bridge** (~40-60s) to get current EditSequence, then sends `SalesOrderMod` with `IsManuallyClosed=true`
+5. Logs to Activity Log (`operation: 'cancel'`) with `qb_ref_number` populated
 
 ```
 User cancels order in Admin UI
@@ -984,12 +1152,17 @@ User cancels order in Admin UI
     → orderCanceled hook fires (emit-order-events.ts)
       → eventBusService.emit("order.canceled", { id: order.id })
         → qb-order-subscriber.handleOrderCanceled
+          → QbSyncLogger.start()            // "Cancelling SO #6176 for Order #1087" (Processing)
           → voidInvoiceInQb(invoiceTxnId)   // if invoice exists
-          → closeSalesOrderInQb(soTxnId)    // fetches EditSequence, then closes
-          → QbSyncLogger.complete()         // Activity Log entry
+          → closeSalesOrderInQb(soTxnId)
+              → bridge GET /api/sales-orders/:txnId  // Poll #1-3 to get EditSequence
+              → bridge DELETE /api/sales-orders/:txnId  // Send close command → operationId
+          → QbSyncLogger.complete(qbRefNumber=soRef)  // "SO #6176 closed/voided for Order #1087"
 ```
 
-> **Activity Log timing:** The cancel entry appears in the Activity Log **after** QBWC processes the operation (~30-90 seconds). The entry is immediately created as `processing`, then updated to `completed` once the bridge confirms.
+> **⚠️ Optimistic Complete:** The Activity Log entry is marked `completed` when the close command is **queued** in the bridge (not when QBWC executes it). QBWC still needs ~20-60s more to actually close the SO in QB Desktop. The [Nightly Verification Job](#nightly-verification-job-quickbooks-nightly-verifyts) confirms the real final status the next morning.
+
+> **Activity Log display:** Cancel entries show the QB document type and ref number — e.g. `SO #6176 closed/voided for Order #1087` — plus `QB #6176` chip inline in the log row.
 
 ---
 
@@ -999,6 +1172,40 @@ When `order.customer_transferred` fires (e.g., after order ownership change in a
 - Sales Order is updated to the new customer's `qb_list_id` via `PATCH /api/sales-orders/:txnId/customer`
 - Invoice is similarly reassigned
 - Both require current `EditSequence` from order metadata
+
+---
+
+### POS vs Web Store Channel Guard
+
+`qb-order-subscriber.ts` skips ALL QB sync for orders placed through the **POS Sales Channel**.
+The POS app handles its own QB operations (Sales Receipt, SO, etc.) directly via the bridge.
+Web Store orders continue through the subscriber as before.
+
+```typescript
+// qb-order-subscriber.ts
+const POS_CHANNEL_ID = process.env.POS_SALES_CHANNEL_ID ?? ""
+
+function isPosOrder(order: any): boolean {
+    if (!POS_CHANNEL_ID) return false  // guard disabled if env var not set
+    return order.sales_channel_id === POS_CHANNEL_ID
+}
+
+// Applied in ALL handlers (placed, payment_captured, fulfillment_created, canceled, customer_transferred)
+if (isPosOrder(order)) {
+    logger.info(`POS order — QB sync handled by POS, skipping subscriber`)
+    return
+}
+```
+
+**Sales Channels (from `.env`):**
+
+| Channel | ID | QB Sync |
+|---------|-----|--------|
+| POS | `POS_SALES_CHANNEL_ID` | POS handles directly |
+| Web Store | `WEB_STORE_SALES_CHANNEL_ID` | Subscriber handles |
+
+> No metadata needed — `sales_channel_id` is a native column on the Medusa `order` table.
+> The POS simply creates orders in the "POS" channel and the subscriber automatically skips them.
 
 ---
 
@@ -1033,12 +1240,13 @@ try {
 | 2 | `qb_sales_order_txn_id` in DB | ✅ |
 | 3 | `qb_sales_order_operation_id` in DB | ✅ |
 
-**Order Metadata Keys:**
+**Order / Draft Order Metadata Keys:**
 
 | Key | Description |
 |-----|-------------|
 | `qb_estimate_txn_id` | QB Estimate TxnID (set when draft is synced) |
 | `qb_estimate_ref` | QB Estimate Reference Number |
+| `estimate_status` | UI status: `Created` \| `Sent` \| `Confirmed Reception` \| `Followed Up` \| `Approved` \| `Not Approved` \| `Cancelled` \| `Duplicate` |
 | `qb_sales_order_operation_id` | Bridge operationId — set immediately when SO is queued (QBWC pending) |
 | `qb_sales_order_txn_id` | QB Sales Order TxnID — set after QBWC processes the operation |
 | `qb_sales_order_ref` | QB Sales Order Reference Number |
@@ -1063,6 +1271,7 @@ From `quickbooks_config` DB table (fallback to env vars):
 - **ListID vs FullName**: Use `ListID` for shipping items. Using `FullName` with `&` fails (even escaped as `&amp;` — triggers silent QB error `0x80040400`)
 - **Amount**: `EstimateLineAdd` sends `<Amount>` (total), NOT `<Rate>`. QB calculates rate internally; sending `<Rate>` causes inflated prices
 - **EstimateMod**: Existing lines use `EstimateLineMod` (with `TxnLineID`); new lines use `EstimateLineAdd` (no `TxnLineID`)
+- **IsActive in EstimateMod**: El campo `<IsActive>` debe colocarse DESPUÉS de `<EditSequence>` según el QBXML SDK. Si se omite, QB lo ignora silenciosamente (no genera error).
 - **QB Error 3175**: "Transaction could not be locked" — occurs when QB Desktop has the estimate open. Close it in QB Desktop and re-sync
 - **close-so requires EditSequence**: `closeSalesOrderInQb()` always queries the SO first to get the current EditSequence before sending the Mod
 
@@ -1072,21 +1281,52 @@ From `quickbooks_config` DB table (fallback to env vars):
 
 All QB operations log to `qb_sync_log` table and appear in the QuickBooks admin dashboard.
 
-| Operation | Triggered by |
-|-----------|-------------|
-| `sales_order` | `order.placed` |
-| `estimate` | Draft → QB Sync (manual) |
-| `payment` | `order.payment_captured` |
-| `invoice` | `order.fulfillment_created` |
-| `cancel` | `order.canceled` |
-| `customer_transfer` | `order.customer_transferred` |
-| `inventory_sync` | Scheduled (every 10 min) |
-| `price_sync` | Scheduled / manual |
-| `customer_sync` | Scheduled / manual |
+| Operation | Triggered by | Notes |
+|-----------|-------------|-------|
+| `sales_order` | `order.placed` | |
+| `estimate` | Draft → QB Sync (manual) | |
+| `estimate_deactivate` | Cancel / Delete draft order (manual) | Shared label — same QB operation (`IsActive=false`) |
+| `payment` | `order.payment_captured` | |
+| `invoice` | `order.fulfillment_created` | |
+| `cancel` | `order.canceled` | Includes `qb_ref_number` + doc type label |
+| `customer_transfer` | `order.customer_transferred` | |
+| `inventory_sync` | Scheduled (every 10 min) | |
+| `price_sync` | Scheduled / manual | |
+| `customer_sync` | Scheduled / manual | |
+| `nightly_verify` | Nightly job (midnight EST) | Internal meta-entry; not shown in order events filter |
 
 - Failed entries show the error message **inline** in red (truncated to 120 chars) without needing to expand
-- Click any row (▼) to see full details including the complete QB error text
-- `cancel` entries appear after QBWC processes the close-so operation (~30-90 seconds delay)
+- Click any row (▼) to see full details including QB TxnID, QB Ref #, complete error, duration
+- `cancel` entries show `QB #6176` chip in the row + `"SO #6176 closed/voided for Order #1087"` as message
+- Stale entries stuck at `processing` for >5 minutes are auto-cleaned to `failed` on each API GET
+
+---
+
+### Nightly Verification Job (`quickbooks-nightly-verify.ts`)
+
+**File:** `backend/src/jobs/quickbooks-nightly-verify.ts`
+
+Runs at midnight EST (polled every 30 min, executes only at hour 0). Verifies that QB operations which were logged as `completed` actually completed in QB Desktop.
+
+**Why needed:** The cancel (and other) operations mark `completed` when the close command is **queued** in the bridge — not when QBWC actually executes it (the "optimistic complete" gap). The nightly job closes this gap.
+
+**Flow:**
+```
+1. Query qb_sync_log for last 24h entries with qb_operation_id
+   (operations: sales_order, invoice, cancel, payment, estimate, customer_transfer)
+2. For each entry → GET /api/sync/status/{operationId} on the bridge
+3. If status=completed: update qb_ref_number in log if missing (bridge has true value)
+4. If status=failed: retroactively mark log entry as failed + record error
+5. Build HTML email with summary cards + detail table
+6. Send via SendGrid to QB_REPORT_EMAIL
+```
+
+**Email format:**
+- Subject: `✅ QB Nightly Report — All Clear (2026-03-07)` or `⚠️ QB Nightly Report — 2 Failed, 1 Pending`
+- Cards: Total | ✅ Confirmed | ❌ Failed | ⏳ Pending | ⚠️ Expired
+- Detail table: Operation, Order #, QB Ref #, Time, Verified Status
+
+**Bridge operationId TTL:** ~1 week. Operations older than that return 404 and are counted as "expired" (not failed).
 
 ---
 
@@ -1123,6 +1363,7 @@ All QB operations log to `qb_sync_log` table and appear in the QuickBooks admin 
 |----------|---------|---------|
 | `SENDGRID_API_KEY` | — | Email sending. Without it → `preview_only: true` |
 | `SENDGRID_FROM_EMAIL` | `estimates@ecopowertech.com` | Sender address |
+| `SENDGRID_FROM` | `noreply@ecopowertech.com` | Sender for system emails (nightly report) |
 | `CHROME_EXECUTABLE_PATH` | `/usr/bin/google-chrome` | Puppeteer PDF |
 | `MINIO_ENDPOINT` | — | Minio server URL |
 | `MINIO_BUCKET` | `medusa-media` | Bucket for uploads |
@@ -1131,6 +1372,10 @@ All QB operations log to `qb_sync_log` table and appear in the QuickBooks admin 
 | `QB_ORDER_FLOW_ENABLED` | `true` | Enable/disable QB sync |
 | `QB_SHIPPING_ITEM_ID` | fallback | Shipping ListID (prefer DB config) |
 | `QB_DEFAULT_SALES_TAX_CODE` | fallback | Tax code (prefer DB config) |
+| `QB_REPORT_EMAIL` | `a.vargas@ecopowertech.com` | Recipient for nightly verification email digest |
+| `POS_SALES_CHANNEL_ID` | `sc_15154EAF0D194265ADD21AAD2D` | POS sales channel — orders in this channel skip QB subscriber |
+| `WEB_STORE_SALES_CHANNEL_ID` | `sc_01KFH7QCHT364SX242A69ZR435` | Web Store sales channel — orders go through QB subscriber |
+
 
 **Public logo URL (email body):**
 ```
@@ -1164,7 +1409,10 @@ https://bucket-production-2e09.up.railway.app/medusa-media/ecopowertech-logo.png
 | Second event slipping past txnId guard | Fixed: added `qb_sales_order_operation_id` check (Layer 3) + in-memory Set mutex (Layer 1) |
 | **Web order price ×100 in QB** | **Root cause: subscriber used `items.unit_price` (already in cents) and multiplied ×100. Fixed: now uses `items.item.unit_price` from `order_line_item` (canonical dollar amount)** |
 | **Cancel not firing → QB SO stays open** | **Root cause: `emit-order-events.ts` hook destructured `{ order_id }` but `cancelOrderWorkflow` passes `{ order }`. Fixed: now uses `order?.id`** |
-| **Activity Log cancel entry missing** | **Normal behavior: cancel entry appears ~30-90s after cancel action (QBWC polling delay). Entry starts as `processing`, completes when QB confirms** |
+| **Cancel Activity Log shows `completed` but QB still open** | **Expected behavior: `completed` = close command queued in bridge, not confirmed by QBWC. QBWC still needs ~20-60s. Nightly job (`quickbooks-nightly-verify.ts`) confirms the real final status** |
+| **Cancel log has no QB Ref #** | **Fixed: subscriber now reads `qb_sales_order_ref` / `qb_invoice_ref` and passes `qbRefNumber` to `QbSyncLogger.complete()`. Message also shows doc type: "SO #6176 closed/voided for Order #1087"** |
+| **QB Estimate deactivation not working** | **Root cause: `buildEstimateMod` in bridge (`estimate.ts`) was missing `<IsActive>` field in QBXML template. Fixed: `<IsActive>${isActive}</IsActive>` added after `<EditSequence>`** |
+| **Cancel/Delete showed "Completed" in Activity Log even when estimate stayed active** | **Root cause: same as above — IsActive field missing from EstimateMod QBXML. With fix applied, deactivation now works correctly** |
 
 ---
 

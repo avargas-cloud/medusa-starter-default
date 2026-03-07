@@ -9,7 +9,7 @@
 
 # Backend Documentation Index
 
-> **Last Updated:** February 2026 | **Total Docs:** 70+
+> **Last Updated:** March 2026 | **Total Docs:** 75+
 
 ---
 
@@ -132,6 +132,18 @@
 | [QUICKBOOKS_BRIDGE_MEDUSA_API_REFERENCE.md](QUICKBOOKS_BRIDGE_MEDUSA_API_REFERENCE.md) | API endpoints the Medusa backend calls on the Bridge service |
 | [QUICKBOOKS_BRIDGE_NODE_V12_COMPATIBILITY.md](QUICKBOOKS_BRIDGE_NODE_V12_COMPATIBILITY.md) | Node.js v12 compatibility fixes for Windows Server 2008 |
 | [QUICKBOOKS_CUSTOMER_IMPORT.md](QUICKBOOKS_CUSTOMER_IMPORT.md) | Customer import: field mapping, deduplication, verification |
+| [QB_SUBSCRIBERS_REFERENCE.md](QB_SUBSCRIBERS_REFERENCE.md) | Reference for all QB event subscribers — handlers, idempotency, metadata keys |
+| [DRAFT_ORDER_ADVANCED_UI.md](DRAFT_ORDER_ADVANCED_UI.md) | **Complete guide** to the Advanced Draft Orders page + QB Estimate lifecycle |
+| [SALES_ORDERS_UI.md](SALES_ORDERS_UI.md) | Admin UI for confirmed Sales Orders: filters, QB ref column, Show Cancelled |
+| [INVOICES_UI.md](INVOICES_UI.md) | Admin UI for Invoices: fulfilled orders with QB Invoice tracking |
+
+---
+
+## 🛒 POS (Point of Sale)
+
+| Document | Description |
+|---|---|
+| [POS_ARCHITECTURE.md](POS_ARCHITECTURE.md) | **Master guide** — Sales Channels, QB Sales Receipt flow, Credit Ledger, multi-invoice Receive Payment |
 
 ---
 

@@ -11,6 +11,7 @@ const DraftOrdersAdvancedList = () => {
         navigate, loading, sorted, paginated, totalPages,
         search, setSearch, sort, setSort, page, setPage,
         showNotApproved, setShowNotApproved, notApprovedCount,
+        showCancelled, setShowCancelled, cancelledCount,
     } = useDraftOrders()
     const nav = useNavigate()
     const [showCreate, setShowCreate] = useState(false)
@@ -40,6 +41,9 @@ const DraftOrdersAdvancedList = () => {
                     showNotApproved={showNotApproved}
                     onToggleNotApproved={() => { setShowNotApproved(v => !v); setPage(0) }}
                     notApprovedCount={notApprovedCount}
+                    showCancelled={showCancelled}
+                    onToggleCancelled={() => { setShowCancelled(v => !v); setPage(0) }}
+                    cancelledCount={cancelledCount}
                 />
                 <div className="overflow-x-auto">
                     <DraftOrdersTable loading={loading} sorted={sorted} paginated={paginated} onRowClick={id => navigate(`/draft-orders-advanced/${id}`)} />

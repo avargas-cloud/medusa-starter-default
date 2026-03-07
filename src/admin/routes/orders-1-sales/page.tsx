@@ -18,6 +18,7 @@ const SalesOrdersPage = () => {
     const {
         navigate, loading, sorted, paginated, totalPages,
         search, setSearch, sort, setSort, page, setPage,
+        showCancelled, setShowCancelled, cancelledCount,
     } = useOrdersList(["not_fulfilled", "partially_fulfilled"])
     const nav = useNavigate()
 
@@ -42,6 +43,9 @@ const SalesOrdersPage = () => {
                 <OrdersControls
                     search={search} onSearchChange={handleSearchChange}
                     sort={sort} onSortChange={handleSortChange}
+                    showCancelled={showCancelled}
+                    onToggleCancelled={() => { setShowCancelled(v => !v); setPage(0) }}
+                    cancelledCount={cancelledCount}
                 />
                 <div className="overflow-x-auto">
                     <OrdersTable

@@ -8,13 +8,14 @@ export interface TimelineEvent {
     user?: string           // Full name of the user who triggered this event
 }
 
-export const ESTIMATE_STATUSES = ["Created", "Sent", "Confirmed Reception", "Followed Up", "Approved", "Not Approved", "Duplicate"] as const
+export const ESTIMATE_STATUSES = ["Created", "Sent", "Confirmed Reception", "Followed Up", "Approved", "Not Approved", "Cancelled", "Duplicate"] as const
 export type EstimateStatus = typeof ESTIMATE_STATUSES[number]
 export type ModalType = "sales-channel" | "email" | "shipping-addr" | "billing-addr" | "transfer" | "add-shipping" | "edit-items" | "metadata" | null
 
 export const STATUS_COLOR: Record<EstimateStatus, "grey" | "blue" | "purple" | "orange" | "green" | "red"> = {
     "Created": "grey", "Sent": "blue", "Confirmed Reception": "purple",
-    "Followed Up": "orange", "Approved": "green", "Not Approved": "red", "Duplicate": "grey",
+    "Followed Up": "orange", "Approved": "green", "Not Approved": "red",
+    "Cancelled": "red", "Duplicate": "grey",
 }
 
 export interface AddrForm {
