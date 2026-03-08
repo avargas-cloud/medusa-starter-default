@@ -4,26 +4,36 @@
 |-------|---------|
 | **Módulo** | Estimates |
 | **Rutas POS** | `/estimates`, `/estimates/[id]`, `/estimates/new` |
-| **Medusa** | Draft Orders (`GET /admin/draft-orders`) |
+| **Medusa** | Draft Orders (`GET /admin/draft-orders`, `POST /admin/draft-orders`) |
 | **QB** | Estimates → Sales Orders |
 | **Última revisión** | 2026-03-07 |
 
 ---
 
-## Descripción
+## Descripción General e Hidratación Híbrida
 
 El módulo de Estimates maneja cotizaciones para clientes B2B desde el POS. Un Estimate es un Draft Order en Medusa que se sincroniza como un **QB Estimate** en QuickBooks Desktop. Cuando el cliente aprueba, se convierte a Order y se crea un **QB Sales Order**.
+
+La persistencia del módulo se basa en un cache local robusto usando `Zustand` (`posStore`) y `localStorage`. Un flujo "Offline-First" permite crear o modificar borradores de forma segura; la sincronización con el servidor ocurre de manera explícita:
+
+1. **Auto-Hydration de Clientes**: Al seleccionar un cliente desde el dropdown (en `new` o draft existente), el POS automáticamente carga sus direcciones predeterminadas (`shipping_address` & `billing_address`) y aplica su canal de venta o grupo de cliente. De esta forma, cada nuevo ítem hereda de manera automática fijaciones de precio (ej. _Wholesale_).
+2. **Offline Price Caching (`availablePrices`)**: Previamente el selector de precios requería del endpoint `/admin/draft-orders/:id/variant-prices`. Ahora, la integración pre-fetchea el arreglo directo desde MeiliSearch y lo inserta en `item.availablePrices` al seleccionar un ítem. Esto habilita modificar entre "Default" y "Wholesale" incluso en cotizaciones nuevas (`/estimates/new`) sin haber guardado el borrador en la DB de Medusa aún.
 
 ---
 
 ## Flujo Completo
 
 ```
-POS Staff crea Estimate
+POS Staff crea Estimate (Local Cache ID: 'new')
+│
+├── 0. [Navegación /estimates/new]
+│        → Crea un objeto en posStore aislado bajo la llave "new"
+│        → Auto-carga de metadata y direcciones al escoger cliente en UI
 │
 ├── 1. POST /admin/draft-orders
 │        { customer_id, items, sales_channel_id }
 │        → draft_order.id creado en Medusa
+│        → router.replace('/estimates/draft_etc') evita recarga abrupta de la página
 │
 ├── 2. [Save] → POST /admin/quickbooks/draft-order
 │        { orderId: draft_order.id }
@@ -32,14 +42,29 @@ POS Staff crea Estimate
 │
 ├── 3. [Opcionales: editar líneas, precios, notas, Save vuelve a sincronizar]
 │
-├── 4. [Cliente aprueba] → Convert to Order
+├── 4. [Cliente aprueba] → Convert to Order (Botón Confirm Order)
 │        → POST /admin/draft-orders/:id/convert-force
-│        → Medusa crea Order confirmada
+│        → Medusa crea Order confirmada (Convierte el draft order permanentemente)
 │
 └── 5. POST /admin/quickbooks/order
          { orderId: order.id }
          → QB Sales Order creado (estimate → SO)
 ```
+
+---
+
+## Document Toolbar (Acciones Principales del Estimate)
+
+La barra de herramientas principal (`DocumentToolbar`) concentra el ciclo de vida del borrador directamente desde el componente visual:
+
+| Botón | Acción y Endpoints Asociados | Condicionales o Fallbacks |
+|-------|------------------------------|---------------------------|
+| **Save** | `POST /admin/draft-orders` (Si es new), `POST /admin/draft-orders/:id` (Actualizamos cart y líneas). Luego avisa a QB Bridge para generar la transacción del lado de QB. | El borrador en el cache de estado cambia de modo "Dirty" a "Saved". |
+| **Confirm Order** | `POST /admin/draft-orders/:id/convert-force`. Fuerza la conversión en Medusa, se deshabilita la edición del frontend. Emite al Bridge de QB convertir en un _Sales Order_. | Bloqueará componentes de UI en la página, no es reversible desde Estimates. |
+| **Email** | Envía correo del estimate al Customer utilizando la API y el SendGrid Notification Provider. | Requiere que el estimado se guarde primero. |
+| **Print** | Redirige al Template Render de impresiones para Estimates comerciales B2B. | Funcionalidad en constante desarrollo visual. |
+| **History** | Lanza el timeline / log de auditoría guardado de las interacciones previas con el estimate o el cliente específico. | – |
+| **Discard** | Descarta la sesión sin guardar de "new" desde el locale storage y resetea el formulario al estado base vacio. | Exclusivo para `/estimates/new`. |
 
 ---
 
@@ -125,21 +150,26 @@ Esto permite el Prev/Next en la página de detalle sin re-fetchear la lista.
 
 ---
 
-## Detalle de Estimate (`/estimates/[id]`)
+## Detalle de Estimate Avanzado (`/estimates/[id]`)
 
-**Archivos:**
+**Principales Rutas:**
 - `ecopowertech-store-pos/app/(pos)/estimates/[id]/page.tsx`
-- `ecopowertech-store-pos/lib/estimateNav.ts`
+- `ecopowertech-store-pos/app/(pos)/estimates/new/page.tsx` (Reutiliza la misma estructura)
 
-### Acciones (DocumentToolbar)
+### Arquitectura de Archivos y Fragmentación de Hooks
 
-| Botón | Descripción |
-|-------|-------------|
-| **Prev / Next** | Navegar entre estimates (sorted list) |
-| **Save** | Guarda en Medusa + re-sincroniza con QB |
-| **Email** | Envía estimate al cliente |
-| **Payment** | Captura de pago parcial o total |
-| **History** | Ver historial del cliente |
+Para promover escalabilidad y limpieza de código en la página de detalle, la lógica monolítica fue dividida en múltiples "Custom Hooks" y componentes aislados dentro del directorio `/estimates/[id]/`:
+
+- **Hooks Especializados (`/hooks/`):**
+  - `useEstimateData.ts`: Encargado exclusivamente del fetch de Medusa (`GET /draft-orders/:id`) usando React Query y devolviendo el estado de la carga.
+  - `useEstimateActions.ts`: Contiene la lógica transaccional de los botones del Toolbar (Save, Print, Confirm Order, Email) comunicándose con los endpoints de Medusa y QB Bridge.
+  - `useEstimateNavigation.ts`: Administra el almacenamiento persistente (`sessionStorage`) del array de UUIDs para proveer desplazamiento con Prev/Next.
+  - `useEstimate.tsx`: Orquestador principal que consolida los hooks anteriores, inicializa el `posStore` (layer local de Drafts) y expone la Interfaz unificada a la Vista (`page.tsx`).
+
+- **Componentes (`/components/`):**
+  - `CustomerStrip.tsx`: Desacopla visual y funcionalmente la primera fila del documento (el buscador de cliente, la direcciones y fecha de validez). Alberga toda la lógica de auto-hidratación descrita previamente, inyectando las direcciones físicas y niveles de preció (sales channels) al seleccionar al cliente objetivo.
+
+---
 
 ### Prev/Next Navigation
 
@@ -223,7 +253,30 @@ Si un estimate está en `Cancelled` y se vuelve a sincronizar con `force: true`:
 
 ---
 
-## Known Issues
+## Mejoras Funcionales y Troubleshooting (Marzo 2026)
+
+Esta sección consolida resoluciones a bugs complejos de interfaz y lógica resueltos recientemente durante el flujo de trabajo de creación B2B:
+
+1. **Bug: Duplicación de Stock en MeiliSearch (`ItemSearch`)**
+   - **Contexto:** Se detectó repetidamente que todos los ítems resultantes de la barra de búsqueda compartían la misma cifra de inventario (ej. "todos en 27 unidades").
+   - **Solución Táctica:** En el archivo `lib/meilisearch.ts` (índice avanzado `searchAdvancedInventory`), se añadió el requerimiento lógico subyacente de traer el atributo `variantId` omitido previamente. Esta ausencia hacía que la llave dinámica `stockMap[undefined]` sobrescribiera universalmente la referencia para todos los elementos iterados por la tabla, por ende todas las filas heredaban el índice del último elemento fetcheado de Medusa.
+   - Adicionalmente, se corrigió el querystring de fetch a la API nativa de `/admin/inventory-items` migrando el parámetro roto `sku[]=` hacia `sku=` directo.
+
+2. **Flujo de Inventario Detallado en Popover Local (`InventoryPopover`)**
+   - **Contexto:** Posibilidad de verificar stock sin salir de los estimados actuales para agilizar confirmaciones (mismo ux que admin dashboard). 
+   - **Implementación:** Se agregó en `components/pos/LineItemsTable.tsx` un icono de "Home" que, usando un React Hook `useQuery`, desencadena interacciones a `/admin/inventory-items` y luego `/location-levels` del id resultante de manera anidada en segundo plano con *staleTime: 60_000*. Emite un recuadro React Portal de UI limpio y preciso reportando `locName` y `available`.
+
+3. **Restricción Clipping a Menú de Precios (`PriceDropdown`)**
+   - **Troubleshooting:** Elementos en `overflow: hidden` cortaban la ventana contextual impidiendo elegir opciones de Wholesale/Customer levels.
+   - **Fix Definitivo:** Implementación de `react-dom.createPortal()` para desterrar los popups visuales del árbol DOM delimitado de Line Items. La función `getBoundingClientRect()` se alió a la refacturización para calcular top/left relativos, posicionando el control en `zIndex: 9999` bajo viewport base (`document.body`).
+
+4. **El Fallback Local (Offline) de Precios Alternos (`availablePrices`)**
+   - **Troubleshooting:** `/estimates/new` al carecer del Id persistido en medusa no autorizaba el backend de Prices a devolver combinaciones.
+   - **Fix Arquitectónico:** Agregación global a la estructura transitoria `store/posStore.ts` del vector opcional `availablePrices`. Este almacena los sets de precios generados directamente por MeiliSearch en el frontend (sin backend), y se lo entrega al `PriceDropdown` como set estático. El usuario ahora puede configurar wholesale antes del primer click a 'Save'.
+
+---
+
+## Known Issues Generales
 
 | Issue | Fix |
 |-------|-----|

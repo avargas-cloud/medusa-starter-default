@@ -322,9 +322,8 @@ module.exports = defineConfig({
         ],
       },
     },
-    // Meilisearch Plugin - Only load when using local Meilisearch
-    // Railway Meilisearch connection in plugin causes 40-60s startup delay
-    ...(process.env.MEILISEARCH_HOST?.includes("localhost") ? [{
+    // Railway Meilisearch connection in plugin causes 40-60s startup delay, testing if it's acceptable
+    {
       resolve: "@rokmohar/medusa-plugin-meilisearch",
       options: {
         config: {
@@ -383,8 +382,73 @@ module.exports = defineConfig({
               }
             }
           },
+          customers: {
+            indexSettings: {
+              searchableAttributes: [
+                "email",
+                "first_name",
+                "last_name",
+                "company_name",
+                "phone"
+              ],
+              filterableAttributes: [
+                "customer_type",
+                "price_level",
+                "has_account",
+                "groups",
+                "status"
+              ],
+              displayedAttributes: [
+                "id",
+                "email",
+                "first_name",
+                "last_name",
+                "company_name",
+                "phone",
+                "has_account",
+                "groups",
+                "metadata",
+                "created_at",
+                "updated_at",
+                "customer_type",
+                "price_level",
+                "acquisition_channel",
+                "list_id",
+                "status"
+              ],
+            },
+            primaryKey: "id",
+            transformer: (customer: any) => {
+              const meta = customer.metadata || {}
+              const groupNames = customer.groups?.map((g: any) => g.name) || []
+              let priceLevel = "Retail"
+              if (groupNames.includes("Wholesale")) priceLevel = "Wholesale"
+              if (meta.price_level || meta.qb_price_level) priceLevel = meta.price_level || meta.qb_price_level
+
+              return {
+                id: customer.id,
+                email: customer.email,
+                first_name: customer.first_name,
+                last_name: customer.last_name,
+                company_name: customer.company_name,
+                phone: customer.phone,
+                has_account: customer.has_account,
+                status: customer.has_account ? "Registered" : "Guest",
+                groups: groupNames,
+                metadata: meta,
+                created_at: new Date(customer.created_at).getTime(),
+                updated_at: new Date(customer.updated_at).getTime(),
+
+                // Extracted top-level fields for the POS table view
+                customer_type: meta.qb_customer_type || meta.customer_type || "Standard",
+                price_level: priceLevel,
+                acquisition_channel: meta.acquisition_channel || "",
+                list_id: meta.qb_list_id || ""
+              }
+            }
+          },
         },
       },
-    }] : []),
+    }
   ]
 })

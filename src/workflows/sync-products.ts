@@ -13,30 +13,48 @@ export const syncProductsToMeiliStep = createStep(
             apiKey: process.env.MEILISEARCH_API_KEY!,
         })
 
-        // Fetch all products with variants, categories, and full hierarchy
-        const { data: products } = await query.graph({
-            entity: "product",
-            fields: [
-                "id",
-                "title",
-                "handle",
-                "description",
-                "thumbnail",
-                "status",
-                "material",
-                "updated_at",
-                "created_at",
-                "categories.handle",
-                "categories.parent_category.handle",
-                "categories.parent_category.parent_category.handle", // Depth 3
-                "variants.*",
-                "variants.options.*",
-                "variants.options.option.*",
-            ],
-        })
+        // Fetch all products with variants, categories, and full hierarchy in batches
+        let allProducts: any[] = []
+        let skip = 0
+        const take = 500
+        let hasMore = true
+
+        while (hasMore) {
+            const { data: batch } = await query.graph({
+                entity: "product",
+                fields: [
+                    "id",
+                    "title",
+                    "handle",
+                    "description",
+                    "thumbnail",
+                    "status",
+                    "material",
+                    "updated_at",
+                    "created_at",
+                    "categories.handle",
+                    "categories.parent_category.handle",
+                    "categories.parent_category.parent_category.handle", // Depth 3
+                    "variants.*",
+                    "variants.options.*",
+                    "variants.options.option.*",
+                ],
+                pagination: { skip, take }
+            })
+
+            if (batch.length === 0) {
+                hasMore = false
+                break
+            }
+
+            allProducts = allProducts.concat(batch)
+            skip += take
+        }
+
+        console.log(`🔍 [DEBUG] Fetched ${allProducts.length} full products for MeiliSearch sync`)
 
         // Transform products for MeiliSearch
-        const meiliProducts = products.map((product: any) => {
+        const meiliProducts = allProducts.map((product: any) => {
             // Flatten all category handles (including parents)
             const allCategoryHandles = new Set<string>()
 

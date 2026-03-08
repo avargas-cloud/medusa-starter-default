@@ -1,22 +1,20 @@
-import { ContainerRegistrationKeys } from "@medusajs/utils"
-export default async function myScript({ container }: { container: any }) {
-    const query = container.resolve(ContainerRegistrationKeys.QUERY)
-    const { data: [order] } = await query.graph({
-        entity: "order",
+import { ExecArgs } from "@medusajs/framework/types"
+
+export default async function testQuery({ container }: ExecArgs) {
+    const query = container.resolve("query")
+    const { data } = await query.graph({
+        entity: "product",
         fields: [
-            "id", "display_id", "status", "metadata", "tax_total",
-            "customer_id",
-            "items.*",
-            "items.variant.*",
-            "items.variant.metadata.*",
-            "items.variant.product.metadata.*"
+            "id",
+            "title",
+            "variants.id",
+            "variants.title",
+            "variants.sku",
+            "variants.price_set.prices.amount",
+            "variants.price_set.prices.currency_code",
+            "variants.price_set.prices.price_list_id",
         ],
-        filters: { id: "order_01KK1V61RHWZ5E9KMHY8ZC5B3K" }
+        pagination: { skip: 0, take: 1 },
     })
-    console.log("---- QUERY RAW RESULTS ----")
-    if (order?.items) {
-        console.dir(order.items[0], { depth: null })
-    } else {
-        console.log("No items found")
-    }
+    console.log(JSON.stringify(data, null, 2))
 }

@@ -1,6 +1,6 @@
 import { createWorkflow, WorkflowResponse } from "@medusajs/framework/workflows-sdk"
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 export const syncInventoryToMeiliStep = createStep(
     "sync-to-meili-step",
@@ -40,38 +40,56 @@ export const syncInventoryToMeiliStep = createStep(
             console.warn("[sync-inventory] Could not load price list prices:", e.message)
         }
 
-        // Fetch all variants with their inventory items, prices, and product info
-        const { data: variants } = await query.graph({
-            entity: "product_variant",
-            fields: [
-                "id",
-                "sku",
-                "created_at",
-                "updated_at",
-                "price_set.id",
-                "product.id",
-                "product.title",
-                "product.thumbnail",
-                "product.status",
-                "product.categories.id",
-                "product.categories.handle",
-                "product.categories.parent_category.handle",
-                "product.categories.parent_category.parent_category.handle",
-                "prices.amount",
-                "prices.currency_code",
-                "prices.price_list_id",   // always null from query graph — kept for future
-                "inventory_items.inventory.id",
-                "inventory_items.inventory.sku",
-                "inventory_items.inventory.title",
-                "inventory_items.inventory.created_at",
-                "inventory_items.inventory.updated_at",
-                "inventory_items.inventory.stocked_quantity",
-                "inventory_items.inventory.reserved_quantity",
-            ],
-        })
+        // Fetch all variants with their inventory items, prices, and product info in batches
+        let allVariants: any[] = []
+        let skip = 0
+        const take = 500
+        let hasMore = true
+
+        while (hasMore) {
+            const { data: batch } = await query.graph({
+                entity: "product_variant",
+                fields: [
+                    "id",
+                    "sku",
+                    "created_at",
+                    "updated_at",
+                    "price_set.id",
+                    "product.id",
+                    "product.title",
+                    "product.thumbnail",
+                    "product.status",
+                    "product.categories.id",
+                    "product.categories.handle",
+                    "product.categories.parent_category.handle",
+                    "product.categories.parent_category.parent_category.handle",
+                    "prices.amount",
+                    "prices.currency_code",
+                    "prices.price_list_id",
+                    "inventory_items.inventory.id",
+                    "inventory_items.inventory.sku",
+                    "inventory_items.inventory.title",
+                    "inventory_items.inventory.created_at",
+                    "inventory_items.inventory.updated_at",
+                    "inventory_items.inventory.stocked_quantity",
+                    "inventory_items.inventory.reserved_quantity",
+                ],
+                pagination: { skip, take }
+            })
+
+            if (batch.length === 0) {
+                hasMore = false
+                break
+            }
+
+            allVariants = allVariants.concat(batch)
+            skip += take
+        }
+
+        console.log(`🔍 [DEBUG] Fetched ${allVariants.length} variants for MeiliSearch inventory sync`)
 
         // Transform variants → inventory items for MeiliSearch
-        const meiliInventoryItems = variants.flatMap((variant: any) => {
+        const meiliInventoryItems = allVariants.flatMap((variant: any) => {
             const product = variant.product
 
             // RETAIL = highest USD price (query graph returns price_list_id as null always,

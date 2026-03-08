@@ -99,10 +99,23 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         let cvJson = await cvRes.json()
 
         if (cvRes.ok) {
-            // Succeeded — compute the true total from the order AFTER conversion
+            // Compute the true total from the order AFTER conversion
             const correctTotal = await computeTrueTotal()
             if (correctTotal !== null) {
                 await fixPaymentCollection(correctTotal)
+            }
+
+            // Save the exact conversion timestamp — Medusa may inherit created_at from the
+            // cart (draft order creation date), so we stamp order_placed_at explicitly.
+            try {
+                await fetch(`${base}/admin/orders/${id}`, {
+                    method: 'POST',
+                    headers: authHeaders,
+                    body: JSON.stringify({ metadata: { order_placed_at: new Date().toISOString() } }),
+                })
+                console.log(`[convert-force] ✅ Stamped order_placed_at on order ${id}`)
+            } catch (metaErr: any) {
+                console.warn(`[convert-force] ⚠️ Could not stamp order_placed_at: ${metaErr?.message}`)
             }
 
             // The order.placed event is emitted by Medusa's conversion workflow and
