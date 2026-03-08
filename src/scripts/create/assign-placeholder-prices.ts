@@ -117,39 +117,41 @@ export default async function createPriceSetsAndAssignPrices({ container }: Exec
         // Phase 2: Add prices to existing Price Sets
         logger.info("\n💲 Phase 2: Adding Prices to Existing Price Sets...")
 
-        for (const variant of variantsWithPriceSets) {
-            try {
-                // Skip if price_set is null (shouldn't happen but TypeScript safety)
-                if (!variant.price_set) continue;
+        // Create prices in batches to avoid timeout
+        const batchSize = 500
 
-                // Add both retail and wholesale prices
-                await pricingModule.addPrices({
-                    priceSetId: variant.price_set.id,
-                    prices: [
+        for (let i = 0; i < variantsWithPriceSets.length; i += batchSize) {
+            const batch = variantsWithPriceSets.slice(i, i + batchSize)
+
+            try {
+                const pricesToCreate: any[] = []
+
+                for (const variant of batch) {
+                    if (!variant.price_set) continue;
+
+                    pricesToCreate.push(
                         {
+                            price_set_id: variant.price_set.id,
                             currency_code: "usd",
                             amount: retailPrice,
-                            rules: {},
+                            rules_count: 0
                         },
                         {
+                            price_set_id: variant.price_set.id,
                             currency_code: "usd",
                             amount: wholesalePrice,
-                            rules: {
-                                customer_group_id: wholesaleGroupId,
-                            }
+                            rules_count: 1
                         }
-                    ]
-                })
-
-                pricesAssigned += 2
-
-                if (pricesAssigned % 100 === 0) {
-                    logger.info(`  ✓ Assigned ${pricesAssigned} prices...`)
+                    )
                 }
 
+                // Add all prices at once
+                await pricingModule.createPrices(pricesToCreate)
+
+                pricesAssigned += pricesToCreate.length
+                logger.info(`  ✓ Assigned ${pricesAssigned}/${variantsWithPriceSets.length * 2} prices...`)
             } catch (error: any) {
-                // Might fail if prices already exist (duplicate), that's OK
-                logger.warn(`  ! Note for ${variant.sku}: ${error.message}`)
+                logger.error(`  ✗ Failed for batch: ${error.message}`)
             }
         }
 

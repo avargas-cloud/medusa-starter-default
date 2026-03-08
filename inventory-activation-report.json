@@ -1,6 +1,152 @@
 {
-  "totalVariants": 505,
-  "inventoryItemsCreated": 505,
-  "alreadyHadInventory": 0,
-  "errors": []
+  "totalVariants": 2460,
+  "inventoryItemsCreated": 1517,
+  "alreadyHadInventory": 914,
+  "errors": [
+    {
+      "variantId": "variant_01KK53MPM7QQ6F4VY70J6TYX72",
+      "sku": "EBU-CLTO3.5W30K",
+      "error": "Inventory item with sku: EBU-CLTO3.5W30K, already exists."
+    },
+    {
+      "variantId": "variant_01KK53MRESGJWNS6ZYQ2J8C69Z",
+      "sku": "ETB-AHB4FC-5K",
+      "error": "Inventory item with sku: ETB-AHB4FC-5K, already exists."
+    },
+    {
+      "variantId": "variant_01KK53MS8F5Z8AZ3AF8RWMH5VY",
+      "sku": "LEG-ADPD4FBL3P2G4",
+      "error": "Inventory item with sku: LEG-ADPD4FBL3P2G4, already exists."
+    },
+    {
+      "variantId": "variant_01KK53MSEV10FW0KZQ3S0P1N7E",
+      "sku": "LEG-AWP1G3WHW4",
+      "error": "Inventory item with sku: LEG-AWP1G3WHW4, already exists."
+    },
+    {
+      "variantId": "variant_01KK53MSEVSMVBCA88TA2KBPVZ",
+      "sku": "LEG-AWP5GWHW1",
+      "error": "Inventory item with sku: LEG-AWP5GWHW1, already exists."
+    },
+    {
+      "variantId": "variant_01KK53MSEWX3N10DY8H5PFVEQT",
+      "sku": "LEG-AWP6GWHW1",
+      "error": "Inventory item with sku: LEG-AWP6GWHW1, already exists."
+    },
+    {
+      "variantId": "variant_01KK53MW2N27XXM982DFHDQC4M",
+      "sku": "WE-FLD2-15CW-KN",
+      "error": "Inventory item with sku: WE-FLD2-15CW-KN, already exists."
+    },
+    {
+      "variantId": "variant_01KK53MW2NT2KGM1GA6ACANM95",
+      "sku": "WE-FLD2-15W30KKN",
+      "error": "Inventory item with sku: WE-FLD2-15W30KKN, already exists."
+    },
+    {
+      "variantId": "variant_01KK53MW2P6Z9PV3GW9NP01D7W",
+      "sku": "WE-LFXMD50W5K-TR",
+      "error": "Inventory item with sku: WE-LFXMD50W5K-TR, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CDE7Z6Z86H8ZXPXVRF5HZ",
+      "sku": "SUN-81119",
+      "error": "Inventory item with sku: SUN-81119, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CDE7ZXAGJPWQE9C1PHY8X",
+      "sku": "SUN-80895",
+      "error": "Inventory item with sku: SUN-80895, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CDE807WQYZMK5N0DYYSG1",
+      "sku": "SUN-88398",
+      "error": "Inventory item with sku: SUN-88398, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CFZSY0JAWX3V9XYY02Y2N",
+      "sku": "LEG-AGFTR2153W4",
+      "error": "Inventory item with sku: LEG-AGFTR2153W4, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CFZSYNRKFKTTW0YYQX738",
+      "sku": "LEG-ACNRFCM1",
+      "error": "Inventory item with sku: LEG-ACNRFCM1, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CFZSYQ40VHC17V5Y1WFE7",
+      "sku": "LEG-ACNRFCW1",
+      "error": "Inventory item with sku: LEG-ACNRFCW1, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CFZSYY8FAMA9B5CMQV1Z7",
+      "sku": "LEG-AGFTR2153G4",
+      "error": "Inventory item with sku: LEG-AGFTR2153G4, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CG0GR3CAP1BM2E1SWZZ4W",
+      "sku": "LEG-AWP1G3WH4",
+      "error": "Inventory item with sku: LEG-AWP1G3WH4, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CG0GR4YPJCKPSSJ719H9Z",
+      "sku": "LEG-AWP5GMG1",
+      "error": "Inventory item with sku: LEG-AWP5GMG1, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CG0GR5T30NPNFVEQE2Y8Z",
+      "sku": "LEG-AWP5GGR1",
+      "error": "Inventory item with sku: LEG-AWP5GGR1, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CG0GR5V67NQGSH86QPFF2",
+      "sku": "LEG-AWP1G3GR4",
+      "error": "Inventory item with sku: LEG-AWP1G3GR4, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CG0GR9H9DKF76PNWS29RV",
+      "sku": "LEG-AWP1G3BR4",
+      "error": "Inventory item with sku: LEG-AWP1G3BR4, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CG0GR9YSMN0WEQBNQWC1G",
+      "sku": "LEG-AWP1G3TM4",
+      "error": "Inventory item with sku: LEG-AWP1G3TM4, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CG0GRHPNGBX9CZP6JVH16",
+      "sku": "LEG-AWP1G3MG4",
+      "error": "Inventory item with sku: LEG-AWP1G3MG4, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CG0GS18HSYH384H125308",
+      "sku": "LEG-AWP5GWH1",
+      "error": "Inventory item with sku: LEG-AWP5GWH1, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CG0GS2AE007SVF867296H",
+      "sku": "LEG-AWP6GTM1",
+      "error": "Inventory item with sku: LEG-AWP6GTM1, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CG0GS62DFFVJ5YH44QGC3",
+      "sku": "LEG-AWP6GWH1",
+      "error": "Inventory item with sku: LEG-AWP6GWH1, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CG0GSEZAVVKTKQ1RZ0J9N",
+      "sku": "LEG-AWP6GGR1",
+      "error": "Inventory item with sku: LEG-AWP6GGR1, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CG0GSGVXNP9X248JAXVAG",
+      "sku": "LEG-AWP5GTM1",
+      "error": "Inventory item with sku: LEG-AWP5GTM1, already exists."
+    },
+    {
+      "variantId": "variant_01KK5CG0GSJNG2RTZPH2JS6Z0S",
+      "sku": "LEG-AWP6GMG1",
+      "error": "Inventory item with sku: LEG-AWP6GMG1, already exists."
+    }
+  ]
 }

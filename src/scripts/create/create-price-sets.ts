@@ -38,32 +38,25 @@ export default async function createPriceSets({ container }: ExecArgs) {
         let created = 0
 
         // Create price sets in batches
-        const batchSize = 50
+        const batchSize = 500
 
         for (let i = 0; i < variantsNeedingPriceSets.length; i += batchSize) {
             const batch = variantsNeedingPriceSets.slice(i, i + batchSize)
 
             try {
-                for (const variant of batch) {
-                    // Create price set
-                    const [priceSet] = await pricingModule.createPriceSets([
-                        {
-                            // No rules = default price set
-                        }
-                    ])
+                // Bulk create price sets (array of empty objects)
+                const priceSetDefinitions = batch.map(() => ({}))
+                const priceSets = await pricingModule.createPriceSets(priceSetDefinitions)
 
-                    // Link price set to variant
-                    await remoteLink.create({
-                        productService: {
-                            variant_id: variant.id,
-                        },
-                        pricingService: {
-                            price_set_id: priceSet.id,
-                        },
-                    })
+                // Bulk link variants to their new price sets
+                const links = batch.map((variant: any, index: number) => ({
+                    [Modules.PRODUCT]: { variant_id: variant.id },
+                    [Modules.PRICING]: { price_set_id: priceSets[index].id }
+                }))
 
-                    created++
-                }
+                await remoteLink.create(links)
+
+                created += batch.length
 
                 logger.info(`  ✓ Created ${created}/${variantsNeedingPriceSets.length} Price Sets...`)
 

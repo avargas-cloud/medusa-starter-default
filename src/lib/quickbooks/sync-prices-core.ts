@@ -226,14 +226,16 @@ export async function syncPricesCore(
             try {
                 const { data: currentPrices } = await query.graph({
                     entity: "price",
-                    fields: ["amount"],
+                    fields: ["id", "amount", "price_list_id"],
                     filters: {
                         price_set_id: variant.price_set.id,
                         currency_code: "usd"
                     }
                 })
 
-                const currentAmount = currentPrices[0]?.amount ?? 0
+                // Find default retail prices (no price list attached)
+                const defaultPrices = currentPrices.filter((p: any) => !p.price_list_id)
+                const currentAmount = defaultPrices[0]?.amount ?? 0
 
                 // Medusa v2 stores prices in MAJOR UNITS (dollars), NOT cents.
                 // QB also sends dollars (e.g., SalesPrice: "29.99")
@@ -245,7 +247,8 @@ export async function syncPricesCore(
                 // cents-as-dollars bug. We trust QB and overwrite.
 
                 // Compare dollars to dollars — skip if unchanged (within $0.01 tolerance)
-                if (Math.abs(currentAmount - newPrice) < 0.01) {
+                // AND there are no duplicates to clean up
+                if (Math.abs(currentAmount - newPrice) < 0.01 && defaultPrices.length <= 1) {
                     stats.skippedNoChange++
                     continue
                 }
@@ -259,15 +262,33 @@ export async function syncPricesCore(
                 }
 
                 // Update Price — Medusa v2: store in dollars directly (major units)
-                await pricingModule.updatePriceSets(variant.price_set.id, {
-                    prices: [
+                if (defaultPrices.length > 0) {
+                    // Update the first existing default price
+                    await (pricingModule as any).updatePrices([
                         {
-                            amount: newPrice,  // dollars directly, no × 100
+                            id: defaultPrices[0].id,
+                            amount: newPrice,
+                        }
+                    ])
+
+                    // Cleanup duplicates if they exist (fixing duplicated retail prices)
+                    if (defaultPrices.length > 1) {
+                        const duplicateIds = defaultPrices.slice(1).map((p: any) => p.id)
+                        await (pricingModule as any).deletePrices(duplicateIds)
+                        warn(`   🧹 Cleaned up ${duplicateIds.length} duplicate retail prices for ${variant.sku}`)
+                    }
+                } else {
+                    // Create new price if not exists
+                    await (pricingModule as any).createPrices([
+                        {
+                            price_set_id: variant.price_set.id,
                             currency_code: "usd",
+                            amount: newPrice,
                             rules: {}
                         }
-                    ]
-                })
+                    ])
+                }
+
                 stats.updatedPrice++
                 log(`   💵 Retail updated ${variant.sku || variant.id}: $${currentAmount.toFixed(2)} → $${newPrice.toFixed(2)}`)
 

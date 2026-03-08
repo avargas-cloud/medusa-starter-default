@@ -103,7 +103,8 @@ export const syncProductsToMeiliStep = createStep(
                 "updated_at",
                 "created_at",
                 "metadata",
-                "description"
+                "description",
+                "category_handles"  // ← required for category filter to work
             ],
             filterableAttributes: [
                 "category_handles",
