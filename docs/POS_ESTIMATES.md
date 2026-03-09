@@ -276,7 +276,7 @@ Esta sección consolida resoluciones a bugs complejos de interfaz y lógica resu
 
 5. **Integración de Tax Mode y Tax Exemption B2B**
    - **Contexto:** Se necesitaba abstraer el cálculo manual de impuestos e integrarse con el estatus real de Exención Fiscal (Tax Exempt) de los clientes B2B traídos de QuickBooks.
-   - **Fix:** Refactorización de la lógica del Checkout en `posStore.ts` y la vista visual `OrderSummary.tsx`. Se migró de variables numéricas libres (`taxRate: 7`) a un Enum estricto `taxMode: 'auto' | 'florida' | 'exempt'`.
+   - **Fix:** Refactorización de la lógica del Checkout en `posStore.ts` y la vista visual `OrderSummary.tsx`. Se migró de variables numéricas libres (`taxRate`) a un Enum estricto `taxMode: 'florida' | 'exempt'`.
    - Si un cliente tiene metadata `is_tax_exempt: 'Yes'`, los selectores visuales cambian automáticamente a 'exempt', forzando tax a 0% visualmente e inyectando `tax_mode` en el payload final de Medusa para respetar la sincronización contable.
 
 6. **Unificación Frontend de System Defaults (`EstimateMetaFields`)**
@@ -289,6 +289,31 @@ Esta sección consolida resoluciones a bugs complejos de interfaz y lógica resu
 8. **Hard Reset Completo en "Discard"**
    - **Contexto:** Al hacer click en el botón `Discard` de una sesión temporal `/estimates/new`, el estado local (items y sumatorias) persistía provocando ítems fantasma en futuros Draft Orders.
    - **Fix:** Se vinculó el action click al hook nativo `resetDocument()` interno del `usePOSStore`, garantizando la limpieza total a estado zero del Cache Local en `localStorage`.
+
+9. **Gestor Avanzado de Direcciones B2B (`AddressModal` & `AddressBookOptions`)**
+   - **Contexto:** Al editar la dirección física dentro del Estimate, los comerciantes debían poder discernir si el cambio aplicaba singularmente de una vez para esa cotización, o si afectaba la libreta de direcciones permanente del cliente.
+   - **Fix:** Se modularizó el componente `AddressModal.tsx` (Patrón Barrel) aislando la vista del formulario (`AddressFormFields`) de la lógica condicional de guardado (`AddressBookOptions`).
+   - Se introdujeron 3 opciones nativas cuando un cliente asocia direcciones predefinidas: 
+     1. Actualizar sólo este borrador (No afectar el Book de la DB).
+     2. Sobreescribir el Record central y este Borrador.
+     3. Conservar la anterior y crear un nuevo Record bajo una etiqueta personalizada (`e.g "Warehouse"`).
+
+10. **Refactor de Cotización de Envíos (`ShippingModal`)**
+    - **Contexto:** Se necesitaba abstraer la lógica rígida de Shipping y soportar UPS + Métodos planificados de Tienda B2B.
+    - **Fix:** El `ShippingModal` ahora pre-evalúa automáticamente la elegibilidad de *Envío Gratis (Free Ground Shipping)* interceptando `/admin/shipping-settings` y comparando el Subtotal del carrito. 
+    - Se integró la API `admin/ups-rate-preview` exigiendo validación estricta de Código Postal (`postal_code`) para mostrar un formulario en-línea (Inline Address Form) si el cliente o el borrador carecen de éste, evitando llamadas fallidas.
+
+11. **Descuentos y Promociones Transaccionales (`PromotionsModal` & `PromotionStrip`)**
+    - **Contexto:** Habilitar descuentos centralizados B2B directos sobre el Order Total.
+    - **Fix:** Integración de la UI híbrida que soporta tanto Códigos Promocionales pre-fabricados en el sistema (via `GET /admin/pos-promotions`), como **Descuentos Customizados (Manuales)** en tarifa Fija ($) o Porcentual (%), enviando el payload directamente a `/admin/pos-discount`.
+
+12. **Line-Item Discounts (Descuentos Individuales por Producto)**
+    - **Contexto:** Permitir al Staff rebajar un renglón en particular por fuera de su *Price List* genérica sin afectar la orden entera.
+    - **Fix:** Dentro de `LineItemsTable.tsx` se construyó un Popover-Portal de `Line Discount`. Modifica el cache local (`_discountTotal`) sumando deducciones en % o Fixed rate que el `posStore.ts` luego computa en la base `_afterLineDiscountTotal` para reflejar con un tachado (*strikethrough*) el precio base al renderizado.
+
+13. **Plantillas Rápidas para Notas (`NoteArea` & `QuickNotesModal`)**
+    - **Contexto:** Los Estimates B2B requieren cláusulas legales o de alcance de trabajo que demoran en escribirse manualmente.
+    - **Fix:** Se integró un Gestor de Plantillas Rápidas inyectando llamadas nativas a `/admin/note-presets`. Esto abre un portal que clasifica jerárquica y localmente por `group_name` (*Store Policy, Installation, Scope of Work*), permitiendo al usuario inyectar bloques gigantes de contenido al textarea nativo con un solo click (`appendNote`).
 
 ---
 
