@@ -274,6 +274,22 @@ Esta sección consolida resoluciones a bugs complejos de interfaz y lógica resu
    - **Troubleshooting:** `/estimates/new` al carecer del Id persistido en medusa no autorizaba el backend de Prices a devolver combinaciones.
    - **Fix Arquitectónico:** Agregación global a la estructura transitoria `store/posStore.ts` del vector opcional `availablePrices`. Este almacena los sets de precios generados directamente por MeiliSearch en el frontend (sin backend), y se lo entrega al `PriceDropdown` como set estático. El usuario ahora puede configurar wholesale antes del primer click a 'Save'.
 
+5. **Integración de Tax Mode y Tax Exemption B2B**
+   - **Contexto:** Se necesitaba abstraer el cálculo manual de impuestos e integrarse con el estatus real de Exención Fiscal (Tax Exempt) de los clientes B2B traídos de QuickBooks.
+   - **Fix:** Refactorización de la lógica del Checkout en `posStore.ts` y la vista visual `OrderSummary.tsx`. Se migró de variables numéricas libres (`taxRate: 7`) a un Enum estricto `taxMode: 'auto' | 'florida' | 'exempt'`.
+   - Si un cliente tiene metadata `is_tax_exempt: 'Yes'`, los selectores visuales cambian automáticamente a 'exempt', forzando tax a 0% visualmente e inyectando `tax_mode` en el payload final de Medusa para respetar la sincronización contable.
+
+6. **Unificación Frontend de System Defaults (`EstimateMetaFields`)**
+   - **Contexto:** Los dropdowns administrativos de _Lead Time_, _Order Type_, _Payment Terms_ y _Status_ estaban dispersos y usaban hardcodings en algunos modales.
+   - **Integración:** El componente `EstimateMetaFields.tsx` ahora se alimenta nativamente del endpoint `GET /admin/system-defaults` a través de `useQuery`, absorbiendo dinámicamente cualquier cambio jerárquico que suceda en el Admin.
+
+7. **Corrección: Save as Default (Sales Rep)**
+   - **Resolución:** El front-end del POS en los "Meta Fields" intentaba empujar el guardado por defecto al objeto del cliente bajo una llave errónea (`default_sales_rep`), mientras que el Admin lo leía bajo `default_rep`. Se unificó `CUSTOMER_META_KEYS` para que el POS grabe y pre-llene la llave universal `default_rep`. El widget `↑ Save as default` ahora aparece de manera inteligente respetando el scope global.
+
+8. **Hard Reset Completo en "Discard"**
+   - **Contexto:** Al hacer click en el botón `Discard` de una sesión temporal `/estimates/new`, el estado local (items y sumatorias) persistía provocando ítems fantasma en futuros Draft Orders.
+   - **Fix:** Se vinculó el action click al hook nativo `resetDocument()` interno del `usePOSStore`, garantizando la limpieza total a estado zero del Cache Local en `localStorage`.
+
 ---
 
 ## Known Issues Generales

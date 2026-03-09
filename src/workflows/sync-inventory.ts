@@ -59,6 +59,7 @@ export const syncInventoryToMeiliStep = createStep(
                     "product.title",
                     "product.thumbnail",
                     "product.status",
+                    "product.metadata",
                     "product.categories.id",
                     "product.categories.handle",
                     "product.categories.parent_category.handle",
@@ -73,6 +74,8 @@ export const syncInventoryToMeiliStep = createStep(
                     "inventory_items.inventory.updated_at",
                     "inventory_items.inventory.stocked_quantity",
                     "inventory_items.inventory.reserved_quantity",
+                    "options.value",
+                    "options.option.title",
                 ],
                 pagination: { skip, take }
             })
@@ -114,6 +117,12 @@ export const syncInventoryToMeiliStep = createStep(
                 if (c.parent_category?.parent_category?.handle) allCategoryHandles.add(c.parent_category.parent_category.handle)
             })
 
+            // Map variant options (Color Temperature = 3000K)
+            const mappedOptions = (variant.options || []).map((opt: any) => ({
+                title: opt.option?.title || "Option",
+                value: opt.value || "",
+            }))
+
             // Map each inventory item linked to this variant
             return (variant.inventory_items || []).map((invItem: any) => {
                 const inventory = invItem.inventory
@@ -129,6 +138,8 @@ export const syncInventoryToMeiliStep = createStep(
                     pricesByList,                           // { [price_list_id]: amount }
                     variantId: variant.id,
                     productId: product?.id || null,
+                    salesDescription: (product?.metadata as any)?.sales_description || null,
+                    options: mappedOptions,
                     category_handles: Array.from(allCategoryHandles),
                     status: product?.status || "draft",
                     created_at: new Date(inventory.created_at || variant.created_at).getTime(),

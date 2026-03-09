@@ -57,7 +57,7 @@ La página de detalles (`app/(pos)/customers/[id]/page.tsx`) abandonó el diseñ
 |------|------------|-------------|
 | **1 (Izquierda)** | `CustomerDetailsCard` | Info básica de contacto, campos editables en modal (Company, Phone, QB List ID, Customer Type, Acquisition Channel), insignias de Status, Tipo y Nivel de Precio. |
 | **1 (Derecha)**   | `CustomerAddressesCard` | Direcciones de Billing y Shipping lado a lado. Cada una tiene su propio modal de edición con validación de estados de US. |
-| **2 (Ancho completo)** | `CustomerDefaultsCard` | Valores por defecto del cliente (Sales Rep, Default Payment Terms, Default Shipping Method, Tax Exempt status). |
+| **2 (Ancho completo)** | `CustomerSystemDefaultsCard` | Valores por defecto del cliente alimentados por los System Defaults unificados (Sales Rep, Default Payment Terms, Default Shipping Method, Tax Exempt status). |
 | **3 (Ancho completo)** | `CustomerActivity` | Historial consolidado. Tabla con altura dinámica que llena el resto de la pantalla y tiene scroll interno. Muestra cruce de Orders (Ventas) y Estimates (Borradores). |
 
 ### Acciones Directas en Toolbar

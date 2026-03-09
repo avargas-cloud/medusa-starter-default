@@ -116,7 +116,7 @@ backend/src/
     │           └── PromotionsBlock.tsx       ← Discount codes
     │
     └── widgets/
-        ├── customer-estimate-defaults.tsx   ← Customer page: default Rep/Terms
+        ├── customer-estimate-defaults.tsx   ← Customer page: default Rep/Terms (Uses unified System Defaults)
         ├── customer-tax-exempt.tsx          ← Customer page: Tax Exempt + doc upload
         └── quickbooks-order-widget.tsx      ← Order detail page: QB Sales Order sync
 ```
@@ -289,14 +289,17 @@ Voids a Sales Receipt in QB when a POS order is cancelled/refunded.
 ---
 
 
-### `GET /admin/estimate-options`
+### `GET /admin/system-defaults`
 
-Returns dropdown options:
+Returns all central system defaults (unified from previous `Customer Defaults` and `Order Defaults`), ordered by context, field name, and sort order. Includes options for Estimate dropdowns.
 ```json
 {
-  "payment_terms": ["Due on Receipt", "Net 15", "Net 30", "Net 60"],
-  "lead_times": ["In stock as of date on quote", "1-2 weeks", "2-4 weeks", "4-6 weeks"],
-  "order_types": ["Regular Order", "Special Order", "Backorder", "Drop Ship"]
+  "defaults": [
+    { "context": "Document Defaults", "field_name": "Terms", "value": "Due on Receipt" },
+    { "context": "Document Defaults", "field_name": "Lead Time", "value": "In stock as of date on quote" },
+    { "context": "Document Defaults", "field_name": "Order Type", "value": "Regular Order" },
+    { "context": "Document Defaults", "field_name": "Sales Rep User", "value": "{\"email\":\"...\",\"name\":\"...\",\"initials\":\"AV\",\"is_sales_rep\":true,\"active\":true}" }
+  ]
 }
 ```
 
@@ -629,7 +632,7 @@ When a field differs from `customerDefaults[key]`, a blue button appears:
 
 **Zone:** `customer.details.after`
 
-Manages default estimate values in customer metadata: `default_rep`, `default_order_type`, `default_lead_time`, `default_payment_terms`. These pre-fill new estimates for that customer.
+Manages default estimate values in customer metadata: `default_rep`, `default_order_type`, `default_lead_time`, `default_payment_terms`. These pre-fill new estimates for that customer. **Crucially, the dropdown options for these fields are natively fetched from the unified `/admin/system-defaults` endpoint** to guarantee harmony between the Admin backend, the Draft Orders GUI, and POS.
 
 ### `customer-tax-exempt.tsx`
 

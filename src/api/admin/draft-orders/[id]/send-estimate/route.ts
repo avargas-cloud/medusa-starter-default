@@ -47,6 +47,29 @@ const LOGO_DATA_URI = `data:image/png;base64,${LOGO_B64}`
 const fmt = (n: number, curr = "USD") =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: curr.toUpperCase() }).format(n)
 
+// ── Text Formatter (Basic Markdown & Spacing Fix) ─────────────────────────────
+function formatPolicyText(text?: string): string {
+  if (!text) return ""
+  // Escape HTML
+  let safe = text.replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  // Parse bold (*text*)
+  safe = safe.replace(/\*(.*?)\*/g, "<b>$1</b>")
+
+  return safe.split(/\r?\n/)
+    .map(line => line.trim())
+    // Ignore consecutive blank lines, but allow meaningful breaks if needed.
+    // For extreme compactness as requested, we remove all blank lines.
+    .filter(line => line.length > 0)
+    .map((line, i) => {
+      // Auto-bold the first line if it looks like a section header
+      if (i === 0 || line.toUpperCase() === "STORE POLICIES" || line.toUpperCase() === "PAYMENT OPTIONS") {
+        return `<div style="font-weight:700;font-size:9px;margin-bottom:2px;">${line}</div>`
+      }
+      return `<div>${line}</div>`
+    })
+    .join("")
+}
+
 // ── HTML Template ─────────────────────────────────────────────────────────────
 function buildEstimateHtml(params: {
   displayId: string | number
@@ -69,12 +92,13 @@ function buildEstimateHtml(params: {
   orderType?: string
   paymentTerms?: string
   project?: string
+  storePolicies?: string
   mode: "print" | "email"
 }): string {
   const {
     displayId, customerName, companyName, billingAddress, shippingAddress,
     items, curr, subtotal, taxAmount, taxRate, shippingTotal, discountTotal, total,
-    notes, estimateDate, rep, leadTime, orderType, paymentTerms, project, mode,
+    notes, estimateDate, rep, leadTime, orderType, paymentTerms, project, storePolicies, mode,
   } = params
 
   const isEmail = mode === "email"
@@ -279,13 +303,13 @@ ${notes ? `
 <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
   <tr style="vertical-align:top;">
     <td style="border:1px solid #d1d5db;padding:6px 8px;font-size:8.5px;line-height:1.55;color:#374151;width:60%;">
-      <div style="font-weight:700;font-size:9px;margin-bottom:2px;">STORE POLICIES</div>
+      ${storePolicies ? formatPolicyText(storePolicies) : `<div style="font-weight:700;font-size:9px;margin-bottom:2px;">STORE POLICIES</div>
       <div><b>·REFUND</b> within 15 days. Product(s) in original condition.</div>
       <div><b>·EXCHANGE / CREDIT</b> within 30 days. Product(s) in original condition.</div>
       <div><b>·SPECIAL ORDERS</b> subject to 25% restocking fee.</div>
       <div><b>·CUSTOM ORDERS</b> not returnable nor cancellable.</div>
       <div><b>·MADE TO ORDER</b> returns subject to approval, commonly not returnable/cancellable.</div>
-      <div><b>·ECOPOWERTECH</b> not responsible for damages after goods leave our premises.</div>
+      <div><b>·ECOPOWERTECH</b> not responsible for damages after goods leave our premises.</div>`}
     </td>
     <td style="width:40%;vertical-align:top;border:1px solid #d1d5db;border-left:0;padding:0;">
       <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
@@ -346,13 +370,15 @@ async function fetchOrderWithPreview(req: MedusaRequest, id: string) {
     "Authorization": req.headers["authorization"] ?? "",
   }
   const base = `http://localhost:${process.env.PORT ?? 9000}`
-  const [oRes, dRes] = await Promise.all([
+  const [oRes, dRes, sysRes] = await Promise.all([
     fetch(`${base}/admin/orders/${id}?fields=+customer.*,+shipping_address.*,+billing_address.*,+items.*,+items.thumbnail,+items.variant.*,+items.variant.product.title,+items.variant.product.thumbnail,+shipping_methods.*,+metadata,+currency_code,+display_id,+email`, { headers }),
     fetch(`${base}/admin/draft-orders/${id}`, { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch(`${base}/admin/system-defaults`, { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
   ])
   if (!oRes.ok) return null
   const { order: raw } = await oRes.json()
   const preview = dRes?.order ?? dRes?.draft_order ?? null
+  const sysDefaults = sysRes?.defaults ?? []
   const norm = (cents: number) => cents > 100 ? cents / 100 : cents
 
   // IMPORTANT: Use raw.items from /admin/orders as the base — it has correct product
@@ -374,6 +400,7 @@ async function fetchOrderWithPreview(req: MedusaRequest, id: string) {
     shipping_total: preview?.shipping_total != null ? preview.shipping_total / 100 : raw.shipping_total ?? 0,
     discount_total: preview?.discount_total != null ? preview.discount_total / 100 : raw.discount_total ?? 0,
     tax_total: preview?.tax_total != null ? preview.tax_total / 100 : raw.tax_total ?? 0,
+    _systemDefaults: sysDefaults,
   }
 }
 
@@ -404,7 +431,9 @@ function buildParams(order: any, mode: "print" | "email") {
     notes: m.estimate_notes, estimateDate,
     rep: m.estimate_rep, leadTime: m.estimate_lead_time,
     orderType: m.estimate_order_type, paymentTerms: m.estimate_payment_terms,
-    project: m.estimate_project, mode,
+    project: m.estimate_project,
+    storePolicies: order._systemDefaults?.find((d: any) => d.context === "Templates Footer" && d.field_name === "Draft Order (Estimates)")?.value,
+    mode,
   }
 }
 

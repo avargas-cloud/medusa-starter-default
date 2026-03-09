@@ -41,18 +41,14 @@ const CustomerEstimateWidget = ({ data }: DetailWidgetProps<HttpTypes.AdminCusto
         // Load options
         fetch("/admin/estimate-options", { credentials: "include" })
             .then(r => r.json())
-            .then(d => setOptions(d))
-            .catch(() => { })
-
-        // Load reps from users
-        fetch("/admin/users", { credentials: "include" })
-            .then(r => r.json())
-            .then(({ users = [] }) => {
-                setReps(users.map((u: any) => {
-                    const name = `${u.first_name ?? ""} ${u.last_name ?? ""}`.trim() || u.email
-                    const initials = name.split(/\s+/).map((p: string) => p[0]?.toUpperCase() ?? "").join("").slice(0, 3)
-                    return { value: initials || u.email.slice(0, 2).toUpperCase(), label: name }
-                }))
+            .then(d => {
+                setOptions(d)
+                if (d.sales_reps) {
+                    setReps(d.sales_reps.map((u: any) => ({
+                        value: u.name,
+                        label: `${u.initials} - ${u.name}`
+                    })))
+                }
             })
             .catch(() => { })
 

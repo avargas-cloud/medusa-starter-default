@@ -105,6 +105,24 @@ Los ítems en MeiliSearch se mantienen sincronizados automáticamente a través 
 
 ---
 
+## Edición de Ítems (`ItemDetailModal`)
+
+El POS permite editar propiedades físicas y comerciales de los ítems directamente desde la grilla de inventario. Debido a la arquitectura separada de Medusa v2, los datos a editar provienen de dos entidades distintas en la base de datos:
+
+1. **Inventory Item:** Contiene la data logística estricta (`sku`, `title`, `weight`, `length`, `width`, `height`, `hs_code`, `mid_code`, `material`).
+2. **Product (Metadata):** Contiene la data comercial que no es nativa de Medusa, manejada vía `metadata` (`sales_description`, `mpn`, `vendor`).
+
+### Estrategia de Fetching y Guardado
+
+- Al abrir el modal, realiza dos queries en paralelo:
+  - `GET /admin/inventory-items/:id` (para dimensiones y atributos aduaneros).
+  - `GET /admin/products/:productId?fields=+metadata` (para popular MPN, Vendor, y Sales Description).
+- **Dimensiones de Envío:** Las dimensiones ingresadas aquí (`weight`, `length`, `width`, `height`) son la **fuente primaria** de cálculo para nuestro cotizador de UPS en el checkout y en el POS (`ups-ground-shipping/service.ts`), superando a las dimensiones del `Variant`.
+- **Validación de Guardado (`isDirty`):** El botón "Save Changes" permanece estrictamente deshabilitado hasta que el usuario modifique al menos un campo real, evitando peticiones API innecesarias.
+- Al guardar, emite dos peticiones `POST` paralelas a los endpoints correspondientes de Inventario y Producto, garantizando que el `metadata` del producto central se mantenga sincronizado. Se omiten atributos del nivel `Variant` (como `barcode` y `country_of_origin`) de este payload para prevenir errores HTTP 400.
+
+---
+
 ## Known Issues (Revisado)
 
 | Issue | Fix |

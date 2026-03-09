@@ -60,23 +60,24 @@ export const EstimateInfoBlock = ({ orderId, customerId, initialInfo, onInfoChan
 
     // Load options + customer defaults
     useEffect(() => {
-        fetch("/admin/estimate-options", { credentials: "include" })
+        fetch("/admin/system-defaults", { credentials: "include" })
             .then(r => r.json())
             .then(d => {
-                setPaymentTerms(d.payment_terms ?? [])
-                setLeadTimes(d.lead_times ?? [])
-                setOrderTypes(d.order_types ?? [])
-            })
-            .catch(() => { })
+                const defaults = d.defaults || []
 
-        fetch("/admin/users", { credentials: "include" })
-            .then(r => r.json())
-            .then(({ users = [] }) => {
-                setReps(users.map((u: any) => {
-                    const name = `${u.first_name ?? ""} ${u.last_name ?? ""}`.trim() || u.email
-                    const initials = name.split(/\s+/).map((p: string) => p[0]?.toUpperCase() ?? "").join("").slice(0, 3)
-                    return { value: initials || u.email.substring(0, 2).toUpperCase(), label: name }
-                }))
+                setPaymentTerms(defaults.filter((x: any) => x.field_name === "Payment Terms").sort((a: any, b: any) => a.sort_order - b.sort_order).map((x: any) => x.value))
+                setLeadTimes(defaults.filter((x: any) => x.field_name === "Lead Time").sort((a: any, b: any) => a.sort_order - b.sort_order).map((x: any) => x.value))
+                setOrderTypes(defaults.filter((x: any) => x.field_name === "Order Type").sort((a: any, b: any) => a.sort_order - b.sort_order).map((x: any) => x.value))
+
+                const repOptions = defaults
+                    .filter((x: any) => x.field_name === "Sales Rep User")
+                    .map((x: any) => {
+                        try { return JSON.parse(x.value) } catch { return null }
+                    })
+                    .filter((parsed: any) => parsed?.active && parsed?.is_sales_rep)
+                    .map((parsed: any) => ({ value: parsed.initials, label: parsed.name }))
+
+                setReps(repOptions)
             })
             .catch(() => { })
 
