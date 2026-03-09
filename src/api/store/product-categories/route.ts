@@ -16,28 +16,12 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         if (req.query.handle) filters.handle = req.query.handle
         if (req.query.name) filters.name = req.query.name
 
-        // Retrieve the custom parameters that middlewares.ts parked in the scope (if they exist)
-        let customParams: any = {}
-        try {
-            customParams = req.scope.resolve("customQueryParams")
-        } catch (e) {
-            // scope may not be registered if this is called internally or without the middleware
-        }
-
-        // Also check req.query as fallback in case some parameters made it through
-        const rawParentId = customParams.parent_category_id ?? req.query.parent_category_id
-        const rawIsActive = customParams.is_active ?? req.query.is_active
-        const rawIsInternal = customParams.is_internal ?? req.query.is_internal
-
+        // parent_category_id: Medusa core passes null as literal "null" string from URL
+        const rawParentId = req.query.parent_category_id
         if (rawParentId !== undefined) {
             filters.parent_category_id = rawParentId === 'null' ? null : rawParentId
         }
-        if (rawIsActive !== undefined) {
-            filters.is_active = String(rawIsActive) === 'true'
-        }
-        if (rawIsInternal !== undefined) {
-            filters.is_internal = String(rawIsInternal) === 'true'
-        }
+
 
         // Get categories using query.graph with explicit fields
         const { data: categories } = await query.graph({
@@ -75,8 +59,6 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
                 // Get category_children (subcategories) with metadata
                 const childrenFilters: any = { parent_category_id: category.id }
-                if (rawIsActive !== undefined) childrenFilters.is_active = String(rawIsActive) === 'true'
-                if (rawIsInternal !== undefined) childrenFilters.is_internal = String(rawIsInternal) === 'true'
 
                 const { data: children } = await query.graph({
                     entity: "product_category",
