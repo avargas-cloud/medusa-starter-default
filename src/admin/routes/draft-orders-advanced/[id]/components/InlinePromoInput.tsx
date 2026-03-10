@@ -11,13 +11,14 @@ interface Promotion {
 interface Props {
     orderId: string
     onApplied: () => void
+    appliedCodes?: string[]
 }
 
 /**
  * Promotion selector — loads existing promotions from Medusa, lets user search
  * and then click to immediately apply (no separate "Apply" button needed).
  */
-export const InlinePromoInput = ({ orderId, onApplied }: Props) => {
+export const InlinePromoInput = ({ orderId, onApplied, appliedCodes = [] }: Props) => {
     const [promotions, setPromotions] = useState<Promotion[]>([])
     const [loading, setLoading] = useState(true)
     const [search, setSearch] = useState("")
@@ -63,11 +64,12 @@ export const InlinePromoInput = ({ orderId, onApplied }: Props) => {
         } finally { setApplying(null) }
     }
 
-    const filtered = promotions.filter(p =>
+    const filtered = promotions.filter(p => !appliedCodes.includes(p.code) && !p.code?.startsWith("CUSTOM-DISC-")).filter(p =>
         !search || p.code?.toLowerCase().includes(search.toLowerCase())
     )
 
     if (loading) {
+
         return <Text size="xsmall" className="text-ui-fg-muted py-2">Loading promotions…</Text>
     }
 

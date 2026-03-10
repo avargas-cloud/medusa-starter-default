@@ -125,7 +125,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 unit_price: item.unit_price || 0,
             }))
 
-        const qbItems = buildQbItems(activeItems)
+        const qbItems = buildQbItems(activeItems, order.metadata)
 
         const shippingItem = buildShippingQbItem(
             order.shipping_methods || [],

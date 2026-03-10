@@ -115,7 +115,7 @@ async function handleDraftOrderCreated(data: any, container: any, logger: any) {
         ...item,
         unit_price: Math.round((item.unit_price || 0) * 100), // dollars → cents for buildQbItems
     }))
-    const qbItems = buildQbItems(itemsForQb)
+    const qbItems = buildQbItems(itemsForQb, draftOrder.metadata)
     logger.info(`${LOG_PREFIX} QB-linked items: ${qbItems.length} of ${draftOrder.items?.length ?? 0} total`)
 
     if (qbItems.length === 0) {

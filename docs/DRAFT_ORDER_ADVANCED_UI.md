@@ -4,7 +4,7 @@
 | Campo | Detalle |
 |-------|---------|
 | **Propósito** | Advanced Draft Orders admin page — a complete replacement for Medusa's native draft order detail view, featuring inline item editing, dual-pricing (Default/Wholesale), tax management, store pickup, and a full B2B Estimate workflow with PDF generation and email delivery. |
-| **Última revisión** | 2026-03-06 (Cancel Draft Order + Show Cancelled filter + QB IsActive fix + Auto-reactivate on re-sync) |
+| **Última revisión** | 2026-03-10 (sales_description per-variant en item search · Hard delete de line items · Drag-to-reorder con sort_order persistente) |
 
 ## Resumen Ejecutivo
 
@@ -33,6 +33,9 @@
 ✅ **Nightly Verification Job** — verifica operaciones QB de las últimas 24h contra el bridge y envía resumen por email
 ✅ **Convert-Force endpoint** — `/admin/draft-orders/:id/convert-force` con fallback de reservaciones
 ✅ **allow_backorder=true** — todos los product variants actualizados para conversión con 0 stock
+✅ **sales_description per-variant** — `InlineItemsTable` muestra `variant.metadata.sales_description` (QB SalesDesc por SKU) en el dropdown de búsqueda en lugar del título genérico del producto
+✅ **Hard delete de line items** — `delete-item-force` usa `deleteOrderLineItems()` directamente (no más qty=0 "zombie items"); soporta POST y DELETE
+✅ **Drag-to-reorder** — `InlineItemsTable` ordena items por `metadata.sort_order`; el orden lo controla el POS y se persiste en la BD
 
 ---
 
@@ -158,9 +161,16 @@ Returns all available prices for a set of variants — default retail + active p
 
 Adds a variant to the draft order, bypassing Medusa's native stock/validation layer.
 
-**Body:** `{ variant_id: string, quantity: number, unit_price: number }`
+**Body:** `{ variant_id: string, quantity: number, unit_price: number, sort_order?: number }`
 
-Uses `POST /admin/orders/:id/items` → confirms the change via `POST /admin/orders/:id/changes/confirm`.
+Uses `orderModule.createOrderLineItems()` directly — pure data layer, bypasses all workflow validation including inventory.
+
+Saves in `line_item.metadata`:
+- `sales_description` — from `variant.metadata.sales_description` (QB SalesDesc per SKU), fallback to `product.metadata.sales_description`
+- `product_title` — denormalized product title for order history
+- `sort_order` — 0-indexed display position (if provided)
+
+> ⚠️ **unit_price in DOLLARS** — `orderModule.createOrderLineItems()` accepts dollars, not cents.
 
 ---
 
@@ -168,19 +178,23 @@ Uses `POST /admin/orders/:id/items` → confirms the change via `POST /admin/ord
 
 Updates quantity and/or unit price of an existing line item.
 
-**Body:** `{ line_item_id: string, quantity?: number, unit_price?: number }`
+**Body:** `{ line_item_id: string, quantity?: number, unit_price?: number, sort_order?: number }`
 
-Flow: fetches current order change or creates one → amends item → confirms.
+Uses `orderModule.updateOrderLineItems()` directly. When `sort_order` is provided, merges it into `line_item.metadata` (preserving existing keys like `sales_description`).
 
-> ⚠️ **price in dollars** — the endpoint receives dollars and converts to cents for Medusa's internal API.
+> ⚠️ **price in dollars** — endpoint receives dollars, Medusa stores dollars internally at module level.
 
 ---
 
-### `POST /admin/draft-orders/:id/delete-item-force`
+### `DELETE|POST /admin/draft-orders/:id/delete-item-force`
 
-Removes a line item.
+Hard-deletes a line item using `orderModule.deleteOrderLineItems()`. No qty=0 soft-delete — item is permanently removed.
 
 **Body:** `{ line_item_id: string }`
+
+Supports both `DELETE` and `POST` for POS and admin panel compatibility.
+
+> ⚠️ **Hard delete is irreversible.** Previous behavior (qty→0) caused "zombie items" visible in the POS — this is the fix.
 
 ---
 
@@ -479,9 +493,34 @@ export function getMissingEstimateFields(info: EstimateInfo): string[] {
 
 **File:** `components/InlineItemsTable.tsx`
 
-### Item Search
+### Item Search (`use-order-items.ts` + `InlineItemsTable.tsx`)
 
-Hits `/admin/product-variants?q=...` then enriches with product thumbnails and inventory levels.
+Hits `/admin/product-variants?q=...&fields=*,metadata` then enriches with product thumbnails and inventory levels.
+
+The search results include `salesDescription` mapped from `variant.metadata.sales_description` (QB SalesDesc per SKU, fallback to product metadata). The dropdown displays `salesDescription` as the **primary label** instead of the generic product title.
+
+```typescript
+// use-order-items.ts — mapping
+salesDescription:
+    (v.metadata?.sales_description as string | undefined)
+    ?? (product.metadata?.sales_description as string | undefined)
+    ?? undefined
+```
+
+When an item is added via `handleAddItem`, **always uses `add-item-force`** (not the standard Medusa edit workflow) to ensure `sales_description` and `sort_order` are saved in `line_item.metadata`.
+
+### Item Display Order (sort_order)
+
+Items are rendered sorted by `metadata.sort_order` (ascending). Items without `sort_order` appear last (fallback `9999`).
+
+The POS app controls `sort_order` via drag-to-reorder. The admin panel respects this order but does not provide its own drag UI.
+
+```typescript
+// InlineItemsTable.tsx
+[...items]
+  .sort((a, b) => (a.metadata?.sort_order ?? 9999) - (b.metadata?.sort_order ?? 9999))
+  .map(item => { ... })
+```
 
 ### Price Selection on Add (Auto-Wholesale)
 

@@ -21,7 +21,7 @@ export const useOrderFetch = (
         setLoading(true); setFetchError(null)
         try {
             const [oRes, dRes] = await Promise.all([
-                fetch(`/admin/orders/${id}?fields=+customer.*,+customer.groups,+shipping_address.*,+billing_address.*,+items.*,+items.variant.*,+shipping_methods.*,+metadata,+currency_code,+email,+created_at,+display_id,+status,+sales_channel.*,+region.*`, { credentials: "include" }),
+                fetch(`/admin/orders/${id}?fields=+customer.*,+customer.groups,+shipping_address.*,+billing_address.*,+items.*,+items.variant.*,+shipping_methods.*,*promotions,*promotions.application_method,+metadata,+currency_code,+email,+created_at,+display_id,+status,+sales_channel.*,+region.*`, { credentials: "include" }),
                 fetch(`/admin/draft-orders/${id}`, { credentials: "include" }).then(r => r.ok ? r.json() : null).catch(() => null),
             ])
             if (!oRes.ok) throw new Error(`HTTP ${oRes.status}`)

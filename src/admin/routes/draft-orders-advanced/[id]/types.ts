@@ -52,6 +52,7 @@ export interface DraftOrderDetail {
 
 export interface VariantResult {
     id: string; title: string; sku?: string; variantTitle?: string; thumbnail?: string
+    salesDescription?: string
     /** Per-location available stock. undefined = still loading. Empty array = no locations found. */
     locations?: { locationName: string; available: number }[]
     prices?: { label: string; amount: number; priceListId?: string }[]

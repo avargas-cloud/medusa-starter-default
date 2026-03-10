@@ -55,6 +55,7 @@ const DraftOrderDetail = () => {
         leadTime: (order.metadata?.estimate_lead_time ?? (order.customer as any)?.metadata?.default_lead_time ?? "") as string,
         paymentTerms: (order.metadata?.estimate_payment_terms ?? (order.customer as any)?.metadata?.default_payment_terms ?? "") as string,
         project: (order.metadata?.estimate_project ?? "") as string,
+        customerPO: (order.metadata?.customer_po ?? "") as string,
     }
 
     return (

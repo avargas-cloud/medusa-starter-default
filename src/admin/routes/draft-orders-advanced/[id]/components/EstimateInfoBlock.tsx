@@ -10,6 +10,7 @@ export interface EstimateInfo {
     leadTime: string
     paymentTerms: string
     project: string
+    customerPO: string  // metadata.customer_po (stored on the order, not the customer)
 }
 
 // Fields that map to customer defaults (key in EstimateInfo → customer metadata key)
@@ -116,6 +117,7 @@ export const EstimateInfoBlock = ({ orderId, customerId, initialInfo, onInfoChan
                         estimate_lead_time: updated.leadTime,
                         estimate_payment_terms: updated.paymentTerms,
                         estimate_project: updated.project,
+                        customer_po: updated.customerPO,
                     },
                 }),
             })
@@ -261,7 +263,7 @@ export const EstimateInfoBlock = ({ orderId, customerId, initialInfo, onInfoChan
                     </Select>
                 </div>
 
-                {/* Project — half width */}
+                {/* Project Name — optional */}
                 <div>
                     <label className="text-[10px] font-bold text-ui-fg-muted uppercase tracking-wider mb-1 block">
                         Project Name <span className="text-ui-fg-muted font-normal">(optional)</span>
@@ -270,6 +272,19 @@ export const EstimateInfoBlock = ({ orderId, customerId, initialInfo, onInfoChan
                         value={info.project}
                         onChange={e => update("project", e.target.value)}
                         placeholder="e.g. Miami Office LED Retrofit"
+                        className="h-8 text-sm"
+                    />
+                </div>
+
+                {/* Customer PO — optional, stored on order metadata */}
+                <div>
+                    <label className="text-[10px] font-bold text-ui-fg-muted uppercase tracking-wider mb-1 block">
+                        Customer PO <span className="text-ui-fg-muted font-normal">(optional)</span>
+                    </label>
+                    <Input
+                        value={info.customerPO}
+                        onChange={e => update("customerPO", e.target.value)}
+                        placeholder="e.g. PO-2026-0042"
                         className="h-8 text-sm"
                     />
                 </div>

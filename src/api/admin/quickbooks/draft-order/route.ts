@@ -134,7 +134,7 @@ export async function POST(
                 unit_price: item.unit_price || 0, // dollars — ready for QB bridge
             }))
 
-        const qbItems = buildQbItems(activeItems)
+        const qbItems = buildQbItems(activeItems, order.metadata)
 
         // Add shipping as a QB line item (skipped if method is Pickup or amount=0)
         const shippingItem = buildShippingQbItem((order as any).shipping_methods || [], qbConfig.shippingItemId)

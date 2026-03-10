@@ -52,6 +52,7 @@ export const syncInventoryToMeiliStep = createStep(
                 fields: [
                     "id",
                     "sku",
+                    "metadata",
                     "created_at",
                     "updated_at",
                     "price_set.id",
@@ -138,7 +139,11 @@ export const syncInventoryToMeiliStep = createStep(
                     pricesByList,                           // { [price_list_id]: amount }
                     variantId: variant.id,
                     productId: product?.id || null,
-                    salesDescription: (product?.metadata as any)?.sales_description || null,
+                    // Prefer variant-level description (correct per-SKU from QB).
+                    // Fall back to product-level for variants not yet migrated.
+                    salesDescription: (variant?.metadata as any)?.sales_description
+                        || (product?.metadata as any)?.sales_description
+                        || null,
                     options: mappedOptions,
                     category_handles: Array.from(allCategoryHandles),
                     status: product?.status || "draft",

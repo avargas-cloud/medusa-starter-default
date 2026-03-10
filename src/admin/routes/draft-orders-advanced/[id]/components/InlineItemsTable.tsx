@@ -10,6 +10,7 @@ interface VariantResult {
     sku?: string
     variantTitle?: string
     thumbnail?: string
+    salesDescription?: string
     prices?: PriceOption[]
     /** Per-location available stock */
     locations?: { locationName: string; available: number }[]
@@ -247,8 +248,12 @@ export const InlineItemsTable = ({
 
                                         {/* Product info — flex-1 takes all remaining space on the left */}
                                         <div className="flex-1 min-w-0">
-                                            <Text size="small" weight="plus" className="truncate block">{v.title}</Text>
-                                            {v.variantTitle && <Text size="xsmall" className="text-ui-fg-subtle truncate block">{v.variantTitle}</Text>}
+                                            {/* Sales description is the primary label (correct per-SKU from QB) */}
+                                            <Text size="small" weight="plus" className="truncate block leading-snug">
+                                                {v.salesDescription ?? v.title}
+                                            </Text>
+                                            {/* Show the product title as a subtitle so the user has context */}
+                                            {!v.salesDescription && v.variantTitle && <Text size="xsmall" className="text-ui-fg-subtle truncate block">{v.variantTitle}</Text>}
                                             {v.sku && <Text size="xsmall" className="text-ui-fg-muted font-mono">{v.sku}</Text>}
                                         </div>
 
@@ -300,117 +305,154 @@ export const InlineItemsTable = ({
                 <div className="px-6 py-8 text-center">
                     <Text size="small" className="text-ui-fg-subtle">No items yet. Search above to add products.</Text>
                 </div>
-            ) : items.map(item => {
-                const qty = itemQtys[item.id] ?? item.quantity
-                const rawUnitPrice = item.unit_price ?? 0
-                const priceStr = itemPrices[item.id] ?? parseFloat(String(rawUnitPrice)).toFixed(2)
-                const price = parseFloat(priceStr) || 0
-                const options = customerPrices[item.variant?.id ?? item.variant_id ?? ""] ?? []
-                const subtotal = price * qty
-                const isSaving = savingItems.has(item.id)
-                const isSaved = savedItems.has(item.id)
-                const isLoadingStock = stockLoading === item.id
-                const hasPopover = stockPopover?.itemId === item.id
+            ) : [...items]
+                .sort((a: any, b: any) => {
+                    // Respect sort_order saved by POS drag-to-reorder
+                    const aOrder = a.metadata?.sort_order ?? 9999
+                    const bOrder = b.metadata?.sort_order ?? 9999
+                    return aOrder - bOrder
+                })
+                .map(item => {
+                    const qty = itemQtys[item.id] ?? item.quantity
+                    const rawUnitPrice = item.unit_price ?? 0
+                    const priceStr = itemPrices[item.id] ?? parseFloat(String(rawUnitPrice)).toFixed(2)
+                    const price = parseFloat(priceStr) || 0
+                    const options = customerPrices[item.variant?.id ?? item.variant_id ?? ""] ?? []
+                    const subtotal = price * qty
+                    const isSaving = savingItems.has(item.id)
+                    const isSaved = savedItems.has(item.id)
+                    const isLoadingStock = stockLoading === item.id
+                    const hasPopover = stockPopover?.itemId === item.id
 
-                return (
-                    <div key={item.id} className="group grid grid-cols-[2.5rem_1fr_2rem_10rem_6rem_5.5rem_1.5rem] gap-x-3 items-center px-6 py-3 border-b border-ui-border-base last:border-0 hover:bg-ui-bg-subtle transition-colors">
-                        {/* Thumbnail */}
-                        {item.thumbnail ? (
-                            <img src={item.thumbnail} alt="" className="w-9 h-9 object-cover rounded border border-ui-border-base" />
-                        ) : (
-                            <div className="w-9 h-9 bg-ui-bg-subtle rounded border border-ui-border-base flex items-center justify-center text-xs text-ui-fg-muted">—</div>
-                        )}
+                    // Line discount rehydration from metadata (persisted by POS on save)
+                    const lineDiscount = item.metadata?.line_discount as { type: 'percent' | 'fixed'; value: number } | undefined
+                    const originalUnitPrice = item.metadata?.original_unit_price as number | undefined
+                    const hasLineDiscount = !!lineDiscount && !!originalUnitPrice && lineDiscount.value > 0
+                    const discountLabel = hasLineDiscount
+                        ? lineDiscount!.type === 'percent'
+                            ? `${lineDiscount!.value}%`
+                            : `-$${lineDiscount!.value.toFixed(2)}`
+                        : null
 
-                        {/* Title / SKU */}
-                        <div className="min-w-0">
-                            <Text size="small" weight="plus" className="block leading-tight">{item.title}</Text>
-                            {item.variant?.title && <Text size="xsmall" className="text-ui-fg-subtle">{item.variant.title}</Text>}
-                            {item.variant?.sku && <Text size="xsmall" className="text-ui-fg-muted font-mono">{item.variant.sku}</Text>}
-                        </div>
-
-                        {/* Stock availability button */}
-                        <div className="flex items-center justify-center">
-                            <button
-                                title="View stock availability"
-                                onClick={e => fetchItemStock(item, e.currentTarget as HTMLButtonElement)}
-                                className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${hasPopover
-                                    ? "text-ui-fg-interactive bg-ui-bg-interactive-hover"
-                                    : "text-ui-fg-muted hover:text-ui-fg-base hover:bg-ui-bg-base"
-                                    } ${isLoadingStock ? "animate-pulse" : ""}`}
-                            >
-                                <WarehouseIcon />
-                            </button>
-                        </div>
-
-                        {/* Price — auto-saves on blur or after 3s of inactivity */}
-                        <div className="flex items-center justify-end gap-1">
-                            {isSaving && (
-                                <span className="text-[10px] text-ui-fg-muted animate-pulse">saving…</span>
+                    return (
+                        <div key={item.id} className="group grid grid-cols-[2.5rem_1fr_2rem_10rem_6rem_5.5rem_1.5rem] gap-x-3 items-center px-6 py-3 border-b border-ui-border-base last:border-0 hover:bg-ui-bg-subtle transition-colors">
+                            {/* Thumbnail */}
+                            {item.thumbnail ? (
+                                <img src={item.thumbnail} alt="" className="w-9 h-9 object-cover rounded border border-ui-border-base" />
+                            ) : (
+                                <div className="w-9 h-9 bg-ui-bg-subtle rounded border border-ui-border-base flex items-center justify-center text-xs text-ui-fg-muted">—</div>
                             )}
-                            {isSaved && !isSaving && (
-                                <span className="text-[10px] text-ui-fg-interactive">✓</span>
-                            )}
-                            <PriceCombobox
-                                value={priceStr}
-                                onChange={v => {
-                                    setItemPrices((p: any) => ({ ...p, [item.id]: v }))
-                                    triggerAutoSave(item.id)
-                                }}
-                                onBlur={() => saveOnBlur(item.id)}
-                                options={options}
-                                onSelectOption={(amount) => {
-                                    setItemPrices((p: any) => ({ ...p, [item.id]: amount.toFixed(2) }))
-                                    if (autoSaveTimers.current[item.id]) {
-                                        clearTimeout(autoSaveTimers.current[item.id])
-                                        delete autoSaveTimers.current[item.id]
-                                    }
-                                    setTimeout(() => handleUpdateItem(item.id), 50)
-                                }}
-                            />
-                        </div>
 
-                        {/* Qty stepper */}
-                        <div className="flex items-center gap-1 justify-center">
+                            {/* Title / SKU */}
+                            <div className="min-w-0">
+                                <Text size="small" weight="plus" className="block leading-tight">{(item.metadata?.sales_description as string | undefined) ?? item.title}</Text>
+                                {item.variant?.title && <Text size="xsmall" className="text-ui-fg-subtle">{item.variant.title}</Text>}
+                                {item.variant?.sku && <Text size="xsmall" className="text-ui-fg-muted font-mono">{item.variant.sku}</Text>}
+                            </div>
+
+                            {/* Stock availability button */}
+                            <div className="flex items-center justify-center">
+                                <button
+                                    title="View stock availability"
+                                    onClick={e => fetchItemStock(item, e.currentTarget as HTMLButtonElement)}
+                                    className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${hasPopover
+                                        ? "text-ui-fg-interactive bg-ui-bg-interactive-hover"
+                                        : "text-ui-fg-muted hover:text-ui-fg-base hover:bg-ui-bg-base"
+                                        } ${isLoadingStock ? "animate-pulse" : ""}`}
+                                >
+                                    <WarehouseIcon />
+                                </button>
+                            </div>
+
+                            {/* Price — auto-saves on blur or after 3s of inactivity */}
+                            <div className="flex flex-col items-end gap-0.5">
+                                {/* Discount indicator badge — shown when a POS line discount was applied */}
+                                {hasLineDiscount && (
+                                    <div className="flex items-center gap-1">
+                                        <span className="text-[10px] text-ui-fg-muted line-through tabular-nums">
+                                            ${originalUnitPrice!.toFixed(2)}
+                                        </span>
+                                        <span className="text-[9px] font-bold bg-green-100 text-green-700 rounded px-1 py-0.5 leading-none">
+                                            {discountLabel}
+                                        </span>
+                                    </div>
+                                )}
+                                <div className="flex items-center justify-end gap-1">
+                                    {isSaving && (
+                                        <span className="text-[10px] text-ui-fg-muted animate-pulse">saving…</span>
+                                    )}
+                                    {isSaved && !isSaving && (
+                                        <span className="text-[10px] text-ui-fg-interactive">✓</span>
+                                    )}
+                                    <PriceCombobox
+                                        value={priceStr}
+                                        onChange={v => {
+                                            setItemPrices((p: any) => ({ ...p, [item.id]: v }))
+                                            triggerAutoSave(item.id)
+                                        }}
+                                        onBlur={() => saveOnBlur(item.id)}
+                                        options={options}
+                                        onSelectOption={(amount) => {
+                                            setItemPrices((p: any) => ({ ...p, [item.id]: amount.toFixed(2) }))
+                                            if (autoSaveTimers.current[item.id]) {
+                                                clearTimeout(autoSaveTimers.current[item.id])
+                                                delete autoSaveTimers.current[item.id]
+                                            }
+                                            setTimeout(() => handleUpdateItem(item.id), 50)
+                                        }}
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Qty stepper */}
+                            <div className="flex items-center gap-1 justify-center">
+                                <button
+                                    onClick={() => {
+                                        setItemQtys((q: any) => ({ ...q, [item.id]: Math.max(1, (q[item.id] ?? item.quantity) - 1) }))
+                                        triggerAutoSave(item.id)
+                                    }}
+                                    disabled={itemSaving || isSaving}
+                                    className="w-5 h-5 flex items-center justify-center border border-ui-border-base rounded hover:bg-ui-bg-base text-ui-fg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                    <Minus />
+                                </button>
+                                <span className="w-7 text-center text-sm font-medium tabular-nums">{qty}</span>
+                                <button
+                                    onClick={() => {
+                                        setItemQtys((q: any) => ({ ...q, [item.id]: (q[item.id] ?? item.quantity) + 1 }))
+                                        triggerAutoSave(item.id)
+                                    }}
+                                    disabled={itemSaving || isSaving}
+                                    className="w-5 h-5 flex items-center justify-center border border-ui-border-base rounded hover:bg-ui-bg-base text-ui-fg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                    <Plus />
+                                </button>
+                            </div>
+
+                            {/* Row total — unit_price is already discounted, so subtotal is correct */}
+                            <div className="text-right min-w-[5rem]">
+                                {hasLineDiscount && (
+                                    <Text size="xsmall" className="block text-ui-fg-muted line-through tabular-nums">
+                                        {fmt(originalUnitPrice! * qty, curr)}
+                                    </Text>
+                                )}
+                                <Text size="small" className={`tabular-nums ${hasLineDiscount ? 'text-green-700 font-semibold' : ''}`}>
+                                    {fmt(subtotal, curr)}
+                                </Text>
+                            </div>
+
+                            {/* Delete button */}
                             <button
-                                onClick={() => {
-                                    setItemQtys((q: any) => ({ ...q, [item.id]: Math.max(1, (q[item.id] ?? item.quantity) - 1) }))
-                                    triggerAutoSave(item.id)
-                                }}
+                                onClick={() => handleRemoveItem(item.id)}
                                 disabled={itemSaving || isSaving}
-                                className="w-5 h-5 flex items-center justify-center border border-ui-border-base rounded hover:bg-ui-bg-base text-ui-fg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                                title="Remove item"
+                                className="w-5 h-5 flex items-center justify-center text-ui-fg-muted hover:text-ui-fg-error hover:bg-ui-bg-subtle rounded opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
                             >
-                                <Minus />
-                            </button>
-                            <span className="w-7 text-center text-sm font-medium tabular-nums">{qty}</span>
-                            <button
-                                onClick={() => {
-                                    setItemQtys((q: any) => ({ ...q, [item.id]: (q[item.id] ?? item.quantity) + 1 }))
-                                    triggerAutoSave(item.id)
-                                }}
-                                disabled={itemSaving || isSaving}
-                                className="w-5 h-5 flex items-center justify-center border border-ui-border-base rounded hover:bg-ui-bg-base text-ui-fg-muted disabled:opacity-40 disabled:cursor-not-allowed"
-                            >
-                                <Plus />
+                                <Trash />
                             </button>
                         </div>
-
-                        {/* Row total */}
-                        <Text size="small" className="text-right min-w-[5rem] tabular-nums">
-                            {fmt(subtotal, curr)}
-                        </Text>
-
-                        {/* Delete button */}
-                        <button
-                            onClick={() => handleRemoveItem(item.id)}
-                            disabled={itemSaving || isSaving}
-                            title="Remove item"
-                            className="w-5 h-5 flex items-center justify-center text-ui-fg-muted hover:text-ui-fg-error hover:bg-ui-bg-subtle rounded opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
-                        >
-                            <Trash />
-                        </button>
-                    </div>
-                )
-            })}
+                    )
+                })}
 
             {/* ── Stock availability popover ── */}
             {stockPopover && (

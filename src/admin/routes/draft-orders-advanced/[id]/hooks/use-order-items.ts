@@ -41,7 +41,7 @@ export const useOrderItems = ({ id, order, setOrder }: Deps) => {
         searchTimer.current = setTimeout(async () => {
             if (!q) { setInvResults([]); return }
             try {
-                const varRes = await fetch(`/admin/product-variants?q=${encodeURIComponent(q)}&limit=20`, { credentials: "include" })
+                const varRes = await fetch(`/admin/product-variants?q=${encodeURIComponent(q)}&limit=20&fields=id,title,sku,product_id,metadata`, { credentials: "include" })
                 if (!varRes.ok) { setInvResults([]); return }
                 const { variants } = await varRes.json()
                 if (!variants?.length) { setInvResults([]); return }
@@ -49,7 +49,7 @@ export const useOrderItems = ({ id, order, setOrder }: Deps) => {
                 const productIds = [...new Set<string>((variants as any[]).map((v: any) => v.product_id).filter(Boolean))]
                 const productMap: Record<string, any> = {}
                 if (productIds.length > 0) {
-                    const pRes = await fetch(`/admin/products?${productIds.map((pid: string) => `id[]=${encodeURIComponent(pid)}`).join("&")}&limit=20`, { credentials: "include" })
+                    const pRes = await fetch(`/admin/products?${productIds.map((pid: string) => `id[]=${encodeURIComponent(pid)}`).join("&")}&limit=20&fields=id,title,thumbnail,metadata`, { credentials: "include" })
                     if (pRes.ok) { const { products } = await pRes.json(); (products ?? []).forEach((p: any) => { productMap[p.id] = p }) }
                 }
 
@@ -104,10 +104,15 @@ export const useOrderItems = ({ id, order, setOrder }: Deps) => {
                         const shortLabel = rawLabel.replace(/\s+Price(s)?$/i, "").trim() || rawLabel
                         priceOptions.push({ label: shortLabel, amount: lp.amount, priceListId: lp.price_list_id })
                     }
+                    // Prefer variant.metadata.sales_description (per-SKU from QB)
+                    // Fall back to prod.metadata.sales_description for legacy items
+                    const salesDescription: string | undefined =
+                        v.metadata?.sales_description || prod?.metadata?.sales_description || undefined
                     return {
                         id: v.id, title: prod?.title ?? v.title ?? v.sku ?? v.id, sku: v.sku ?? undefined,
                         variantTitle: v.title && v.title !== prod?.title ? v.title : undefined,
                         thumbnail: prod?.thumbnail ?? undefined,
+                        salesDescription,
                         prices: priceOptions.length > 0 ? priceOptions : undefined,
                         locations: locationMap[v.id] ?? [],
                     }
@@ -124,7 +129,10 @@ export const useOrderItems = ({ id, order, setOrder }: Deps) => {
         const optimisticItem = {
             id: `optimistic-${Date.now()}`, variant_id: variantId,
             variant: { id: variantId, sku: matchedVariant?.sku ?? "" },
-            title: matchedVariant?.title ?? variantId, subtitle: matchedVariant?.variantTitle ?? "",
+            // Use sales description for immediate display (same as the saved item will show)
+            title: matchedVariant?.salesDescription ?? matchedVariant?.title ?? variantId,
+            subtitle: matchedVariant?.variantTitle ?? "",
+            metadata: matchedVariant?.salesDescription ? { sales_description: matchedVariant.salesDescription } : undefined,
             thumbnail: matchedVariant?.thumbnail ?? null, quantity: 1,
             unit_price: overridePrice !== undefined ? overridePrice : 0,
         }
@@ -162,37 +170,54 @@ export const useOrderItems = ({ id, order, setOrder }: Deps) => {
                     }
                 } catch { }
             }
-            await fetch(`/admin/draft-orders/${id}/edit`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" } })
-            const itemPayload: any = { variant_id: variantId, quantity: 1 }
-            if (unitPrice !== undefined) itemPayload.unit_price = unitPrice
-            const r = await fetch(`/admin/draft-orders/${id}/edit/items`, {
+            // Always use add-item-force — it correctly saves variant.metadata.sales_description
+            // into line_item.metadata so the item table shows the correct QB description.
+            // The standard Medusa edit flow does NOT set metadata, causing title to show instead.
+            const noStockR = await fetch(`/admin/draft-orders/${id}/add-item-force`, {
                 method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
-                body: JSON.stringify({ items: [itemPayload] })
+                body: JSON.stringify({ variant_id: variantId, quantity: 1, unit_price: unitPrice })
             })
-            if (!r.ok) {
-                const j = await r.json().catch(() => ({}))
-                const msg: string = j.message ?? ""
-                const needsForce = (j.type === "not_allowed" && j.code === "insufficient_inventory") || msg.toLowerCase().includes("not published") || msg.toLowerCase().includes("do not exist")
-                if (needsForce) {
-                    const noStockR = await fetch(`/admin/draft-orders/${id}/add-item-force`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ variant_id: variantId, quantity: 1, unit_price: unitPrice }) })
-                    if (!noStockR.ok) { const j2 = await noStockR.json().catch(() => ({})); throw new Error(j2.message || "Could not add item") }
-                } else { throw new Error(msg || `HTTP ${r.status}`) }
-            }
-            await fetch(`/admin/draft-orders/${id}/edit/confirm`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" } })
+            if (!noStockR.ok) { const j2 = await noStockR.json().catch(() => ({})); throw new Error(j2.message || "Could not add item") }
             toast.success("Item added")
             try {
-                const freshR = await fetch(`/admin/orders/${id}?fields=+items.*`, { credentials: "include" })
+                const freshR = await fetch(`/admin/orders/${id}?fields=+items.*,+items.metadata`, { credentials: "include" })
                 if (freshR.ok) {
                     const { order: freshOrder } = await freshR.json()
                     const freshItems: any[] = freshOrder?.items ?? []
-                    const matchedReal = freshItems.filter((i: any) => (i.variant_id ?? i.variant?.id) === variantId).sort((a: any, b: any) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime())[0]
+                    const matchedReal = freshItems.filter((i: any) =>
+                        (i.variant_id ?? i.variant?.id) === variantId && (i.quantity ?? 0) > 0
+                    ).sort((a: any, b: any) =>
+                        new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime()
+                    )[0]
                     if (matchedReal) {
-                        setOrder(prev => prev ? {
-                            ...prev,
-                            items: (prev.items ?? []).map((i: any) => i.id === optimisticItem.id
-                                ? { ...matchedReal, title: optimisticItem.title, thumbnail: optimisticItem.thumbnail, variant: optimisticItem.variant, unit_price: optimisticItem.unit_price !== 0 ? optimisticItem.unit_price : matchedReal.unit_price, quantity: matchedReal.quantity ?? optimisticItem.quantity }
-                                : i)
-                        } : prev)
+                        // Medusa's GET /admin/orders/:id sometimes returns items without metadata
+                        // populated. Preserve the optimistic item's sales_description so the
+                        // table doesn't flicker from description → title.
+                        const mergedMetadata = {
+                            ...(optimisticItem.metadata ?? {}),
+                            ...(matchedReal.metadata ?? {}),
+                            // If the real item came back without sales_description, keep the optimistic one
+                            sales_description:
+                                matchedReal.metadata?.sales_description
+                                ?? optimisticItem.metadata?.sales_description
+                                ?? undefined,
+                        }
+                        setOrder(prev =>
+                            prev ? {
+                                ...prev,
+                                items: (prev.items ?? []).map((i: any) =>
+                                    i.id === optimisticItem.id
+                                        ? {
+                                            ...matchedReal,
+                                            metadata: mergedMetadata,
+                                            thumbnail: optimisticItem.thumbnail,
+                                            variant: optimisticItem.variant,
+                                            unit_price: optimisticItem.unit_price !== 0 ? optimisticItem.unit_price : matchedReal.unit_price,
+                                            quantity: matchedReal.quantity ?? optimisticItem.quantity
+                                        }
+                                        : i)
+                            } : prev
+                        )
                     }
                 }
             } catch { }

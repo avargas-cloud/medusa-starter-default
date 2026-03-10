@@ -110,7 +110,7 @@ const EditItemsTable = (p: EditItemsTableProps) => {
 
                             {/* Item info */}
                             <div className="min-w-0">
-                                <Text size="small" weight="plus" className="truncate block">{item.title}</Text>
+                                <Text size="small" weight="plus" className="truncate block">{(item as any).metadata?.sales_description ?? item.title}</Text>
                                 {item.variant?.title && item.variant.title !== item.title && (
                                     <Text size="xsmall" className="text-ui-fg-subtle block truncate">{item.variant.title}</Text>
                                 )}
@@ -339,7 +339,7 @@ export const OrderDrawers = (props: OrderDrawersProps) => {
                             {orderItems.map(item => (
                                 <div key={item.id} className="flex items-center gap-3 px-4 py-2 border-b last:border-0 border-ui-border-base bg-ui-bg-subtle/30">
                                     <Text size="xsmall" className="text-ui-fg-muted w-6 text-right shrink-0">{item.quantity}x</Text>
-                                    <Text size="xsmall">{item.title}</Text>
+                                    <Text size="xsmall">{(item as any).metadata?.sales_description ?? item.title}</Text>
                                 </div>
                             ))}
                         </div>

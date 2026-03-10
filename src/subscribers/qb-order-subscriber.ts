@@ -242,7 +242,7 @@ async function handleOrderPlaced(
                 unit_price: Math.round((item.unit_price || 0) * 100), // dollars → cents for buildQbItems
             }))
 
-        const qbItems = buildQbItems(activeItems)
+        const qbItems = buildQbItems(activeItems, order.metadata)
 
 
         // Add shipping line (skip pickup methods automatically)

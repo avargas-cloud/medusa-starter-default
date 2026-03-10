@@ -79,6 +79,7 @@ export interface MedusaOrderForQb {
             sku?: string
             metadata?: Record<string, any>
         }
+        title?: string
         product_title?: string
         quantity: number
         unit_price: number   // in cents (Medusa v2)
@@ -197,19 +198,50 @@ function sanitizeForQb(text: string): string {
  * Filters to only items that have a quickbooks_id in variant.metadata.
  * Sends the actual Medusa price as Rate — requires QB price lists to be disabled.
  * Set variant.metadata.quickbooks_uom (e.g. "each") to prevent QB UOM multiplication.
+ * Also parses metadata.pos_comment_lines (if present) and interleaves them based on sort_order.
  */
-export function buildQbItems(items: MedusaOrderForQb["items"]): QbOrderItem[] {
-    return (items || [])
+export function buildQbItems(items: MedusaOrderForQb["items"], metadata?: Record<string, any>): QbOrderItem[] {
+    const productLines = (items || [])
         .filter(item => item.variant?.metadata?.quickbooks_id)
         .map(item => ({
-            productId: item.variant!.metadata!.quickbooks_id as string,
-            quantity: item.quantity,
-            price: (item.unit_price || 0) / 100,  // unit_price is in cents → convert to dollars for QB
-            unitOfMeasure: (item.variant?.metadata?.quickbooks_uom as string) || undefined,
-            desc: sanitizeForQb(
-                `${item.product_title || ""}${item.variant?.sku ? ` (${item.variant.sku})` : ""}`
-            ),
+            _sortOrder: typeof item.metadata?.sort_order === "number" ? item.metadata.sort_order : 9999,
+            qbItem: {
+                productId: item.variant!.metadata!.quickbooks_id as string,
+                quantity: item.quantity,
+                price: (item.unit_price || 0) / 100,  // unit_price is in cents → convert to dollars for QB
+                unitOfMeasure: (item.variant?.metadata?.quickbooks_uom as string) || undefined,
+                desc: sanitizeForQb(
+                    item.metadata?.sales_description
+                        ? String(item.metadata.sales_description)
+                        : `${item.title || item.product_title || ""}${item.variant?.sku ? ` (${item.variant.sku})` : ""}`
+                ),
+            }
         }))
+
+    let commentLines: any[] = []
+    if (metadata?.pos_comment_lines) {
+        try {
+            const parsed = typeof metadata.pos_comment_lines === "string"
+                ? JSON.parse(metadata.pos_comment_lines)
+                : metadata.pos_comment_lines
+            if (Array.isArray(parsed)) {
+                commentLines = parsed.map(c => ({
+                    _sortOrder: typeof c.sortOrder === "number" ? c.sortOrder : 9999,
+                    qbItem: {
+                        desc: sanitizeForQb(c.text || ""),
+                        noSite: true
+                    }
+                }))
+            }
+        } catch (e) {
+            console.warn("[QB] Failed to parse pos_comment_lines:", e)
+        }
+    }
+
+    const allLines = [...productLines, ...commentLines]
+    allLines.sort((a, b) => a._sortOrder - b._sortOrder)
+
+    return allLines.map(line => line.qbItem)
 }
 
 /**
@@ -305,7 +337,7 @@ export async function processOrderInQb(
         // 3. Build Sales Order items
         // Use pre-built items if provided (allows caller to inject shipping line).
         // Fallback: build from order.items (subscriber path — no shipping).
-        const soItems = options?.prebuiltItems ?? buildQbItems(order.items)
+        const soItems = options?.prebuiltItems ?? buildQbItems(order.items, order.metadata)
 
         if (soItems.length === 0) {
             console.warn(`${prefix} ⚠️ Order #${order.display_id} has no items with quickbooks_id — skipping SO creation`)

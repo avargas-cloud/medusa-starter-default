@@ -18,10 +18,15 @@ export async function POST(
     res: MedusaResponse
 ): Promise<void> {
     const { id } = req.params as { id: string }
-    const { variant_id, quantity = 1, unit_price } = req.body as {
+    const { variant_id, quantity = 1, unit_price, sort_order, line_discount, original_unit_price, custom_title, custom_description } = req.body as {
         variant_id: string
         quantity?: number
-        unit_price?: number  // in DOLLARS (e.g. 29.99)
+        unit_price?: number            // effective (post-discount) price in DOLLARS
+        sort_order?: number            // 0-indexed display position for drag-to-reorder
+        line_discount?: { type: 'percent' | 'fixed'; value: number } | null  // POS discount descriptor
+        original_unit_price?: number | null  // pre-discount price for POS rehydration
+        custom_title?: string          // User-edited title for "Special Items"
+        custom_description?: string    // User-edited description for "Special Items"
     }
 
     if (!variant_id) {
@@ -41,13 +46,14 @@ export async function POST(
         let productTitle: string | undefined  // denormalized for order history
         let productHandle: string | undefined  // denormalized for order history
         let thumbnail: string | undefined
+        let salesDescription: string | undefined  // QB SalesDesc from product.metadata
         let resolvedPrice = 0  // in DOLLARS (orderModule convention)
 
         // ── Attempt 1: resolve via Product Module (fastest path) ──────────────
         try {
             const [variant] = await productModule.listProductVariants(
                 { id: [variant_id] },
-                { relations: ["prices", "product"] }
+                { relations: ["prices", "product", "product.metadata", "metadata"] }
             ) as any[]
 
             if (!variant) {
@@ -75,6 +81,10 @@ export async function POST(
                 variantSku = vAny?.sku ?? undefined
                 productId = vAny?.product?.id ?? undefined
                 thumbnail = vAny?.product?.thumbnail ?? undefined
+                // Prefer variant-level description (correct per-SKU from QB).
+                // Fall back to product-level for variants not yet migrated.
+                salesDescription = (vAny?.metadata?.sales_description
+                    || vAny?.product?.metadata?.sales_description) as string | undefined
 
                 if (unit_price !== undefined) {
                     resolvedPrice = unit_price
@@ -92,7 +102,7 @@ export async function POST(
             try {
                 const base = `http://localhost:${process.env.PORT ?? 9000}`
                 const varRes = await fetch(
-                    `${base}/admin/products?variants[id][]=${variant_id}&fields=title,thumbnail,variants.title,variants.id,variants.prices`,
+                    `${base}/admin/products?variants[id][]=${variant_id}&fields=title,thumbnail,metadata,variants.title,variants.id,variants.sku,variants.prices`,
                     {
                         headers: {
                             "Cookie": String(req.headers["cookie"] ?? ""),
@@ -117,7 +127,8 @@ export async function POST(
                                 resolvedPrice = v.prices[0].amount / 100
                             }
                         }
-                        console.log(`[add-item-force] Fallback API resolved title="${title}" sku="${variantSku}" for ${variant_id}`)
+                        salesDescription = product.metadata?.sales_description as string | undefined
+                        console.log(`[add-item-force] Fallback API resolved title="${title}" sku="${variantSku}" sdesc="${salesDescription ?? 'none'}" for ${variant_id}`)
                     }
                 }
             } catch (e2: any) {
@@ -138,22 +149,43 @@ export async function POST(
             resolvedPrice = unit_price
         }
 
+        if (custom_title) {
+            title = custom_title
+        }
+
+        if (custom_description !== undefined) {
+            salesDescription = custom_description || undefined
+        }
+
         // createOrderLineItems is the correct module-level API (no workflow, no inventory check)
         // IMPORTANT: Accepts unit_price in DOLLARS (same as Medusa REST API)
+        //
+        // title = product title (kept as-is for Medusa native display)
+        // metadata.sales_description = QB SalesDesc (used by POS Description column + QB sync)
+        // metadata.product_title = original product title for reference
+        console.log(`[add-item-force] title="${title}" sdesc="${salesDescription ?? 'none'}" sku="${variantSku}"`)
+
         await orderModule.createOrderLineItems(id, [{
             variant_id,
             product_id: productId,      // CRITICAL: without this, Medusa Admin skips SKU rendering
             quantity,
             unit_price: resolvedPrice,
-            title,
+            title,                      // always the product title
             subtitle: variantTitle,     // variant title shown under product name (e.g. "6000K")
             variant_title: variantTitle,
             variant_sku: variantSku,    // SKU shown as first gray line in Medusa Admin order detail
-            product_title: productTitle ?? title,  // denormalized for order history
-            product_handle: productHandle,          // denormalized for order history
+            product_title: productTitle ?? title,
+            product_handle: productHandle,
             thumbnail,
             is_discountable: true,
             requires_shipping: true,
+            metadata: {
+                product_title: productTitle ?? title,
+                ...(salesDescription ? { sales_description: salesDescription } : {}),
+                ...(sort_order !== undefined ? { sort_order } : {}),
+                ...(line_discount ? { line_discount } : {}),
+                ...(original_unit_price != null ? { original_unit_price } : {}),
+            },
         }])
 
         res.status(200).json({ success: true })
