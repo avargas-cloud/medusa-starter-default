@@ -6,7 +6,7 @@
 | **Rutas POS** | `/orders`, `/orders/[id]` |
 | **Medusa** | Orders (`GET /admin/orders`) |
 | **QB Docs** | Sales Receipt · Sales Order + Invoice |
-| **Última revisión** | 2026-03-07 |
+| **Última revisión** | 2026-03-10 |
 
 ---
 
@@ -344,15 +344,25 @@ const ORDER_FIELDS = [
 // Query key: ['order', id]   ← staleTime: 60_000ms
 ```
 
-### A.3 Hydration guard (idéntico al de Estimates)
+### A.3 Hydration guard — Orders siempre re-hidratan
+
+A diferencia de Estimates (que tienen un guard `hasLocalWork` para proteger cambios locales no guardados), **en Orders el guard fue eliminado**:
 
 ```ts
-const hasLocalWork = current.isDirty
-    && !!current.doc.customerId
-    && current.doc.items.length > 0
-    && current.doc.medusaId === o.id
-if (hasLocalWork) return  // No sobreescribir trabajo en progreso
+// useOrderData.ts — sin guard
+// Las Orders son read-only en el POS (Save = toast informativo).
+// Siempre re-hidratamos desde el servidor para garantizar isDirty=false.
+current.hydrateDocument({ ... })  // siempre se ejecuta
 ```
+
+**¿Por qué se eliminó el guard?**
+
+Las Orders confirmadas no se pueden editar via el POS Store (`handleSave` muestra un toast). El guard `hasLocalWork` estaba causando un **false-positive de isDirty** — si el `draftCache` de localStorage tenía un slot de una sesión anterior con `isDirty: true`, el guard saltaba `hydrateDocument` (que resetea `isDirty=false`) y la orden mostraba el botón Save en ámbar sin ningún cambio real del usuario.
+
+Eliminar el guard garantiza:
+- `isDirty` siempre `false` al cargar una orden
+- `draftCache` stale de sesiones anteriores no contamina el estado
+- Consistencia visual: el botón Save nunca aparece activo sin razón
 
 ### A.4 Hydration completa — campos mapeados
 
@@ -972,3 +982,66 @@ In both cases the MIDDLE column is hidden (no manual order selection needed).
 
 Written to `metadata` on the Medusa order or draft order. If credit was applied, `POST /admin/customers/{id}/credits/apply` is called first.
 
+---
+
+## 12. Changelog — 2026-03-10 (isDirty + Discard)
+
+### 12.1 isDirty / isSaving ahora correctamente wired
+
+**Problema:** `DocumentToolbar` recibía `isDirty={false}` e `isSaving={false}` hardcodeados — el botón Save nunca se iluminaba aunque hubiera cambios.
+
+**Fix:** Ahora se leen del hook `useOrder`:
+
+```tsx
+<DocumentToolbar
+    onSave={order.handleSave}
+    isDirty={order.isDirty}       // ← antes: false hardcodeado
+    isSaving={order.isSaving}     // ← antes: false hardcodeado
+    ...
+/>
+```
+
+### 12.2 False-Positive de isDirty al cargar — Fix
+
+**Causa raíz:** El `draftCache` persistido en localStorage podía contener slots de órdenes con `isDirty: true` de sesiones anteriores. El guard `hasLocalWork` en `useOrderData` **saltaba** `hydrateDocument` (que resetea `isDirty=false`) si ese slot existía con datos.
+
+**Fix:** Eliminado el guard `hasLocalWork` en `useOrderData`. Las Orders siempre re-hidratan desde el servidor. Ver sección A.3.
+
+### 12.3 Botón Discard Changes
+
+Agregado al `DocumentToolbar` de Orders con el mismo patrón que Estimates:
+
+```tsx
+// orders/[id]/page.tsx
+const [discardModalOpen, setDiscardModalOpen] = useState(false)
+
+const handleDiscardClick = () => {
+    const hasData = !!order.doc.customerId || order.doc.items.length > 0
+    if (hasData) {
+        setDiscardModalOpen(true)   // → ConfirmModal
+    } else {
+        order.handleDiscard()       // → resetDocument() + router.push('/orders')
+    }
+}
+
+<DocumentToolbar onDiscard={handleDiscardClick} ... />
+
+<ConfirmModal
+    isOpen={discardModalOpen}
+    type="danger"
+    title="Leave Order?"
+    message="Go back to the Orders list? Any local changes will be cleared."
+    confirmLabel="Leave"
+    onConfirm={() => { setDiscardModalOpen(false); order.handleDiscard() }}
+    onClose={() => setDiscardModalOpen(false)}
+/>
+```
+
+**`handleDiscard` (en `useOrderActions.ts`):**
+
+```ts
+const handleDiscard = useCallback(() => {
+    usePOSStore.getState().resetDocument()
+    router.push('/orders')
+}, [router])
+```
