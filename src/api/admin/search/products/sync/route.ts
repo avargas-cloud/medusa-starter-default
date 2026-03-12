@@ -60,17 +60,15 @@ export const POST = async (
         console.log(`🔍 [Sync Check] DB Last Upd: ${dbLastUpdate.toISOString()} | Meili: ${meiliLastUpdate.toISOString()}`)
 
 
-        // 3. Check if sync is needed
-        // Count must match
+        // 3. Check if sync is needed (skip if force=true)
+        const force = req.query.force === "true"
         const isCountSync = dbCount === meiliCount
-
-        // MeiliSearch should be at least as recent as DB (with 5s tolerance for processing time)
         const timeDiff = dbLastUpdate.getTime() - meiliLastUpdate.getTime()
         const isTimeSync = timeDiff <= 5000 // MeiliSearch can be up to 5s behind
 
-        console.log(`🔍[Sync Status] Count Match: ${isCountSync}, Time Diff: ${timeDiff}ms, Time Sync: ${isTimeSync}`)
+        console.log(`🔍[Sync Status] Count Match: ${isCountSync}, Time Diff: ${timeDiff}ms, Time Sync: ${isTimeSync}, Force: ${force}`)
 
-        if (isCountSync && isTimeSync) {
+        if (!force && isCountSync && isTimeSync) {
             // Already synced
             console.log(`✅[Sync Check] Already in sync!`)
             return res.json({

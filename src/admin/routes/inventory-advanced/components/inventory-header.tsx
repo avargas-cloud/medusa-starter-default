@@ -46,6 +46,7 @@ export const InventoryHeader = ({
                         <SyncStatusButton
                             entity="inventory"
                             label="Check Inventory Sync"
+                            showForceSync={true}
                             onSyncComplete={() => queryClient.invalidateQueries({ queryKey: ["custom-inventory-with-prices"] })}
                         />
                     </div>

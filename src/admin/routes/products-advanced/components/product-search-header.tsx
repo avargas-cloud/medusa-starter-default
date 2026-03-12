@@ -46,6 +46,7 @@ export const ProductSearchHeader = ({
                         </Heading>
                         <SyncStatusButton
                             entity="products"
+                            showForceSync={true}
                             onSyncComplete={() => queryClient.invalidateQueries({ queryKey: ["meili-products"] })}
                         />
                     </div>

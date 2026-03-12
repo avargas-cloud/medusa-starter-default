@@ -8,48 +8,35 @@ interface SyncStatusButtonProps {
     entity: "products" | "customers" | "inventory"
     label?: string
     onSyncComplete?: () => void
+    showForceSync?: boolean      // show secondary Force Sync button (default: false)
 }
 
-export const SyncStatusButton = ({ entity, label = "Check Sync", onSyncComplete }: SyncStatusButtonProps) => {
+function useSyncAction(entity: SyncStatusButtonProps["entity"], onSyncComplete?: () => void) {
     const [status, setStatus] = useState<SyncStatus>("idle")
     const [message, setMessage] = useState<string>("")
 
-    // Reset state when component re-mounts (fixes stale state issue)
-    useEffect(() => {
-        setStatus("idle")
-        setMessage("")
-    }, [])
-
-    const handleSync = async () => {
+    const run = async (force = false) => {
         setStatus("loading")
-        setMessage("Checking...")
-
+        setMessage(force ? "Forcing..." : "Checking...")
         try {
-            // Route to correct sync endpoint based on entity
             const endpoint = entity === "products"
                 ? "/admin/search/products/sync"
                 : entity === "customers"
                     ? "/admin/search/customers/sync"
                     : "/admin/search/inventory/sync"
 
-            const response = await fetch(endpoint, {
-                method: "POST",
-                credentials: "include"
-            })
+            const url = force ? `${endpoint}?force=true` : endpoint
+            const response = await fetch(url, { method: "POST", credentials: "include" })
             const data = await response.json()
 
             if (data.status === "already_synced") {
                 setStatus("already_synced")
-                setMessage("Synced Already")
+                setMessage("Up to Date")
             } else {
                 setStatus("synced_now")
-                setMessage("Synced Now")
-                // Success! Trigger refresh
+                setMessage(force ? `Force synced (${data.synced ?? "?"})` : `Synced (${data.synced ?? "?"})`)
                 onSyncComplete?.()
             }
-
-            // Keep success state visible
-
         } catch (error) {
             console.error(error)
             setStatus("error")
@@ -57,12 +44,27 @@ export const SyncStatusButton = ({ entity, label = "Check Sync", onSyncComplete 
         }
     }
 
+    // Reset state on mount
+    useEffect(() => { setStatus("idle"); setMessage("") }, [])
+
+    return { status, message, run }
+}
+
+export const SyncStatusButton = ({
+    entity,
+    label = "Check Sync",
+    onSyncComplete,
+    showForceSync = false,
+}: SyncStatusButtonProps) => {
+    const { status, message, run } = useSyncAction(entity, onSyncComplete)
+
     return (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
+            {/* ── Primary: Check Sync ───────────────────────────────── */}
             <Button
                 variant="secondary"
                 size="small"
-                onClick={handleSync}
+                onClick={() => run(false)}
                 disabled={status === "loading"}
                 className={clx(
                     "transition-all duration-200 gap-2",
@@ -76,13 +78,23 @@ export const SyncStatusButton = ({ entity, label = "Check Sync", onSyncComplete 
                 {status === "already_synced" && <CheckCircle className="text-green-500" />}
                 {status === "synced_now" && <CheckCircle className="text-blue-500" />}
                 {status === "error" && <ExclamationCircle />}
-
-                <span>
-                    {status === "idle" ? label : message}
-                </span>
+                <span>{status === "idle" ? label : message}</span>
             </Button>
 
-            {/* Optional: Last checked timestamp could go here */}
+            {/* ── Secondary: Force Full Sync ────────────────────────── */}
+            {showForceSync && (
+                <Button
+                    variant="transparent"
+                    size="small"
+                    onClick={() => run(true)}
+                    disabled={status === "loading"}
+                    title="Force full re-sync (bypasses smart check)"
+                    className="text-ui-fg-muted hover:text-ui-fg-base gap-1.5 text-xs"
+                >
+                    <ArrowPath className={clx("w-3 h-3", status === "loading" && "animate-spin")} />
+                    Force Sync
+                </Button>
+            )}
         </div>
     )
 }
