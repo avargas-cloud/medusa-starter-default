@@ -1339,3 +1339,22 @@ const [historyModalOpen, setHistoryModalOpen] = useState(false)
 
 > **Nota**: `onHistory` se pasa como `undefined` cuando no hay cliente — esto deshabilita el botón automáticamente en `DocumentToolbar`.
 
+---
+
+## Changelog — Marzo 11, 2026
+
+### 28. Modal "Add New Customer" — Rediseño de Validación y Metadata
+
+El modal de nuevo cliente (disponible en Estimates al seleccionar un cliente) fue rediseñado:
+
+**Cambios:**
+- **Validación:** `(First Name AND Last Name) OR Company Name` — antes requería ambos sin opción de solo empresa
+- **Email opcional:** Si el usuario no provee email, se genera automáticamente `noemail-{timestamp}@ecopowertech.com` (mismo patrón del script de importación QB)
+- **Sección Alt. Contact & Notifications** (nueva):
+  - `alt_contact` — nombre de persona de referencia alterna
+  - `alt_phone` — teléfono del contacto alterno
+  - `alt_email` — email directo del contacto alterno (separado de CC)
+  - `cc_emails` — lista comma-separated de emails para CC en estimates e invoices
+- **Hint contextual** — aparece cuando email está vacío indicando que se generará uno automáticamente
+
+Para documentación completa del modal, ver `POS_CUSTOMERS.md § 3`.

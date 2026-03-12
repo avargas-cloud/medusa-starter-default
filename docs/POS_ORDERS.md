@@ -1044,4 +1044,44 @@ const handleDiscard = useCallback(() => {
     usePOSStore.getState().resetDocument()
     router.push('/orders')
 }, [router])
+
+---
+
+## Changelog — Marzo 11, 2026
+
+### 13. Orders Layout Migration — Parity con Estimates
+
+La página `/orders/[id]` fue migrada para replicar el layout premium **7-row no-scroll** de `/estimates/[id]`. La goal: paridad estética y funcional entre ambas páginas.
+
+**Cambios implementados:**
+
+1. **Layout 7-row idéntico:** Mismo `flex flex-col flex-1 min-h-0 gap-2 overflow-hidden` con todas las rows en el orden correcto:
+   - Row 1: `CustomerStrip`
+   - Row 2: `OrderMetaFields`
+   - Row 3: Items (flex-1, única zona con scroll interno)
+   - Row 4: `PromotionStrip`
+   - Row 5-7 (grid 4 cols): `NoteArea` (2 cols) | `ShippingSection` (1 col) | `OrderSummary` (1 col)
+
+2. **Activity Log como columna derecha estrecha:** `w-52 flex-shrink-0` — mismo ancho que en Estimates, sin ocupar toda la pantalla
+
+3. **Toolbar de items completo:**
+   - Agregado botón **Comment** (`MessageSquare`) para orders — igual que Estimates
+   - Nota: Comment en Orders crea headers visuales pero no se sincroniza con QB (Orders son read-only)
+
+4. **`isDirty` y `isSaving` ahora correctamente wired** — antes estaban hardcodeados como `false`
+
+5. **Colores del toolbar (light mode):** Mismos estilos que Estimates para consistencia visual
+
+6. **CustomerStrip en Orders:** Mismos 3 paneles (Contact | Shipping | Billing) en display read-only
+
+**Tabla de comparación final:**
+
+| Feature | Estimates | Orders |
+|---------|-----------|--------|
+| Layout | 7-row no-scroll | 7-row no-scroll ✅ |
+| Activity Log | `w-52` right col | `w-52` right col ✅ |
+| Comment button | ✅ | ✅ (visual only) |
+| isDirty wired | ✅ | ✅ ✅ |
+| Save | Funcional | Toast read-only |
+| Confirm Order | Draft → Order | Toast (ya confirmado) |
 ```
