@@ -58,7 +58,8 @@ export async function POST(
       is_tax_inclusive: false,   // CRITICAL: apply % to pre-tax subtotal only (not subtotal+tax)
       application_method: {
         type: discount_type === "percent" ? "percentage" : "fixed",
-        target_type: "items",   // CRITICAL: "order" uses subtotal+tax as base (wrong); "items" uses unit_price×qty (pre-tax, correct)
+        target_type: "items",        // CRITICAL: "order" uses subtotal+tax as base (wrong); "items" uses unit_price×qty (pre-tax, correct)
+        is_tax_inclusive: false,     // Belt-and-suspenders: also set at application_method level
         value: discount_value,
         currency_code: discount_type === "fixed" ? order.currency_code : undefined
       }
