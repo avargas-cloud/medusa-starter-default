@@ -53,7 +53,7 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
         const newStatus = balanceDue <= 0 ? 'paid' : (totalPaid > 0 ? 'partial' : invoice.status)
 
         await invoiceService.updatePosInvoices(
-            id,
+            { id },
             { total, balance_due: balanceDue, amount_paid: totalPaid, status: newStatus }
         )
 

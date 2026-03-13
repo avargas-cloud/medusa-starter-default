@@ -23,7 +23,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     const updated = await invoiceService.updatePosInvoices(
-        id,
+        { id },
         {
             status:     'voided' as const,
             voided_at:  new Date(),

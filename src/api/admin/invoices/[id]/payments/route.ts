@@ -62,7 +62,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const newStatus = balanceDue <= 0 ? 'paid' : 'partial'
 
         await invoiceService.updatePosInvoices(
-            id,
+            { id },
             { amount_paid: totalPaid, balance_due: balanceDue, status: newStatus }
         )
 
