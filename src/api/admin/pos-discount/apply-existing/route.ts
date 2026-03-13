@@ -87,47 +87,58 @@ export async function POST(
             resolvedPromoId = promoByCode?.id
         }
 
-        // ── Step 1: Normalise promotion ───────────────────────────────────────
+        // ── Step 1: Normalise promotion (ALWAYS — no conditional skips) ───────
         //
-        // Two critical fixes are applied every time a promo is applied:
+        // CRITICAL: We ALWAYS normalise, never skip. Skipping based on current
+        // DB values is unsafe because the workflow reads from Medusa's ORM cache,
+        // not the raw DB. If a previous request already patched the DB but the
+        // ORM cache is stale, the workflow would still use the wrong settings.
         //
-        // A) is_tax_inclusive = false
-        //    Ensures the promo value is treated as pre-tax.
+        // A) is_tax_inclusive = false  ← via ORM (updates the ORM cache)
+        //    Prevents the promo value from being treated as tax-inclusive.
         //
-        // B) application_method.target_type = "items"  ← THE KEY FIX
-        //    When target_type = "order", Medusa computes the percentage against
-        //    (item_subtotal + tax_total), giving an inflated discount.
-        //    When target_type = "items", Medusa computes against each item's
-        //    raw subtotal (unit_price × qty, pre-tax), which is correct.
+        // B) application_method.target_type = "items"  ← THE KEY TAX FIX
+        //    target_type = "order" → Medusa computes discount against
+        //    (item_subtotal + tax_total), e.g. 10% × ($49.39 × 1.07) = $5.28 ❌
+        //    target_type = "items" → Medusa computes against each item's
+        //    raw unit_price × qty (pre-tax), e.g. 10% × $49.39 = $4.94 ✓
         //
         if (resolvedPromoId) {
-            const promo = await promotionModule.retrievePromotion(resolvedPromoId, {
+            // Step 1a: Always update promotion-level fields via ORM so the
+            // ORM cache is updated before the workflow reads the promotionModule.
+            await (promotionModule as any).updatePromotions({
+                id: resolvedPromoId,
+                status: "active",
+                is_tax_inclusive: false,
+            })
+            logger.info(`[POS apply-existing] Normalised promotion ${promotion_code} → active, is_tax_inclusive=false`)
+
+            // Step 1b: Fetch fresh from ORM to get application_method ID.
+            // This re-read also busts any stale cached data at this layer.
+            const freshPromo = await promotionModule.retrievePromotion(resolvedPromoId, {
                 relations: ["application_method"],
             })
+            const appMethod = (freshPromo as any).application_method
 
-            const appMethod = (promo as any).application_method
-            const needsPromoUpdate =
-                promo.status !== "active" ||
-                (promo as any).is_tax_inclusive === true
-
-            if (needsPromoUpdate) {
-                await promotionModule.updatePromotions({
-                    id: resolvedPromoId,
-                    status: "active",
-                    is_tax_inclusive: false,
-                } as any)
-                logger.info(`[POS apply-existing] Normalised promotion ${promotion_code} → active, is_tax_inclusive=false`)
-            }
-
-            // Fix target_type via Knex (promotionModule.updatePromotions doesn't
-            // reliably update nested application_method fields in Medusa v2)
-            if (appMethod?.id && appMethod?.target_type !== "items") {
+            // Step 1c: Always fix target_type = "items" via Knex raw SQL.
+            // We ALWAYS run this (not conditional on current value) because
+            // Knex bypasses the ORM cache — the DB write is what matters for
+            // the next step where the workflow reads from DB directly.
+            if (appMethod?.id) {
                 await knex.raw(`
                     UPDATE promotion_application_method
-                    SET target_type = 'items', updated_at = NOW()
+                    SET target_type = 'items', is_tax_inclusive = false, updated_at = NOW()
                     WHERE id = ? AND deleted_at IS NULL
                 `, [appMethod.id])
-                logger.info(`[POS apply-existing] Fixed ${promotion_code} target_type: ${appMethod.target_type} → items`)
+                logger.info(`[POS apply-existing] Forced ${promotion_code} target_type=items, is_tax_inclusive=false on application_method (was: ${appMethod.target_type})`)
+
+                // Step 1d: Re-fetch via ORM to force cache bust BEFORE the
+                // workflow runs. This is the critical step that ensures the
+                // workflow picks up the updated target_type from DB.
+                await promotionModule.retrievePromotion(resolvedPromoId, {
+                    relations: ["application_method"],
+                })
+                logger.info(`[POS apply-existing] ORM cache busted for ${promotion_code}`)
             }
         }
 
