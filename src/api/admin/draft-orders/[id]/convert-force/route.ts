@@ -94,145 +94,95 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     }
 
     try {
-        // ── Step 1: Try standard conversion first ─────────────────────────────
-        let cvRes = await callConvert()
-        let cvJson = await cvRes.json()
+        // ── Step 1: Fetch draft order items ───────────────────────────────────
+        // Get items from the DRAFT (not confirmed order) to create reservations
+        // proactively — avoids the try → fail → fix → retry anti-pattern.
+        const draftRes = await fetch(`${base}/admin/draft-orders/${id}`, { headers: authHeaders })
+        if (draftRes.ok) {
+            const { draft_order } = await draftRes.json()
+            const items: any[] = draft_order?.items ?? draft_order?.cart?.items ?? []
 
-        if (cvRes.ok) {
-            // Compute the true total from the order AFTER conversion
-            const correctTotal = await computeTrueTotal()
-            if (correctTotal !== null) {
-                await fixPaymentCollection(correctTotal)
+            // ── Step 2: Get the primary stock location ────────────────────────
+            const slRes = await fetch(`${base}/admin/stock-locations?limit=100`, { headers: authHeaders })
+            const slJson = slRes.ok ? await slRes.json() : {}
+            const primaryLocationId: string | undefined = (slJson.stock_locations ?? [])[0]?.id
+
+            if (primaryLocationId && items.length > 0) {
+                // ── Step 3: Ensure allow_backorder reservations for all items ─
+                // Creating reservations before conversion means convert-to-order
+                // finds existing reservations and skips the stock check entirely.
+                for (const lineItem of items) {
+                    const lineItemId: string = lineItem.id
+                    const variantId: string | undefined = lineItem.variant_id ?? lineItem.variant?.id
+                    if (!variantId) continue
+
+                    // Skip if reservation already exists
+                    const resRes = await fetch(`${base}/admin/reservations?line_item_id[]=${lineItemId}&limit=5`, { headers: authHeaders })
+                    const resJson = resRes.ok ? await resRes.json() : {}
+                    if ((resJson.reservations ?? []).length > 0) continue
+
+                    // Find the inventory item for this variant
+                    const invRes = await fetch(`${base}/admin/inventory-items?variant_id[]=${variantId}&limit=10`, { headers: authHeaders })
+                    if (!invRes.ok) continue
+                    const invJson = await invRes.json()
+                    const inventoryItemId = (invJson.inventory_items ?? [])[0]?.id
+                    if (!inventoryItemId) {
+                        console.warn(`[convert-force] No inventory item for variant ${variantId}, skipping reservation`)
+                        continue
+                    }
+
+                    // Create reservation with allow_backorder — bypasses stock check
+                    const createRes = await fetch(`${base}/admin/reservations`, {
+                        method: "POST",
+                        headers: authHeaders,
+                        body: JSON.stringify({
+                            line_item_id: lineItemId,
+                            inventory_item_id: inventoryItemId,
+                            location_id: primaryLocationId,
+                            quantity: lineItem.quantity ?? 1,
+                            allow_backorder: true,
+                        }),
+                    })
+                    if (!createRes.ok) {
+                        const err = await createRes.json().catch(() => ({}))
+                        console.warn(`[convert-force] Reservation failed for ${lineItemId}:`, err?.message)
+                    } else {
+                        console.log(`[convert-force] ✅ Reservation created for lineItem ${lineItemId} (allow_backorder)`)
+                    }
+                }
             }
-
-            // Save the exact conversion timestamp — Medusa may inherit created_at from the
-            // cart (draft order creation date), so we stamp order_placed_at explicitly.
-            try {
-                await fetch(`${base}/admin/orders/${id}`, {
-                    method: 'POST',
-                    headers: authHeaders,
-                    body: JSON.stringify({ metadata: { order_placed_at: new Date().toISOString() } }),
-                })
-                console.log(`[convert-force] ✅ Stamped order_placed_at on order ${id}`)
-            } catch (metaErr: any) {
-                console.warn(`[convert-force] ⚠️ Could not stamp order_placed_at: ${metaErr?.message}`)
-            }
-
-            // The order.placed event is emitted by Medusa's conversion workflow and
-            // picked up by qb-order-subscriber.ts, which creates the QB Sales Order.
-            // ⚠️  Do NOT call /admin/quickbooks/order here — that would create a duplicate SO.
-
-            return void res.status(200).json(cvJson)
+        } else {
+            console.warn(`[convert-force] Could not fetch draft order ${id} — proceeding without reservation pre-creation`)
         }
 
-        // ── Step 2: Check if it's an inventory error ──────────────────────────
-        const isInventoryError =
-            cvJson?.type === "not_allowed" ||
-            (cvJson?.message ?? "").toLowerCase().includes("insufficient") ||
-            (cvJson?.message ?? "").toLowerCase().includes("inventory") ||
-            (cvJson?.message ?? "").toLowerCase().includes("stock")
+        // ── Step 4: Convert draft → confirmed order (single attempt) ────────
+        const cvRes = await callConvert()
+        const cvJson = await cvRes.json()
 
-        if (!isInventoryError) {
+        if (!cvRes.ok) {
+            console.error(`[convert-force] Conversion failed after reservation pre-creation:`, cvJson?.message)
             return void res.status(cvRes.status).json(cvJson)
         }
 
-        console.log(`[convert-force] Inventory error for ${id}. Creating missing reservations via native API…`)
-
-        // ── Step 3: Create missing inventory RESERVATIONS for line items ─────────
-        //
-        // Items added via add-item-force skip Medusa's normal flow and never get
-        // inventory reservations created. Medusa's conversion workflow REQUIRES
-        // reservations to exist in order to confirm them.
-        //
-        // With allow_backorder=true (set globally), reservations can be created
-        // even at 0 or negative stock — we are NOT changing stock quantities.
-        //
-        // Process:
-        //  a) Get the order's line items and the default stock location
-        //  b) For each line item, check if a reservation already exists
-        //  c) If not, find the inventory item for that variant via native API
-        //  d) Create the reservation (soft allocation, no stock change)
-
-        const orderRes = await fetch(`${base}/admin/orders/${id}?fields=+items.*`, { headers: authHeaders })
-        if (!orderRes.ok) return void res.status(cvRes.status).json(cvJson)
-        const { order } = await orderRes.json()
-        const items: any[] = order?.items ?? []
-
-        // Get stock locations to know where to create reservations
-        const slRes = await fetch(`${base}/admin/stock-locations?limit=100`, { headers: authHeaders })
-        const slJson = slRes.ok ? await slRes.json() : {}
-        const stockLocations: any[] = slJson.stock_locations ?? []
-        const primaryLocationId: string | undefined = stockLocations[0]?.id
-        if (!primaryLocationId) {
-            console.warn("[convert-force] No stock locations found, skipping reservation creation")
-        }
-
-        if (primaryLocationId) {
-            for (const lineItem of items) {
-                const lineItemId: string = lineItem.id
-                const variantId: string | undefined = lineItem.variant_id ?? lineItem.variant?.id
-                if (!variantId) continue
-
-                // a) Check if a reservation already exists for this line item
-                const resRes = await fetch(`${base}/admin/reservations?line_item_id[]=${lineItemId}&limit=5`, { headers: authHeaders })
-                const resJson = resRes.ok ? await resRes.json() : {}
-                const existingRes: any[] = resJson.reservations ?? []
-                if (existingRes.length > 0) continue // already has a reservation
-
-                // b) Find inventory item for this variant via the native API
-                const invRes = await fetch(`${base}/admin/inventory-items?variant_id[]=${variantId}&limit=10`, { headers: authHeaders })
-                if (!invRes.ok) continue
-                const invJson = await invRes.json()
-                const invItems: any[] = invJson.inventory_items ?? []
-                if (invItems.length === 0) {
-                    console.warn(`[convert-force] No inventory item found for variant ${variantId}, skipping`)
-                    continue
-                }
-
-                const inventoryItemId = invItems[0].id
-
-                // c) Create the reservation with allow_backorder=true — does NOT change stock quantity.
-                //    Medusa reads allow_backorder from the reservation input (line 116 of inventory-module.js)
-                //    to decide whether to enforce the stock quantity check during ensureInventoryLevels().
-                console.log(`[convert-force] Creating reservation for lineItem ${lineItemId}, invItem ${inventoryItemId}`)
-                const createRes = await fetch(`${base}/admin/reservations`, {
-                    method: "POST",
-                    headers: authHeaders,
-                    body: JSON.stringify({
-                        line_item_id: lineItemId,
-                        inventory_item_id: inventoryItemId,
-                        location_id: primaryLocationId,
-                        quantity: lineItem.quantity ?? 1,
-                        allow_backorder: true,   // ← bypasses the stock check in ensureInventoryLevels
-                    }),
-                })
-                if (!createRes.ok) {
-                    const err = await createRes.json().catch(() => ({}))
-                    console.warn(`[convert-force] Reservation creation failed for ${lineItemId}:`, err?.message)
-                }
-            }
-        }
-
-        // ── Step 4: Retry conversion ───────────────────────────────────────────
-        cvRes = await callConvert()
-        cvJson = await cvRes.json()
-
-        if (!cvRes.ok) {
-            return void res.status(cvRes.status).json({
-                ...cvJson,
-                message: cvJson?.message ?? "Conversion failed even after creating missing reservations",
-                backorder_attempted: true,
-            })
-        }
-
-        // Fix payment collection post-conversion
+        // ── Step 5: Fix payment collection total (post-conversion) ───────────
         const correctTotal = await computeTrueTotal()
         if (correctTotal !== null) {
             await fixPaymentCollection(correctTotal)
         }
 
-        // The order.placed event handles QB sync via subscriber — no explicit call needed.
-        res.status(200).json({ ...cvJson, backorder_items_enabled: true })
+        // Stamp order_placed_at so POS activity log shows correct creation time
+        try {
+            await fetch(`${base}/admin/orders/${id}`, {
+                method: 'POST',
+                headers: authHeaders,
+                body: JSON.stringify({ metadata: { order_placed_at: new Date().toISOString() } }),
+            })
+            console.log(`[convert-force] ✅ Stamped order_placed_at on order ${id}`)
+        } catch (metaErr: any) {
+            console.warn(`[convert-force] ⚠️ Could not stamp order_placed_at: ${metaErr?.message}`)
+        }
+
+        return void res.status(200).json(cvJson)
     } catch (e: any) {
         console.error("[convert-force]", e?.message)
         res.status(500).json({ message: e?.message ?? "Conversion failed" })

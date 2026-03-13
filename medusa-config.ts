@@ -210,6 +210,12 @@ module.exports = defineConfig({
       resolve: "./src/modules/pos-user",
     },
     {
+      resolve: "./src/modules/invoices",
+    },
+    {
+      resolve: "./src/modules/document-templates",
+    },
+    {
       resolve: "@medusajs/medusa/file",
       options: {
         providers: [

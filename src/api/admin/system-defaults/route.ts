@@ -4,38 +4,49 @@ import { Client } from "pg"
 export const DB = () => new Client({ connectionString: process.env.DATABASE_URL })
 
 // ── Default System Defaults ──────────────────────────────────────────────────
+// data_scope: "Customer Data" | "Document Data"
+// "Customer Data" = options that describe the customer relationship (terms, etc.)
+// "Document Data" = options that appear directly on the printed document header/footer
 const DEFAULT_VALUES = [
-    // Document Defaults (Consolidated)
-    { context: "Document Defaults", field_name: "Terms", value: "Due on Receipt", sort_order: 1 },
-    { context: "Document Defaults", field_name: "Terms", value: "Net 15", sort_order: 2 },
-    { context: "Document Defaults", field_name: "Terms", value: "Net 30", sort_order: 3 },
-    { context: "Document Defaults", field_name: "Terms", value: "Net 45", sort_order: 4 },
-    { context: "Document Defaults", field_name: "Terms", value: "Net 60", sort_order: 5 },
+    // Document Defaults — Payment Terms (was: Terms)
+    { context: "Document Defaults", field_name: "Payment Terms", data_scope: "Customer Data", value: "Due on Receipt", sort_order: 1 },
+    { context: "Document Defaults", field_name: "Payment Terms", data_scope: "Customer Data", value: "30% deposit, 70% upon delivery", sort_order: 2 },
+    { context: "Document Defaults", field_name: "Payment Terms", data_scope: "Customer Data", value: "50% deposit, 50% upon delivery", sort_order: 3 },
+    { context: "Document Defaults", field_name: "Payment Terms", data_scope: "Customer Data", value: "70% deposit, 30% upon delivery", sort_order: 4 },
+    { context: "Document Defaults", field_name: "Payment Terms", data_scope: "Customer Data", value: "80% deposit, 20% upon delivery", sort_order: 5 },
+    { context: "Document Defaults", field_name: "Payment Terms", data_scope: "Customer Data", value: "Project Completion", sort_order: 6 },
+    { context: "Document Defaults", field_name: "Payment Terms", data_scope: "Customer Data", value: "Net-7", sort_order: 7 },
+    { context: "Document Defaults", field_name: "Payment Terms", data_scope: "Customer Data", value: "Net-15", sort_order: 8 },
+    { context: "Document Defaults", field_name: "Payment Terms", data_scope: "Customer Data", value: "Net-30", sort_order: 9 },
+    { context: "Document Defaults", field_name: "Payment Terms", data_scope: "Customer Data", value: "Special", sort_order: 10 },
+    { context: "Document Defaults", field_name: "Payment Terms", data_scope: "Customer Data", value: "Prepaid", sort_order: 11 },
 
-    { context: "Document Defaults", field_name: "Tax Code", value: "TAX", sort_order: 1 },
-    { context: "Document Defaults", field_name: "Tax Code", value: "NON", sort_order: 2 },
+    // Document Defaults — Tax Code
+    { context: "Document Defaults", field_name: "Tax Code", data_scope: "Document Data", value: "TAX", sort_order: 1 },
+    { context: "Document Defaults", field_name: "Tax Code", data_scope: "Document Data", value: "NON", sort_order: 2 },
 
-    { context: "Document Defaults", field_name: "Order Type", value: "Standard Order", sort_order: 1 },
-    { context: "Document Defaults", field_name: "Order Type", value: "Store Pickup", sort_order: 2 },
-    { context: "Document Defaults", field_name: "Order Type", value: "Project", sort_order: 3 },
+    // Document Defaults — Order Type
+    { context: "Document Defaults", field_name: "Order Type", data_scope: "Document Data", value: "Standard Order", sort_order: 1 },
+    { context: "Document Defaults", field_name: "Order Type", data_scope: "Document Data", value: "Store Pickup", sort_order: 2 },
+    { context: "Document Defaults", field_name: "Order Type", data_scope: "Document Data", value: "Project", sort_order: 3 },
 
-    { context: "Document Defaults", field_name: "Lead Time", value: "Immediate", sort_order: 1 },
-    { context: "Document Defaults", field_name: "Lead Time", value: "1-2 Business Days", sort_order: 2 },
-    { context: "Document Defaults", field_name: "Lead Time", value: "3-5 Business Days", sort_order: 3 },
-    { context: "Document Defaults", field_name: "Lead Time", value: "5-7 Business Days", sort_order: 4 },
-    { context: "Document Defaults", field_name: "Lead Time", value: "7-14 Business Days", sort_order: 5 },
+    // Document Defaults — Lead Time
+    { context: "Document Defaults", field_name: "Lead Time", data_scope: "Document Data", value: "Immediate", sort_order: 1 },
+    { context: "Document Defaults", field_name: "Lead Time", data_scope: "Document Data", value: "1-2 Business Days", sort_order: 2 },
+    { context: "Document Defaults", field_name: "Lead Time", data_scope: "Document Data", value: "3-5 Business Days", sort_order: 3 },
+    { context: "Document Defaults", field_name: "Lead Time", data_scope: "Document Data", value: "5-7 Business Days", sort_order: 4 },
+    { context: "Document Defaults", field_name: "Lead Time", data_scope: "Document Data", value: "7-14 Business Days", sort_order: 5 },
+
+    // Document Defaults — Order Metadata (Customer PO & Project Name)
+    { context: "Document Defaults", field_name: "Customer PO", data_scope: "orders", value: "-", sort_order: 1 },
+    { context: "Document Defaults", field_name: "Project Name", data_scope: "orders", value: "-", sort_order: 1 },
 
     // Templates Footer
     {
         context: "Templates Footer",
         field_name: "Draft Order (Estimates)",
-        value: `STORE POLICIES
-·REFUND within 15 days. Product(s) in original condition.
-·EXCHANGE / CREDIT within 30 days. Product(s) in original condition.
-·SPECIAL ORDERS subject to 25% restocking fee.
-·CUSTOM ORDERS not returnable nor cancellable.
-·MADE TO ORDER returns subject to approval, commonly not returnable/cancellable.
-·ECOPOWERTECH not responsible for damages after goods leave our premises.`,
+        data_scope: "Document Data",
+        value: `STORE POLICIES\n·REFUND within 15 days. Product(s) in original condition.\n·EXCHANGE / CREDIT within 30 days. Product(s) in original condition.\n·SPECIAL ORDERS subject to 25% restocking fee.\n·CUSTOM ORDERS not returnable nor cancellable.\n·MADE TO ORDER returns subject to approval, commonly not returnable/cancellable.\n·ECOPOWERTECH not responsible for damages after goods leave our premises.`,
         sort_order: 1
     },
 ]
@@ -56,16 +67,22 @@ export async function ensureTable(client: Client) {
         )
     `)
 
-    // Temporary Migration logic for consolidated Document Defaults
+    // Migration: add data_scope column if it doesn't exist yet
+    await client.query(`
+        ALTER TABLE system_defaults
+        ADD COLUMN IF NOT EXISTS data_scope TEXT NOT NULL DEFAULT 'Document Data'
+    `)
+
+    // Migration: consolidate old Customer Defaults / Order Defaults contexts
     try {
         await client.query(`
-            UPDATE system_defaults 
-            SET context = 'Document Defaults' 
+            UPDATE system_defaults
+            SET context = 'Document Defaults'
             WHERE context IN ('Customer Defaults', 'Order Defaults')
             AND NOT EXISTS (
-                SELECT 1 FROM system_defaults sd2 
-                WHERE sd2.context = 'Document Defaults' 
-                AND sd2.field_name = system_defaults.field_name 
+                SELECT 1 FROM system_defaults sd2
+                WHERE sd2.context = 'Document Defaults'
+                AND sd2.field_name = system_defaults.field_name
                 AND sd2.value = system_defaults.value
             )
         `)
@@ -76,21 +93,71 @@ export async function ensureTable(client: Client) {
         // ignore unique constraint errors from migration
     }
 
+    // Migration: rename "Terms" → "Payment Terms" and set correct scope
+    try {
+        // Rename field_name where no conflict exists with existing Payment Terms rows
+        await client.query(`
+            UPDATE system_defaults
+            SET field_name = 'Payment Terms',
+                data_scope = 'customers,orders',
+                updated_at  = NOW()
+            WHERE field_name = 'Terms'
+            AND NOT EXISTS (
+                SELECT 1 FROM system_defaults sd2
+                WHERE sd2.context     = system_defaults.context
+                AND   sd2.field_name  = 'Payment Terms'
+                AND   sd2.value       = system_defaults.value
+            )
+        `)
+        // Delete any remaining "Terms" rows that are now duplicates of "Payment Terms"
+        await client.query(`
+            DELETE FROM system_defaults
+            WHERE field_name = 'Terms'
+        `)
+        // Fix any Payment Terms rows that still have old-format scope
+        await client.query(`
+            UPDATE system_defaults
+            SET data_scope = 'customers,orders', updated_at = NOW()
+            WHERE field_name = 'Payment Terms'
+            AND (data_scope IS NULL OR data_scope IN ('Customer Data', 'Document Data', ''))
+        `)
+    } catch (e) {
+        // ignore errors if already migrated
+    }
+
+    // Migration: insert Customer PO and Project Name placeholders if they don't exist
+    try {
+        await client.query(`
+            INSERT INTO system_defaults (context, field_name, value, sort_order, data_scope)
+            VALUES ('Document Defaults', 'Customer PO', '-', 1, 'orders')
+            ON CONFLICT DO NOTHING
+        `)
+        await client.query(`
+            INSERT INTO system_defaults (context, field_name, value, sort_order, data_scope)
+            VALUES ('Document Defaults', 'Project Name', '-', 1, 'orders')
+            ON CONFLICT DO NOTHING
+        `)
+    } catch (e) {
+        // ignore errors
+    }
+
     const { rowCount } = await client.query("SELECT 1 FROM system_defaults LIMIT 1")
     if (!rowCount) {
-        // Single batch INSERT for seeding
+        // Single batch INSERT for seeding (includes data_scope)
         const values: any[] = []
         const placeholders = DEFAULT_VALUES.map((p, i) => {
-            const base = i * 4
-            values.push(p.context, p.field_name, p.value, p.sort_order)
-            return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`
+            const base = i * 5
+            values.push(p.context, p.field_name, p.value, p.sort_order, p.data_scope)
+            return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`
         })
         await client.query(
-            `INSERT INTO system_defaults (context, field_name, value, sort_order) VALUES ${placeholders.join(", ")} ON CONFLICT DO NOTHING`,
+            `INSERT INTO system_defaults (context, field_name, value, sort_order, data_scope)
+             VALUES ${placeholders.join(", ")} ON CONFLICT DO NOTHING`,
             values
         )
     }
 }
+
 
 /**
  * GET /admin/system-defaults

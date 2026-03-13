@@ -6,11 +6,22 @@ import {
 import { useState, useEffect, useCallback } from "react"
 
 // ── Types ──────────────────────────────────────────────────────────────────────
+// data_scope is stored as comma-separated: "customers" | "orders" | "customers,orders"
+// Future doc types can be added (e.g. "invoices", "vendors")
+const ALL_DOC_SCOPES = [
+    { key: "customers", label: "Customers" },
+    { key: "orders",    label: "Orders"    },
+] as const
+type DocScopeKey = typeof ALL_DOC_SCOPES[number]["key"]  // "customers" | "orders"
+
+type DataScope = string  // comma-separated DocScopeKeys, e.g. "customers,orders"
+
 interface SystemDefault {
     id: string
     context: string
     field_name: string
     value: string
+    data_scope: DataScope
     sort_order: number
     created_at: string
     updated_at: string
@@ -19,13 +30,35 @@ interface SystemDefault {
 const KNOWN_CONTEXTS = ["Document Defaults", "Templates Footer"]
 
 const KNOWN_FIELDS_BY_CONTEXT: Record<string, string[]> = {
-    "Document Defaults": ["Terms", "Tax Code", "Price List", "Estimate Status", "Order Status", "Order Type", "Lead Time", "FOB", "Ship Via", "Project Phase", "Payment Terms"],
+    "Document Defaults": ["Payment Terms", "Tax Code", "Price List", "Estimate Status", "Order Status", "Order Type", "Lead Time", "FOB", "Ship Via", "Project Phase"],
     "Templates Footer": ["Draft Order (Estimates)", "Order (Sales Order)", "Invoice"],
+}
+
+// Default applies_to scopes per known field (comma-separated)
+const FIELD_DEFAULT_SCOPE: Record<string, string> = {
+    "Payment Terms":           "customers,orders",
+    "Price List":              "customers",
+    "Estimate Status":         "customers,orders",
+    "Order Status":            "customers,orders",
+    "Tax Code":                "orders",
+    "Order Type":              "orders",
+    "Lead Time":               "customers,orders",
+    "FOB":                     "orders",
+    "Ship Via":                "orders",
+    "Project Phase":           "orders",
+    "Draft Order (Estimates)": "orders",
+    "Order (Sales Order)":     "orders",
+    "Invoice":                 "orders",
+}
+
+const SCOPE_BADGE_COLOR: Record<DocScopeKey, "blue" | "green"> = {
+    customers: "green",
+    orders:    "blue",
 }
 
 const CONTEXT_COLORS: Record<string, "blue" | "green" | "orange" | "purple" | "grey"> = {
     "Document Defaults": "blue",
-    "Templates Footer": "purple",
+    "Templates Footer":  "purple",
 }
 
 // ── Modal ──────────────────────────────────────────────────────────────────────
@@ -38,35 +71,37 @@ function DefaultModal({
     onClose: () => void
     onSave: (data: Partial<SystemDefault>) => Promise<void>
 }) {
-    const [context, setContext] = useState(item?.context ?? KNOWN_CONTEXTS[0])
+    const [context, setContext] = useState<string>(item?.context ?? KNOWN_CONTEXTS[0] ?? "Document Defaults")
     const [customContext, setCustomContext] = useState("")
 
-    const availableFields = KNOWN_FIELDS_BY_CONTEXT[context] || []
-    const initialField = item?.field_name || (availableFields.length > 0 ? availableFields[0] : "")
+    const availableFields = (KNOWN_FIELDS_BY_CONTEXT as Record<string, string[]>)[context] || []
+    const initialField: string = item?.field_name || (availableFields.length > 0 ? availableFields[0] ?? "" : "")
 
-    const [field, setField] = useState(initialField)
+    const [field, setField] = useState<string>(initialField)
     const [customField, setCustomField] = useState("")
-
-    const [value, setValue] = useState(item?.value ?? "")
+    const [value, setValue] = useState<string>(item?.value ?? "")
     const [sortOrder, setSortOrder] = useState(item?.sort_order?.toString() ?? "0")
+    const [dataScope, setDataScope] = useState<string>(item?.data_scope ?? (initialField ? FIELD_DEFAULT_SCOPE[initialField] : undefined) ?? "customers,orders")
     const [saving, setSaving] = useState(false)
 
     // Auto-infer context from field
     useEffect(() => {
-        if (field !== "__custom__") {
-            const contextForField = KNOWN_CONTEXTS.find(c => KNOWN_FIELDS_BY_CONTEXT[c]?.includes(field))
-            if (contextForField) {
-                setContext(contextForField)
-            }
+        if (field && field !== "__custom__") {
+            const contextForField = KNOWN_CONTEXTS.find(c => (KNOWN_FIELDS_BY_CONTEXT as Record<string, string[]>)[c]?.includes(field))
+            if (contextForField) setContext(contextForField)
+            // Auto-set the default data_scope for the chosen known field
+            const defaultScope = (FIELD_DEFAULT_SCOPE as Record<string, string>)[field]
+            if (defaultScope) setDataScope(defaultScope)
         }
     }, [field])
 
-    const isCustomContext = !KNOWN_CONTEXTS.includes(context) && context !== "__custom__"
-    const isCustomField = field === "__custom__" || (context !== "__custom__" && !(KNOWN_FIELDS_BY_CONTEXT[context] || []).includes(field))
+    const allKnownFields = Object.values(KNOWN_FIELDS_BY_CONTEXT).flat()
+    const isCustomField = field === "__custom__" || !allKnownFields.includes(field)
+    const isCustomContext = !KNOWN_CONTEXTS.some(c => c === context) && context !== "__custom__"
 
     const handleSave = async () => {
-        const c = context === "__custom__" ? customContext.trim() : (isCustomContext ? context : context)
-        const f = field === "__custom__" ? customField.trim() : (isCustomField && field !== "__custom__" ? field : field)
+        const c = context === "__custom__" ? customContext.trim() : context
+        const f = field === "__custom__" ? customField.trim() : field
         const v = value.trim()
         const order = parseInt(sortOrder, 10) || 0
 
@@ -76,7 +111,7 @@ function DefaultModal({
         }
         setSaving(true)
         try {
-            await onSave({ context: c, field_name: f, value: v, sort_order: order })
+            await onSave({ context: c, field_name: f, value: v, sort_order: order, data_scope: dataScope })
             onClose()
         } catch {
             toast.error("Failed to save")
@@ -94,12 +129,11 @@ function DefaultModal({
                 </div>
                 <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
 
-
                     {/* Field */}
                     <div>
                         <Label className="mb-1 block text-sm">Field Name</Label>
                         <select
-                            value={Object.values(KNOWN_FIELDS_BY_CONTEXT).flat().includes(field) ? field : "__custom__"}
+                            value={field && allKnownFields.includes(field) ? field : "__custom__"}
                             onChange={e => {
                                 setField(e.target.value)
                                 if (e.target.value !== "__custom__") setCustomField("")
@@ -107,14 +141,18 @@ function DefaultModal({
                             className="w-full border border-ui-border-base rounded-md px-3 py-2 text-sm bg-ui-bg-field text-ui-fg-base"
                         >
                             <optgroup label="Document Defaults" className="bg-ui-bg-base text-ui-fg-base font-semibold">
-                                {KNOWN_FIELDS_BY_CONTEXT["Document Defaults"].map(f => <option key={f} value={f} className="bg-ui-bg-base text-ui-fg-base font-normal">{f}</option>)}
+                                {(KNOWN_FIELDS_BY_CONTEXT["Document Defaults"] ?? []).map(f => (
+                                    <option key={f} value={f} className="bg-ui-bg-base text-ui-fg-base font-normal">{f}</option>
+                                ))}
                             </optgroup>
                             <optgroup label="Templates Footer" className="bg-ui-bg-base text-ui-fg-base font-semibold">
-                                {KNOWN_FIELDS_BY_CONTEXT["Templates Footer"].map(f => <option key={f} value={f} className="bg-ui-bg-base text-ui-fg-base font-normal">{f}</option>)}
+                                {(KNOWN_FIELDS_BY_CONTEXT["Templates Footer"] ?? []).map(f => (
+                                    <option key={f} value={f} className="bg-ui-bg-base text-ui-fg-base font-normal">{f}</option>
+                                ))}
                             </optgroup>
                             <option value="__custom__" className="bg-ui-bg-base text-ui-fg-base">Custom field…</option>
                         </select>
-                        {(field === "__custom__" || isCustomField) && (
+                        {isCustomField && (
                             <Input
                                 className="mt-3"
                                 placeholder="Custom field name (e.g. Shipping Method)"
@@ -122,7 +160,7 @@ function DefaultModal({
                                 onChange={e => field === "__custom__" ? setCustomField(e.target.value) : setField(e.target.value)}
                             />
                         )}
-                        {(field === "__custom__" || isCustomField) && (
+                        {isCustomField && (
                             <div className="mt-3">
                                 <Label className="mb-1 block text-sm">Target Context Area</Label>
                                 <select
@@ -136,7 +174,7 @@ function DefaultModal({
                                 </select>
                             </div>
                         )}
-                        {(context === "__custom__" || isCustomContext) && (field === "__custom__" || isCustomField) && (
+                        {isCustomField && isCustomContext && (
                             <Input
                                 className="mt-2"
                                 placeholder="Custom context name (e.g. Invoice Defaults)"
@@ -146,7 +184,38 @@ function DefaultModal({
                         )}
                     </div>
 
-                    {/* Value */}
+                    {/* Applies To (Data Scope) — only for brand-new entries from the main Add Default button */}
+                    {!item?.field_name && (
+                        <div>
+                            <Label className="mb-1 block text-sm">Applies To</Label>
+                            <div className="flex flex-col gap-2 mt-1">
+                                {ALL_DOC_SCOPES.map(({ key, label }) => {
+                                    const scopes = dataScope.split(",").map(s => s.trim()).filter(Boolean)
+                                    const checked = scopes.includes(key)
+                                    return (
+                                        <label key={key} className="flex items-center gap-2 cursor-pointer select-none">
+                                            <input
+                                                type="checkbox"
+                                                className="h-4 w-4 cursor-pointer"
+                                                checked={checked}
+                                                onChange={e => {
+                                                    const current = dataScope.split(",").map(s => s.trim()).filter(Boolean)
+                                                    const next = e.target.checked
+                                                        ? [...new Set([...current, key])]
+                                                        : current.filter(s => s !== key)
+                                                    if (next.length === 0) return
+                                                    setDataScope(next.sort().join(","))
+                                                }}
+                                            />
+                                            <span className="text-sm text-ui-fg-base">{label}</span>
+                                        </label>
+                                    )
+                                })}
+                            </div>
+                            <Text className="text-xs text-ui-fg-muted mt-1">At least one is required. Use ✏ on existing groups to change scope.</Text>
+                        </div>
+                    )}
+
                     <div>
                         <Label className="mb-1 block text-sm">Value</Label>
                         {context === "Templates Footer" ? (
@@ -159,7 +228,7 @@ function DefaultModal({
                             />
                         ) : (
                             <Input
-                                placeholder="e.g. Net 30, Standard Order, 5-7 Days..."
+                                placeholder="e.g. Net-30, Standard Order, 5-7 Days..."
                                 value={value}
                                 onChange={e => setValue(e.target.value)}
                             />
@@ -187,11 +256,90 @@ function DefaultModal({
     )
 }
 
+// ── Scope Modal (edit Applies To for an entire field group) ────────────────────
+function ScopeModal({
+    fieldName,
+    currentScope,
+    onClose,
+    onSave,
+}: {
+    fieldName: string
+    currentScope: string
+    onClose: () => void
+    onSave: (newScope: string) => Promise<void>
+}) {
+    const [dataScope, setDataScope] = useState<string>(currentScope || "customers,orders")
+    const [saving, setSaving] = useState(false)
+
+    const handleSave = async () => {
+        if (!dataScope) return
+        setSaving(true)
+        try {
+            await onSave(dataScope)
+            onClose()
+        } catch {
+            toast.error("Failed to update scope")
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="bg-ui-bg-base border border-ui-border-base rounded-xl shadow-2xl w-[380px] flex flex-col overflow-hidden">
+                <div className="px-5 py-4 border-b border-ui-border-base flex items-center justify-between">
+                    <div>
+                        <Heading level="h2" className="text-base">Edit Scope</Heading>
+                        <Text className="text-xs text-ui-fg-muted mt-0.5">{fieldName}</Text>
+                    </div>
+                    <button onClick={onClose} className="text-ui-fg-muted hover:text-ui-fg-base text-xl leading-none">×</button>
+                </div>
+                <div className="px-5 py-5 space-y-2">
+                    <Label className="mb-2 block text-sm font-medium">Applies To</Label>
+                    {ALL_DOC_SCOPES.map(({ key, label }) => {
+                        const scopes = dataScope.split(",").map(s => s.trim()).filter(Boolean)
+                        const checked = scopes.includes(key)
+                        return (
+                            <label key={key} className="flex items-center gap-3 cursor-pointer select-none p-2 rounded-md hover:bg-ui-bg-subtle transition-colors">
+                                <input
+                                    type="checkbox"
+                                    className="h-4 w-4 cursor-pointer"
+                                    checked={checked}
+                                    onChange={e => {
+                                        const current = dataScope.split(",").map(s => s.trim()).filter(Boolean)
+                                        const next = e.target.checked
+                                            ? [...new Set([...current, key])]
+                                            : current.filter(s => s !== key)
+                                        if (next.length === 0) return
+                                        setDataScope(next.sort().join(","))
+                                    }}
+                                />
+                                <div>
+                                    <span className="text-sm font-medium text-ui-fg-base">{label}</span>
+                                    <span className="block text-xs text-ui-fg-muted">
+                                        {key === "customers" ? "Customer profile & customer-related docs" : "Estimates, Orders & Invoices"}
+                                    </span>
+                                </div>
+                            </label>
+                        )
+                    })}
+                    <Text className="text-xs text-ui-fg-muted pt-2">Updates all <strong>{fieldName}</strong> options at once.</Text>
+                </div>
+                <div className="px-5 py-4 border-t border-ui-border-base flex justify-end gap-2">
+                    <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
+                    <Button onClick={handleSave} isLoading={saving}>Apply to All</Button>
+                </div>
+            </div>
+        </div>
+    )
+}
+
 // ── Main Page ──────────────────────────────────────────────────────────────────
 const SystemDefaultsPage = () => {
     const [defaults, setDefaults] = useState<SystemDefault[]>([])
     const [loading, setLoading] = useState(true)
     const [modal, setModal] = useState<Partial<SystemDefault> | null | false>(false)
+    const [scopeModal, setScopeModal] = useState<{ fieldName: string; items: SystemDefault[] } | null>(null)
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
     const [syncingUsers, setSyncingUsers] = useState(false)
 
@@ -278,13 +426,27 @@ const SystemDefaultsPage = () => {
         }
     }, [load])
 
+    // Bulk-update data_scope for all items in a field group
+    const handleSaveScope = useCallback(async (items: SystemDefault[], newScope: string) => {
+        await Promise.all(items.map(item =>
+            fetch(`/admin/system-defaults/${item.id}`, {
+                method: "PATCH", credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ data_scope: newScope }),
+            })
+        ))
+        toast.success("Scope updated")
+        await load(true)
+    }, [load])
+
     // Grouping: Context -> Field -> Values
     const contextGroups: Record<string, Record<string, SystemDefault[]>> = {}
 
     for (const d of defaults) {
         if (!contextGroups[d.context]) contextGroups[d.context] = {}
-        if (!contextGroups[d.context][d.field_name]) contextGroups[d.context][d.field_name] = []
-        contextGroups[d.context][d.field_name].push(d)
+        const ctxGroup = contextGroups[d.context]!
+        if (!ctxGroup[d.field_name]) ctxGroup[d.field_name] = []
+        ctxGroup[d.field_name]!.push(d)
     }
 
     const contextOrder = [...KNOWN_CONTEXTS, ...Object.keys(contextGroups).filter(c => !KNOWN_CONTEXTS.includes(c))]
@@ -386,15 +548,36 @@ const SystemDefaultsPage = () => {
                         <div key={contextName} className="space-y-4 pt-6">
                             <div className="flex items-center gap-2 border-b border-ui-border-base pb-2">
                                 <Heading level="h2" className="text-lg">{contextName}</Heading>
-                                <Badge color={CONTEXT_COLORS[contextName] ?? "grey"}>{Object.values(contextGroups[contextName]).flat().length} items</Badge>
+                                <Badge color={CONTEXT_COLORS[contextName] ?? "grey"}>{Object.values(contextGroups[contextName] ?? {}).flat().length} items</Badge>
                             </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {Object.entries(contextGroups[contextName]).map(([fieldName, items]) => (
+                                {Object.entries(contextGroups[contextName] ?? {}).map(([fieldName, items]) => {
+                                    const fieldScope: string | undefined = (items[0] as any)?.data_scope
+                                    const scopeKeys = (fieldScope ?? "").split(",").map((s: string) => s.trim()).filter(Boolean) as DocScopeKey[]
+                                    return (
                                     <Container key={fieldName} className="p-0 overflow-hidden flex flex-col h-full">
-                                        <div className="px-4 py-2.5 bg-ui-bg-subtle border-b border-ui-border-base flex justify-between items-center">
-                                            <Text className="font-semibold text-sm">{fieldName}</Text>
-                                            <Text className="text-xs text-ui-fg-muted">{items.length} options</Text>
+                                        <div className="px-4 py-2.5 bg-ui-bg-subtle border-b border-ui-border-base flex justify-between items-start gap-2">
+                                            <div className="flex flex-col gap-1 min-w-0">
+                                                <Text className="font-semibold text-sm">{fieldName}</Text>
+                                                {scopeKeys.length > 0 && (
+                                                    <div className="flex gap-1 flex-wrap">
+                                                        {scopeKeys.map(sk => (
+                                                            <Badge key={sk} color={SCOPE_BADGE_COLOR[sk] ?? "grey"} className="text-xs">
+                                                                {ALL_DOC_SCOPES.find(s => s.key === sk)?.label ?? sk}
+                                                            </Badge>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="flex items-center gap-2 shrink-0">
+                                                <Text className="text-xs text-ui-fg-muted">{items.length} options</Text>
+                                                <button
+                                                    title="Edit scope (Applies To)"
+                                                    className="text-ui-fg-muted hover:text-ui-fg-base text-xs px-1.5 py-0.5 rounded hover:bg-ui-bg-base-hover transition-colors"
+                                                    onClick={() => setScopeModal({ fieldName, items: items as SystemDefault[] })}
+                                                >&#9999;&#65039;</button>
+                                            </div>
                                         </div>
                                         <div className="divide-y divide-ui-border-base flex-1">
                                             {items.sort((a, b) => a.sort_order - b.sort_order).map((p: SystemDefault) => (
@@ -426,25 +609,41 @@ const SystemDefaultsPage = () => {
                                                 variant="transparent"
                                                 size="small"
                                                 className="w-full text-ui-fg-muted text-xs hover:bg-ui-bg-subtle-hover h-7"
-                                                onClick={() => setModal({ context: contextName, field_name: fieldName, sort_order: items.length + 1 })}
+                                                onClick={() => setModal({
+                                                    context: contextName,
+                                                    field_name: fieldName,
+                                                    sort_order: items.length + 1,
+                                                    data_scope: fieldScope ?? "customers,orders",
+                                                })}
                                             >
                                                 + Add {fieldName} option
                                             </Button>
                                         </div>
                                     </Container>
-                                ))}
+                                    )
+                                })}
                             </div>
                         </div>
                     ))}
                 </>
             )}
 
-            {/* Modal */}
+            {/* Add/Edit Default Modal */}
             {modal !== false && (
                 <DefaultModal
                     item={modal}
                     onClose={() => setModal(false)}
                     onSave={handleSave}
+                />
+            )}
+
+            {/* Edit Scope Modal */}
+            {scopeModal && (
+                <ScopeModal
+                    fieldName={scopeModal.fieldName}
+                    currentScope={(scopeModal.items[0] as any)?.data_scope ?? "customers,orders"}
+                    onClose={() => setScopeModal(null)}
+                    onSave={(newScope) => handleSaveScope(scopeModal.items, newScope)}
                 />
             )}
         </div>

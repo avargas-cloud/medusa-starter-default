@@ -1,0 +1,19 @@
+/**
+ * src/modules/document-templates/models/pos-document-template.ts
+ * Document template entity for Estimates, Orders, and Invoices.
+ */
+
+import { model } from '@medusajs/framework/utils'
+
+const PosDocumentTemplate = model.define('pos_document_template', {
+    id:           model.id().primaryKey(),
+    name:         model.text(),                              // "Invoice Ecopowertech"
+    doc_type:     model.enum(['estimate', 'order', 'invoice']),
+    is_default:   model.boolean().default(false),
+    thumbnail:    model.text().nullable(),                   // base64 or Minio URL
+    field_config: model.json().default({}),                 // FieldConfig object
+    layout_data:  model.json().default([]),                 // LayoutElement[]
+    created_by:   model.text().nullable(),
+})
+
+export default PosDocumentTemplate

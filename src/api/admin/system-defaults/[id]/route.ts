@@ -24,6 +24,7 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse): Promise<vo
     if (body.field_name !== undefined) { updates.push(`field_name = $${idx++}`); values.push(body.field_name) }
     if (body.value !== undefined) { updates.push(`value = $${idx++}`); values.push(body.value) }
     if (body.sort_order !== undefined) { updates.push(`sort_order = $${idx++}`); values.push(body.sort_order) }
+    if (body.data_scope !== undefined) { updates.push(`data_scope = $${idx++}`); values.push(body.data_scope) }
 
     if (updates.length === 0) {
         res.status(400).json({ error: "No fields to update" })
