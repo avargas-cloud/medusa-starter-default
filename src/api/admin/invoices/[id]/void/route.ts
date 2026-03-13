@@ -8,7 +8,7 @@ import { INVOICE_MODULE } from '../../../../../modules/invoices'
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
-    const { id } = req.params
+    const id = req.params.id!
     const { void_reason } = req.body as { void_reason?: string }
 
     let invoice: any
@@ -23,7 +23,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     const updated = await invoiceService.updatePosInvoices(
-        { id },
+        id,
         {
             status:     'voided' as const,
             voided_at:  new Date(),

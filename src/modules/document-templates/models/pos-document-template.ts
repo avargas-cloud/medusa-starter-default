@@ -12,7 +12,8 @@ const PosDocumentTemplate = model.define('pos_document_template', {
     is_default:   model.boolean().default(false),
     thumbnail:    model.text().nullable(),                   // base64 or Minio URL
     field_config: model.json().default({}),                 // FieldConfig object
-    layout_data:  model.json().default([]),                 // LayoutElement[]
+    layout_data:  model.json().nullable(),                   // LayoutElement[] (null = empty)
+    layout_guides: model.json().nullable(),                  // Guide lines (null = empty)
     created_by:   model.text().nullable(),
 })
 

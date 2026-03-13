@@ -15,7 +15,7 @@ interface TrackingBody {
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
-    const { id } = req.params
+    const id = req.params.id!
     const body = req.body as TrackingBody
 
     if (!body.tracking_number) {
@@ -30,7 +30,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     const tracking = await invoiceService.createInvoiceTrackings({
-        invoice: { id },
+        invoice_id:      id,
         carrier:         body.carrier ?? null,
         tracking_number: body.tracking_number,
         tracking_url:    body.tracking_url ?? null,

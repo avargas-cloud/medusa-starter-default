@@ -78,6 +78,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     const balance_due = body.total - body.amount_paid
 
+    // Step 1: Create the invoice (no nested items — hasMany must be created separately)
     const invoice = await invoiceService.createPosInvoices({
         invoice_number,
         order_id:       body.order_id,
@@ -96,15 +97,28 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         notes:          body.notes ?? null,
         created_by:     body.created_by ?? null,
         shipping_address: body.shipping_address ?? null,
-        items:          body.items.map(it => ({
-            variant_id:  it.variant_id ?? null,
-            sku:         it.sku ?? null,
-            description: it.description,
-            quantity:    it.quantity,
-            unit_price:  it.unit_price,
-            total:       it.total,
-        })),
     })
 
-    return res.status(201).json({ invoice })
+    // Step 2: Create line items linked to the invoice
+    if (body.items?.length) {
+        await invoiceService.createPosInvoiceItems(
+            body.items.map(it => ({
+                invoice_id:  (invoice as any).id,
+                variant_id:  it.variant_id ?? null,
+                sku:         it.sku ?? null,
+                description: it.description,
+                quantity:    it.quantity,
+                unit_price:  it.unit_price,
+                total:       it.total,
+            }))
+        )
+    }
+
+    // Re-fetch with relations for the response
+    const full = await invoiceService.retrievePosInvoice((invoice as any).id, {
+        relations: ['items'],
+    }).catch(() => invoice)
+
+    return res.status(201).json({ invoice: full })
 }
+

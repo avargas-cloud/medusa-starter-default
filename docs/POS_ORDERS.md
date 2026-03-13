@@ -1084,4 +1084,18 @@ La página `/orders/[id]` fue migrada para replicar el layout premium **7-row no
 | isDirty wired | ✅ | ✅ ✅ |
 | Save | Funcional | Toast read-only |
 | Confirm Order | Draft → Order | Toast (ya confirmado) |
-```
+
+---
+
+## Changelog — Marzo 13, 2026
+
+### 14. Order Summary — Separación de Descuentos Inline vs. Global
+
+Ver documentación completa en `POS_ESTIMATES.md § 29`.
+
+**Resumen:** El componente compartido `components/pos/OrderSummary.tsx` (usado en Estimates, Orders e Invoices POS) fue actualizado:
+
+- **Item Subtotal** ahora muestra `subtotal - lineDiscountsTotal` — ya absorbe los descuentos inline por ítem
+- **Discount** ahora muestra solo `orderDiscount` — el descuento global de la orden
+
+`Order Subtotal`, `Tax` y `Total` no cambian.

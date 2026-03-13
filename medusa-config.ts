@@ -28,22 +28,23 @@ module.exports = defineConfig({
     // Without this, subscribers will NOT load (even if code is correct)
     workerMode: (process.env.WORKER_MODE || "shared") as "shared" | "worker" | "server",
     http: {
-      // ✅ Smart CORS: Use env vars with fallbacks
+      // ✅ CORS: All origins must come from environment variables.
+      // Set STORE_CORS, ADMIN_CORS, AUTH_CORS on Railway — no hardcoded fallbacks in production.
       storeCors: process.env.STORE_CORS || (
         process.env.NODE_ENV === "production"
-          ? "https://ecopowertech.com,https://www.ecopowertech.com,https://ecopowertech-headless-medusa.vercel.app,https://pos.ecopowertech.com,https://ecopowertech-store-pos.vercel.app"
+          ? ""  // Must be set via STORE_CORS env var on Railway
           : "http://localhost:4321,https://localhost:4321,http://localhost:8000,https://docs.medusajs.com,http://localhost:3001"
       ),
 
       adminCors: process.env.ADMIN_CORS || (
         process.env.NODE_ENV === "production"
-          ? "https://medusa-starter-default-production-b69e.up.railway.app,https://ecopowertech-store-pos.vercel.app"
+          ? ""  // Must be set via ADMIN_CORS env var on Railway
           : "http://localhost:5173,http://localhost:9000,http://localhost:3001"
       ),
 
       authCors: process.env.AUTH_CORS || (
         process.env.NODE_ENV === "production"
-          ? "https://ecopowertech.com,https://www.ecopowertech.com,https://ecopowertech-headless-medusa.vercel.app,https://medusa-starter-default-production-b69e.up.railway.app,https://ecopowertech-store-pos.vercel.app"
+          ? ""  // Must be set via AUTH_CORS env var on Railway
           : "http://localhost:4321,https://localhost:4321,http://localhost:5173,http://localhost:9000,http://localhost:3001"
       ),
 

@@ -10,7 +10,7 @@ import { INVOICE_MODULE } from '../../../../modules/invoices'
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
-    const { id } = req.params
+    const id = req.params.id!
 
     let invoice: any
     try {
@@ -32,7 +32,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
 export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
-    const { id } = req.params
+    const id = req.params.id!
     const { total } = req.body as { total: number }
 
     if (!total || total <= 0) {
@@ -53,7 +53,7 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
         const newStatus = balanceDue <= 0 ? 'paid' : (totalPaid > 0 ? 'partial' : invoice.status)
 
         await invoiceService.updatePosInvoices(
-            { id },
+            id,
             { total, balance_due: balanceDue, amount_paid: totalPaid, status: newStatus }
         )
 

@@ -342,3 +342,13 @@ El nombre `"Default Sales Channel"` se normaliza a `"Default"` en la columna Cha
 
 **Última actualización:** 2026-03-06  
 **Versión:** 1.0 — Documentación inicial
+
+---
+
+## Nota: POS Invoice y Order Summary
+
+> Este documento cubre el módulo de **Invoices del Admin Panel** de Medusa (`backend/src/admin/`).
+>
+> La página de **Invoice del POS** (`ecopowertech-store-pos/app/(pos)/invoices/[id]/page.tsx`) es una entidad separada. Usa el mismo componente compartido `components/pos/OrderSummary.tsx`.
+>
+> **Marzo 13, 2026:** El Order Summary del POS fue actualizado para separar descuentos inline vs. global. Ver `POS_ESTIMATES.md § 29` para la documentación completa del cambio.

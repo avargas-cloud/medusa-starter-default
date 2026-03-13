@@ -846,6 +846,19 @@ const doc = usePOSStore(s => s.doc)
 const { subtotal, lineDiscountsTotal, orderDiscount, tax, total, itemsWithTotals } = computeTotals(doc)
 ```
 
+### Mapeo de valores a filas del Order Summary (`components/pos/OrderSummary.tsx`)
+
+| Fila UI | Valor mostrado | Descripción |
+|---------|---------------|-------------|
+| **Item Subtotal (N items)** | `subtotal - lineDiscountsTotal` | Precio bruto menos los descuentos inline por ítem. Los descuentos por línea **ya están absorbidos** en este número. |
+| **Discount** | `orderDiscount` | Solo el descuento global de la orden — manual (fixed/percent) o código de promoción. |
+| **Order Subtotal** | `afterDiscount` (= `subtotal - lineDiscountsTotal - orderDiscount`) | Base después de todos los descuentos. |
+| **Shipping** | `shipping` | `doc.shippingPrice` — no está sujeto a impuestos (Florida law). |
+| **Tax** | `tax` | `afterDiscount × 0.07` (o 0 si `taxMode = 'exempt'`). |
+| **Total** | `total` | `afterDiscount + shipping + tax`. |
+
+> **Regla de diseño:** Los descuentos inline (BulkDiscountModal / por línea) se muestran directamente en la columna `% Disc.` de la `LineItemsTable`. **No se repiten** como fila separada en el Order Summary — el Item Subtotal ya los refleja. Solo el descuento de orden global aparece en la fila Discount.
+
 ---
 
 ## C. useEstimateData — Hidratación desde Medusa
@@ -1358,3 +1371,36 @@ El modal de nuevo cliente (disponible en Estimates al seleccionar un cliente) fu
 - **Hint contextual** — aparece cuando email está vacío indicando que se generará uno automáticamente
 
 Para documentación completa del modal, ver `POS_CUSTOMERS.md § 3`.
+
+---
+
+## Changelog — Marzo 13, 2026
+
+### 29. Order Summary — Separación de Descuentos Inline vs. Global
+
+**Cambio en `components/pos/OrderSummary.tsx`** (compartido entre Estimates, Orders e Invoices POS).
+
+**Antes:**
+- **Item Subtotal** = precio bruto de todos los ítems sin ningún descuento
+- **Discount** = suma de descuentos inline por línea + descuento global de la orden
+
+**Ahora:**
+- **Item Subtotal** = precio bruto **menos los descuentos inline por línea** (ya reflejan el precio efectivo negociado)
+- **Discount** = solo el **descuento global** de la orden (PromotionStrip / código de descuento / porcentaje fijo manual)
+
+**Justificación:** Los descuentos por línea ya se muestran en la columna `% Disc.` de la tabla de ítems. Repetirlos como descuento separado en el summary era confuso. El descuento global (promo code o porcentaje de orden) es el único que aplica "post-negociación" y merece su propia fila.
+
+**Sin cambio numérico:** `Order Subtotal`, `Tax` y `Total` son idénticos — solo cambia cómo se distribuyen los valores entre las filas superiores del ledger.
+
+**Archivo modificado:** `ecopowertech-store-pos/components/pos/OrderSummary.tsx`
+
+```ts
+// computeTotals() ya retornaba lineDiscountsTotal y orderDiscount por separado.
+// El orden de uso en OrderSummary.tsx cambió de:
+const itemSubtotal = subtotal                                    // antes
+const discountRow  = totalDiscount                              // antes (inline + global)
+
+// A:
+const itemSubtotal = subtotal - lineDiscountsTotal               // ahora (inline absorbido)
+const discountRow  = orderDiscount                              // ahora (solo global)
+```

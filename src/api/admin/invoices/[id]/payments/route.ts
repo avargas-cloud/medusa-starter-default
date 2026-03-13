@@ -11,7 +11,7 @@ import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
 import { INVOICE_MODULE } from '../../../../../modules/invoices'
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
-    const { id } = req.params
+    const id = req.params.id!
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
 
     try {
@@ -26,7 +26,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 }
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
-    const { id } = req.params
+    const id = req.params.id!
     const { amount, payment_method, notes, created_by, paid_at } = req.body as any
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
 
@@ -62,7 +62,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const newStatus = balanceDue <= 0 ? 'paid' : 'partial'
 
         await invoiceService.updatePosInvoices(
-            { id },
+            id,
             { amount_paid: totalPaid, balance_due: balanceDue, status: newStatus }
         )
 
