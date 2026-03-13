@@ -55,12 +55,11 @@ export async function POST(
       type: "standard",
       status: "active",
       is_automatic: false,
+      is_tax_inclusive: false,   // CRITICAL: apply % to pre-tax subtotal only (not subtotal+tax)
       application_method: {
         type: discount_type === "percent" ? "percentage" : "fixed",
-        target_type: "order",
-        value: discount_type === "percent"
-          ? discount_value
-          : Math.round(discount_value * 100),
+        target_type: "items",   // CRITICAL: "order" uses subtotal+tax as base (wrong); "items" uses unit_price×qty (pre-tax, correct)
+        value: discount_value,
         currency_code: discount_type === "fixed" ? order.currency_code : undefined
       }
     }

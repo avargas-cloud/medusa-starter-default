@@ -162,3 +162,37 @@ const tax = taxableBase * FL_TAX_RATE
 
 Backend: `tax_rate_rule` atado a `product_type` únicamente. Shipping methods = $0 tax.
 See `CHECKOUT_PAYMENT_IMPLEMENTATION_GUIDE.md` → "Florida Tax" section.
+
+---
+
+## Bug 6: Promotion Discount Inflated on Draft Orders (2026-03-13)
+
+### Síntoma
+`google-review` 5% aparecía como $18.60 en Medusa admin pero el POS calculaba $17.38
+(diferencia siempre = factor de ~1.07 = FL tax rate).
+
+### Causa raíz
+`addDraftOrderPromotionWorkflow` crea `ITEM_ADJUSTMENTS_REPLACE` actions que al confirmarse
+**añaden** nuevos `order_line_item_adjustment` records sin soft-delete los anteriores.
+Después de múltiples `apply-existing`, cada item acumula N adjustment records.
+Medusa suma TODOS al calcular `discount_total`, inflando el valor mostrado.
+
+```
+Ejemplo: 4000K item ($46.13) tenía 4 adjustment records:
+  $2.5625 + $2.5625 + $2.5625 + $2.3065 = $10.00 (¡debería ser solo $2.3065!)
+```
+
+### Regla general - Promotions en Draft Orders
+> - Las promotions se aplican sobre `item.subtotal = unit_price × quantity` (pre-tax)
+> - `is_tax_inclusive: false` (todos los promotions del POS deben tenerlo así)
+> - Cada `apply-existing` acumula adjustments → siempre limpiar después de confirmar
+
+### Fix (2026-03-13)
+1. **`apply-existing/route.ts` Step 5**: después de `confirmDraftOrderEditWorkflow`,
+   soft-delete los adjustment records duplicados manteniendo solo el más reciente por item.
+2. **`pos-discount/route.ts`**: `is_tax_inclusive: false` en `createPromotionsWorkflow`.
+3. **`apply-existing/route.ts` Step 0**: asegura `is_tax_inclusive: false` antes de aplicar.
+
+### Archivos
+- `backend/src/api/admin/pos-discount/apply-existing/route.ts`
+- `backend/src/api/admin/pos-discount/route.ts`

@@ -144,6 +144,17 @@
 | Document | Description |
 |---|---|
 | [POS_ARCHITECTURE.md](POS_ARCHITECTURE.md) | **Master guide** — Sales Channels, QB Sales Receipt flow, Credit Ledger, multi-invoice Receive Payment |
+| [POS_TEMPLATES.md](POS_TEMPLATES.md) | **Template System** — 3-step wizard (Fields → Layout → Preview), LayoutBlock types, BlockStyle, clamping, migration, save sync, and guide to building new template pages |
+| [POS_ESTIMATES.md](POS_ESTIMATES.md) | Estimate module — create/edit/convert, QB sync, PDF/print flow |
+| [POS_ORDERS.md](POS_ORDERS.md) | Sales Orders module — order editing, payments, discounts |
+| [POS_CUSTOMERS.md](POS_CUSTOMERS.md) | Customer module — search, profile, balance/credit |
+| [POS_INVENTORY.md](POS_INVENTORY.md) | Inventory module — stock levels, location management |
+| [POS_AUTH.md](POS_AUTH.md) | POS authentication — staff vs admin roles |
+| [POS_CAPTURE_PAYMENT.md](POS_CAPTURE_PAYMENT.md) | Payment capture flow |
+| [POS_DASHBOARD.md](POS_DASHBOARD.md) | Dashboard overview |
+| [POS_USERS.md](POS_USERS.md) | User management |
+| [POS_VENDORS.md](POS_VENDORS.md) | Vendor management |
+| [POS_QUICKBOOKS.md](POS_QUICKBOOKS.md) | QuickBooks integration from POS side |
 
 ---
 

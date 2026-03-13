@@ -170,16 +170,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
         if (!orderRes.ok) return void res.status(404).json({ message: "Order not found" })
         const { order } = await orderRes.json()
 
-        // ── Tax base = items + shipping (FL taxes both) ────────────────────────
-        // NOTE: /admin/orders returns monetary values in CENTS for draft orders.
-        // Divide by 100 to convert to dollars before tax computation.
-        const normCents = (v: number) => v > 100 ? v / 100 : v
+        // NOTE: /admin/orders returns monetary values in DOLLARS/DECIMALS for draft orders in v2.
         const itemsSubtotal: number = (order?.items ?? []).reduce((sum: number, item: any) =>
-            sum + (normCents(item.unit_price ?? 0) * (item.quantity ?? 1)), 0)
+            sum + ((item.unit_price ?? 0) * (item.quantity ?? 1)), 0)
 
         const shippingMethods: any[] = order?.shipping_methods ?? []
         const hasPickup = shippingMethods.some(m => isPickup(m.name ?? ""))
-        const shippingSubtotal: number = shippingMethods.reduce((sum: number, m: any) => sum + normCents(m.amount ?? 0), 0)
+        const shippingSubtotal: number = shippingMethods.reduce((sum: number, m: any) => sum + (m.amount ?? 0), 0)
 
         // ── Determine province ─────────────────────────────────────────────────
         const province = hasPickup

@@ -85,9 +85,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 application_method: {
                     type: discount_type === "percent" ? "percentage" : "fixed",
                     target_type: "order",
-                    value: discount_type === "percent"
-                        ? discount_value
-                        : Math.round(discount_value * 100),
+                    value: discount_value,
                     currency_code: discount_type === "fixed" ? (order.currency_code ?? "usd") : undefined,
                 }
             }

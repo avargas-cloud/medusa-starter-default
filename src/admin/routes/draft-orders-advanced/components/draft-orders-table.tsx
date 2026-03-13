@@ -68,7 +68,7 @@ export const DraftOrdersTable = ({ loading, sorted, paginated, onRowClick }: Dra
                         <div className="flex justify-center">
                             <Badge color={synced ? "green" : "orange"} size="small">{synced ? "✓ Yes" : "Pending"}</Badge>
                         </div>
-                        <Text size="small" className="text-right">{formatCurrency(order.metadata?.computed_total ?? (order.total != null ? order.total / 100 : undefined), order.currency_code)}</Text>
+                        <Text size="small" className="text-right">{formatCurrency(order.total != null ? Number(order.total) : (order.metadata?.computed_total != null ? Number(order.metadata.computed_total) : undefined), order.currency_code)}</Text>
                     </div>
                 )
             })}
