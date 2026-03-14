@@ -456,7 +456,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
 // ── POST — generate PDF and send as attachment ─────────────────────────────────
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
   const { id } = req.params as { id: string }
-  const { to: toOverride, subject: subjectOverride } = (req.body ?? {}) as any
+  const { to: toOverride, cc: ccOverride, subject: subjectOverride } = (req.body ?? {}) as any
   const order = await fetchOrderWithPreview(req, id)
   if (!order) return void res.status(404).json({ message: "Order not found" })
   const { customer, total } = buildTotals(order)
@@ -535,6 +535,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     from: { email: fromEmail, name: "EcoPowerTech" },
     subject: emailSubject,
     html: emailBodyHtml,
+    ...(ccOverride ? { cc: ccOverride } : {}),
   }
 
   if (pdfBuffer) {

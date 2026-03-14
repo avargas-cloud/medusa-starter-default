@@ -12,6 +12,8 @@ The Template System is the engine that drives PDF/print generation for Estimates
 ```
 Step 1 — Fields   →   Step 2 — Layout Designer   →   Step 3 — Preview
 /templates/[id]/edit   /templates/[id]/design       /templates/[id]/preview
+
+Templates are then instantiated on the **Estimates Page** `/estimates/[id]` where they can be printed, downloaded as PDF, or attached directly to customer emails via the `Send Estimate` modal.
 ```
 
 Templates are **type-scoped** (`estimate | order | invoice`), support **duplicate/set-default**, and are stored in the backend database via a dedicated `document-templates` endpoint on the Medusa admin API.
@@ -140,6 +142,10 @@ interface FieldConfig {
 
     // Dynamic metadata from /admin/system-defaults (e.g. customer_po, project_name, lead_time)
     metadata_fields: MetadataField[]
+
+    // Store Contact Additions (March 2026)
+    show_store_phone: ToggleValue
+    show_store_email: ToggleValue
 
     // Item table column configuration
     columns: {
@@ -323,17 +329,29 @@ const setMetaField = useCallback((key: string, which: 'screen' | 'print' | 'labe
 const colWidthSum  = visibleCols.reduce((s, c) => s + c.width, 0)
 const colWidthOver = colWidthSum > 100
 
-// On save: if under 100%, extra goes to 'description' column
-if (colWidthSum < 100) {
-    const diff = 100 - colWidthSum
+// On save: 'description' column adapts to reach exactly 100%
+if (Math.abs(100 - colWidthSum) > 0.001) {
+    const totalWithoutDesc = visibleCols.filter(c => c.key !== 'description').reduce((s, c) => s + c.width, 0)
+    const newDescWidth = parseFloat(Math.max(0, 100 - totalWithoutDesc).toFixed(2))
+    
     finalConfig = {
         ...config,
         columns: config.columns.map(c =>
-            c.key === 'description' && c.visible ? { ...c, width: c.width + diff } : c
+            c.key === 'description' && c.visible ? { ...c, width: newDescWidth } : c
         ),
     }
 }
 ```
+
+> **v2.1 Feature:** Column resizing inside the layout designer canvas snaps to 0.01% increments to allow high precision, while the description column width is read-only in the fields editor since it auto-absorbs remaining space.
+
+### Store Information Enhancements
+
+Two new fields were added to the `Store Information` sector:
+1. **Company Phone** (`show_store_phone`) -> Prints `'Phone: ' + config value`
+2. **Company Email** (`show_store_email`) -> Prints `'Email: ' + config value`
+
+These fields utilize the actual store metadata values provided by the `useStoreInfo` hook and automatically add their respective prefixes before rendering.
 
 ### Navigation
 
@@ -638,7 +656,23 @@ const tdColStylesPv = (block.props?.tdColStyles ?? block.props?.colStyles ?? {})
 
 > **Bug history (fixed Mar 2026):** The old code used a single `colStyles` for both header and data rows. Alignment changes to a data column incorrectly also changed the header column and vice versa. Fixed by separating `thColStyles` from `tdColStyles`.
 
-### `SubElStylePanel.tsx` — Per-Subelement Styling
+### Column-Specific Font Size Overrides
+
+The font size for individual columns can now be explicitly set independently from the global `td` or `th` style:
+- `block.props.thColStyles[colKey].fontSize`
+- `block.props.tdColStyles[colKey].fontSize`
+
+If omitted, the engine falls back to the row's base font size (`tdSS.fontSize`), which in turn falls back to the block's base font size (`tdColStyles[col.key]?.fontSize ?? tdSS.fontSize ?? 8`).
+
+### Dynamic Row Heights & Text Wrapping
+
+Line item table rows (`td`) use `minHeight` instead of a fixed `height`. This ensures that cells with significant text wrapping (like the `description` column, which is explicitly set to `whiteSpace: 'normal'`) can expand the row height vertically without getting cut off at the bottom.
+
+### Image Scaling
+
+If a product line item does not have a real thumbnail image, the renderer defaults to `/ecopowertech-logo.png`. To prevent the logo from appearing aggressively large, the engine applies a visual shrink: `transform: scale(0.7)` if the image source matches the fallback logo path, and dynamically fades the opacity to `0.65`.
+
+---
 
 Shown in the right panel when a sub-element (th or td) is selected within a structural block.
 
@@ -949,6 +983,23 @@ router.push(`/templates/${template.id}/edit`)
 
 ---
 
+## 4. POS Interface Integration (Estimates Page)
+
+The `/estimates/[id]` details page natively bridges the template engine to the operational flow:
+
+### Contextual Printing & PDF
+When the user clicks the **Print** or **PDF** actions on an estimate, the app uses the `TemplatePicker` to allow the user to select the desired layout (which defaults to the `is_default` template).
+
+The user is then seamlessly redirected to `/print/[templateId]?id=[estimateId]` which uses the exact same `BlockRenderer` logic as the layout preview but injects the **real, live data** fetched from Medusa, bypassing the dummy data module.
+
+### Send Estimate Modal (Email Integration)
+The `SendEstimateModal.tsx` handles generating and attaching a PDF of the configured template directly into an email targeting the customer.
+
+1. **CC Support**: The modal supports adding a CC email address. The default CC email is automatically pre-filled utilizing the `"cc_email"` metadata field from the `customer` object linked to the order. 
+2. **Payload**: The backend route `/admin/draft-orders/[id]/send-estimate` receives the template request, generates the PDF server-side using the identical rendering logic, attaches it to a SendGrid email template, and dispatches it immediately to the primary and CC recipients.
+
+---
+
 ## Building a New Template Renderer from Scratch
 
 ### 1. Load Data
@@ -1145,6 +1196,12 @@ if (!hMap.has(k)) hMap.set(k, lineDescriptor)
 
 | Date | Change |
 |------|--------|
+| Mar 2026 | **Estimates Email Integration** — Added full support for generating PDFs from layouts and sending them via the Send Estimate modal, including auto-prefilling CC addresses from customer metadata. |
+| Mar 2026 | **Column Customizations** — Description column now enforces exactly 100% total row width via an auto-adjustment algorithm. Column drag resizing snaps precisely to 0.01%. |
+| Mar 2026 | **Text Wrapping & Height** — Data rows (`td`) switch to `minHeight` instead of rigid `height` constraints, allowing heavily-wrapped product descriptions to expand the row cleanly without cutoff. |
+| Mar 2026 | **Font Size Overrides** — Added per-column font-size overrides for `tdColStyles` and `thColStyles`. |
+| Mar 2026 | **Store Information Fields** — Added `show_store_phone` and `show_store_email` to step 1, which auto-prefix their outputs with `"Phone: "` and `"Email: "`. |
+| Mar 2026 | **No-Image Fallback Shrink** — The default `/ecopowertech-logo.png` fallback product thumbnail is dynamically scaled down by 30% (`transform: scale(0.7)`) to reduce visual noise. |
 | Mar 2026 | **SVG border overlay** — replaced CSS borders with deduped SVG lines in both editor canvas and preview. Eliminates double-borders, corner artifacts, and disappearing borders at zoom |
 | Mar 2026 | **Block background color fix** — `BordersSVG` moved to render after all block divs in preview; added `zIndex: 2` to SVG to prevent block `backgroundColor` from covering border lines |
 | Mar 2026 | **Independent column alignment** — `thColStyles` and `tdColStyles` separated; header and data row alignment now independently controlled |
