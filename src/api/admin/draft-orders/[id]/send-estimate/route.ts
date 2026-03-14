@@ -25,6 +25,30 @@ async function generateEstimatePdf(html: string): Promise<Buffer> {
   }
 }
 
+// ── PDF from a live URL (frontend custom template) ────────────────────────────
+async function generatePdfFromUrl(url: string): Promise<Buffer> {
+  const CHROME_PATH =
+    process.env.CHROME_EXECUTABLE_PATH ??
+    "/usr/bin/google-chrome"
+  const browser = await puppeteer.launch({
+    executablePath: CHROME_PATH,
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    headless: true,
+  })
+  try {
+    const page = await browser.newPage()
+    // Wait for the page to fully render the print template
+    await page.goto(url, { waitUntil: "networkidle0", timeout: 30000 })
+    const pdfBuffer = await page.pdf({
+      format: "Letter",
+      printBackground: true,
+    })
+    return Buffer.from(pdfBuffer)
+  } finally {
+    await browser.close()
+  }
+}
+
 // ── QB Rep mapping ────────────────────────────────────────────────────────────
 const QB_REP_MAP: Record<string, string> = {
   "a.vargas@ecopowertech.com": "AVP",
@@ -456,7 +480,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
 // ── POST — generate PDF and send as attachment ─────────────────────────────────
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
   const { id } = req.params as { id: string }
-  const { to: toOverride, cc: ccOverride, subject: subjectOverride } = (req.body ?? {}) as any
+  const { to: toOverride, cc: ccOverride, subject: subjectOverride, templateId, docId, displayId: displayIdOverride } = (req.body ?? {}) as any
   const order = await fetchOrderWithPreview(req, id)
   if (!order) return void res.status(404).json({ message: "Order not found" })
   const { customer, total } = buildTotals(order)
@@ -468,14 +492,26 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   if (!apiKey) return void res.status(200).json({ success: false, preview_only: true, message: "SENDGRID_API_KEY not set." })
 
   const params = buildParams(order, "email")
-  const estNum = `E${String(order.display_id).padStart(8, "0")}`
+  const displayId = displayIdOverride ?? order.display_id
+  const estNum = `E${String(displayId).padStart(8, "0")}`
   const emailSubject = subjectOverride ?? `Estimate ${estNum} from EcoPowerTech`
 
-  // Generate PDF (fall back to HTML-only email if Chrome unavailable)
+  // Generate PDF — prefer frontend template (Puppeteer on print page URL), fallback to backend HTML
   let pdfBuffer: Buffer | null = null
   try {
-    const pdfHtml = buildEstimateHtml(params)
-    pdfBuffer = await generateEstimatePdf(pdfHtml)
+    if (templateId && docId) {
+      // Use the frontend custom template: render the print page via Puppeteer
+      const POS_URL = process.env.POS_FRONTEND_URL ?? process.env.NEXT_PUBLIC_POS_URL ?? "http://localhost:3001"
+      const params = new URLSearchParams({ docId, auto: "0" })
+      if (displayId) params.set("displayId", String(displayId))
+      const printUrl = `${POS_URL}/print/${templateId}?${params}`
+      console.log(`[send-estimate] Using frontend template PDF: ${printUrl}`)
+      pdfBuffer = await generatePdfFromUrl(printUrl)
+    } else {
+      // Fallback: use the backend-generated HTML template
+      const pdfHtml = buildEstimateHtml(params)
+      pdfBuffer = await generateEstimatePdf(pdfHtml)
+    }
   } catch (err) {
     console.error("[send-estimate] PDF generation failed, falling back to HTML email:", err)
   }

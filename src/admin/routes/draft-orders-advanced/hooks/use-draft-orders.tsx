@@ -56,6 +56,9 @@ export const useDraftOrders = () => {
             }
         }
         load()
+        // Poll every 10s so the list reflects compute-tax updates after saves
+        const interval = setInterval(load, 10_000)
+        return () => clearInterval(interval)
     }, [])
 
     const filtered = useMemo(() => {

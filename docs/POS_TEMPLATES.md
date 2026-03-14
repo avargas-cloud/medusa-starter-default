@@ -747,23 +747,53 @@ function DimInput({ value, onChange, min }) {
 }
 ```
 
-### Resize Handles
+### Resize Handles — Directional (3-Zone System)
 
-Blocks can be resized via **8 handles**: 4 corners + 4 edge midpoints.
+Each block has **three invisible hit zones** at its bottom-right corner that trigger directional resizing:
+
+| Zone | Location | Cursor | Mode |
+|------|----------|--------|------|
+| Right edge strip | Full right edge, excluding bottom 16px | `ew-resize` (↔) | **Width only** — `mode: 'x'` |
+| Bottom edge strip | Full bottom edge, excluding right 16px | `ns-resize` (↕) | **Height only** — `mode: 'y'` |
+| Corner triangle | Bottom-right 16×16px diagonal triangle | `se-resize` (↘) | **Both** — `mode: 'both'` |
+
+```tsx
+{/* X-only strip: right edge */}
+<div className="absolute top-0 right-0 w-2 z-20"
+     style={{ bottom: 16, cursor: 'ew-resize' }}
+     onPointerDown={e => onResizeDown(e, block.id, 'x')} />
+
+{/* Y-only strip: bottom edge */}
+<div className="absolute bottom-0 left-0 h-2 z-20"
+     style={{ right: 16, cursor: 'ns-resize' }}
+     onPointerDown={e => onResizeDown(e, block.id, 'y')} />
+
+{/* Both: diagonal corner triangle */}
+<div className="absolute bottom-0 right-0 w-4 h-4 z-30 opacity-20 hover:opacity-80"
+     style={{ background: 'linear-gradient(135deg, transparent 50%, #888 50%)', cursor: 'se-resize' }}
+     onPointerDown={e => onResizeDown(e, block.id, 'both')} />
+```
+
+The `resizing` ref tracks the active `mode`:
 
 ```typescript
-// Resize directions:
-type ResizeDir = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
+resizing = useRef<{
+    id:     string
+    origW:  number
+    origH:  number
+    startX: number
+    startY: number
+    mode:   'both' | 'x' | 'y'   // ← constrains which axis updates
+} | null>(null)
+```
 
-// Each handle is a small div positioned around the block's selection outline
-// CSS cursors: nw-resize, n-resize, ne-resize, e-resize, etc.
+`onPointerMove` branches on `mode` to lock the constrained axis:
 
-// During resize, dx/dy are applied to x/y/width/height depending on direction:
-// 'n' handle  → adjusts y and height (push top edge up/down)
-// 's' handle  → adjusts height only  (push bottom edge)
-// 'e' handle  → adjusts width only   (push right edge)
-// 'w' handle  → adjusts x and width  (push left edge)
-// Corners     → adjust both axes simultaneously
+```typescript
+setBlocks(prev => prev.map(b => b.id === r.id ? clampBlock({ ...b,
+    width:  r.mode !== 'y' ? Math.max(12, r.origW + dxMm) : b.width,
+    height: r.mode !== 'x' ? Math.max(4,  r.origH + dyMm) : b.height,
+}) : b))
 ```
 
 All resize mutations go through `clampBlock()`.

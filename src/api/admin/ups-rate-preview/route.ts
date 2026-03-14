@@ -62,19 +62,24 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 shipToCountry = (a.country_code || "us").toUpperCase()
             }
 
-            // Fetch items with dimensions via inventory_item (same as fulfillment providers)
+            // Fetch items with dimensions via order_item → order_line_item bridge.
+            // IMPORTANT: order_line_item has NO order_id column in Medusa v2.
+            // Items are linked through: order_item.item_id → order_line_item.id
             const itemsRes = await client.query(`
                 SELECT
-                    oi.quantity,
+                    oitem.quantity,
                     COALESCE(ii.weight, pv.weight, 1)::float   AS weight,
                     COALESCE(ii.length, pv.length, 6)::float   AS length,
                     COALESCE(ii.width,  pv.width,  6)::float   AS width,
                     COALESCE(ii.height, pv.height, 6)::float   AS height
-                FROM order_line_item oi
-                JOIN product_variant pv ON pv.id = oi.variant_id
+                FROM order_item oitem
+                JOIN order_line_item oli ON oli.id = oitem.item_id
+                JOIN product_variant pv ON pv.id = oli.variant_id
                 LEFT JOIN product_variant_inventory_item pvii ON pvii.variant_id = pv.id
                 LEFT JOIN inventory_item ii ON ii.id = pvii.inventory_item_id
-                WHERE oi.order_id = $1 AND oi.deleted_at IS NULL
+                WHERE oitem.order_id = $1
+                  AND oli.deleted_at IS NULL
+                  AND oitem.deleted_at IS NULL
             `, [draftOrderId])
 
             items = itemsRes.rows
