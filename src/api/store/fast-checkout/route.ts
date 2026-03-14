@@ -471,6 +471,30 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         console.log(`[fast-checkout] 🎉 Order created: ${orderId} (#${displayId})`)
         // Note: order.placed event is emitted via completeCartWorkflow hook in emit-order-events.ts
 
+        // ── STEP 7b: Tag order with web metadata ──────────────────────────────
+        // Stamps the order with standard metadata so it appears correctly in
+        // POS/Orders, POS/Invoices, and the Medusa admin with the right context.
+        // NON-FATAL: payment is already captured — log and continue on any failure.
+        if (orderId) {
+            try {
+                const orderModule = req.scope.resolve("order") as any
+                await orderModule.updateOrders([{
+                    id: orderId,
+                    metadata: {
+                        order_status:      "Placed Online",
+                        order_type:       "Online Order",
+                        payment_terms:    "Due on Receipt",
+                        lead_time:        "Ships in 0-1 business days",
+                        sales_rep:        "Web",
+                        order_placed_at:  new Date().toISOString(),
+                    }
+                }])
+                console.log(`[fast-checkout] ✅ Order metadata tagged (Placed Online / Online Order / Web)`)
+            } catch (metaErr: any) {
+                console.warn(`[fast-checkout] ⚠️ Could not tag order metadata (non-fatal): ${metaErr.message}`)
+            }
+        }
+
         return res.json({ ok: true, orderId, displayId })
 
     } catch (error: any) {

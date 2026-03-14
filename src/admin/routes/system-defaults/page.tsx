@@ -3,7 +3,7 @@ import { CogSixTooth } from "@medusajs/icons"
 import {
     Container, Heading, Button, Input, Label, Text, toast, Badge, Textarea
 } from "@medusajs/ui"
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 // data_scope is stored as comma-separated: "customers" | "orders" | "customers,orders"
@@ -30,7 +30,7 @@ interface SystemDefault {
 const KNOWN_CONTEXTS = ["Document Defaults", "Templates Footer"]
 
 const KNOWN_FIELDS_BY_CONTEXT: Record<string, string[]> = {
-    "Document Defaults": ["Payment Terms", "Tax Code", "Price List", "Estimate Status", "Order Status", "Order Type", "Lead Time", "FOB", "Ship Via", "Project Phase"],
+    "Document Defaults": ["Payment Terms", "Tax Code", "Price List", "Order Status", "Order Type", "Lead Time", "FOB", "Ship Via", "Project Phase"],
     "Templates Footer": ["Draft Order (Estimates)", "Order (Sales Order)", "Invoice"],
 }
 
@@ -38,7 +38,6 @@ const KNOWN_FIELDS_BY_CONTEXT: Record<string, string[]> = {
 const FIELD_DEFAULT_SCOPE: Record<string, string> = {
     "Payment Terms":           "customers,orders",
     "Price List":              "customers",
-    "Estimate Status":         "customers,orders",
     "Order Status":            "customers,orders",
     "Tax Code":                "orders",
     "Order Type":              "orders",
@@ -334,6 +333,221 @@ function ScopeModal({
     )
 }
 
+// ── Manual User Modal ─────────────────────────────────────────────────────────
+function ManualUserModal({
+    onClose,
+    onSave,
+}: {
+    onClose: () => void
+    onSave: (name: string, initials: string, isSalesRep: boolean) => Promise<void>
+}) {
+    const [name, setName] = useState("")
+    const [initials, setInitials] = useState("")
+    const [isSalesRep, setIsSalesRep] = useState(true)
+    const [saving, setSaving] = useState(false)
+
+    // Auto-generate initials from name
+    const handleNameChange = (val: string) => {
+        setName(val)
+        const parts = val.trim().split(/\s+/)
+        const auto = parts.map(p => p[0] ?? "").join("").toUpperCase().slice(0, 3)
+        setInitials(auto)
+    }
+
+    const handleSave = async () => {
+        if (!name.trim()) { toast.error("Name is required"); return }
+        setSaving(true)
+        try {
+            await onSave(name.trim(), initials.trim().toUpperCase() || name[0]?.toUpperCase() || "?", isSalesRep)
+            onClose()
+        } catch {
+            toast.error("Failed to create user")
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="bg-ui-bg-base border border-ui-border-base rounded-xl shadow-2xl w-[400px] flex flex-col overflow-hidden">
+                <div className="px-6 py-4 border-b border-ui-border-base flex items-center justify-between">
+                    <Heading level="h2" className="text-base">Add Manual User</Heading>
+                    <button onClick={onClose} className="text-ui-fg-muted hover:text-ui-fg-base text-xl leading-none">×</button>
+                </div>
+                <div className="px-6 py-5 space-y-4">
+                    <Text className="text-xs text-ui-fg-muted">
+                        Adds a user that is not linked to a Medusa account (e.g. a channel or role like "Web").
+                    </Text>
+                    <div>
+                        <Label className="mb-1 block text-sm">Name <span className="text-ui-fg-error">*</span></Label>
+                        <Input
+                            placeholder='e.g. Web, Walk-in, Phone'
+                            value={name}
+                            onChange={e => handleNameChange(e.target.value)}
+                            autoFocus
+                        />
+                    </div>
+                    <div>
+                        <Label className="mb-1 block text-sm">Initials</Label>
+                        <Input
+                            placeholder="e.g. WB"
+                            value={initials}
+                            onChange={e => setInitials(e.target.value.toUpperCase().slice(0, 3))}
+                            className="uppercase w-24"
+                        />
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            className="h-4 w-4 cursor-pointer"
+                            checked={isSalesRep}
+                            onChange={e => setIsSalesRep(e.target.checked)}
+                        />
+                        <span className="text-sm text-ui-fg-base">Mark as Sales Rep</span>
+                    </label>
+                </div>
+                <div className="px-6 py-4 border-t border-ui-border-base flex justify-end gap-2">
+                    <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
+                    <Button onClick={handleSave} isLoading={saving}>Add User</Button>
+                </div>
+            </div>
+        </div>
+    )
+}
+
+// ── DraggableItems ─────────────────────────────────────────────────────────────
+function DraggableOptionList({
+    items,
+    onReorder,
+    onEdit,
+    onDelete,
+    deleteConfirm,
+    setDeleteConfirm,
+}: {
+    items: SystemDefault[]
+    onReorder: (reordered: SystemDefault[]) => Promise<void>
+    onEdit: (item: SystemDefault) => void
+    onDelete: (id: string) => void
+    deleteConfirm: string | null
+    setDeleteConfirm: (id: string | null) => void
+}) {
+    const [localItems, setLocalItems] = useState<SystemDefault[]>(items)
+    const [draggingId, setDraggingId] = useState<string | null>(null)
+    const [dragOverId, setDragOverId] = useState<string | null>(null)
+    const [saving, setSaving] = useState(false)
+    const dragItem = useRef<SystemDefault | null>(null)
+
+    // Sync when parent items change (after a reload)
+    useEffect(() => {
+        setLocalItems([...items].sort((a, b) => a.sort_order - b.sort_order))
+    }, [items])
+
+    const handleDragStart = (e: React.DragEvent, item: SystemDefault) => {
+        dragItem.current = item
+        setDraggingId(item.id)
+        e.dataTransfer.effectAllowed = "move"
+    }
+
+    const handleDragOver = (e: React.DragEvent, targetId: string) => {
+        e.preventDefault()
+        e.dataTransfer.dropEffect = "move"
+        if (targetId !== dragOverId) setDragOverId(targetId)
+    }
+
+    const handleDrop = async (e: React.DragEvent, targetId: string) => {
+        e.preventDefault()
+        if (!dragItem.current || dragItem.current.id === targetId) {
+            setDraggingId(null)
+            setDragOverId(null)
+            dragItem.current = null
+            return
+        }
+
+        const fromId = dragItem.current.id
+        const current = [...localItems]
+        const fromIdx = current.findIndex(i => i.id === fromId)
+        const toIdx = current.findIndex(i => i.id === targetId)
+        if (fromIdx === -1 || toIdx === -1) return
+
+        // Reorder array
+        const reordered = [...current]
+        const [moved] = reordered.splice(fromIdx, 1)
+        reordered.splice(toIdx, 0, moved!)
+
+        // Reassign sort_order (1-based)
+        const withNewOrder = reordered.map((item, idx) => ({ ...item, sort_order: idx + 1 }))
+
+        setLocalItems(withNewOrder)
+        setDraggingId(null)
+        setDragOverId(null)
+        dragItem.current = null
+
+        // Find only the items whose sort_order actually changed
+        const changed = withNewOrder.filter((item, idx) => item.sort_order !== current[idx]?.sort_order)
+        if (changed.length === 0) return
+
+        setSaving(true)
+        try {
+            await onReorder(withNewOrder)
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    const handleDragEnd = () => {
+        setDraggingId(null)
+        setDragOverId(null)
+        dragItem.current = null
+    }
+
+    return (
+        <div className={`divide-y divide-ui-border-base flex-1 relative ${saving ? "opacity-70 pointer-events-none" : ""}`}>
+            {localItems.map((p: SystemDefault, idx) => (
+                <div
+                    key={p.id}
+                    draggable
+                    onDragStart={e => handleDragStart(e, p)}
+                    onDragOver={e => handleDragOver(e, p.id)}
+                    onDrop={e => handleDrop(e, p.id)}
+                    onDragEnd={handleDragEnd}
+                    className={`
+                        px-4 py-2 flex items-center justify-between group transition-colors cursor-default
+                        ${draggingId === p.id ? "opacity-40 bg-ui-bg-subtle" : "hover:bg-ui-bg-base-hover"}
+                        ${dragOverId === p.id && draggingId !== p.id ? "border-t-2 border-ui-border-interactive bg-ui-bg-highlight" : ""}
+                    `}
+                >
+                    <div className="flex items-center gap-3">
+                        {/* Drag handle */}
+                        <span
+                            className="text-ui-fg-muted cursor-grab active:cursor-grabbing select-none text-sm leading-none hover:text-ui-fg-base transition-colors"
+                            title="Drag to reorder"
+                        >
+                            ⠿
+                        </span>
+                        <span className="text-xs text-ui-fg-muted w-4 inline-block text-right">{idx + 1}.</span>
+                        <Text className="text-sm">{p.value}</Text>
+                    </div>
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button variant="transparent" size="small" onClick={() => onEdit(p)} className="h-6 w-6 p-0 text-ui-fg-muted hover:text-ui-fg-base">
+                            <span className="text-xs">Edit</span>
+                        </Button>
+                        {deleteConfirm === p.id ? (
+                            <div className="flex gap-1">
+                                <Button variant="danger" size="small" onClick={() => onDelete(p.id)} className="h-6 px-2 text-xs">Yes</Button>
+                                <Button variant="transparent" size="small" onClick={() => setDeleteConfirm(null)} className="h-6 px-2 text-xs">No</Button>
+                            </div>
+                        ) : (
+                            <Button variant="transparent" size="small" onClick={() => setDeleteConfirm(p.id)} className="h-6 w-6 p-0 text-ui-fg-muted hover:text-ui-error">
+                                <span className="text-xs">Del</span>
+                            </Button>
+                        )}
+                    </div>
+                </div>
+            ))}
+        </div>
+    )
+}
+
 // ── Main Page ──────────────────────────────────────────────────────────────────
 const SystemDefaultsPage = () => {
     const [defaults, setDefaults] = useState<SystemDefault[]>([])
@@ -342,6 +556,7 @@ const SystemDefaultsPage = () => {
     const [scopeModal, setScopeModal] = useState<{ fieldName: string; items: SystemDefault[] } | null>(null)
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
     const [syncingUsers, setSyncingUsers] = useState(false)
+    const [manualUserModal, setManualUserModal] = useState(false)
 
     const load = useCallback(async (background = false) => {
         if (!background) setLoading(true)
@@ -412,6 +627,33 @@ const SystemDefaultsPage = () => {
         }
     }, [load])
 
+    const handleAddManualUser = useCallback(async (name: string, initials: string, isSalesRep: boolean) => {
+        const existingUsers = (contextGroups["Global"]?.["Sales Rep User"] ?? [])
+        const maxSort = existingUsers.reduce((max, u) => Math.max(max, u.sort_order), 0)
+        const newUserObj = {
+            medusa_id: `manual-${Date.now()}`,
+            name,
+            initials,
+            email: null,
+            is_sales_rep: isSalesRep,
+            active: true,
+        }
+        const r = await fetch("/admin/system-defaults", {
+            method: "POST", credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                context: "Global",
+                field_name: "Sales Rep User",
+                value: JSON.stringify(newUserObj),
+                sort_order: maxSort + 1,
+                data_scope: "orders",
+            }),
+        })
+        if (!r.ok) throw new Error()
+        toast.success(`"${name}" added as a manual user.`)
+        await load(true)
+    }, [load])  // eslint-disable-line react-hooks/exhaustive-deps
+
     const handleUserUpdate = useCallback(async (item: SystemDefault, newParsedValue: any) => {
         try {
             const r = await fetch(`/admin/system-defaults/${item.id}`, {
@@ -438,6 +680,31 @@ const SystemDefaultsPage = () => {
         toast.success("Scope updated")
         await load(true)
     }, [load])
+
+    // Reorder handler: PATCHes only the changed sort_orders
+    const handleReorder = useCallback(async (reordered: SystemDefault[]) => {
+        const original = defaults.filter(d => reordered.some(r => r.id === d.id))
+        const changed = reordered.filter((item) => {
+            const orig = original.find(o => o.id === item.id)
+            return orig && orig.sort_order !== item.sort_order
+        })
+        if (changed.length === 0) return
+        await Promise.all(
+            changed.map(item =>
+                fetch(`/admin/system-defaults/${item.id}`, {
+                    method: "PATCH", credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ sort_order: item.sort_order }),
+                })
+            )
+        )
+        // Update local defaults state so future reorders use up-to-date sort_orders
+        setDefaults(prev => prev.map(d => {
+            const updated = reordered.find(r => r.id === d.id)
+            return updated ? { ...d, sort_order: updated.sort_order } : d
+        }))
+        toast.success("Order saved")
+    }, [defaults])
 
     // Grouping: Context -> Field -> Values
     const contextGroups: Record<string, Record<string, SystemDefault[]>> = {}
@@ -475,14 +742,23 @@ const SystemDefaultsPage = () => {
                                 <Heading level="h2" className="text-lg">POS Users / Sales Reps</Heading>
                                 <Badge color="blue">{contextGroups["Global"]?.["Sales Rep User"]?.length ?? 0} synced</Badge>
                             </div>
-                            <Button
-                                variant="secondary"
-                                size="small"
-                                isLoading={syncingUsers}
-                                onClick={handleSyncUsers}
-                            >
-                                Sync with Medusa Users
-                            </Button>
+                            <div className="flex gap-2">
+                                <Button
+                                    variant="secondary"
+                                    size="small"
+                                    onClick={() => setManualUserModal(true)}
+                                >
+                                    + Add Manual User
+                                </Button>
+                                <Button
+                                    variant="secondary"
+                                    size="small"
+                                    isLoading={syncingUsers}
+                                    onClick={handleSyncUsers}
+                                >
+                                    Sync with Medusa Users
+                                </Button>
+                            </div>
                         </div>
 
                         <Container className="p-0 overflow-hidden">
@@ -506,7 +782,11 @@ const SystemDefaultsPage = () => {
                                                     <tr key={item.id} className="hover:bg-ui-bg-base-hover group">
                                                         <td className="px-4 py-3">
                                                             <div className="font-medium text-ui-fg-base">{userObj.name}</div>
-                                                            <div className="text-xs text-ui-fg-muted">{userObj.email}</div>
+                                                            {userObj.email ? (
+                                                                <div className="text-xs text-ui-fg-muted">{userObj.email}</div>
+                                                            ) : (
+                                                                <div className="text-xs text-ui-fg-subtle italic">Manual user — no email</div>
+                                                            )}
                                                         </td>
                                                         <td className="px-4 py-3 text-center align-middle">
                                                             <input
@@ -555,6 +835,7 @@ const SystemDefaultsPage = () => {
                                 {Object.entries(contextGroups[contextName] ?? {}).map(([fieldName, items]) => {
                                     const fieldScope: string | undefined = (items[0] as any)?.data_scope
                                     const scopeKeys = (fieldScope ?? "").split(",").map((s: string) => s.trim()).filter(Boolean) as DocScopeKey[]
+                                    const sortedItems = [...items].sort((a, b) => a.sort_order - b.sort_order)
                                     return (
                                     <Container key={fieldName} className="p-0 overflow-hidden flex flex-col h-full">
                                         <div className="px-4 py-2.5 bg-ui-bg-subtle border-b border-ui-border-base flex justify-between items-start gap-2">
@@ -579,31 +860,17 @@ const SystemDefaultsPage = () => {
                                                 >&#9999;&#65039;</button>
                                             </div>
                                         </div>
-                                        <div className="divide-y divide-ui-border-base flex-1">
-                                            {items.sort((a, b) => a.sort_order - b.sort_order).map((p: SystemDefault) => (
-                                                <div key={p.id} className="px-4 py-2 hover:bg-ui-bg-base-hover flex items-center justify-between group">
-                                                    <div className="flex items-center gap-3">
-                                                        <span className="text-xs text-ui-fg-muted w-4 inline-block text-right">{p.sort_order}.</span>
-                                                        <Text className="text-sm">{p.value}</Text>
-                                                    </div>
-                                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                        <Button variant="transparent" size="small" onClick={() => setModal(p)} className="h-6 w-6 p-0 text-ui-fg-muted hover:text-ui-fg-base">
-                                                            <span className="text-xs">Edit</span>
-                                                        </Button>
-                                                        {deleteConfirm === p.id ? (
-                                                            <div className="flex gap-1">
-                                                                <Button variant="danger" size="small" onClick={() => handleDelete(p.id)} className="h-6 px-2 text-xs">Yes</Button>
-                                                                <Button variant="transparent" size="small" onClick={() => setDeleteConfirm(null)} className="h-6 px-2 text-xs">No</Button>
-                                                            </div>
-                                                        ) : (
-                                                            <Button variant="transparent" size="small" onClick={() => setDeleteConfirm(p.id)} className="h-6 w-6 p-0 text-ui-fg-muted hover:text-ui-error">
-                                                                <span className="text-xs">Del</span>
-                                                            </Button>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
+
+                                        {/* Drag-and-drop list */}
+                                        <DraggableOptionList
+                                            items={sortedItems}
+                                            onReorder={handleReorder}
+                                            onEdit={p => setModal(p)}
+                                            onDelete={handleDelete}
+                                            deleteConfirm={deleteConfirm}
+                                            setDeleteConfirm={setDeleteConfirm}
+                                        />
+
                                         <div className="p-2 border-t border-ui-border-base bg-ui-bg-field">
                                             <Button
                                                 variant="transparent"
@@ -644,6 +911,14 @@ const SystemDefaultsPage = () => {
                     currentScope={(scopeModal.items[0] as any)?.data_scope ?? "customers,orders"}
                     onClose={() => setScopeModal(null)}
                     onSave={(newScope) => handleSaveScope(scopeModal.items, newScope)}
+                />
+            )}
+
+            {/* Manual User Modal */}
+            {manualUserModal && (
+                <ManualUserModal
+                    onClose={() => setManualUserModal(false)}
+                    onSave={handleAddManualUser}
                 />
             )}
         </div>

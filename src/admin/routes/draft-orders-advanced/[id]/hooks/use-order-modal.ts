@@ -76,7 +76,7 @@ export const useOrderModal = ({
         if (type === "metadata") {
             const meta = order?.metadata ?? {}
             const cleaned: Record<string, string> = {}
-            Object.entries(meta).forEach(([k, v]) => { if (k !== "estimate_status") cleaned[k] = String(v ?? "") })
+            Object.entries(meta).forEach(([k, v]) => { if (k !== "order_status" && k !== "estimate_status") cleaned[k] = String(v ?? "") })
             setMetadataForm(cleaned); setMetaNewKey(""); setMetaNewVal("")
         }
         if (type === "edit-items") {
@@ -146,7 +146,7 @@ export const useOrderModal = ({
         try {
             const existing = order?.metadata ?? {}
             const updated = { ...existing, ...metadataForm }
-            Object.keys(existing).forEach(k => { if (k !== "estimate_status" && !(k in metadataForm)) updated[k] = null })
+            Object.keys(existing).forEach(k => { if (k !== "order_status" && k !== "estimate_status" && !(k in metadataForm)) updated[k] = null })
             await patchOrder({ metadata: updated })
             toast.success("Metadata updated"); setModal(null); fetchOrder()
         } catch (e: any) { toast.error(e.message) } finally { setSaving(false) }

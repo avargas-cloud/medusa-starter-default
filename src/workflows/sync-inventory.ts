@@ -125,7 +125,36 @@ export const syncInventoryToMeiliStep = createStep(
                 value: opt.value || "",
             }))
 
-            // Map each inventory item linked to this variant
+            // Map each inventory item linked to this variant.
+            // If no inventory items exist (manage_inventory:false — services), emit a
+            // synthetic document so the variant still appears in the POS product browser.
+            if (!variant.inventory_items || variant.inventory_items.length === 0) {
+                // Only include if the variant has a SKU (services always do)
+                if (!variant.sku) return []
+                return [{
+                    id: variant.id,                          // variant.id as primary key (no inv item)
+                    sku: variant.sku,
+                    title: product?.title || 'Untitled',
+                    thumbnail: product?.thumbnail || null,
+                    totalStock: null,                        // null = unmanaged / unlimited
+                    totalReserved: 0,
+                    price: retailPrice?.amount || 0,
+                    currencyCode: retailPrice?.currency_code?.toUpperCase() || 'USD',
+                    pricesByList,
+                    variantId: variant.id,
+                    productId: product?.id || null,
+                    handle: product?.handle || null,
+                    salesDescription: (variant?.metadata as any)?.sales_description
+                        || (product?.metadata as any)?.sales_description
+                        || null,
+                    options: mappedOptions,
+                    category_handles: Array.from(allCategoryHandles),
+                    status: product?.status || 'draft',
+                    created_at: new Date(variant.created_at).getTime(),
+                    updated_at: new Date(variant.updated_at).getTime(),
+                }]
+            }
+
             return (variant.inventory_items || []).map((invItem: any) => {
                 const inventory = invItem.inventory
                 return {
@@ -153,6 +182,7 @@ export const syncInventoryToMeiliStep = createStep(
                     updated_at: new Date(inventory.updated_at || variant.updated_at).getTime(),
                 }
             })
+
         })
 
         // Filter out orphaned items

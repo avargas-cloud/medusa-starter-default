@@ -46,7 +46,7 @@ const DraftOrdersAdvancedList = () => {
                     cancelledCount={cancelledCount}
                 />
                 <div className="overflow-x-auto">
-                    <DraftOrdersTable loading={loading} sorted={sorted} paginated={paginated} onRowClick={id => navigate(`/draft-orders-advanced/${id}`)} />
+                    <DraftOrdersTable loading={loading} sorted={sorted} paginated={paginated} onRowClick={id => navigate(`/draft-orders-advanced/${id}`)} rowHref={id => `/app/draft-orders-advanced/${id}`} />
                 </div>
                 <DraftOrdersFooter loading={loading} sorted={sorted} page={page} totalPages={totalPages} onPrev={() => setPage(p => p - 1)} onNext={() => setPage(p => p + 1)} />
             </Container>

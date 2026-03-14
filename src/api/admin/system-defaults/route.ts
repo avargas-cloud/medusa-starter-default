@@ -125,6 +125,22 @@ export async function ensureTable(client: Client) {
         // ignore errors if already migrated
     }
 
+    // Migration: convert all remaining old-format data_scope values to new format
+    //   "Document Data" → "orders"      (fields that appear on docs: Lead Time, Tax Code, etc.)
+    //   "Customer Data" → "customers,orders"  (Customer-linked fields: Terms, etc.)
+    try {
+        await client.query(`
+            UPDATE system_defaults SET data_scope = 'orders', updated_at = NOW()
+            WHERE data_scope = 'Document Data'
+        `)
+        await client.query(`
+            UPDATE system_defaults SET data_scope = 'customers,orders', updated_at = NOW()
+            WHERE data_scope = 'Customer Data'
+        `)
+    } catch (e) {
+        // ignore
+    }
+
     // Migration: insert Customer PO and Project Name placeholders if they don't exist
     try {
         await client.query(`
@@ -139,6 +155,28 @@ export async function ensureTable(client: Client) {
         `)
     } catch (e) {
         // ignore errors
+    }
+
+    // Migration: rename "Estimate Status" → "Order Status"
+    try {
+        await client.query(`
+            UPDATE system_defaults
+            SET field_name = 'Order Status', updated_at = NOW()
+            WHERE field_name = 'Estimate Status'
+            AND NOT EXISTS (
+                SELECT 1 FROM system_defaults sd2
+                WHERE sd2.context    = system_defaults.context
+                AND   sd2.field_name = 'Order Status'
+                AND   sd2.value      = system_defaults.value
+            )
+        `)
+        // Remove any duplicates that couldn't be renamed due to conflicts
+        await client.query(`
+            DELETE FROM system_defaults
+            WHERE field_name = 'Estimate Status'
+        `)
+    } catch (e) {
+        // ignore errors if already migrated
     }
 
     const { rowCount } = await client.query("SELECT 1 FROM system_defaults LIMIT 1")

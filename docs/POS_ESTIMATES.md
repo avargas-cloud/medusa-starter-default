@@ -384,7 +384,15 @@ Esta sección consolida resoluciones a bugs complejos de interfaz y lógica resu
 - El POS UI en `LineItemsTable.tsx` permite editar `title` y `salesDescription` localmente si el producto está marcado como "Editable" (ej. items especiales configurados para uso manual).
 - `handleSave` identifica si difieren del original y empuja los overrides al endpoint.
 
-### 18. Consolidación de Descuentos (Order & Line-Level)
+### 18. Transferencia de Propiedad ("Transfer Ownership" al cambiar cliente)
+
+**Problema:** Al editar un Estimate existente en el POS y asignarle un cliente distinto de la base de datos, el posterior Update `POST /admin/draft-orders/:id` es rechazado o ignora silenciosamente los cambios ya que Medusa bloquea la alteración directa del `customer_id` por seguridad. Adicionalmente, el Endpoint Nativo `draft-orders/:id/transfer` está diseñado para flujos B2C donde el cliente debe autorizar el traslado por email usando un token.
+
+**Fix (Marzo 14, 2026):**
+- **Endpoint Backdoor:** Se implementó `POST /admin/pos-transfer`, una ruta de Admin dedicada exclusivamente para el POS. Interactúa directamente con el `OrderModuleService` a bajo nivel esquivando restricciones de Token/Email para cambiar la propiedad de forma inmediata.
+- **Hook de Detección:** Dentro del evento `Save` original en `useEstimateSave.ts`, se incorporó una pre-validación. Si el UI detenta que `doc.customerId !== order.customer_id`, interrumpe el update tradicional, invoca `pos-transfer` cediendo la propiedad al vuelo, y *luego* empuja los metadatos y actualizaciones del carrito con normalidad. Esto ocurre transparentemente en milisegundos cuando el Operador de POS guarda cambios.
+
+### 19. Consolidación de Descuentos (Order & Line-Level)
 
 **Implementación Híbrida de Promociones:**
 - **Order Level:** Se creó un endpoint nativo `POST /admin/pos-discount` para insertar y/o crear códigos de descuento "sobre la marcha" en Medusa (Fixed Amount `$` o Percentage `%`). Si ya existe un código promocional estático (ej. `ORDER-DISCOUNT-10%`), se llama a la ruta `POST /admin/pos-discount/apply-existing`. Todo esto permite aplicar descuentos masivos en un solo click desde `PromotionStrip`.

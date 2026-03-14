@@ -96,7 +96,7 @@ export const useOrderActions = ({ id, order, estimateStatus, setEstimateStatus, 
         const toastId = toast.loading("Cancelling draft order…")
         try {
             await deactivateQbEstimate(id)
-            await patchOrder({ metadata: { estimate_status: "Cancelled" } })
+            await patchOrder({ metadata: { order_status: "Cancelled" } })
             setEstimateStatus("Cancelled")
             toast.dismiss(toastId)
             toast.success("Draft order cancelled. QuickBooks Estimate marked inactive.")
@@ -111,7 +111,7 @@ export const useOrderActions = ({ id, order, estimateStatus, setEstimateStatus, 
     // ── Status change ──────────────────────────────────────────────────────────
     const handleStatusChange = async (val: string) => {
         setStatusSaving(true)
-        try { await patchOrder({ metadata: { estimate_status: val } }); setEstimateStatus(val as EstimateStatus); toast.success(`Status → "${val}"`) } catch (e: any) { toast.error(e.message) } finally { setStatusSaving(false) }
+        try { await patchOrder({ metadata: { order_status: val } }); setEstimateStatus(val as EstimateStatus); toast.success(`Status → "${val}"`) } catch (e: any) { toast.error(e.message) } finally { setStatusSaving(false) }
     }
 
     // ── QB Sync ────────────────────────────────────────────────────────────────

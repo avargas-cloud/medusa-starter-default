@@ -256,6 +256,16 @@ Esto es el mismo comportamiento que Medusa Admin: los draft orders son cotizacio
 
 ---
 
+### Transferencia de Propiedad en Orders ("Transfer Ownership")
+
+**Problema:** Al igual que en los Estimates, el POS mostraba el campo de cliente como modificable en las Órdenes, pero al intentar Guardar los metadatos y direcciones asociadas a un nuevo cliente, Medusa rechazaba silenciosamente el cambio de `customer_id` original de la Orden. Adicionalmente, la API nativa `orders/:id/transfer` de Medusa requiere aceptación asincrónica del cliente mediante Tokens via Email.
+
+**Solución Implementada (Marzo 14, 2026):**
+- **Unified Transfer API:** Se inyectó el endpoint custom `POST /admin/pos-transfer` que resuelve el modulo de Orders directamente, permitiendo reescribir `customer_id` y `email` en la base de datos sin requerimientos asíncronos.
+- **Hook de Intercepción (`useOrderActions.ts`):** En el proceso de edición transparente (`handleSave`), el UI detecta si `doc.customerId !== order.customer_id`. Si difieren, ejecuta este forced endpoint cambiando el dueño instantáneamente *antes* de proseguir con la volcada masiva de direcciones física (Shipping/Billing Address) y metadata de la orden. Todo en un solo click.
+
+---
+
 ### Items Toolbar en Orders (Read-Only)
 
 A diferencia de Estimates, el toolbar de items en Orders **no tiene botones de acción**:

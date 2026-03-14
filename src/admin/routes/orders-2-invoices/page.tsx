@@ -45,6 +45,7 @@ const InvoicesPage = () => {
                     <OrdersTable
                         loading={loading} sorted={sorted} paginated={paginated}
                         onRowClick={id => navigate(`/orders/${id}`)}
+                        rowHref={id => `/app/orders/${id}`}
                     />
                 </div>
                 <OrdersFooter

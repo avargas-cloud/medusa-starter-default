@@ -25,9 +25,10 @@ interface DraftOrdersTableProps {
     sorted: DraftOrderListItem[]
     paginated: DraftOrderListItem[]
     onRowClick: (id: string) => void
+    rowHref?: (id: string) => string
 }
 
-export const DraftOrdersTable = ({ loading, sorted, paginated, onRowClick }: DraftOrdersTableProps) => {
+export const DraftOrdersTable = ({ loading, sorted, paginated, onRowClick, rowHref }: DraftOrdersTableProps) => {
     if (loading) return <div className="p-6"><Text size="small" className="text-ui-fg-muted">Loading draft orders...</Text></div>
     if (sorted.length === 0) return <div className="p-6"><Text size="small" className="text-ui-fg-subtle">No draft orders found.</Text></div>
 
@@ -52,7 +53,9 @@ export const DraftOrdersTable = ({ loading, sorted, paginated, onRowClick }: Dra
                 return (
                     <div key={order.id}
                         className={`grid ${COLS} gap-x-3 px-4 py-3 border-b border-ui-border-base hover:bg-ui-bg-subtle-hover transition-colors cursor-pointer items-center${(isDeclined || isCancelled) ? " opacity-50" : ""}`}
-                        onClick={() => onRowClick(order.id)}>
+                        onClick={() => onRowClick(order.id)}
+                        onMouseDown={e => { if (e.button === 1) e.preventDefault() }}
+                        onAuxClick={e => { if (e.button === 1 && rowHref) window.open(rowHref(order.id), '_blank') }}>
                         <Text size="small" weight="plus">{order.display_id}</Text>
                         <Text size="small" className="font-mono text-ui-fg-subtle truncate">{qbRef ?? "—"}</Text>
                         <Text size="small" className="text-ui-fg-subtle">{formatDate(order.created_at)}</Text>

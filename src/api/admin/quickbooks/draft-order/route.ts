@@ -148,7 +148,7 @@ export async function POST(
         }
 
         const isResync = !!(req.body as any).force && !!order.metadata?.qb_estimate_txn_id
-        const isCancelled = order.metadata?.estimate_status === "Cancelled" || order.metadata?.estimate_status === "cancelled"
+        const isCancelled = (order.metadata?.order_status ?? order.metadata?.estimate_status) === "Cancelled" || (order.metadata?.order_status ?? order.metadata?.estimate_status) === "cancelled"
         const memo = `Draft Order #${(order as any).display_id || orderId} - ${customer.first_name || ""} ${customer.last_name || ""}`.trim()
 
         // ── Tax state: mirror Medusa's tax decision in QB ─────────────────────
@@ -204,7 +204,7 @@ export async function POST(
                 ? {
                     ...(order.metadata || {}),
                     qb_synced_at: new Date().toISOString(),
-                    ...(isCancelled ? { estimate_status: "Created" } : {}),
+                    ...(isCancelled ? { order_status: "Created" } : {}),
                 }
                 // New sync: save all QB identifiers
                 : {

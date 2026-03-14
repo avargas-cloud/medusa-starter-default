@@ -609,7 +609,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     // Read current metadata, merge, then PATCH
     const curRes = await fetch(`${base}/admin/orders/${id}?fields=id,+metadata`, { headers: metaHeaders })
     const curMeta = curRes.ok ? ((await curRes.json()).order?.metadata ?? {}) : {}
-    const newStatus = curMeta.estimate_status === "Created" ? "Sent" : (curMeta.estimate_status ?? "Sent")
+    const curStatus = curMeta.order_status ?? curMeta.estimate_status
+    const newStatus = curStatus === "Created" ? "Sent" : (curStatus ?? "Sent")
     await fetch(`${base}/admin/draft-orders/${id}`, {
       method: "POST",
       headers: metaHeaders,
@@ -619,7 +620,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
           estimate_sent_at: new Date().toISOString(),
           estimate_sent_to: customerEmail,
           estimate_sent_by: senderName,
-          estimate_status: newStatus,
+          order_status: newStatus,
         },
       }),
     })

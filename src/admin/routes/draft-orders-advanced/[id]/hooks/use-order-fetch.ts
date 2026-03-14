@@ -104,9 +104,9 @@ export const useOrderFetch = (
             for (const item of (merged.items ?? [])) { qtys[item.id] = item.quantity; prices[item.id] = String(item.unit_price ?? 0) }
             setItemQtys(qtys); setItemPrices(prices)
 
-            const es = merged?.metadata?.estimate_status as EstimateStatus | undefined
+            const es = (merged?.metadata?.order_status ?? merged?.metadata?.estimate_status) as EstimateStatus | undefined
             setEstimateStatus(es ?? "Created")
-            if (!es) fetch(`/admin/draft-orders/${id}`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ metadata: { estimate_status: "Created" } }) }).catch(() => { })
+            if (!es) fetch(`/admin/draft-orders/${id}`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ metadata: { order_status: "Created" } }) }).catch(() => { })
 
             // Fetch timeline from order changes
             try {
