@@ -48,7 +48,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
                 SELECT o.shipping_address_id, sa.first_name, sa.last_name, sa.company,
                        sa.address_1, sa.city, sa.province, sa.country_code
                 FROM "order" o
-                LEFT JOIN address sa ON sa.id = o.shipping_address_id
+                LEFT JOIN order_address sa ON sa.id = o.shipping_address_id
                 WHERE o.id = $1 AND o.deleted_at IS NULL
                 LIMIT 1
             `, [draftOrderId])

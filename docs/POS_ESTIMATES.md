@@ -1017,11 +1017,14 @@ Llamadas 3..N (parallel): POST /admin/draft-orders/{id}/add-item-force
            {
                variant_id: item.variantId,
                quantity: item.quantity,
-               unit_price: item.unitPrice,       ← en dólares, precio base (sin descuento)
+               unit_price: effectiveUnitPrice,       ← precio DESPUÉS del descuento (en dólares)
+               original_unit_price: item.unitPrice,  ← precio base (en metadata)
+               line_discount: item.lineDiscount,     ← descuento inline (en metadata)
+               sort_order: item.sortOrder,
                custom_title: item.title,
                custom_description: item.salesDescription || ''
            }
-           ⚠️ Los descuentos se aplican en el UPDATE (no en CREATE primera vez)
+           ✅ Los descuentos inline SÍ se aplican en el CREATE (fix: Mar 14 2026)
 
 Llamada adicional (si shipping): POST /admin/draft-orders/{id}/add-shipping-force
            { shipping_option_id, custom_amount: shippingPrice / 100 }
@@ -1404,3 +1407,67 @@ const discountRow  = totalDiscount                              // antes (inline
 const itemSubtotal = subtotal - lineDiscountsTotal               // ahora (inline absorbido)
 const discountRow  = orderDiscount                              // ahora (solo global)
 ```
+
+---
+
+## Changelog — Marzo 14, 2026
+
+### 30. Compute-Tax Fire-and-Forget: POST → GET fix
+
+**Problema:** `useEstimateActions.ts` llamaba `POST /admin/draft-orders/:id/compute-tax` después de cada save. El endpoint POST solo acepta `{ mode: "florida" | "exempt" }` para cambiar `tax_mode` — NO calcula impuestos.
+
+**Fix:** Cambiado a `GET /admin/draft-orders/:id/compute-tax`, que es el que realmente calcula, persiste en `order_line_item_tax_line` y escribe `metadata.computed_total`.
+
+```ts
+// ✅ Correcto — GET calcula y escribe computed_total
+medusaFetch(`/admin/draft-orders/${resolvedId}/compute-tax`, { token })
+// ❌ Incorrecto — POST solo escribe tax_mode
+medusaFetch(`/admin/draft-orders/${resolvedId}/compute-tax`, { method: 'POST', token })
+```
+
+---
+
+### 31. Shipping Preview — Soporte para `order_id` (long-item detection en POS)
+
+**Problema:** El `ShippingModal` usaba `/shipping-preview?cart_id=` para calcular Ground Shipping. Pero los items del POS se agregan via `add-item-force` → `order_line_item`, NO `cart_line_item`. El endpoint siempre devolvía 0 items → usaba precio flat sin detectar long items.
+
+**Fix:** `/shipping-preview` ahora acepta `order_id=` como alternativa a `cart_id=`:
+- `cart_id` path → lee `cart_line_item` (storefront carts, sin cambio)
+- `order_id` path → lee `order_line_item` via `order_item` bridge (POS draft orders)
+
+**Long-item detection:** threshold = 30 pulgadas (mismo que `box-packing.ts`). Si algún ítem del order tiene `inventory_item.length/width/height > 30` → aplica `long_item_ground_shipping_price` en vez de `regular_ground_shipping_price`.
+
+**ShippingModal:** ahora pasa `order_id=${medusaId}` en vez de `cart_id=${cartId}` para el cálculo de Ground Shipping.
+
+---
+
+### 32. `ups-rate-preview` — Dos Bug Fixes de SQL (Medusa v2 Schema)
+
+**Bug 1: `order_line_item.order_id` no existe en Medusa v2**
+
+```sql
+-- ❌ Antes (usaba columna inexistente → 500)
+FROM order_line_item oi
+WHERE oi.order_id = $1
+
+-- ✅ Después (usa tabla bridge order_item)
+FROM order_item oitem
+JOIN order_line_item oli ON oli.id = oitem.item_id
+WHERE oitem.order_id = $1
+  AND oli.deleted_at IS NULL
+  AND oitem.deleted_at IS NULL
+```
+
+En Medusa v2, `order_line_item` NO tiene `order_id`. Los items se vinculan via `order_item.item_id → order_line_item.id`.
+
+**Bug 2: tabla `address` no existe en Medusa v2**
+
+```sql
+-- ❌ Antes
+LEFT JOIN address sa ON sa.id = o.shipping_address_id
+
+-- ✅ Después  
+LEFT JOIN order_address sa ON sa.id = o.shipping_address_id
+```
+
+Las tablas de direcciones en Medusa v2 son: `order_address`, `cart_address`, `customer_address`, `fulfillment_address`. No existe una tabla genérica `address`.
