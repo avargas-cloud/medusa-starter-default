@@ -164,7 +164,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
         }
 
         const orderRes = await fetch(
-            `${base}/admin/orders/${id}?fields=+items.*,+shipping_methods.*,+shipping_address.*,+customer_id,+metadata,+customer.*`,
+            `${base}/admin/orders/${id}?fields=+items.*,+items.adjustments.*,+shipping_methods.*,+shipping_address.*,+customer_id,+metadata,+customer.*`,
             { headers }
         )
         if (!orderRes.ok) return void res.status(404).json({ message: "Order not found" })
@@ -173,6 +173,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
         // NOTE: /admin/orders returns monetary values in DOLLARS/DECIMALS for draft orders in v2.
         const itemsSubtotal: number = (order?.items ?? []).reduce((sum: number, item: any) =>
             sum + ((item.unit_price ?? 0) * (item.quantity ?? 1)), 0)
+
+        // Compute order-level discount from item adjustments (pre-tax amount stored in DB).
+        // This ensures tax is applied on the POST-DISCOUNT subtotal, matching standard accounting.
+        const discountTotal: number = (order?.items ?? []).reduce((sum: number, item: any) =>
+            sum + (item.adjustments ?? []).reduce((a: number, adj: any) => a + (Number(adj.amount) || 0), 0), 0)
+        const discountedSubtotal: number = Math.max(0, itemsSubtotal - discountTotal)
 
         const shippingMethods: any[] = order?.shipping_methods ?? []
         const hasPickup = shippingMethods.some(m => isPickup(m.name ?? ""))
@@ -217,9 +223,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
         } else if (effectiveMode === "florida") {
             const fl = await getStateRate(req, FL_PROVINCE)
             rate = fl.rate; reason = fl.reason
-            // CHANGED: Only taxing itemsSubtotal to match Medusa native behavior.
-            // Shipping is no longer taxed.
-            const taxableBase = itemsSubtotal
+            // Tax is computed on the POST-DISCOUNT item subtotal (standard accounting: discount first, then tax).
+            const taxableBase = discountedSubtotal
             amount = Math.round(taxableBase * rate / 100 * 100) / 100
         } else {
             reason = "No shipping address set"
@@ -230,13 +235,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
 
         // ── Save only computed_tax_* + computed_total via REST — NEVER tax_mode ──
         // tax_mode is only written by the POST endpoint
-        const computedTotal = itemsSubtotal + shippingSubtotal + amount
+        const computedTotal = discountedSubtotal + shippingSubtotal + amount
         saveOrderMeta(req, id, {
             computed_tax_amount: amount,
             computed_tax_rate: rate,
             computed_tax_reason: reason,
             computed_total: computedTotal,
             computed_subtotal: itemsSubtotal,
+            computed_discount: discountTotal,
         }).catch(() => { }) // fire-and-forget: the computed values are informational
 
         res.status(200).json({ amount, rate, reason, exempt, mode: effectiveMode, subtotal: itemsSubtotal, shippingSubtotal, autoMode })

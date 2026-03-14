@@ -371,7 +371,7 @@ async function fetchOrderWithPreview(req: MedusaRequest, id: string) {
   }
   const base = `http://localhost:${process.env.PORT ?? 9000}`
   const [oRes, dRes, sysRes] = await Promise.all([
-    fetch(`${base}/admin/orders/${id}?fields=+customer.*,+shipping_address.*,+billing_address.*,+items.*,+items.thumbnail,+items.variant.*,+items.variant.product.title,+items.variant.product.thumbnail,+shipping_methods.*,+metadata,+currency_code,+display_id,+email`, { headers }),
+    fetch(`${base}/admin/orders/${id}?fields=+customer.*,+shipping_address.*,+billing_address.*,+items.*,+items.adjustments.*,+items.thumbnail,+items.variant.*,+items.variant.product.title,+items.variant.product.thumbnail,+shipping_methods.*,+metadata,+currency_code,+display_id,+email`, { headers }),
     fetch(`${base}/admin/draft-orders/${id}`, { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
     fetch(`${base}/admin/system-defaults`, { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
   ])
@@ -409,7 +409,12 @@ function buildTotals(order: any) {
   const taxAmount: number = order.metadata?.computed_tax_amount ?? order.tax_total ?? 0
   const taxRate: number = order.metadata?.computed_tax_rate ?? 0
   const shippingTotal: number = order.shipping_total ?? 0
-  const discountTotal: number = order.discount_total ?? 0
+  // Use raw item adjustment amounts (pre-tax) — NOT order.discount_total which Medusa inflates
+  // by multiplying with (1 + tax_rate) for its own "effective savings" display metric.
+  // item.adjustments[].amount is the actual pre-tax deduction stored in DB.
+  const discountTotal: number = (order.items ?? []).reduce((s: number, i: any) => {
+    return s + (i.adjustments ?? []).reduce((a: number, adj: any) => a + (Number(adj.amount) || 0), 0)
+  }, 0) || (order.discount_total ?? 0)
   const total: number = subtotal + shippingTotal - discountTotal + taxAmount
   const customer = order.customer
   const customerName = customer

@@ -10,29 +10,28 @@ import {
 /**
  * POST /admin/pos-discount/apply-existing
  *
- * Applies a named Medusa promotion (e.g. GOOGLE-REVIEW) to a draft order
- * using the proper Medusa v2 Order Edit workflow:
- *   1. Normalise promotion config (active, is_tax_inclusive=false, target_type=items)
- *   2. Cancel any pending order edits (clean slate)
- *   3. Begin a new draft order edit
- *   4. Add the promotion via workflow
- *   5. Pre-confirm: delete stale confirmed adjustments for this promo
- *   6. Confirm the edit → materialises new adjustments, recomputes order_summary
+ * Applies a named Medusa promotion to a draft order via the order-edit workflow,
+ * then corrects the computed adjustment amounts using authoritative DB data.
  *
- * WHY target_type = "items" (not "order"):
- *   - target_type "order" causes Medusa to compute the percentage against
- *     (item_subtotal + tax) — e.g. 5% × $371.95 = $18.60 ❌
- *   - target_type "items" causes Medusa to compute against each item's
- *     unit_price × quantity (pre-tax) — e.g. 5% × $347.62 = $17.38 ✓
+ * Root cause of amount mismatch:
+ *   the order-edit confirm creates new line_item versions from the ORM snapshot.
+ *   This snapshot may have stale qty (e.g. qty=1 when POS has qty=2) because
+ *   update-item-force writes directly to DB without going through the workflow.
+ *   Result: 5% × $46.13 × qty=1 = $2.31 ❌ instead of 5% × $46.13 × qty=2 = $4.61
  *
- * WHY is_tax_inclusive = false:
- *   - Belt-and-suspenders: ensures the promo value itself is treated as
- *     a pre-tax figure (mainly relevant for fixed-amount promos).
+ *   Fix: after the workflow runs and writes adjustments, we recompute each
+ *   adjustment amount from order_item (which has the correct qty via update-item-force)
+ *   and UPDATE the adjustment rows to match.
+ *
+ * Linking tables:
+ *   order_line_item_adjustment.item_id = line_item.id  (ordli_ prefix)
+ *   order_item.item_id                 = line_item.id  (ordli_ prefix)
+ *   → So adjustment.item_id = order_item.item_id — both reference the same line_item
  *
  * Body:
- *   order_id       — draft order ID (order_XXXXX)
+ *   order_id       — draft order ID
  *   promotion_code — promo code to apply
- *   promotion_id   — promo ID (used to look up the promo if needed)
+ *   promotion_id   — promo ID (optional, looked up if missing)
  */
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
@@ -77,125 +76,218 @@ export async function POST(
     const knex = req.scope.resolve("__pg_connection__")
 
     try {
-        // ── Step 0: Resolve promotion ID ──────────────────────────────────────
+        // ── Step 0: Resolve promotion ID + extract pct value ──────────────────
         const promotionModule = req.scope.resolve("promotion") as IPromotionModuleService
-
         let resolvedPromoId: string | undefined = promotion_id
+        let promoMethodValue: number | null = null
 
         if (!resolvedPromoId) {
             const [promoByCode] = await promotionModule.listPromotions({ code: [promotion_code] } as any)
             resolvedPromoId = promoByCode?.id
         }
 
-        // ── Step 1: Normalise promotion (ALWAYS — no conditional skips) ───────
-        //
-        // CRITICAL: We ALWAYS normalise, never skip. Skipping based on current
-        // DB values is unsafe because the workflow reads from Medusa's ORM cache,
-        // not the raw DB. If a previous request already patched the DB but the
-        // ORM cache is stale, the workflow would still use the wrong settings.
-        //
-        // A) is_tax_inclusive = false  ← via ORM (updates the ORM cache)
-        //    Prevents the promo value from being treated as tax-inclusive.
-        //
-        // B) application_method.target_type = "items"  ← THE KEY TAX FIX
-        //    target_type = "order" → Medusa computes discount against
-        //    (item_subtotal + tax_total), e.g. 10% × ($49.39 × 1.07) = $5.28 ❌
-        //    target_type = "items" → Medusa computes against each item's
-        //    raw unit_price × qty (pre-tax), e.g. 10% × $49.39 = $4.94 ✓
-        //
+        // ── Step 1: Normalise promotion settings (ALWAYS) ─────────────────────
         if (resolvedPromoId) {
-            // Step 1a: Always update promotion-level fields via ORM so the
-            // ORM cache is updated before the workflow reads the promotionModule.
             await (promotionModule as any).updatePromotions({
                 id: resolvedPromoId,
                 status: "active",
                 is_tax_inclusive: false,
             })
-            logger.info(`[POS apply-existing] Normalised promotion ${promotion_code} → active, is_tax_inclusive=false`)
 
-            // Step 1b: Fetch fresh from ORM to get application_method ID.
-            // This re-read also busts any stale cached data at this layer.
             const freshPromo = await promotionModule.retrievePromotion(resolvedPromoId, {
                 relations: ["application_method"],
             })
             const appMethod = (freshPromo as any).application_method
+            promoMethodValue = appMethod?.value != null ? Number(appMethod.value) : null
 
-            // Step 1c: Always fix target_type = "items" via Knex raw SQL.
-            // We ALWAYS run this (not conditional on current value) because
-            // Knex bypasses the ORM cache — the DB write is what matters for
-            // the next step where the workflow reads from DB directly.
             if (appMethod?.id) {
                 await knex.raw(`
                     UPDATE promotion_application_method
-                    SET target_type = 'items', is_tax_inclusive = false, updated_at = NOW()
+                    SET target_type = 'items', updated_at = NOW()
                     WHERE id = ? AND deleted_at IS NULL
                 `, [appMethod.id])
-                logger.info(`[POS apply-existing] Forced ${promotion_code} target_type=items, is_tax_inclusive=false on application_method (was: ${appMethod.target_type})`)
 
-                // Step 1d: Re-fetch via ORM to force cache bust BEFORE the
-                // workflow runs. This is the critical step that ensures the
-                // workflow picks up the updated target_type from DB.
+                // ORM cache bust
                 await promotionModule.retrievePromotion(resolvedPromoId, {
                     relations: ["application_method"],
                 })
-                logger.info(`[POS apply-existing] ORM cache busted for ${promotion_code}`)
             }
+            logger.info(`[POS apply-existing] Normalised ${promotion_code} → active, is_tax_inclusive=false, target_type=items, pct=${promoMethodValue}`)
+        } else {
+            // Fallback: read pct from DB
+            const pgPromo = await knex.raw(`
+                SELECT am.value FROM promotion p
+                JOIN promotion_application_method am ON am.promotion_id = p.id
+                WHERE p.code = ? AND p.deleted_at IS NULL AND am.deleted_at IS NULL LIMIT 1
+            `, [promotion_code])
+            promoMethodValue = pgPromo.rows[0] ? Number(pgPromo.rows[0].value) : null
+            logger.warn(`[POS apply-existing] promotionId not resolved for ${promotion_code}, pct=${promoMethodValue}`)
         }
 
-        // ── Step 2: Cancel any existing open order edits (clean slate) ────────
+        // ── Step 2: Cancel any open order edits ───────────────────────────────
         try {
             await cancelDraftOrderEditWorkflow(req.scope).run({ input: { order_id } })
-            logger.info(`[POS apply-existing] Cancelled existing draft order edit for ${order_id}`)
             await sleep(500)
-        } catch {
-            // No existing edit to cancel — that's fine
-        }
+        } catch { /* No open edit — fine */ }
 
-        // ── Step 3: Begin a new draft order edit (with lock retry) ───────────
+        // ── Step 3: Begin a new draft order edit ─────────────────────────────
         await runWithLockRetry(
             () => beginDraftOrderEditWorkflow(req.scope).run({ input: { order_id } }),
             3, 1500
         )
-        logger.info(`[POS apply-existing] Began draft order edit for ${order_id}`)
+        logger.info(`[POS apply-existing] Began draft order edit`)
 
-        // ── Step 4: Apply the promotion ───────────────────────────────────────
+        // ── Step 4: Apply the promotion via workflow ───────────────────────────
         await addDraftOrderPromotionWorkflow(req.scope).run({
             input: { order_id, promo_codes: [promotion_code] }
         })
-        logger.info(`[POS apply-existing] Applied ${promotion_code} to order ${order_id}`)
+        logger.info(`[POS apply-existing] Applied ${promotion_code} via workflow`)
 
-        // ── Step 5: Delete stale confirmed adjustments BEFORE confirm ─────────
+        // ── Step 5: Soft-delete ALL current active adjustments for this promo ──
         //
-        // addDraftOrderPromotionWorkflow stores new adjustments as PENDING
-        // order_change_action records — NOT yet in order_line_item_adjustment.
-        // confirmDraftOrderEditWorkflow will materialise those and recompute
-        // order_summary.discount_total atomically.
-        // Soft-deleting old confirmed adjustments BEFORE confirm ensures
-        // only the fresh (correct) ones exist after confirm.
+        // KEY FIX: use order_item.item_id (ordli_ ref) to scope to this order.
+        //   order_item.item_id = line_item.id = order_line_item_adjustment.item_id
+        // This avoids the order_change_action.reference_id which is NULL for
+        // ITEM_ADJUSTMENTS_REPLACE (the actual item IDs are inside details JSONB).
+        //
         try {
-            const deleted = await knex.raw(`
+            const del = await knex.raw(`
                 UPDATE order_line_item_adjustment
                 SET deleted_at = NOW()
                 WHERE deleted_at IS NULL
                   AND code = ?
                   AND item_id IN (
                       SELECT DISTINCT item_id FROM order_item
-                      WHERE order_id = ? AND deleted_at IS NULL
+                      WHERE order_id = ?
                   )
             `, [promotion_code, order_id])
-            logger.info(`[POS apply-existing] Pre-confirm: cleared stale ${promotion_code} adjustments — ${deleted.rowCount ?? 0} soft-deleted`)
-        } catch (cleanupErr: any) {
-            logger.warn(`[POS apply-existing] Pre-confirm cleanup failed (non-fatal): ${cleanupErr.message}`)
+            logger.info(`[POS apply-existing] Pre-confirm: soft-deleted ${del.rowCount ?? 0} existing adjustment(s)`)
+        } catch (e: any) {
+            logger.warn(`[POS apply-existing] Pre-confirm soft-delete non-fatal: ${e.message}`)
         }
 
         // ── Step 6: Confirm the edit ──────────────────────────────────────────
+        // Materialises ITEM_ADJUSTMENTS_REPLACE → NEW order_line_item_adjustment rows
+        // with workflow-computed amounts (may be wrong due to ORM snapshot qty mismatch)
         await confirmDraftOrderEditWorkflow(req.scope).run({
             input: {
                 order_id,
                 confirmed_by: (req as any).auth_context?.actor_id ?? "pos-system"
             }
         })
-        logger.info(`[POS apply-existing] Confirmed draft order edit for ${order_id}`)
+        logger.info(`[POS apply-existing] Confirmed draft order edit`)
+
+        // ── Step 7: Correct adjustment amounts from authoritative order_item ───
+        //
+        // The workflow-computed adjustment may have wrong qty (ORM snapshot lag).
+        // We recompute: unit_price × quantity × pct from order_item (which has
+        // the correct qty from update-item-force direct DB writes).
+        //
+        // order_item.item_id = ordli_ (links to the same line_item as the adjustment)
+        // We use MAX(version) to get the latest version for each item.
+        //
+        if (promoMethodValue != null && promoMethodValue > 0) {
+            try {
+                const pct = promoMethodValue / 100
+
+                // Get all active adjustments for this promo on this order
+                const adjResult = await knex.raw(`
+                    SELECT a.id, a.item_id, a.amount
+                    FROM order_line_item_adjustment a
+                    WHERE a.code = ?
+                      AND a.deleted_at IS NULL
+                      AND a.item_id IN (
+                          SELECT DISTINCT item_id FROM order_item WHERE order_id = ?
+                      )
+                `, [promotion_code, order_id])
+
+                const adjRows: Array<{ id: string; item_id: string; amount: number }> = adjResult.rows
+                logger.info(`[POS apply-existing] Found ${adjRows.length} active adjustment(s) after confirm`)
+
+                for (const adj of adjRows) {
+                    // Get latest order_item version for this item (has correct qty from update-item-force)
+                    const oiResult = await knex.raw(`
+                        SELECT unit_price, quantity
+                        FROM order_item
+                        WHERE item_id = ? AND order_id = ?
+                        ORDER BY version DESC
+                        LIMIT 1
+                    `, [adj.item_id, order_id])
+
+                    if (oiResult.rows.length > 0) {
+                        const { unit_price, quantity } = oiResult.rows[0]
+                        const correct = Number((Number(unit_price) * Number(quantity) * pct).toFixed(2))
+
+                        // Update BOTH amount (decimal display) AND raw_amount (used by Medusa ORM/API).
+                        // Medusa v2 stores monetary values as {value: string, precision: 20} JSON.
+                        // The API computes discount_total from raw_amount.value — updating only
+                        // `amount` is not enough; the API will still return the old value.
+                        const rawAmountJson = JSON.stringify({ value: String(correct), precision: 20 })
+                        await knex.raw(`
+                            UPDATE order_line_item_adjustment
+                            SET amount = ?, raw_amount = ?::jsonb, updated_at = NOW()
+                            WHERE id = ? AND deleted_at IS NULL
+                        `, [correct, rawAmountJson, adj.id])
+                        logger.info(`[POS apply-existing] Corrected adj ${adj.id}: ${Number(adj.amount).toFixed(4)} → ${correct} (price=${unit_price} qty=${quantity} pct=${pct})`)
+                    } else {
+                        logger.warn(`[POS apply-existing] No order_item found for item_id=${adj.item_id}`)
+                    }
+                }
+            } catch (e: any) {
+                logger.warn(`[POS apply-existing] Adjustment correction non-fatal: ${e.message}`)
+            }
+        }
+
+        // ── Step 8: Hard-delete all stale rows ────────────────────────────────
+        // Estimates never need history. Physically remove soft-deleted rows.
+        try {
+            // 8a. Soft-deleted adjustment rows
+            const adjDel = await knex.raw(`
+                DELETE FROM order_line_item_adjustment
+                WHERE deleted_at IS NOT NULL
+                  AND item_id IN (
+                      SELECT DISTINCT item_id FROM order_item WHERE order_id = ?
+                  )
+            `, [order_id])
+            logger.info(`[POS apply-existing] Hard-deleted ${adjDel.rowCount ?? 0} stale adjustment row(s)`)
+
+            // 8b. Old order_change_action rows (keep only latest order_change)
+            const ocaDel = await knex.raw(`
+                DELETE FROM order_change_action
+                WHERE order_change_id IN (
+                    SELECT id FROM order_change WHERE order_id = ?
+                    AND id != (SELECT id FROM order_change WHERE order_id = ? ORDER BY created_at DESC LIMIT 1)
+                )
+            `, [order_id, order_id])
+            logger.info(`[POS apply-existing] Hard-deleted ${ocaDel.rowCount ?? 0} stale order_change_action row(s)`)
+
+            // 8c. Old order_change rows (keep only latest)
+            const ocDel = await knex.raw(`
+                DELETE FROM order_change WHERE order_id = ?
+                AND id != (SELECT id FROM order_change WHERE order_id = ? ORDER BY created_at DESC LIMIT 1)
+            `, [order_id, order_id])
+            logger.info(`[POS apply-existing] Hard-deleted ${ocDel.rowCount ?? 0} stale order_change row(s)`)
+
+            // 8d. Old order_item versions (keep only latest version per item)
+            const oiDel = await knex.raw(`
+                DELETE FROM order_item
+                WHERE order_id = ?
+                  AND (item_id, version) NOT IN (
+                      SELECT item_id, MAX(version) FROM order_item WHERE order_id = ? GROUP BY item_id
+                  )
+            `, [order_id, order_id])
+            logger.info(`[POS apply-existing] Hard-deleted ${oiDel.rowCount ?? 0} stale order_item version(s)`)
+
+            // 8e. Old order_summary versions (keep only latest)
+            const osDel = await knex.raw(`
+                DELETE FROM order_summary WHERE order_id = ?
+                AND version != (SELECT MAX(version) FROM order_summary WHERE order_id = ?)
+            `, [order_id, order_id])
+            logger.info(`[POS apply-existing] Hard-deleted ${osDel.rowCount ?? 0} stale order_summary version(s)`)
+
+        } catch (e: any) {
+            logger.warn(`[POS apply-existing] Hard-delete cleanup non-fatal: ${e.message}`)
+        }
 
         res.status(200).json({ success: true })
 

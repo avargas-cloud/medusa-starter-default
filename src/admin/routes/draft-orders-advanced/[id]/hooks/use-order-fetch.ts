@@ -21,7 +21,7 @@ export const useOrderFetch = (
         setLoading(true); setFetchError(null)
         try {
             const [oRes, dRes] = await Promise.all([
-                fetch(`/admin/orders/${id}?fields=+customer.*,+customer.groups,+shipping_address.*,+billing_address.*,+items.*,+items.variant.*,+shipping_methods.*,*promotions,*promotions.application_method,+metadata,+currency_code,+email,+created_at,+display_id,+status,+sales_channel.*,+region.*`, { credentials: "include" }),
+                fetch(`/admin/orders/${id}?fields=+customer.*,+customer.groups,+shipping_address.*,+billing_address.*,+items.*,+items.adjustments.*,+items.variant.*,+shipping_methods.*,*promotions,*promotions.application_method,+metadata,+currency_code,+email,+created_at,+display_id,+status,+sales_channel.*,+region.*`, { credentials: "include" }),
                 fetch(`/admin/draft-orders/${id}`, { credentials: "include" }).then(r => r.ok ? r.json() : null).catch(() => null),
             ])
             if (!oRes.ok) throw new Error(`HTTP ${oRes.status}`)
@@ -37,7 +37,16 @@ export const useOrderFetch = (
                 items: normalizedPreviewItems ?? rawOrder.items ?? [],
                 subtotal: preview?.subtotal != null ? preview.subtotal / 100 : rawOrder.subtotal ?? 0,
                 shipping_total: preview?.shipping_total != null ? preview.shipping_total / 100 : rawOrder.shipping_total ?? 0,
-                discount_total: preview?.discount_total != null ? preview.discount_total / 100 : rawOrder.discount_total ?? 0,
+                // Compute pre-tax discount from raw item adjustment amounts.
+                // Medusa's order.discount_total grosses-up by (1 + tax_rate) for its own display,
+                // giving $4.93 instead of the correct pre-tax $4.61. We use item.adjustments[].amount
+                // which is the actual amount stored in order_line_item_adjustment.amount.
+                discount_total: (() => {
+                    const fromAdj = (rawOrder.items ?? []).reduce((s: number, item: any) =>
+                        s + (item.adjustments ?? []).reduce((a: number, adj: any) => a + (Number(adj.amount) || 0), 0), 0)
+                    if (fromAdj > 0) return fromAdj
+                    return preview?.discount_total != null ? preview.discount_total / 100 : rawOrder.discount_total ?? 0
+                })(),
                 tax_total: preview?.tax_total != null ? preview.tax_total / 100 : rawOrder.tax_total ?? 0,
                 total: preview?.total != null ? preview.total / 100 : rawOrder.total ?? 0,
             }
