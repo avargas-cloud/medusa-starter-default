@@ -179,7 +179,9 @@ curl -H "x-publishable-api-key: TU_API_KEY" \\
 
 ### 🎯 Problema Común: Precios Wholesale no se muestran
 
-Si tienes clientes mayoristas con precios especiales, el endpoint **DEBE** recibir el JWT token del frontend para identificar al cliente y aplicar sus precios.
+Si tienes clientes mayoristas con precios especiales, el endpoint **DEBE** recibir el JWT token del frontend para identificar al cliente y aplicar sus precios. 
+
+> **⚠️ NOTA SOBRE SKUs LEGACY (`LEG`):** Los productos cuyo SKU comienza con el prefijo `LEG` están **excluidos intencionalmente** de las listas de precios Wholesale en la base de datos (mediante scripts de purga automatizados). Si estás debugeando precios Wholesale y ves que un precio base $100 se mantiene en $100 para un cliente B2B, verifica primero si el SKU es `LEG`. Si lo es, ese es el comportamiento esperado.
 
 ### 🔍 Síntomas del problema:
 

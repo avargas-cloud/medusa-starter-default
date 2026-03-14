@@ -221,6 +221,18 @@ sus datos via `queryClient.prefetchQuery` para navegación instantánea.
 }
 ```
 
+### Retrocompatibilidad de Metadatos
+En versiones anteriores, campos como Términos de Pago, Lead Time y Comercial se almacenaban localmente bajo los prefijos `estimate_` (ej. `estimate_payment_terms`, `estimate_rep`). Actualmente, se utilizan claves agnósticas (ej. `payment_terms`, `sales_rep`). 
+
+Los hooks globales del POS (`useOrderData`, `useEstimateData`) implementan checkeo *fallback* automático en tiempo real. Esto garantiza que cualquier documento cotizado en versiones anteriores siga mostrando sus metadatos sin necesidad de scripts de migración formales:
+
+```ts
+leadTime: metadata.lead_time ?? metadata.estimate_lead_time
+paymentTerms: metadata.payment_terms ?? metadata.estimate_payment_terms
+orderType: metadata.order_type ?? metadata.estimate_order_type
+salesRep: metadata.sales_rep ?? metadata.estimate_rep
+```
+
 ### Status Values (`metadata.estimate_status`)
 
 | Valor | Badge |
@@ -398,6 +410,22 @@ Esta sección consolida resoluciones a bugs complejos de interfaz y lógica resu
 - **Order Level:** Se creó un endpoint nativo `POST /admin/pos-discount` para insertar y/o crear códigos de descuento "sobre la marcha" en Medusa (Fixed Amount `$` o Percentage `%`). Si ya existe un código promocional estático (ej. `ORDER-DISCOUNT-10%`), se llama a la ruta `POST /admin/pos-discount/apply-existing`. Todo esto permite aplicar descuentos masivos en un solo click desde `PromotionStrip`.
 - **Line Level:** Calculado visualmente en el UI local `posStore` en las variables `_discountTotal` y `_afterLineDiscountTotal` para fines estéticos, permitiendo ajustar los `unitPrice` directamente. Durante el Save, los custom prices (calculados tras aplicar el descuento de línea local) reemplazan el `unit_price`, afectando la suma sin requerir módulos masivos de promociones por línea para Estimates temporales.
 
+### 20. Unsaved Changes Guard sobre Print y Email (Marzo 2026)
+
+**Problema:** Los usuarios podían abrir la vista de impresión (`/print/[templateId]`) o el modal del Email en el POS a pesar de tener ediciones flotantes sin guardar en la orden o cotización. Esto enviaba a los clientes o a la impresora el documento obsoleto (antes de aplicarle Guardar).
+
+**Fix:**
+- En `DocumentToolbar.tsx`, se incluyó un chequeo estricto del booleano `isDirty` originado por Zustand/Zod en los botones de "Print" y "Email".
+- Si el usuario presiona estas acciones habiendo tecleado algún cambio sin guardar, la acción es interceptada de inmediato y arroja una alerta roja de Sonner (`toast.error`) pidiéndole primero confirmar los cambios antes de compartirlos.
+
+### 21. Notas de Cotización Dinámicas ("Virtual Row Notes")
+
+**Problema:** En el diseñador visual de plantillas antiguo de Medusa, el campo *Notes* se asignaba como un bloque de texto fijo (Width: X, Height: Y) con un espacio restrictivo y estático. Si en un Estimate se agregaba texto de Términos y Condiciones sumamente largo (3-4 párrafos), se desbordaba horizontalmente o la pantalla cortaba el contenido, pues la paginación del Custom HTML Layout fallaba.
+
+**Fix:**
+- **Remoción en el Diseñador Visual:** El conmutador de *Notes* ahora se eliminó del Layout Builder Palette (`app/(pos)/templates/[id]/_design/fields.ts`) y se limpia activamente cualquier bloque "nota suelta" viejo (`fieldKey === 'notes'`). Las Notas jamás deberían tener una tarjeta propia con W/H definido.
+- **Inyección Virtual Table Row:** Durante el parseo para Impresión (`_buildRealData.ts`), cualquier Nota ahora se inyecta falsamente al final del arreglo de `items` bajo el string magico `**_NOTE_**`.
+- **BlockRenderer Handling:** La celda de la Tabla de Productos recibe este objeto fantasma. El iterador lo detecta, frena la creación de celdas unitarias (QTY, PRICE), e inserta un `<div>` flotante del 100% de Ancho. Al estar dentro de la grilla de productos y no en un contenedor limitativo, la tabla lo paginará en un bloque ininterrumpido a lo largo de 1-2 páginas PDF extraíbles si el texto es inmensamente largo.
 ### 19. Comment Lines / Section Headers (Interleaving)
 
 **Contexto:** Necesidad de intercalar cabeceras descriptivas (ej. "Area 1", "Installation Fees") visualmente *entre* los items reales, y que esto viaje íntegro hasta QuickBooks.

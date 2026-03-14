@@ -145,6 +145,16 @@ POS Staff: venta a crédito (pagar después)
 
 ## Detalle de Orden (`/orders/[id]`)
 
+### Metadata y Backward Compatibility (Herencia de Estimates)
+Al convertir un Estimate en Order, la versión anterior de la aplicación guardaba los campos bajo el prefijo `estimate_` (ej. `estimate_lead_time`). El diseño actual utiliza claves agnósticas (ej. `lead_time`, `sales_rep`). Para asegurar la visibilidad de documentos antiguos sin necesidad de scripts de migración, la capa de inicialización (`useOrderData.ts`) incluye un fallback automático:
+
+```ts
+leadTime: o.metadata?.lead_time ?? o.metadata?.estimate_lead_time ?? '',
+paymentTerms: o.metadata?.payment_terms ?? o.metadata?.estimate_payment_terms ?? '',
+orderType: o.metadata?.order_type ?? o.metadata?.estimate_order_type ?? '',
+salesRep: o.metadata?.sales_rep ?? o.metadata?.estimate_rep ?? '',
+```
+
 ### Acciones disponibles
 
 | Acción | Descripción |
@@ -263,6 +273,11 @@ Esto es el mismo comportamiento que Medusa Admin: los draft orders son cotizacio
 **Solución Implementada (Marzo 14, 2026):**
 - **Unified Transfer API:** Se inyectó el endpoint custom `POST /admin/pos-transfer` que resuelve el modulo de Orders directamente, permitiendo reescribir `customer_id` y `email` en la base de datos sin requerimientos asíncronos.
 - **Hook de Intercepción (`useOrderActions.ts`):** En el proceso de edición transparente (`handleSave`), el UI detecta si `doc.customerId !== order.customer_id`. Si difieren, ejecuta este forced endpoint cambiando el dueño instantáneamente *antes* de proseguir con la volcada masiva de direcciones física (Shipping/Billing Address) y metadata de la orden. Todo en un solo click.
+
+### Notas de Ordenes Dinámicas ("Virtual Row Notes") y Guardias de Seguridad
+
+- **Print/Email Guards:** La vista de Orders cuenta con la misma protección introducida en Marzo de 2026 sobre el `DocumentToolbar.tsx`. Si se edita la orden de alguna forma, los botones de "Print" y "Email" fallarán con un `toast.error` forzando al operador al Save si la bandera `isDirty` del store local se marca positiva.
+- **Paginación Vertical del Documento:** Para evitar derrames (overflows), el *Notes* global de la orden tampoco se diagrama en un bloque cerrado y fijo. El renderizador (`BlockRenderer`) lo empuja como la **última línea mágica de tipo ítem de factura** (`**_NOTE_**`). De esa manera el motor de impresión del navegador expande la celda del 100% hasta la siguiente página en caso de exceder su largo predeterminado. (Se describe más en `POS_ESTIMATES.md`).
 
 ---
 

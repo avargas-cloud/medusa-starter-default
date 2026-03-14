@@ -84,6 +84,7 @@ cd backend && npx tsx src/scripts/checks/check-test-prices.ts
 - **Wholesale** — Precio con descuento (clientes en el customer group "Wholesale")
   - Típicamente ~7.5-10% menos que retail
   - Aplicado vía Medusa Price Lists con regla de customer_group
+  - **Excepción ESTRICTA:** Productos cuyo SKU comience con el prefijo `LEG` (Legacy) están excluidos programática y permanentemente de las listas Wholesale. No reciben descuento.
 
 ### Cómo agregar precios al price list wholesale
 Desde Medusa Admin:

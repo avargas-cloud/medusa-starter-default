@@ -245,12 +245,17 @@ export async function syncInventoryCore(
 
         for (const variant of qbVariants) {
             const qbId = (variant.metadata as any)?.quickbooks_id
-            const qbItem = qbMap.get(qbId)
+            let qbItem = qbMap.get(qbId)
 
             if (!qbItem) {
                 stats.missingInQb++
-                warn(`   ⚠️ ${variant.sku} — not found in QB response`)
-                continue
+                // warn(`   ⚠️ ${variant.sku} — not found in QB response`)
+                // Nota: QuickBooks ItemSitesQuery omite productos sin historial en la bodega. 
+                // Asumimos stock 0 para mantener Medusa correcto y silenciamos el log para evitar ruido.
+                qbItem = {
+                    QuantityOnHand: "0",
+                    ItemInventoryRef: { ListID: qbId, FullName: variant.sku }
+                }
             }
 
             stats.foundInQb++
@@ -271,9 +276,6 @@ export async function syncInventoryCore(
 
             // Clamp negatives to 0 — QB can report negative stock due to over-sales or data errors
             const newStock = rawStock < 0 ? 0 : rawStock
-            if (rawStock < 0) {
-                warn(`   ⚠️ ${variant.sku}: QB reported negative stock (${rawStock}) → clamped to 0`)
-            }
 
             // Get current stock from Medusa
             const levels = await inventoryService.listInventoryLevels({
@@ -282,6 +284,16 @@ export async function syncInventoryCore(
             })
             const currentStock = levels[0]?.stocked_quantity ?? 0
             const delta = newStock - currentStock
+
+            if (rawStock < 0) {
+                // Si mandan negativo pero Medusa ya lo tenía en 0, no es de alarmarse (ya estaba out of stock)
+                if (currentStock > 0) {
+                    warn(`   ⚠️ ${variant.sku}: QB reported negative stock (${rawStock}) → clamped to 0 (Medusa had ${currentStock})`)
+                } else {
+                    // Silencioso o log normal de consola (sin el ⚠️) para no asustar, pues igual se hará skip si delta == 0
+                    // console.log(`   [Info] ${variant.sku}: QB has negative stock (${rawStock}), Medusa is already 0.`)
+                }
+            }
 
             // DEBUG: Log comparison for diagnostics (remove once bug is found)
             if (variant.sku === 'EAP-AS1-8S' || stats.foundInQb <= 5) {

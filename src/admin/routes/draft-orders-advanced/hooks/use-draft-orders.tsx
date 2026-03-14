@@ -56,8 +56,8 @@ export const useDraftOrders = () => {
             }
         }
         load()
-        // Poll every 10s so the list reflects compute-tax updates after saves
-        const interval = setInterval(load, 10_000)
+        // Poll every 60s so the list reflects compute-tax updates after saves (reduced from 10s to save backend load)
+        const interval = setInterval(load, 60_000)
         return () => clearInterval(interval)
     }, [])
 
