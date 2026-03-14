@@ -1,5 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+
 // Cache manager removed - using fresh pricing calculations
 
 /**
@@ -30,15 +30,21 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         // Get customer groups for wholesale pricing (only in Dynamic Pricing mode)
         const customerId = (req as any).auth_context?.actor_id
 
+        let isWholesaleCustomer = false;
+
         if (dynamicPricingEnabled && customerId) {
             try {
-                const customerModule = req.scope.resolve(Modules.CUSTOMER)
+                const customerModule = req.scope.resolve("customer")
                 const customer = await customerModule.retrieveCustomer(customerId, {
                     relations: ["groups"]
                 })
 
                 if (customer.groups?.length) {
-                    pricingContext.customer_group_id = customer.groups.map(g => g.id)
+                    pricingContext.customer_group_id = customer.groups.map((g: any) => g.id)
+                    isWholesaleCustomer = customer.groups.some((g: any) => 
+                        g.name?.toLowerCase().includes('wholesale') || 
+                        g.name?.toLowerCase().includes('distributor')
+                    );
                 }
             } catch (error) {
                 // Could not fetch customer groups
@@ -48,8 +54,22 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         // Cache removed - prices calculated fresh every time for dynamic pricing
 
         const knex = req.scope.resolve("__pg_connection__")
-        const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)
-        const pricingModule = req.scope.resolve(Modules.PRICING)
+        const query = req.scope.resolve("query")
+        const pricingModule = req.scope.resolve("pricing")
+
+        // Fetch active store config to pass down global prefixes
+        let activeStoreConfig = ["LEG"];
+        try {
+            const { data: stores } = await query.graph({
+                entity: "store",
+                fields: ["metadata"]
+            });
+            if (stores && stores.length > 0 && (stores[0] as any).metadata?.non_wholesale_prefixes) {
+                activeStoreConfig = (stores[0] as any).metadata.non_wholesale_prefixes as string[];
+            }
+        } catch (err: any) {
+            console.error("[PRICES-STOCK] ⚠️ Error fetching store metadata:", err.message);
+        }
 
         // Step 1: Get variants with price_set_id
         const { data: variants } = await query.graph({
@@ -74,8 +94,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
         // Step 2: Calculate prices using Pricing Module (CORRECT WAY)
         const priceSetIds = variants
-            .map(v => v.price_set?.id)
-            .filter((id): id is string => Boolean(id))
+            .map((v: any) => v.price_set?.id)
+            .filter((id: any): id is string => Boolean(id))
 
 
         let calculatedPrices: any[] = []
@@ -113,9 +133,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             .whereNull("product_variant.deleted_at")
 
         // Step 4: Map everything together
-        const variantData = variants.map(v => {
+        const variantData = variants.map((v: any) => {
             const priceSetId = v.price_set?.id
-            const calculatedPrice = calculatedPrices.find(p => p.id === priceSetId)
+            const calculatedPrice = calculatedPrices.find((p: any) => p.id === priceSetId)
 
             const inv = inventory.find(i => i.variant_id === v.id)
             const availableQuantity = inv
@@ -147,7 +167,11 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             variants: variantData,
             customer_context: {
                 customer_id: customerId || 'anonymous',
-                customer_groups: pricingContext.customer_group_id || []
+                customer_groups: pricingContext.customer_group_id || [],
+                is_wholesale: isWholesaleCustomer
+            },
+            store_config: {
+                non_wholesale_prefixes: activeStoreConfig
             },
             timestamp: new Date().toISOString()
         }

@@ -32,6 +32,20 @@ export async function POST(
         const pricingModule = req.scope.resolve(Modules.PRICING);
         const customerModule = req.scope.resolve(Modules.CUSTOMER);
 
+        // Fetch active store config to pass down global prefixes
+        let activeStoreConfig = ["LEG"];
+        try {
+            const { data: stores } = await query.graph({
+                entity: "store",
+                fields: ["metadata"]
+            });
+            if (stores && stores.length > 0 && stores[0].metadata?.non_wholesale_prefixes) {
+                activeStoreConfig = stores[0].metadata.non_wholesale_prefixes;
+            }
+        } catch (err: any) {
+            console.error("[Batch Prices] ⚠️ Error fetching store metadata:", err.message);
+        }
+
         // Build pricing context
         const pricingContext: Record<string, any> = {
             currency_code: "usd",
@@ -85,34 +99,45 @@ export async function POST(
         });
 
         if (!products || products.length === 0) {
-            res.json({ prices: {}, customer_type: isWholesale ? 'wholesale' : 'retail' });
+            res.json({ 
+                prices: {}, 
+                customer_type: isWholesale ? 'wholesale' : 'retail',
+                store_config: { non_wholesale_prefixes: activeStoreConfig }
+            });
             return;
         }
 
         // console.log(`[Batch Prices] Fetched ${products.length} products`);
 
         // Get price_set_ids from first variants
-        const priceSetData: Array<{ productId: string; priceSetId: string; variantId: string }> = [];
+        const priceSetData: Array<{ productId: string; priceSetId: string; variantId: string; sku: string }> = [];
 
         for (const product of products) {
             if (!product.variants || product.variants.length === 0) continue;
 
-            const firstVariant = product.variants[0];
-            if (!firstVariant) continue;
+            for (const variant of product.variants) {
+                const priceSetId = (variant as any).price_set?.id;
+                const sku = (variant as any).sku || "";
 
-            const priceSetId = (firstVariant as any).price_set?.id;
-
-            if (priceSetId) {
-                priceSetData.push({
-                    productId: product.id,
-                    priceSetId: priceSetId,
-                    variantId: firstVariant.id
-                });
+                if (priceSetId) {
+                    priceSetData.push({
+                        productId: product.id,
+                        priceSetId: priceSetId,
+                        variantId: variant.id,
+                        sku: sku
+                    });
+                }
             }
         }
 
+
+
         if (priceSetData.length === 0) {
-            res.json({ prices: {}, customer_type: isWholesale ? 'wholesale' : 'retail' });
+            res.json({ 
+                prices: {}, 
+                customer_type: isWholesale ? 'wholesale' : 'retail',
+                store_config: { non_wholesale_prefixes: activeStoreConfig }
+            });
             return;
         }
 
@@ -126,7 +151,7 @@ export async function POST(
             { context: pricingContext } // IMPORTANT: context wrapped in object
         );
 
-        // console.log(`[Batch Prices] ✅ Calculated ${calculatedPrices.length} prices`);
+        console.log(`[Batch Prices] ✅ First calculatedPrice:`, JSON.stringify(calculatedPrices[0], null, 2));
 
         // Map prices back to products
         const prices: Record<string, any> = {};
@@ -139,19 +164,35 @@ export async function POST(
                 continue;
             }
 
-            prices[data.productId] = {
-                amount: calculatedPrice.calculated_amount || 0,
-                currency_code: calculatedPrice.currency_code || 'usd',
-                price_list_type: isWholesale ? 'wholesale' : 'retail',
-                variant_id: data.variantId
-            };
+            const amt = calculatedPrice.calculated_amount || 0;
+
+            if (!prices[data.productId]) {
+                prices[data.productId] = {
+                    amount: amt,
+                    amount_max: amt,
+                    currency_code: calculatedPrice.currency_code || 'usd',
+                    price_list_type: isWholesale ? 'wholesale' : 'retail',
+                    variant_id: data.variantId,
+                    sku: data.sku
+                };
+            } else {
+                if (amt < prices[data.productId].amount) {
+                    prices[data.productId].amount = amt;
+                    prices[data.productId].variant_id = data.variantId;
+                    prices[data.productId].sku = data.sku;
+                }
+                if (amt > prices[data.productId].amount_max) {
+                    prices[data.productId].amount_max = amt;
+                }
+            }
         }
 
         // console.log(`[Batch Prices] Returning prices for ${Object.keys(prices).length} products`);
 
         res.json({
             prices,
-            customer_type: isWholesale ? 'wholesale' : 'retail'
+            customer_type: isWholesale ? 'wholesale' : 'retail',
+            store_config: { non_wholesale_prefixes: activeStoreConfig }
         });
 
     } catch (error) {

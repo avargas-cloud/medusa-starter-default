@@ -59,6 +59,7 @@ export const GET = async (
                 "title",
                 "description",
                 "handle",
+                "status",
                 "thumbnail",
                 "metadata",
                 "variants.*",
@@ -196,6 +197,7 @@ export const GET = async (
                     "id",
                     "title",
                     "handle",
+                    "status",
                     "thumbnail",
                     "variants.*",
                     "variants.price_set.id"

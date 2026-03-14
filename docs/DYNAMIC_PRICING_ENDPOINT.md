@@ -36,114 +36,88 @@ Crea este archivo:
 backend/src/api/store/products/[id]/prices-and-stock/route.ts
 ```
 
-### Paso 2: Copiar el código completo
+### Paso 2: Usar el Pricing Module Nativo de Medusa v2 (SIN CACHE HARDCODED)
+
+El código actual utiliza `pricingModule.calculatePrices` y prescinde de Redis cache duro, ya que Medusa calcula en tiempo real para todos los grupos de clientes.
 
 ```typescript
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { getCacheManager } from "../../../../../lib/cache-manager"
 
-/**
- * Endpoint ligero para obtener SOLO precios e inventario
- * Diseñado para hidratación client-side de páginas SSG
- */
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     try {
         const { id } = req.params
 
-        // 🔥 PASO 1: Revisar si está en cache
-        const cacheKey = `product:${id}:prices-stock`
-        const cacheService = req.scope.resolve("cache")
-        const cacheManager = getCacheManager(cacheService)
-
-        const cached = await cacheManager.get<any>(cacheKey)
-        if (cached) {
-            console.log(`[PRICES-STOCK] 🎯 Cache HIT: ${cacheKey}`)
-            return res.json(cached)
+        // Construir contexto de precios base
+        const pricingContext: Record<string, any> = {
+            currency_code: "usd",
+            region_id: "reg_01KFS28SNF1MT1MRHRAFQ6ZGK1"
         }
 
-        console.log(`[PRICES-STOCK] ❌ Cache MISS: ${cacheKey}`)
-        
-        // 🔥 PASO 2: Si no está en cache, buscar en la BD
-        const knex = req.scope.resolve("__pg_connection__")
+        // Definir si está habilitado el Dynamic Pricing mode
+        const dynamicPricingEnabled = process.env.ENABLE_DYNAMIC_PRICING !== 'false';
+        const customerId = (req as any).auth_context?.actor_id
+        let isWholesaleCustomer = false;
 
-        // Obtener precios de variants
-        const prices = await knex("price")
-            .select(
-                "price.amount",
-                "price.currency_code",
-                "product_variant_price_set.variant_id",
-                "product_variant.title as variant_title",
-                "product_variant.sku"
-            )
-            .join("product_variant_price_set", "price.price_set_id", "product_variant_price_set.price_set_id")
-            .join("product_variant", "product_variant_price_set.variant_id", "product_variant.id")
-            .where("product_variant.product_id", id)
-            .where("price.currency_code", "usd")
-            .whereNull("price.deleted_at")
-            .whereNull("product_variant.deleted_at")
+        // Recuperar grupos del cliente (si está logueado y activado)
+        if (dynamicPricingEnabled && customerId) {
+            try {
+                const customerModule = req.scope.resolve("customer")
+                const customer = await customerModule.retrieveCustomer(customerId, {
+                    relations: ["groups"]
+                })
 
-        // Obtener inventario
-        const inventory = await knex("inventory_level")
-            .select(
-                "inventory_level.stocked_quantity",
-                "inventory_level.incoming_quantity",
-                "inventory_level.reserved_quantity",
-                "product_variant_inventory_item.variant_id"
-            )
-            .join("product_variant_inventory_item", "inventory_level.inventory_item_id", "product_variant_inventory_item.inventory_item_id")
-            .join("product_variant", "product_variant_inventory_item.variant_id", "product_variant.id")
-            .where("product_variant.product_id", id)
-            .whereNull("inventory_level.deleted_at")
-            .whereNull("product_variant.deleted_at")
-
-        // 🔥 PASO 3: Combinar precios e inventario
-        const variantData = prices.map(p => {
-            const inv = inventory.find(i => i.variant_id === p.variant_id)
-            const availableQuantity = inv
-                ? (inv.stocked_quantity || 0) - (inv.reserved_quantity || 0)
-                : 0
-
-            return {
-                variant_id: p.variant_id,
-                sku: p.sku,
-                title: p.variant_title,
-                price: {
-                    amount: p.amount,
-                    currency_code: p.currency_code,
-                    // ⚠️ IMPORTANTE: Medusa v2 guarda precios como decimales, NO dividir por 100
-                    formatted: `$${parseFloat(p.amount).toFixed(2)}`
-                },
-                inventory: {
-                    available: availableQuantity,
-                    stocked: inv?.stocked_quantity || 0,
-                    incoming: inv?.incoming_quantity || 0,
-                    reserved: inv?.reserved_quantity || 0,
-                    in_stock: availableQuantity > 0
+                if (customer.groups?.length) {
+                    pricingContext.customer_group_id = customer.groups.map((g: any) => g.id)
+                    isWholesaleCustomer = customer.groups.some((g: any) => 
+                        g.name?.toLowerCase().includes('wholesale') || 
+                        g.name?.toLowerCase().includes('distributor')
+                    );
                 }
+            } catch (error) {
+                // Silencioso
             }
-        })
-
-        const responseData = {
-            product_id: id,
-            variants: variantData,
-            timestamp: new Date().toISOString()
         }
 
-        // 🔥 PASO 4: Guardar en cache por 5 minutos
-        await cacheManager.set(cacheKey, responseData, 300)
-        console.log(`[PRICES-STOCK] 💾 Guardado en cache: ${cacheKey}`)
+        const knex = req.scope.resolve("__pg_connection__")
+        const query = req.scope.resolve("query")
+        const pricingModule = req.scope.resolve("pricing")
 
-        return res.json(responseData)
+        // Obtener Configuración de la Tienda (Prefijos excluidos de Wholesale)
+        let activeStoreConfig = ["LEG"];
+        try {
+            const { data: stores } = await query.graph({ entity: "store", fields: ["metadata"] });
+            if (stores && stores.length > 0 && (stores[0] as any).metadata?.non_wholesale_prefixes) {
+                activeStoreConfig = (stores[0] as any).metadata.non_wholesale_prefixes as string[];
+            }
+        } catch (err: any) { }
 
-    } catch (error: any) {
-        console.error("[PRICES-STOCK] ❌ Error:", error.message)
-        return res.status(500).json({
-            error: "Error al obtener precios",
-            message: error.message
+        // Paso 1: Obtener todos los variants del producto
+        const { data: variants } = await query.graph({
+            entity: "variant",
+            fields: ["id", "title", "sku", "price_set.id"],
+            filters: { product_id: id }
         })
-    }
-}
+
+        if (variants.length === 0) {
+            return res.json({ product_id: id, variants: [] })
+        }
+
+        // Paso 2: Calcular TODOS los precios nativamente
+        const priceSetIds = variants.map((v: any) => v.price_set?.id).filter((id: any): id is string => Boolean(id))
+        let calculatedPrices: any[] = []
+        if (priceSetIds.length > 0) {
+            calculatedPrices = await pricingModule.calculatePrices(
+                { id: priceSetIds },
+                { context: pricingContext }
+            )
+        }
+
+        // (Obtención de inventario con knex omitida por brevedad...)
 ```
+
+### Paso 3: Retornar Tipos de Precio (Retail vs Wholesale) y Contexto del Cliente
+
+El backend no solo devuelve el precio; ahora también le indica al frontend explícitamente si el usuario actual es "wholesale" y cuáles son las configuraciones de la tienda (para inyectar los Badges correctos).
 
 ### Paso 3: Verifica que funcione
 
