@@ -822,6 +822,43 @@ User-added horizontal and vertical snap guides:
 - Blocks snap to guides during drag (`snapToGuides()` helper)
 - Guides are draggable; a position input field accepts a mm value
 
+### `useStoreInfo` — Server-Side Proxy (No CORS)
+
+The design editor and preview pages display live store name, address, phone, and email. These values come from the Medusa admin API. **They must NOT be fetched from the browser directly** — that crosses origins (browser on `:3001` → Medusa on `:9000`) and triggers CORS errors regardless of `ADMIN_CORS` config (the compiled `.medusa/server/medusa-config.js` may be a stale build snapshot with different CORS strings).
+
+**Pattern:** `useStoreInfo` calls a Next.js API route that makes the fetch server-side:
+
+```
+browser (localhost:3001)
+  → GET /api/pos/store-info          [same origin — no CORS]
+    → Next.js route.ts
+      → fetch localhost:9000/admin/store          [server-to-server — no CORS]
+      → fetch localhost:9000/admin/stock-locations [server-to-server — no CORS]
+    ← { store, stock_locations }
+  ← StoreInfo
+```
+
+**Files:**
+- `app/api/pos/store-info/route.ts` — server-side proxy (uses `MEDUSA_BACKEND_URL` env var)
+- `hooks/useStoreInfo.ts` — calls `/api/pos/store-info`, NOT `localhost:9000` directly
+
+```typescript
+// hooks/useStoreInfo.ts — correct pattern
+fetch('/api/pos/store-info', {
+    headers: { Authorization: `Bearer ${token}` },
+})
+
+// app/api/pos/store-info/route.ts — proxy
+const MEDUSA_URL = process.env.MEDUSA_BACKEND_URL ?? 'http://localhost:9000'
+const [storeRes, locRes] = await Promise.allSettled([
+    fetch(`${MEDUSA_URL}/admin/store`, { headers }),
+    fetch(`${MEDUSA_URL}/admin/stock-locations?limit=1`, { headers }),
+])
+// Returns 200 with nulls on partial failure → hook falls back to DEFAULT values
+```
+
+> **Rule:** Any admin API call made on a page that runs client-side (`'use client'`) must go through a `/api/pos/...` proxy route. Direct `localhost:9000` fetches from the browser will fail in local dev and in production (cross-origin).
+
 ### `handleSave()` — Save with Field Config Sync
 
 When blocks for a field are **all hidden**, the save handler automatically disables that field's `print` toggle:
@@ -1238,5 +1275,6 @@ if (!hMap.has(k)) hMap.set(k, lineDescriptor)
 | Mar 2026 | **Display/Print checkbox fix** — Removed `onAnyChange` in `edit/page.tsx` that was force-enabling `screen` when any checkbox fired; new metadata entries now default the unclicked checkbox to `false` |
 | Mar 2026 | **Metadata field auto-injection** — `extractPrintFields` changed from `mf.print` to `mf.screen \|\| mf.print`; Design page init now auto-creates blocks for all enabled fields missing from saved layout |
 | Mar 2026 | **FieldsPalette auto-create** — Eye icon click on a field with no canvas blocks now generates and adds default title+data blocks instead of doing nothing |
-| Mar 2026 | **8-direction block resize** — Added N/S/E/W edge handles in addition to corner handles |
+| Mar 2026 | **Directional resize handles (3-zone)** — Replaced single diagonal corner handle with three hit zones: right-edge strip (`ew-resize`, width only), bottom-edge strip (`ns-resize`, height only), corner triangle (`se-resize`, both). `resizing` ref gains `mode: 'both' \| 'x' \| 'y'` field; `onPointerMove` branches on it. |
+| Mar 2026 | **`useStoreInfo` CORS proxy** — Moved store/stock-location fetches from client-side browser calls to a server-side Next.js API route (`/api/pos/store-info`). Eliminates `Access-Control-Allow-Origin` errors caused by browser cross-origin requests to port 9000. |
 | Mar 2026 | **Sample data improvements** — `SAMPLE_ROWS` in `StructuralBlockCanvas` updated with realistic qty and unit_price values; column key aliases (`qty`↔`quantity`, `price`↔`unit_price`) handled in data lookup |
