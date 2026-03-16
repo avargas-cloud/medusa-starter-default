@@ -217,6 +217,17 @@ module.exports = defineConfig({
       resolve: "./src/modules/document-templates",
     },
     {
+      resolve: "@medusajs/medusa/tax",
+      options: {
+        providers: [
+          {
+            resolve: "./src/modules/pos-tax",
+            id: "pos-tax",
+          }
+        ]
+      }
+    },
+    {
       resolve: "@medusajs/medusa/file",
       options: {
         providers: [

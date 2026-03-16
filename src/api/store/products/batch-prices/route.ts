@@ -1,5 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils";
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 
 /**
  * POST /store/products/batch-prices
@@ -39,8 +39,8 @@ export async function POST(
                 entity: "store",
                 fields: ["metadata"]
             });
-            if (stores && stores.length > 0 && stores[0].metadata?.non_wholesale_prefixes) {
-                activeStoreConfig = stores[0].metadata.non_wholesale_prefixes;
+            if (stores && stores.length > 0 && Array.isArray(stores[0]!.metadata?.non_wholesale_prefixes)) {
+                activeStoreConfig = stores[0]!.metadata!.non_wholesale_prefixes as string[];
             }
         } catch (err: any) {
             console.error("[Batch Prices] ⚠️ Error fetching store metadata:", err.message);

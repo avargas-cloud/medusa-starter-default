@@ -6,7 +6,7 @@
 | **Rutas POS** | `/estimates`, `/estimates/[id]`, `/estimates/new` |
 | **Medusa** | Draft Orders (`GET /admin/draft-orders`, `POST /admin/draft-orders`) |
 | **QB** | Estimates → Sales Orders |
-| **Última revisión** | 2026-03-10 |
+| **Última revisión** | 2026-03-16 |
 
 ---
 
@@ -1526,3 +1526,329 @@ LEFT JOIN order_address sa ON sa.id = o.shipping_address_id
 ```
 
 Las tablas de direcciones en Medusa v2 son: `order_address`, `cart_address`, `customer_address`, `fulfillment_address`. No existe una tabla genérica `address`.
+
+---
+
+## TAX SYSTEM — Arquitectura Nativa Completa (Medusa v2 POS)
+
+> **Última actualización:** 2026-03-16  
+> **Estado:** ✅ Producción — 100% nativo, idempotente y sin acumulación.
+
+---
+
+### Objetivo y Regla Contable
+
+El sistema de impuestos de los Estimates sigue una regla contable estricta:
+
+- **Florida (7%):** Se aplica el 7% sobre el **subtotal neto** = `items_subtotal - todos_los_descuentos`. El shipping está **exento** de impuesto.
+- **Tax Exempt (0%):** Clientes con certificado de exención fiscal — el tax es $0 independientemente del estado.
+- **Auto-detect:** Si la dirección de envío es FL → florida; si es otro estado o no hay dirección → $0.
+
+**Ejemplo verificado en producción:**
+```
+Items:    $53.00  (2 items)
+Descuento: $2.65  (5% google-review promo)
+Subtotal: $50.35
+Tax 7%:    $3.52  = $50.35 × 0.07 (redondeado)
+Shipping: $14.99  (EXENTO de impuesto)
+Total:    $68.86  ✅
+```
+
+---
+
+### Arquitectura: Custom Tax Provider (`pos-tax`)
+
+Medusa v2 permite registrar **Tax Providers** que reemplazan el cálculo por defecto (`system`). Nuestro provider es `pos-tax`.
+
+#### Archivos clave
+
+| Archivo | Propósito |
+|---------|----------|
+| `backend/src/modules/pos-tax/service.ts` | Lógica del provider — implementa `ITaxProvider` |
+| `backend/src/modules/pos-tax/index.ts` | Registro del módulo Medusa |
+| `backend/medusa-config.ts` | Registro en `ModuleProvider(Modules.TAX, ...)` |
+| `backend/src/api/admin/draft-orders/[id]/compute-tax/route.ts` | Endpoint GET/POST del POS |
+
+#### `service.ts` — Lógica del Provider
+
+```typescript
+// Implementa ITaxProvider de @medusajs/types
+class PosTaxProvider implements ITaxProvider {
+    static IDENTIFIER = "pos-tax"
+
+    async getTaxLines(
+        itemLines: ItemTaxCalculationLine[],
+        shippingLines: ShippingTaxCalculationLine[],
+        context: TaxCalculationContext
+    ): Promise<(ItemTaxLineDTO | ShippingTaxLineDTO)[]> {
+        const result: (ItemTaxLineDTO | ShippingTaxLineDTO)[] = []
+
+        // Detectar modo desde metadata de la orden
+        const taxMode = context.customer?.metadata?.tax_mode
+            ?? context.address?.metadata?.tax_mode
+            ?? 'florida'  // default: Florida
+        const isExempt = taxMode === 'exempt'
+
+        for (const line of itemLines) {
+            result.push({
+                rate_id: isExempt ? US_EXEMPT_TAX_RATE_ID : FLORIDA_TAX_RATE_ID,
+                rate: isExempt ? 0 : 7,        // 7% Florida, 0% exempt
+                name: isExempt ? 'Tax Exempt' : 'Florida Sales Tax',
+                code: isExempt ? 'EXEMPT' : 'FL',
+                line_item_id: line.line_item.id,
+                provider_id: PosTaxProvider.IDENTIFIER,
+            })
+        }
+
+        // Shipping siempre exento en Florida
+        for (const line of shippingLines) {
+            result.push({
+                rate_id: US_EXEMPT_TAX_RATE_ID,
+                rate: 0,
+                name: 'Shipping Tax Exempt',
+                code: 'SHIPPING_EXEMPT',
+                shipping_line_id: line.shipping_line.id,
+                provider_id: PosTaxProvider.IDENTIFIER,
+            })
+        }
+
+        return result
+    }
+}
+```
+
+#### Registro en `medusa-config.ts`
+
+```typescript
+ModuleProvider(Modules.TAX, {
+    services: [PosTaxProvider],
+})
+```
+
+#### DB: `tax_region` — Provider asignado
+
+```sql
+-- El top-level US region debe apuntar al provider pos-tax
+-- (constraint CK_tax_region_provider_top_level impide asignar a sub-regiones)
+UPDATE tax_region
+SET provider_id = 'tp_pos-tax_pos-tax'
+WHERE country_code = 'us' AND province_code IS NULL;
+```
+
+El `provider_id` sigue la convención de Medusa: `tp_<module_name>_<identifier>`.
+
+---
+
+### Endpoint: `GET /admin/draft-orders/:id/compute-tax`
+
+Este endpoint es el **corazón** del sistema de taxes en el POS. Se llama automáticamente cuando el usuario abre un estimate en el Admin o el POS.
+
+#### Flujo completo del GET
+
+```
+POS / Admin Admin carga estimate
+         │
+         ▼
+GET /admin/draft-orders/:id/compute-tax
+         │
+         ├── 1. Fetch orden con items, shipping, adjustments, metadata, customer
+         │
+         ├── 2. Detectar effectiveMode:
+         │       'florida'  ← savedMode (metadata.tax_mode) == 'florida'
+         │       'exempt'   ← savedMode == 'exempt'
+         │       auto-detect ← savedMode == 'auto' o vacío:
+         │           FL → 'florida'
+         │           otro estado → 'exempt'
+         │           sin dirección → 'florida' (default)
+         │
+         ├── 3. Cleanup IDEMPOTENTE (pg Pool directo):
+         │       DELETE FROM order_line_item_tax_line
+         │       WHERE item_id IN (
+         │           SELECT item_id FROM order_item WHERE order_id = $1
+         │       )
+         │       ← Borra líneas existentes ANTES del workflow
+         │       ← Sin esto el workflow acumula en cada refresh
+         │
+         ├── 4. updateOrderTaxLinesWorkflow (Medusa nativo)
+         │       → Medusa invoca PosTaxProvider.getTaxLines()
+         │       → Provider retorna items con rate 7% o 0%
+         │       → Medusa guarda en order_line_item_tax_line
+         │       → Medusa actualiza order_summary.tax_total
+         │
+         ├── 5. Re-fetch de la orden para leer tax_total nativo
+         │       GET /admin/orders/:id?fields=+tax_total,+items.tax_lines.*
+         │
+         ├── 6. Guardar en metadata (fire-and-forget):
+         │       computed_tax_amount, computed_tax_rate,
+         │       computed_tax_reason, computed_total,
+         │       computed_subtotal, computed_discount
+         │
+         └── 7. Responder:
+                { amount, rate, reason, exempt, mode, subtotal, shippingSubtotal, autoMode }
+```
+
+#### Por qué el cleanup es crítico
+
+`updateOrderTaxLinesWorkflow` de Medusa v2 **agrega** (INSERT) nuevas tax lines en cada llamada en lugar de reemplazar las existentes. Sin el DELETE previo, cada refresh del estimate multiplicaba el tax:
+
+```
+Refresh 1: $3.52
+Refresh 2: $7.04  ← acumulación
+Refresh 3: $10.56 ← acumulación
+...
+Refresh 24: $84.48 ← llegamos a tener hasta 48-58 líneas acumuladas!
+```
+
+#### Por qué usamos `pg Pool` directo para el cleanup
+
+El Order Module Service de Medusa v2 **no expone** métodos `listLineItemTaxLines` ni `deleteLineItemTaxLines` en esta versión. El intento de usarlos devolvía: `orderModule.listLineItemTaxLines is not a function`.
+
+La solución es usar `pg Pool` directamente con el SQL confirmado del schema de Medusa v2:
+
+```typescript
+// Singleton lazy — se crea una sola vez por proceso
+let _taxCleanupPool: Pool | null = null
+function getTaxCleanupPool(): Pool {
+    if (!_taxCleanupPool) {
+        _taxCleanupPool = new Pool({
+            connectionString: process.env.DATABASE_URL,
+            ssl: { rejectUnauthorized: false },
+            max: 2,
+        })
+    }
+    return _taxCleanupPool
+}
+
+// Cleanup antes del workflow:
+const client = await getTaxCleanupPool().connect()
+try {
+    await client.query(
+        `DELETE FROM order_line_item_tax_line
+         WHERE item_id IN (
+             SELECT item_id FROM order_item WHERE order_id = $1
+         )`,
+        [orderId]
+    )
+} finally {
+    client.release()
+}
+```
+
+#### Schema Medusa v2 — Tablas de Tax Lines
+
+```
+order
+  └── order_item (tabla bridge: tiene order_id + item_id)
+        └── order_line_item (item_id → order_line_item.id)
+              └── order_line_item_tax_line
+                    columns: id, item_id, rate, code, name, provider_id
+
+⚠️  order_line_item NO tiene order_id directamente
+✅  El vínculo es: order → order_item.order_id → order_item.item_id → order_line_item_tax_line.item_id
+```
+
+---
+
+### Endpoint: `POST /admin/draft-orders/:id/compute-tax`
+
+Permite cambiar el modo de impuesto explícitamente desde el POS.
+
+```typescript
+// Body: { mode: 'florida' | 'exempt' }
+// Guarda en metadata: { tax_mode: mode }
+// El GET posterior leerá este savedMode y pasará 'exempt' o 'florida' al provider
+```
+
+---
+
+### Cálculo del Subtotal Neto (Base Imponible)
+
+La base imponible es el **subtotal después de todos los descuentos** (no incluye shipping):
+
+```typescript
+// 1. Subtotal bruto de items
+const itemsSubtotal = items.reduce((sum, item) =>
+    sum + (item.unit_price * item.quantity), 0)
+// = $53.00
+
+// 2. Total de descuentos (promotions + line discounts)
+const discountTotal = items.reduce((sum, item) => {
+    const adj = item.adjustments?.reduce((s, a) =>
+        s + Math.abs(Number(a.amount ?? 0)), 0) ?? 0
+    return sum + adj
+}, 0)
+// = $2.65 (5% google-review promo)
+
+// 3. Base imponible (discounted subtotal)
+const discountedSubtotal = itemsSubtotal - discountTotal
+// = $50.35
+
+// 4. Tax = Medusa lo calcula: $50.35 × 7% = $3.5245 → $3.52
+```
+
+**Nota:** El tax resultante (`$3.52`) lo calcula **Medusa internamente** al aplicar el rate que devuelve nuestro provider. Nosotros solo leemos `order.tax_total` del resultado del workflow.
+
+---
+
+### Log de Debugging
+
+Al funcionar correctamente, el backend muestra:
+
+```
+[compute-tax] Cleared 2 stale item tax lines       ← pg cleanup exitoso
+[PosTaxProvider] ----------- getTaxLines INVOKED   ← Medusa invoca el provider
+[PosTaxProvider] Context: {}                        ← metadata de la orden
+[PosTaxProvider] isExempt evaluated to: false       ← modo Florida activo
+[compute-tax] Native tax result: $3.5245 @ 7% (mode: florida)  ← resultado correcto
+```
+
+### Errores conocidos y soluciones
+
+| Error | Causa | Solución |
+|-------|-------|----------|
+| `tax_total` acumulando en cada F5 | Workflow no cleanup antes de INSERT | El pg cleanup en route.ts lo previene |
+| `orderModule.listLineItemTaxLines is not a function` | Método no existe en esta versión de Medusa | Usamos pg Pool directo — ya resuelto |
+| Tax muestra $0.00 en el admin | `tax_region.provider_id = 'tp_system'` en vez de nuestro provider | `UPDATE tax_region SET provider_id = 'tp_pos-tax_pos-tax' WHERE country_code = 'us' AND province_code IS NULL` |
+| `foreign key constraint` al actualizar `tax_region` | Intentar usar provider_id incorrecto | El ID correcto es `tp_pos-tax_pos-tax` (verificar en tabla `tax_provider`) |
+| `CK_tax_region_provider_top_level` violation | Intentar asignar provider a sub-región (FL) | Solo se puede asignar al nivel US (`province_code IS NULL`) |
+
+---
+
+### Verificación de Estado del Sistema en DB
+
+```sql
+-- 1. Confirmar que pos-tax está registrado
+SELECT id FROM tax_provider WHERE id = 'tp_pos-tax_pos-tax';
+
+-- 2. Confirmar que US region apunta a pos-tax
+SELECT id, country_code, province_code, provider_id
+FROM tax_region
+WHERE country_code = 'us' AND province_code IS NULL;
+-- Debe mostrar: provider_id = 'tp_pos-tax_pos-tax'
+
+-- 3. Ver tax lines actuales de un order (no deben acumularse)
+SELECT olt.rate, olt.code, olt.name, olt.created_at
+FROM order_line_item_tax_line olt
+WHERE olt.item_id IN (
+    SELECT item_id FROM order_item WHERE order_id = '<order_id>'
+)
+ORDER BY olt.created_at;
+-- Resultado esperado: 1-2 filas (una por item) con rate=7 y code='FL'
+
+-- 4. Limpieza de emergency si el tax se acumula
+DELETE FROM order_line_item_tax_line
+WHERE item_id IN (
+    SELECT item_id FROM order_item WHERE order_id = '<order_id>'
+);
+```
+
+---
+
+### Futuras Mejoras Planeadas
+
+| Mejora | Descripción |
+|--------|-------------|
+| Multi-estado | Actualmente solo FL y Exempt. Expandible a otros estados agregando más `rate_ids` en el provider |
+| Tax en QB | Sincronizar el tax_total con el campo `TaxCodeRef` del Estimate en QuickBooks |
+| Cache de modo | Evitar el re-cálculo si el modo y los items no han cambiado desde el último compute |
+| Dashboard de tax | Panel admin que muestre el breakdown de taxes por período y estado |

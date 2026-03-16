@@ -67,13 +67,13 @@ export const useDraftOrders = () => {
         // By default, hide orders with estimate_status = "Not Approved" or "Cancelled"
         if (!showNotApproved) {
             list = list.filter(o => {
-                const s = o.metadata?.estimate_status
+                const s = o.metadata?.order_status ?? o.metadata?.estimate_status
                 return s !== "Not Approved" && s !== "not_approved"
             })
         }
         if (!showCancelled) {
             list = list.filter(o => {
-                const s = o.metadata?.estimate_status
+                const s = o.metadata?.order_status ?? o.metadata?.estimate_status
                 return s !== "Cancelled" && s !== "cancelled"
             })
         }
@@ -110,14 +110,14 @@ export const useDraftOrders = () => {
     // Count of hidden orders for toggle labels
     const notApprovedCount = useMemo(
         () => orders.filter(o => {
-            const s = o.metadata?.estimate_status
+            const s = o.metadata?.order_status ?? o.metadata?.estimate_status
             return s === "Not Approved" || s === "not_approved"
         }).length,
         [orders]
     )
     const cancelledCount = useMemo(
         () => orders.filter(o => {
-            const s = o.metadata?.estimate_status
+            const s = o.metadata?.order_status ?? o.metadata?.estimate_status
             return s === "Cancelled" || s === "cancelled"
         }).length,
         [orders]

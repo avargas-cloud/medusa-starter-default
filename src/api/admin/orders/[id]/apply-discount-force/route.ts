@@ -8,6 +8,7 @@ import {
     cancelDraftOrderEditWorkflow,
 } from "@medusajs/core-flows"
 import { Pool } from "pg"
+import { posOverrideAdjustmentsWorkflow } from "../../../../../workflows/pos-discount/workflows"
 
 /**
  * POST /admin/orders/:id/apply-discount-force
@@ -112,6 +113,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
 
             // 6. Mechanically remove old POS-DISC adjustments and `order_promotion` links so they don't stack
             const dbUrl = process.env.DATABASE_URL
+            
+            /* --- NATIVE MIGRATION: 
+               We continue using the fast SQL cleanup here just for purging old data 
+               so the edit is a clean slate before the workflow runs. 
+               This avoids workflow errors trying to cancel non-existent things.
+            */
             if (dbUrl) {
                 const pool = new Pool({ connectionString: dbUrl })
                 try {
@@ -139,116 +146,23 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             })
             logger.info(`[apply-discount-force] Applied promotion ${promoCode} to order ${id}`)
 
-            // 8. Confirm the edit
+            // 8. Override the JSON payload natively BEFORE confirm
+            // This is the EXACT same magic trick we did for Estimates
+            const pctVal = discount_type === "percent" ? discount_value / 100 : null
+            logger.info(`[apply-discount-force] Running posOverrideAdjustmentsWorkflow for native fractional calculation`)
+            await posOverrideAdjustmentsWorkflow(req.scope).run({
+                input: {
+                    order_id: id,
+                    promotion_code: promoCode,
+                    pct_discount: pctVal // (Fixed discounts are currently handled natively by Medusa spreading mechanism, only percent needs the item-level rewrite)
+                }
+            })
+
+            // 9. Confirm the edit
             await confirmDraftOrderEditWorkflow(req.scope).run({
                 input: { order_id: id, confirmed_by: "pos-system" }
             })
-            logger.info(`[apply-discount-force] Confirmed draft order edit`)
-
-            // 9. Correct adjustment amounts from authoritative order_item (Bypass Workflow Lag)
-            // Just like Estimates, the workflow snapshot has stale `qty` if items were edited via `update-item-force`.
-            if (discount_value != null && discount_value > 0 && dbUrl) {
-                const pool = new Pool({ connectionString: dbUrl })
-                try {
-                    const adjResult = await pool.query(`
-                        SELECT a.id, a.item_id, a.amount
-                        FROM order_line_item_adjustment a
-                        WHERE a.code = $1 AND a.deleted_at IS NULL
-                          AND a.item_id IN (SELECT DISTINCT item_id FROM order_item WHERE order_id = $2)
-                    `, [promoCode, id])
-
-                    logger.info(`[apply-discount-force] Found ${adjResult.rows.length} active adjustments for ${promoCode}`)
-
-                    // First pass: collect authoritative totals (unit_price * quantity)
-                    let orderSubtotal = 0
-                    const itemData = new Map<string, { price: number, qty: number, lineTotal: number }>()
-                    
-                    for (const adj of adjResult.rows) {
-                        const oiResult = await pool.query(`
-                            SELECT unit_price, quantity
-                            FROM order_item
-                            WHERE item_id = $1 AND order_id = $2
-                            ORDER BY version DESC LIMIT 1
-                        `, [adj.item_id, id])
-
-                        if (oiResult.rows.length > 0) {
-                            const p = Number(oiResult.rows[0].unit_price)
-                            const q = Number(oiResult.rows[0].quantity)
-                            const lt = p * q
-                            itemData.set(adj.id, { price: p, qty: q, lineTotal: lt })
-                            orderSubtotal += lt
-                        }
-                    }
-
-                    // Second pass: Update each adjustment depending on type
-                    let discountAllocated = 0
-                    const isLast = (index: number) => index === adjResult.rows.length - 1
-
-                    for (let i = 0; i < adjResult.rows.length; i++) {
-                        const adj = adjResult.rows[i]
-                        const data = itemData.get(adj.id)
-                        if (!data) continue
-
-                        let correctAmount = 0
-                        if (discount_type === "percent") {
-                            // strictly math
-                            const pct = discount_value / 100
-                            correctAmount = Number((data.lineTotal * pct).toFixed(2))
-                        } else if (discount_type === "fixed") {
-                            // Prorate fixed discount over the subtotal sum
-                            if (orderSubtotal > 0) {
-                                if (isLast(i)) {
-                                    // Allocate remainder to last item to prevent rounding gaps
-                                    correctAmount = Number((discount_value - discountAllocated).toFixed(2))
-                                } else {
-                                    correctAmount = Number(((data.lineTotal / orderSubtotal) * discount_value).toFixed(2))
-                                    discountAllocated += correctAmount
-                                }
-                            }
-                        }
-
-                        if (correctAmount < 0) correctAmount = 0
-                        const rawAmountJson = JSON.stringify({ value: String(correctAmount), precision: 20 })
-
-                        await pool.query(`
-                            UPDATE order_line_item_adjustment
-                            SET amount = $1, raw_amount = $2::jsonb, updated_at = NOW()
-                            WHERE id = $3 AND deleted_at IS NULL
-                        `, [correctAmount, rawAmountJson, adj.id])
-                        logger.info(`[apply-discount-force] Corrected adj ${adj.id} to ${correctAmount} (${discount_type})`)
-                    }
-
-                    // Third pass: Force-update the `order_summary` discount_total
-                    // Medusa's workflow confirm computes the summary *before* our corrections, 
-                    // leaving it with the wrong prorated amounts. We must overwrite it.
-                    const finalDiscountTotal = discount_type === "fixed" ? discount_value : discountAllocated
-                    if (finalDiscountTotal > 0) {
-                        const summaryRes = await pool.query(`
-                            SELECT id, totals FROM order_summary
-                            WHERE order_id = $1 AND deleted_at IS NULL
-                            ORDER BY version DESC LIMIT 1
-                        `, [id])
-
-                        if (summaryRes.rows[0]) {
-                            const { id: summaryId, totals } = summaryRes.rows[0]
-                            await pool.query(
-                                `UPDATE order_summary SET totals = $1, updated_at = NOW() WHERE id = $2`,
-                                [JSON.stringify({
-                                    ...totals,
-                                    discount_total: finalDiscountTotal,
-                                    raw_discount_total: { value: String(finalDiscountTotal), precision: 20 },
-                                }), summaryId]
-                            )
-                            logger.info(`[apply-discount-force] ✅ Patched order_summary ${summaryId} discount_total to ${finalDiscountTotal}`)
-                        }
-                    }
-
-                } catch (e: any) {
-                    logger.warn(`[apply-discount-force] Adjustment correction non-fatal error: ${e.message}`)
-                } finally {
-                    await pool.end()
-                }
-            }
+            logger.info(`[apply-discount-force] Confirmed order edit via native workflow`)
 
         } finally {
             // 9. ALWAYS restore is_draft_order = false (even if something fails above)

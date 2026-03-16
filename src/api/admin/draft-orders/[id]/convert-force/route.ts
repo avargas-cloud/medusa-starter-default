@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
+import { ContainerRegistrationKeys, Modules, OrderStatus, OrderWorkflowEvents } from "@medusajs/utils"
 
 /**
  * POST /admin/draft-orders/:id/convert-force
@@ -19,6 +20,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
     const { id } = req.params as { id: string }
+    const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)
 
     const base = `http://localhost:${process.env.PORT ?? 9000}`
     const authHeaders: Record<string, string> = {
@@ -28,13 +30,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     }
 
     // ── Helper: call the native Medusa convert-to-order endpoint ──────────────
-    const callConvert = () =>
-        fetch(`${base}/admin/draft-orders/${id}/convert-to-order`, {
-            method: "POST",
-            headers: authHeaders,
-        })
-
-    // ── Helper: compute the true order total from live order data ─────────────
+    // (removed unused callConvert function since we bypass the REST layer natively) // ── Helper: compute the true order total from live order data ─────────────
     // Reads directly from the converted order's items, shipping, and tax totals.
     // More reliable than order_summary.current_order_total, which is stale if the
     // user changed quantities via update-item-force without re-running compute-tax.
@@ -122,10 +118,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                     if ((resJson.reservations ?? []).length > 0) continue
 
                     // Find the inventory item for this variant
-                    const invRes = await fetch(`${base}/admin/inventory-items?variant_id[]=${variantId}&limit=10`, { headers: authHeaders })
-                    if (!invRes.ok) continue
-                    const invJson = await invRes.json()
-                    const inventoryItemId = (invJson.inventory_items ?? [])[0]?.id
+                    const { data: variants } = await query.graph({
+                        entity: "variant",
+                        fields: ["id", "inventory_items.inventory_item_id"],
+                        filters: { id: variantId }
+                    })
+                    const inventoryItemId = variants[0]?.inventory_items?.[0]?.inventory_item_id
                     if (!inventoryItemId) {
                         console.warn(`[convert-force] No inventory item for variant ${variantId}, skipping reservation`)
                         continue
@@ -155,13 +153,31 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             console.warn(`[convert-force] Could not fetch draft order ${id} — proceeding without reservation pre-creation`)
         }
 
-        // ── Step 4: Convert draft → confirmed order (single attempt) ────────
-        const cvRes = await callConvert()
-        const cvJson = await cvRes.json()
-
-        if (!cvRes.ok) {
-            console.error(`[convert-force] Conversion failed after reservation pre-creation:`, cvJson?.message)
-            return void res.status(cvRes.status).json(cvJson)
+        // ── Step 4: Convert draft → confirmed order natively (bypassing stock reservation block) ────────
+        let convertedOrder
+        try {
+            const orderService = req.scope.resolve(Modules.ORDER)
+            const response = await orderService.updateOrders([
+                {
+                    id,
+                    status: OrderStatus.PENDING,
+                    is_draft_order: false,
+                },
+            ])
+            convertedOrder = response[0]
+            
+            // Emit the PLACED event purely natively so subscribers like QBDraftOrderSync react properly.
+            if (convertedOrder) {
+                const eventBus = req.scope.resolve(Modules.EVENT_BUS)
+                await eventBus.emit({
+                    name: OrderWorkflowEvents.PLACED,
+                    data: { id: convertedOrder.id }
+                })
+            }
+            
+        } catch (cvErr: any) {
+            console.error(`[convert-force] Direct API Conversion failed:`, cvErr?.message)
+            return void res.status(500).json({ message: cvErr?.message ?? "Conversion failed natively" })
         }
 
         // ── Step 5: Fix payment collection total (post-conversion) ───────────
@@ -182,7 +198,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             console.warn(`[convert-force] ⚠️ Could not stamp order_placed_at: ${metaErr?.message}`)
         }
 
-        return void res.status(200).json(cvJson)
+        return void res.status(200).json({ order: convertedOrder })
     } catch (e: any) {
         console.error("[convert-force]", e?.message)
         res.status(500).json({ message: e?.message ?? "Conversion failed" })

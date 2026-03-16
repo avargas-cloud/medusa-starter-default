@@ -1,9 +1,21 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
 import { Modules } from "@medusajs/utils"
+import { updateOrderTaxLinesWorkflow } from "@medusajs/core-flows"
 import { Pool } from "pg"
 
-/** Simple unique ID generator for tax line records */
-const genId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+// Lazy DB pool singleton for idempotent tax line cleanup.
+// Uses the same DATABASE_URL as the rest of the backend.
+let _taxCleanupPool: Pool | null = null
+function getTaxCleanupPool(): Pool {
+    if (!_taxCleanupPool) {
+        _taxCleanupPool = new Pool({
+            connectionString: process.env.DATABASE_URL,
+            ssl: { rejectUnauthorized: false },
+            max: 2,
+        })
+    }
+    return _taxCleanupPool
+}
 
 const PICKUP_KEYWORDS = ["pickup", "store pickup", "local pickup", "in store", "in-store"]
 const isPickup = (name: string) => PICKUP_KEYWORDS.some(k => name.toLowerCase().includes(k))
@@ -41,84 +53,6 @@ async function saveOrderMeta(
     })
 }
 
-/**
- * Persists tax into Medusa's native draft order view by:
- * 1. Inserting/updating order_line_item_tax_line for each line item (proportional)
- * 2. Updating order_summary.totals JSONB to include tax in current_order_total
- */
-async function persistTaxToOrder(orderId: string, taxAmountDollars: number, taxRate: number): Promise<void> {
-    const dbUrl = process.env.DATABASE_URL
-    if (!dbUrl) return
-
-    const pool = new Pool({ connectionString: dbUrl })
-    try {
-        const itemsRes = await pool.query<{ item_id: string }>(
-            `SELECT DISTINCT oi.item_id
-             FROM order_item oi
-             JOIN order_line_item oli ON oli.id = oi.item_id
-             WHERE oi.order_id = $1 AND oi.deleted_at IS NULL AND oli.deleted_at IS NULL`,
-            [orderId]
-        )
-        const itemIds = itemsRes.rows.map(r => r.item_id)
-
-        if (itemIds.length === 0) {
-            await updateOrderSummaryTax(pool, orderId, taxAmountDollars)
-            return
-        }
-
-        await pool.query(
-            `DELETE FROM order_line_item_tax_line WHERE item_id = ANY($1) AND code = 'manual'`,
-            [itemIds]
-        )
-
-        if (taxAmountDollars > 0 && taxRate > 0) {
-            const rawRate = JSON.stringify({ value: String(taxRate), precision: 20 })
-            for (const itemId of itemIds) {
-                const lineId = genId("taxline")
-                await pool.query(
-                    `INSERT INTO order_line_item_tax_line (id, item_id, code, rate, raw_rate, description, created_at, updated_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())`,
-                    [lineId, itemId, "manual", taxRate, rawRate, "Sales Tax"]
-                )
-            }
-        }
-
-        await updateOrderSummaryTax(pool, orderId, taxAmountDollars)
-    } catch (e: any) {
-        console.error("[compute-tax] persistTaxToOrder failed:", e?.message)
-    } finally {
-        await pool.end()
-    }
-}
-
-async function updateOrderSummaryTax(pool: Pool, orderId: string, taxAmountDollars: number): Promise<void> {
-    const summaryRes = await pool.query<{ id: string; totals: any; version: number }>(
-        `SELECT id, totals, version FROM order_summary
-         WHERE order_id = $1 AND deleted_at IS NULL
-         ORDER BY version DESC LIMIT 1`,
-        [orderId]
-    )
-    if (!summaryRes.rows[0]) return
-    const { id: summaryId, totals } = summaryRes.rows[0]
-    const currentTotal: number = parseFloat(totals?.current_order_total ?? "0") || 0
-    const subTotal: number = parseFloat(totals?.raw_original_order_total?.value ?? "0") || currentTotal
-    const newCurrentTotal = subTotal + taxAmountDollars
-
-    await pool.query(
-        `UPDATE order_summary SET totals = $1, updated_at = NOW() WHERE id = $2`,
-        [JSON.stringify({
-            ...totals,
-            tax_total: taxAmountDollars,
-            current_order_total: newCurrentTotal,
-            accounting_total: newCurrentTotal,
-            raw_tax_total: { value: String(taxAmountDollars), precision: 20 },
-            raw_current_order_total: { value: String(newCurrentTotal), precision: 20 },
-            raw_accounting_total: { value: String(newCurrentTotal), precision: 20 },
-            pending_difference: newCurrentTotal,
-            raw_pending_difference: { value: String(newCurrentTotal), precision: 20 },
-        }), summaryId]
-    )
-}
 
 async function getStateRate(req: MedusaRequest, province: string): Promise<{ rate: number; reason: string }> {
     try {
@@ -218,23 +152,80 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
 
         if (effectiveMode === "exempt") {
             exempt = true
+            rate = 0
+            amount = 0
             reason = customerIsExempt ? "Tax Exempt (customer)" : "Tax Exempt (out-of-state)"
-            rate = 0; amount = 0
         } else if (effectiveMode === "florida") {
             const fl = await getStateRate(req, FL_PROVINCE)
-            rate = fl.rate; reason = fl.reason
-            // Tax is computed on the POST-DISCOUNT item subtotal (standard accounting: discount first, then tax).
-            const taxableBase = discountedSubtotal
-            amount = Math.round(taxableBase * rate / 100 * 100) / 100
+            rate = fl.rate
+            reason = fl.reason
         } else {
+            rate = 0
+            amount = 0
             reason = "No shipping address set"
         }
 
-        // ── Persist to native Medusa tables ────────────────────────────────────
-        await persistTaxToOrder(id, amount, rate)
+        // ── Native Tax Recalculation (idempotent) ─────────────────────────────
+        // CRITICAL: Delete existing tax lines BEFORE calling the workflow.
+        // updateOrderTaxLinesWorkflow APPENDS new lines on every call — we
+        // must wipe them first so each recalculation is idempotent.
+        // We use pg directly because the Order Module service doesn't expose
+        // list/delete tax line methods in this version of Medusa.
+        try {
+            const db = getTaxCleanupPool()
+            const client = await db.connect()
+            try {
+                // Delete item tax lines via order_item join (confirmed schema)
+                const delItemResult = await client.query(
+                    `DELETE FROM order_line_item_tax_line
+                     WHERE item_id IN (
+                         SELECT item_id FROM order_item WHERE order_id = $1
+                     )`,
+                    [id]
+                )
+                if (delItemResult.rowCount && delItemResult.rowCount > 0) {
+                    console.log(`[compute-tax] Cleared ${delItemResult.rowCount} stale item tax lines`)
+                }
 
-        // ── Save only computed_tax_* + computed_total via REST — NEVER tax_mode ──
-        // tax_mode is only written by the POST endpoint
+                // Delete shipping method tax lines (best-effort, soft schema)
+                await client.query(
+                    `DELETE FROM order_shipping_method_tax_line
+                     WHERE shipping_method_id IN (
+                         SELECT osm.id
+                         FROM order_shipping_method osm
+                         JOIN order_shipping os ON os.order_id = $1
+                     )`,
+                    [id]
+                ).catch(() => { /* schema differences — ignore */ })
+            } finally {
+                client.release()
+            }
+        } catch (cleanupErr: any) {
+            console.warn("[compute-tax] Tax line cleanup soft-failed:", cleanupErr?.message)
+        }
+
+        // Now call the workflow — pos-tax provider will create fresh, correct lines
+        await updateOrderTaxLinesWorkflow(req.scope).run({
+            input: { order_id: id }
+        }).catch((e: any) => {
+            console.error("[compute-tax] Native Tax workflow soft-failed:", e?.message)
+        })
+
+        // ── Fetch the Native Engine's Result ───────────────────────────────────
+        const updatedRes = await fetch(
+            `${base}/admin/orders/${id}?fields=id,+total,+subtotal,+tax_total,+item_tax_total,+shipping_tax_total,+items.tax_lines.*`,
+            { headers }
+        )
+        const { order: updatedOrder } = updatedRes.ok ? await updatedRes.json() : { order: null }
+
+        // Extract the exact native amount and rate from what the engine calculated
+        amount = Number(updatedOrder?.tax_total ?? 0)
+        const sampleTaxLine = updatedOrder?.items?.[0]?.tax_lines?.[0]
+        rate = sampleTaxLine?.rate ?? (exempt ? 0 : 7)
+
+        console.log(`[compute-tax] Native tax result: $${amount} @ ${rate}% (mode: ${effectiveMode})`)
+
+        // ── Save computed totals to metadata (fire-and-forget) ─────────────────
         const computedTotal = discountedSubtotal + shippingSubtotal + amount
         saveOrderMeta(req, id, {
             computed_tax_amount: amount,
@@ -243,11 +234,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
             computed_total: computedTotal,
             computed_subtotal: itemsSubtotal,
             computed_discount: discountTotal,
-        }).catch(() => { }) // fire-and-forget: the computed values are informational
+        }).catch(() => {})
 
         res.status(200).json({ amount, rate, reason, exempt, mode: effectiveMode, subtotal: itemsSubtotal, shippingSubtotal, autoMode })
     } catch (e: any) {
-        console.error("[compute-tax]", e?.message)
+        console.error("[compute-tax] GET Error:", e?.message)
         res.status(500).json({ message: e?.message ?? "Failed to compute tax" })
     }
 }

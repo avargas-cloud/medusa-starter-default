@@ -2,12 +2,22 @@ import { Text, Badge, Button, Input, Select } from "@medusajs/ui"
 import type { DraftOrderListItem, SortKey } from "../hooks/use-draft-orders"
 import { SORT_OPTIONS, PAGE_SIZE } from "../hooks/use-draft-orders"
 
-type EstimateStatus = "Created" | "Sent" | "Confirmed Reception" | "Followed Up" | "Approved" | "Not Approved" | "Cancelled" | "Duplicate"
+type EstimateStatus = "Created" | "Sent" | "Sent by Email" | "To be Sent" | "To Confirm Reception" | "Confirmed Reception" | "Followed Up" | "Provided in Store" | "Approved" | "Not Approved" | "Cancelled" | "Duplicate" | "Placed Online"
 
 const STATUS_BADGE_COLOR: Record<EstimateStatus, "grey" | "blue" | "purple" | "orange" | "green" | "red"> = {
-    "Created": "grey", "Sent": "blue", "Confirmed Reception": "purple",
-    "Followed Up": "orange", "Approved": "green", "Not Approved": "red",
-    "Cancelled": "red", "Duplicate": "grey",
+    "Created": "grey",
+    "Sent": "blue",
+    "Sent by Email": "blue",
+    "To be Sent": "orange",
+    "To Confirm Reception": "purple",
+    "Confirmed Reception": "purple",
+    "Followed Up": "orange",
+    "Provided in Store": "green",
+    "Approved": "green",
+    "Not Approved": "red",
+    "Cancelled": "red",
+    "Duplicate": "grey",
+    "Placed Online": "blue",
 }
 
 const formatDate = (d: string) => new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
@@ -46,7 +56,7 @@ export const DraftOrdersTable = ({ loading, sorted, paginated, onRowClick, rowHr
                 const email = order.customer?.email ?? order.email ?? "—"
                 const synced = !!order.metadata?.qb_estimate_txn_id
                 const qbRef = (order.metadata?.qb_estimate_ref as string | null) ?? null
-                const s = order.metadata?.estimate_status as EstimateStatus | undefined
+                const s = (order.metadata?.order_status ?? order.metadata?.estimate_status) as EstimateStatus | undefined
 
                 const isDeclined = s === "Not Approved"
                 const isCancelled = s === "Cancelled"
