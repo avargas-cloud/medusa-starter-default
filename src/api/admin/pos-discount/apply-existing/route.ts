@@ -6,6 +6,7 @@ import {
     confirmDraftOrderEditWorkflow,
     cancelDraftOrderEditWorkflow,
 } from "@medusajs/core-flows"
+import { posOverrideAdjustmentsWorkflow } from "../../../../workflows/pos-discount/workflows"
 
 /**
  * POST /admin/pos-discount/apply-existing
@@ -143,15 +144,21 @@ export async function POST(
         })
         logger.info(`[POS apply-existing] Applied ${promotion_code} via workflow`)
 
+        // ── Step 5 (NEW NATIVE): Override adjustments BEFORE confirmation ──────
+        // Intercept the Draft Edit Payload and overwrite all the bad prorated numbers.
+        await posOverrideAdjustmentsWorkflow(req.scope).run({
+            input: {
+                order_id,
+                promotion_code,
+                pct_discount: promoMethodValue ? promoMethodValue / 100 : null
+            }
+        })
+        logger.info(`[POS apply-existing] Ran posOverrideAdjustmentsWorkflow to patch JSON adjustments payload`)
+
+        /* --- LEGACY SQL FORCE LOGIC (Commented for fallback per user request) ---
         // ── Step 5: Soft-delete ALL current active adjustments for this promo ──
-        //
-        // KEY FIX: use order_item.item_id (ordli_ ref) to scope to this order.
-        //   order_item.item_id = line_item.id = order_line_item_adjustment.item_id
-        // This avoids the order_change_action.reference_id which is NULL for
-        // ITEM_ADJUSTMENTS_REPLACE (the actual item IDs are inside details JSONB).
-        //
         try {
-            const del = await knex.raw(`
+            const del = await knex.raw(\`
                 UPDATE order_line_item_adjustment
                 SET deleted_at = NOW()
                 WHERE deleted_at IS NULL
@@ -160,15 +167,17 @@ export async function POST(
                       SELECT DISTINCT item_id FROM order_item
                       WHERE order_id = ?
                   )
-            `, [promotion_code, order_id])
-            logger.info(`[POS apply-existing] Pre-confirm: soft-deleted ${del.rowCount ?? 0} existing adjustment(s)`)
+            \`, [promotion_code, order_id])
+            logger.info(\`[POS apply-existing] Pre-confirm: soft-deleted \${del.rowCount ?? 0} existing adjustment(s)\`)
         } catch (e: any) {
-            logger.warn(`[POS apply-existing] Pre-confirm soft-delete non-fatal: ${e.message}`)
+            logger.warn(\`[POS apply-existing] Pre-confirm soft-delete non-fatal: \${e.message}\`)
         }
+        ------------------------------------------------------------------------- */
 
         // ── Step 6: Confirm the edit ──────────────────────────────────────────
         // Materialises ITEM_ADJUSTMENTS_REPLACE → NEW order_line_item_adjustment rows
         // with workflow-computed amounts (may be wrong due to ORM snapshot qty mismatch)
+        // BUT we fixed the JSON payload in Step 5, so decorateCartTotals natively succeeds.
         await confirmDraftOrderEditWorkflow(req.scope).run({
             input: {
                 order_id,
@@ -177,21 +186,14 @@ export async function POST(
         })
         logger.info(`[POS apply-existing] Confirmed draft order edit`)
 
+        /* --- LEGACY SQL FORCE LOGIC (Commented for fallback per user request) ---
         // ── Step 7: Correct adjustment amounts from authoritative order_item ───
-        //
-        // The workflow-computed adjustment may have wrong qty (ORM snapshot lag).
-        // We recompute: unit_price × quantity × pct from order_item (which has
-        // the correct qty from update-item-force direct DB writes).
-        //
-        // order_item.item_id = ordli_ (links to the same line_item as the adjustment)
-        // We use MAX(version) to get the latest version for each item.
-        //
         if (promoMethodValue != null && promoMethodValue > 0) {
             try {
                 const pct = promoMethodValue / 100
 
                 // Get all active adjustments for this promo on this order
-                const adjResult = await knex.raw(`
+                const adjResult = await knex.raw(\`
                     SELECT a.id, a.item_id, a.amount
                     FROM order_line_item_adjustment a
                     WHERE a.code = ?
@@ -199,95 +201,82 @@ export async function POST(
                       AND a.item_id IN (
                           SELECT DISTINCT item_id FROM order_item WHERE order_id = ?
                       )
-                `, [promotion_code, order_id])
+                \`, [promotion_code, order_id])
 
                 const adjRows: Array<{ id: string; item_id: string; amount: number }> = adjResult.rows
-                logger.info(`[POS apply-existing] Found ${adjRows.length} active adjustment(s) after confirm`)
+                logger.info(\`[POS apply-existing] Found \${adjRows.length} active adjustment(s) after confirm\`)
 
                 for (const adj of adjRows) {
-                    // Get latest order_item version for this item (has correct qty from update-item-force)
-                    const oiResult = await knex.raw(`
+                    // Get latest order_item version...
+                    const oiResult = await knex.raw(\`
                         SELECT unit_price, quantity
                         FROM order_item
                         WHERE item_id = ? AND order_id = ?
                         ORDER BY version DESC
                         LIMIT 1
-                    `, [adj.item_id, order_id])
+                    \`, [adj.item_id, order_id])
 
                     if (oiResult.rows.length > 0) {
                         const { unit_price, quantity } = oiResult.rows[0]
                         const correct = Number((Number(unit_price) * Number(quantity) * pct).toFixed(2))
 
-                        // Update BOTH amount (decimal display) AND raw_amount (used by Medusa ORM/API).
-                        // Medusa v2 stores monetary values as {value: string, precision: 20} JSON.
-                        // The API computes discount_total from raw_amount.value — updating only
-                        // `amount` is not enough; the API will still return the old value.
                         const rawAmountJson = JSON.stringify({ value: String(correct), precision: 20 })
-                        await knex.raw(`
+                        await knex.raw(\`
                             UPDATE order_line_item_adjustment
                             SET amount = ?, raw_amount = ?::jsonb, updated_at = NOW()
                             WHERE id = ? AND deleted_at IS NULL
-                        `, [correct, rawAmountJson, adj.id])
-                        logger.info(`[POS apply-existing] Corrected adj ${adj.id}: ${Number(adj.amount).toFixed(4)} → ${correct} (price=${unit_price} qty=${quantity} pct=${pct})`)
+                        \`, [correct, rawAmountJson, adj.id])
+                        logger.info(\`[POS apply-existing] Corrected adj \${adj.id}\`)
                     } else {
-                        logger.warn(`[POS apply-existing] No order_item found for item_id=${adj.item_id}`)
+                        logger.warn(\`[POS apply-existing] No order_item found for item_id=\${adj.item_id}\`)
                     }
                 }
             } catch (e: any) {
-                logger.warn(`[POS apply-existing] Adjustment correction non-fatal: ${e.message}`)
+                logger.warn(\`[POS apply-existing] Adjustment correction non-fatal: \${e.message}\`)
             }
         }
 
         // ── Step 8: Hard-delete all stale rows ────────────────────────────────
-        // Estimates never need history. Physically remove soft-deleted rows.
         try {
-            // 8a. Soft-deleted adjustment rows
-            const adjDel = await knex.raw(`
+            const adjDel = await knex.raw(\`
                 DELETE FROM order_line_item_adjustment
                 WHERE deleted_at IS NOT NULL
                   AND item_id IN (
                       SELECT DISTINCT item_id FROM order_item WHERE order_id = ?
                   )
-            `, [order_id])
-            logger.info(`[POS apply-existing] Hard-deleted ${adjDel.rowCount ?? 0} stale adjustment row(s)`)
+            \`, [order_id])
+            logger.info(\`[POS apply-existing] Hard-deleted \${adjDel.rowCount ?? 0} stale adjustment row(s)\`)
 
-            // 8b. Old order_change_action rows (keep only latest order_change)
-            const ocaDel = await knex.raw(`
+            const ocaDel = await knex.raw(\`
                 DELETE FROM order_change_action
                 WHERE order_change_id IN (
                     SELECT id FROM order_change WHERE order_id = ?
                     AND id != (SELECT id FROM order_change WHERE order_id = ? ORDER BY created_at DESC LIMIT 1)
                 )
-            `, [order_id, order_id])
-            logger.info(`[POS apply-existing] Hard-deleted ${ocaDel.rowCount ?? 0} stale order_change_action row(s)`)
+            \`, [order_id, order_id])
 
-            // 8c. Old order_change rows (keep only latest)
-            const ocDel = await knex.raw(`
+            const ocDel = await knex.raw(\`
                 DELETE FROM order_change WHERE order_id = ?
                 AND id != (SELECT id FROM order_change WHERE order_id = ? ORDER BY created_at DESC LIMIT 1)
-            `, [order_id, order_id])
-            logger.info(`[POS apply-existing] Hard-deleted ${ocDel.rowCount ?? 0} stale order_change row(s)`)
+            \`, [order_id, order_id])
 
-            // 8d. Old order_item versions (keep only latest version per item)
-            const oiDel = await knex.raw(`
+            const oiDel = await knex.raw(\`
                 DELETE FROM order_item
                 WHERE order_id = ?
                   AND (item_id, version) NOT IN (
                       SELECT item_id, MAX(version) FROM order_item WHERE order_id = ? GROUP BY item_id
                   )
-            `, [order_id, order_id])
-            logger.info(`[POS apply-existing] Hard-deleted ${oiDel.rowCount ?? 0} stale order_item version(s)`)
+            \`, [order_id, order_id])
 
-            // 8e. Old order_summary versions (keep only latest)
-            const osDel = await knex.raw(`
+            const osDel = await knex.raw(\`
                 DELETE FROM order_summary WHERE order_id = ?
                 AND version != (SELECT MAX(version) FROM order_summary WHERE order_id = ?)
-            `, [order_id, order_id])
-            logger.info(`[POS apply-existing] Hard-deleted ${osDel.rowCount ?? 0} stale order_summary version(s)`)
+            \`, [order_id, order_id])
 
         } catch (e: any) {
-            logger.warn(`[POS apply-existing] Hard-delete cleanup non-fatal: ${e.message}`)
+            logger.warn(\`[POS apply-existing] Hard-delete cleanup non-fatal: \${e.message}\`)
         }
+        ------------------------------------------------------------------------- */
 
         res.status(200).json({ success: true })
 
