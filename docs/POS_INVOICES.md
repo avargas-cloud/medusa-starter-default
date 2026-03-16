@@ -56,14 +56,34 @@ Al igual que Estimates y Orders, los Invoices heredan la solución anti-overflow
 - Si la invoice contiene cientos de renglones de términos comerciales, la tabla sencillamente paginará todo el grupo hacia una segunda (o tercera) página sin cortar el texto ni romper las márgenes.
 
 ### Unsaved Changes Guard
+
+**Regla de Guardado Habilitado (Save Button):**
+Como ocurre unificadamente en Estimates y Orders, el botón de "Save" en `DocumentToolbar` **siempre estará habilitado**, dando la opción al comerciante de forzar un guardado. La propiedad `isDirty` tiene un comportamiento **únicamente visual** (naranja/ámbar) para alertar al operador que su vista actual difiere de la base de datos de Invoices. 
+
 Al compartir el componente base `DocumentToolbar.tsx` que orquesta la cabecera gris de los Documentos del POS, toda la vista de Invoice hereda automáticamente el mismo Firewall de impresiones integrado en Marzo 2026:
-- Si un operador de caja edita una Nota, cambia un Término de Pago (Metadata), o adjunta algún valor flotante, la propiedad `isDirty` enciende un warning naranja en el botón de Save.
-- Los botones adjuntos de **Print** y **Email** interceptarán cualquier click mediante una alerta de Sonner (`toast.error`), exigiendo que primero se haga clic en Save antes de poder enviar un PDF que no contiene los últimos cambios.
+- Si un operador de caja edita una Nota, cambia un Término de Pago (Metadata), o adjunta algún valor flotante, la propiedad `isDirty` enciende el warning naranja en el botón de Save y el documento actual.
+- Los botones adjuntos de **Print** y **Email** interceptarán cualquier intento de click mediante una alerta roja de Sonner (`toast.error`), exigiendo que primero se haga clic en Save de todas formas antes de poder enviar un PDF que no posea los últimos cambios capturados en las casillas.
 - De igual forma que en Estimates, el campo de promociones renderizará estéticamente un string vacío (`''`) al imprimirse en caso de no contener descuentos, mejorando las métricas de marketing y evitando discusiones con los clientes visualizando la palabra "None".
 
 ---
 
-## 5. Endpoints de Soporte (`lib/invoices.ts`)
+## 5. Exact Medusa v2 Math & Rounding Rules (Parity fix)
+
+The Medusa v2 calculation engine does NOT apply discounts and taxes globally to the summed cart total. It accumulates them strictly **line-by-line using integer cents**.
+
+To achieve 100% parity between the POS frontend and the Medusa backend, the following algorithm **must** be used inside the POS state (`posStore.ts` and `computeEffectivePrice` payload builders):
+
+1. **Calculate Cents:** All calculations must convert the base unit price to cents first (`Math.round(price * 100)`).
+2. **Line Discounts (Unit-Level Rounding):** Line discounts apply directly to the unit price in cents. Round the result of `(unitPriceCents * discountRate)`, then multiply by `quantity`. Calculate `lineAfterLineDiscountCents`.
+3. **Order Discounts (Line-Level Rounding):** The total global order discount (e.g. 5%) is applied proportionally to each item's `lineAfterLineDiscountCents` total. Calculate `Math.round(lineAfterLineDiscountCents * orderDiscountRate)`. Accumulate all these rounded values to get the global `orderDiscountTotalCents`.
+4. **Tax Calculation (Aggregate Level):** Tax is applied implicitly on the aggregate taxable total after all discounts are deducted. `taxableAmountCents = afterLineDiscountsSubtotalCents - orderDiscountTotalCents`. Then `Math.round(taxableAmountCents * taxRate)`.
+5. **Divisor:** Sum the final cents and divide by `100` at the very end to yield the exact POS display values and payload targets.
+
+Failure to follow this exact order of rounding (or using floating-point `toFixed()` mid-calculation) will lead to 1-2 cent discrepancies against the Medusa backend.
+
+---
+
+## 6. Endpoints de Soporte (`lib/invoices.ts`)
 
 La interacción entre el Store POS y la base de datos para la generación de PDFs y abonos de las Facturas usa llamadas directas usando la layer `medusaFetch`:
 

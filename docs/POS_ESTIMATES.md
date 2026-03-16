@@ -329,6 +329,22 @@ Esta sección consolida resoluciones a bugs complejos de interfaz y lógica resu
 
 ---
 
+## E. Exact Medusa v2 Math & Rounding Rules (Parity fix)
+
+The Medusa v2 calculation engine does NOT apply discounts and taxes globally to the summed cart total. It accumulates them strictly **line-by-line using integer cents**.
+
+To achieve 100% parity between the POS frontend and the Medusa backend, the following algorithm **must** be used inside the POS state (`posStore.ts` and `computeEffectivePrice` payload builders):
+
+1. **Calculate Cents:** All calculations must convert the base unit price to cents first (`Math.round(price * 100)`).
+2. **Line Discounts (Unit-Level Rounding):** Line discounts apply directly to the unit price in cents. Round the result of `(unitPriceCents * discountRate)`, then multiply by `quantity`. Calculate `lineAfterLineDiscountCents`.
+3. **Order Discounts (Line-Level Rounding):** The total global order discount (e.g. 5%) is applied proportionally to each item's `lineAfterLineDiscountCents` total. Calculate `Math.round(lineAfterLineDiscountCents * orderDiscountRate)`. Accumulate all these rounded values to get the global `orderDiscountTotalCents`.
+4. **Tax Calculation (Aggregate Level):** Tax is applied implicitly on the aggregate taxable total after all discounts are deducted. `taxableAmountCents = afterLineDiscountsSubtotalCents - orderDiscountTotalCents`. Then `Math.round(taxableAmountCents * taxRate)`.
+5. **Divisor:** Sum the final cents and divide by `100` at the very end to yield the exact POS display values and payload targets.
+
+Failure to follow this exact order of rounding (or using floating-point `toFixed()` mid-calculation) will lead to 1-2 cent discrepancies against the Medusa backend.
+
+---
+
 ## Known Issues Generales
 
 | Issue | Fix |
@@ -412,11 +428,14 @@ Esta sección consolida resoluciones a bugs complejos de interfaz y lógica resu
 
 ### 20. Unsaved Changes Guard sobre Print y Email (Marzo 2026)
 
-**Problema:** Los usuarios podían abrir la vista de impresión (`/print/[templateId]`) o el modal del Email en el POS a pesar de tener ediciones flotantes sin guardar en la orden o cotización. Esto enviaba a los clientes o a la impresora el documento obsoleto (antes de aplicarle Guardar).
+**Regla de Guardado Habilitado (Save Button):**
+A partir de Marzo de 2026, el botón de "Save" en `DocumentToolbar` **siempre está habilitado** permitiendo a los comerciantes forzar un guardado en cualquier momento. La propiedad `isDirty` originada por Zustand/Zod se reserva **únicamente como un indicador visual** (naranja/ámbar) para alertar al usuario que su vista actual difiere de la base de datos. 
 
-**Fix:**
-- En `DocumentToolbar.tsx`, se incluyó un chequeo estricto del booleano `isDirty` originado por Zustand/Zod en los botones de "Print" y "Email".
-- Si el usuario presiona estas acciones habiendo tecleado algún cambio sin guardar, la acción es interceptada de inmediato y arroja una alerta roja de Sonner (`toast.error`) pidiéndole primero confirmar los cambios antes de compartirlos.
+**Problema Histórico:** Los usuarios podían abrir la vista de impresión (`/print/[templateId]`) o el modal del Email en el POS a pesar de tener ediciones flotantes sin guardar en la orden o cotización. Esto enviaba a los clientes o a la impresora el documento obsoleto (antes de aplicarle Guardar).
+
+**Fix (Activo):**
+- En `DocumentToolbar.tsx`, se incluyó un chequeo estricto del booleano `isDirty` en los botones de "Print" y "Email".
+- Si el usuario presiona estas acciones habiendo tecleado algún cambio sin guardar (luz naranja encendida), la acción es interceptada de inmediato y arroja una alerta roja de Sonner (`toast.error`) pidiéndole primero confirmar los cambios con el botón "Save" antes de compartirlos.
 
 ### 21. Notas de Cotización Dinámicas ("Virtual Row Notes")
 

@@ -276,7 +276,10 @@ Esto es el mismo comportamiento que Medusa Admin: los draft orders son cotizacio
 
 ### Notas de Ordenes Dinámicas ("Virtual Row Notes") y Guardias de Seguridad
 
-- **Print/Email Guards:** La vista de Orders cuenta con la misma protección introducida en Marzo de 2026 sobre el `DocumentToolbar.tsx`. Si se edita la orden de alguna forma, los botones de "Print" y "Email" fallarán con un `toast.error` forzando al operador al Save si la bandera `isDirty` del store local se marca positiva.
+**Regla de Guardado Habilitado (Save Button):**
+El botón de "Save" en `DocumentToolbar` **siempre está habilitado** permitiendo forzar un guardado en cualquier instante. La propiedad `isDirty` originada por Zustand/Zod se reserva **únicamente como un indicador visual** (naranja/ámbar) para alertar al usuario que los cambios de la pantalla actual en sus renglones difieren de los de la base de datos de Medusa. 
+
+- **Print/Email Guards:** La vista de Orders cuenta con la misma protección estricta sobre el `DocumentToolbar.tsx`. Si se edita la orden de alguna forma (encendiendo la luz naranja `isDirty = true`), los botones de "Print" y "Email" fallarán con un `toast.error` forzando de todas maneras al operador al dar click en el botón Save antes de poder compartir información no grabada.
 - **Paginación Vertical del Documento:** Para evitar derrames (overflows), el *Notes* global de la orden tampoco se diagrama en un bloque cerrado y fijo. El renderizador (`BlockRenderer`) lo empuja como la **última línea mágica de tipo ítem de factura** (`**_NOTE_**`). De esa manera el motor de impresión del navegador expande la celda del 100% hasta la siguiente página en caso de exceder su largo predeterminado. (Se describe más en `POS_ESTIMATES.md`).
 
 ---
@@ -780,6 +783,20 @@ ecopowertech-store-pos/
 }
 ```
 
+## I. Exact Medusa v2 Math & Rounding Rules (Parity fix)
+
+The Medusa v2 calculation engine does NOT apply discounts and taxes globally to the summed cart total. It accumulates them strictly **line-by-line using integer cents**.
+
+To achieve 100% parity between the POS frontend and the Medusa backend, the following algorithm **must** be used inside the POS state (`posStore.ts` and `computeEffectivePrice` payload builders):
+
+1. **Calculate Cents:** All calculations must convert the base unit price to cents first (`Math.round(price * 100)`).
+2. **Line Discounts (Unit-Level Rounding):** Line discounts apply directly to the unit price in cents. Round the result of `(unitPriceCents * discountRate)`, then multiply by `quantity`. Calculate `lineAfterLineDiscountCents`.
+3. **Order Discounts (Line-Level Rounding):** The total global order discount (e.g. 5%) is applied proportionally to each item's `lineAfterLineDiscountCents` total. Calculate `Math.round(lineAfterLineDiscountCents * orderDiscountRate)`. Accumulate all these rounded values to get the global `orderDiscountTotalCents`.
+4. **Tax Calculation (Aggregate Level):** Tax is applied implicitly on the aggregate taxable total after all discounts are deducted. `taxableAmountCents = afterLineDiscountsSubtotalCents - orderDiscountTotalCents`. Then `Math.round(taxableAmountCents * taxRate)`.
+5. **Divisor:** Sum the final cents and divide by `100` at the very end to yield the exact POS display values and payload targets.
+
+Failure to follow this exact order of rounding (or using floating-point `toFixed()` mid-calculation) will lead to 1-2 cent discrepancies against the Medusa backend.
+
 ---
 
 ## 9. Capture Payment (Order-Level)
@@ -1124,3 +1141,13 @@ Ver documentación completa en `POS_ESTIMATES.md § 29`.
 - **Discount** ahora muestra solo `orderDiscount` — el descuento global de la orden
 
 `Order Subtotal`, `Tax` y `Total` no cambian.
+
+### 15. Exact Medusa v2 Math & Rounding Rules (Parity fix)
+
+Ver documentación completa en `POS_ESTIMATES.md § F` para las reglas de redondeo.
+
+**Órdenes vs Estimados (Hard Deletion):**
+A diferencia de los Estimados, Medusa no siempre limpia las tablas de historial y los ajustes (`adjustments` y `tax_lines`) cuando se ejecutan ediciones en órdenes confirmadas (`post-edit-sync.ts` y `apply-discount-force.ts`).
+Como el POS ahora es la única fuente de la verdad para una Orden:
+* **The DB Wipe**: El backend ejecuta secuencias `DELETE` en SQL puro (PostgreSQL) cada vez que el POS sobreescribe una orden, eliminando registros obsoletos de `order_change`, `order_change_action`, versiones antiguas de `order_item` / `order_summary`, e inyecciones "soft-deleted" de impuestos.
+* **No "Soft Deletes"**: Ya que las Órdenes en POS nunca usan el historial y no son reversibles, este borrado "Hard Delete" previene que los Descuentos se auto-sumen y corrompan los totales de Impuestos en Medusa Admin.
