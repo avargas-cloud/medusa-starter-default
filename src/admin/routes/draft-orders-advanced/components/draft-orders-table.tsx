@@ -81,7 +81,16 @@ export const DraftOrdersTable = ({ loading, sorted, paginated, onRowClick, rowHr
                         <div className="flex justify-center">
                             <Badge color={synced ? "green" : "orange"} size="small">{synced ? "✓ Yes" : "Pending"}</Badge>
                         </div>
-                        <Text size="small" className="text-right">{formatCurrency(order.total != null ? Number(order.total) : (order.metadata?.computed_total != null ? Number(order.metadata.computed_total) : undefined), order.currency_code)}</Text>
+                        <Text size="small" className="text-right">{formatCurrency(
+                            // Priority: metadata.computed_total (explicitly saved by compute-tax: items - discounts + taxes + shipping)
+                            // Fallback: order.total (may be pre-tax in dev, or shipping-only in prod if patches not applied)
+                            order.metadata?.computed_total != null
+                                ? Number(order.metadata.computed_total)
+                                : order.total != null
+                                    ? Number(order.total)
+                                    : undefined,
+                            order.currency_code
+                        )}</Text>
                     </div>
                 )
             })}

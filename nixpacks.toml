@@ -9,6 +9,15 @@ nixPkgs = ["nodejs-20_x", "yarn", "python3", "gnumake", "gcc", "g++"]
 cmds = ["echo '--- INSTALL (yarn) ---'", "yarn install --frozen-lockfile"]
 
 [phases.build]
-# patch-package runs in build phase (never cached) — reliable even when yarn.lock doesn't change.
-# Overhead is ~5-10 seconds per deploy, which is acceptable.
-cmds = ["npx patch-package", "yarn build"]
+# Step 1: Apply patches to the build workspace (affects medusa build compilation)
+# Step 2: medusa build → generates .medusa/server/ with FRESH npm install (un-patched!)
+# Step 3: Copy patches/ into .medusa/server/ and re-apply them there
+# Step 4: Inject postinstall hook into .medusa/server/package.json so future npm installs re-patch
+cmds = [
+  "echo '--- PATCH (workspace) ---'",
+  "npx patch-package",
+  "echo '--- BUILD (medusa) ---'",
+  "yarn build",
+  "echo '--- RE-PATCH (.medusa/server) ---'",
+  "node scripts/post-build.js"
+]

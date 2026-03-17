@@ -102,8 +102,8 @@ export const useDraftOrders = () => {
             case "display_id_asc": return arr.sort((a, b) => a.display_id - b.display_id)
             case "created_at_desc": return arr.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
             case "created_at_asc": return arr.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-            case "total_desc": return arr.sort((a, b) => (Number(b.total ?? b.metadata?.computed_total ?? 0)) - (Number(a.total ?? a.metadata?.computed_total ?? 0)))
-            case "total_asc": return arr.sort((a, b) => (Number(a.total ?? a.metadata?.computed_total ?? 0)) - (Number(b.total ?? b.metadata?.computed_total ?? 0)))
+            case "total_desc": return arr.sort((a, b) => (Number(b.metadata?.computed_total ?? b.total ?? 0)) - (Number(a.metadata?.computed_total ?? a.total ?? 0)))
+            case "total_asc": return arr.sort((a, b) => (Number(a.metadata?.computed_total ?? a.total ?? 0)) - (Number(b.metadata?.computed_total ?? b.total ?? 0)))
         }
     }, [filtered, sort])
 
