@@ -9,6 +9,11 @@ import {
     processUpdateEstimateInQb,
     processDeactivateEstimateInQb,
 } from "../../../../lib/quickbooks/order-flow-core"
+import {
+    buildEstimatePatch,
+    getEstimateTxnId,
+    getEstimateRef,
+} from "../../../../lib/quickbooks/qb-metadata-types"
 
 /**
  * Reads QB order-flow settings from the DB config row.
@@ -97,13 +102,15 @@ export async function POST(
         }
 
         // Check if already synced — allow force re-sync via body.force=true
-        if (order.metadata?.qb_estimate_txn_id && !(req.body as any).force) {
+        const existingEstimateTxnId = getEstimateTxnId(order.metadata)
+        const existingEstimateRef = getEstimateRef(order.metadata)
+        if (existingEstimateTxnId && !(req.body as any).force) {
             res.json({
                 success: true,
                 alreadySynced: true,
-                qbEstimateTxnId: order.metadata.qb_estimate_txn_id,
-                qbEstimateRef: order.metadata.qb_estimate_ref,
-                message: `Already synced to QB Estimate #${order.metadata.qb_estimate_ref || order.metadata.qb_estimate_txn_id}`,
+                qbEstimateTxnId: existingEstimateTxnId,
+                qbEstimateRef: existingEstimateRef,
+                message: `Already synced to QB Estimate #${existingEstimateRef || existingEstimateTxnId}`,
             })
             return
         }
@@ -147,7 +154,7 @@ export async function POST(
             return
         }
 
-        const isResync = !!(req.body as any).force && !!order.metadata?.qb_estimate_txn_id
+        const isResync = !!(req.body as any).force && !!existingEstimateTxnId
         const isCancelled = (order.metadata?.order_status ?? order.metadata?.estimate_status) === "Cancelled" || (order.metadata?.order_status ?? order.metadata?.estimate_status) === "cancelled"
         const memo = `Draft Order #${(order as any).display_id || orderId} - ${customer.first_name || ""} ${customer.last_name || ""}`.trim()
 
@@ -167,7 +174,7 @@ export async function POST(
             // If the estimate was Cancelled (inactive in QB), auto-reactivate it
             result = await processUpdateEstimateInQb({
                 draftOrderId: orderId,
-                estimateTxnId: order.metadata.qb_estimate_txn_id as string,
+                estimateTxnId: existingEstimateTxnId as string,
                 items: qbItems,
                 memo,
                 taxExempt,
@@ -196,24 +203,26 @@ export async function POST(
             return
         }
 
-        // Save QB metadata to the order via admin API
+        // Save QB metadata using patch builder
         if (result.txnId || isResync) {
-            const metadataUpdate = isResync
-                // Re-sync: txnId/ref stay the same — only update timestamp
-                // If reactivating a Cancelled estimate, also reset the estimate_status to Created
-                ? {
+            let metadataUpdate: Record<string, any>
+            if (isResync) {
+                // Re-sync: keep existing estimate ref/txnId, just update timestamp
+                // (and reset estimate_status if reactivating from Cancelled)
+                metadataUpdate = {
                     ...(order.metadata || {}),
                     qb_synced_at: new Date().toISOString(),
                     ...(isCancelled ? { order_status: "Created" } : {}),
                 }
-                // New sync: save all QB identifiers
-                : {
-                    ...(order.metadata || {}),
-                    qb_estimate_txn_id: result.txnId,
-                    qb_estimate_ref: result.refNumber || result.txnId,
-                    qb_list_id: qbCustomerId,
-                    qb_synced_at: new Date().toISOString(),
-                }
+            } else {
+                // New sync: write structured qb_estimate JSON
+                metadataUpdate = buildEstimatePatch(order.metadata || {}, {
+                    txnId:       result.txnId!,
+                    refNumber:   result.refNumber || null,
+                    operationId: result.operationId || null,
+                })
+                metadataUpdate.qb_list_id = qbCustomerId
+            }
 
             await fetch(`${baseUrl}/admin/orders/${orderId}`, {
                 method: "POST",
@@ -222,12 +231,8 @@ export async function POST(
             })
         }
 
-        const txnIdToReturn = isResync
-            ? (order.metadata?.qb_estimate_txn_id as string)
-            : result.txnId
-        const refToReturn = isResync
-            ? (order.metadata?.qb_estimate_ref as string | undefined)
-            : result.refNumber
+        const txnIdToReturn = isResync ? existingEstimateTxnId : result.txnId
+        const refToReturn   = isResync ? existingEstimateRef    : result.refNumber
 
         res.json({
             success: true,
@@ -286,8 +291,9 @@ export async function DELETE(
         }
 
         const { order } = await orderResp.json()
-        const estimateTxnId = order?.metadata?.qb_estimate_txn_id as string | undefined
-        const estimateRef = order?.metadata?.qb_estimate_ref as string | undefined
+        // Read via compat helpers — supports both old flat fields and new JSON shape
+        const estimateTxnId = getEstimateTxnId(order?.metadata)
+        const estimateRef   = getEstimateRef(order?.metadata)
 
         if (!estimateTxnId) {
             // Draft order was never synced to QB — nothing to deactivate
