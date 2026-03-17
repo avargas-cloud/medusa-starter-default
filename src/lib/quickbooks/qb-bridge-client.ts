@@ -26,7 +26,7 @@ const MAX_POLL_ATTEMPTS = 20     // ~7 min max wait
 export interface QbOrderItem {
     productId?: string  // QB ListID of the product (preferred)
     productName?: string // QB Item FullName fallback (e.g. "SHIPPING & HANDLING")
-    quantity: number
+    quantity?: number   // optional — QB Subtotal/Discount item types must NOT have quantity (Error 3060)
     price?: number      // in dollars (e.g., 29.99) — optional, QB uses default if omitted
     unitOfMeasure?: string  // e.g. "each" — prevents QB UOM multiplication when price is set
     desc?: string

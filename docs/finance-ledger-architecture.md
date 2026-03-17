@@ -99,3 +99,12 @@ A continuación los archivos críticos al hacer mantenimiento de este sistema:
 - `src/api/admin/finance/customers/[id]/balance/route.ts`: Formula matemática principal para cuadrar la deuda, explicada arriba.
 - `.../invoices/route.ts` & `.../invoices/[id]/payments/route.ts`: Donde ocurren las "Operaciones Atómicas"; es decir, si se crea un invoice con un deposito anticipado, ambos se amarran simultáneamente o ambos fallan (Rollback) por seguridad pericial. 
 - `/convert-cents.ts` (Opcional): Usable en terminal via `npx medusa exec ... ` para sanear pagos de transiciones antiguas que pasaron en coma flotante por error antes de unificar toda la unidad contable a centavos base entera.
+#### POS Orders Default Channel Bug (March 17, 2026)
+Investigated an issue where orders created were saving under `Default Sales Channel`.
+- **Estimate Confirm Order**: This function properly created POS metadata and assigned `POS Sales Channel`.
+- **New Order (Direct POS)**: The direct order creation payload in `useOrderActions.ts` was missing the `sales_channel_id` entirely, which made the Medusa backend assign the default channel automatically.
+- **Admin Panel (Advanced Draft Order)**: The backend UI's modal did not preselect the `POS` channel, causing agents to create quotes manually as `Default`.
+
+**Resolutions applied**:
+1. Added `sales_channel_id: process.env.NEXT_PUBLIC_SALES_CHANNEL_ID` and `metadata.pos_created: true` to the direct New Order creation payload inside `useOrderActions.ts`.
+2. Updated `backend/src/admin/routes/draft-orders-advanced/components/CreateDraftOrderModal.tsx` to automatically find and preselect the `POS` sales channel upon opening.

@@ -102,30 +102,33 @@ export async function POST(
         const activeItems = (order.items || []).filter((item: any) => (item.quantity ?? 0) > 0)
 
         // ── Discount strategy ─────────────────────────────────────────────────
-        // ORDER-LEVEL promotions → keep original item prices + Subtotal + Discount lines.
-        // ITEM-LEVEL promotions OR no promotions → discounted unit prices (via item.subtotal).
-        const promotions = (order as any).promotions ?? []
-        const hasOrderLevelPromo = promotions.some(
-            (p: any) => p.application_method?.target_type === "order"
-        )
-        const orderDiscountTotal = Number((order as any).discount_total ?? 0) // cents
+        // ALL DISCOUNTS → keep original item prices + Subtotal + Discount lines.
+        // Admin API returns discount_total in DOLLARS (e.g. 4.45) — convert to cents for buildQbOrderDiscountLines.
+        const orderDiscountDollars = Number((order as any).discount_total ?? 0)
+        const orderDiscountTotal = Math.round(orderDiscountDollars * 100) // dollars → cents
 
-        const itemsForQb = hasOrderLevelPromo
-            ? activeItems.map((item: any) => ({ ...item, subtotal: undefined }))
-            : activeItems
+        // Admin API returns unit_price in DOLLARS (e.g. 22.25).
+        // buildQbItems expects unit_price in CENTS — multiply ×100 like the subscriber does.
+        const itemsForQb = activeItems.map((item: any) => ({
+            ...item,
+            unit_price: Math.round((item.unit_price || 0) * 100), // dollars → cents
+            subtotal: undefined, // force original price, ignore item-level adjustments
+        }))
 
         const qbItems = buildQbItems(itemsForQb, order.metadata)
 
-        // Add shipping line item
-        const shippingItem = buildShippingQbItem((order as any).shipping_methods || [], qbConfig.shippingItemId)
-        if (shippingItem) qbItems.push(shippingItem)
-
-        // Append Subtotal + Discount lines for order-level promos
-        if (hasOrderLevelPromo && orderDiscountTotal > 0) {
-            const orderSubtotal = Number((order as any).subtotal ?? 0)
+        // Append Subtotal + Discount lines BEFORE shipping so the Subtotal only sums products.
+        // Shipping goes LAST — outside the Subtotal — so it's never included in the discount.
+        if (orderDiscountTotal > 0) {
+            const orderSubtotal = Math.round(Number((order as any).subtotal ?? 0) * 100) // dollars → cents
             const discountPercent = orderSubtotal > 0 ? (orderDiscountTotal / orderSubtotal) * 100 : null
             buildQbOrderDiscountLines(orderDiscountTotal, discountPercent).forEach(l => qbItems.push(l))
         }
+
+        // Add shipping LAST — after Subtotal+Discount so it's not counted in the discount
+        const shippingItem = buildShippingQbItem((order as any).shipping_methods || [], qbConfig.shippingItemId)
+        if (shippingItem) qbItems.push(shippingItem)
+
 
         if (qbItems.length === 0) {
             res.status(400).json({

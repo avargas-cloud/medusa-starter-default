@@ -278,15 +278,16 @@ export function buildQbOrderDiscountLines(
 
     return [
         {
-            // QB Subtotal item — totals everything above it. No price needed; QB calculates it.
+            // QB Subtotal item — totals everything ABOVE it (products only; shipping comes after).
+            // IMPORTANT: QB Subtotal item type does NOT accept Quantity (Error 3060). Omit it entirely.
             productName: "Subtotal",
-            quantity: 1,
+            desc: "Order Item Subtotal",
             noSite: true,
         },
         {
             // QB Discount item — exact dollar amount so QB doesn't recalculate via %.
+            // IMPORTANT: QB Discount item type does NOT accept Quantity either. Omit it; use price only.
             productName: "Discount",
-            quantity: 1,
             price: discountDollars,
             desc: sanitizeForQb(`Order Discount${pctStr}`),
             noSite: true,

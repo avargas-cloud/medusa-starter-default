@@ -23,6 +23,7 @@ import { Modules, ContainerRegistrationKeys } from "@medusajs/utils"
 import {
     ensureCustomerInQb,
     buildQbItems,
+    buildQbOrderDiscountLines,
     processEstimateInQb,
 } from "../lib/quickbooks/order-flow-core"
 
@@ -82,6 +83,8 @@ export async function handleDraftOrderCreated(data: any, container: any, logger:
             fields: [
                 "id",
                 "metadata",
+                "subtotal",
+                "discount_total",
                 "customer.*",
                 "customer.metadata",
                 "customer.addresses.*",
@@ -134,8 +137,17 @@ export async function handleDraftOrderCreated(data: any, container: any, logger:
     const itemsForQb = (draftOrder.items || []).map((item: any) => ({
         ...item,
         unit_price: Math.round((item.unit_price || 0) * 100), // dollars → cents for buildQbItems
+        subtotal: undefined, // Force buildQbItems to use original unit_price
     }))
     const qbItems = buildQbItems(itemsForQb, draftOrder.metadata)
+
+    const orderDiscountTotal = Math.round((draftOrder.discount_total || 0) * 100)
+    if (orderDiscountTotal > 0) {
+        const orderSubtotal = Math.round((draftOrder.subtotal || 0) * 100)
+        const discountPercent = orderSubtotal > 0 ? (orderDiscountTotal / orderSubtotal) * 100 : null
+        buildQbOrderDiscountLines(orderDiscountTotal, discountPercent).forEach(l => qbItems.push(l))
+    }
+
     logger.info(`${LOG_PREFIX} QB-linked items: ${qbItems.length} of ${draftOrder.items?.length ?? 0} total`)
 
     if (qbItems.length === 0) {

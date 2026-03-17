@@ -255,12 +255,8 @@ export async function handleOrderPlaced(
         }
 
         // ── Discount strategy ─────────────────────────────────────────────────
-        // ORDER-LEVEL promotions → keep original item prices + Subtotal + Discount lines.
-        // ITEM-LEVEL promotions OR no promotions → discounted unit prices (via item.subtotal).
-        const promotions = order.promotions ?? []
-        const hasOrderLevelPromo = promotions.some(
-            (p: any) => p.application_method?.target_type === "order"
-        )
+        // ALL DISCOUNTS → keep original item prices + Subtotal + Discount lines.
+        // QB must show the discount as a separate line at the bottom, not via reduced unit prices.
         const orderDiscountTotal = Math.round((order.discount_total || 0) * 100) // dollars → cents
 
         const activeItems = (order.items || [])
@@ -268,17 +264,21 @@ export async function handleOrderPlaced(
             .map((item: any) => ({
                 ...item,
                 unit_price: Math.round((item.unit_price || 0) * 100), // dollars → cents for buildQbItems
-                subtotal: Math.round((item.subtotal || 0) * 100),     // dollars → cents for buildQbItems
+                subtotal: undefined, // Force buildQbItems to use original unit_price, ignore item-level discounts
             }))
 
-        const itemsForQb = hasOrderLevelPromo
-            ? activeItems.map((item: any) => ({ ...item, subtotal: undefined }))
-            : activeItems
+        const qbItems = buildQbItems(activeItems, order.metadata)
 
-        const qbItems = buildQbItems(itemsForQb, order.metadata)
+        // Append Subtotal + Discount lines BEFORE shipping so the Subtotal only sums products.
+        // Shipping goes LAST — outside the Subtotal — so it's never included in the discount.
+        if (orderDiscountTotal > 0) {
+            const orderSubtotal = Math.round((order.subtotal || 0) * 100) // dollars → cents
+            const discountPercent = orderSubtotal > 0 ? (orderDiscountTotal / orderSubtotal) * 100 : null
+            buildQbOrderDiscountLines(orderDiscountTotal, discountPercent).forEach(l => qbItems.push(l))
+            logger.info(`${LOG_PREFIX} Discount lines added: -$${(orderDiscountTotal/100).toFixed(2)}`)
+        }
 
-
-        // Add shipping line (skip pickup methods automatically)
+        // Add shipping LAST (skip pickup methods automatically) — after Subtotal+Discount
         const shippingItem = buildShippingQbItem(
             (order as any).shipping_methods || [],
             qbConfig.shippingItemId
@@ -288,14 +288,6 @@ export async function handleOrderPlaced(
             logger.info(`${LOG_PREFIX} Shipping line added: $${shippingItem.price?.toFixed(2)} (${shippingItem.desc})`)
         } else {
             logger.info(`${LOG_PREFIX} No shipping line (pickup or $0)`)
-        }
-
-        // Append Subtotal + Discount lines for order-level promos
-        if (hasOrderLevelPromo && orderDiscountTotal > 0) {
-            const orderSubtotal = Math.round((order.subtotal || 0) * 100) // dollars → cents
-            const discountPercent = orderSubtotal > 0 ? (orderDiscountTotal / orderSubtotal) * 100 : null
-            buildQbOrderDiscountLines(orderDiscountTotal, discountPercent).forEach(l => qbItems.push(l))
-            logger.info(`${LOG_PREFIX} Order-level discount lines added: -$${(orderDiscountTotal/100).toFixed(2)}`)
         }
 
         // Determine sales tax code
@@ -521,10 +513,6 @@ async function handleFulfillmentCreated(
 
     if (!qbSoTxnId) {
         const qbConfig = await getQbConfig()
-        const promotions = order.promotions ?? []
-        const hasOrderLevelPromo = promotions.some(
-            (p: any) => p.application_method?.target_type === "order"
-        )
         const orderDiscountTotal = Math.round((order.discount_total || 0) * 100)
 
         const activeItems = (order.items || [])
@@ -532,14 +520,10 @@ async function handleFulfillmentCreated(
             .map((item: any) => ({
                 ...item,
                 unit_price: Math.round((item.unit_price || 0) * 100),
-                subtotal: Math.round((item.subtotal || 0) * 100),
+                subtotal: undefined, // Force buildQbItems to use original unit_price, ignore item-level discounts
             }))
 
-        const itemsForQb = hasOrderLevelPromo
-            ? activeItems.map((item: any) => ({ ...item, subtotal: undefined }))
-            : activeItems
-
-        prebuiltItems = buildQbItems(itemsForQb, order.metadata)
+        prebuiltItems = buildQbItems(activeItems, order.metadata)
 
         const shippingItem = buildShippingQbItem(
             (order as any).shipping_methods || [],
@@ -550,11 +534,11 @@ async function handleFulfillmentCreated(
             logger.info(`${LOG_PREFIX} Shipping line added for standalone invoice: $${shippingItem.price?.toFixed(2)}`)
         }
 
-        if (hasOrderLevelPromo && orderDiscountTotal > 0) {
+        if (orderDiscountTotal > 0) {
             const orderSubtotal = Math.round((order.subtotal || 0) * 100)
             const discountPercent = orderSubtotal > 0 ? (orderDiscountTotal / orderSubtotal) * 100 : null
             buildQbOrderDiscountLines(orderDiscountTotal, discountPercent).forEach(l => prebuiltItems!.push(l))
-            logger.info(`${LOG_PREFIX} Order-level discount lines added to standalone invoice: -$${(orderDiscountTotal/100).toFixed(2)}`)
+            logger.info(`${LOG_PREFIX} Discount lines added to standalone invoice: -$${(orderDiscountTotal/100).toFixed(2)}`)
         }
 
         const hasTax = order.tax_total && order.tax_total > 0
