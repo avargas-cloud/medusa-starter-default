@@ -19,7 +19,7 @@
   ],
   "scripts": {
     "postinstall": "patch-package",
-    "build": "medusa build && node scripts/post-build.js",
+    "build": "medusa build",
     "seed": "medusa exec ./src/scripts/seed.ts",
     "start": "medusa start",
     "dev": "nodemon",
