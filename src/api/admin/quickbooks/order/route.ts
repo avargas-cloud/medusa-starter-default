@@ -11,6 +11,12 @@ import {
     pollOperationResult,
 } from "../../../../lib/quickbooks/qb-bridge-client"
 import { getQbConfig } from "../../../../lib/quickbooks/qb-config"
+import {
+    buildSaleOrderPatch,
+    getSoTxnId,
+    getSoRef,
+    getEstimateTxnId,
+} from "../../../../lib/quickbooks/qb-metadata-types"
 
 /**
  * POST /admin/quickbooks/order
@@ -66,13 +72,15 @@ export async function POST(
         }
 
         // If already synced — block unless force=true
-        if (order.metadata?.qb_sales_order_txn_id && !force) {
+        const existingSoTxnId = getSoTxnId(order.metadata)
+        const existingSoRef = getSoRef(order.metadata)
+        if (existingSoTxnId && !force) {
             res.json({
                 success: true,
                 alreadySynced: true,
-                qbSoTxnId: order.metadata.qb_sales_order_txn_id,
-                qbSoRef: order.metadata.qb_sales_order_ref,
-                message: `Already synced to QB Sales Order #${order.metadata.qb_sales_order_ref || order.metadata.qb_sales_order_txn_id}`,
+                qbSoTxnId: existingSoTxnId,
+                qbSoRef: existingSoRef,
+                message: `Already synced to QB Sales Order #${existingSoRef || existingSoTxnId}`,
             })
             return
         }
@@ -113,12 +121,11 @@ export async function POST(
         }
 
         // ─── RE-SYNC PATH (force=true + existing SO) — use SalesOrderMod ─────────
-        const existingTxnId = order.metadata?.qb_sales_order_txn_id as string | undefined
-        if (force && existingTxnId) {
-            console.log(`[QB] Re-sync: updating existing Sales Order ${existingTxnId} via MOD`)
+        if (force && existingSoTxnId) {
+            console.log(`[QB] Re-sync: updating existing Sales Order ${existingSoTxnId} via MOD`)
 
             const modResult = await updateSalesOrderInQb({
-                txnId: existingTxnId,
+                txnId: existingSoTxnId,
                 customerId: custResult.qbCustomerId,
                 items: qbItems,
                 memo: `Medusa Order #${(order as any).display_id || orderId}`,
@@ -131,27 +138,25 @@ export async function POST(
             }
 
             // Poll for the mod result to get updated txnId/refNumber
-            let txnId = existingTxnId
-            let refNumber = order.metadata?.qb_sales_order_ref as string | undefined
+            let txnId = existingSoTxnId
+            let refNumber = existingSoRef
 
             if (modResult.data?.operationId && modResult.data.operationId !== "DRY_RUN") {
                 const polled = await pollOperationResult(modResult.data.operationId)
-                txnId = polled.txnId || existingTxnId
+                txnId = polled.txnId || existingSoTxnId
                 refNumber = polled.refNumber || refNumber
             }
 
-            // Update metadata
+            // Update metadata using patch builder
+            const patch = buildSaleOrderPatch(order.metadata || {}, {
+                txnId:       txnId,
+                refNumber:   refNumber || null,
+                operationId: modResult.data?.operationId || null,
+            })
             await fetch(`${baseUrl}/admin/orders/${orderId}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", cookie: req.headers.cookie || "" },
-                body: JSON.stringify({
-                    metadata: {
-                        ...(order.metadata || {}),
-                        qb_sales_order_txn_id: txnId,
-                        qb_sales_order_ref: refNumber || null,
-                        qb_synced_at: new Date().toISOString(),
-                    },
-                }),
+                body: JSON.stringify({ metadata: patch }),
             })
 
             res.json({
@@ -195,26 +200,24 @@ export async function POST(
             return
         }
 
-        // Save QB metadata to the order
+        // Save QB metadata using patch builder
         const txnId = result.soTxnId
         const refNumber = result.soRefNumber
 
         if (txnId || result.operationId) {
-            const metadataUpdate = {
-                ...(order.metadata || {}),
-                qb_sales_order_txn_id: txnId || null,
-                qb_sales_order_ref: refNumber || null,
-                qb_synced_at: new Date().toISOString(),
-            }
-
+            const patch = buildSaleOrderPatch(order.metadata || {}, {
+                txnId:       txnId || null,
+                refNumber:   refNumber || null,
+                operationId: result.operationId || null,
+            })
             await fetch(`${baseUrl}/admin/orders/${orderId}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", cookie: req.headers.cookie || "" },
-                body: JSON.stringify({ metadata: metadataUpdate }),
+                body: JSON.stringify({ metadata: patch }),
             })
         }
 
-        const isConversion = !!(order.metadata?.qb_estimate_txn_id)
+        const isConversion = !!(getEstimateTxnId(order.metadata))
         const action = isConversion ? "Estimate converted to Sales Order" : "Sales Order created"
 
         res.json({

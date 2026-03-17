@@ -19,10 +19,12 @@
  *   Set QB_POS_SALES_CHANNEL_ID env var to the POS channel's ID to enable this guard.
  *   No metadata needed — sales_channel_id is a native Medusa column on the order.
  *
- * Metadata stored on order:
- *   qb_sales_order_txn_id, qb_sales_order_ref
- *   qb_payment_txn_id, qb_payment_ref
- *   qb_invoice_txn_id, qb_invoice_ref
+ * Metadata stored on order (new structured JSON shape):
+ *   qb_sales_order: { ref_number, txn_id, operation_id, synced_at }
+ *   qb_invoices:    [{ ref_number, txn_id, operation_id, fulfillment_id, synced_at }]
+ *   qb_payments:    [{ ref_number, txn_id, operation_id, amount, method, synced_at }]
+ *   qb_sync_status: "sales_order" | "estimate_conversion" | "pending" | null
+ *   qb_list_id, qb_synced_at (flat, unchanged)
  */
 
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
@@ -40,6 +42,18 @@ import {
     transferDocumentCustomer,
 } from "../lib/quickbooks/qb-bridge-client"
 import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger"
+import {
+    buildSaleOrderPatch,
+    buildInvoicePatch,
+    buildPaymentPatch,
+    getEstimateTxnId,
+    getSoTxnId,
+    getSoRef,
+    getSoOperationId,
+    getLatestInvoiceTxnId,
+    getLatestInvoiceRef,
+    getLatestPaymentTxnId,
+} from "../lib/quickbooks/qb-metadata-types"
 
 const LOG_PREFIX = "[QB-ORDER]"
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
@@ -196,19 +210,21 @@ async function handleOrderPlaced(
 
     try {
 
-        // Layer 2: txnId in metadata → QBWC already processed the SO
-        if (order.metadata?.qb_sales_order_txn_id) {
-            logger.info(`${LOG_PREFIX} ⏭️ QB SO already exists (txnId=${order.metadata.qb_sales_order_txn_id}) — skipping duplicate`)
+        // Layer 2: txnId in metadata → QBWC already processed the SO (supports both old and new shape)
+        const existingSoTxnId = getSoTxnId(order.metadata)
+        if (existingSoTxnId) {
+            logger.info(`${LOG_PREFIX} ⏭️ QB SO already exists (txnId=${existingSoTxnId}) — skipping duplicate`)
             return
         }
         // Layer 3: operationId in metadata → SO already queued (QBWC processing in progress)
-        if (order.metadata?.qb_sales_order_operation_id) {
-            logger.info(`${LOG_PREFIX} ⏭️ QB SO already queued (opId=${order.metadata.qb_sales_order_operation_id}) — skipping duplicate`)
+        const existingSoOpId = getSoOperationId(order.metadata)
+        if (existingSoOpId) {
+            logger.info(`${LOG_PREFIX} ⏭️ QB SO already queued (opId=${existingSoOpId}) — skipping duplicate`)
             return
         }
 
-        // Check for draft→order path (estimate metadata on order)
-        const estimateTxnId = order.metadata?.qb_estimate_txn_id
+        // Check for draft→order path (estimate metadata on order, supports both shapes)
+        const estimateTxnId = getEstimateTxnId(order.metadata)
         if (estimateTxnId) {
             logger.info(`${LOG_PREFIX} ✅ Order has qb_estimate_txn_id=${estimateTxnId} — will convert Estimate→SO`)
         } else {
@@ -285,20 +301,19 @@ async function handleOrderPlaced(
             return
         }
 
-        // Save QB metadata to order
+        // Save QB metadata to order (new structured JSON shape)
         if (result.soTxnId || result.operationId) {
             try {
-                await orderModule.updateOrders(orderId, {
-                    metadata: {
-                        ...(order.metadata || {}),
-                        qb_sales_order_txn_id: result.soTxnId || null,
-                        qb_sales_order_ref: result.soRefNumber || null,
-                        qb_sales_order_operation_id: result.operationId || null,
-                        qb_list_id: result.customerId || null,
-                        qb_synced_at: new Date().toISOString(),
-                    },
+                const syncStatus = estimateTxnId ? "estimate_conversion" : "sales_order"
+                const patch = buildSaleOrderPatch(order.metadata || {}, {
+                    txnId:       result.soTxnId || null,
+                    refNumber:   result.soRefNumber || null,
+                    operationId: result.operationId || null,
+                    customerId:  result.customerId || null,
+                    syncStatus,
                 })
-                logger.info(`${LOG_PREFIX} ✅ Saved SO metadata — TxnID=${result.soTxnId}, Ref=${result.soRefNumber}, OpID=${result.operationId}`)
+                await orderModule.updateOrders(orderId, { metadata: patch })
+                logger.info(`${LOG_PREFIX} ✅ Saved SO metadata — TxnID=${result.soTxnId}, Ref=${result.soRefNumber}, OpID=${result.operationId}, status=${syncStatus}`)
             } catch (metaErr: any) {
                 logger.error(`${LOG_PREFIX} ⚠️ Failed to save order metadata: ${metaErr.message}`)
             }
@@ -386,18 +401,18 @@ async function handlePaymentCaptured(
         return
     }
 
-    // Save payment metadata
+    // Save payment metadata (new structured JSON shape — appends to qb_payments array)
     if (result.txnId || result.operationId) {
         try {
-            await orderModule.updateOrders(orderId, {
-                metadata: {
-                    ...(order.metadata || {}),
-                    qb_list_id: qbCustomerId,   // ensure it's persisted
-                    qb_payment_txn_id: result.txnId || null,
-                    qb_payment_ref: result.refNumber || null,
-                    qb_payment_operation_id: result.operationId || null,
-                },
+            const baseMeta = { ...(order.metadata || {}), qb_list_id: qbCustomerId }
+            const patch = buildPaymentPatch(baseMeta, {
+                txnId:       result.txnId || null,
+                refNumber:   result.refNumber || null,
+                operationId: result.operationId || null,
+                amount,
+                method:      paymentMethod,
             })
+            await orderModule.updateOrders(orderId, { metadata: patch })
             logger.info(`${LOG_PREFIX} ✅ Saved payment metadata — TxnID=${result.txnId}, Ref=${result.refNumber}`)
         } catch (metaErr: any) {
             logger.error(`${LOG_PREFIX} ⚠️ Failed to save payment metadata: ${metaErr.message}`)
@@ -445,15 +460,16 @@ async function handleFulfillmentCreated(
         }
     }
 
-    const qbSoTxnId: string | undefined = order.metadata?.qb_sales_order_txn_id
-    const qbPaymentTxnId: string | undefined = order.metadata?.qb_payment_txn_id
+    // Read via compat helpers — supports both old flat fields and new JSON shape
+    const qbSoTxnId: string | undefined = getSoTxnId(order.metadata)
+    const qbPaymentTxnId: string | undefined = getLatestPaymentTxnId(order.metadata)
 
     logger.info(`${LOG_PREFIX} QB data — customerId=${qbCustomerId ?? "MISSING"}, soTxnId=${qbSoTxnId ?? "MISSING"}, paymentTxnId=${qbPaymentTxnId ?? "none"}`)
 
     if (!qbCustomerId || !qbSoTxnId) {
         logger.warn(`${LOG_PREFIX} ❌ Missing required QB data for invoice creation:`)
         if (!qbCustomerId) logger.warn(`${LOG_PREFIX}   → qb_list_id is missing (check that order.placed succeeded)`)
-        if (!qbSoTxnId) logger.warn(`${LOG_PREFIX}   → qb_sales_order_txn_id is missing (SO must exist before invoice)`)
+        if (!qbSoTxnId) logger.warn(`${LOG_PREFIX}   → qb_sales_order_txn_id / qb_sales_order.txn_id is missing (SO must exist before invoice)`)
         return
     }
 
@@ -490,18 +506,18 @@ async function handleFulfillmentCreated(
         return
     }
 
-    // Save invoice metadata
+    // Save invoice metadata (new structured JSON shape — appends to qb_invoices array)
     if (result.txnId || result.operationId) {
         try {
-            await orderModule.updateOrders(orderId, {
-                metadata: {
-                    ...(order.metadata || {}),
-                    qb_invoice_txn_id: result.txnId || null,
-                    qb_invoice_ref: result.refNumber || null,
-                    qb_invoice_operation_id: result.operationId || null,
-                },
+            const fulfillmentId: string | null = (data.fulfillment_id as string | undefined) ?? null
+            const patch = buildInvoicePatch(order.metadata || {}, {
+                txnId:         result.txnId || null,
+                refNumber:     result.refNumber || null,
+                operationId:   result.operationId || null,
+                fulfillmentId,
             })
-            logger.info(`${LOG_PREFIX} ✅ Saved invoice metadata — TxnID=${result.txnId}, Ref=${result.refNumber}`)
+            await orderModule.updateOrders(orderId, { metadata: patch })
+            logger.info(`${LOG_PREFIX} ✅ Saved invoice metadata — TxnID=${result.txnId}, Ref=${result.refNumber}, ful=${fulfillmentId}`)
         } catch (metaErr: any) {
             logger.error(`${LOG_PREFIX} ⚠️ Failed to save invoice metadata: ${metaErr.message}`)
         }
@@ -534,10 +550,11 @@ async function handleOrderCanceled(
     }
 
     const meta = order.metadata || {}
-    const soTxnId = meta.qb_sales_order_txn_id as string | undefined
-    const soRef = meta.qb_sales_order_ref as string | undefined
-    const invoiceTxnId = meta.qb_invoice_txn_id as string | undefined
-    const invoiceRef = meta.qb_invoice_ref as string | undefined
+    // Read via compat helpers — supports both old flat fields and new JSON shape
+    const soTxnId = getSoTxnId(meta)
+    const soRef = getSoRef(meta)
+    const invoiceTxnId = getLatestInvoiceTxnId(meta)
+    const invoiceRef = getLatestInvoiceRef(meta)
 
     if (!soTxnId && !invoiceTxnId) {
         logger.info(`${LOG_PREFIX} Order ${orderId} has no QB documents — nothing to cancel`)
@@ -653,9 +670,10 @@ async function handleCustomerTransferred(
         return
     }
 
-    const soTxnId = meta.qb_sales_order_txn_id as string | undefined
+    // Read via compat helpers — supports both old flat fields and new JSON shape
+    const soTxnId = getSoTxnId(meta)
     const soEditSeq = meta.qb_sales_order_edit_sequence as string | undefined
-    const invoiceTxnId = meta.qb_invoice_txn_id as string | undefined
+    const invoiceTxnId = getLatestInvoiceTxnId(meta)
     const invEditSeq = meta.qb_invoice_edit_sequence as string | undefined
 
     if (!soTxnId && !invoiceTxnId) {

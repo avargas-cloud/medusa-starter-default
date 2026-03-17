@@ -85,11 +85,38 @@ The patch is stored as a git diff in `patches/@medusajs+core-flows+2.13.0.patch`
 
 ```json
 "scripts": {
-    "postinstall": "patch-package"
+    "postinstall": "patch-package",
+    "build": "medusa build && node scripts/post-build.js"
 }
 ```
 
-**This means:** Railway deploys, fresh checkouts, and `yarn install` calls will always apply the correct tax fix without manual intervention.
+### Railway / Railpack Deployment (VERIFIED 2026-03-17)
+
+> **⚠️ CRÍTICO:** Railpack (Railway's builder) ignora `nixpacks.toml` completamente.  
+> La única forma de customizar el build es via el script `"build"` en `package.json`.
+
+El flujo en Railway es:
+
+```
+1. yarn install --frozen-lockfile
+   → postinstall: patch-package  (aplica patches al build workspace)
+
+2. npm run build
+   → medusa build  (genera .medusa/server/ con npm install FRESCO — borra patches!)
+   → node scripts/post-build.js:
+       • Copia patches/ → .medusa/server/patches/
+       • Inyecta "postinstall": "npx --yes patch-package" en .medusa/server/package.json
+       ⚠️ NO ejecuta patch-package aquí — node_modules no existen aún en build time.
+
+3. cd .medusa/server && npm install --omit=dev --legacy-peer-deps
+   → postinstall: npx --yes patch-package   ← AQUÍ se aplican en producción ✅
+   → @medusajs/core-flows@2.13.0 ✔
+   → @medusajs/order@2.13.0 ✔
+```
+
+**Gotcha — Watch Paths:** Railway solo hace deploy cuando cambian `/src/**`, `package.json`, etc.  
+Si editas solo `scripts/post-build.js` (archivo `.js`), **no se triggerea el deploy**.  
+Solución: también bumpa la versión en `package.json` para forzar el redeploy.
 
 ## Affected Workflows
 

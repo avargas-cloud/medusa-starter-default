@@ -201,36 +201,93 @@ Los patches están en `backend/patches/`:
 
 ```
 patches/
-├── @medusajs+core-flows+2.13.0.patch   # Agrega "summary" al list workflow
-└── @medusajs+order+2.13.0.patch        # Tres fixes descritos arriba
+├── @medusajs+core-flows+2.13.0.patch   # Agrega "summary" al list workflow + discount-aware tax
+├── @medusajs+order+2.13.0.patch        # Tres fixes descritos arriba
+└── @medusajs+utils+2.13.1.patch        # Utils fix
 ```
-
-Se aplican automáticamente vía `patch-package` gracias a:
-```json
-// backend/package.json
-{ "scripts": { "postinstall": "patch-package" } }
-```
-
-**Explícitamente en Railway (Railpack)**
-
-Railway usa `Railpack`, cuyo comportamiento estándar (para Node) es:
-1. `yarn install --frozen-lockfile` (fase install)
-2. `npm run build` (fase build)
-3. `cd .medusa/server && npm install --omit=dev && npm start` (fase deploy)
-
-**El problema:** El paso 3 (`npm install` dentro de `.medusa/server`) borra cualquier patch aplicado globalmente, descargando el código original de Medusa de npm.
-
-**La solución:** Implementamos un script `post-build` que se inyecta en el ciclo de build de Medusa.
-
-1. **`scripts/post-build.js`**: Este script copia el directorio `patches/` hacia `.medusa/server/patches/` y agrega el script `"postinstall": "npx --yes patch-package"` al `package.json` generado en `.medusa/server`.
-2. **`package.json` (raíz)**: Actualizamos el script de build:
-   ```json
-   "build": "medusa build && node scripts/post-build.js"
-   ```
-
-De esta manera, cuando Railpack ejecuta paso 3 (`npm install` en `.medusa/server`), dispara automáticamente el `postinstall` adentro y re-aplica los patches *sobre la nueva instalación limpia* justo antes de levantar el servidor.
 
 ---
+
+## Cómo se Aplican los Patches en Railway (Railpack) ✅ VERIFIED
+
+> **⚠️ CRÍTICO:** Este flujo fue verificado el 2026-03-17 después de debugging extensivo.
+> No cambiar la estructura sin entender cada paso.
+
+### Flujo de Railpack 0.19.0
+
+Railway usa **Railpack** (no Nixpacks). Ignora `nixpacks.toml`. El flujo es:
+
+```
+1. INSTALL:  yarn install --frozen-lockfile
+             → postinstall: patch-package
+             → aplica patches al BUILD WORKSPACE ✅
+
+2. BUILD:    npm run build
+             → "medusa build" genera .medusa/server/ con npm install FRESCO
+               (borra los patches del build workspace ❌)
+             → "node scripts/post-build.js" se ejecuta después:
+               • Copia patches/ → .medusa/server/patches/
+               • Inyecta postinstall en .medusa/server/package.json
+
+3. DEPLOY:   cd .medusa/server && npm install --omit=dev --legacy-peer-deps
+             → postinstall: npx --yes patch-package   ← patches aplicados ✅
+             → @medusajs/order@2.13.0 ✔
+             → @medusajs/core-flows@2.13.0 ✔
+             → @medusajs/utils@2.13.1 ✔
+
+4. START:    npm start   ← servidor con patches activos ✅
+```
+
+### Archivos clave
+
+**`package.json` (script de build):**
+```json
+{
+  "scripts": {
+    "postinstall": "patch-package",
+    "build": "medusa build && node scripts/post-build.js"
+  }
+}
+```
+
+**`scripts/post-build.js`** — Se ejecuta DESPUÉS de `medusa build`:
+```javascript
+// 1. Copia patches/ → .medusa/server/patches/
+fs.cpSync(PATCHES_SRC, PATCHES_DST, { recursive: true });
+
+// 2. Inyecta postinstall hook
+pkg.scripts.postinstall = "npx --yes patch-package";
+fs.writeFileSync(PKG_JSON, JSON.stringify(pkg, null, 2));
+
+// ⚠️  NO ejecutar patch-package aquí directamente.
+//    .medusa/server/node_modules no existe todavía en build time.
+//    Si se intenta: ERROR "package not present at node_modules/..."
+```
+
+### Por qué NO usar nixpacks.toml para esto
+
+```toml
+# ❌ ESTO NO FUNCIONA — Railpack ignora nixpacks.toml
+[phases.build]
+cmds = ["npx patch-package", "yarn build"]
+```
+
+Railpack 0.19.0 genera su propio plan y lo ignora completamente.
+La única forma de customizar el build es via el script `"build"` en `package.json`.
+
+### Watch Paths en Railway
+
+Railway está configurado para solo deployar cuando cambian:
+- `/src/**`
+- `medusa-config.ts`
+- `package.json`
+- `tsconfig.json` / `tsconfig.server.json`
+
+**Cambios solo en `.js` files no triggerean deploy.** Si modificas `scripts/post-build.js`,
+también hay que tocar `package.json` (ej: bump de versión) para forzar el redeploy.
+
+---
+
 
 ## Por qué el Admin Detail (`/app/orders/:id`) no tenía el bug original
 
