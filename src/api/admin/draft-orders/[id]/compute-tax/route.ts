@@ -108,10 +108,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
         const itemsSubtotal: number = (order?.items ?? []).reduce((sum: number, item: any) =>
             sum + ((item.unit_price ?? 0) * (item.quantity ?? 1)), 0)
 
-        // Compute order-level discount from item adjustments (pre-tax amount stored in DB).
-        // This ensures tax is applied on the POST-DISCOUNT subtotal, matching standard accounting.
+        // Compute order-level discount from item adjustments.
+        // Medusa v2 stores adjustment amounts as NEGATIVE (e.g., -2.53 for a $2.53 discount).
+        // We use Math.abs() so the sum is a positive discount value regardless of sign.
         const discountTotal: number = (order?.items ?? []).reduce((sum: number, item: any) =>
-            sum + (item.adjustments ?? []).reduce((a: number, adj: any) => a + (Number(adj.amount) || 0), 0), 0)
+            sum + (item.adjustments ?? []).reduce((a: number, adj: any) => a + Math.abs(Number(adj.amount) || 0), 0), 0)
         const discountedSubtotal: number = Math.max(0, itemsSubtotal - discountTotal)
 
         const shippingMethods: any[] = order?.shipping_methods ?? []
@@ -211,19 +212,58 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
             console.error("[compute-tax] Native Tax workflow soft-failed:", e?.message)
         })
 
-        // ── Fetch the Native Engine's Result ───────────────────────────────────
-        const updatedRes = await fetch(
-            `${base}/admin/orders/${id}?fields=id,+total,+subtotal,+tax_total,+item_tax_total,+shipping_tax_total,+items.tax_lines.*`,
+        // ── Fetch rate from the created tax lines ──────────────────────────────
+        const taxLineRes = await fetch(
+            `${base}/admin/orders/${id}?fields=id,+items.tax_lines.*`,
             { headers }
         )
-        const { order: updatedOrder } = updatedRes.ok ? await updatedRes.json() : { order: null }
-
-        // Extract the exact native amount and rate from what the engine calculated
-        amount = Number(updatedOrder?.tax_total ?? 0)
-        const sampleTaxLine = updatedOrder?.items?.[0]?.tax_lines?.[0]
+        const { order: taxLineOrder } = taxLineRes.ok ? await taxLineRes.json() : { order: null }
+        const sampleTaxLine = taxLineOrder?.items?.[0]?.tax_lines?.[0]
         rate = sampleTaxLine?.rate ?? (exempt ? 0 : 7)
 
-        console.log(`[compute-tax] Native tax result: $${amount} @ ${rate}% (mode: ${effectiveMode})`)
+        // ── Compute correct discount-aware amount ──────────────────────────────
+        // Medusa ALSO creates "manual" lines independently (doubles the tax to $7.07).
+        // Our discountedSubtotal already has all promotion adjustments deducted,
+        // so we get the correct discount-aware tax here.
+        // Math.round(discountedSubtotal × rate) / 100
+        //   e.g. Math.round(47.95 × 7) / 100 = 336 / 100 = $3.36 ✓
+        if (!exempt) {
+            amount = Math.round(discountedSubtotal * rate) / 100
+        }
+
+        // ── Post-workflow DB fix ───────────────────────────────────────────────
+        // Problem: after the workflow, the DB has BOTH:
+        //   • "FL" lines from pos-tax provider (code='FL', wrong amount — pre-discount)
+        //   • "manual" lines from Medusa's own engine (duplicate!)
+        // Fix: (1) delete the "manual" duplicates, (2) update FL amounts to correct value.
+        try {
+            const db = getTaxCleanupPool()
+            const client = await db.connect()
+            try {
+                // 1. Remove "manual" / stray lines Medusa's engine added on top
+                const delManual = await client.query(
+                    `DELETE FROM order_line_item_tax_line
+                     WHERE item_id IN (SELECT item_id FROM order_item WHERE order_id = $1)
+                     AND code NOT IN ('FL', 'FL-SHIPPING', 'EXEMPT')`,
+                    [id]
+                )
+                if (delManual.rowCount && delManual.rowCount > 0) {
+                    console.log(`[compute-tax] Removed ${delManual.rowCount} duplicate "manual" tax lines`)
+                }
+
+                // 2. Note: order_line_item_tax_line only stores `rate`, not `amount`.
+                //    Tax amounts shown in Medusa admin are computed dynamically as
+                //    rate × unit_price × qty — we cannot update them via SQL.
+                //    Our POS (computeTotals) and payment collection use
+                //    metadata.computed_total which correctly accounts for discounts.
+            } finally {
+                client.release()
+            }
+        } catch (fixErr: any) {
+            console.warn("[compute-tax] Post-workflow DB fix soft-failed:", fixErr?.message)
+        }
+
+        console.log(`[compute-tax] Discount-aware tax: $${amount} @ ${rate}% | subtotal=$${itemsSubtotal} discount=$${discountTotal} taxable=$${discountedSubtotal} (mode: ${effectiveMode})`)
 
         // ── Save computed totals to metadata (fire-and-forget) ─────────────────
         const computedTotal = discountedSubtotal + shippingSubtotal + amount

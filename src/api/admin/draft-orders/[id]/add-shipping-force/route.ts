@@ -1,27 +1,15 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
-import { Modules } from "@medusajs/framework/utils"
 import {
-    beginDraftOrderEditWorkflow,
-    addDraftOrderShippingMethodsWorkflow,
-    removeDraftOrderShippingMethodWorkflow,
-    confirmDraftOrderEditWorkflow,
     cancelDraftOrderEditWorkflow,
 } from "@medusajs/core-flows"
+import { Pool } from "pg"
 
 /**
  * POST /admin/draft-orders/:id/add-shipping-force
  *
  * Atomically REPLACES all shipping methods with the given one.
- *
- * CRITICAL ORDER OF OPERATIONS (version-aware):
- *   0. Cancel any pending order edit (clean state)
- *   1. Query existing shipping method IDs BEFORE beginning the new edit.
- *      (After beginDraftOrderEdit, the pending version increments, so
- *       retrieveOrder would return the new empty version — NOT the old methods.)
- *   2. Begin a fresh draft order edit
- *   3. Remove each previously-found shipping method
- *   4. Add the new shipping method
- *   5. Confirm the edit
+ * Uses direct SQL + order module to bypass addDraftOrderShippingMethodsWorkflow,
+ * which fails with AwilixResolutionError when tax_region.provider_id is null.
  *
  * Body: { shipping_option_id, custom_amount? }
  */
@@ -40,69 +28,70 @@ export async function POST(
         return
     }
 
+    const base = `http://localhost:${process.env.PORT ?? 9000}`
+    const authHeaders: Record<string, string> = {
+        "Cookie": String(req.headers["cookie"] ?? ""),
+        "Authorization": String(req.headers["authorization"] ?? ""),
+        "Content-Type": "application/json",
+    }
+    const dbUrl = process.env.DATABASE_URL
+
     try {
         // Step 0: Cancel any pending order edit (clean state)
         try {
-            await cancelDraftOrderEditWorkflow(req.scope).run({
-                input: { order_id: id },
-            })
-        } catch {
-            // No pending edit to cancel — fine
-        }
+            await cancelDraftOrderEditWorkflow(req.scope).run({ input: { order_id: id } })
+        } catch { /* No pending edit — fine */ }
 
-        // Step 1: Get existing shipping method IDs BEFORE starting the new edit.
-        // After beginDraftOrderEditWorkflow, the pending version increments and
-        // retrieveOrder returns the NEW (empty) pending version — missing the current methods.
-        // We must capture them BEFORE begin.
-        const orderService = req.scope.resolve(Modules.ORDER)
-        let existingMethodIds: string[] = []
+        // Step 1: Fetch shipping option details (name, price)
+        let shippingName = "Shipping"
+        let baseAmount = 0
         try {
-            const currentOrder = await (orderService as any).retrieveOrder(id, {
-                relations: ["shipping_methods"],
-            })
-            existingMethodIds = ((currentOrder as any)?.shipping_methods ?? [])
-                .map((sm: any) => sm.id)
-                .filter(Boolean)
-            console.log(`[add-shipping-force] Found ${existingMethodIds.length} existing method(s) to remove:`, existingMethodIds)
-        } catch (fetchErr: any) {
-            console.warn("[add-shipping-force] Could not fetch existing methods:", fetchErr?.message)
-        }
-
-        // Step 2: Begin a fresh draft order edit
-        await beginDraftOrderEditWorkflow(req.scope).run({
-            input: { order_id: id },
-        })
-
-        // Step 3: Remove each previously-found shipping method
-        // (IDs captured before begin, so they're at the committed version)
-        for (const smId of existingMethodIds) {
-            try {
-                await removeDraftOrderShippingMethodWorkflow(req.scope).run({
-                    input: { order_id: id, shipping_method_id: smId },
-                })
-                console.log(`[add-shipping-force] Removed shipping method ${smId}`)
-            } catch (rmErr: any) {
-                console.warn("[add-shipping-force] Could not remove method", smId, rmErr?.message)
+            const soRes = await fetch(
+                `${base}/admin/shipping-options/${shipping_option_id}`,
+                { headers: authHeaders }
+            )
+            if (soRes.ok) {
+                const { shipping_option } = await soRes.json()
+                shippingName = shipping_option?.name ?? "Shipping"
+                if (custom_amount == null) {
+                    baseAmount = shipping_option?.amount ?? 0
+                }
             }
+        } catch { /* fallback to defaults */ }
+
+        const finalAmount = custom_amount ?? baseAmount
+
+        if (!dbUrl) {
+            res.status(500).json({ message: "DATABASE_URL not configured" })
+            return
         }
 
-        // Step 4: Add the new shipping method
-        await addDraftOrderShippingMethodsWorkflow(req.scope).run({
-            input: {
-                order_id: id,
-                shipping_option_id,
-                ...(custom_amount != null ? { custom_amount } : {}),
-            },
-        })
+        const pool = new Pool({ connectionString: dbUrl })
+        try {
+            // Step 2: Soft-delete existing shipping methods for this order
+            await pool.query(
+                `UPDATE order_shipping_method SET deleted_at = NOW() WHERE order_id = $1 AND deleted_at IS NULL`,
+                [id]
+            )
 
-        // Step 5: Confirm all pending edits (removes + add)
-        const confirmedBy = (req as any).auth_context?.actor_id ?? "admin"
-        await confirmDraftOrderEditWorkflow(req.scope).run({
-            input: { order_id: id, confirmed_by: confirmedBy },
-        })
+            // Step 3: Insert new shipping method directly (bypasses tax calculation workflow)
+            const smId = `sm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+            const rawAmount = JSON.stringify({ value: String(finalAmount), precision: 20 })
+            await pool.query(
+                `INSERT INTO order_shipping_method
+                    (id, order_id, shipping_option_id, amount, raw_amount, name, is_tax_inclusive, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, false, NOW(), NOW())`,
+                [smId, id, shipping_option_id, finalAmount, rawAmount, shippingName]
+            )
+            console.log(`[add-shipping-force] ✅ Inserted shipping method ${smId} (${shippingName} @ ${finalAmount}) for order ${id}`)
 
-        console.log(`[add-shipping-force] Successfully replaced shipping method on order ${id}`)
-        res.status(200).json({ success: true })
+        } finally {
+            await pool.end()
+        }
+
+
+
+        res.status(200).json({ success: true, shipping_method_id: `sm_${Date.now()}`, amount: finalAmount })
     } catch (e: any) {
         console.error("[add-shipping-force]", e?.message)
         res.status(500).json({ message: e?.message ?? "Failed to add shipping" })

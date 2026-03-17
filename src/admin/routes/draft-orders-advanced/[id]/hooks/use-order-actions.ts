@@ -51,6 +51,18 @@ export const useOrderActions = ({ id, order, estimateStatus, setEstimateStatus, 
             const j = await r.json()
             if (!r.ok) throw new Error(j.message || `HTTP ${r.status}: ${r.statusText}`)
             const orderId = j.order?.id ?? id
+
+            // Stamp confirmed_at so POS Activity Log shows the correct conversion time
+            // (same as POS handleConfirmOrder — backend stamps order_placed_at, we add confirmed_at)
+            if (orderId) {
+                fetch(`/admin/orders/${orderId}`, {
+                    method: "POST",
+                    credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ metadata: { confirmed_at: new Date().toISOString() } }),
+                }).catch(() => { /* non-critical */ })
+            }
+
             toast.dismiss(toastId)
             toast.success(j.backorder_items_enabled ? "Converted to order! Some items are on backorder." : "Converted to order! Redirecting…")
             navigate(`/orders/${orderId}`)

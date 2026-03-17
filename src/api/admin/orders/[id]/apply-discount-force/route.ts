@@ -23,10 +23,11 @@ import { posOverrideAdjustmentsWorkflow } from "../../../../../workflows/pos-dis
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
     const { id } = req.params as { id: string }
-    const { discount_type, discount_value, pos_total } = req.body as {
+    const { discount_type, discount_value, pos_total, pos_tax_rate } = req.body as {
         discount_type: 'percent' | 'fixed'
         discount_value: number
         pos_total?: number  // POS-computed final total in dollars (includes tax, shipping, discounts)
+        pos_tax_rate?: number  // POS-computed tax rate: 0 for EXEMPT, 7 for FL. Controls which tax lines are inserted.
     }
 
     if (!discount_type || !discount_value) {
@@ -124,15 +125,23 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 try {
                     const delAdj = await pool.query(
                         `DELETE FROM order_line_item_adjustment 
-                         WHERE item_id IN (SELECT item_id FROM order_item WHERE order_id = $1)
-                         AND (code LIKE 'POS-DISC-%' OR code LIKE 'CUSTOM-DISC-%' OR code LIKE 'ORDER-DISCOUNT-%')`,
+                         WHERE item_id IN (SELECT item_id FROM order_item WHERE order_id = $1)`,
                         [id]
                     )
                     const delPromo = await pool.query(
                         `DELETE FROM order_promotion WHERE order_id = $1`,
                         [id]
                     )
-                    logger.info(`[apply-discount-force] Mechanically wiped ${delAdj.rowCount} old adjustments and ${delPromo.rowCount} promo links`)
+                    // CRITICAL: Also delete stored tax lines BEFORE applying the promotion.
+                    // Stored tax lines inflate the promotion base in addDraftOrderPromotionWorkflow:
+                    // 5% × (items $52.98 + tax $3.52) = $2.82 instead of 5% × $52.98 = $2.65.
+                    // post-edit-sync will re-inject tax lines with the correct rate after confirmation.
+                    const delTax = await pool.query(
+                        `DELETE FROM order_line_item_tax_line 
+                         WHERE item_id IN (SELECT item_id FROM order_item WHERE order_id = $1)`,
+                        [id]
+                    )
+                    logger.info(`[apply-discount-force] Wiped ALL ${delAdj.rowCount} adjustments + ${delPromo.rowCount} promo links + ${delTax.rowCount} tax lines (clean slate)`)
                 } catch (e: any) {
                     logger.warn(`[apply-discount-force] DB cleanup failed: ${e.message}`)
                 } finally {
@@ -163,6 +172,46 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 input: { order_id: id, confirmed_by: "pos-system" }
             })
             logger.info(`[apply-discount-force] Confirmed order edit via native workflow`)
+
+            // 10. Insert FL tax lines at the statutory rate (7%) directly via SQL.
+            // updateOrderTaxLinesWorkflow would fail because tax_region.provider_id=null → AwilixError.
+            // By storing rate=7, decorateCartTotals computes: 7% × (subtotal − discount_adj) = correct tax.
+            // Example: 7% × ($52.96 − $2.65) = 7% × $50.31 = $3.52 ✅ — matches POS value, no overwrite needed.
+            if (dbUrl) {
+                const taxPool = new Pool({ connectionString: dbUrl })
+                try {
+                    const taxItemsRes = await taxPool.query<{ item_id: string }>(
+                        `SELECT DISTINCT item_id FROM order_item WHERE order_id = $1 AND deleted_at IS NULL`,
+                        [id]
+                    )
+                    // Delete existing tax lines first to ensure clean state
+                    const itemIds = taxItemsRes.rows.map(r => r.item_id)
+                    if (itemIds.length > 0) {
+                        await taxPool.query(
+                            `DELETE FROM order_line_item_tax_line WHERE item_id = ANY($1)`,
+                            [itemIds]
+                        )
+                    }
+                    // Use pos_tax_rate to determine correct tax: 0 = EXEMPT, 7 = FL (or other rate)
+                    const effectiveRate = pos_tax_rate ?? 7
+                    const taxCode = effectiveRate === 0 ? "EXEMPT" : "FL"
+                    const taxDesc = effectiveRate === 0 ? "Tax Exempt" : "Florida Sales Tax"
+                    const rawRate = JSON.stringify({ value: String(effectiveRate), precision: 20 })
+                    for (const row of taxItemsRes.rows) {
+                        const taxLineId = `taxline_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+                        await taxPool.query(
+                            `INSERT INTO order_line_item_tax_line (id, item_id, code, rate, raw_rate, description, created_at, updated_at)
+                             VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())`,
+                            [taxLineId, row.item_id, taxCode, effectiveRate, rawRate, taxDesc]
+                        )
+                    }
+                    logger.info(`[apply-discount-force] ✅ Inserted ${taxCode} tax lines at ${effectiveRate}% for ${taxItemsRes.rows.length} items`)
+                } catch (e: any) {
+                    logger.warn(`[apply-discount-force] Tax line insertion non-fatal: ${e.message}`)
+                } finally {
+                    await taxPool.end()
+                }
+            }
 
         } finally {
             // 9. ALWAYS restore is_draft_order = false (even if something fails above)

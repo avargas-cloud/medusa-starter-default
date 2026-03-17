@@ -6,7 +6,7 @@
 | **Rutas POS** | `/orders`, `/orders/[id]` |
 | **Medusa** | Orders (`GET /admin/orders`) |
 | **QB Docs** | Sales Receipt · Sales Order + Invoice |
-| **Última revisión** | 2026-03-10 |
+| **Última revisión** | 2026-03-16 |
 
 ---
 
@@ -212,10 +212,12 @@ POST   /admin/orders/:id/cancel         (Medusa)
 | Issue | Fix |
 |-------|-----|
 | Sales Receipt sin TxnID inmediato | Bridge async — usar `qb_sales_receipt_operation_id` para polling |
-| Subscriber crea duplicado en QB | Verificar `POS_SALES_CHANNEL_ID` en `qb-order-subscriber.ts` |
+| QB sync corre para órdenes POS | ✅ RESUELTO (2026-03-16): `isPosOrder()` ahora detecta órdenes POS via `metadata.pos_created=true` incluso sin `POS_SALES_CHANNEL_ID` |
 | Invoice no creada al fulfillment | POS debe llamar `POST /admin/quickbooks/invoice` manualmente |
 | Company no aparece en la tabla | Verificar `customer.company_name` o `billing_address.company` en la orden |
 | QB Ref # muestra `—` | La orden no fue sincronizada con QB aún — usar los botones de sync en el detalle |
+| Tax incorrecto al confirmar estimate | ✅ RESUELTO (2026-03-16): `convert-force` ahora lee `metadata.tax_mode` para aplicar FL 7% o EXEMPT 0% |
+| Tax no se actualiza al editar orden | ✅ RESUELTO (2026-03-16): `post-edit-sync` y `apply-discount-force` ahora respetan `pos_tax_rate=0` para EXEMPT |
 
 ---
 
@@ -412,7 +414,7 @@ current.hydrateDocument({
     customerPO: o.metadata?.customer_po ?? '',
     salesRep: o.metadata?.sales_rep ?? '',
     note: o.metadata?.pos_notes ?? '',
-    taxMode: o.metadata?.tax_mode ?? 'auto',
+    taxMode: (o.metadata?.tax_mode === 'florida' || o.metadata?.tax_mode === 'exempt') ? o.metadata.tax_mode : 'florida',
     taxEnabled: o.metadata?.tax_enabled ?? true,
     taxRate: o.metadata?.tax_rate ?? 7,
     shippingAddress: mapAddr(o.shipping_address),   // ← sin fallback a cart
@@ -470,14 +472,27 @@ current.hydrateDocument({
 
 **Archivo:** `app/(pos)/orders/[id]/hooks/useOrderActions.ts`
 
-### B.1 handleSave — Read-Only
+### B.1 handleSave — Order Edit Flow (via post-edit-sync)
+
+Las órdenes confirmadas SÍ se pueden editar a través del POS. El flujo completo:
+
+1. Actualiza items (add/remove/update) via `add-item-force`, `update-item-force`, `delete-item-force`
+2. Actualiza shipping via `add-shipping-force` (SQL directo — bypass del workflow con null tax provider)
+3. Aplica promociones via `apply-discount-force` (recibe `pos_tax_rate` para insertar tax lines correctas)
+4. Llama a `post-edit-sync` con `pos_tax_amount`, `pos_tax_rate` para corregir tax lines y `order_summary`
 
 ```ts
-const handleSave = useCallback(async () => {
-    toast.info('Orders are read-only in the POS. Please use the Medusa Admin.')
-}, [])
-// ⚠️ Las Orders confirmadas NO se pueden editar vía POS Store.
-// Para editar una Order, usar Order Edit en el Medusa Admin.
+// post-edit-sync body:
+{
+    discount_type, discount_value,
+    pos_discount_amount,
+    pos_total,           // incluye tax + shipping
+    pos_tax_amount,      // 0 para EXEMPT, >0 para FL
+    pos_tax_rate,        // 0 para EXEMPT, 7 para FL — siempre enviar
+}
+// ⚠️ pos_tax_amount=0 es válido (EXEMPT) — SIEMPRE enviarlo aunque sea 0
+// Antes de este fix (2026-03-16), pos_tax_amount: tax > 0 ? tax : undefined
+// enviaba undefined para EXEMPT → la actualización de tax lines se saltaba
 ```
 
 ### B.2 handleEmail
@@ -764,7 +779,8 @@ ecopowertech-store-pos/
   "customer_po": "PO-2026-001",
   "sales_rep": "John Smith",
   "pos_notes": "Customer requested urgent delivery",
-  "tax_mode": "auto",
+  "tax_mode": "florida",         // 'florida' | 'exempt' — 'auto' ELIMINADO (2026-03-16)
+  "pos_created": true,            // Flag para QB subscriber: skip sync para órdenes POS
   "discount_type": "percent",
   "discount_value": 10,
   "promotion_code": "CUSTOM-10%",
@@ -1151,3 +1167,96 @@ A diferencia de los Estimados, Medusa no siempre limpia las tablas de historial 
 Como el POS ahora es la única fuente de la verdad para una Orden:
 * **The DB Wipe**: El backend ejecuta secuencias `DELETE` en SQL puro (PostgreSQL) cada vez que el POS sobreescribe una orden, eliminando registros obsoletos de `order_change`, `order_change_action`, versiones antiguas de `order_item` / `order_summary`, e inyecciones "soft-deleted" de impuestos.
 * **No "Soft Deletes"**: Ya que las Órdenes en POS nunca usan el historial y no son reversibles, este borrado "Hard Delete" previene que los Descuentos se auto-sumen y corrompan los totales de Impuestos en Medusa Admin.
+
+---
+
+## Changelog — Marzo 16, 2026
+
+### 16. Sistema de Tax Completamente Reescrito — 3 Escenas
+
+El sistema de tax para órdenes fue completamente corregido para contemplar las 3 escenas del flujo de ventas POS:
+
+#### Escena 1 — Estimate → Confirmed Order (`convert-force`)
+
+**Problema:** Al confirmar un estimate, `convert-force` siempre aplicaba FL 7% ignorando el `taxMode` seleccionado en el POS.
+
+**Fix en `backend/src/api/admin/draft-orders/[id]/convert-force/route.ts`:**
+- Step 7a ahora lee `order.metadata.tax_mode`
+- `'exempt'` → inserta tax lines con `code='EXEMPT'`, `rate=0`
+- Cualquier otro valor (o `null`) → inserta tax lines con `code='FL'`, `rate=7`
+- Elimina duplicados antes de insertar (DELETE + INSERT)
+
+#### Escena 2 — Nueva Orden Directamente desde POS (`add-shipping-force`)
+
+**Problema:** `addDraftOrderShippingMethodsWorkflow` fallaba con `AwilixResolutionError: Could not resolve 'null'` porque `tax_region.provider_id` es null en la DB y Medusa no puede resolver el tax provider.
+
+**Fix en `backend/src/api/admin/draft-orders/[id]/add-shipping-force/route.ts`:**
+- Reescrita completamente — reemplaza el workflow roto con SQL directo
+- Hace `UPDATE order_shipping_method SET deleted_at = NOW()` para eliminar método anterior
+- Hace `INSERT INTO order_shipping_method` con los datos correctos (fetching nombre de la opción via API)
+- Elimina todos los imports de Medusa workflows que causaban el error
+
+#### Escena 3 — Editar Tax de una Orden Existente (`post-edit-sync` + `apply-discount-force`)
+
+**Problema 1:** `post-edit-sync` tenía condición `pos_tax_amount > 0` que salteaba el bloque de tax cuando el valor era `0` (EXEMPT). Las líneas FL no se eliminaban.
+
+**Fix en `backend/src/api/admin/orders/[id]/post-edit-sync/route.ts`:**
+- Condición cambiada a `pos_tax_amount != null` — captura `0` explícito
+- Tax code dinámico: `effectiveRate === 0 ? 'EXEMPT' : 'FL'`
+- Tax description dinámico: `'Tax Exempt'` o `'Florida Sales Tax'`
+
+**Problema 2:** `apply-discount-force` siempre insertaba FL 7% hardcodeado, causando un "doble write" innecesario (FL → luego sobreescrito por EXEMPT).
+
+**Fix en `backend/src/api/admin/orders/[id]/apply-discount-force/route.ts`:**
+- Acepta nuevo parámetro `pos_tax_rate` en el body
+- Hace DELETE de tax lines existentes antes de insertar (clean state)
+- Usa `pos_tax_rate` para determinar `code` y `description` correctos
+- `post-edit-sync` ahora pasa `pos_tax_rate` a `apply-discount-force` en la llamada interna
+
+**Problema 3 (POS):** `useOrderActions.ts` enviaba `pos_tax_amount: tax > 0 ? tax : undefined` — para EXEMPT, enviaba `undefined`, no triggereaba la actualización de tax lines.
+
+**Fix en `ecopowertech-store-pos/app/(pos)/orders/[id]/hooks/useOrderActions.ts`:**
+- `pos_tax_amount: doc.taxMode === 'exempt' ? 0 : (tax > 0 ? tax : undefined)`
+- `0` explícito para EXEMPT es válido — el backend lo reconoce como señal de borrar FL lines
+- Aplica tanto a `handleSave` como a `handleForceSave`
+
+#### Cambios en posStore / POS State
+
+**`store/posStore.ts`:**
+- `taxMode` type: `'auto' | 'florida' | 'exempt'` → `'florida' | 'exempt'` (removido 'auto')
+- Default `taxMode`: `'auto'` → `'florida'`
+
+**`app/(pos)/estimates/[id]/hooks/useEstimateData.ts`:**
+- Fallback de `taxMode`: `'auto'` → `'florida'`
+
+**`app/(pos)/estimates/[id]/components/CustomerStrip.tsx`:**
+- Ahora detecta `is_tax_exempt` en múltiples formatos: `true`, `'true'`, `'True'`, `'yes'`, `'Yes'` → `taxMode = 'exempt'`
+- Null o false → `taxMode = 'florida'`
+
+#### QB Sync Guard — `pos_created` Metadata
+
+**Problema:** `isPosOrder()` en `qb-order-subscriber.ts` solo chequeaba `sales_channel_id` via `POS_SALES_CHANNEL_ID` env var. Si no estaba seteada, todas las órdenes POS corrían QB sync.
+
+**Fix en `backend/src/subscribers/qb-order-subscriber.ts`:**
+- `isPosOrder()` ahora usa fallback dual:
+  1. `POS_SALES_CHANNEL_ID` env var (existente)
+  2. `order.metadata.pos_created === true` (nuevo fallback)
+
+**Fix en `ecopowertech-store-pos/app/(pos)/estimates/[id]/lib/estimatePayload.ts`:**
+- `buildCreatePayload()` y `buildUpdatePayload()` ahora incluyen `pos_created: true` en el metadata
+- Este flag se propaga a las órdenes confirmadas cuando `convert-force` copia el metadata del draft
+
+#### Archivos Modificados (Marzo 16, 2026)
+
+| Archivo | Tipo de Cambio |
+|---------|---------------|
+| `backend/src/api/admin/draft-orders/[id]/convert-force/route.ts` | Tax mode-aware EXEMPT/FL injection |
+| `backend/src/api/admin/draft-orders/[id]/add-shipping-force/route.ts` | Rewrite completo: workflow → SQL directo |
+| `backend/src/api/admin/orders/[id]/post-edit-sync/route.ts` | Condición `!= null`, dynamic EXEMPT/FL code |
+| `backend/src/api/admin/orders/[id]/apply-discount-force/route.ts` | Acepta `pos_tax_rate`, dynamic code, DELETE antes de INSERT |
+| `backend/src/subscribers/qb-order-subscriber.ts` | `isPosOrder()` con fallback `metadata.pos_created` |
+| `ecopowertech-store-pos/.../useOrderActions.ts` | EXEMPT sends `pos_tax_amount: 0` explícito |
+| `ecopowertech-store-pos/.../posStore.ts` | Removido 'auto' taxMode, default → 'florida' |
+| `ecopowertech-store-pos/.../useEstimateData.ts` | Fallback taxMode → 'florida' |
+| `ecopowertech-store-pos/.../CustomerStrip.tsx` | is_tax_exempt check multi-format |
+| `ecopowertech-store-pos/.../estimatePayload.ts` | `pos_created: true` en metadata |

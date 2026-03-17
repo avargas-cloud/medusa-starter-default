@@ -1,0 +1,56 @@
+diff --git a/node_modules/@medusajs/utils/dist/totals/line-item/index.js b/node_modules/@medusajs/utils/dist/totals/line-item/index.js
+index 44970f2..9433964 100644
+--- a/node_modules/@medusajs/utils/dist/totals/line-item/index.js
++++ b/node_modules/@medusajs/utils/dist/totals/line-item/index.js
+@@ -69,7 +69,10 @@ function getLineItemTotals(item, context) {
+     });
+     const originalTaxTotal = (0, tax_1.calculateTaxTotal)({
+         taxLines: item.tax_lines || [],
+-        taxableAmount: currentSubtotal,
++        // ECOPOWERTECH PATCH: FL taxes on post-discount price.
++        // Use the same discount-aware taxable amount so the Admin "Tax Total"
++        // display shows the real charged tax ($3.52) and not the gross ($3.71).
++        taxableAmount: math_1.MathBN.sub(currentSubtotal, currentDiscountsSubtotal),
+         setTotalField: "subtotal",
+     });
+     // Compute full-quantity net total after discounts and taxes to derive per-unit totals
+@@ -93,7 +96,10 @@ function getLineItemTotals(item, context) {
+         // Discount values prorated to the current quantity
+         discount_subtotal: new big_number_1.BigNumber(currentDiscountsSubtotal),
+         discount_tax_total: new big_number_1.BigNumber(math_1.MathBN.sub(originalTaxTotal, taxTotal)),
+-        discount_total: new big_number_1.BigNumber(math_1.MathBN.add(currentDiscountsSubtotal, math_1.MathBN.sub(originalTaxTotal, taxTotal))),
++        // ECOPOWERTECH PATCH: discount_total = pre-tax discount only (not discount + tax savings).
++        // FL law taxes on post-discount selling price — the "discount" shown to customers
++        // must be the raw pre-tax amount, not the combined discount+tax-savings figure.
++        discount_total: new big_number_1.BigNumber(currentDiscountsSubtotal),
+         tax_total: new big_number_1.BigNumber(taxTotal),
+         original_tax_total: new big_number_1.BigNumber(originalTaxTotal),
+     };
+diff --git a/node_modules/@medusajs/utils/dist/totals/promotion/index.js b/node_modules/@medusajs/utils/dist/totals/promotion/index.js
+index b64db38..058c759 100644
+--- a/node_modules/@medusajs/utils/dist/totals/promotion/index.js
++++ b/node_modules/@medusajs/utils/dist/totals/promotion/index.js
+@@ -75,9 +75,8 @@ function calculateAdjustmentAmountFromPromotion(lineItem, promotion, lineItemsAm
+     */
+     if (promotion.allocation === promotion_1.ApplicationMethodAllocation.ACROSS) {
+         const quantity = getApplicableQuantity(lineItem, promotion.max_quantity);
+-        const lineItemAmount = math_1.MathBN.mult(promotion.is_tax_inclusive
+-            ? getLineItemOriginalTotal(lineItem)
+-            : getLineItemSubtotal(lineItem), quantity);
++        // ECOPOWERTECH PATCH: always use pre-tax subtotal as promotion base (never original_total which includes tax).
++        const lineItemAmount = math_1.MathBN.mult(getLineItemSubtotal(lineItem), quantity);
+         const applicableAmount = math_1.MathBN.sub(lineItemAmount, promotion.applied_value);
+         if (math_1.MathBN.lte(applicableAmount, big_number_1.MEDUSA_EPSILON)) {
+             return math_1.MathBN.convert(0);
+@@ -107,8 +106,9 @@ function calculateAdjustmentAmountFromPromotion(lineItem, promotion, lineItemsAm
+         
+         We then apply whichever is lower.
+     */
+-    const remainingItemAmount = math_1.MathBN.sub(promotion.is_tax_inclusive ? lineItem.original_total : lineItem.subtotal, promotion.applied_value);
+-    const itemAmount = math_1.MathBN.div(promotion.is_tax_inclusive ? lineItem.original_total : lineItem.subtotal, lineItem.quantity);
++    // ECOPOWERTECH PATCH: always use pre-tax subtotal as promotion base (never original_total which includes tax).
++    const remainingItemAmount = math_1.MathBN.sub(lineItem.subtotal, promotion.applied_value);
++    const itemAmount = math_1.MathBN.div(lineItem.subtotal, lineItem.quantity);
+     const maximumPromotionAmount = math_1.MathBN.mult(itemAmount, promotion.max_quantity ?? math_1.MathBN.convert(1));
+     const applicableAmount = math_1.MathBN.min(remainingItemAmount, maximumPromotionAmount);
+     if (math_1.MathBN.lte(applicableAmount, big_number_1.MEDUSA_EPSILON)) {

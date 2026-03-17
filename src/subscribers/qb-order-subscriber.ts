@@ -52,8 +52,11 @@ const POS_CHANNEL_ID = process.env.POS_SALES_CHANNEL_ID ?? ""
 
 /** Returns true if the order was placed through the POS sales channel */
 function isPosOrder(order: any): boolean {
-    if (!POS_CHANNEL_ID) return false
-    return order.sales_channel_id === POS_CHANNEL_ID
+    // Primary check: sales channel ID (set via POS_SALES_CHANNEL_ID env var)
+    if (POS_CHANNEL_ID && order.sales_channel_id === POS_CHANNEL_ID) return true
+    // Fallback: metadata flag set by POS app on all orders (works without env var)
+    if (order.metadata?.pos_created === true) return true
+    return false
 }
 
 /**

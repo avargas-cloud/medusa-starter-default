@@ -10,3 +10,77 @@ index 21eb9dd..dd65c33 100644
              "payment_collections.status",
              "payment_collections.amount",
              "payment_collections.captured_amount",
+diff --git a/node_modules/@medusajs/core-flows/dist/order/workflows/update-tax-lines.js b/node_modules/@medusajs/core-flows/dist/order/workflows/update-tax-lines.js
+index b998a18..49b4f44 100644
+--- a/node_modules/@medusajs/core-flows/dist/order/workflows/update-tax-lines.js
++++ b/node_modules/@medusajs/core-flows/dist/order/workflows/update-tax-lines.js
+@@ -31,6 +31,11 @@ const completeOrderFields = [
+     "items.title",
+     "items.quantity",
+     "items.unit_price",
++    // ECOPOWERTECH PATCH: fetch adjustments so normalizeLineItemsForTax (get-item-tax-lines.js)
++    // can compute the discount-adjusted unit_price for correct tax calculation.
++    "items.adjustments.id",
++    "items.adjustments.amount",
++    "items.adjustments.promotion_id",
+     "items.tax_lines.id",
+     "items.tax_lines.description",
+     "items.tax_lines.code",
+@@ -113,6 +118,11 @@ const lineItemFields = [
+     "title",
+     "quantity",
+     "unit_price",
++    // ECOPOWERTECH PATCH: fetch adjustments for discount-aware tax calculation.
++    // See companion patch in dist/tax/steps/get-item-tax-lines.js.
++    "adjustments.id",
++    "adjustments.amount",
++    "adjustments.promotion_id",
+     "tax_lines.id",
+     "tax_lines.description",
+     "tax_lines.code",
+diff --git a/node_modules/@medusajs/core-flows/dist/tax/steps/get-item-tax-lines.js b/node_modules/@medusajs/core-flows/dist/tax/steps/get-item-tax-lines.js
+index 0cd5477..35f37b6 100644
+--- a/node_modules/@medusajs/core-flows/dist/tax/steps/get-item-tax-lines.js
++++ b/node_modules/@medusajs/core-flows/dist/tax/steps/get-item-tax-lines.js
+@@ -43,16 +43,33 @@ function normalizeTaxModuleContext(orderOrCart, forceTaxCalculation, isReturn, s
+     };
+ }
+ function normalizeLineItemsForTax(orderOrCart, items) {
+-    return items.map((item) => ({
+-        id: item.id,
+-        product_id: item.product_id,
+-        product_type_id: item.product_type_id,
+-        quantity: item.quantity,
+-        unit_price: item.unit_price,
+-        currency_code: orderOrCart.currency_code,
+-    }));
++    return items.map((item) => {
++        // ECOPOWERTECH PATCH — Discount-Aware Tax Calculation (discount applied on subtotal before tax)
++        // See docs/MEDUSA_PATCH_TAX_DISCOUNT_AWARE.md for full explanation.
++        const grossSubtotal = Number(item.unit_price || 0) * Number(item.quantity || 1);
++        // Adjustments in Medusa v2 are stored as NEGATIVE values for discounts.
++        // Sum them and add to gross: adjustedSubtotal = unitPrice*qty + (negative discount)
++        const totalAdj = (item.adjustments || [])
++            .reduce((sum, adj) => sum + Number(adj.amount || 0), 0);
++        const adjustedSubtotal = Math.max(0, grossSubtotal + totalAdj);
++        const qty = Number(item.quantity || 1);
++        const adjustedUnitPrice = qty > 0 ? adjustedSubtotal / qty : Number(item.unit_price || 0);
++        // DEBUG LOG — captures real adjustment.amount values to confirm sign/magnitude.
++        // Check backend tmux logs for [TAX-PATCH-DEBUG] lines after any tax computation.
++        // Remove this log once sign is confirmed and patch is stable.
++        console.log(`[TAX-PATCH-DEBUG] item=${item.id} unit_price=${item.unit_price} qty=${qty} rawAdj=${JSON.stringify((item.adjustments||[]).slice(0,3).map(a=>({amount:a.amount,code:a.code,id:a.id})))} totalAdj=${totalAdj} adjustedUnitPrice=${adjustedUnitPrice} grossSubtotal=${grossSubtotal}`);
++        return {
++            id: item.id,
++            product_id: item.product_id,
++            product_type_id: item.product_type_id,
++            quantity: item.quantity,
++            unit_price: adjustedUnitPrice,
++            currency_code: orderOrCart.currency_code,
++        };
++    });
+ }
+ function normalizeLineItemsForShipping(orderOrCart, shippingMethods) {
++
+     return shippingMethods.map((shippingMethod) => ({
+         id: shippingMethod.id,
+         shipping_option_id: shippingMethod.shipping_option_id,

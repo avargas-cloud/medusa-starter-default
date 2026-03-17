@@ -1,5 +1,19 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
 import { ContainerRegistrationKeys, Modules, OrderStatus, OrderWorkflowEvents } from "@medusajs/utils"
+import { Pool } from "pg"
+
+// Lazy singleton pg pool for post-conversion tax line cleanup
+let _pool: Pool | null = null
+function getConvertPool(): Pool {
+    if (!_pool) {
+        _pool = new Pool({
+            connectionString: process.env.DATABASE_URL,
+            ssl: { rejectUnauthorized: false },
+            max: 2,
+        })
+    }
+    return _pool
+}
 
 /**
  * POST /admin/draft-orders/:id/convert-force
@@ -29,28 +43,30 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         "Content-Type": "application/json",
     }
 
-    // ── Helper: call the native Medusa convert-to-order endpoint ──────────────
-    // (removed unused callConvert function since we bypass the REST layer natively) // ── Helper: compute the true order total from live order data ─────────────
-    // Reads directly from the converted order's items, shipping, and tax totals.
-    // More reliable than order_summary.current_order_total, which is stale if the
-    // user changed quantities via update-item-force without re-running compute-tax.
+    // ── Helper: compute the true order total ──────────────────────────────────
+    // PRIORITY 1: metadata.computed_total — saved by compute-tax using correctly-rounded
+    //             discount logic (Math.round per component), avoiding Medusa's fractional
+    //             accumulation that can cause 1 cent errors (e.g. $84.28 instead of $84.27).
+    // PRIORITY 2: order.total from Medusa API — fallback if compute-tax was never called.
     const computeTrueTotal = async (): Promise<number | null> => {
         try {
-            // Fetch order.total directly — Medusa computes this from the stored tax_lines
-            // (which were set by our compute-tax workflow in the draft stage), so it's always
-            // correct regardless of conversion timing.
-            //
-            // ⚠️  Previous approach (sum from items × qty + shipping + tax) had a race condition:
-            //     immediately after conversion, the HTTP API could return only 1 of N items
-            //     (DB not fully committed yet) → wrong total → payment collection patched incorrectly.
             const orderRes = await fetch(
-                `${base}/admin/orders/${id}?fields=total,tax_total,subtotal,discount_total`,
+                `${base}/admin/orders/${id}?fields=total,tax_total,subtotal,discount_total,+metadata`,
                 { headers: authHeaders }
             )
             if (!orderRes.ok) return null
             const { order } = await orderRes.json()
-            if (!order?.total) return null
-            console.log(`[convert-force] order.total from API: ${order.total} (tax=${order.tax_total}, subtotal=${order.subtotal})`)
+            if (!order) return null
+
+            // Prefer our correctly-rounded computed_total from metadata
+            const computedMeta = order.metadata?.computed_total
+            if (computedMeta && Number(computedMeta) > 0) {
+                console.log(`[convert-force] Using metadata.computed_total: ${computedMeta} (Medusa order.total: ${order.total})`)
+                return Number(computedMeta)
+            }
+
+            // Fall back to Medusa's order.total (may be 1 cent off due to fractional promotions)
+            console.log(`[convert-force] Using Medusa order.total: ${order.total} (no computed_total in metadata)`)
             return order.total > 0 ? order.total : null
         } catch (e: any) {
             console.warn("[convert-force] Could not fetch order total:", e?.message)
@@ -186,7 +202,166 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             await fixPaymentCollection(correctTotal)
         }
 
+        // ── Step 6: Remove duplicate tax lines (defensive) ────────────────────
+        // Deletes any 'manual' or other non-POS-generated tax lines that may
+        // have been added by Medusa's engine before or during conversion.
+        // Note: order_line_item_tax_line has no 'amount' column — amounts are
+        // computed dynamically. The tax-fix-subscriber also handles this
+        // asynchronously after order.placed fires.
+        try {
+            const db = getConvertPool()
+            const client = await db.connect()
+            try {
+                const del = await client.query(
+                    `DELETE FROM order_line_item_tax_line
+                     WHERE item_id IN (SELECT item_id FROM order_item WHERE order_id = $1)
+                     AND code NOT IN ('FL', 'FL-SHIPPING', 'EXEMPT')`,
+                    [id]
+                )
+                if (del.rowCount && del.rowCount > 0) {
+                    console.log(`[convert-force] ✅ Removed ${del.rowCount} duplicate tax lines post-conversion`)
+                }
+            } finally {
+                client.release()
+            }
+        } catch (taxFixErr: any) {
+            console.warn(`[convert-force] ⚠️ Post-conversion tax fix soft-failed: ${taxFixErr?.message}`)
+        }
+
+        // ── Step 7: Inject tax lines using pos-tax provider logic ─────────────
+        // Primary source: order.metadata.tax_mode ('exempt' | 'florida' | 'auto')
+        // set by the POS tax dropdown. Fallback: customer "tax-exempt" group.
+        try {
+            // 7a. Read order metadata and customer info
+            let isExempt = false
+            try {
+                const orderInfoRes = await fetch(
+                    `${base}/admin/orders/${id}?fields=customer_id,+metadata`,
+                    { headers: authHeaders }
+                )
+                if (orderInfoRes.ok) {
+                    const { order: orderInfo } = await orderInfoRes.json()
+                    const taxMode: string = orderInfo?.metadata?.tax_mode ?? "auto"
+                    console.log(`[convert-force] order.metadata.tax_mode = "${taxMode}"`)
+
+                    if (taxMode === "exempt") {
+                        // Explicitly set to exempt in POS dropdown
+                        isExempt = true
+                        console.log("[convert-force] tax_mode=exempt → EXEMPT")
+                    } else if (taxMode === "florida") {
+                        // Explicitly set to FL → force FL regardless of customer group
+                        isExempt = false
+                        console.log("[convert-force] tax_mode=florida → FL 7%")
+                    } else {
+                        // 'auto' or missing → check customer group (mirrors pos-tax service.ts)
+                        if (orderInfo?.customer_id) {
+                            const custRes = await fetch(
+                                `${base}/admin/customers/${orderInfo.customer_id}?fields=id,+groups`,
+                                { headers: authHeaders }
+                            )
+                            if (custRes.ok) {
+                                const { customer } = await custRes.json()
+                                const groups: any[] = customer?.groups ?? []
+                                isExempt = groups.some(g =>
+                                    g === "tax-exempt" ||
+                                    g.name === "tax-exempt" ||
+                                    (typeof g === "object" && g.name?.toLowerCase().includes("exempt"))
+                                )
+                                if (isExempt) console.log("[convert-force] Customer in tax-exempt group → EXEMPT")
+                                else console.log("[convert-force] No exempt group → FL 7%")
+                            }
+                        }
+                    }
+                }
+            } catch { /* non-fatal, fall through to FL */ }
+
+            // 7b. Tax parameters (mirrors pos-tax service.ts identifier constants)
+            const taxRate = isExempt ? 0 : 7
+            const taxCode = isExempt ? "EXEMPT" : "FL"
+            const taxDesc = isExempt ? "Tax Exempt" : "Florida Sales Tax"
+            console.log(`[convert-force] Tax decision: ${taxCode} @ ${taxRate}%`)
+
+
+            // 7c. Insert tax lines via SQL
+            const db = getConvertPool()
+            const client = await db.connect()
+            try {
+                const itemsRes = await client.query<{ item_id: string }>(
+                    `SELECT DISTINCT oi.item_id FROM order_item oi WHERE oi.order_id = $1 AND oi.deleted_at IS NULL`,
+                    [id]
+                )
+                const itemIds = itemsRes.rows.map(r => r.item_id)
+
+                if (itemIds.length > 0) {
+                    // Delete existing tax lines (belt-and-suspenders after Step 6)
+                    await client.query(
+                        `DELETE FROM order_line_item_tax_line WHERE item_id = ANY($1)`,
+                        [itemIds]
+                    )
+
+                    const rawRate = JSON.stringify({ value: String(taxRate), precision: 20 })
+                    const genId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+
+                    for (const itemId of itemIds) {
+                        await client.query(
+                            `INSERT INTO order_line_item_tax_line (id, item_id, code, rate, raw_rate, description, created_at, updated_at)
+                             VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())`,
+                            [genId("taxline"), itemId, taxCode, taxRate, rawRate, taxDesc]
+                        )
+                    }
+                    console.log(`[convert-force] ✅ Inserted ${taxCode} @ ${taxRate}% for ${itemIds.length} items`)
+
+                    // 7d. Re-fetch live tax_total — decorateCartTotals with adjustments
+                    // computes the correct post-discount amount: rate × (subtotal − discount)
+                    let liveTaxTotal = 0
+                    try {
+                        const taxFetch = await fetch(`${base}/admin/orders/${id}?fields=tax_total`, { headers: authHeaders })
+                        if (taxFetch.ok) {
+                            const { order: taxOrder } = await taxFetch.json()
+                            liveTaxTotal = Number(taxOrder?.tax_total ?? 0)
+                            console.log(`[convert-force] Live tax_total = $${liveTaxTotal.toFixed(2)}`)
+                        }
+                    } catch { /* non-fatal */ }
+
+                    // 7e. Update order_summary with tax and corrected totals
+                    const sumRes = await client.query<{ id: string; totals: any }>(
+                        `SELECT id, totals FROM order_summary
+                         WHERE order_id = $1 AND deleted_at IS NULL
+                         ORDER BY version DESC LIMIT 1`,
+                        [id]
+                    )
+                    if (sumRes.rows[0]) {
+                        const { id: sumId, totals } = sumRes.rows[0]
+                        const discountTotal = Number(totals.discount_total || 0)
+                        const newTotal = Number(totals.original_order_total || 0) + liveTaxTotal - discountTotal
+                        await client.query(
+                            `UPDATE order_summary SET totals = $1, updated_at = NOW() WHERE id = $2`,
+                            [JSON.stringify({
+                                ...totals,
+                                tax_total: liveTaxTotal,
+                                raw_tax_total: { value: String(liveTaxTotal), precision: 20 },
+                                accounting_total: newTotal,
+                                raw_accounting_total: { value: String(newTotal), precision: 20 },
+                                current_order_total: newTotal,
+                                raw_current_order_total: { value: String(newTotal), precision: 20 },
+                                pending_difference: newTotal,
+                                raw_pending_difference: { value: String(newTotal), precision: 20 },
+                            }), sumId]
+                        )
+                        console.log(`[convert-force] ✅ order_summary: tax=$${liveTaxTotal.toFixed(2)} total=$${newTotal.toFixed(2)}`)
+                        await fixPaymentCollection(newTotal)
+                    }
+                }
+            } finally {
+                client.release()
+            }
+        } catch (taxInjErr: any) {
+            console.warn(`[convert-force] ⚠️ Tax injection soft-failed: ${taxInjErr?.message}`)
+        }
+
+
         // Stamp order_placed_at so POS activity log shows correct creation time
+
         try {
             await fetch(`${base}/admin/orders/${id}`, {
                 method: 'POST',

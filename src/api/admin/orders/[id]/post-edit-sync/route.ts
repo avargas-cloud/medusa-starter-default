@@ -20,9 +20,10 @@ import { Pool } from "pg"
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
     const { id } = req.params as { id: string }
-    const { discount_type, discount_value, pos_total, pos_tax_amount, pos_tax_rate } = req.body as {
+    const { discount_type, discount_value, pos_discount_amount, pos_total, pos_tax_amount, pos_tax_rate } = req.body as {
         discount_type?: string
-        discount_value?: number
+        discount_value?: number   // Raw discount value: percent rate (e.g. 5) OR fixed dollar amount
+        pos_discount_amount?: number // POS-computed dollar discount amount for reconciliation (e.g. 2.65)
         pos_total?: number  // POS-computed final total in dollars (includes tax, shipping, discounts)
         pos_tax_amount?: number // POS-computed tax in dollars
         pos_tax_rate?: number   // POS-computed tax rate (e.g. 7)
@@ -42,7 +43,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         try {
             const dr = await fetch(`${base}/admin/orders/${id}/apply-discount-force`, {
                 method: "POST", headers: authHeaders,
-                body: JSON.stringify({ discount_type, discount_value, pos_total }),
+                body: JSON.stringify({ discount_type, discount_value, pos_total, pos_tax_rate }),
             })
             const dj = await dr.json().catch(() => ({}))
             if (dr.ok) {
@@ -80,44 +81,66 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         }
     }
 
-    // ── Apply Tax to Order Summary \u0026 Tax Lines ──────────────────────────────
-    if (pos_tax_amount != null && pos_tax_amount > 0) {
+    // ── Apply Tax to Order Summary & Tax Lines ──────────────────────────────
+    if (pos_tax_amount != null) {
         const dbUrl = process.env.DATABASE_URL
         if (dbUrl) {
             const pool = new Pool({ connectionString: dbUrl })
             try {
-                // 1. Inyectar tax lines en los items (necesario para que Medusa Admin lo sume en el UI)
+                // 1. Fetch current Medusa-stored tax_total (BEFORE our injection) to compare vs POS.
+                let calculatedTax = 0
+                try {
+                    const taxCheckRes = await fetch(`${base}/admin/orders/${id}?fields=tax_total`, { headers: authHeaders })
+                    if (taxCheckRes.ok) {
+                        const { order: taxCheckOrder } = await taxCheckRes.json()
+                        calculatedTax = Number(taxCheckOrder?.tax_total ?? 0)
+                    }
+                } catch { /* non-fatal */ }
+
+                // 2. Fetch item IDs for tax line operations.
                 const itemsRes = await pool.query<{ item_id: string }>(
-                    `SELECT DISTINCT oi.item_id
-                     FROM order_item oi
-                     JOIN order_line_item oli ON oli.id = oi.item_id
-                     WHERE oi.order_id = $1 AND oi.deleted_at IS NULL AND oli.deleted_at IS NULL`,
+                    `SELECT DISTINCT oi.item_id FROM order_item oi WHERE oi.order_id = $1 AND oi.deleted_at IS NULL`,
                     [id]
                 )
                 const itemIds = itemsRes.rows.map(r => r.item_id)
-                
+
+                // Use the statutory tax rate (7% FL). Do NOT back-calculate from gross subtotal.
+                // With pos-tax provider fixed (provider_id='tp_pos-tax') and adjustments loaded:
+                // 7% × (subtotal − discount) = correct amount ✅
+                // This fallback only runs if apply-discount-force tax insertion missed something.
+                const effectiveRate = pos_tax_rate ?? 7
+
+                logger.info(`[post-edit-sync] CALCULATED TAX = $${calculatedTax.toFixed(2)} | POS TAX = $${pos_tax_amount.toFixed(2)}`)
+                if (Math.abs(calculatedTax - pos_tax_amount) > 0.005) {
+                    logger.warn(`[post-edit-sync] ⚠️  TAX OVERWRITE: Medusa=$${calculatedTax.toFixed(2)} → POS=$${pos_tax_amount.toFixed(2)} (rate=${effectiveRate}%)`)
+                }
+
                 if (itemIds.length > 0) {
+                    // Delete ALL existing tax lines to ensure clean state.
                     await pool.query(
-                        `DELETE FROM order_line_item_tax_line WHERE item_id = ANY($1) AND code = 'manual'`,
+                        `DELETE FROM order_line_item_tax_line WHERE item_id = ANY($1)`,
                         [itemIds]
                     )
-                    
-                    const taxRate = pos_tax_rate ?? 7 // Default to 7% if not provided
-                    const rawRate = JSON.stringify({ value: String(taxRate), precision: 20 })
+
+                    const rawRate = JSON.stringify({ value: String(effectiveRate), precision: 20 })
                     const genId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-                    
+
+                    // Use EXEMPT code when rate is 0, FL when rate is 7
+                    const taxCode = effectiveRate === 0 ? "EXEMPT" : "FL"
+                    const taxDesc = effectiveRate === 0 ? "Tax Exempt" : "Florida Sales Tax"
+
                     for (const itemId of itemIds) {
                         const lineId = genId("taxline")
                         await pool.query(
                             `INSERT INTO order_line_item_tax_line (id, item_id, code, rate, raw_rate, description, created_at, updated_at)
                              VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())`,
-                            [lineId, itemId, "manual", taxRate, rawRate, "Sales Tax"]
+                            [lineId, itemId, taxCode, effectiveRate, rawRate, taxDesc]
                         )
                     }
-                    logger.info(`[post-edit-sync] ✅ Injected tax lines for ${itemIds.length} items`)
+                    logger.info(`[post-edit-sync] ✅ Inserted ${taxCode} tax lines at ${effectiveRate}% for ${itemIds.length} items ($${pos_tax_amount} total)`)
                 }
 
-                // 2. Inyectar en order_summary
+                // 3. Update order_summary JSONB with correct totals
                 const summaryRes = await pool.query<{ id: string; totals: any; version: number }>(
                     `SELECT id, totals, version FROM order_summary
                      WHERE order_id = $1 AND deleted_at IS NULL
@@ -126,22 +149,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 )
                 if (summaryRes.rows[0]) {
                     const { id: summaryId, totals } = summaryRes.rows[0]
-                    
-                    // We must patch ALL high level mathematical aggregations so Medusa doesn't calculate weirdly:
-                    // new_accounting_total = (totals.original_order_total || 0) + tax_total - discount_total
-                    // However, original_order_total already includes the tax... wait, original_order_total in medusa
-                    // is strictly items + shipping BEFORE discounts but with their native taxes.
-                    // Let's just hardcode the Final Math to the POS's exact numbers. The POS gave us `pos_tax_amount`.
-                    
-                    // Re-fetch the true discount from order_summary if apply-discount-force just set it
-                    const forcedDiscount = totals.discount_total || 0
-                    
-                    // Assuming POS Total algorithm: 
-                    // Item Subtotal (from order_item) + Shipping (from order_shipping_method)
-                    // Let's just let Medusa keep original_order_total, but we force current_order_total and others.
-                    
+
+                    // Prefer pos_discount_amount (POS dollar truth); fall back to fixed discount_value.
+                    const forcedDiscount = (pos_discount_amount && pos_discount_amount > 0)
+                        ? pos_discount_amount
+                        : (discount_value && discount_value > 0 && discount_type !== 'percent') ? discount_value : (totals.discount_total || 0)
+
                     const newAccountingTotal = Number(totals.original_order_total || 0) + pos_tax_amount - forcedDiscount
-                    
+
                     await pool.query(
                          `UPDATE order_summary SET totals = $1, updated_at = NOW() WHERE id = $2`,
                          [JSON.stringify({
@@ -203,7 +218,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             logger.info(`[post-edit-sync] 🧹 Hard-deleted ${ocDel.rowCount ?? 0} stale order_change row(s)`)
 
             // 4. Delete old order_item versions (keep only latest version per item)
-            // also drops any stray order_item elements that aren't mapped in order_line_item if needed
             const oiDel = await pool.query(
                 `DELETE FROM order_item
                  WHERE order_id = $1
@@ -225,6 +239,80 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             logger.warn(`[post-edit-sync] 🧹 Hard-wipe cleanup non-fatal: ${e.message}`)
         } finally {
             await pool.end()
+        }
+    }
+
+    // ── Discount Reconciliation (Safety Net) ─────────────────────────────────
+    // pos_discount_amount = POS-computed dollar amount (e.g. $2.65), ALWAYS provided when discount exists.
+    // If not available, fall back to discount_value only when it is a fixed dollar amount (not a percent rate).
+    const reconDiscountAmt = (pos_discount_amount && pos_discount_amount > 0)
+        ? pos_discount_amount
+        : (discount_value && discount_value > 0 && discount_type === 'fixed' ? discount_value : undefined)
+    if (reconDiscountAmt && reconDiscountAmt > 0) {
+        try {
+            const recheckRes = await fetch(
+                `${base}/admin/orders/${id}?fields=discount_total`,
+                { headers: authHeaders }
+            )
+            if (recheckRes.ok) {
+                const { order: recheckOrder } = await recheckRes.json()
+                const medusaDiscount = Number(recheckOrder?.discount_total ?? 0)
+                const posDiscount = Number(reconDiscountAmt)
+                logger.info(`[post-edit-sync] CALCULATED DISCOUNT = $${medusaDiscount.toFixed(2)} | POS ORDER DISCOUNT = $${posDiscount.toFixed(2)}`)
+                if (Math.abs(medusaDiscount - posDiscount) > 0.005) {
+                    logger.warn(`[post-edit-sync] ⚠️ DISCOUNT OVERWRITE: Medusa=$${medusaDiscount.toFixed(2)} → POS=$${posDiscount.toFixed(2)}`)
+                    const discPool = new Pool({ connectionString: process.env.DATABASE_URL!, ssl: undefined })
+                    try {
+                        const adjRes = await discPool.query<{ id: string; amount: string }>(
+                            `SELECT olia.id, olia.amount::text
+                             FROM order_line_item_adjustment olia
+                             WHERE olia.item_id IN (SELECT oi.item_id FROM order_item oi WHERE oi.order_id = $1)
+                             AND olia.deleted_at IS NULL`,
+                            [id]
+                        )
+                        const adjs = adjRes.rows
+                        if (adjs.length > 0) {
+                            const totalAdj = adjs.reduce((s, r) => s + Number(r.amount), 0)
+                            for (const adj of adjs) {
+                                const proportion = totalAdj > 0 ? Number(adj.amount) / totalAdj : 1 / adjs.length
+                                const newAmt = Number((proportion * posDiscount).toFixed(6))
+                                const rawAmt = JSON.stringify({ value: String(newAmt), precision: 20 })
+                                await discPool.query(
+                                    `UPDATE order_line_item_adjustment SET amount = $1, raw_amount = $2, updated_at = NOW() WHERE id = $3`,
+                                    [newAmt, rawAmt, adj.id]
+                                )
+                            }
+                            logger.info(`[post-edit-sync] ✅ Forced discount: ${adjs.length} adjustments corrected to sum $${posDiscount}`)
+                            results.discount_forced = posDiscount
+                        }
+
+                        // CRITICAL: Also update order_summary so the admin DISPLAY shows the correct discount_total.
+                        const sumRes2 = await discPool.query<{ id: string; totals: any }>(
+                            `SELECT id, totals FROM order_summary WHERE order_id = $1 AND deleted_at IS NULL ORDER BY version DESC LIMIT 1`,
+                            [id]
+                        )
+                        if (sumRes2.rows[0]) {
+                            const { id: sumId2, totals: sumTotals2 } = sumRes2.rows[0]
+                            await discPool.query(
+                                `UPDATE order_summary SET totals = $1, updated_at = NOW() WHERE id = $2`,
+                                [JSON.stringify({
+                                    ...sumTotals2,
+                                    discount_total: posDiscount,
+                                    raw_discount_total: { value: String(posDiscount), precision: 20 },
+                                }), sumId2]
+                            )
+                            logger.info(`[post-edit-sync] ✅ Order summary discount_total corrected to $${posDiscount}`)
+                        }
+                    } finally {
+                        await discPool.end()
+                    }
+                } else {
+                    logger.info(`[post-edit-sync] ✅ DISCOUNT OK — no overwrite needed`)
+                    results.discount_ok = medusaDiscount
+                }
+            }
+        } catch (e: any) {
+            logger.warn(`[post-edit-sync] Discount reconciliation non-fatal: ${e.message}`)
         }
     }
 
