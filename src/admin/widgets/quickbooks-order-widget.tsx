@@ -7,13 +7,13 @@ import { useState, useEffect, useRef, useCallback } from "react"
  * QuickBooks Order Widget  (zone: order.details.before)
  *
  * Shows QB sync status for a confirmed Order.
- * Metadata keys:
- *   qb_sales_order_txn_id   — QB Sales Order TxnID
- *   qb_sales_order_ref      — QB Sales Order number (e.g. "1042")
- *   qb_payment_txn_id       — QB Payment TxnID (set after payment captured)
- *   qb_invoice_txn_id       — QB Invoice TxnID (set after fulfillment)
- *   qb_estimate_txn_id      — QB Estimate (only present if came from Draft Order)
- *   qb_synced_at            — ISO timestamp of last QB sync
+ * Metadata keys (new structured JSON shape, with flat-field backward compat):
+ *   qb_sales_order: { ref_number, txn_id, operation_id, synced_at }
+ *   qb_invoices:    [{ ref_number, txn_id, operation_id, fulfillment_id, synced_at }]
+ *   qb_payments:    [{ ref_number, txn_id, operation_id, amount, method, synced_at }]
+ *   qb_estimate:    { ref_number, txn_id, ... } (only if from Draft Order)
+ *   qb_sync_status: "sales_order" | "estimate_conversion" | "pending" | null
+ *   qb_synced_at:   ISO timestamp (flat, unchanged)
  */
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -60,12 +60,34 @@ const QuickBooksOrderWidget = ({ data }: DetailWidgetProps<any>) => {
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
     // Removed early return so widget is always visible even if canceled/archived
-    const soTxnId: string | null = localMeta.qb_sales_order_txn_id ?? null
-    const soRef: string | null = localMeta.qb_sales_order_ref ?? null
-    const paymentTxnId: string | null = localMeta.qb_payment_txn_id ?? null
-    const invoiceTxnId: string | null = localMeta.qb_invoice_txn_id ?? null
-    const estimateTxnId: string | null = localMeta.qb_estimate_txn_id ?? null
-    const operationId: string | null = localMeta.qb_sales_order_operation_id ?? null
+    // ── Read metadata (new JSON shape with flat-field fallbacks) ──────────────
+    // Sales Order
+    const soObj   = localMeta.qb_sales_order
+    const soTxnId: string | null =
+        (soObj && typeof soObj === "object" ? soObj.txn_id : null) ??
+        localMeta.qb_sales_order_txn_id ?? null
+    const soRef: string | null =
+        (soObj && typeof soObj === "object" ? soObj.ref_number : null) ??
+        localMeta.qb_sales_order_ref ?? null
+    // Operation ID (pending state detection)
+    const operationId: string | null =
+        (soObj && typeof soObj === "object" ? soObj.operation_id : null) ??
+        localMeta.qb_sales_order_operation_id ?? null
+    // Estimate (from Draft Order path)
+    const estObj = localMeta.qb_estimate
+    const estimateTxnId: string | null =
+        (estObj && typeof estObj === "object" ? estObj.txn_id : null) ??
+        localMeta.qb_estimate_txn_id ?? null
+    // Latest Invoice
+    const invoicesArr: any[] = Array.isArray(localMeta.qb_invoices) ? localMeta.qb_invoices : []
+    const latestInvoice = invoicesArr.length > 0 ? invoicesArr[invoicesArr.length - 1] : null
+    const invoiceTxnId: string | null = latestInvoice?.txn_id ?? localMeta.qb_invoice_txn_id ?? null
+    const invoiceRef: string | null   = latestInvoice?.ref_number ?? localMeta.qb_invoice_ref ?? null
+    // Latest Payment
+    const paymentsArr: any[] = Array.isArray(localMeta.qb_payments) ? localMeta.qb_payments : []
+    const latestPayment = paymentsArr.length > 0 ? paymentsArr[paymentsArr.length - 1] : null
+    const paymentTxnId: string | null = latestPayment?.txn_id ?? localMeta.qb_payment_txn_id ?? null
+    // Sync timestamp (flat, unchanged)
     const syncedAt: string | null = localMeta.qb_synced_at ?? null
 
     const soSynced = !!soTxnId
@@ -81,9 +103,10 @@ const QuickBooksOrderWidget = ({ data }: DetailWidgetProps<any>) => {
             if (!resp.ok) return
             const json = await resp.json()
             const meta = json?.order?.metadata ?? {}
-            if (meta.qb_sales_order_txn_id) {
+            // Stop polling once we have a txnId (in new or old shape)
+            const hasTxnId = meta?.qb_sales_order?.txn_id || meta?.qb_sales_order_txn_id
+            if (hasTxnId) {
                 setLocalMeta(meta)
-                // Stop polling once txnId is present
                 if (pollRef.current) clearInterval(pollRef.current)
             }
         } catch {
@@ -142,11 +165,15 @@ const QuickBooksOrderWidget = ({ data }: DetailWidgetProps<any>) => {
                 return
             }
 
-            // Optimistically update local metadata display
+            // Optimistic update — writes to new JSON shape
             setLocalMeta((prev) => ({
                 ...prev,
-                qb_sales_order_txn_id: json.qbSoTxnId ?? prev.qb_sales_order_txn_id,
-                qb_sales_order_ref: json.qbSoRef ?? prev.qb_sales_order_ref,
+                qb_sales_order: {
+                    ...(prev.qb_sales_order && typeof prev.qb_sales_order === "object" ? prev.qb_sales_order : {}),
+                    txn_id:     json.qbSoTxnId ?? prev.qb_sales_order?.txn_id ?? prev.qb_sales_order_txn_id,
+                    ref_number: json.qbSoRef   ?? prev.qb_sales_order?.ref_number ?? prev.qb_sales_order_ref,
+                    synced_at:  new Date().toISOString(),
+                },
                 qb_synced_at: new Date().toISOString(),
             }))
 
@@ -216,7 +243,14 @@ const QuickBooksOrderWidget = ({ data }: DetailWidgetProps<any>) => {
                 </div>
                 {invoiceTxnId && (
                     <div className="grid grid-cols-3 gap-4">
+                        <QBField label="Invoice Number" value={invoiceRef} />
                         <QBField label="Invoice TxnID" value={invoiceTxnId} />
+                        {invoicesArr.length > 1 && (
+                            <div className="flex flex-col gap-1">
+                                <span className="text-[10px] text-ui-fg-muted uppercase tracking-widest font-medium">Invoices</span>
+                                <span className="text-sm text-ui-fg-muted">{invoicesArr.length} total</span>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>

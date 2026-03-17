@@ -129,7 +129,13 @@ export const useOrderActions = ({ id, order, estimateStatus, setEstimateStatus, 
     // ── QB Sync ────────────────────────────────────────────────────────────────
     const handleSync = async () => {
         if (!order) return; setSyncing(true); setSyncError(null)
-        const isAlreadySynced = !!(order.metadata?.qb_estimate_txn_id)
+        // Read from new JSON shape first, fallback to old flat field for backward compat
+        const estMeta = order.metadata?.qb_estimate
+        const existingTxnId =
+            (estMeta && typeof estMeta === "object" ? (estMeta as any).txn_id : null) ??
+            (order.metadata?.qb_estimate_txn_id as string | undefined) ??
+            null
+        const isAlreadySynced = !!existingTxnId
         const wasCancelled = estimateStatus === "Cancelled"
         try {
             const r = await fetch("/admin/quickbooks/draft-order", {

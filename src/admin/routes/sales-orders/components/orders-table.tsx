@@ -79,7 +79,18 @@ export const OrdersTable = ({ loading, sorted, paginated, onRowClick, rowHref }:
                 const channel = (order.sales_channel?.name === "Default Sales Channel" || !order.sales_channel?.name)
                     ? "Default" : order.sales_channel.name!
 
-                const qbRef = (order.metadata?.qb_sales_order_ref ?? order.metadata?.qb_invoice_ref ?? null) as string | null
+                const soObj = order.metadata?.qb_sales_order
+                const invArr = Array.isArray(order.metadata?.qb_invoices) ? order.metadata.qb_invoices : []
+                const qbRef = (
+                    // New JSON shape (SO)
+                    (soObj && typeof soObj === "object" ? (soObj as any).ref_number : null) ??
+                    // New JSON shape (latest invoice)
+                    (invArr.length > 0 ? invArr[invArr.length - 1].ref_number : null) ??
+                    // Old flat fields (backward compat)
+                    order.metadata?.qb_sales_order_ref ??
+                    order.metadata?.qb_invoice_ref ??
+                    null
+                ) as string | null
                 return (
                     <div key={order.id}
                         className={`grid ${COLS} gap-x-3 px-4 py-3 border-b border-ui-border-base hover:bg-ui-bg-subtle-hover transition-colors cursor-pointer items-center`}

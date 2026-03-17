@@ -143,9 +143,22 @@ const DraftOrderDetail = () => {
                 {/* ── Right sidebar ─────────────────────────────────────────── */}
                 <OrderSidebar
                     id={id!}
-                    estimateRef={s.localRef ?? (order.metadata?.qb_estimate_ref as string | null) ?? null}
-                    estimateTxnId={s.localTxnId ?? (order.metadata?.qb_estimate_txn_id as string | null) ?? null}
-                    isSynced={!!(s.localTxnId ?? order.metadata?.qb_estimate_txn_id)}
+                    estimateRef={s.localRef ?? (
+                        order.metadata?.qb_estimate && typeof order.metadata.qb_estimate === "object"
+                            ? (order.metadata.qb_estimate as any)?.ref_number
+                            : (order.metadata?.qb_estimate_ref as string | undefined)
+                    ) ?? null}
+                    estimateTxnId={s.localTxnId ?? (
+                        order.metadata?.qb_estimate && typeof order.metadata.qb_estimate === "object"
+                            ? (order.metadata.qb_estimate as any)?.txn_id
+                            : (order.metadata?.qb_estimate_txn_id as string | undefined)
+                    ) ?? null}
+                    isSynced={!!(
+                        s.localTxnId ??
+                        (order.metadata?.qb_estimate && typeof order.metadata.qb_estimate === "object"
+                            ? (order.metadata.qb_estimate as any)?.txn_id
+                            : order.metadata?.qb_estimate_txn_id)
+                    )}
                     estimateStatus={s.estimateStatus}
                     statusSaving={s.statusSaving} syncing={s.syncing} syncError={s.syncError}
                     timeline={s.timeline} orderCreatedAt={order.created_at}
@@ -215,7 +228,10 @@ const DraftOrderDetail = () => {
                         <div className="px-6 py-5">
                             <Text className="text-ui-fg-subtle text-sm">
                                 This draft order will be permanently deleted from Medusa.
-                                {!!(s.localTxnId ?? order.metadata?.qb_estimate_txn_id) && (
+                                {!!(s.localTxnId ??
+                            (order.metadata?.qb_estimate && typeof order.metadata.qb_estimate === "object"
+                                ? (order.metadata.qb_estimate as any)?.txn_id
+                                : order.metadata?.qb_estimate_txn_id)) && (
                                     <span className="block mt-2 text-ui-fg-muted">
                                         The linked QuickBooks Estimate will be marked as <strong>inactive</strong>.
                                     </span>
@@ -271,7 +287,10 @@ const DraftOrderDetail = () => {
                         <div className="px-6 py-5">
                             <Text className="text-ui-fg-subtle text-sm">
                                 The draft order will remain in Medusa with status <strong>Cancelled</strong>.
-                                {!!(s.localTxnId ?? order.metadata?.qb_estimate_txn_id) && (
+                                {!!(s.localTxnId ??
+                            (order.metadata?.qb_estimate && typeof order.metadata.qb_estimate === "object"
+                                ? (order.metadata.qb_estimate as any)?.txn_id
+                                : order.metadata?.qb_estimate_txn_id)) && (
                                     <span className="block mt-2 text-ui-fg-muted">
                                         The linked QuickBooks Estimate will be marked as <strong>inactive</strong>.
                                     </span>

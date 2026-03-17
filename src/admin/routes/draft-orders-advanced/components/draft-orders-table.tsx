@@ -54,8 +54,16 @@ export const DraftOrdersTable = ({ loading, sorted, paginated, onRowClick, rowHr
             {paginated.map(order => {
                 const name = order.customer ? `${order.customer.first_name ?? ""} ${order.customer.last_name ?? ""}`.trim() || "—" : "—"
                 const email = order.customer?.email ?? order.email ?? "—"
-                const synced = !!order.metadata?.qb_estimate_txn_id
-                const qbRef = (order.metadata?.qb_estimate_ref as string | null) ?? null
+                const estObj = order.metadata?.qb_estimate
+                const synced = !!(
+                    (estObj && typeof estObj === "object" ? (estObj as any).txn_id : null) ??
+                    order.metadata?.qb_estimate_txn_id
+                )
+                const qbRef = (
+                    (estObj && typeof estObj === "object" ? (estObj as any).ref_number : null) ??
+                    (order.metadata?.qb_estimate_ref as string | null) ??
+                    null
+                )
                 const s = (order.metadata?.order_status ?? order.metadata?.estimate_status) as EstimateStatus | undefined
 
                 const isDeclined = s === "Not Approved"
