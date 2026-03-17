@@ -214,6 +214,9 @@ module.exports = defineConfig({
       resolve: "./src/modules/invoices",
     },
     {
+      resolve: "./src/modules/finance",
+    },
+    {
       resolve: "./src/modules/document-templates",
     },
     {

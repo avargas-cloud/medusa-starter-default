@@ -47,7 +47,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     // PRIORITY 1: metadata.computed_total — saved by compute-tax using correctly-rounded
     //             discount logic (Math.round per component), avoiding Medusa's fractional
     //             accumulation that can cause 1 cent errors (e.g. $84.28 instead of $84.27).
-    // PRIORITY 2: order.total from Medusa API — fallback if compute-tax was never called.
+    // PRIORITY 2: Explicit math recalculation (Subtotal - Discount + Tax) using Medusa's API fields.
     const computeTrueTotal = async (): Promise<number | null> => {
         try {
             const orderRes = await fetch(
@@ -65,11 +65,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 return Number(computedMeta)
             }
 
-            // Fall back to Medusa's order.total (may be 1 cent off due to fractional promotions)
-            console.log(`[convert-force] Using Medusa order.total: ${order.total} (no computed_total in metadata)`)
-            return order.total > 0 ? order.total : null
+            // Fall back to explicit math (Subtotal - Discount + Tax) because Medusa computes Tax on Gross
+            const subtotal = Number(order.subtotal || 0)
+            const discount = Number(order.discount_total || 0)
+            const tax = Number(order.tax_total || 0)
+            const trueTotal = subtotal - discount + tax
+            
+            console.log(`[convert-force] Using Explicit Math (Subtotal ${subtotal} - Discount ${discount} + Tax ${tax}): ${trueTotal} (Medusa order.total: ${order.total})`)
+            return trueTotal > 0 ? trueTotal : null
         } catch (e: any) {
-            console.warn("[convert-force] Could not fetch order total:", e?.message)
+            console.warn("[convert-force] Could not calculate true total:", e?.message)
             return null
         }
     }
@@ -78,30 +83,34 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     // ── Helper: patch payment collection to the correct amount ────────────────
     const fixPaymentCollection = async (correctTotal: number) => {
         try {
-            // Fetch the order's payment collections
-            const pcRes = await fetch(
-                `${base}/admin/payment-collections?order_id=${id}`,
-                { headers: authHeaders }
-            )
-            if (!pcRes.ok) return
+            const db = getConvertPool()
+            const client = await db.connect()
+            try {
+                // Find payment collections linked to this order
+                const res = await client.query(
+                    `SELECT opc.payment_collection_id 
+                     FROM order_payment_collection opc 
+                     WHERE opc.order_id = $1`,
+                    [id]
+                )
+                
+                const pcolIds = res.rows.map(r => r.payment_collection_id)
+                if (pcolIds.length === 0) return
 
-            const pcJson = await pcRes.json()
-            const collections: any[] = pcJson.payment_collections ?? []
-
-            for (const col of collections) {
-                // Amount in payment collection is in cents; our total is in dollars
                 const correctCents = Math.round(correctTotal * 100)
-                if (col.amount === correctCents) continue  // already correct
-
-                console.log(`[convert-force] Patching payment collection ${col.id}: ${col.amount} → ${correctCents} cents`)
-                await fetch(`${base}/admin/payment-collections/${col.id}`, {
-                    method: "POST",
-                    headers: authHeaders,
-                    body: JSON.stringify({ amount: correctCents }),
-                })
+                
+                for (const pcId of pcolIds) {
+                    const pcRes = await client.query(`SELECT amount FROM payment_collection WHERE id = $1`, [pcId])
+                    if (pcRes.rows[0] && Number(pcRes.rows[0].amount) !== correctCents) {
+                        console.log(`[convert-force] Patching Payment Collection ${pcId} via SQL: ${pcRes.rows[0].amount} → ${correctCents}`)
+                        await client.query(`UPDATE payment_collection SET amount = $1, updated_at = NOW() WHERE id = $2`, [correctCents, pcId])
+                    }
+                }
+            } finally {
+                client.release()
             }
         } catch (e: any) {
-            console.warn("[convert-force] Could not patch payment collection:", e?.message)
+             console.warn("[convert-force] Could not SQL patch payment collection:", e?.message)
         }
     }
 

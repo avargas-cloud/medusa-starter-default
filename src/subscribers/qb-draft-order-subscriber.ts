@@ -29,6 +29,18 @@ import {
 const LOG_PREFIX = "[QB-DRAFT]"
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
 
+// Sales Channel IDs from .env
+const POS_CHANNEL_ID = process.env.POS_SALES_CHANNEL_ID ?? ""
+
+/** Returns true if the order was placed through the POS sales channel */
+function isPosOrder(order: any): boolean {
+    // Primary check: sales channel ID (set via POS_SALES_CHANNEL_ID env var)
+    if (POS_CHANNEL_ID && order.sales_channel_id === POS_CHANNEL_ID) return true
+    // Fallback: metadata flag set by POS app on all orders (works without env var)
+    if (order.metadata?.pos_created === true) return true
+    return false
+}
+
 // ─── Subscriber Handler ─────────────────────────────────────────────────────
 
 async function qbDraftOrderSubscriber({ event, container }: SubscriberArgs<any>) {
@@ -55,7 +67,7 @@ async function qbDraftOrderSubscriber({ event, container }: SubscriberArgs<any>)
 
 // ─── Event Handlers ──────────────────────────────────────────────────────────
 
-async function handleDraftOrderCreated(data: any, container: any, logger: any) {
+export async function handleDraftOrderCreated(data: any, container: any, logger: any, isCron: boolean = false) {
     const draftOrderId = data.id
     logger.info(`${LOG_PREFIX} ── draft_order.created → ${draftOrderId} ──`)
 
@@ -92,6 +104,14 @@ async function handleDraftOrderCreated(data: any, container: any, logger: any) {
 
     logger.info(`${LOG_PREFIX} Draft order metadata: ${JSON.stringify(draftOrder.metadata || {})}`)
     logger.info(`${LOG_PREFIX} Draft order items: ${draftOrder.items?.length ?? 0}`)
+
+    // POS guard
+    // POS Draft Orders do not sync to QB immediately. They are picked up by a cron job 1 hour later,
+    // unless they are converted to a real order before then.
+    if (!isCron && isPosOrder(draftOrder)) {
+        logger.info(`${LOG_PREFIX} ⏭️ POS Draft Order — QB sync delayed by 1 hour (handled by cron), skipping subscriber`)
+        return
+    }
 
     // Ensure customer in QB
     const customer = draftOrder.customer

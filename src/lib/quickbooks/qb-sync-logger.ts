@@ -46,6 +46,7 @@ export type QbOperation =
     | "inventory_sync"
     | "price_sync"
     | "customer_sync"
+    | "pos_sync"
 
 export type QbLogStatus = "processing" | "completed" | "failed" | "skipped"
 

@@ -77,6 +77,35 @@ const PAYMENT_LABELS: Record<string, string> = {
     ach: "ACH / Wire", credit: "Store Credit", mixed: "Mixed",
 }
 
+// ─── QB metadata helpers ──────────────────────────────────────────────────────
+
+interface QbMeta {
+    ref: string | null
+    synced: boolean
+    customerDisplay?: string
+}
+
+function extractQbMeta(meta: Record<string, unknown> | null | undefined): QbMeta {
+    if (!meta) return { ref: null, synced: false }
+    // New consolidated shape: qb_invoice (object) or qb_invoices (array)
+    const invObj = meta.qb_invoice
+    const invArr = Array.isArray(meta.qb_invoices) ? meta.qb_invoices : []
+    const latestInv = invArr.length > 0 ? invArr[invArr.length - 1] : null
+    const ref = (
+        (invObj && typeof invObj === "object" ? (invObj as any).ref_number : null) ??
+        (latestInv?.ref_number ?? null) ??
+        (meta.qb_invoice_ref as string | null) ??
+        null
+    )
+    const txnId = (
+        (invObj && typeof invObj === "object" ? (invObj as any).txn_id : null) ??
+        (latestInv?.txn_id ?? null) ??
+        (meta.qb_invoice_txn_id as string | null) ??
+        null
+    )
+    return { ref: ref ?? null, synced: !!(txnId || ref) }
+}
+
 type SortKey = "date_desc" | "date_asc" | "total_desc" | "total_asc" | "invoice_desc" | "invoice_asc"
 
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
@@ -235,14 +264,15 @@ const InvoiceDetailModal = ({ inv, navigate, onClose }: InvoiceDetailProps) => {
 
 // ─── Column layout ─────────────────────────────────────────────────────────────
 
-const COLS = "grid-cols-[130px_100px_100px_minmax(140px,1fr)_100px_130px_110px_110px]"
-const HEADERS = ["Invoice #", "Order #", "Date", "Customer ID", "Status", "Payment", "Total", "Balance"]
+const COLS = "grid-cols-[130px_90px_100px_100px_minmax(180px,1fr)_100px_130px_110px_100px_80px]"
+const HEADERS = ["Invoice #", "QB Ref #", "Order #", "Date", "Customer", "Status", "Payment", "Total", "Balance", "QB Sync"]
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 const InvoicesPage = () => {
     const navigate = useNavigate()
     const [invoices, setInvoices] = useState<PosInvoice[]>([])
+    const [orderMeta, setOrderMeta] = useState<Record<string, QbMeta>>({})
     const [loading, setLoading] = useState(true)
     const [search, setSearch] = useState("")
     const [sort, setSort] = useState<SortKey>("date_desc")
@@ -253,9 +283,42 @@ const InvoicesPage = () => {
         setLoading(true)
         try {
             const r = await fetch(`/admin/invoices`, { credentials: "include" })
-            if (r.ok) {
-                const json = await r.json()
-                setInvoices(json.invoices ?? [])
+            if (!r.ok) return
+            const json = await r.json()
+            const invList: PosInvoice[] = json.invoices ?? []
+            setInvoices(invList)
+
+            // Batch-fetch order metadata for QB columns
+            const orderIds = [...new Set(invList.map(i => i.order_id))]
+            if (orderIds.length > 0) {
+                const idsParam = orderIds.map(id => `id[]=${id}`).join("&")
+                const or = await fetch(`/admin/orders?${idsParam}&fields=id,metadata,*customer&limit=100`, { credentials: "include" })
+                if (or.ok) {
+                    const oj = await or.json()
+                    const map: Record<string, QbMeta> = {}
+                    for (const o of (oj.orders ?? [])) {
+                        const meta = extractQbMeta(o.metadata)
+                        
+                        let customerDisplay = undefined
+                        if (o.customer) {
+                            const parts = []
+                            if (o.customer.first_name || o.customer.last_name) {
+                                parts.push([o.customer.first_name, o.customer.last_name].filter(Boolean).join(" "))
+                            }
+                            if (o.customer.company_name) {
+                                parts.push(o.customer.company_name)
+                            }
+                            if (parts.length > 0) {
+                                customerDisplay = parts.join(" — ")
+                            } else if (o.customer.email) {
+                                customerDisplay = o.customer.email
+                            }
+                        }
+                        
+                        map[o.id] = { ...meta, customerDisplay }
+                    }
+                    setOrderMeta(map)
+                }
             }
         } catch (err) {
             console.error("[InvoicesPage] fetch failed", err)
@@ -354,19 +417,26 @@ const InvoicesPage = () => {
                                     ))}
                                 </div>
                                 {/* Rows */}
-                                {paginated.map(inv => (
+                                {paginated.map(inv => {
+                                    const qb = orderMeta[inv.order_id] ?? { ref: null, synced: false }
+                                    return (
                                     <div
                                         key={inv.id}
                                         className={`grid ${COLS} gap-x-3 px-4 py-3 border-b border-ui-border-base hover:bg-ui-bg-subtle-hover transition-colors cursor-pointer items-center`}
                                         onClick={() => setSelectedInvoice(inv)}
                                     >
                                         <Text size="small" weight="plus" className="font-mono">{inv.invoice_number}</Text>
+                                        {/* QB Ref # */}
+                                        <Text size="small" className="font-mono text-ui-fg-subtle truncate" title={qb.ref ?? undefined}>
+                                            {qb.ref ?? "—"}
+                                        </Text>
+                                        {/* Order # */}
                                         <Text size="small" className="text-ui-fg-subtle truncate font-mono" title={inv.order_id}>
                                             ...{inv.order_id.slice(-8)}
                                         </Text>
                                         <Text size="small" className="text-ui-fg-subtle">{fmtDate(inv.issued_at ?? inv.created_at)}</Text>
-                                        <Text size="small" className="text-ui-fg-subtle truncate font-mono text-xs" title={inv.customer_id}>
-                                            ...{inv.customer_id.slice(-10)}
+                                        <Text size="small" className={qb.customerDisplay ? "text-ui-fg-base truncate" : "text-ui-fg-subtle truncate font-mono text-xs"} title={qb.customerDisplay ?? inv.customer_id}>
+                                            {qb.customerDisplay ?? `...${inv.customer_id.slice(-10)}`}
                                         </Text>
                                         <div>
                                             <Badge color={STATUS_COLORS[inv.status] ?? "grey"} size="small">
@@ -380,8 +450,16 @@ const InvoicesPage = () => {
                                         <Text size="small" className={`text-right font-medium ${inv.balance_due > 0 ? "text-orange-500" : "text-green-600"}`}>
                                             {fmt(inv.balance_due)}
                                         </Text>
+                                        {/* QB Sync */}
+                                        <div className="flex justify-center">
+                                            {qb.synced
+                                                ? <span title="Synced to QuickBooks" className="text-green-500 font-bold text-base leading-none">✓</span>
+                                                : <span title="Not synced" className="text-ui-fg-muted text-base leading-none">—</span>
+                                            }
+                                        </div>
                                     </div>
-                                ))}
+                                    )
+                                })}
                             </div>
                         )}
                     </div>

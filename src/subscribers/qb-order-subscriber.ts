@@ -35,6 +35,7 @@ import {
     processInvoiceInQb,
     buildQbItems,
     buildShippingQbItem,
+    buildQbOrderDiscountLines,
 } from "../lib/quickbooks/order-flow-core"
 import {
     closeSalesOrderInQb,
@@ -118,7 +119,7 @@ async function qbOrderSubscriber({ event, container }: SubscriberArgs<any>) {
                 await handlePaymentCaptured(event.data, orderModule, customerModule, logger)
                 break
             case "order.fulfillment_created":
-                await handleFulfillmentCreated(event.data, orderModule, customerModule, logger)
+                await handleFulfillmentCreated(event.data, orderModule, customerModule, container, logger)
                 break
             case "order.canceled":
                 await handleOrderCanceled(event.data, orderModule, logger)
@@ -138,12 +139,13 @@ async function qbOrderSubscriber({ event, container }: SubscriberArgs<any>) {
 
 // ─── Event Handlers ──────────────────────────────────────────────────────────
 
-async function handleOrderPlaced(
+export async function handleOrderPlaced(
     data: any,
     orderModule: any,
     customerModule: any,
     _container: any,
-    logger: any
+    logger: any,
+    isCron: boolean = false
 ) {
     const orderId = data.id
     logger.info(`${LOG_PREFIX} ── order.placed → ${orderId} ──`)
@@ -165,6 +167,10 @@ async function handleOrderPlaced(
                 "id", "display_id", "status", "metadata", "tax_total",
                 "sales_channel_id",        // ← used for POS channel guard
                 "customer_id",
+                "subtotal",
+                "discount_total",
+                "promotions.*",
+                "promotions.application_method.*",
                 "items.*",
                 "items.item.unit_price",   // ← canonical price from order_line_item table
                 "items.variant.*",
@@ -182,9 +188,9 @@ async function handleOrderPlaced(
         order = fetchedOrder
         logger.info(`${LOG_PREFIX} Order fetched via Query: #${order.display_id}, items=${order.items?.length ?? 0}, shipping_methods=${order.shipping_methods?.length ?? 0}, sales_channel_id=${order.sales_channel_id ?? "none"}`)
 
-        // ── POS guard: POS orders handle QB sync directly via the POS app ────
-        if (isPosOrder(order)) {
-            logger.info(`${LOG_PREFIX} ⏭️ POS order (channel: ${order.sales_channel_id}) — QB sync handled by POS, skipping subscriber`)
+        // ── POS guard: Delay QB Sales Order creation by 1 hour (handled by cron job) ────
+        if (!isCron && isPosOrder(order)) {
+            logger.info(`${LOG_PREFIX} ⏭️ POS order (channel: ${order.sales_channel_id}) — Sales Order creation delayed by 1 hour (handled by cron), skipping immediate sync`)
             return
         }
 
@@ -248,20 +254,28 @@ async function handleOrderPlaced(
             logger.warn(`${LOG_PREFIX} ⚠️ Order ${orderId} has no customer_id`)
         }
 
-        // Build QB items — query.graph returns unit_price in DOLLARS (e.g. 51.25 = $51.25).
-        // buildQbItems() expects unit_price in CENTS (divides by 100 internally).
-        // Multiply ×100 here to match the same contract as the manual sync route.
-        const rawItemPrices = (order.items || []).map((i: any) => `${i.title?.slice(0, 20)}: unit_price=${i.unit_price} qty=${i.quantity}`)
-        logger.info(`${LOG_PREFIX} 🔍 RAW item prices from query.graph: ${JSON.stringify(rawItemPrices)}`)
+        // ── Discount strategy ─────────────────────────────────────────────────
+        // ORDER-LEVEL promotions → keep original item prices + Subtotal + Discount lines.
+        // ITEM-LEVEL promotions OR no promotions → discounted unit prices (via item.subtotal).
+        const promotions = order.promotions ?? []
+        const hasOrderLevelPromo = promotions.some(
+            (p: any) => p.application_method?.target_type === "order"
+        )
+        const orderDiscountTotal = Math.round((order.discount_total || 0) * 100) // dollars → cents
 
         const activeItems = (order.items || [])
             .filter((item: any) => (item.quantity ?? 0) > 0)
             .map((item: any) => ({
                 ...item,
                 unit_price: Math.round((item.unit_price || 0) * 100), // dollars → cents for buildQbItems
+                subtotal: Math.round((item.subtotal || 0) * 100),     // dollars → cents for buildQbItems
             }))
 
-        const qbItems = buildQbItems(activeItems, order.metadata)
+        const itemsForQb = hasOrderLevelPromo
+            ? activeItems.map((item: any) => ({ ...item, subtotal: undefined }))
+            : activeItems
+
+        const qbItems = buildQbItems(itemsForQb, order.metadata)
 
 
         // Add shipping line (skip pickup methods automatically)
@@ -274,6 +288,14 @@ async function handleOrderPlaced(
             logger.info(`${LOG_PREFIX} Shipping line added: $${shippingItem.price?.toFixed(2)} (${shippingItem.desc})`)
         } else {
             logger.info(`${LOG_PREFIX} No shipping line (pickup or $0)`)
+        }
+
+        // Append Subtotal + Discount lines for order-level promos
+        if (hasOrderLevelPromo && orderDiscountTotal > 0) {
+            const orderSubtotal = Math.round((order.subtotal || 0) * 100) // dollars → cents
+            const discountPercent = orderSubtotal > 0 ? (orderDiscountTotal / orderSubtotal) * 100 : null
+            buildQbOrderDiscountLines(orderDiscountTotal, discountPercent).forEach(l => qbItems.push(l))
+            logger.info(`${LOG_PREFIX} Order-level discount lines added: -$${(orderDiscountTotal/100).toFixed(2)}`)
         }
 
         // Determine sales tax code
@@ -348,11 +370,8 @@ async function handlePaymentCaptured(
         return
     }
 
-    // POS guard
-    if (isPosOrder(order)) {
-        logger.info(`${LOG_PREFIX} ⏭️ POS order — payment sync handled by POS, skipping`)
-        return
-    }
+    // Note: We no longer guard against isPosOrder here because POS payments
+    // should sync to QB immediately (Standalone Invoice + Payment flow).
 
     // --- FIX: qb_list_id lookup priority ---
     // 1. Stored directly on order.metadata (set by handleOrderPlaced)
@@ -424,6 +443,7 @@ async function handleFulfillmentCreated(
     data: any,
     orderModule: any,
     customerModule: any,
+    _container: any,
     logger: any
 ) {
     const orderId = data.order_id || data.id
@@ -432,19 +452,39 @@ async function handleFulfillmentCreated(
 
     let order: any
     try {
-        order = await orderModule.retrieveOrder(orderId, { relations: ["items"] })
-        logger.info(`${LOG_PREFIX} Order fetched: #${order.display_id}, customer_id=${order.customer_id}`)
+        const query = _container.resolve(ContainerRegistrationKeys.QUERY)
+        const { data: [fetchedOrder] } = await query.graph({
+            entity: "order",
+            fields: [
+                "id", "display_id", "status", "metadata", "tax_total", "total",
+                "sales_channel_id",
+                "customer_id",
+                "subtotal",
+                "discount_total",
+                "promotions.*",
+                "promotions.application_method.*",
+                "items.*",
+                "items.item.unit_price",
+                "items.variant.*",
+                "items.variant.metadata",
+                "customer.*",
+                "customer.metadata",
+                "shipping_methods.*"
+            ],
+            filters: { id: orderId }
+        })
+
+        if (!fetchedOrder) throw new Error(`Query returned no order for id ${orderId}`)
+        order = fetchedOrder
+        logger.info(`${LOG_PREFIX} Order fetched for Invoice: #${order.display_id}, customer_id=${order.customer_id}`)
         logger.info(`${LOG_PREFIX} Order metadata: ${JSON.stringify(order.metadata || {})}`)
     } catch (err: any) {
         logger.error(`${LOG_PREFIX} ❌ Failed to fetch order ${orderId}: ${err.message}`)
         return
     }
 
-    // POS guard
-    if (isPosOrder(order)) {
-        logger.info(`${LOG_PREFIX} ⏭️ POS order — fulfillment/invoice sync handled by POS, skipping`)
-        return
-    }
+    // Note: We no longer guard against isPosOrder here because POS fulfillments
+    // should sync to QB immediately (Standalone Invoice flow).
 
     // --- FIX: qb_list_id lookup with customer fallback ---
     let qbCustomerId: string | undefined = order.metadata?.qb_list_id
@@ -466,11 +506,59 @@ async function handleFulfillmentCreated(
 
     logger.info(`${LOG_PREFIX} QB data — customerId=${qbCustomerId ?? "MISSING"}, soTxnId=${qbSoTxnId ?? "MISSING"}, paymentTxnId=${qbPaymentTxnId ?? "none"}`)
 
-    if (!qbCustomerId || !qbSoTxnId) {
-        logger.warn(`${LOG_PREFIX} ❌ Missing required QB data for invoice creation:`)
-        if (!qbCustomerId) logger.warn(`${LOG_PREFIX}   → qb_list_id is missing (check that order.placed succeeded)`)
-        if (!qbSoTxnId) logger.warn(`${LOG_PREFIX}   → qb_sales_order_txn_id / qb_sales_order.txn_id is missing (SO must exist before invoice)`)
+    if (!qbCustomerId) {
+        logger.warn(`${LOG_PREFIX} ❌ Missing required qb_list_id for invoice creation.`)
         return
+    }
+
+    if (!qbSoTxnId) {
+        logger.info(`${LOG_PREFIX} ℹ️ No qb_sales_order_txn_id found — creating a STANDALONE INVOICE directly.`)
+    }
+
+    // --- Standalone Invoice Prep (if no SO exists) ---
+    let prebuiltItems: any[] | undefined
+    let salesTaxCode: string | undefined
+
+    if (!qbSoTxnId) {
+        const qbConfig = await getQbConfig()
+        const promotions = order.promotions ?? []
+        const hasOrderLevelPromo = promotions.some(
+            (p: any) => p.application_method?.target_type === "order"
+        )
+        const orderDiscountTotal = Math.round((order.discount_total || 0) * 100)
+
+        const activeItems = (order.items || [])
+            .filter((item: any) => (item.quantity ?? 0) > 0)
+            .map((item: any) => ({
+                ...item,
+                unit_price: Math.round((item.unit_price || 0) * 100),
+                subtotal: Math.round((item.subtotal || 0) * 100),
+            }))
+
+        const itemsForQb = hasOrderLevelPromo
+            ? activeItems.map((item: any) => ({ ...item, subtotal: undefined }))
+            : activeItems
+
+        prebuiltItems = buildQbItems(itemsForQb, order.metadata)
+
+        const shippingItem = buildShippingQbItem(
+            (order as any).shipping_methods || [],
+            qbConfig.shippingItemId
+        )
+        if (shippingItem) {
+            prebuiltItems.push(shippingItem)
+            logger.info(`${LOG_PREFIX} Shipping line added for standalone invoice: $${shippingItem.price?.toFixed(2)}`)
+        }
+
+        if (hasOrderLevelPromo && orderDiscountTotal > 0) {
+            const orderSubtotal = Math.round((order.subtotal || 0) * 100)
+            const discountPercent = orderSubtotal > 0 ? (orderDiscountTotal / orderSubtotal) * 100 : null
+            buildQbOrderDiscountLines(orderDiscountTotal, discountPercent).forEach(l => prebuiltItems!.push(l))
+            logger.info(`${LOG_PREFIX} Order-level discount lines added to standalone invoice: -$${(orderDiscountTotal/100).toFixed(2)}`)
+        }
+
+        const hasTax = order.tax_total && order.tax_total > 0
+        salesTaxCode = hasTax ? qbConfig.defaultSalesTaxCode : undefined
     }
 
     // Calculate fulfillment amount (partial fulfillment support)
@@ -495,6 +583,8 @@ async function handleFulfillmentCreated(
         qbSoTxnId,
         qbPaymentTxnId,
         paymentAmount: fulfillmentAmount,
+        prebuiltItems,
+        salesTaxCode,
     })
 
     if (result.skipped) {
@@ -543,11 +633,9 @@ async function handleOrderCanceled(
         return
     }
 
-    // POS guard — POS handles its own QB cancellation (Sales Receipt void)
-    if (isPosOrder(order)) {
-        logger.info(`${LOG_PREFIX} ⏭️ POS order — cancel/void handled by POS, skipping`)
-        return
-    }
+    // Note: We no longer guard against isPosOrder here because POS orders
+    // will now have their documents generated by the backend, so the backend
+    // should also void/delete them when canceled.
 
     const meta = order.metadata || {}
     // Read via compat helpers — supports both old flat fields and new JSON shape

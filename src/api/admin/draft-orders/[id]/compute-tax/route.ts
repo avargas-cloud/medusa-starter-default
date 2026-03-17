@@ -46,11 +46,15 @@ async function saveOrderMeta(
     const prevMeta = current?.metadata ?? {}
 
     // Patch with merged metadata
-    await fetch(`${base}/admin/draft-orders/${id}`, {
+    const patchRes = await fetch(`${base}/admin/draft-orders/${id}`, {
         method: "POST",
         headers,
         body: JSON.stringify({ metadata: { ...prevMeta, ...fields } }),
     })
+    
+    if (!patchRes.ok) {
+        console.warn(`[compute-tax] Failed to save metadata on draft order: ${await patchRes.text()}`)
+    }
 }
 
 

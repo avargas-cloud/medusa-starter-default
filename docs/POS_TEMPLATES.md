@@ -161,7 +161,7 @@ interface FieldConfig {
         visible: boolean
     }[]
 
-    // Custom labels for any field
+    // Custom labels for any field (e.g. Backorder Qty instead of Backordered)
     custom_labels: Record<string, string>
 }
 ```

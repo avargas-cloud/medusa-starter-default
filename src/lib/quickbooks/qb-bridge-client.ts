@@ -91,6 +91,8 @@ export interface QbCreateInvoicePayload {
     LinkToTxnID?: string    // Sales Order TxnID (for linked invoices)
     templateRef?: string
     items?: QbOrderItem[]   // Only needed for standalone invoices (not linked to SO)
+    taxExempt?: boolean     // true → CustomerSalesTaxCodeRef = "Exempt"
+    salesTaxCode?: string   // e.g. "Sale Tax 7%" — overrides customer default
 }
 
 export interface QbCreateEstimatePayload {

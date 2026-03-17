@@ -632,7 +632,13 @@ Aplica tanto en Estimates como en Orders (mismo `LineItemsTable.tsx`).
 
 ---
 
-### 27. SendEstimateModal — Integración de Email
+### 27. Columna Dinámica de "Invoiced Qty" y "Backordered Qty"
+- Se inyectó el sub-campo `+items.fulfilled_quantity` (siempre disponible en items bajo el capo nativo de Medusa v2 de fulfillment/invoicing) en los fetches globales.
+- En el UI local `LineItemsTable`, sí `fulfilled_quantity` es recibido, se presenta como "Invoiced Qty" y la diferencia al "Qty" pedido se deduce matemáticamente como el nuevo "Backordered Qty". La suma de ambas columnas siempre iguala a Quantity.
+
+---
+
+### 28. SendEstimateModal — Integración de Email
 
 Botón **"Email"** en `DocumentToolbar` (`onEmail` prop) → `SendEstimateModal.tsx`.
 

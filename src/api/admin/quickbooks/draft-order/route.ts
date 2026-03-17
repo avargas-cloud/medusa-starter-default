@@ -5,6 +5,7 @@ import {
     ensureCustomerInQb,
     buildQbItems,
     buildShippingQbItem,
+    buildQbOrderDiscountLines,
     processEstimateInQb,
     processUpdateEstimateInQb,
     processDeactivateEstimateInQb,
@@ -71,7 +72,7 @@ export async function POST(
 
         const baseUrl = process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
         const orderResp = await fetch(
-            `${baseUrl}/admin/orders/${orderId}?fields=id,display_id,status,metadata,tax_total,+items.*,+items.variant.*,+items.variant.metadata,+customer.*,+shipping_methods.*`,
+            `${baseUrl}/admin/orders/${orderId}?fields=id,display_id,status,metadata,tax_total,subtotal,discount_total,+items.*,+items.variant.*,+items.variant.metadata,+customer.*,+shipping_methods.*,+promotions.*,+promotions.application_method.*`,
             {
                 headers: {
                     // Forward the admin auth cookie from the incoming request
@@ -132,20 +133,36 @@ export async function POST(
         }
         const qbCustomerId = custResult.qbCustomerId!
 
-        // ⚠️  Admin API returns unit_price in DOLLARS — pass directly to QB bridge.
-        //     Do NOT multiply by 100.
-        const activeItems = (order.items || [])
-            .filter((item: any) => (item.quantity ?? 0) > 0)
-            .map((item: any) => ({
-                ...item,
-                unit_price: item.unit_price || 0, // dollars — ready for QB bridge
-            }))
+        const activeItems = (order.items || []).filter((item: any) => (item.quantity ?? 0) > 0)
 
-        const qbItems = buildQbItems(activeItems, order.metadata)
+        // ── Discount strategy ─────────────────────────────────────────────────
+        // ORDER-LEVEL promotions (target_type='order') → keep original item prices
+        //   and append explicit Subtotal + Discount lines at the end.
+        // ITEM-LEVEL promotions OR no promotions → use discounted unit prices via
+        //   item.subtotal (already baked into each item → no separate discount lines).
+        const promotions = (order as any).promotions ?? []
+        const hasOrderLevelPromo = promotions.some(
+            (p: any) => p.application_method?.target_type === "order"
+        )
+        const orderDiscountTotal = Number((order as any).discount_total ?? 0) // cents
+
+        // Build items — clear subtotal for order-level promos so we keep original prices
+        const itemsForQb = hasOrderLevelPromo
+            ? activeItems.map((item: any) => ({ ...item, subtotal: undefined }))
+            : activeItems
+
+        const qbItems = buildQbItems(itemsForQb, order.metadata)
 
         // Add shipping as a QB line item (skipped if method is Pickup or amount=0)
         const shippingItem = buildShippingQbItem((order as any).shipping_methods || [], qbConfig.shippingItemId)
         if (shippingItem) qbItems.push(shippingItem)
+
+        // Add Subtotal + Discount lines for order-level promos (BEFORE checking length)
+        if (hasOrderLevelPromo && orderDiscountTotal > 0) {
+            const orderSubtotal = Number((order as any).subtotal ?? 0) // cents
+            const discountPercent = orderSubtotal > 0 ? (orderDiscountTotal / orderSubtotal) * 100 : null
+            buildQbOrderDiscountLines(orderDiscountTotal, discountPercent).forEach(l => qbItems.push(l))
+        }
 
         if (qbItems.length === 0) {
             res.status(400).json({

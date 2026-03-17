@@ -82,11 +82,13 @@ export interface MedusaOrderForQb {
         title?: string
         product_title?: string
         quantity: number
-        unit_price: number   // in cents (Medusa v2)
+        unit_price: number   // in cents (Medusa v2) — original price before discounts
+        subtotal?: number    // in cents — post-adjustment (discounted) subtotal for the whole line
         metadata?: Record<string, any>
     }>
     created_at?: string | Date
-    tax_total?: number   // in cents (Medusa v2) — 0 = tax-exempt order
+    tax_total?: number        // in cents (Medusa v2) — 0 = tax-exempt order
+    discount_total?: number   // in cents — total discount applied to the order (for order-level promos)
 }
 
 export interface OrderFlowResult {
@@ -203,20 +205,30 @@ function sanitizeForQb(text: string): string {
 export function buildQbItems(items: MedusaOrderForQb["items"], metadata?: Record<string, any>): QbOrderItem[] {
     const productLines = (items || [])
         .filter(item => item.variant?.metadata?.quickbooks_id)
-        .map(item => ({
-            _sortOrder: typeof item.metadata?.sort_order === "number" ? item.metadata.sort_order : 9999,
-            qbItem: {
-                productId: item.variant!.metadata!.quickbooks_id as string,
-                quantity: item.quantity,
-                price: (item.unit_price || 0) / 100,  // unit_price is in cents → convert to dollars for QB
-                unitOfMeasure: (item.variant?.metadata?.quickbooks_uom as string) || undefined,
-                desc: sanitizeForQb(
-                    item.metadata?.sales_description
-                        ? String(item.metadata.sales_description)
-                        : `${item.title || item.product_title || ""}${item.variant?.sku ? ` (${item.variant.sku})` : ""}`
-                ),
-            }
-        }))
+        .map(item => {
+            // Use discounted unit price if item has adjustments (item.subtotal < unit_price * qty).
+            // Both item-level discounts (per-item promotions) and order-level distributed discounts
+            // are reflected here. Price is always per-unit in dollars for QB.
+            const originalTotal = (item.unit_price || 0) * item.quantity
+            const effectiveUnitPriceCents =
+                item.subtotal !== undefined && item.subtotal < originalTotal && item.subtotal > 0
+                    ? Math.round(item.subtotal / item.quantity) // discounted subtotal ÷ qty → per-unit cents
+                    : (item.unit_price || 0)                   // no discount → original unit price
+            return ({
+                _sortOrder: typeof item.metadata?.sort_order === "number" ? item.metadata.sort_order : 9999,
+                qbItem: {
+                    productId: item.variant!.metadata!.quickbooks_id as string,
+                    quantity: item.quantity,
+                    price: effectiveUnitPriceCents / 100,  // cents → dollars for QB
+                    unitOfMeasure: (item.variant?.metadata?.quickbooks_uom as string) || undefined,
+                    desc: sanitizeForQb(
+                        item.metadata?.sales_description
+                            ? String(item.metadata.sales_description)
+                            : `${item.title || item.product_title || ""}${item.variant?.sku ? ` (${item.variant.sku})` : ""}`
+                    ),
+                }
+            })
+        })
 
     let commentLines: any[] = []
     if (metadata?.pos_comment_lines) {
@@ -242,6 +254,44 @@ export function buildQbItems(items: MedusaOrderForQb["items"], metadata?: Record
     allLines.sort((a, b) => a._sortOrder - b._sortOrder)
 
     return allLines.map(line => line.qbItem)
+}
+
+/**
+ * Builds the two QB line items for an order-level discount:
+ *   1. "Subtotal" — QB Subtotal item type. QB automatically sums all lines above it.
+ *   2. "Discount" — QB Discount item type with the EXACT dollar amount from Medusa.
+ *
+ * Use this ONLY for order-level promotions (applied to the whole order, e.g. coupon codes).
+ * Do NOT use when discounts are already baked into item unit prices (item-level promotions).
+ *
+ * @param discountTotalCents - Total order-level discount in cents (positive value)
+ * @param discountPercent    - Optional human-readable % to include in the description
+ */
+export function buildQbOrderDiscountLines(
+    discountTotalCents: number,
+    discountPercent?: number | null
+): QbOrderItem[] {
+    if (!discountTotalCents || discountTotalCents <= 0) return []
+
+    const discountDollars = discountTotalCents / 100
+    const pctStr = discountPercent != null ? ` (${discountPercent.toFixed(0)}%)` : ""
+
+    return [
+        {
+            // QB Subtotal item — totals everything above it. No price needed; QB calculates it.
+            productName: "Subtotal",
+            quantity: 1,
+            noSite: true,
+        },
+        {
+            // QB Discount item — exact dollar amount so QB doesn't recalculate via %.
+            productName: "Discount",
+            quantity: 1,
+            price: discountDollars,
+            desc: sanitizeForQb(`Order Discount${pctStr}`),
+            noSite: true,
+        },
+    ]
 }
 
 /**
@@ -518,9 +568,11 @@ export async function processInvoiceInQb(invoice: {
     orderId: string
     orderDisplayId?: number
     qbCustomerId: string
-    qbSoTxnId: string
+    qbSoTxnId?: string            // Make optional for direct invoices
     qbPaymentTxnId?: string
     paymentAmount?: number
+    prebuiltItems?: QbOrderItem[] // Used if no qbSoTxnId
+    salesTaxCode?: string         // Used if no qbSoTxnId
 }): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
@@ -533,16 +585,18 @@ export async function processInvoiceInQb(invoice: {
         orderDisplayId: invoice.orderDisplayId,
         eventType: "order.fulfillment_created",
         triggeredBy: "event",
-        message: `Creating Invoice for order #${invoice.orderDisplayId || invoice.orderId} linked to SO: ${invoice.qbSoTxnId}`,
+        message: `Creating Invoice for order #${invoice.orderDisplayId || invoice.orderId}${invoice.qbSoTxnId ? ` linked to SO: ${invoice.qbSoTxnId}` : ' (Direct Invoice)'}`,
         metadata: { qbSoTxnId: invoice.qbSoTxnId, qbPaymentTxnId: invoice.qbPaymentTxnId },
     })
 
-    console.log(`${prefix} Creating Invoice for order #${invoice.orderDisplayId || invoice.orderId} linked to SO: ${invoice.qbSoTxnId}...`)
+    console.log(`${prefix} Creating Invoice for order #${invoice.orderDisplayId || invoice.orderId}${invoice.qbSoTxnId ? ` linked to SO: ${invoice.qbSoTxnId}` : ' (Direct Invoice)'}...`)
 
     const invResult = await createInvoiceInQb({
         customerId: invoice.qbCustomerId,
         date: getDateString(),
         LinkToTxnID: invoice.qbSoTxnId,
+        items: invoice.prebuiltItems,
+        salesTaxCode: invoice.salesTaxCode,
     })
 
     if (!invResult.success) {

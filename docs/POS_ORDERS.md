@@ -218,8 +218,25 @@ POST   /admin/orders/:id/cancel         (Medusa)
 | QB Ref # muestra `—` | La orden no fue sincronizada con QB aún — usar los botones de sync en el detalle |
 | Tax incorrecto al confirmar estimate | ✅ RESUELTO (2026-03-16): `convert-force` ahora lee `metadata.tax_mode` para aplicar FL 7% o EXEMPT 0% |
 | Tax no se actualiza al editar orden | ✅ RESUELTO (2026-03-16): `post-edit-sync` y `apply-discount-force` ahora respetan `pos_tax_rate=0` para EXEMPT |
+| Payment Pending vs Order Total Mismatch | ✅ RESUELTO (2026-03-17): `convert-force` recalcula explícitamente el `payment_collection.amount` basándose en la matemática del POS `(Subtotal - Discount) + Tax`. |
 
 ---
+
+## Changelog — Marzo 17, 2026
+
+### Patch Matemático de Payment Collections (Order Total Mismatch)
+
+**Problema:**
+Al convertir un "Estimate" a "Order", el monto pendiente ("Payment Pending") registrado automáticamente por Medusa v2 difería del gran total mostrado en pantalla. Ejemplo: Un subtotal de $89 con un descuento de 5% ($4.45) y un impuesto de 7% (calculado posterior al descuento = $5.92) suma el total de `$90.47`. Sin embargo, Medusa creaba la recolección de pago (`payment_collection`) por `$84.55`.
+
+**Origen:**
+La arquitectura _Core_ de Medusa aplica el impuesto sobre el subtotal bruto (`Gross Subtotal * Tax`), y de ahí resta los descuentos. Por ende, generaba una colección de pago olvidando rastrear la forma en que los componentes del POS (vía _metadata.computed_total_) computan el impuesto sobre el subtotal neteado (`(Subtotal - Discount) + Tax`).
+
+**Solución Implementada:**
+1. **Ruta `convert-force.ts`**: Se integró una función auxiliar (`fixPaymentCollection`) que intercepta la base de datos subyacente de la orden durante la conversión final (`order_payment_collection` `->` `payment_collection`).
+2. Calcula la matemática verdadera vía `subtotal - discount_total + tax_total`.
+3. Ejecuta una actualización SQL directa `UPDATE payment_collection SET amount = $1 WHERE id = $2` ignorando el valor que haya inyectado temporalmente el Workflow nativo de Medusa.
+4. Con esto, tanto `metadata.computed_total`, la interfaz del POS y la tabla subyacente de pagos cuadran siempre en `$90.47`, sin editar o fracturar la librería `@medusajs/core-flows`.
 
 ## Changelog — Marzo 10, 2026
 
@@ -283,6 +300,12 @@ El botón de "Save" en `DocumentToolbar` **siempre está habilitado** permitiend
 
 - **Print/Email Guards:** La vista de Orders cuenta con la misma protección estricta sobre el `DocumentToolbar.tsx`. Si se edita la orden de alguna forma (encendiendo la luz naranja `isDirty = true`), los botones de "Print" y "Email" fallarán con un `toast.error` forzando de todas maneras al operador al dar click en el botón Save antes de poder compartir información no grabada.
 - **Paginación Vertical del Documento:** Para evitar derrames (overflows), el *Notes* global de la orden tampoco se diagrama en un bloque cerrado y fijo. El renderizador (`BlockRenderer`) lo empuja como la **última línea mágica de tipo ítem de factura** (`**_NOTE_**`). De esa manera el motor de impresión del navegador expande la celda del 100% hasta la siguiente página en caso de exceder su largo predeterminado. (Se describe más en `POS_ESTIMATES.md`).
+
+---
+
+### Columna Dinámica de "Invoiced Qty" y "Backordered Qty" (Marzo 17, 2026)
+- Se inyectó el sub-campo `+items.fulfilled_quantity` en el hook local (`useOrderData.ts`) leyéndolo de la BD nativa de Medusa donde se guardan los fulfillments.
+- En el UI local `LineItemsTable`, sí `fulfilled_quantity` es recibido u operado, altera "Invoiced Qty" y deduce el "Backordered Qty" a partir de `quantity` menos `fulfilled_quantity`.
 
 ---
 

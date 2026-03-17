@@ -27,11 +27,12 @@ interface SystemDefault {
     updated_at: string
 }
 
-const KNOWN_CONTEXTS = ["Document Defaults", "Templates Footer"]
+const KNOWN_CONTEXTS = ["Document Defaults", "Templates Footer", "Metadata Options"]
 
 const KNOWN_FIELDS_BY_CONTEXT: Record<string, string[]> = {
     "Document Defaults": ["Payment Terms", "Tax Code", "Price List", "Order Status", "Order Type", "Lead Time", "FOB", "Ship Via", "Project Phase"],
     "Templates Footer": ["Draft Order (Estimates)", "Order (Sales Order)", "Invoice"],
+    "Metadata Options": ["referential_deposit"],
 }
 
 // Default applies_to scopes per known field (comma-separated)
@@ -48,6 +49,7 @@ const FIELD_DEFAULT_SCOPE: Record<string, string> = {
     "Draft Order (Estimates)": "orders",
     "Order (Sales Order)":     "orders",
     "Invoice":                 "orders",
+    "referential_deposit":     "orders",
 }
 
 const SCOPE_BADGE_COLOR: Record<DocScopeKey, "blue" | "green"> = {
@@ -58,6 +60,7 @@ const SCOPE_BADGE_COLOR: Record<DocScopeKey, "blue" | "green"> = {
 const CONTEXT_COLORS: Record<string, "blue" | "green" | "orange" | "purple" | "grey"> = {
     "Document Defaults": "blue",
     "Templates Footer":  "purple",
+    "Metadata Options":  "orange",
 }
 
 // ── Modal ──────────────────────────────────────────────────────────────────────
@@ -101,7 +104,7 @@ function DefaultModal({
     const handleSave = async () => {
         const c = context === "__custom__" ? customContext.trim() : context
         const f = field === "__custom__" ? customField.trim() : field
-        const v = value.trim()
+        const v = field === "referential_deposit" ? "auto-injected" : value.trim()
         const order = parseInt(sortOrder, 10) || 0
 
         if (!c || !f || !v) {
@@ -149,6 +152,11 @@ function DefaultModal({
                                     <option key={f} value={f} className="bg-ui-bg-base text-ui-fg-base font-normal">{f}</option>
                                 ))}
                             </optgroup>
+                            <optgroup label="Metadata Options" className="bg-ui-bg-base text-ui-fg-base font-semibold">
+                                {(KNOWN_FIELDS_BY_CONTEXT["Metadata Options"] ?? []).map(f => (
+                                    <option key={f} value={f} className="bg-ui-bg-base text-ui-fg-base font-normal">{f}</option>
+                                ))}
+                            </optgroup>
                             <option value="__custom__" className="bg-ui-bg-base text-ui-fg-base">Custom field…</option>
                         </select>
                         {isCustomField && (
@@ -169,6 +177,7 @@ function DefaultModal({
                                 >
                                     <option value="Document Defaults">Document Defaults</option>
                                     <option value="Templates Footer">Templates Footer</option>
+                                    <option value="Metadata Options">Metadata Options</option>
                                     <option value="__custom__">Custom Context...</option>
                                 </select>
                             </div>
@@ -224,6 +233,12 @@ function DefaultModal({
                                 onChange={e => setValue(e.target.value)}
                                 rows={8}
                                 className="font-mono text-xs"
+                            />
+                        ) : field === "referential_deposit" ? (
+                            <Input
+                                placeholder="Auto-populated by deposits"
+                                value="auto-injected"
+                                disabled={true}
                             />
                         ) : (
                             <Input

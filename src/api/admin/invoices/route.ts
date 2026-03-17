@@ -6,16 +6,20 @@
 
 import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
 import { INVOICE_MODULE } from '../../../modules/invoices'
+import { FINANCE_MODULE } from '../../../modules/finance'
 
 // ── GET /admin/invoices?order_id=:id ─────────────────────────────────────────
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
-    const { order_id } = req.query as Record<string, string>
+    const { order_id, customer_id } = req.query as Record<string, string>
 
     const filters: Record<string, unknown> = {}
     if (order_id) {
         filters.order_id = order_id
+    }
+    if (customer_id) {
+        filters.customer_id = customer_id
     }
 
     const invoices = await invoiceService.listPosInvoices(filters, {
@@ -65,6 +69,7 @@ interface CreateInvoiceBody {
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
+    const financeService = req.scope.resolve(FINANCE_MODULE)
     const body = req.body as CreateInvoiceBody
 
     if (!body.order_id || !body.customer_id || !body.items?.length) {
@@ -112,6 +117,83 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 total:       it.total,
             }))
         )
+    }
+    // Step 3: If an initial payment amount is sent, record it in ALL ledgers
+    if (body.amount_paid > 0) {
+        const paymentDate = new Date()
+
+        // A. PosInvoice internal payment record
+        await invoiceService.createInvoicePayments({
+            invoice_id:     (invoice as any).id,
+            amount:         body.amount_paid,
+            payment_method: body.payment_method,
+            notes:          'Initial payment at issuance',
+            created_by:     body.created_by ?? null,
+            paid_at:        paymentDate,
+        })
+        if (body.payment_method === 'credit') {
+            // Consume existing available credit instead of creating a new payment
+            const availablePayments = await financeService.listCustomerPayments(
+                { customer_id: body.customer_id },
+                { relations: ['applications'] }
+            )
+            
+            let amountToFind = body.amount_paid
+            for (const p of availablePayments) {
+                if (amountToFind <= 0) break;
+                if (p.status === 'available' || p.status === 'partially_applied') {
+                    const totalApplied = p.applications
+                        .filter((app: any) => !app.voided_at)
+                        .reduce((sum: number, app: any) => sum + Number(app.amount_applied), 0)
+                    
+                    const remaining = Number(p.amount) - totalApplied
+                    if (remaining > 0) {
+                        const applyAmount = Math.min(remaining, amountToFind)
+                        
+                        await financeService.createPaymentApplications({
+                            payment_id: p.id,
+                            invoice_id: (invoice as any).id,
+                            order_id: body.order_id,
+                            amount_applied: applyAmount,
+                            applied_at: paymentDate,
+                            applied_by: body.created_by || null
+                        })
+                        
+                        const newRemaining = remaining - applyAmount
+                        await financeService.updateCustomerPayments({
+                            id: p.id,
+                            status: newRemaining <= 0 ? 'applied' : 'partially_applied'
+                        })
+                        
+                        amountToFind -= applyAmount
+                    }
+                }
+            }
+        } else {
+            // B. Finance Module global AR Ledger integration (New Money via Cash/Card/etc)
+            const customerPayment = await financeService.createCustomerPayments({
+                customer_id: body.customer_id,
+                amount: body.amount_paid,
+                method: body.payment_method as any,
+                reference: 'Deposit', // Label to clarify this was pre-paid
+                notes: body.notes || 'Initial invoice payment via Complete Order',
+                received_at: paymentDate,
+                created_by: body.created_by || null,
+                source: 'pos',
+                type: 'payment',
+                status: 'applied',
+            })
+
+            // C. Finance Application map
+            await financeService.createPaymentApplications({
+                payment_id: customerPayment.id,
+                invoice_id: (invoice as any).id,
+                order_id: body.order_id,
+                amount_applied: body.amount_paid,
+                applied_at: paymentDate,
+                applied_by: body.created_by || null
+            })
+        }
     }
 
     // Re-fetch with relations for the response

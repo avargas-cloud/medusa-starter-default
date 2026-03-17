@@ -42,8 +42,8 @@ const prettyLabel = (s: string) =>
 
 // ─── Column layout ────────────────────────────────────────────────────────────
 
-const COLS = "grid-cols-[80px_110px_110px_minmax(120px,1fr)_minmax(120px,1fr)_120px_120px_110px_110px]"
-const HEADERS = ["Order #", "QB Ref #", "Date", "Company", "Customer", "Payment", "Fulfillment", "Channel", "Total"]
+const COLS = "grid-cols-[80px_110px_110px_minmax(120px,1fr)_minmax(120px,1fr)_120px_120px_110px_110px_70px]"
+const HEADERS = ["Order #", "QB Ref #", "Date", "Company", "Customer", "Payment", "Fulfillment", "Channel", "Total", "QB Sync"]
 
 // ─── Table ────────────────────────────────────────────────────────────────────
 
@@ -91,6 +91,12 @@ export const OrdersTable = ({ loading, sorted, paginated, onRowClick, rowHref }:
                     order.metadata?.qb_invoice_ref ??
                     null
                 ) as string | null
+                // QB sync — true if qb_sales_order.txn_id or legacy qb_so_txn_id exists
+                const soSynced = !!(
+                    (soObj && typeof soObj === "object" ? (soObj as any).txn_id : null) ??
+                    order.metadata?.qb_so_txn_id ??
+                    null
+                )
                 return (
                     <div key={order.id}
                         className={`grid ${COLS} gap-x-3 px-4 py-3 border-b border-ui-border-base hover:bg-ui-bg-subtle-hover transition-colors cursor-pointer items-center`}
@@ -116,6 +122,13 @@ export const OrdersTable = ({ loading, sorted, paginated, onRowClick, rowHref }:
                         <Text size="small" className="text-right font-medium">
                             {formatCurrency(order.total, order.currency_code)}
                         </Text>
+                        {/* QB Sync */}
+                        <div className="flex justify-center">
+                            {soSynced
+                                ? <span title="Synced to QuickBooks" className="text-green-500 font-bold text-base leading-none">✓</span>
+                                : <span title="Not synced" className="text-ui-fg-muted text-base leading-none">—</span>
+                            }
+                        </div>
                     </div>
                 )
             })}

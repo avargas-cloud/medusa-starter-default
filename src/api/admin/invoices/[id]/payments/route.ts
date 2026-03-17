@@ -8,7 +8,9 @@
  */
 
 import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
+import { markPaymentCollectionAsPaid } from "@medusajs/core-flows"
 import { INVOICE_MODULE } from '../../../../../modules/invoices'
+import { FINANCE_MODULE } from '../../../../../modules/finance'
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const id = req.params.id!
@@ -27,8 +29,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const id = req.params.id!
-    const { amount, payment_method, notes, created_by, paid_at } = req.body as any
+    const { amount, payment_method, notes, created_by, paid_at, customer_id, reference } = req.body as any
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
+    const financeService = req.scope.resolve(FINANCE_MODULE)
 
     if (!amount || amount <= 0) {
         return res.status(400).json({ error: 'amount must be a positive number (cents)' })
@@ -36,26 +39,55 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     if (!payment_method) {
         return res.status(400).json({ error: 'payment_method is required' })
     }
+    if (!customer_id) {
+        return res.status(400).json({ error: 'customer_id is required. All payments must be linked to a customer ledger.' })
+    }
 
     try {
-        // Load the invoice to verify it exists and isn't voided
+        // 1. Load the invoice to verify it exists and isn't voided
         const invoice = await invoiceService.retrievePosInvoice(id)
         if (!invoice) return res.status(404).json({ error: 'Invoice not found' })
         if (invoice.status === 'voided') {
             return res.status(400).json({ error: 'Cannot add payment to a voided invoice' })
         }
 
-        // Create the payment record
+        const paymentDate = paid_at ? new Date(paid_at) : new Date()
+
+        // 2. Create the CustomerPayment (The core AR ledger entry)
+        const customerPayment = await financeService.createCustomerPayments({
+            customer_id,
+            amount,
+            method: payment_method,
+            reference: reference || null,
+            notes: notes || null,
+            received_at: paymentDate,
+            created_by: created_by || null,
+            source: 'pos',
+            type: 'payment',
+            status: 'applied', // Immediately applied to this invoice
+        })
+
+        // 3. Create the PaymentApplication linking the payment to the invoice
+        await financeService.createPaymentApplications({
+            payment_id: customerPayment.id,
+            invoice_id: id,
+            order_id: invoice.order_id,
+            amount_applied: amount,
+            applied_at: paymentDate,
+            applied_by: created_by || null
+        })
+
+        // 4. Create the historic InvoicePayment record
         await invoiceService.createInvoicePayments({
             invoice_id: id,
             amount,
             payment_method,
             notes: notes ?? null,
             created_by: created_by ?? null,
-            paid_at: paid_at ? new Date(paid_at) : new Date(),
+            paid_at: paymentDate,
         })
 
-        // Re-sum all payments and update the invoice
+        // 5. Re-sum all payments and update the invoice status
         const allPayments = await invoiceService.listInvoicePayments({ invoice_id: id })
         const totalPaid = allPayments.reduce((sum: number, p: any) => sum + Number(p.amount), 0)
         const balanceDue = Math.max(0, Number(invoice.total) - totalPaid)
@@ -66,8 +98,29 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             { amount_paid: totalPaid, balance_due: balanceDue, status: newStatus }
         )
 
+        // 6. Mark native payment collection as paid if invoice is fully paid
+        if (newStatus === 'paid' && invoice.order_id) {
+            try {
+                const query = req.scope.resolve("query")
+                const { data: [order] } = await query.graph({
+                    entity: 'order',
+                    fields: ['payment_collections.*'],
+                    filters: { id: invoice.order_id }
+                })
+                
+                const pcId = order?.payment_collections?.[0]?.id
+                if (pcId) {
+                    await markPaymentCollectionAsPaid(req.scope).run({
+                        input: { order_id: invoice.order_id, payment_collection_id: pcId }
+                    })
+                }
+            } catch (err: any) {
+                req.scope.resolve('logger').warn(`[Medusa Native] Failed to mark order payment collection as paid (${invoice.order_id}): ` + err.message)
+            }
+        }
+
         const updated = await invoiceService.retrievePosInvoice(id)
-        return res.json({ invoice: updated, payments: allPayments })
+        return res.json({ invoice: updated, payments: allPayments, customer_payment: customerPayment })
     } catch (err: any) {
         return res.status(500).json({ error: err.message })
     }

@@ -352,3 +352,5 @@ El nombre `"Default Sales Channel"` se normaliza a `"Default"` en la columna Cha
 > La página de **Invoice del POS** (`ecopowertech-store-pos/app/(pos)/invoices/[id]/page.tsx`) es una entidad separada. Usa el mismo componente compartido `components/pos/OrderSummary.tsx`.
 >
 > **Marzo 13, 2026:** El Order Summary del POS fue actualizado para separar descuentos inline vs. global. Ver `POS_ESTIMATES.md § 29` para la documentación completa del cambio.
+>
+> **Marzo 17, 2026:** La tabla de line-items del POS ahora admite **Custom Labels** inyectados desde el Template Engine para esta vista y cuenta con columnas dinámicas para `Invoiced Qty` (`fulfilled_quantity`) y `Backordered Qty`, permitiendo facturación visual precisa de despachos parciales.
