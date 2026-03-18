@@ -97,6 +97,7 @@ export default async function financePaymentCapturedHandler({
       type: 'payment',
       status: 'available', // Web payments are available until invoiced by POS
       medusa_payment_id: medusaPaymentId,
+      medusa_payment_synced: true, // Web payments come FROM Medusa — already synced
       locked_order_id: orderId
     })
 

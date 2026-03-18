@@ -17,6 +17,7 @@ const PosInvoice = model.define('pos_invoice', {
     customer_id:    model.text(),            // FK → Medusa Customer (external)
     status:         model.enum(['draft', 'issued', 'partial', 'paid', 'voided']).default('issued'),
     subtotal:       model.bigNumber(),       // in cents
+    discount:       model.bigNumber().default(0),  // in cents
     shipping:       model.number().default(0),     // in cents (plain numeric in DB)
     tax:            model.bigNumber(),
     total:          model.bigNumber(),

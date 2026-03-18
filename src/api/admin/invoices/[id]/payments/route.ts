@@ -8,9 +8,9 @@
  */
 
 import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
-import { markPaymentCollectionAsPaid } from "@medusajs/core-flows"
 import { INVOICE_MODULE } from '../../../../../modules/invoices'
 import { FINANCE_MODULE } from '../../../../../modules/finance'
+import { registerMedusaPayment } from '../../register-medusa-payment'
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const id = req.params.id!
@@ -53,11 +53,20 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
         const paymentDate = paid_at ? new Date(paid_at) : new Date()
 
+        function mapPosMethodToDbEnum(method: string): any {
+            if (['visa', 'mastercard', 'discover', 'amex', 'capital_one', 'debit_card'].includes(method)) return 'card';
+            if (['e_check', 'checking_account', 'transfer', 'wire_transfer'].includes(method)) return 'ach';
+            if (['paypal', 'money_order'].includes(method)) return 'other';
+            if (method === 'credit') return 'credit_memo';
+            if (['cash', 'check', 'zelle'].includes(method)) return method;
+            return 'other';
+        }
+
         // 2. Create the CustomerPayment (The core AR ledger entry)
         const customerPayment = await financeService.createCustomerPayments({
             customer_id,
             amount,
-            method: payment_method,
+            method: mapPosMethodToDbEnum(payment_method),
             reference: reference || null,
             notes: notes || null,
             received_at: paymentDate,
@@ -65,6 +74,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             source: 'pos',
             type: 'payment',
             status: 'applied', // Immediately applied to this invoice
+            medusa_payment_synced: false, // will be updated after Medusa sync
         })
 
         // 3. Create the PaymentApplication linking the payment to the invoice
@@ -98,25 +108,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             { amount_paid: totalPaid, balance_due: balanceDue, status: newStatus }
         )
 
-        // 6. Mark native payment collection as paid if invoice is fully paid
-        if (newStatus === 'paid' && invoice.order_id) {
-            try {
-                const query = req.scope.resolve("query")
-                const { data: [order] } = await query.graph({
-                    entity: 'order',
-                    fields: ['payment_collections.*'],
-                    filters: { id: invoice.order_id }
-                })
-                
-                const pcId = order?.payment_collections?.[0]?.id
-                if (pcId) {
-                    await markPaymentCollectionAsPaid(req.scope).run({
-                        input: { order_id: invoice.order_id, payment_collection_id: pcId }
-                    })
-                }
-            } catch (err: any) {
-                req.scope.resolve('logger').warn(`[Medusa Native] Failed to mark order payment collection as paid (${invoice.order_id}): ` + err.message)
-            }
+        // 6. Register in Medusa native Payment Module (best-effort, every payment)
+        const medusaPaymentId = await registerMedusaPayment(req.scope, {
+            order_id:       invoice.order_id,
+            amount,
+            payment_method,
+            invoice_total:  Number(invoice.total),
+        })
+        if (medusaPaymentId) {
+            await financeService.updateCustomerPayments(
+                { id: customerPayment.id },
+                { medusa_payment_synced: true }
+            ).catch(() => {}) // non-fatal
         }
 
         const updated = await invoiceService.retrievePosInvoice(id)

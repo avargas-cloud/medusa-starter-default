@@ -6,7 +6,7 @@
 | **Rutas POS** | `/orders`, `/orders/[id]` |
 | **Medusa** | Orders (`GET /admin/orders`) |
 | **QB Docs** | Sales Receipt · Sales Order + Invoice |
-| **Última revisión** | 2026-03-16 |
+| **Última revisión** | 2026-03-18 |
 
 ---
 
@@ -46,13 +46,19 @@ total, created_at, email, metadata,
 | Columna | Fuente |
 |---------|--------|
 | # | `display_id` |
-| QB Ref # | `metadata.qb_sales_order_ref_num` o `qb_invoice_ref_num` |
+| QB Ref # | `metadata.qb_sales_order` → `ref_number` (objeto anidado). Fallback a `metadata.qb_invoice.ref_number` y luego a legacy `metadata.qb_sales_order_ref_num`. |
 | Customer | `customer.first_name + last_name` |
 | Company | `customer.company_name` o `billing_address.company` |
+| Email | `customer.email` |
 | Payment | `payment_status` (badge coloreado) |
 | Fulfillment | `fulfillment_status` (badge coloreado) |
 | Total | `total` en dólares |
 | Date | `created_at` (format: MMM d, yyyy) |
+| Deposit | `metadata.deposit_amount` |
+| Paid Amt | `metadata.payment_received` |
+| Delivery | `metadata.delivery_method` |
+| Channel | `sales_channel.name` |
+| QB Synced | Ícono Lucide: ✅ `Check` verde (tiene txn_id en metadata), 🕐 `Clock` ámbar (operación QB pendiente en metadata), ❌ `X` rojo (sin QB sync). Columna centrada. |
 
 ### Tabs (client-side)
 
@@ -163,6 +169,7 @@ salesRep: o.metadata?.sales_rep ?? o.metadata?.estimate_rep ?? '',
 | **Create QB Sales Order** | On account → QB Sales Order |
 | **Fulfill Items** | Crear shipment parcial o total |
 | **Receive Payment** | Abrir módulo Capture Payment (ver POS_CAPTURE_PAYMENT.md) |
+| **Duplicate** | Clona la orden como nuevo Estimate via `posStore.startDuplicate()`. Navega a `/estimates/new`. Solo disponible cuando la orden tiene al menos 1 ítem. El representante guarda cuando esté listo. |
 | **Cancel Order** | Cancelar + void en QB si aplica |
 
 ---

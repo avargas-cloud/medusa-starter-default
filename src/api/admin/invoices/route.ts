@@ -7,6 +7,7 @@
 import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
 import { INVOICE_MODULE } from '../../../modules/invoices'
 import { FINANCE_MODULE } from '../../../modules/finance'
+import { registerMedusaPayment } from './register-medusa-payment'
 
 // ── GET /admin/invoices?order_id=:id ─────────────────────────────────────────
 
@@ -46,6 +47,7 @@ interface CreateInvoiceBody {
         total: number        // cents
     }>
     subtotal: number         // cents
+    discount?: number        // cents
     shipping: number         // cents
     tax: number              // cents
     total: number            // cents
@@ -91,6 +93,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         customer_id:    body.customer_id,
         status:         'issued' as const,
         subtotal:       body.subtotal,
+        discount:       body.discount ?? 0,
         shipping:       body.shipping ?? 0,
         tax:            body.tax,
         total:          body.total,
@@ -170,21 +173,31 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 }
             }
         } else {
-            // B. Finance Module global AR Ledger integration (New Money via Cash/Card/etc)
+function mapPosMethodToDbEnum(method: string): any {
+    if (['visa', 'mastercard', 'discover', 'amex', 'capital_one', 'debit_card'].includes(method)) return 'card';
+    if (['e_check', 'checking_account', 'transfer', 'wire_transfer'].includes(method)) return 'ach';
+    if (['paypal', 'money_order'].includes(method)) return 'other';
+    if (method === 'credit') return 'credit_memo';
+    if (['cash', 'check', 'zelle'].includes(method)) return method;
+    return 'other';
+}
+
+            // B. Finance Module global AR Ledger (New Money via Cash/Card/etc)
             const customerPayment = await financeService.createCustomerPayments({
                 customer_id: body.customer_id,
                 amount: body.amount_paid,
-                method: body.payment_method as any,
-                reference: 'Deposit', // Label to clarify this was pre-paid
+                method: mapPosMethodToDbEnum(body.payment_method),
+                reference: 'Deposit',
                 notes: body.notes || 'Initial invoice payment via Complete Order',
                 received_at: paymentDate,
                 created_by: body.created_by || null,
                 source: 'pos',
                 type: 'payment',
                 status: 'applied',
+                medusa_payment_synced: false, // will be updated after Medusa sync
             })
 
-            // C. Finance Application map
+            // C. Finance Application
             await financeService.createPaymentApplications({
                 payment_id: customerPayment.id,
                 invoice_id: (invoice as any).id,
@@ -193,6 +206,20 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 applied_at: paymentDate,
                 applied_by: body.created_by || null
             })
+
+            // D. Register in Medusa native Payment Module (best-effort)
+            const medusaPaymentId = await registerMedusaPayment(req.scope, {
+                order_id:      body.order_id,
+                amount:        body.amount_paid,
+                payment_method: body.payment_method,
+                invoice_total: body.total,
+            })
+            if (medusaPaymentId) {
+                await financeService.updateCustomerPayments(
+                    { id: customerPayment.id },
+                    { medusa_payment_synced: true }
+                ).catch(() => {}) // non-fatal
+            }
         }
     }
 

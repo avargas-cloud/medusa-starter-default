@@ -6,7 +6,7 @@
 | **Rutas POS** | `/estimates`, `/estimates/[id]`, `/estimates/new` |
 | **Medusa** | Draft Orders (`GET /admin/draft-orders`, `POST /admin/draft-orders`) |
 | **QB** | Estimates → Sales Orders |
-| **Última revisión** | 2026-03-16 |
+| **Última revisión** | 2026-03-18 |
 
 ---
 
@@ -60,6 +60,7 @@ La barra de herramientas principal (`DocumentToolbar`) concentra el ciclo de vid
 | Botón | Acción y Endpoints Asociados | Condicionales o Fallbacks |
 |-------|------------------------------|---------------------------|
 | **Save** | `POST /admin/draft-orders` (Si es new), `POST /admin/draft-orders/:id` (Actualizamos cart y líneas). Luego avisa a QB Bridge para generar la transacción del lado de QB. | El borrador en el cache de estado cambia de modo "Dirty" a "Saved". |
+| **Duplicate** | Clona el documento actual en la ranura `new:estimate` del `draftCache` via `posStore.startDuplicate()`. Navega a `/estimates/new` con todos los ítems, cliente y metadatos pre-cargados. `medusaId = null` — el representante elige cuándo guardar. | Solo aparece cuando el documento tiene al menos 1 ítem. No disponible en borradores vacíos. |
 | **Confirm Order** | `POST /admin/draft-orders/:id/convert-force`. Fuerza la conversión en Medusa, se deshabilita la edición del frontend. Emite al Bridge de QB convertir en un _Sales Order_. | Bloqueará componentes de UI en la página, no es reversible desde Estimates. |
 | **Email** | Envía correo del estimate al Customer utilizando la API y el SendGrid Notification Provider. | Requiere que el estimado se guarde primero. |
 | **Print** | Redirige al Template Render de impresiones para Estimates comerciales B2B. | Funcionalidad en constante desarrollo visual. |
@@ -91,14 +92,14 @@ id, display_id, status, email, currency_code, total, created_at, metadata,
 | Columna | Fuente |
 |---------|--------|
 | Ref Num | `display_id` |
-| QB Ref # | `metadata.qb_estimate_ref_num` |
+| QB Ref # | `metadata.qb_estimate_ref` (objeto `qb_estimate` → `ref_number`). Fallback a `metadata.qb_estimate_ref_num` para compatibilidad legacy. |
 | Date | `created_at` (format: MMM d, yyyy) |
 | Company | `customer.company_name` |
 | Customer | `customer.first_name + last_name` |
 | Email | `customer.email` o `email` |
 | Sales Channel | `sales_channel.name` |
 | Status | `metadata.estimate_status` (con badge de color) |
-| QB Synced | presencia de `metadata.qb_estimate_txn_id` |
+| QB Synced | Ícono Lucide: ✅ `Check` verde (tiene `qb_estimate_txn_id` o procesando), 🕐 `Clock` ámbar (sync en proceso), ❌ `X` rojo (no sincronizado). Columna centrada. |
 | Total | `metadata.computed_total` o `total / 100` |
 
 ### Filtros (client-side)

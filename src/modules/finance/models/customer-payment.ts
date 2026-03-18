@@ -1,4 +1,4 @@
-import { model } from '@medusajs/framework/utils'
+import { model } from '@medusajs/utils'
 import { PaymentApplication } from './payment-application'
 
 /**
@@ -35,10 +35,14 @@ const CustomerPayment = model.define('customer_payment', {
     reference:           model.text().nullable(),        // check #, last4, Stripe charge ID, etc.
     status:              model.enum(['available', 'partially_applied', 'applied', 'voided']).default('available'),
     // Web-only: reference to native Medusa payment (deduplication key + audit trail)
-    medusa_payment_id:   model.text().nullable(),        // payment.id from Medusa payment module
-    medusa_refund_id:    model.text().nullable(),        // payment_refund.id if this is a refund mirror
+    medusa_payment_id:     model.text().nullable(),        // payment.id from Medusa payment module
+    medusa_refund_id:      model.text().nullable(),        // payment_refund.id if this is a refund mirror
+    // Sync tracking: true = this payment is already registered in Medusa's native Payment Module
+    // web source: always true (payment came FROM Medusa)
+    // pos source: false until registerMedusaPayment() runs and succeeds
+    medusa_payment_synced: model.boolean().default(false),
     // The order this payment is locked to (web: always set; POS: set when applied)
-    locked_order_id:     model.text().nullable(),        // web payments are locked to their order
+    locked_order_id:       model.text().nullable(),        // web payments are locked to their order
     received_at:         model.dateTime(),
     notes:               model.text().nullable(),
     created_by:          model.text().nullable(),        // admin user email / "system" for subscribers

@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
 import { Modules } from "@medusajs/utils"
+import { Pool } from "pg"
 
 /**
  * POST /admin/orders/:id/add-shipping-force
@@ -16,13 +17,8 @@ import { Modules } from "@medusajs/utils"
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
     const { id } = req.params as { id: string }
     const { shipping_option_id, custom_amount } = req.body as {
-        shipping_option_id: string
+        shipping_option_id?: string | null
         custom_amount?: number   // DOLLARS
-    }
-
-    if (!shipping_option_id) {
-        res.status(400).json({ message: "shipping_option_id is required" })
-        return
     }
 
     const base = `http://localhost:${process.env.PORT ?? 9000}`
@@ -65,15 +61,59 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             }
         } catch { /* non-fatal */ }
 
-        // 3. Create the new shipping method directly on the order
-        const amountDollars = custom_amount ?? 0
-        await orderModule.createOrderShippingMethods(id, [{
-            shipping_option_id,
-            name: shippingOptionName,
-            amount: amountDollars,  // Order module expects dollars (same as line items)
-        }])
+        // 3. Create the new shipping method directly on the order if provided
+        if (shipping_option_id) {
+            const amountDollars = custom_amount ?? 0
+            await orderModule.createOrderShippingMethods(id, [{
+                shipping_option_id,
+                name: shippingOptionName,
+                amount: amountDollars,  // Order module expects dollars (same as line items)
+            }])
+            console.log(`[orders/add-shipping-force] Applied ${shippingOptionName} ($${amountDollars}) to order ${id}`)
 
-        console.log(`[orders/add-shipping-force] Applied ${shippingOptionName} ($${amountDollars}) to order ${id}`)
+            // 4. Insert a 0% tax_line for the new shipping method.
+            // Shipping is never taxed, but Medusa Admin requires tax_lines to exist
+            // on each shipping method or crashes when the user expands "Shipping Subtotal".
+            const dbUrl = process.env.DATABASE_URL
+            if (dbUrl) {
+                const pool = new Pool({ connectionString: dbUrl })
+                try {
+                    // Find the newly created shipping method for this order
+                    const smRes = await pool.query<{ id: string }>(
+                        `SELECT id FROM order_shipping_method
+                         WHERE order_id = $1 AND deleted_at IS NULL
+                         ORDER BY created_at DESC LIMIT 1`,
+                        [id]
+                    )
+                    const shippingMethodId = smRes.rows[0]?.id
+                    if (shippingMethodId) {
+                        const taxLineId = `taxline_sm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+                        await pool.query(
+                            `INSERT INTO order_shipping_method_tax_line
+                             (id, shipping_method_id, code, rate, raw_rate, description, created_at, updated_at)
+                             VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+                             ON CONFLICT DO NOTHING`,
+                            [
+                                taxLineId,
+                                shippingMethodId,
+                                'EXEMPT',
+                                0,
+                                JSON.stringify({ value: '0', precision: 20 }),
+                                'Shipping Not Taxed',
+                            ]
+                        )
+                        console.log(`[orders/add-shipping-force] ✅ Inserted 0% tax_line for shipping method ${shippingMethodId}`)
+                    }
+                } catch (te: any) {
+                    console.warn(`[orders/add-shipping-force] Tax line insert failed (non-fatal):`, te?.message)
+                } finally {
+                    await pool.end()
+                }
+            }
+        } else {
+            console.log(`[orders/add-shipping-force] Cleared shipping methods from order ${id}`)
+        }
+
         res.status(200).json({ success: true })
     } catch (e: any) {
         console.error("[orders/add-shipping-force]", e?.message)

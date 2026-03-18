@@ -91,3 +91,78 @@ La interacción entre el Store POS y la base de datos para la generación de PDF
 - `POST /admin/invoices`: Genera una nueva factura tomando el current payload de items y subtotales.
 - `POST /admin/invoices/{id}/payments`: Permite registrar un abono parcial (ej. $50 Cash, $200 Card), actualizando el `amount_paid` y `balance_due` matemáticamente en el servidor y estampándolo en la tirilla u hoja PDF de Invoices en tiempo real.
 - `POST /admin/invoices/{id}/void`: Destruye el balance y marca el snapshot como inválido.
+
+---
+
+## 7. Dashboard de Invoices (`/invoices`)
+
+**Archivo:** `ecopowertech-store-pos/app/(pos)/invoices/page.tsx`
+
+### Columnas de la Tabla
+
+| Columna | Fuente |
+|---------|--------|
+| Invoice # | `inv.invoice_number` (prefijo `INV-{display_id}-{seq}`). Ícono `Receipt`. Sin bold. |
+| QB Ref # | `metadata.qb_invoice.ref_number` (o `qb_invoices[-1].ref_number`). Batch-fetched desde la orden padre. |
+| Date | `inv.issued_at` → fallback `inv.created_at` |
+| Customer | `order.customer.first_name + last_name` (batch-fetch) |
+| Company | `order.customer.company_name` (batch-fetch) |
+| Email | `order.customer.email` → fallback `order.email` (batch-fetch) |
+| Status | `inv.status` — badge: `draft`=gris, `issued`=azul, `partial`=ámbar, `paid`=verde, `voided`=rojo |
+| Payment | `inv.payment_method` (`cash`, `check`, `card`, `ach`, `credit`, `mixed`) |
+| Total | `inv.total / 100` en dólares (verde) |
+| Balance | `inv.balance_due / 100` — verde si pagado, ámbar si pendiente, `—` si voided |
+| QB Sync | Ícono: ✅ `Check` verde (`qb txn_id` presente), ❌ `X` rojo (no sincronizado). Columna centrada. |
+
+### Estrategia de Datos (2-Query Batch)
+
+1. **Query principal:** `GET /admin/invoices` — retorna todos los `PosInvoice`.
+2. **Query secundaria (batch):** `GET /admin/orders?id[]=...&fields=id,metadata,email,+customer.*&limit=100`
+   - Extrae QB metadata y datos del cliente en un solo request por lote de `order_id` únicos.
+   - Produce un mapa `orderId → { ref, synced, customerName, company, email }`.
+   - `staleTime: 0` — siempre se re-fetcha al montar para datos frescos.
+
+### Sort (client-side)
+
+| Opción | Descripción |
+|--------|-------------|
+| `date_desc` | Date (Newest) — **default** |
+| `date_asc` | Date (Oldest) |
+| `total_desc` | Total (High → Low) |
+| `total_asc` | Total (Low → High) |
+| `invoice_desc` | Invoice # (Desc) |
+| `invoice_asc` | Invoice # (Asc) |
+| `balance_desc` | Balance (Highest) |
+
+### Navegación al abrir un Invoice
+
+Click en fila → `Link href={'/invoices/${inv.order_id}'}` → carga la vista de detalle de la orden referenciada.
+
+---
+
+## Changelog — Marzo 18, 2026
+
+### Nueva estructura de columnas en `/invoices`
+
+**Antes:** Invoice # | QB Ref # | Order # | Date | Status | Payment | Items | Total | Balance | QB Sync
+
+**Ahora:** Invoice # | QB Ref # | Date | Customer | Company | Email | Status | Payment | Total | Balance | QB Sync
+
+**Cambios:**
+- ✅ Añadidas columnas **Customer**, **Company**, **Email** (datos del order padre via batch-fetch)
+- ❌ Eliminada columna **Order #** (formato UUID no human-friendly)
+- ❌ Eliminada columna **Items** (recuento de ítems no relevante a nivel lista)
+- `font-semibold` removido del Invoice # (ahora solo `font-mono`)
+- QB Sync usa íconos `Check`/`X` (Lucide) en lugar de texto `Yes`/`No`
+
+### Navegación al detalle al crear Invoice
+
+Al completar una orden y generar un invoice desde el `CompleteOrderModal`, el `onSuccess` callback ahora recibe el invoice creado y navega automáticamente a `/invoices/${invoice.order_id}`.
+
+```ts
+onSuccess={(invoice) => {
+    setCompleteOrderModalOpen(false)
+    refetchInvoices()
+    order.router.push(`/invoices/${invoice.order_id}`)
+}}
+```

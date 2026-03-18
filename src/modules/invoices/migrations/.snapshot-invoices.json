@@ -50,7 +50,7 @@
           "primary": false,
           "nullable": false,
           "length": 6,
-          "default": "Thu Mar 12 2026 14:19:13 GMT-0400 (Eastern Daylight Time)",
+          "default": "Wed Mar 18 2026 15:42:53 GMT-0400 (Eastern Daylight Time)",
           "mappedType": "datetime"
         },
         "notes": {
@@ -198,6 +198,7 @@
           "enumItems": [
             "draft",
             "issued",
+            "partial",
             "paid",
             "voided"
           ],
@@ -211,6 +212,26 @@
           "primary": false,
           "nullable": false,
           "mappedType": "decimal"
+        },
+        "discount": {
+          "name": "discount",
+          "type": "numeric",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "default": "0",
+          "mappedType": "decimal"
+        },
+        "shipping": {
+          "name": "shipping",
+          "type": "integer",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "default": "0",
+          "mappedType": "integer"
         },
         "tax": {
           "name": "tax",
@@ -322,6 +343,15 @@
           "nullable": true,
           "mappedType": "text"
         },
+        "shipping_address": {
+          "name": "shipping_address",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "json"
+        },
         "raw_subtotal": {
           "name": "raw_subtotal",
           "type": "jsonb",
@@ -329,6 +359,16 @@
           "autoincrement": false,
           "primary": false,
           "nullable": false,
+          "mappedType": "json"
+        },
+        "raw_discount": {
+          "name": "raw_discount",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "default": "'{\"value\":\"0\",\"precision\":20}'",
           "mappedType": "json"
         },
         "raw_tax": {
