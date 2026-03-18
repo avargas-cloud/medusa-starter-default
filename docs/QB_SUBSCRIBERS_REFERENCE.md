@@ -6,7 +6,7 @@
 | Campo | Detalle |
 |-------|---------|
 | **Ubicación** | `backend/src/subscribers/` |
-| **Última revisión** | 2026-03-06 |
+| **Última revisión** | 2026-03-17 |
 | **Relacionado con** | `DRAFT_ORDER_ADVANCED_UI.md` (sección 14), `QB_BRIDGE_CLIENT.md` |
 
 ---
@@ -81,16 +81,36 @@ export const config: SubscriberConfig = {
 ```
 1. Idempotency Layer 1: In-memory Set check (process-local mutex)
 2. Fetch order via query.graph (con items, customer, shipping, metadata)
+   - NOTA: query.graph devuelve unit_price en DOLLARS (e.g. 22.25)
 3. Idempotency Layer 2: Check qb_sales_order_txn_id in metadata → ya procesado
 4. Idempotency Layer 3: Check qb_sales_order_operation_id → QBWC en progreso
-5. ensureCustomerInQb() → crea/vincula customer en QB
-6. buildQbItems() → mapea items a QB format (unit_price: dollars→cents)
-7. buildShippingQbItem() → agrega shipping como line item QB
-8. if qb_estimate_txn_id exists → EstimateToSalesOrder (convierte Estimate→SO en QB)
+5. POS guard: Si order.sales_channel_id = POS channel → skip (delayed 1hr por cron job)
+6. ensureCustomerInQb() → crea/vincula customer en QB
+7. Discount strategy (UNIVERSAL — aplica a CUALQUIER tipo de descuento):
+   a. unit_price de query.graph está en DOLLARS → multiplicar ×100 antes de buildQbItems
+   b. buildQbItems() → mapea items con unit_price en cents → QB Rate en dólares correctos
+   c. Si discount_total > 0:
+      - Append: «Order Item Subtotal» (QB Subtotal item, sin quantity)
+      - Append: «Order Discount (X%)» (QB Discount item, Amount=-$X.XX, sin quantity)
+8. buildShippingQbItem() → agrega shipping como ÚLTIMA línea (fuera del Subtotal, no descontado)
+9. If qb_estimate_txn_id exists → EstimateToSalesOrder (convierte Estimate→SO en QB)
    else → SalesOrderAdd (crea nuevo SO)
-9. Guarda qb_sales_order_operation_id en metadata (QBWC pending)
-10. QBWC procesa → guarda qb_sales_order_txn_id + qb_sales_order_ref en metadata
+10. Guarda qb_sales_order_operation_id en metadata (QBWC pending)
+11. QBWC procesa → guarda qb_sales_order_txn_id + qb_sales_order_ref en metadata
 ```
+
+**Orden de líneas en QB (con descuento):**
+```
+1. EAP-AS1-8W  | Qty=4 | Rate=22.25 | Amount=89.00
+2. Order Item Subtotal            (QB Subtotal — suma todo lo de arriba)
+3. Order Discount (5%)           (QB Discount — Amount=-$4.45)
+4. Shipping & Handling           (si aplica — fuera del descuento)
+   ─────────────────────────────────────────
+   Tax 7%  = $5.91  (calculado sobre $84.55, post-descuento ✅)
+   Total   = $90.47
+```
+
+> **⚠️ QBXML Gotcha:** QB Subtotal y Discount item types NO ACEPTAN `<Quantity>`. Si se envía quantity, QB lanza Error 3060. Estos items solo usan `<Desc>` y `<Amount>` (o `<Rate>` para porcentaje).
 
 **Metadata que lee:**
 - `qb_list_id` — QB Customer ListID (del customer)
@@ -462,3 +482,8 @@ Ver detalles completos en `DRAFT_ORDER_ADVANCED_UI.md` → sección 14 → "Nigh
 | `completed` en log pero SO abierto en QB | Optimistic complete: log marca completed cuando el close se *encola*, no cuando QBWC lo ejecuta | Nightly verify job confirma el estado real |
 | Subscriber no recibe eventos en dev | Redis event bus es asíncrono/unreliable en dev | `emit-order-events.ts` re-emite sincrónicamente desde workflow hooks |
 | QB Error 3175 (locked transaction) | QB Desktop tiene el documento abierto | Cerrar en QB Desktop, luego re-sync |
+| **Discount/Subtotal faltaban en SO** | Lógica antigua solo aplicaba descuento en órdenes con promo de tipo "order-level" | Ahora TODOS los descuentos (cualquier tipo) generan líneas Subtotal + Discount |
+| **QB Error 3060 en Subtotal/Discount líneas** | Se enviaba `<Quantity>1</Quantity>` que QB rechaza para estos item types | `buildQbOrderDiscountLines` ahora omite quantity completamente |
+| **QB Error 3170 — Amount must be positive** | Manual resync route: unit_price del Admin API (dólares) no se multiplicaba ×100 → price=0.2225 → Amount=0.89, discount ($4.45) > total → negativo | Route ahora multiplica unit_price ×100 igual que el subscriber |
+| **Discount Amount vacío en QB** | Manual route pasaba discount_total en dólares (4.45) directo a `buildQbOrderDiscountLines` que esperaba cents → dividía 4.45/100=0.044 | Route ahora multiplica ×100 antes de llamar la función |
+| **Shipping incluido en descuento** | Shipping se agregaba antes des las líneas Subtotal+Discount → QB lo sumaba en el Subtotal | Shipping ahora siempre va como ÚLTIMA línea (después de Subtotal y Discount) |

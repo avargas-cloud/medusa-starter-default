@@ -406,5 +406,68 @@ Para cobrar al momento de la orden pero facturar después:
 
 ---
 
+## 💰 Discount Strategy — Subdescuentos en Sales Orders
+
+> **Última actualización:** 2026-03-17. Estrategia universal confirmada en producción.
+
+### Principio General
+
+Todos los descuentos de órdenes se representan en QB con **dos líneas especiales** al final de los items (antes del shipping):
+
+```
+1. [Items del producto]
+2. «Order Item Subtotal»  ← QB Subtotal item — suma todo lo de arriba
+3. «Order Discount (X%)» ← QB Discount item — Amount negativo exacto
+4. [Shipping]            ← SIEMPRE al final — fuera del descuento
+```
+
+**¿Por qué este orden?** El QB `Subtotal` item suma todos los líneas **arriba** de él. Si shipping va antes, queda incluido en el subtotal y el descuento se calcularía sobre productos + shipping. Poniéndolo después, la base del descuento es solo los productos.
+
+### QBXML Gotchas — Subtotal y Discount item types
+
+| Item QB | `<Quantity>` | `<Desc>` | `<Amount>` |
+|---------|-------------|----------|-----------|
+| Subtotal | ⛔ NO (Error 3060) | ✅ Sí | ❌ No (QB lo calcula automáticamente) |
+| Discount | ⛔ NO (Error 3060) | ✅ Sí | ✅ Sí — Amount exacto en dólares |
+
+```xml
+<!-- ✅ CORRECTO: Sin Quantity -->
+<SalesOrderLineAdd>
+  <ItemRef><FullName>Subtotal</FullName></ItemRef>
+  <Desc>Order Item Subtotal</Desc>
+</SalesOrderLineAdd>
+<SalesOrderLineAdd>
+  <ItemRef><FullName>Discount</FullName></ItemRef>
+  <Desc>Order Discount (5%)</Desc>
+  <Amount>4.45</Amount>
+</SalesOrderLineAdd>
+
+<!-- ❌ INCORRECTO: Con Quantity → QB Error 3060 -->
+<SalesOrderLineAdd>
+  <ItemRef><FullName>Subtotal</FullName></ItemRef>
+  <Quantity>1</Quantity>   ← ROMPE
+</SalesOrderLineAdd>
+```
+
+### Conversiones de Montos (Medusa → QB)
+
+| Fuente | Campo | Unidad | Conversión necesaria |
+|--------|-------|--------|---------------------|
+| `query.graph` (subscriber) | `unit_price` | **Dólares** (e.g. 22.25) | `Math.round(val * 100)` → cents → `buildQbItems` → ÷100 → dólares |
+| Admin HTTP API (manual route) | `unit_price` | **Dólares** (e.g. 22.25) | Igual: `Math.round(val * 100)` antes de `buildQbItems` |
+| Admin HTTP API (manual route) | `discount_total` | **Dólares** (e.g. 4.45) | `Math.round(val * 100)` → cents → `buildQbOrderDiscountLines` → ÷100 → dólares |
+
+> **⚠️ Error histórico:** La ruta manual (`/admin/quickbooks/order`) pasaba `discount_total` directamente a `buildQbOrderDiscountLines` (que esperaba cents), resultando en `4.45/100 = 0.044` → Amount casi vacío → QB Error 3170 (total negativo). Resuelto 2026-03-17.
+
+### Código en backend (Canonical)
+
+- **`buildQbOrderDiscountLines()`** — `src/lib/quickbooks/order-flow-core.ts`
+- **`buildQbItems()`** — `src/lib/quickbooks/order-flow-core.ts`
+- **Subscriber (automático):** `src/subscribers/qb-order-subscriber.ts`
+- **Manual sync route:** `src/api/admin/quickbooks/order/route.ts`
+- **Draft order route:** `src/api/admin/quickbooks/draft-order/route.ts`
+
+---
+
 **Desarrollado por:** Equipo de Integración Medusa-QB.
-**Última Actualización:** 27 de Febrero, 2026. (v2.0 — Actualizado a QBWC, Amount vs Rate, PM2, errores adicionales)
+**Última Actualización:** 17 de Marzo, 2026. (v3.0 — Estrategia universal de descuentos, fix Error 3060/3170, shipping al final)
