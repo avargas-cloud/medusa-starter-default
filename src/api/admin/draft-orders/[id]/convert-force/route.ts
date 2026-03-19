@@ -37,12 +37,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     // PRIORITY 2: Explicit math recalculation (Subtotal - Discount + Tax) using Medusa's API fields.
     const computeTrueTotal = async (): Promise<number | null> => {
         try {
-            const orderRes = await fetch(
-                `${base}/admin/orders/${id}?fields=total,tax_total,subtotal,discount_total,+metadata`,
-                { headers: authHeaders }
-            )
-            if (!orderRes.ok) return null
-            const { order } = await orderRes.json()
+            const { data } = await query.graph({
+                entity: "order",
+                fields: ["total", "tax_total", "subtotal", "discount_total", "metadata"],
+                filters: { id }
+            })
+            const order = data?.[0]
             if (!order) return null
 
             // Prefer our correctly-rounded computed_total from metadata
@@ -84,13 +84,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 const pcolIds = res.rows.map(r => r.payment_collection_id)
                 if (pcolIds.length === 0) return
 
-                const correctCents = Math.round(correctTotal * 100)
+                const correctAmount = correctTotal
                 
                 for (const pcId of pcolIds) {
                     const pcRes = await client.query(`SELECT amount FROM payment_collection WHERE id = $1`, [pcId])
-                    if (pcRes.rows[0] && Number(pcRes.rows[0].amount) !== correctCents) {
-                        console.log(`[convert-force] Patching Payment Collection ${pcId} via SQL: ${pcRes.rows[0].amount} → ${correctCents}`)
-                        await client.query(`UPDATE payment_collection SET amount = $1, updated_at = NOW() WHERE id = $2`, [correctCents, pcId])
+                    if (pcRes.rows[0] && Number(pcRes.rows[0].amount) !== correctAmount) {
+                        console.log(`[convert-force] Patching Payment Collection ${pcId} via SQL: ${pcRes.rows[0].amount} → ${correctAmount}`)
+                        await client.query(`UPDATE payment_collection SET amount = $1, updated_at = NOW() WHERE id = $2`, [correctAmount, pcId])
                     }
                 }
             } finally {
@@ -102,18 +102,23 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     }
 
     try {
-        // ── Step 1: Fetch draft order items ───────────────────────────────────
-        // Get items from the DRAFT (not confirmed order) to create reservations
-        // proactively — avoids the try → fail → fix → retry anti-pattern.
-        const draftRes = await fetch(`${base}/admin/draft-orders/${id}`, { headers: authHeaders })
-        if (draftRes.ok) {
-            const { draft_order } = await draftRes.json()
-            const items: any[] = draft_order?.items ?? draft_order?.cart?.items ?? []
+        // ── Step 1 & 2: Fetch draft order items and stock location concurrently ───────────
+        const [{ data: orderData }, { data: locationData }] = await Promise.all([
+            query.graph({
+                entity: "order",
+                fields: ["items.*", "items.variant_id", "items.variant.id"],
+                filters: { id }
+            }),
+            query.graph({
+                entity: "stock_location",
+                fields: ["id"]
+            })
+        ])
+        const draft_order = orderData?.[0]
+        const primaryLocationId: string | undefined = locationData?.[0]?.id
 
-            // ── Step 2: Get the primary stock location ────────────────────────
-            const slRes = await fetch(`${base}/admin/stock-locations?limit=100`, { headers: authHeaders })
-            const slJson = slRes.ok ? await slRes.json() : {}
-            const primaryLocationId: string | undefined = (slJson.stock_locations ?? [])[0]?.id
+        if (draft_order) {
+            const items: any[] = draft_order?.items ?? draft_order?.cart?.items ?? []
 
             if (primaryLocationId && items.length > 0) {
                 // ── Step 3: Ensure allow_backorder reservations for all items ─
@@ -234,13 +239,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             // 7a. Read order metadata and customer info
             let isExempt = false
             try {
-                const orderInfoRes = await fetch(
-                    `${base}/admin/orders/${id}?fields=customer_id,+metadata`,
-                    { headers: authHeaders }
-                )
-                if (orderInfoRes.ok) {
-                    const { order: orderInfo } = await orderInfoRes.json()
-                    const taxMode: string = orderInfo?.metadata?.tax_mode ?? "auto"
+                const { data } = await query.graph({
+                    entity: "order",
+                    fields: ["customer_id", "metadata"],
+                    filters: { id }
+                })
+                const orderInfo = data?.[0]
+
+                if (orderInfo) {
+                    const taxMode = String(orderInfo?.metadata?.tax_mode ?? "auto")
                     console.log(`[convert-force] order.metadata.tax_mode = "${taxMode}"`)
 
                     if (taxMode === "exempt") {
@@ -254,21 +261,19 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                     } else {
                         // 'auto' or missing → check customer group (mirrors pos-tax service.ts)
                         if (orderInfo?.customer_id) {
-                            const custRes = await fetch(
-                                `${base}/admin/customers/${orderInfo.customer_id}?fields=id,+groups`,
-                                { headers: authHeaders }
+                            const { data: custData } = await query.graph({
+                                entity: "customer",
+                                fields: ["groups.*"],
+                                filters: { id: orderInfo.customer_id }
+                            })
+                            const customerGroups = custData?.[0]?.groups ?? []
+                            isExempt = customerGroups.some((g: any) =>
+                                g === "tax-exempt" ||
+                                g.name === "tax-exempt" ||
+                                (typeof g === "object" && g.name?.toLowerCase().includes("exempt"))
                             )
-                            if (custRes.ok) {
-                                const { customer } = await custRes.json()
-                                const groups: any[] = customer?.groups ?? []
-                                isExempt = groups.some(g =>
-                                    g === "tax-exempt" ||
-                                    g.name === "tax-exempt" ||
-                                    (typeof g === "object" && g.name?.toLowerCase().includes("exempt"))
-                                )
-                                if (isExempt) console.log("[convert-force] Customer in tax-exempt group → EXEMPT")
-                                else console.log("[convert-force] No exempt group → FL 7%")
-                            }
+                            if (isExempt) console.log("[convert-force] Customer in tax-exempt group → EXEMPT")
+                            else console.log("[convert-force] No exempt group → FL 7%")
                         }
                     }
                 }

@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
+import { ContainerRegistrationKeys } from "@medusajs/utils"
 import { getDbPool } from "../../../../utils/db-pool"
 
 
@@ -37,6 +38,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         "Content-Type": "application/json",
     }
     const logger = req.scope.resolve("logger")
+    const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)
     const results: Record<string, any> = {}
 
     // ── Apply discount + fix payment collection ───────────────────────────────
@@ -60,21 +62,23 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     } else {
         // No discount — still fix payment collection to current order total
         try {
-            const orderRes = await fetch(
-                `${base}/admin/orders/${id}?fields=total,+payment_collections.*`,
-                { headers: authHeaders }
-            )
-            if (orderRes.ok) {
-                const { order } = await orderRes.json()
+            const { data } = await query.graph({
+                entity: "order",
+                fields: ["total", "payment_collections.*"],
+                filters: { id }
+            })
+            const order = data?.[0]
+
+            if (order) {
                 // Use POS total if provided (includes tax), otherwise use Medusa's order total
                 const correctTotal: number = (pos_total != null && pos_total > 0) ? pos_total : (order?.total ?? 0)
                 const cols: any[] = order?.payment_collections ?? []
                 logger.info(`[post-edit-sync] No discount — fixing payment: total=${correctTotal}, cols=${cols.length}`)
                 const paymentModule = req.scope.resolve("payment" as any) as any
-                for (const col of cols) {
-                    await paymentModule.updatePaymentCollections(col.id, { amount: correctTotal })
-                    logger.info(`[post-edit-sync] ✅ Payment updated to $${correctTotal}`)
-                }
+                
+                // Parallelize payment collection updates
+                await Promise.all(cols.map(col => paymentModule.updatePaymentCollections(col.id, { amount: correctTotal })))
+                logger.info(`[post-edit-sync] ✅ Payment(s) updated to $${correctTotal}`)
                 results.payment_fixed = correctTotal
             }
         } catch (e: any) {
@@ -88,14 +92,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         if (dbUrl) {
             const pool = getDbPool()
             try {
-                // 1. Fetch current Medusa-stored tax_total (BEFORE our injection) to compare vs POS.
+                // 1. Fetch current Medusa-stored tax_total (BEFORE our injection) natively.
                 let calculatedTax = 0
                 try {
-                    const taxCheckRes = await fetch(`${base}/admin/orders/${id}?fields=tax_total`, { headers: authHeaders })
-                    if (taxCheckRes.ok) {
-                        const { order: taxCheckOrder } = await taxCheckRes.json()
-                        calculatedTax = Number(taxCheckOrder?.tax_total ?? 0)
-                    }
+                    const { data } = await query.graph({
+                        entity: "order",
+                        fields: ["tax_total"],
+                        filters: { id }
+                    })
+                    calculatedTax = Number(data?.[0]?.tax_total ?? 0)
                 } catch { /* non-fatal */ }
 
                 // 2. Fetch item IDs for tax line operations.
