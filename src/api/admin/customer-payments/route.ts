@@ -8,7 +8,7 @@ import { FINANCE_MODULE } from '../../../modules/finance'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function mapMethod(method: string): string {
+function mapMethod(method: string): any {
     if (['visa', 'mastercard', 'discover', 'amex', 'capital_one', 'debit_card'].includes(method)) return 'card'
     if (['e_check', 'checking_account', 'transfer', 'wire_transfer'].includes(method)) return 'ach'
     if (['paypal', 'money_order'].includes(method)) return 'other'
