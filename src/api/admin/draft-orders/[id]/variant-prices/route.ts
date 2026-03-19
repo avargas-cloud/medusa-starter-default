@@ -1,5 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
-import { Pool } from "pg"
+import { getDbPool } from "../../../../utils/db-pool"
 
 /**
  * GET /admin/draft-orders/:id/variant-prices
@@ -26,7 +26,7 @@ export async function GET(
         return
     }
 
-    const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+    const pool = getDbPool()
 
     try {
         // ── 1. Fetch DEFAULT prices (no price_list_id) ────────────────────────────
@@ -100,6 +100,6 @@ export async function GET(
         console.error("[variant-prices] SQL error:", e?.message)
         res.status(500).json({ message: e?.message ?? "Failed to retrieve prices" })
     } finally {
-        await pool.end()
+        // shared pool — do NOT call pool.end()
     }
 }

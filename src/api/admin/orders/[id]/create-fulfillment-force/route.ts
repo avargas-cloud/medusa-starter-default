@@ -1,19 +1,30 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
-import { Pool } from "pg"
+import { createReservationsWorkflow } from "@medusajs/core-flows"
+import { Modules } from "@medusajs/utils"
+import { getDbPool } from "../../../../utils/db-pool"
 
 /**
  * POST /admin/orders/:id/create-fulfillment-force
  *
- * Creates a fulfillment for an order bypassing Medusa's shipping profile
- * validation. The native endpoint rejects if the shipping option's profile
- * differs from the product's profile (e.g., Local Pickup vs Default).
+ * Creates a fulfillment for a POS local-pickup order.
  *
- * Strategy: temporarily align the order items' shipping profile to match
- * the shipping option, call the native workflow, then restore original profiles.
+ * Strategy 1 (native, preferred): createOrderFulfillmentWorkflow
+ *   Pre-steps (before calling native workflow):
+ *     A) SQL: set requires_shipping=false on order_item rows
+ *        (bypasses Medusa's shipping-profile check for local pickup)
+ *     B) Ensure stock reservations exist for each item
+ *        (POS orders bypass checkout so reservations are never auto-created;
+ *         the native workflow requires them to exist before fulfilling)
+ *   Falls through to Strategy 2 only if this still fails (e.g. 0-stock items
+ *   where reservation creation itself is rejected).
+ *
+ * Strategy 2 (force, fallback): FulfillmentModuleService + OrderModuleService
+ *   Post-step: SQL sets fulfilled_quantity=quantity on ALL order_item rows
+ *   to fix fulfillment_status display when order has historical item versions.
  *
  * Body:
- *   items: { id: string; quantity: number }[]  — order line item IDs + quantities
- *   location_id: string                        — stock location ID
+ *   items: { id: string; quantity: number }[]
+ *   location_id: string
  *   no_notification?: boolean
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
@@ -28,87 +39,256 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         return res.status(400).json({ message: "items and location_id are required" })
     }
 
+    const orderId = id as string
     const dbUrl = process.env.DATABASE_URL
-    if (!dbUrl) {
-        return res.status(500).json({ message: "DATABASE_URL not set" })
+
+    // ── Idempotency guard ─────────────────────────────────────────────────────
+    try {
+        const fulfillmentModuleCheck = req.scope.resolve(Modules.FULFILLMENT) as any
+        const existingFulfillments = await fulfillmentModuleCheck.listFulfillments(
+            { order_id: orderId },
+            { select: ["id", "provider_id", "created_at"], take: 1 }
+        )
+        if (existingFulfillments?.length) {
+            console.log(`[create-fulfillment-force] ↩️ Already has fulfillment ${existingFulfillments[0].id}, returning early`)
+            return res.status(200).json({ fulfillment: existingFulfillments[0], already_fulfilled: true })
+        }
+    } catch (checkErr: any) {
+        console.warn(`[create-fulfillment-force] idempotency check failed: ${checkErr?.message?.slice(0, 60)}`)
     }
 
-    const pool = new Pool({ connectionString: dbUrl })
-
+    // ── Strategy 1: Native createOrderFulfillmentWorkflow ────────────────────
     try {
-        // 1. Find the shipping profile used by the active shipping method on this order
-        const smRes = await pool.query<{ shipping_profile_id: string }>(
-            `SELECT so.shipping_profile_id
-             FROM order_shipping_method osm
-             JOIN shipping_option so ON so.id = osm.shipping_option_id
-             WHERE osm.order_id = $1 AND osm.deleted_at IS NULL
-             ORDER BY osm.created_at DESC LIMIT 1`,
-            [id]
-        )
-        const shippingProfileId = smRes.rows[0]?.shipping_profile_id
+        const { createOrderFulfillmentWorkflow } = await import("@medusajs/core-flows")
+        console.log(`[create-fulfillment-force] 🔄 Strategy 1: native workflow for order=${orderId}`)
 
-        console.log(`[create-fulfillment-force] order=${id}, shipping_profile=${shippingProfileId}`)
+        if (dbUrl) {
+            const pool = getDbPool()
+            try {
+                // Pre-step A: Set requires_shipping=false via SQL
+                // orderModule.updateOrderItem() fails silently for this field.
+                // Raw SQL is the reliable path for local pickup items.
+                const itemIds = items.map((i: any) => i.id)
+                await pool.query(
+                    `UPDATE order_item SET requires_shipping = false WHERE id = ANY($1)`,
+                    [itemIds]
+                )
+                console.log(`[create-fulfillment-force] ✅ Pre-A: requires_shipping=false for ${itemIds.length} items`)
 
-        // 2. Find the current shipping profiles of the items being fulfilled
-        const itemIds = items.map(i => i.id)
-        const itemProfilesRes = await pool.query<{ id: string; shipping_profile_id: string }>(
-            `SELECT p.id, p.shipping_profile_id
-             FROM product p
-             JOIN product_variant pv ON pv.product_id = p.id
-             JOIN order_line_item oli ON oli.variant_id = pv.id
-             WHERE oli.id = ANY($1::text[])`,
-            [itemIds]
-        )
-        const originalProfiles = itemProfilesRes.rows
+                // Pre-step B: Ensure stock reservations exist for each item.
+                // POS orders call allocate-items at save time, but this is the safety net.
+                // POS uses allow_backorder=true → createReservationItems always succeeds
+                // regardless of stocked_quantity. No stock bump needed.
+                const inventoryModule = req.scope.resolve(Modules.INVENTORY) as any
 
-        // 3. If there's a mismatch and we have a target profile, temporarily patch
-        const needsPatch = shippingProfileId && originalProfiles.some(
-            r => r.shipping_profile_id !== shippingProfileId
-        )
+                for (const reqItem of items) {
+                    try {
+                        // Idempotent: reqItem.id is order_line_item.id (from Medusa API)
+                        const existing = await inventoryModule.listReservationItems(
+                            { line_item_id: reqItem.id },
+                            { take: 1 }
+                        )
+                        if (existing?.length) {
+                            console.log(`[create-fulfillment-force] ✅ Pre-B: reservation exists for item ${reqItem.id}`)
+                            continue
+                        }
 
-        if (needsPatch) {
-            const productIds = originalProfiles.map(r => r.id)
-            await pool.query(
-                `UPDATE product SET shipping_profile_id = $1 WHERE id = ANY($2::text[])`,
-                [shippingProfileId, productIds]
-            )
-            console.log(`[create-fulfillment-force] Patched ${productIds.length} products to profile ${shippingProfileId}`)
-        }
+                        // reqItem.id = order_line_item.id → join via oi.item_id to get variant_id
+                        const variantRes = await pool.query<{ variant_id: string | null }>(
+                            `SELECT oli.variant_id
+                             FROM order_line_item oli
+                             WHERE oli.id = $1 LIMIT 1`,
+                            [reqItem.id]
+                        )
+                        const variantId = variantRes.rows[0]?.variant_id
+                        if (!variantId) {
+                            console.warn(`[create-fulfillment-force] Pre-B: no variant_id for item ${reqItem.id}, skipping`)
+                            continue
+                        }
 
-        try {
-            // 4. Call native Medusa fulfillment workflow (now profiles match)
-            const { createOrderFulfillmentWorkflow } = await import("@medusajs/core-flows")
+                        // Get inventory_item_id from variant→inventory link table
+                        const invItemRes = await pool.query<{ inventory_item_id: string }>(
+                            `SELECT inventory_item_id FROM product_variant_inventory_item
+                             WHERE variant_id = $1 AND deleted_at IS NULL LIMIT 1`,
+                            [variantId]
+                        )
+                        const inventoryItemId = invItemRes.rows[0]?.inventory_item_id
+                        if (!inventoryItemId) {
+                            console.warn(`[create-fulfillment-force] Pre-B: no inventory_item for variant ${variantId}, skipping`)
+                            continue
+                        }
 
-            const result = await createOrderFulfillmentWorkflow(req.scope).run({
-                input: {
-                    order_id: id,
-                    items,
-                    location_id,
-                    no_notification,
-                    created_by: ((req as any).auth_context?.actor_id ?? '') as string,
-                },
-            })
+                        // Use native createReservationsWorkflow — reqItem.id IS order_line_item.id ✅
+                        await createReservationsWorkflow(req.scope).run({
+                            input: {
+                                reservations: [{
+                                    inventory_item_id: inventoryItemId,
+                                    location_id,
+                                    quantity: reqItem.quantity,
+                                    line_item_id: reqItem.id,
+                                }],
+                            },
+                        })
+                        console.log(`[create-fulfillment-force] ✅ Pre-B: created reservation for item ${reqItem.id} (inv=${inventoryItemId})`)
 
-            console.log(`[create-fulfillment-force] ✅ Fulfillment created`)
-
-            const fulfillmentResult = result.result as any
-            return res.status(201).json({ fulfillment: fulfillmentResult ?? { id: 'unknown' } })
-        } finally {
-            // 5. ALWAYS restore original shipping profiles
-            if (needsPatch) {
-                for (const row of originalProfiles) {
-                    await pool.query(
-                        `UPDATE product SET shipping_profile_id = $1 WHERE id = $2`,
-                        [row.shipping_profile_id, row.id]
-                    ).catch(e => console.warn("[create-fulfillment-force] Failed to restore profile:", e?.message))
+                    } catch (reservErr: any) {
+                        // Non-fatal: fall through to Strategy 2 if this fails
+                        console.warn(`[create-fulfillment-force] Pre-B: reservation failed for ${reqItem.id}: ${reservErr?.message?.slice(0, 80)}`)
+                    }
                 }
-                console.log(`[create-fulfillment-force] Restored original shipping profiles`)
+
+            } finally {
+                // shared pool — do NOT call pool.end()
             }
-            await pool.end()
         }
-    } catch (e: any) {
-        console.error("[create-fulfillment-force]", e?.message)
-        try { await pool.end() } catch { /* ignore */ }
-        return res.status(500).json({ message: e?.message ?? "Failed to create fulfillment" })
+
+        // Call the native workflow — should succeed now that reservations exist
+        const result = await createOrderFulfillmentWorkflow(req.scope).run({
+            input: {
+                order_id: orderId,
+                items,
+                location_id,
+                no_notification,
+                created_by: ((req as any).auth_context?.actor_id ?? "") as string,
+            },
+        })
+
+        console.log(`[create-fulfillment-force] ✅ Strategy 1 (native workflow) succeeded`)
+        return res.status(201).json({ fulfillment: (result.result as any) ?? { id: "ok" } })
+
+    } catch (workflowErr: any) {
+        console.warn(`[create-fulfillment-force] ⚠️ Strategy 1 failed (${workflowErr?.message?.slice(0, 100)}), falling back to Strategy 2...`)
+    }
+
+
+    // ── Strategy 2: FulfillmentModule + OrderModule directly (force path) ─────
+    try {
+        const orderModule = req.scope.resolve(Modules.ORDER) as any
+        const fulfillmentModule = req.scope.resolve(Modules.FULFILLMENT) as any
+
+        const orderData = await orderModule.retrieveOrder(orderId, {
+            relations: ["items", "shipping_address", "shipping_methods"],
+        })
+
+        const shippingMethod = orderData?.shipping_methods?.[0]
+
+        const fulfillmentItems = items.map((reqItem: { id: string; quantity: number }) => {
+            const orderItem = orderData?.items?.find((i: any) => i.id === reqItem.id)
+            const sku = orderItem?.variant_sku ?? orderItem?.sku ?? null
+            const barcode = orderItem?.variant_barcode ?? sku ?? ''
+            return {
+                title: orderItem?.title ?? 'Item',
+                sku,
+                barcode,
+                quantity: reqItem.quantity,
+                line_item_id: reqItem.id,
+            }
+        })
+
+        console.log(`[create-fulfillment-force] 🔄 Strategy 2: module services, items=${fulfillmentItems.length}`)
+
+        // Try providers in priority order
+        const dbProviders: string[] = []
+        try {
+            const rows = await fulfillmentModule.listFulfillmentProviders({}, { take: 20 })
+            dbProviders.push(...(rows as any[]).map((p: any) => p.id).filter(Boolean))
+        } catch { /* non-fatal */ }
+
+        const optionProvider = shippingMethod?.shipping_option?.provider_id
+        const candidates = [...new Set([
+            'store-pickup_store-pickup',
+            'manual_manual',
+            optionProvider,
+            ...dbProviders,
+        ].filter(Boolean))] as string[]
+        console.log(`[create-fulfillment-force] Provider candidates (${candidates.length}):`, candidates.slice(0, 4))
+
+        let fulfillment: any
+
+        const deliveryAddress = (orderData?.shipping_address?.country_code)
+            ? orderData.shipping_address
+            : { address_1: '2760 W 84th St Unit 4', city: 'Hialeah', province: 'FL', postal_code: '33016', country_code: 'us' }
+
+        for (const providerId of candidates) {
+            try {
+                fulfillment = await fulfillmentModule.createFulfillment({
+                    location_id,
+                    provider_id: providerId,
+                    shipping_option_id: shippingMethod?.shipping_option_id ?? null,
+                    items: fulfillmentItems,
+                    delivery_address: deliveryAddress,
+                    order: { id: orderId },
+                    data: {},
+                    labels: [],
+                })
+                console.log(`[create-fulfillment-force] ✅ Created with provider=${providerId}: ${fulfillment.id}`)
+                break
+            } catch (err: any) {
+                console.warn(`[create-fulfillment-force] provider=${providerId} failed: ${err?.message?.slice(0, 80)}`)
+            }
+        }
+
+        if (!fulfillment) {
+            try {
+                fulfillment = await fulfillmentModule.createFulfillment({
+                    location_id,
+                    shipping_option_id: shippingMethod?.shipping_option_id ?? null,
+                    items: fulfillmentItems,
+                    delivery_address: deliveryAddress,
+                    order: { id: orderId },
+                    data: {},
+                    labels: [],
+                })
+                console.log(`[create-fulfillment-force] ✅ Created (no provider): ${fulfillment.id}`)
+            } catch (err: any) {
+                throw new Error(`All provider attempts failed. Last error: ${err?.message}`)
+            }
+        }
+
+        // Register fulfillment against the order
+        try {
+            await orderModule.registerFulfillment({
+                order_id: orderId,
+                reference: "fulfillment",
+                reference_id: fulfillment.id,
+                items: items.map((i: { id: string; quantity: number }) => ({
+                    id: i.id,
+                    quantity: i.quantity,
+                })),
+            })
+            console.log(`[create-fulfillment-force] ✅ Fulfillment registered against order`)
+        } catch (regErr: any) {
+            console.warn(`[create-fulfillment-force] registerFulfillment warning: ${regErr?.message?.slice(0, 100)}`)
+        }
+
+        // ── fulfilled_quantity fix (Strategy 2 only) ──────────────────────────
+        // Medusa computes fulfillment_status across ALL order_item rows including
+        // historical versions from order edits (which have fulfilled_quantity=0).
+        // Fix: set fulfilled_quantity=quantity on ALL active rows so status = 'fulfilled'.
+        // (Strategy 1's native workflow handles this correctly without this patch.)
+        if (dbUrl) {
+            const pool = getDbPool()
+            try {
+                const result = await pool.query(
+                    `UPDATE order_item
+                     SET fulfilled_quantity = quantity
+                     WHERE order_id = $1
+                       AND deleted_at IS NULL
+                       AND quantity > 0`,
+                    [orderId]
+                )
+                console.log(`[create-fulfillment-force] ✅ Patched fulfilled_quantity for ${result.rowCount} order_item rows`)
+            } catch (sqlErr: any) {
+                console.warn(`[create-fulfillment-force] fulfilled_quantity patch failed (non-fatal): ${sqlErr?.message}`)
+            } finally {
+                // shared pool — do NOT call pool.end()
+            }
+        }
+
+        return res.status(201).json({ fulfillment })
+
+    } catch (moduleErr: any) {
+        console.error(`[create-fulfillment-force] ❌ Strategy 2 also failed: ${moduleErr?.message}`)
+        return res.status(500).json({ message: moduleErr?.message ?? "Fulfillment creation failed" })
     }
 }

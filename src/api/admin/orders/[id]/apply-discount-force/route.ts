@@ -7,7 +7,7 @@ import {
     confirmDraftOrderEditWorkflow,
     cancelDraftOrderEditWorkflow,
 } from "@medusajs/core-flows"
-import { Pool } from "pg"
+import { getDbPool } from "../../../../utils/db-pool"
 import { posOverrideAdjustmentsWorkflow } from "../../../../../workflows/pos-discount/workflows"
 
 /**
@@ -121,7 +121,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                This avoids workflow errors trying to cancel non-existent things.
             */
             if (dbUrl) {
-                const pool = new Pool({ connectionString: dbUrl })
+                const pool = getDbPool()
                 try {
                     const delAdj = await pool.query(
                         `DELETE FROM order_line_item_adjustment 
@@ -144,8 +144,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                     logger.info(`[apply-discount-force] Wiped ALL ${delAdj.rowCount} adjustments + ${delPromo.rowCount} promo links + ${delTax.rowCount} tax lines (clean slate)`)
                 } catch (e: any) {
                     logger.warn(`[apply-discount-force] DB cleanup failed: ${e.message}`)
-                } finally {
-                    await pool.end()
                 }
             }
 
@@ -178,7 +176,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             // By storing rate=7, decorateCartTotals computes: 7% × (subtotal − discount_adj) = correct tax.
             // Example: 7% × ($52.96 − $2.65) = 7% × $50.31 = $3.52 ✅ — matches POS value, no overwrite needed.
             if (dbUrl) {
-                const taxPool = new Pool({ connectionString: dbUrl })
+                const taxPool = getDbPool()
                 try {
                     const taxItemsRes = await taxPool.query<{ item_id: string }>(
                         `SELECT DISTINCT item_id FROM order_item WHERE order_id = $1 AND deleted_at IS NULL`,
@@ -208,8 +206,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                     logger.info(`[apply-discount-force] ✅ Inserted ${taxCode} tax lines at ${effectiveRate}% for ${taxItemsRes.rows.length} items`)
                 } catch (e: any) {
                     logger.warn(`[apply-discount-force] Tax line insertion non-fatal: ${e.message}`)
-                } finally {
-                    await taxPool.end()
                 }
             }
 

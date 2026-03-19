@@ -74,9 +74,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const financeService = req.scope.resolve(FINANCE_MODULE)
     const body = req.body as CreateInvoiceBody
 
+
     if (!body.order_id || !body.customer_id || !body.items?.length) {
         return res.status(400).json({ error: 'order_id, customer_id, and items are required' })
     }
+
 
     // Derive invoice number: INV-{display_id}-{seq}
     const existing = await invoiceService.listPosInvoices({ order_id: body.order_id })

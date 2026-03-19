@@ -229,6 +229,46 @@ POST   /admin/orders/:id/cancel         (Medusa)
 
 ---
 
+## Changelog — Marzo 19, 2026
+
+### Patch de Asignación de Inventario (Allocation / Backorders)
+
+**Problema:**
+Al intentar asignar (allocate) inventario a ítems de una orden desde el POS, o al agregar un ítem nuevo (`add-item-force`), los productos sin inventario (0 stock) no se reservaban (quedaban como "Not allocated"), incluso si tenían habilitada la opción de "Continue selling when out of stock" (`allow_backorder = true`).
+
+**Origen 1 (El error silencioso de consulta):**
+El backend usaba `remoteQuery` o la REST API `/admin/inventory-items?variant_id[]=` con parámetros y operadores estructuralmente inválidos para Medusa v2 (`$where` en remoteQuery o filtros no soportados en REST). Al atrapar (`catch`) este fallo silenciosamente, el backend reportaba que el ítem era un *unmanaged product* y lo saltaba.
+
+**Solución 1:**
+Se refactorizó la consulta de `inventory_item_id` en las tres rutas clave (`allocate-items`, `add-item-force`, y `convert-force`) para utilizar el motor nativo de Medusa v2 de manera correcta:
+```typescript
+const variantData = await query.graph({
+    entity: "variant",
+    fields: ["id", "inventory_items.inventory_item_id"],
+    filters: { id: variant_id }
+})
+```
+
+**Origen 2 (Validación estricta de stock en 0):**
+Una vez resuelto el identificador del inventario, la función nativa `createReservationsWorkflow` arrojaba un "Not enough stock available" para ítems en 0, **ignorando el switch `allow_backorder` de la base de datos**; y asimismo las rutas como `convert-force` estaban utilizando *loops HTTP `fetch` a sí mismas* muy frágiles.
+
+**Solución 2:**
+En Medusa v2, el workflow de reservas exige que la excepción de stock se pase de forma explícita en el *volante de vuelo* de la propia reserva. Se inyectó contundentemente el booleano `allow_backorder: true` de la siguiente manera, reemplazando cualquier `fetch` rústico por el llamado a los core-flows universales:
+```typescript
+const { createReservationsWorkflow } = require("@medusajs/core-flows")
+
+await createReservationsWorkflow(req.scope).run({
+    input: {
+        reservations: [{
+            line_item_id, inventory_item_id, location_id, quantity,
+            allow_backorder: true // 👈 Evita validación 0 stock en POS durante Confirm Order y Save
+        }],
+    },
+})
+```
+
+---
+
 ## Changelog — Marzo 17, 2026
 
 ### Patch Matemático de Payment Collections (Order Total Mismatch)

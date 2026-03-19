@@ -460,7 +460,11 @@ A partir de Marzo de 2026, el botón de "Save" en `DocumentToolbar` **siempre es
 **Bloqueo Inteligente:**
 - **isDirty Guardian:** Se detectó que convertir el Draft a Order sin presionar `Save` causaba pérdida de datos locales. La mitigación implementada inyecta una validación en `handleConfirmOrder` (`useEstimateActions.ts` vs `page.tsx`).
 - Si el store del POS detecta `isDirty: true`, lanza un `ConfirmModal` amarillo exigiendo un "Save & Confirm" atómico.
-- **Convert-Force Nativo:** Una vez todo guardado, se pulsa `POST /admin/draft-orders/:id/convert-force`, que llama eficientemente la rutina nativa de Medusa, preservando todo (custom prices, metadata description override, address metadata, discount promos, y *pos_comment_lines*) durante su ascenso a *Sales Order*.
+
+**Convert-Force Nativo & Backorders (Marzo 19, 2026):** 
+Una vez todo guardado, se pulsa `POST /admin/draft-orders/:id/convert-force`. Esta ruta realiza dos tareas críticas:
+1. **Asignación (Allocation) Forzada:** En vez de delegarle a Medusa la asignación durante la conversión (lo cual falla si hay ítems con 0 stock), `convert-force` pre-crea todas las reservaciones utilizando directamente el `createReservationsWorkflow` interno junto a la directiva `allow_backorder: true`.
+2. **Ascenso a Sales Order:** Llama eficientemente la rutina nativa `updateOrders({ is_draft_order: false })`, preservando absolutamente todo (custom prices, metadata description override, address metadata, discount promos, y *pos_comment_lines*) durante su ascenso a *Sales Order*.
 
 ### 21. Sincronización Avanzada a QuickBooks
 

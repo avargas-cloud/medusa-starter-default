@@ -18,8 +18,13 @@ module.exports = defineConfig({
         }
       },
       pool: {
-        min: 2,
-        max: 10
+        // min: 0 → Knex won't keep idle connections alive.
+        // Railway proxy drops idle TCP connections after ~20-30s,
+        // causing "Connection ended unexpectedly". No idle connections = no drops.
+        min: 0,
+        max: 10,
+        idleTimeoutMillis: 20000,   // close connections before Railway proxy does
+        acquireTimeoutMillis: 30000,
       }
     },
     // TEMPORARY: Disabled Redis to debug Order API Cache issue
@@ -139,6 +144,16 @@ module.exports = defineConfig({
       resolve: "@medusajs/medusa/event-bus-redis",
       options: {
         redisUrl: process.env.REDIS_URL,
+        redisOptions: {
+          connectTimeout: 45000,
+          keepAlive: 5000,
+          // Max 50 retries (~8min total), then stop flooding logs.
+          // Railway Redis is still reachable; this just prevents }}} spam.
+          retryStrategy: (times: number) => {
+            if (times > 10) return null  // stop after 10 tries (~3 min), then silence
+            return Math.min(times * 3000, 30000)  // 3s → 30s backoff
+          },
+        },
       },
     },
     {
@@ -146,6 +161,12 @@ module.exports = defineConfig({
       options: {
         redis: {
           redisUrl: process.env.REDIS_URL,
+          connectTimeout: 45000,
+          keepAlive: 5000,
+          retryStrategy: (times: number) => {
+            if (times > 10) return null
+            return Math.min(times * 3000, 30000)
+          },
         },
       },
     },
@@ -153,6 +174,14 @@ module.exports = defineConfig({
       resolve: "@medusajs/medusa/cache-redis",
       options: {
         redisUrl: process.env.REDIS_URL,
+        redisOptions: {
+          connectTimeout: 45000,
+          keepAlive: 5000,
+          retryStrategy: (times: number) => {
+            if (times > 10) return null
+            return Math.min(times * 3000, 30000)
+          },
+        },
       },
     },
     {
@@ -165,6 +194,14 @@ module.exports = defineConfig({
             is_default: true,
             options: {
               redisUrl: process.env.REDIS_URL,
+              redisOptions: {
+                connectTimeout: 45000,
+                keepAlive: 5000,
+                retryStrategy: (times: number) => {
+                  if (times > 10) return null
+                  return Math.min(times * 3000, 30000)
+                },
+              },
             },
           },
         ],

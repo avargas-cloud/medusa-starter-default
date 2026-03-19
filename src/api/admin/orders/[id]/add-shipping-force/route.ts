@@ -1,6 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
 import { Modules } from "@medusajs/utils"
-import { Pool } from "pg"
+import { getDbPool } from "../../../../utils/db-pool"
 
 /**
  * POST /admin/orders/:id/add-shipping-force
@@ -76,7 +76,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             // on each shipping method or crashes when the user expands "Shipping Subtotal".
             const dbUrl = process.env.DATABASE_URL
             if (dbUrl) {
-                const pool = new Pool({ connectionString: dbUrl })
+                const pool = getDbPool()
                 try {
                     // Find the newly created shipping method for this order
                     const smRes = await pool.query<{ id: string }>(
@@ -106,8 +106,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                     }
                 } catch (te: any) {
                     console.warn(`[orders/add-shipping-force] Tax line insert failed (non-fatal):`, te?.message)
-                } finally {
-                    await pool.end()
                 }
             }
         } else {

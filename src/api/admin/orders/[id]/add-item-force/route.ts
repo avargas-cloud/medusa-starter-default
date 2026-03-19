@@ -195,12 +195,25 @@ export async function POST(
                 "Content-Type": "application/json",
             }
 
-            const [slRes, invRes] = await Promise.all([
-                fetch(`${base}/admin/stock-locations?limit=1`, { headers: authHeaders }),
-                fetch(`${base}/admin/inventory-items?variant_id[]=${variant_id}&limit=1`, { headers: authHeaders }),
-            ])
-            const primaryLocationId = slRes.ok ? (await slRes.json())?.stock_locations?.[0]?.id : null
-            const inventoryItemId = invRes.ok ? (await invRes.json())?.inventory_items?.[0]?.id : null
+            const stockLocationModule = req.scope.resolve(Modules.STOCK_LOCATION) as any
+            const remoteQuery = req.scope.resolve("remoteQuery") as any
+
+            const locs = await stockLocationModule.listStockLocations({}, { take: 1, select: ["id"] })
+            const primaryLocationId = locs?.[0]?.id
+
+            let inventoryItemId: string | null = null
+            try {
+                const variantData = await remoteQuery({
+                    variant: {
+                        fields: ["id"],
+                        __args: { filters: { id: variant_id } },
+                        inventory_items: { fields: ["inventory_item_id"] }
+                    }
+                })
+                inventoryItemId = variantData?.[0]?.inventory_items?.[0]?.inventory_item_id ?? null
+            } catch (e: any) {
+                console.warn(`[orders/add-item-force] remoteQuery failed:`, e?.message)
+            }
 
             if (primaryLocationId && inventoryItemId && createdItem?.id) {
                 await fetch(`${base}/admin/reservations`, {
