@@ -1,5 +1,5 @@
 import { createWorkflow, createStep, StepResponse, WorkflowResponse } from "@medusajs/framework/workflows-sdk"
-import { Modules, ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { Modules, ContainerRegistrationKeys } from "@medusajs/utils"
 
 // interface IdentifyVariantsInput {
 //     productId: any

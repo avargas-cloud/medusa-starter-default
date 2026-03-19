@@ -1,5 +1,5 @@
 import { MedusaContainer } from "@medusajs/framework/types"
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 import { PRODUCT_ATTRIBUTES_MODULE } from "../modules/product-attributes"
 
 /**

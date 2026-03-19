@@ -1,5 +1,5 @@
 import { createWorkflow, createStep, StepResponse, WorkflowResponse } from "@medusajs/framework/workflows-sdk"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 interface CreateVariantsInput {
     productId: any

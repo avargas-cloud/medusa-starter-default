@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types";
-import { Modules } from "@medusajs/framework/utils";
+import { Modules } from "@medusajs/utils";
 import WooCommerceRestApi from "@woocommerce/woocommerce-rest-api";
 
 /**

@@ -3,7 +3,7 @@ import {
   ContainerRegistrationKeys,
   Modules,
   ProductStatus,
-} from "@medusajs/framework/utils";
+} from "@medusajs/utils";
 import {
   createWorkflow,
   transform,

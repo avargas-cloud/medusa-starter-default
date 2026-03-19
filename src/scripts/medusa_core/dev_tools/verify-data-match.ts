@@ -1,6 +1,6 @@
 
 import { ExecArgs } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 import * as fs from "fs"
 import * as path from "path"
 

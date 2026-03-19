@@ -13,7 +13,7 @@
 import dotenv from "dotenv"
 dotenv.config()
 
-import { generateEntityId } from "@medusajs/framework/utils"
+import { generateEntityId } from "@medusajs/utils"
 import { MedusaModule } from "@medusajs/framework/modules-sdk"
 import knex from "knex"
 import fs from "fs"

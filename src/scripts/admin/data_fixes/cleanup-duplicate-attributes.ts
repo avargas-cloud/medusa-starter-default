@@ -1,4 +1,4 @@
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 export default async function cleanupDuplicateAttributes({ container }: any) {
     const query = container.resolve("query")

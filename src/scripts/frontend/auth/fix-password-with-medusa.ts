@@ -1,8 +1,8 @@
-import { Modules } from '@medusajs/framework/utils'
+import { Modules } from "@medusajs/utils"
 import { MedusaContainer } from '@medusajs/framework/types'
 import { initialize } from '@medusajs/framework'
 import postgres from 'postgres'
-import { loadEnv } from '@medusajs/framework/utils'
+import { loadEnv } from "@medusajs/utils"
 
 loadEnv('development', process.cwd())
 

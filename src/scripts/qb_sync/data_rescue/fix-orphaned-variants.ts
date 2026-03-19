@@ -1,5 +1,5 @@
 import { MedusaContainer } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 /**
  * Fix Specific Orphaned Variants

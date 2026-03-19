@@ -3,7 +3,7 @@
  * Removes all prices with price_list_id (keeps only default prices)
  */
 
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 export default async function deleteWholesalePrices({ container }: any) {
     const logger = container.resolve("logger")

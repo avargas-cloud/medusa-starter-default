@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 /**
  * Find products with options but unlinked variants

@@ -3,8 +3,8 @@
  * Run: yarn medusa exec ./src/scripts/verify/verify-wholesale-10skus.ts
  */
 import { ExecArgs } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
+import { ContainerRegistrationKeys } from "@medusajs/utils"
 
 function smartRound(price: number): number {
     const dollars = Math.floor(price)

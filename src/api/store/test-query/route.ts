@@ -12,7 +12,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
             "id", "display_id", "subtotal", "discount_total", "tax_total", "total",
             "items.*", "items.subtotal", "items.discount_total", "items.total"
         ],
-        filters: { display_id: Number(orderId) }
+        filters: { display_id: orderId }
     })
     
     res.json({ order })

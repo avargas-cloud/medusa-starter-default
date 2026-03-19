@@ -1,5 +1,5 @@
 import { MedusaModule } from "@medusajs/framework/modules-sdk"
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys } from "@medusajs/utils"
 
 async function debugBreadcrumbs() {
     const { medusaAppLoader } = await import("@medusajs/framework")

@@ -3,7 +3,7 @@
  * Shows default and wholesale prices
  */
 
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 export default async function verifySkuPrices({ container }: any) {
     const logger = container.resolve("logger")

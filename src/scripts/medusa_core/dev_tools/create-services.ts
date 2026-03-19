@@ -5,7 +5,7 @@
  * with Product Type = "Service"
  */
 
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 
 export default async function createServices({ container }: any) {
     const logger = container.resolve("logger")

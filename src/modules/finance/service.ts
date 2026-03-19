@@ -1,4 +1,4 @@
-import { MedusaService } from '@medusajs/framework/utils'
+import { MedusaService } from "@medusajs/utils"
 import { CustomerPayment } from './models/customer-payment'
 import { PaymentApplication } from './models/payment-application'
 

@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 import { IProductModuleService } from "@medusajs/framework/types"
 import * as fs from "fs"
 import * as path from "path"

@@ -1,4 +1,4 @@
-import { loadEnv } from '@medusajs/framework/utils'
+import { loadEnv } from "@medusajs/utils"
 import postgres from 'postgres'
 
 loadEnv(process.env.NODE_ENV || 'development', process.cwd())

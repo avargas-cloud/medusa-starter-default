@@ -3,7 +3,7 @@
  * MedusaService auto-generates CRUD methods: createPosUsers, updatePosUsers, etc.
  */
 
-import { MedusaService } from '@medusajs/framework/utils'
+import { MedusaService } from "@medusajs/utils"
 import PosUser from './models/pos-user'
 
 class PosUserModuleService extends MedusaService({

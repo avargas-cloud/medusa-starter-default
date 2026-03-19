@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types";
-import { Modules } from "@medusajs/framework/utils";
+import { Modules } from "@medusajs/utils";
 
 /**
  * Force update LPV-100-24 with minimal payload using Product Module Service

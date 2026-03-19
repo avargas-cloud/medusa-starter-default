@@ -1,4 +1,4 @@
-import { loadEnv } from '@medusajs/framework/utils'
+import { loadEnv } from "@medusajs/utils"
 import postgres from 'postgres'
 import { scryptSync, randomBytes } from 'crypto'
 

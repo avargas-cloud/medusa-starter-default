@@ -8,7 +8,7 @@
  * Set DRY_RUN=true to preview changes without executing
  */
 
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 
 const DRY_RUN = process.env.DRY_RUN === "true"
 

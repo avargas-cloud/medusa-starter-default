@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 /**
  * Force sync specific customer to Meilisearch

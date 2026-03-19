@@ -1,0 +1,147 @@
+check_shipping.ts(1,27): error TS2307: Cannot find module './src/utils/db-pool' or its corresponding type declarations.
+check_shipping2.ts(6,19): error TS2532: Object is possibly 'undefined'.
+check_shipping2.ts(6,19): error TS2532: Object is possibly 'undefined'.
+check_shipping3.ts(6,19): error TS2532: Object is possibly 'undefined'.
+check_shipping3.ts(6,19): error TS2532: Object is possibly 'undefined'.
+check_shipping4.ts(6,19): error TS2532: Object is possibly 'undefined'.
+check_shipping4.ts(6,19): error TS2532: Object is possibly 'undefined'.
+src/admin/routes/note-presets/page.tsx(46,45): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+src/admin/routes/note-presets/page.tsx(181,9): error TS2532: Object is possibly 'undefined'.
+src/admin/routes/note-presets/page.tsx(207,34): error TS2532: Object is possibly 'undefined'.
+src/admin/routes/note-presets/page.tsx(207,68): error TS2532: Object is possibly 'undefined'.
+src/admin/routes/note-presets/page.tsx(212,30): error TS2532: Object is possibly 'undefined'.
+src/api/admin/attributes/[id]/route.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/admin/attributes/sync-values/route.ts(40,25): error TS7006: Parameter 'option' implicitly has an 'any' type.
+src/api/admin/attributes/sync-values/route.ts(41,22): error TS7006: Parameter 'option' implicitly has an 'any' type.
+src/api/admin/config/features/route.ts(10,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/admin/customers/resync-meili/route.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/api/admin/customers/resync-meili/route.ts(2,37): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/admin/draft-orders/[id]/remove-shipping/route.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/admin/inventory/with-prices/route.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/api/admin/orders/[id]/add-shipping-force/route.ts(43,60): error TS2532: Object is possibly 'undefined'.
+src/api/admin/products/[id]/attributes/route.ts(5,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/admin/products/bulk-assign-prices/route.ts(12,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/api/admin/products/bulk-assign-prices/route.ts(12,37): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/admin/products/mark-oversized/route.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/admin/products/sync-dimensions/route.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/auth/customer/google/callback/route.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/auth/customer/google/callback/route.ts(2,19): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/api/auth/customer/google/callback/route.ts(2,46): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'MedusaError'.
+src/api/auth/customer/google/route.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/store/auth/activate/route.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/store/auth/activate/route.ts(1,19): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'generateJwtToken'.
+src/api/store/auth/activate/route.ts(1,37): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/api/store/auth/google/callback/route.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/store/auth/google/callback/route.ts(2,19): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/api/store/auth/google/callback/route.ts(3,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'generateJwtToken'.
+src/api/store/auth/login/route.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/store/auth/login/route.ts(1,19): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'generateJwtToken'.
+src/api/store/auth/login/route.ts(1,37): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/api/store/auth/register/case1-new-customer.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/store/auth/register/case1-new-customer.ts(95,17): error TS2339: Property 'generateJwtToken' does not exist on type '{ default: typeof import("@medusajs/framework/utils"); PolicyResource: {}; PolicyOperation: { readonly "*": "*"; readonly ALL: "*"; readonly create: "create"; readonly delete: "delete"; readonly read: "read"; readonly update: "update"; }; Policy: {}; }'.
+src/api/store/auth/register/case1-new-customer.ts(95,35): error TS2339: Property 'ContainerRegistrationKeys' does not exist on type '{ default: typeof import("@medusajs/framework/utils"); PolicyResource: {}; PolicyOperation: { readonly "*": "*"; readonly ALL: "*"; readonly create: "create"; readonly delete: "delete"; readonly read: "read"; readonly update: "update"; }; Policy: {}; }'.
+src/api/store/auth/register/case2-existing-customer.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/store/auth/register/case2-existing-customer.ts(1,19): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'generateJwtToken'.
+src/api/store/auth/register/case2-existing-customer.ts(1,37): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/api/store/auth/register/case3-legacy-customer.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/store/auth/reset-password/confirm/route.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/store/auth/reset-password/confirm/route.ts(2,19): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/api/store/auth/reset-password/confirm/route.ts(2,46): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'generateJwtToken'.
+src/api/store/auth/reset-password/route.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/store/products/[id]/breadcrumbs/route.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/store/products/[id]/with-prices/route.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/api/store/products/[id]/with-prices/route.ts(83,42): error TS7006: Parameter 'v' implicitly has an 'any' type.
+src/api/store/products/[id]/with-prices/route.ts(83,72): error TS7006: Parameter 'id' implicitly has an 'any' type.
+src/api/store/products/by-handle/[handle]/with-prices-and-related/route.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/api/store/products/by-handle/[handle]/with-prices-and-related/route.ts(217,30): error TS7006: Parameter 'p' implicitly has an 'any' type.
+src/api/store/sync-dimensions-temp/route.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/api/store/test-query/route.ts(15,20): error TS2322: Type 'number' is not assignable to type 'Maybe<string> | Maybe<string>[] | OperatorMap<Maybe<string> | Maybe<string>[]> | undefined'.
+src/links/product-attribute-link.ts(4,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'defineLink'.
+src/models/product-category.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'model'.
+src/models/shipping-settings.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'model'.
+src/modules/authorize-net/index.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ModuleProvider'.
+src/modules/authorize-net/index.ts(2,26): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/modules/document-templates/index.ts(6,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Module'.
+src/modules/document-templates/models/pos-document-template.ts(6,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'model'.
+src/modules/document-templates/service.ts(7,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'MedusaService'.
+src/modules/file-minio-flat/index.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ModuleProvider'.
+src/modules/file-minio-flat/index.ts(1,26): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/modules/file-minio-flat/service.ts(3,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'AbstractFileProviderService'.
+src/modules/finance/index.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Module'.
+src/modules/finance/models/payment-application.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'model'.
+src/modules/finance/service.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'MedusaService'.
+src/modules/ground-shipping/index.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ModuleProvider'.
+src/modules/ground-shipping/index.ts(2,26): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/modules/ground-shipping/service.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'AbstractFulfillmentProviderService'.
+src/modules/invoices/index.ts(6,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Module'.
+src/modules/invoices/models/invoice-payment.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'model'.
+src/modules/invoices/models/invoice-tracking.ts(7,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'model'.
+src/modules/invoices/models/pos-invoice-item.ts(7,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'model'.
+src/modules/invoices/models/pos-invoice.ts(8,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'model'.
+src/modules/invoices/service.ts(7,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'MedusaService'.
+src/modules/pos-tax/index.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ModuleProvider'.
+src/modules/pos-tax/index.ts(2,26): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/modules/pos-user/index.ts(6,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Module'.
+src/modules/pos-user/models/pos-user.ts(8,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'model'.
+src/modules/pos-user/service.ts(6,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'MedusaService'.
+src/modules/product-attributes/index.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Module'.
+src/modules/product-attributes/models/attribute-key.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'model'.
+src/modules/product-attributes/models/attribute-set.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'model'.
+src/modules/product-attributes/models/attribute-value.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'model'.
+src/modules/product-attributes/service.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'MedusaService'.
+src/modules/shipping-settings-module/index.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Module'.
+src/modules/shipping-settings-module/models/shipping-settings.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'model'.
+src/modules/shipping-settings-module/service.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'MedusaService'.
+src/modules/smart-storage/index.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ModuleProvider'.
+src/modules/smart-storage/index.ts(1,26): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/modules/smart-storage/service.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'AbstractFileProviderService'.
+src/modules/store-pickup/index.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ModuleProvider'.
+src/modules/store-pickup/index.ts(2,26): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/modules/store-pickup/service.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'AbstractFulfillmentProviderService'.
+src/modules/ups-2nd-day-air/index.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ModuleProvider'.
+src/modules/ups-2nd-day-air/index.ts(2,26): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/modules/ups-2nd-day-air/service.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'AbstractFulfillmentProviderService'.
+src/modules/ups-3-day-select/index.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ModuleProvider'.
+src/modules/ups-3-day-select/index.ts(2,26): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/modules/ups-3-day-select/service.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'AbstractFulfillmentProviderService'.
+src/modules/ups-ground-shipping/index.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ModuleProvider'.
+src/modules/ups-ground-shipping/index.ts(2,26): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/modules/ups-ground-shipping/service.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'AbstractFulfillmentProviderService'.
+src/modules/ups-next-day-air/index.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ModuleProvider'.
+src/modules/ups-next-day-air/index.ts(2,26): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/modules/ups-next-day-air/service.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'AbstractFulfillmentProviderService'.
+src/modules/ups-shipping/index.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ModuleProvider'.
+src/modules/ups-shipping/index.ts(2,26): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/modules/ups-shipping/service.ts(1,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'AbstractFulfillmentProviderService'.
+src/subscribers/customer-meilisearch-sync.ts(5,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/subscribers/customer-meilisearch-sync.ts(56,52): error TS7006: Parameter 'g' implicitly has an 'any' type.
+src/subscribers/customer-meilisearch-sync.ts(77,42): error TS7006: Parameter 'g' implicitly has an 'any' type.
+src/subscribers/google-oauth-dedup.ts(19,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/subscribers/google-oauth-dedup.ts(19,19): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/subscribers/order-notifications.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/subscribers/order-notifications.ts(2,19): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/subscribers/protect-managed-options.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ProductEvents'.
+src/workflows/cleanup-variant-attributes.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/workflows/cleanup-variant-attributes.ts(2,19): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/workflows/cleanup-variant-attributes.ts(26,64): error TS7006: Parameter 'item' implicitly has an 'any' type.
+src/workflows/delete-test-customer.ts(3,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/workflows/generate-variants-from-attributes.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/workflows/generate-variants-from-attributes.ts(68,62): error TS7006: Parameter 'o' implicitly has an 'any' type.
+src/workflows/hooks/set-cart-pricing-context.ts(3,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/workflows/product-attributes/steps/sync-variants.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/workflows/product-attributes/steps/sync-variants.ts(3,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/workflows/product-attributes/steps/sync-variants.ts(67,21): error TS7006: Parameter 'res' implicitly has an 'any' type.
+src/workflows/product-attributes/steps/update-product-metadata.ts(3,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/workflows/product-attributes/update-product-attributes.ts(4,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/workflows/product-attributes/upsert-product-attribute.ts(9,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/workflows/sync-search.ts(3,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/workflows/sync-search.ts(3,37): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/workflows/variant-cleanup/steps/check-variant-sales.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'ContainerRegistrationKeys'.
+src/workflows/variant-cleanup/steps/delete-option.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/workflows/variant-cleanup/steps/delete-variants.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/workflows/variant-cleanup/steps/find-variants-by-option.ts(2,10): error TS2305: Module '"@medusajs/framework/utils"' has no exported member 'Modules'.
+src/workflows/variant-cleanup/steps/find-variants-by-option.ts(21,41): error TS7006: Parameter 'v' implicitly has an 'any' type.
+test-op.ts(1,1): error TS6133: 'pollOperationResult' is declared but its value is never read.
+test-op.ts(1,37): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.
+test-order.ts(1,33): error TS7031: Binding element 'container' implicitly has an 'any' type.

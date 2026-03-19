@@ -6,7 +6,7 @@
  * Keep ALL wholesale prices (price_list_id != null)
  */
 
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 const DRY_RUN = false // Set to true to preview changes
 

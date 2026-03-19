@@ -1,4 +1,4 @@
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 import { IProductModuleService } from "@medusajs/framework/types"
 
 /**

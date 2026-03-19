@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 import { IProductModuleService } from "@medusajs/framework/types"
 
 export default async function showCategoryFilters({ container, args }: ExecArgs) {

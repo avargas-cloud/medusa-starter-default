@@ -1,4 +1,4 @@
-import { AbstractFulfillmentProviderService } from "@medusajs/framework/utils"
+import { AbstractFulfillmentProviderService } from "@medusajs/utils"
 
 class StorePickupService extends AbstractFulfillmentProviderService {
     static identifier = "store-pickup"

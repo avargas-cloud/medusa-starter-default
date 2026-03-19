@@ -5,7 +5,7 @@
  * Status lifecycle: draft → issued → paid → voided
  */
 
-import { model } from '@medusajs/framework/utils'
+import { model } from "@medusajs/utils"
 import PosInvoiceItem from './pos-invoice-item'
 import InvoiceTracking from './invoice-tracking'
 

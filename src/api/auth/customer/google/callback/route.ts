@@ -1,5 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { Modules, ContainerRegistrationKeys, MedusaError } from "@medusajs/framework/utils"
+import { Modules, ContainerRegistrationKeys, MedusaError } from "@medusajs/utils"
 import * as jwt from "jsonwebtoken"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {

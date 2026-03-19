@@ -1,0 +1,17 @@
+check_shipping.ts(1,27): error TS2307: Cannot find module './src/utils/db-pool' or its corresponding type declarations.
+check_shipping2.ts(6,19): error TS2532: Object is possibly 'undefined'.
+check_shipping2.ts(6,19): error TS2532: Object is possibly 'undefined'.
+check_shipping3.ts(6,19): error TS2532: Object is possibly 'undefined'.
+check_shipping3.ts(6,19): error TS2532: Object is possibly 'undefined'.
+check_shipping4.ts(6,19): error TS2532: Object is possibly 'undefined'.
+check_shipping4.ts(6,19): error TS2532: Object is possibly 'undefined'.
+src/admin/routes/note-presets/page.tsx(46,45): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+src/admin/routes/note-presets/page.tsx(181,9): error TS2532: Object is possibly 'undefined'.
+src/admin/routes/note-presets/page.tsx(207,34): error TS2532: Object is possibly 'undefined'.
+src/admin/routes/note-presets/page.tsx(207,68): error TS2532: Object is possibly 'undefined'.
+src/admin/routes/note-presets/page.tsx(212,30): error TS2532: Object is possibly 'undefined'.
+src/api/admin/orders/[id]/add-shipping-force/route.ts(43,60): error TS2532: Object is possibly 'undefined'.
+test-op.ts(1,1): error TS6133: 'pollOperationResult' is declared but its value is never read.
+test-op.ts(1,37): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.
+test-order.ts(1,33): error TS7031: Binding element 'container' implicitly has an 'any' type.

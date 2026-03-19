@@ -5,7 +5,7 @@
  * Run: npx tsx src/scripts/mark-oversized-by-sku.ts
  */
 
-import { Modules } from "@medusajs/framework/utils";
+import { Modules } from "@medusajs/utils";
 import { initialize } from "@medusajs/framework";
 
 async function main() {

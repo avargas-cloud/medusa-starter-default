@@ -1,4 +1,4 @@
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 import { MedusaAppLoader } from "@medusajs/framework"
 
 async function main() {

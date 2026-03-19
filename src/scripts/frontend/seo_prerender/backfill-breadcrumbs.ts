@@ -1,4 +1,4 @@
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 import { buildCategoryBreadcrumbsWorkflow } from "../workflows/build-category-breadcrumbs-workflow"
 
 type BreadcrumbItem = {

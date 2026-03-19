@@ -1,5 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { Modules, ContainerRegistrationKeys, generateJwtToken } from "@medusajs/framework/utils"
+import { Modules, ContainerRegistrationKeys, generateJwtToken } from "@medusajs/utils"
 import postgres from 'postgres'
 
 export const POST = async (

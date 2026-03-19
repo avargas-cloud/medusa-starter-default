@@ -1,7 +1,7 @@
 
 import ProductModule from "@medusajs/medusa/product"
 import AttributeModule from "../modules/product-attributes"
-import { defineLink } from "@medusajs/framework/utils"
+import { defineLink } from "@medusajs/utils"
 
 export default defineLink(
     { linkable: ProductModule.linkable.product, isList: true },

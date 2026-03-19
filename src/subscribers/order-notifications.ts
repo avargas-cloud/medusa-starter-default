@@ -1,5 +1,5 @@
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
-import { Modules, ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { Modules, ContainerRegistrationKeys } from "@medusajs/utils"
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 const LOGO_URL =
@@ -66,9 +66,15 @@ async function handleFulfillmentCreated(
   const { order_id, fulfillment_id } = payload
 
   const order = await orderService.retrieveOrder(order_id, {
-    select: ["id", "display_id", "email", "currency_code", "total", "subtotal", "shipping_total", "tax_total", "*items", "*items.detail"],
+    select: ["id", "display_id", "email", "metadata", "currency_code", "total", "subtotal", "shipping_total", "tax_total", "*items", "*items.detail"],
     relations: ["items", "items.tax_lines", "items.adjustments", "shipping_address"],
   })
+
+  // Skip notifications for POS orders entirely
+  if (order.metadata?.pos_created === true) {
+    logger.info(`📧 [OrderNotifications] Skipping fulfillment email for POS Order #${order.display_id}`)
+    return
+  }
 
   const fulfillment = await fulfillmentService.retrieveFulfillment(fulfillment_id, {
     relations: ["labels"],
@@ -143,9 +149,15 @@ async function handleShipmentCreated(
   }
 
   const order = await orderService.retrieveOrder(orderId, {
-    select: ["id", "display_id", "email", "currency_code", "total", "*items", "*items.detail"],
+    select: ["id", "display_id", "email", "metadata", "currency_code", "total", "*items", "*items.detail"],
     relations: ["items", "shipping_address"],
   })
+
+  // Skip notifications for POS orders entirely
+  if (order.metadata?.pos_created === true) {
+    logger.info(`📧 [OrderNotifications] Skipping shipment email for POS Order #${order.display_id}`)
+    return
+  }
 
   const trackingNumbers = fulfillment.labels?.map((l: any) => l.tracking_number).filter(Boolean) || []
   const trackingUrls = fulfillment.labels?.map((l: any) => l.tracking_url).filter(Boolean) || []
@@ -182,9 +194,15 @@ async function handleDeliveryCreated(
   }
 
   const order = await orderService.retrieveOrder(orderId, {
-    select: ["id", "display_id", "email", "currency_code", "total", "*items", "*items.detail"],
+    select: ["id", "display_id", "email", "metadata", "currency_code", "total", "*items", "*items.detail"],
     relations: ["items"],
   })
+
+  // Skip notifications for POS orders entirely
+  if (order.metadata?.pos_created === true) {
+    logger.info(`📧 [OrderNotifications] Skipping delivery email for POS Order #${order.display_id}`)
+    return
+  }
 
   await sgMail.default.send({
     to: order.email,

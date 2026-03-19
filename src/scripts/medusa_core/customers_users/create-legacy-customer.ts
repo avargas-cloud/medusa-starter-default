@@ -1,6 +1,6 @@
 import postgres from 'postgres'
-import { loadEnv } from '@medusajs/framework/utils'
-import { generateEntityId } from '@medusajs/framework/utils'
+import { loadEnv } from "@medusajs/utils"
+import { generateEntityId } from "@medusajs/utils"
 
 loadEnv('development', process.cwd())
 const sql = postgres(process.env.DATABASE_URL!)

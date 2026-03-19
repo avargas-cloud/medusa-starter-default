@@ -1,5 +1,5 @@
 import postgres from 'postgres'
-import { loadEnv } from '@medusajs/framework/utils'
+import { loadEnv } from "@medusajs/utils"
 import { scrypt, randomBytes } from 'crypto'
 import { promisify } from 'util'
 

@@ -6,7 +6,7 @@ import {
     transform
 } from "@medusajs/framework/workflows-sdk"
 import { createRemoteLinkStep } from "@medusajs/medusa/core-flows"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 import { PRODUCT_ATTRIBUTES_MODULE } from "../../modules/product-attributes"
 
 export type UpsertProductAttributeInput = {

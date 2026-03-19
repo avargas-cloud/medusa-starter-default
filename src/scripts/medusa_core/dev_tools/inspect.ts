@@ -1,4 +1,4 @@
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 // @ts-ignore
 import { initialize as initializeCartModule } from "@medusajs/cart"
 

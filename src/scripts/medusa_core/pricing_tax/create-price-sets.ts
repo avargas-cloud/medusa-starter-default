@@ -6,7 +6,7 @@
  */
 
 import { ExecArgs } from "@medusajs/framework/types"
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 
 export default async function createPriceSets({ container }: ExecArgs) {
     const query = container.resolve(ContainerRegistrationKeys.QUERY)

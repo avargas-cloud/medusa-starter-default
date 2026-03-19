@@ -3,7 +3,7 @@
  * Document template entity for Estimates, Orders, and Invoices.
  */
 
-import { model } from '@medusajs/framework/utils'
+import { model } from "@medusajs/utils"
 
 const PosDocumentTemplate = model.define('pos_document_template', {
     id:           model.id().primaryKey(),

@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types"
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 import * as fs from "fs"
 
 export default async function linkIdsFromJson({ container }: ExecArgs) {

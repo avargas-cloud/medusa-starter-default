@@ -1,4 +1,4 @@
-import { AbstractFileProviderService } from "@medusajs/framework/utils"
+import { AbstractFileProviderService } from "@medusajs/utils"
 import { FileTypes } from "@medusajs/framework/types"
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3"
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"

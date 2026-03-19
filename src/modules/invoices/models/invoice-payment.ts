@@ -1,4 +1,4 @@
-import { model } from '@medusajs/framework/utils'
+import { model } from "@medusajs/utils"
 
 export const InvoicePayment = model.define('invoice_payment', {
     id:             model.id({ prefix: 'ipay' }).primaryKey(),

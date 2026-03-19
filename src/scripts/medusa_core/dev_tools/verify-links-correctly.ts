@@ -1,6 +1,6 @@
 
 import { ExecArgs } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 export default async function verifyLinksCorrectly({ container }: ExecArgs) {
     const remoteLink = container.resolve("remoteLink")

@@ -3,7 +3,7 @@
  * Checks variant → price_set → prices relationships
  */
 
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 export default async function diagnosePriceDisplay({ container }: any) {
     const logger = container.resolve("logger")

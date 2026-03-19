@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { initialize } from '@medusajs/framework/utils';
+import { initialize } from "@medusajs/utils";
 
 async function run() {
     const { container } = await initialize({ configModule: require('../../../medusa-config').default });

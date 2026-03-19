@@ -16,7 +16,7 @@
  */
 
 import type { SubscriberArgs, SubscriberConfig } from '@medusajs/framework'
-import { Modules, ContainerRegistrationKeys } from '@medusajs/framework/utils'
+import { Modules, ContainerRegistrationKeys } from "@medusajs/utils"
 import type { ICustomerModuleService } from '@medusajs/types'
 import postgres from 'postgres'
 

@@ -8,7 +8,7 @@
  * 4. Sample price comparison
  */
 
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 
 export default async function verifyWholesalePricing({ container }: any) {
     const logger = container.resolve("logger")

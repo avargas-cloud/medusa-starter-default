@@ -1,4 +1,4 @@
-import { AbstractFulfillmentProviderService } from "@medusajs/framework/utils"
+import { AbstractFulfillmentProviderService } from "@medusajs/utils"
 import { getUPSRate } from "../ups-rate-cache"
 import { packItems } from "../box-packing"
 

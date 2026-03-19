@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 export default async function syncAllCustomersFast({ container }: ExecArgs) {
     const logger = container.resolve("logger")

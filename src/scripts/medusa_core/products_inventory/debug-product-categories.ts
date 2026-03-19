@@ -1,4 +1,4 @@
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys } from "@medusajs/utils"
 
 export default async function checkProductCategories({ container }: any) {
     const knex = container.resolve(ContainerRegistrationKeys.PG_CONNECTION)

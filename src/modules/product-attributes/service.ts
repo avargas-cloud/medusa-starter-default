@@ -1,4 +1,4 @@
-import { MedusaService } from "@medusajs/framework/utils"
+import { MedusaService } from "@medusajs/utils"
 import { AttributeKey } from "./models/attribute-key"
 import { AttributeValue } from "./models/attribute-value"
 import { AttributeSet } from "./models/attribute-set"

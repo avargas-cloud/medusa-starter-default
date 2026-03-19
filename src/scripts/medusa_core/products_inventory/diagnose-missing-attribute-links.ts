@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types"
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys } from "@medusajs/utils"
 
 export default async function ({ container }: ExecArgs) {
     const logger = container.resolve(ContainerRegistrationKeys.LOGGER)

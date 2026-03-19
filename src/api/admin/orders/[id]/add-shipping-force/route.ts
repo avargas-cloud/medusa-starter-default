@@ -40,7 +40,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             try {
                 // Fetch current order version
                 const vRes = await pool.query<{ version: number }>(`SELECT version FROM "order" WHERE id = $1 LIMIT 1`, [id])
-                if (vRes.rows.length > 0) currentVersion = vRes.rows[0].version
+                if (vRes.rows.length > 0) currentVersion = vRes.rows[0]!.version
 
                 // Hard-delete existing shipping links to ensure clean state across versions
                 await pool.query(

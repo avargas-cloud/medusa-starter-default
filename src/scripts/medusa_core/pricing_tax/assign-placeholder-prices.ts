@@ -7,7 +7,7 @@
  */
 
 import { ExecArgs } from "@medusajs/framework/types"
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 
 // Helper: Round to .25, .50, .75, or .99
 function smartRound(price: number): number {

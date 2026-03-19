@@ -1,5 +1,5 @@
 import FinanceModuleService from './service'
-import { Module } from '@medusajs/framework/utils'
+import { Module } from "@medusajs/utils"
 
 export const FINANCE_MODULE = 'finance'
 

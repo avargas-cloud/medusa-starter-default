@@ -1,4 +1,4 @@
-import { Modules } from "@medusajs/framework/utils";
+import { Modules } from "@medusajs/utils";
 import { ExecArgs } from "@medusajs/framework/types";
 
 export default async function cleanupCarts({ container }: ExecArgs) {

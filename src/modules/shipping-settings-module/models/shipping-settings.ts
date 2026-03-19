@@ -1,4 +1,4 @@
-import { model } from "@medusajs/framework/utils"
+import { model } from "@medusajs/utils"
 
 // Define the shipping_settings model to match the existing database table
 export const ShippingSettings = model.define("shipping_settings", {

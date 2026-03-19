@@ -4,7 +4,7 @@
  * Displays all available fields and metadata from customers
  */
 
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys } from "@medusajs/utils"
 
 export default async function showCustomerData({ container }: any) {
     const logger = container.resolve("logger")

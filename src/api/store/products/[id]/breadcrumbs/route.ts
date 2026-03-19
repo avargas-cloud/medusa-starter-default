@@ -1,5 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 import { IProductModuleService } from "@medusajs/framework/types"
 import { getProductMainCategoryBreadcrumbs } from "../../../../utils/breadcrumbs"
 

@@ -1,6 +1,6 @@
 
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 type UpdateMetadataInput = {
     productId: string

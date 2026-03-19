@@ -11,7 +11,7 @@
  * Set QB_DRY_RUN=true to skip the actual Bridge call.
  */
 
-import { loadEnv } from "@medusajs/framework/utils"
+import { loadEnv } from "@medusajs/utils"
 
 loadEnv("development", process.cwd())
 

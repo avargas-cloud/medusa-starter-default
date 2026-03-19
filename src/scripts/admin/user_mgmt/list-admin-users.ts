@@ -1,6 +1,6 @@
-import { Modules } from '@medusajs/framework/utils'
+import { Modules } from "@medusajs/utils"
 import { initialize } from '@medusajs/framework'
-import { loadEnv } from '@medusajs/framework/utils'
+import { loadEnv } from "@medusajs/utils"
 
 loadEnv(process.env.NODE_ENV || 'development', process.cwd())
 

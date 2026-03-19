@@ -1,5 +1,5 @@
 import postgres from 'postgres'
-import { loadEnv } from '@medusajs/framework/utils'
+import { loadEnv } from "@medusajs/utils"
 import * as crypto from 'crypto'
 
 loadEnv('development', process.cwd())

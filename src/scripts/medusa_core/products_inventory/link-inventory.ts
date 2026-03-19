@@ -1,4 +1,4 @@
-import { MedusaModule, Modules } from "@medusajs/framework/utils"
+import { MedusaModule, Modules } from "@medusajs/utils"
 import { IInventoryService, IProductModuleService, ILinkModule } from "@medusajs/types"
 import { initialize as initProduct } from "@medusajs/product"
 import { initialize as initInventory } from "@medusajs/inventory"

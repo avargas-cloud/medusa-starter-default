@@ -5,7 +5,7 @@
  * are correctly assigned to the "Wholesale" customer group.
  */
 
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 
 export default async function verifyPriceLists({ container }: any) {
     const logger = container.resolve("logger")

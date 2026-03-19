@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 export default async function ({ container }: ExecArgs) {
     console.log("🧪 FINAL TEST: Product Update Event")

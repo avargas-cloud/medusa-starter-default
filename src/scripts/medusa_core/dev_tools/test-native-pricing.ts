@@ -1,5 +1,5 @@
 import { MedusaContainer } from "@medusajs/framework/types"
-import { Modules, ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { Modules, ContainerRegistrationKeys } from "@medusajs/utils"
 import { Pool } from "pg"
 
 export default async function testNativePricing({ container }: { container: MedusaContainer }) {

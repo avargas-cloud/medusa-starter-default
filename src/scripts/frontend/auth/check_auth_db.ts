@@ -1,5 +1,5 @@
 
-import { loadEnv } from '@medusajs/framework/utils';
+import { loadEnv } from "@medusajs/utils";
 import postgres from 'postgres';
 loadEnv('development', process.cwd());
 

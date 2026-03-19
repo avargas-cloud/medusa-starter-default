@@ -7,7 +7,7 @@
  *   - priceLists: all active price lists in DB (for dynamic columns)
  */
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     try {

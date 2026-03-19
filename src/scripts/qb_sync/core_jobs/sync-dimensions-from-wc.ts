@@ -6,7 +6,7 @@
  */
 
 import WooCommerceRestApi from "@woocommerce/woocommerce-rest-api";
-import { Modules } from "@medusajs/framework/utils";
+import { Modules } from "@medusajs/utils";
 import * as dotenv from "dotenv";
 
 dotenv.config();

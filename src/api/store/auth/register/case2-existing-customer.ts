@@ -1,4 +1,4 @@
-import { Modules, generateJwtToken, ContainerRegistrationKeys } from '@medusajs/framework/utils'
+import { Modules, generateJwtToken, ContainerRegistrationKeys } from "@medusajs/utils"
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 
 /**

@@ -4,7 +4,7 @@
  * Business logic (set-default, duplicate) is handled in API routes.
  */
 
-import { MedusaService } from '@medusajs/framework/utils'
+import { MedusaService } from "@medusajs/utils"
 import PosDocumentTemplate from './models/pos-document-template'
 
 class DocumentTemplateModuleService extends MedusaService({

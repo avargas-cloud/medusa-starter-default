@@ -3,7 +3,7 @@
  * Checks: price table, product_variant_price_set join, and query structure
  */
 
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 export default async function diagnosePrices({ container }: any) {
     const logger = container.resolve("logger")

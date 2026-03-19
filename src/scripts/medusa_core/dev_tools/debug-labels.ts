@@ -1,6 +1,6 @@
 
 import { ExecArgs } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 import ProductAttributesService from "../modules/product-attributes/service"
 
 export default async function debugLabels({ container }: ExecArgs) {

@@ -16,7 +16,7 @@ import { ExecArgs } from "@medusajs/framework/types"
 import {
     ContainerRegistrationKeys,
     Modules,
-} from "@medusajs/framework/utils"
+} from "@medusajs/utils"
 
 const SHIPPING_PROFILE_ID = "sp_01KFH54TAP34J6ZYRE1NZWGSG2"
 const BATCH_SIZE = 100

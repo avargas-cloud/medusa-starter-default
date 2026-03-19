@@ -8,7 +8,7 @@
  *   cd backend && npx -y tsx src/scripts/tests/test-qb-payment-cycle.ts
  */
 
-import { loadEnv } from "@medusajs/framework/utils"
+import { loadEnv } from "@medusajs/utils"
 loadEnv("development", process.cwd())
 
 import {

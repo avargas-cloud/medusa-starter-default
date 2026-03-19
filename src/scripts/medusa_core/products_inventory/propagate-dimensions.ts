@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types";
-import { Modules } from "@medusajs/framework/utils";
+import { Modules } from "@medusajs/utils";
 
 /**
  * Propagate dimensions from Parent Product (Text) to its Variants (Number)

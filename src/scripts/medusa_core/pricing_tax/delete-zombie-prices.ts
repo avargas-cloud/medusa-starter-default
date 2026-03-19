@@ -3,7 +3,7 @@
  * Removes prices that are not linked to any variant
  */
 
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 export default async function deleteZombiePrices({ container }: any) {
     const logger = container.resolve("logger")

@@ -31,14 +31,28 @@ async function main() {
 
         // ── Step 3: Fulfillments ─────────────────────────────────────────────
         console.log("3. Deleting Fulfillments (fulfillment_label, fulfillment_item, order_fulfillment, fulfillment)")
-        await client.query(`DELETE FROM fulfillment_label`).catch(() => console.warn("   ⚠ fulfillment_label not found, skipping"))
-        await client.query(`DELETE FROM fulfillment_item`).catch(() => console.warn("   ⚠ fulfillment_item not found, skipping"))
-        await client.query(`DELETE FROM order_fulfillment`).catch(() => console.warn("   ⚠ order_fulfillment not found, skipping"))
-        await client.query(`DELETE FROM fulfillment`).catch(() => console.warn("   ⚠ fulfillment not found, skipping"))
+        await client.query("SAVEPOINT pre_fulfillments")
+        try {
+            await client.query(`DELETE FROM fulfillment_label`)
+            await client.query(`DELETE FROM fulfillment_item`)
+            await client.query(`DELETE FROM order_fulfillment`)
+            await client.query(`DELETE FROM fulfillment`)
+            await client.query("RELEASE SAVEPOINT pre_fulfillments")
+        } catch (e) {
+            await client.query("ROLLBACK TO pre_fulfillments")
+            console.warn("   ⚠ Fulfillments logic skipped (tables may not exist)")
+        }
 
         // ── Step 4: Item Allocations (Inventory Reservations) ───────────────
         console.log("4. Deleting Item Allocations / Reservations (reservation_item)")
-        await client.query(`DELETE FROM reservation_item`).catch(() => console.warn("   ⚠ reservation_item not found, skipping"))
+        await client.query("SAVEPOINT pre_reservations")
+        try {
+            await client.query(`DELETE FROM reservation_item`)
+            await client.query("RELEASE SAVEPOINT pre_reservations")
+        } catch (e) {
+            await client.query("ROLLBACK TO pre_reservations")
+            console.warn("   ⚠ reservation_item not found, skipping")
+        }
 
         // ── Step 5: ALL Orders (draft + non-draft) ───────────────────────────
         // NOTE: POS orders are is_draft_order = true — old script missed them!

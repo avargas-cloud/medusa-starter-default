@@ -1,4 +1,4 @@
-import { Modules } from '@medusajs/framework/utils'
+import { Modules } from "@medusajs/utils"
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { buildWelcomeEmail } from "../../../../utils/email-templates"
 
@@ -92,7 +92,7 @@ export async function handleNewCustomerRegistration(
         // Step 3: Generate JWT token with explicit actor_id
         // Using generateJwtToken directly instead of generateJwtTokenForAuthIdentity
         // because we need to explicitly control the actor_id field
-        const { generateJwtToken, ContainerRegistrationKeys } = await import('@medusajs/framework/utils')
+        const { generateJwtToken, ContainerRegistrationKeys } = await import('@medusajs/utils')
 
         const config = req.scope.resolve(ContainerRegistrationKeys.CONFIG_MODULE)
         const { http } = config.projectConfig

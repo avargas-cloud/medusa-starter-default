@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types"
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys } from "@medusajs/utils"
 import { reconcileCustomersCore } from "../../../src/lib/quickbooks/reconcile-customers-core"
 
 export default async function liveRunReconcile({ container }: ExecArgs) {

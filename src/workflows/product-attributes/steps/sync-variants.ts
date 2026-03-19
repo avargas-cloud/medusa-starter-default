@@ -1,6 +1,6 @@
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
-import { Modules } from "@medusajs/framework/utils"
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
+import { ContainerRegistrationKeys } from "@medusajs/utils"
 
 interface SyncStepInput {
     productId: string

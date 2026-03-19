@@ -3,7 +3,7 @@
  * Module definition — register in medusa-config.ts as resolve: "./src/modules/pos-user"
  */
 
-import { Module } from '@medusajs/framework/utils'
+import { Module } from "@medusajs/utils"
 import PosUserModuleService from './service'
 
 export const POS_USER_MODULE = 'pos_user'

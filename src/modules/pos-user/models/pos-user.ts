@@ -5,7 +5,7 @@
  * Authentication is handled by Medusa's auth module via actor_type "pos_user".
  */
 
-import { model } from '@medusajs/framework/utils'
+import { model } from "@medusajs/utils"
 
 const PosUser = model.define('pos_user', {
     id: model.id().primaryKey(),

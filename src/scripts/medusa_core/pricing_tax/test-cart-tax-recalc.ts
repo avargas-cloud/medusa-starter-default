@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { initialize } from '@medusajs/framework/utils';
+import { initialize } from "@medusajs/utils";
 import { updateCartWorkflow } from '@medusajs/medusa/core-flows';
 
 async function run() {

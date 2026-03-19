@@ -1,4 +1,4 @@
-import { loadEnv } from '@medusajs/framework/utils'
+import { loadEnv } from "@medusajs/utils"
 
 loadEnv('development', process.cwd())
 

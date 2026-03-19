@@ -14,7 +14,7 @@
  * Uses real product:  800019EA-1715274093 (EAP-AS1-8S)
  */
 
-import { loadEnv } from "@medusajs/framework/utils"
+import { loadEnv } from "@medusajs/utils"
 loadEnv("development", process.cwd())
 
 import {

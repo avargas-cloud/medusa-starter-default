@@ -5,7 +5,7 @@
  * Uses smart rounding: .25, .50, .75, or .99
  */
 
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 
 // Helper: Round price to .25, .50, .75, or .99
 function smartRound(price: number): number {

@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 import { ExecArgs } from "@medusajs/framework/types"
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 import { IProductModuleService } from "@medusajs/types"
 
 /**

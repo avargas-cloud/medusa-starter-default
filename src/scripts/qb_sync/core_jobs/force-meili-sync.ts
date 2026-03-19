@@ -5,7 +5,7 @@
  */
 
 import { ExecArgs } from "@medusajs/framework/types"
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys } from "@medusajs/utils"
 
 export default async function forceMeiliSync({ container }: ExecArgs) {
     const query = container.resolve(ContainerRegistrationKeys.QUERY)

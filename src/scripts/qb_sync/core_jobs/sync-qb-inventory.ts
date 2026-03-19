@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types"
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 // Fix: Use IInventoryService instead of Internal
 import { IProductModuleService, IPricingModuleService, IInventoryService, IStockLocationService } from "@medusajs/types"
 

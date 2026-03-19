@@ -5,7 +5,7 @@
  * that are now empty after migration.
  */
 
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 
 export default async function deleteOldCustomerGroups({ container }: any) {
     const logger = container.resolve("logger")

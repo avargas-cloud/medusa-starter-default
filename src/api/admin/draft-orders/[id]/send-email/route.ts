@@ -26,7 +26,7 @@ async function generateEstimatePdf(html: string): Promise<Buffer> {
 }
 
 // ── PDF from a live URL (frontend custom template) ────────────────────────────
-async function generatePdfFromUrl(url: string): Promise<Buffer> {
+async function generatePdfFromUrl(url: string, posState?: string, tokenRaw?: string): Promise<Buffer> {
   const CHROME_PATH =
     process.env.CHROME_EXECUTABLE_PATH ??
     "/usr/bin/google-chrome"
@@ -37,6 +37,21 @@ async function generatePdfFromUrl(url: string): Promise<Buffer> {
   })
   try {
     const page = await browser.newPage()
+    
+    if (posState || tokenRaw) {
+      const originUrl = new URL(url).origin
+      // Wait slightly to establish origin before injecting localStorage
+      await page.goto(originUrl, { waitUntil: "domcontentloaded" })
+      await page.evaluate((state, tokenStr) => {
+        if (state) localStorage.setItem("pos-documents", state)
+        if (tokenStr) {
+          const t = tokenStr.replace('Bearer ', '')
+          const authState = { state: { token: t }, version: 0 }
+          localStorage.setItem("pos-auth", JSON.stringify(authState))
+        }
+      }, posState, tokenRaw)
+    }
+
     // Wait for the page to fully render the print template
     await page.goto(url, { waitUntil: "networkidle0", timeout: 30000 })
     const pdfBuffer = await page.pdf({
@@ -480,7 +495,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
 // ── POST — generate PDF and send as attachment ─────────────────────────────────
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
   const { id } = req.params as { id: string }
-  const { to: toOverride, cc: ccOverride, subject: subjectOverride, templateId, docId, displayId: displayIdOverride } = (req.body ?? {}) as any
+  const { to: toOverride, cc: ccOverride, subject: subjectOverride, templateId, docId, displayId: displayIdOverride, emailBody, documentType, posState } = (req.body ?? {}) as any
   const order = await fetchOrderWithPreview(req, id)
   if (!order) return void res.status(404).json({ message: "Order not found" })
   const { customer, total } = buildTotals(order)
@@ -492,9 +507,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   if (!apiKey) return void res.status(200).json({ success: false, preview_only: true, message: "SENDGRID_API_KEY not set." })
 
   const params = buildParams(order, "email")
+  const docType = documentType ?? "Estimate"
   const displayId = displayIdOverride ?? order.display_id
   const estNum = `E${String(displayId).padStart(8, "0")}`
-  const emailSubject = subjectOverride ?? `Estimate ${estNum} from EcoPowerTech`
+  const emailSubject = subjectOverride ?? `${docType} ${estNum} from EcoPowerTech`
 
   // Generate PDF — prefer frontend template (Puppeteer on print page URL), fallback to backend HTML
   let pdfBuffer: Buffer | null = null
@@ -505,15 +521,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
       const params = new URLSearchParams({ docId, auto: "0" })
       if (displayId) params.set("displayId", String(displayId))
       const printUrl = `${POS_URL}/print/${templateId}?${params}`
-      console.log(`[send-estimate] Using frontend template PDF: ${printUrl}`)
-      pdfBuffer = await generatePdfFromUrl(printUrl)
+      console.log(`[send-email] Using frontend template PDF: ${printUrl}`)
+      const authHeader = req.headers["authorization"] ?? req.headers["cookie"]?.split(';').find(c => c.trim().startsWith('pos-auth-token='))?.split('=')[1]
+      let token = authHeader
+      if (token && !token.startsWith('Bearer ')) token = `Bearer ${token}`
+      pdfBuffer = await generatePdfFromUrl(printUrl, posState, token)
     } else {
       // Fallback: use the backend-generated HTML template
       const pdfHtml = buildEstimateHtml(params)
       pdfBuffer = await generateEstimatePdf(pdfHtml)
     }
   } catch (err) {
-    console.error("[send-estimate] PDF generation failed, falling back to HTML email:", err)
+    console.error("[send-email] PDF generation failed, falling back to HTML email:", err)
   }
 
   const customerName = params.customerName
@@ -541,12 +560,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     <span>ECOPOWERTECH</span>
   </div>
 
-  <h2>Your Estimate is Ready</h2>
-  <p style="margin:0 0 4px;">Dear ${customerName},</p>
-  <p style="margin:0 0 16px;color:#555;">Thank you for your interest. Please find your estimate attached as a PDF.</p>
+  <h2>Your ${docType} is Ready</h2>
+  ${emailBody ? 
+    `<div style="white-space:pre-wrap;margin-bottom:16px;line-height:1.5;">${emailBody.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\[Customer Name\]/gi, customerName)}</div>` 
+    : 
+    `<p style="margin:0 0 4px;">Dear ${customerName},</p>
+     <p style="margin:0 0 16px;color:#555;">Thank you for your interest. Please find your ${docType.toLowerCase()} attached as a PDF.</p>`
+  }
 
   <div class="box">
-    <div><b>Estimate #:</b> ${estNum}</div>
+    <div><b>${docType} #:</b> ${estNum}</div>
     <div><b>Date:</b> ${params.estimateDate}</div>
     ${params.leadTime ? `<div><b>Lead Time:</b> ${params.leadTime}</div>` : ""}
     ${params.orderType ? `<div><b>Order Type:</b> ${params.orderType}</div>` : ""}
@@ -566,12 +589,21 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   const sgMail = await import("@sendgrid/mail")
   sgMail.default.setApiKey(apiKey)
 
+  const toEmails = customerEmail.split(',').map((e: string) => e.trim()).filter(Boolean)
+  let ccEmails: string[] = []
+  if (ccOverride) {
+    const rawCc = Array.isArray(ccOverride) ? ccOverride.join(',') : String(ccOverride)
+    ccEmails = rawCc.split(',').map((e: string) => e.trim()).filter(e => e && !toEmails.includes(e))
+  }
+
   const msg: any = {
-    to: customerEmail,
+    to: toEmails,
     from: { email: fromEmail, name: "EcoPowerTech" },
     subject: emailSubject,
     html: emailBodyHtml,
-    ...(ccOverride ? { cc: ccOverride } : {}),
+  }
+  if (ccEmails.length > 0) {
+    msg.cc = ccEmails
   }
 
   if (pdfBuffer) {

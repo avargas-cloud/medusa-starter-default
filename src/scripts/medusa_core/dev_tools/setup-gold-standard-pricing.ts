@@ -1,4 +1,4 @@
-import { Modules } from "@medusajs/framework/utils";
+import { Modules } from "@medusajs/utils";
 
 /**
  * GOLD STANDARD Medusa v2 Pricing Setup

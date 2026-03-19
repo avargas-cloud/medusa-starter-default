@@ -1,4 +1,4 @@
-import { Modules, ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { Modules, ContainerRegistrationKeys } from "@medusajs/utils"
 import * as jwt from "jsonwebtoken"
 
 /**

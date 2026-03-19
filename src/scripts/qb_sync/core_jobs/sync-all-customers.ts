@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 export default async function syncAllCustomers({ container }: ExecArgs) {
     const { transformCustomer, meiliClient, CUSTOMERS_INDEX } = await import("../lib/meili-backend.mts")
     const logger = container.resolve("logger")

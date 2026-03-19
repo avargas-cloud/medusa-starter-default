@@ -1,6 +1,6 @@
 import { resolve } from "path"
 import { initialize as initializeOrderModule } from "@medusajs/order"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 import { config } from "dotenv"
 
 config({ path: resolve(__dirname, "../.env") })

@@ -4,7 +4,7 @@
  * Stored at issue time so changes to the Order don't mutate existing invoices.
  */
 
-import { model } from '@medusajs/framework/utils'
+import { model } from "@medusajs/utils"
 import PosInvoice from './pos-invoice'
 
 const PosInvoiceItem = model.define('pos_invoice_item', {

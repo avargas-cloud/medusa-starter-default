@@ -1,5 +1,5 @@
 import { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
-import { ProductEvents } from "@medusajs/framework/utils"
+import { ProductEvents } from "@medusajs/utils"
 
 /**
  * IMPORTANT: This subscriber executes AFTER the option is deleted.

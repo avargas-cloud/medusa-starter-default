@@ -1,6 +1,6 @@
 import { ExecArgs } from "@medusajs/framework/types"
 import { IProductModuleService } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 // import fetch from "node-fetch" // Not needed in newer node/medusa envs usually, using global fetch if avail or skipping to curl
 
 export default async function findAndQueryProduct({ container }: ExecArgs) {

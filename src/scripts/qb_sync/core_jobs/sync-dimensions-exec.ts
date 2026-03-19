@@ -3,7 +3,7 @@
  * Run: npx medusa exec ./src/scripts/sync-dimensions-exec.ts
  */
 
-import { Modules } from "@medusajs/framework/utils";
+import { Modules } from "@medusajs/utils";
 import WooCommerceRestApi from "@woocommerce/woocommerce-rest-api";
 
 export default async function syncDimensions({ container }: any) {

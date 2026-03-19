@@ -1,6 +1,6 @@
 
 import { ExecArgs } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 import ProductAttributesService from "../modules/product-attributes/service"
 import { IProductModuleService } from "@medusajs/framework/types"
 import { Client } from "pg"

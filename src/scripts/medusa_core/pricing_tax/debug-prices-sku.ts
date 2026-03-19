@@ -3,7 +3,7 @@
  * Usage: yarn medusa exec ./src/scripts/debug/debug-prices-sku.ts
  */
 import { ExecArgs } from "@medusajs/framework/types"
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys } from "@medusajs/utils"
 
 const TARGET_SKU_PREFIX = process.env.SKU_PREFIX || "ESPFC4R4N50W08"
 

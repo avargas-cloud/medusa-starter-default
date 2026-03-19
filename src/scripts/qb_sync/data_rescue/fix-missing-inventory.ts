@@ -1,4 +1,4 @@
-import { Modules } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
 // En la v2 se requiere crear el item de inventario y luego vincularlo
 // Para usar los links y módulos dentro de un script Medusa v2:
 import { resolve } from "path"

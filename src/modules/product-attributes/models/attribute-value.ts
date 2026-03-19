@@ -1,4 +1,4 @@
-import { model } from "@medusajs/framework/utils"
+import { model } from "@medusajs/utils"
 import { AttributeKey } from "./attribute-key"
 
 export const AttributeValue = model.define("attribute_value", {

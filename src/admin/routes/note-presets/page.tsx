@@ -37,7 +37,7 @@ function PresetModal({
     onClose: () => void
     onSave: (data: Partial<NotePreset>) => Promise<void>
 }) {
-    const [group, setGroup] = useState(preset?.group_name ?? KNOWN_GROUPS[0])
+    const [group, setGroup] = useState<string>(preset?.group_name ?? KNOWN_GROUPS[0]!)
     const [customGroup, setCustomGroup] = useState("")
     const [title, setTitle] = useState(preset?.title ?? "")
     const [content, setContent] = useState(preset?.content ?? "")
@@ -178,7 +178,7 @@ const NotePresetsPage = () => {
     const grouped: Record<string, NotePreset[]> = {}
     for (const p of presets) {
         if (!grouped[p.group_name]) grouped[p.group_name] = []
-        grouped[p.group_name].push(p)
+        grouped[p.group_name]!.push(p)
     }
     const groupOrder = [...KNOWN_GROUPS, ...Object.keys(grouped).filter(g => !KNOWN_GROUPS.includes(g))]
 
@@ -204,12 +204,12 @@ const NotePresetsPage = () => {
                         <div className="flex items-center gap-2 px-4 py-2.5 bg-ui-bg-subtle border-b border-ui-border-base">
                             <Badge color={GROUP_COLORS[groupName] ?? "grey"}>{groupName}</Badge>
                             <Text className="text-ui-fg-muted text-xs ml-auto">
-                                {grouped[groupName].length} preset{grouped[groupName].length !== 1 ? "s" : ""}
+                                {grouped[groupName]!.length} preset{grouped[groupName]!.length !== 1 ? "s" : ""}
                             </Text>
                         </div>
                         {/* Presets list */}
                         <div className="divide-y divide-ui-border-base">
-                            {grouped[groupName].map(p => (
+                            {grouped[groupName]!.map(p => (
                                 <div key={p.id} className="px-4 py-3 flex gap-4">
                                     <div className="flex-1 min-w-0">
                                         <Text className="font-semibold text-sm text-ui-fg-base">{p.title}</Text>

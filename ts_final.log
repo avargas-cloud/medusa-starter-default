@@ -1,0 +1,10 @@
+check_shipping.ts(1,27): error TS2307: Cannot find module './src/utils/db-pool' or its corresponding type declarations.
+check_shipping2.ts(6,19): error TS2532: Object is possibly 'undefined'.
+check_shipping2.ts(6,19): error TS2532: Object is possibly 'undefined'.
+check_shipping3.ts(6,19): error TS2532: Object is possibly 'undefined'.
+check_shipping3.ts(6,19): error TS2532: Object is possibly 'undefined'.
+check_shipping4.ts(6,19): error TS2532: Object is possibly 'undefined'.
+check_shipping4.ts(6,19): error TS2532: Object is possibly 'undefined'.
+test-op.ts(1,1): error TS6133: 'pollOperationResult' is declared but its value is never read.
+test-op.ts(1,37): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.
+test-order.ts(1,33): error TS7031: Binding element 'container' implicitly has an 'any' type.

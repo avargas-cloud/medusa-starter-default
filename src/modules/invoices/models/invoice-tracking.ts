@@ -4,7 +4,7 @@
  * Triggers shipment notification email when saved.
  */
 
-import { model } from '@medusajs/framework/utils'
+import { model } from "@medusajs/utils"
 import PosInvoice from './pos-invoice'
 
 const InvoiceTracking = model.define('invoice_tracking', {

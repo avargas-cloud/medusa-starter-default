@@ -9,8 +9,8 @@
  * Run: yarn medusa exec ./src/scripts/fix/test-wholesale-3skus.ts
  */
 import { ExecArgs } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { Modules } from "@medusajs/utils"
+import { ContainerRegistrationKeys } from "@medusajs/utils"
 
 const TARGET_SKUS = [
     "ESPFC4R4N50W0830",

@@ -9,7 +9,7 @@
  */
 
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { ContainerRegistrationKeys, Modules as _Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules as _Modules } from "@medusajs/utils"
 
 // Helper: Round to .25, .50, .75, or .99
 function smartRound(price: number): number {

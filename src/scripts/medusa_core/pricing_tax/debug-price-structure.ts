@@ -3,7 +3,7 @@
  * Shows how prices are actually stored
  */
 
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys } from "@medusajs/utils"
 
 export default async function debugPriceStructure({ container }: any) {
     const logger = container.resolve("logger")
