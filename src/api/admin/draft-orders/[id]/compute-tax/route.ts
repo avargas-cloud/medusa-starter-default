@@ -109,19 +109,20 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
         const { order } = await orderRes.json()
 
         // NOTE: /admin/orders returns monetary values in DOLLARS/DECIMALS for draft orders in v2.
-        const itemsSubtotal: number = (order?.items ?? []).reduce((sum: number, item: any) =>
-            sum + ((item.unit_price ?? 0) * (item.quantity ?? 1)), 0)
+        // To match POS and QuickBooks exactly, we MUST calculate in CENTS and match the POS rounding phases.
+        const itemsSubtotalCents: number = (order?.items ?? []).reduce((sum: number, item: any) =>
+            sum + (Math.round((item.unit_price ?? 0) * 100) * (item.quantity ?? 1)), 0)
 
-        // Compute order-level discount from item adjustments.
-        // Medusa v2 stores adjustment amounts as NEGATIVE (e.g., -2.53 for a $2.53 discount).
-        // We use Math.abs() so the sum is a positive discount value regardless of sign.
-        const discountTotal: number = (order?.items ?? []).reduce((sum: number, item: any) =>
-            sum + (item.adjustments ?? []).reduce((a: number, adj: any) => a + Math.abs(Number(adj.amount) || 0), 0), 0)
-        const discountedSubtotal: number = Math.max(0, itemsSubtotal - discountTotal)
+        // POS MATH: Order discounts are accumulated unrounded, then ROUNDED BEFORE subtracting from subtotal.
+        const unroundedDiscountCents: number = (order?.items ?? []).reduce((sum: number, item: any) =>
+            sum + (item.adjustments ?? []).reduce((a: number, adj: any) => a + (Math.abs(Number(adj.amount) || 0) * 100), 0), 0)
+        
+        const roundedDiscountCents = Math.round(unroundedDiscountCents)
+        const discountedSubtotalCents: number = Math.max(0, itemsSubtotalCents - roundedDiscountCents)
 
         const shippingMethods: any[] = order?.shipping_methods ?? []
         const hasPickup = shippingMethods.some(m => isPickup(m.name ?? ""))
-        const shippingSubtotal: number = shippingMethods.reduce((sum: number, m: any) => sum + (m.amount ?? 0), 0)
+        const shippingSubtotalCents: number = shippingMethods.reduce((sum: number, m: any) => sum + Math.round((m.amount ?? 0) * 100), 0)
 
         // ── Determine province ─────────────────────────────────────────────────
         const province = hasPickup
@@ -226,13 +227,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
         rate = sampleTaxLine?.rate ?? (exempt ? 0 : 7)
 
         // ── Compute correct discount-aware amount ──────────────────────────────
-        // Medusa ALSO creates "manual" lines independently (doubles the tax to $7.07).
-        // Our discountedSubtotal already has all promotion adjustments deducted,
-        // so we get the correct discount-aware tax here.
-        // Math.round(discountedSubtotal × rate) / 100
-        //   e.g. Math.round(47.95 × 7) / 100 = 336 / 100 = $3.36 ✓
+        // POS parity: Tax applies on the aggregate rounded taxable amount.
         if (!exempt) {
-            amount = Math.round(discountedSubtotal * rate) / 100
+            amount = Math.round(discountedSubtotalCents * (rate / 100)) / 100
         }
 
         // ── Post-workflow DB fix ───────────────────────────────────────────────
@@ -267,10 +264,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
             console.warn("[compute-tax] Post-workflow DB fix soft-failed:", fixErr?.message)
         }
 
-        console.log(`[compute-tax] Discount-aware tax: $${amount} @ ${rate}% | subtotal=$${itemsSubtotal} discount=$${discountTotal} taxable=$${discountedSubtotal} (mode: ${effectiveMode})`)
+        const itemsSubtotal = itemsSubtotalCents / 100
+        const discountTotal = roundedDiscountCents / 100
+        const shippingSubtotal = shippingSubtotalCents / 100
+        
+        console.log(`[compute-tax] Discount-aware tax: $${amount} @ ${rate}% | subtotal=$${itemsSubtotal} discount=$${discountTotal} taxable=$${discountedSubtotalCents/100} (mode: ${effectiveMode})`)
 
         // ── Save computed totals to metadata (fire-and-forget) ─────────────────
-        const computedTotal = discountedSubtotal + shippingSubtotal + amount
+        const computedTotal = (discountedSubtotalCents + shippingSubtotalCents) / 100 + amount
         saveOrderMeta(req, id, {
             computed_tax_amount: amount,
             computed_tax_rate: rate,

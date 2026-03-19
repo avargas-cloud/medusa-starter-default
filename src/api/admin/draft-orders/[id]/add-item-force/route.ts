@@ -151,6 +151,7 @@ export async function POST(
 
         if (custom_title) {
             title = custom_title
+            productTitle = custom_title // Keep denormalized field in sync for Medusa Native Admin
         }
 
         if (custom_description !== undefined) {

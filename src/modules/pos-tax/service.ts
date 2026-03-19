@@ -66,17 +66,21 @@ export default class PosTaxProvider implements ITaxProvider {
             }
         })
 
-        // Florida Exempts Shipping by law
+        /* 
+        // Florida Exempts Shipping by law.
+        // We omit explicit 0% lines to avoid cluttering the Medusa Admin UI.
+        // Medusa will default to $0 tax for shipping if no lines are provided.
         taxLines = taxLines.concat(
             shippingLines.map((l) => ({
                 rate_id: PosTaxProvider.FLORIDA_TAX_RATE_ID,
                 rate: 0,
-                name: "Shipping Tax Exempt",
+                name: "FL-SHIPPING",
                 code: "FL-SHIPPING",
                 shipping_line_id: l.shipping_line.id,
                 provider_id: this.getIdentifier(),
             }))
         )
+        */
 
         return taxLines
     }

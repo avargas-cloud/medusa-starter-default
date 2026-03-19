@@ -565,6 +565,16 @@ Las órdenes confirmadas SÍ se pueden editar a través del POS. El flujo comple
 // enviaba undefined para EXEMPT → la actualización de tax lines se saltaba
 ```
 
+### B.1.1 Anti-Patrón React Query (Marzo 2026 Fix)
+Anteriormente, la acción local de `handleSave` intentaba parchear la caché local en memoria usando `queryClient.setQueryData(['order', id], ...)`. Si bien esto protegía contra ciertos parpadeos de React, generaba un **bug de re-hidratación** donde metadata (como el `tax_mode` modificado a 0%) se revertía temporalmente en la UI porque no había sido cubierto por el parcheo estático.
+
+**Flujo actual y correcto:**
+Al finalizar el árbol de guardado, siempre se fuerza una **descarga autoritativa** vaciando el query key directo con la red:
+```ts
+// Se prohíbe el uso de setQueryData. En su lugar forzamos el request original:
+queryClient.invalidateQueries({ queryKey: ['order', resolvedId] })
+```
+
 ### B.2 handleEmail
 
 ```ts
@@ -879,7 +889,8 @@ To achieve 100% parity between the POS frontend and the Medusa backend, the foll
 2. **Line Discounts (Unit-Level Rounding):** Line discounts apply directly to the unit price in cents. Round the result of `(unitPriceCents * discountRate)`, then multiply by `quantity`. Calculate `lineAfterLineDiscountCents`.
 3. **Order Discounts (Line-Level Rounding):** The total global order discount (e.g. 5%) is applied proportionally to each item's `lineAfterLineDiscountCents` total. Calculate `Math.round(lineAfterLineDiscountCents * orderDiscountRate)`. Accumulate all these rounded values to get the global `orderDiscountTotalCents`.
 4. **Tax Calculation (Aggregate Level):** Tax is applied implicitly on the aggregate taxable total after all discounts are deducted. `taxableAmountCents = afterLineDiscountsSubtotalCents - orderDiscountTotalCents`. Then `Math.round(taxableAmountCents * taxRate)`.
-5. **Divisor:** Sum the final cents and divide by `100` at the very end to yield the exact POS display values and payload targets.
+5. **Database Injection (Override Level):** When saving POS global discounts to the Medusa database (e.g., via `posOverrideAdjustmentsWorkflow`), the `amount` passed to Medusa must be strictly truncated to cents (`Math.round(val * 100) / 100`). Preventing Medusa from storing purely floating-point fractions (like `$1.485`) guarantees that Medusa's native `/admin/orders/[id]` Subtotal math yields the exact same 2-decimal precision required by QuickBooks.
+6. **Divisor:** Sum the final cents and divide by `100` at the very end to yield the exact POS display values and payload targets.
 
 Failure to follow this exact order of rounding (or using floating-point `toFixed()` mid-calculation) will lead to 1-2 cent discrepancies against the Medusa backend.
 

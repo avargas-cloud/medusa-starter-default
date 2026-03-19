@@ -83,7 +83,10 @@ export const overrideOrderChangeAdjustmentsStep = createStep(
                         const qty = Number(item.quantity) || 1
                         
                         // Back to native non-rounded calculation as the user requested POS to adapt to Medusa
-                        const correctAmount = unitPrice * qty * input.pct_discount
+                        // WAIT: To match POS and QuickBooks EXACTLY (down to the penny on Total),
+                        // we MUST round the adjustment amount to the nearest cent BEFORE passing it to Medusa's DB!
+                        // e.g. 5.50 * 5.4 * 0.05 = 1.485 -> Math.round(148.5) / 100 = 1.49!
+                        const correctAmount = Math.round(unitPrice * qty * input.pct_discount * 100) / 100
                         
                         logger.info(`[Override Step] Overwriting action ${action.id} amt: ${adj.amount} -> ${correctAmount}`)
                         

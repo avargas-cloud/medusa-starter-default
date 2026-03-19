@@ -1046,146 +1046,55 @@ enrichItemPrices(item.localId, availablePrices)
 
 ---
 
-## D. Save Flow — Todas las Llamadas API en Secuencia
+## D. Save Flow — La Arquitectura BFF (`sync-pos`)
 
-**Archivo:** `app/(pos)/estimates/[id]/hooks/useEstimateActions.ts`
+**Archivo Front-end:** `app/(pos)/estimates/[id]/hooks/useEstimateSave.ts`
+**Archivo Back-end (Mega-Endpoint):** `backend/src/api/admin/draft-orders/sync-pos/route.ts`
 
-### D.1 Pre-validaciones antes de guardar
+### D.1 El Problema Original
+Previo a Marzo 2026, el Frontend (`useEstimateSave`) ejecutaba un "HTTP Waterfall" de hasta 15 peticiones secuenciales y concurrentes (`Promise.all`) contra Medusa para crear el Draft, inyectar línea por línea, asignar el envío y luego los descuentos. Esto causaba:
+1. **Lentitud de Red:** El cliente (Miami) tenía que hacer ~15 viajes de ida y vuelta al servidor (Virginia), apilando latencia total a más de 2 segundos.
+2. **Race Conditions & Database Locks:** Múltiples `update-item-force` concurrentes lanzando queries a PostgreSQL creaban bloqueos de tabla.
+3. **Ghost Duplicates:** Interrupciones de red durante la fase de adición causaban duplicación fantasma de ítems.
 
-```ts
-// 1. getMissingMetaFields(doc) — valida campos requeridos
-if (missingFields.length > 0) {
-    toast.error(`Please fill in: ${missingFields.join(', ')}`)
-    return
-}
-// 2. token requerido
-// 3. doc.items.length > 0 — no se guarda un estimate vacío
-// 4. Auto-apply Local Pickup si no hay shipping method
-if (!localHasShipping && !existingHasShipping) {
-    await shippingRef?.current?.applyLocalPickup()
-}
-```
-
-### D.2 CREATE — Primer guardado (`wasNew = true`)
-
-```
-Llamada 1: GET /admin/regions?limit=1
-           → obtiene regionId para crear el draft order
-
-Llamada 2: POST /admin/draft-orders
-           Body completo (ver buildCreatePayload más abajo)
-           → retorna { draft_order: { id, cart_id } }
-           → store.markSaved(resolvedId)
-           → router.replace('/estimates/{resolvedId}')
-
-Llamadas 3..N (parallel): POST /admin/draft-orders/{id}/add-item-force
-           Por cada item:
-           {
-               variant_id: item.variantId,
-               quantity: item.quantity,
-               unit_price: effectiveUnitPrice,       ← precio DESPUÉS del descuento (en dólares)
-               original_unit_price: item.unitPrice,  ← precio base (en metadata)
-               line_discount: item.lineDiscount,     ← descuento inline (en metadata)
-               sort_order: item.sortOrder,
-               custom_title: item.title,
-               custom_description: item.salesDescription || ''
-           }
-           ✅ Los descuentos inline SÍ se aplican en el CREATE (fix: Mar 14 2026)
-
-Llamada adicional (si shipping): POST /admin/draft-orders/{id}/add-shipping-force
-           { shipping_option_id, custom_amount: shippingPrice / 100 }
-           ⚠️ Aquí sí se divide /100 porque add-shipping-force espera dólares/100? Verificar.
-
-Llamada adicional (si promotionId): POST /admin/pos-discount/apply-existing
-           { order_id, promotion_code, promotion_id }
-O bien: POST /admin/pos-discount
-           { order_id, discount_type, discount_value }
-```
-
-**buildCreatePayload — Body completo:**
+### D.2 La Solución Actual: Mega-Endpoint (BFF)
+Toda la lógica de guardado transaccional se movió a un **único endpoint en el Backend** (`POST /admin/draft-orders/sync-pos`). El Frontend ahora simplemente empuja el objeto completo `doc` (del Zustand Store) de una sola vez. 
 
 ```ts
-{
-    customer_id: doc.customerId ?? undefined,
-    email: doc.customerEmail || undefined,
-    items: [],    // ← siempre vacío en el create; items se agregan via add-item-force
-    region_id: regionId,
-    shipping_address: { first_name, last_name, company, address_1, address_2, city, province, postal_code, country_code, phone },
-    billing_address: { ...mismos campos... },
-    metadata: {
-        estimate_status: doc.estimateStatus,    // 'Created'
-        lead_time: doc.leadTime,
-        payment_terms: doc.paymentTerms,
-        order_type: doc.orderType,
-        project_name: doc.projectName,
-        customer_po: doc.customerPO,
-        sales_rep: doc.salesRep,
-        pos_notes: doc.note,
-        tax_mode: doc.taxMode,                  // 'auto' | 'florida' | 'exempt'
-        discount_type: doc.discountValue > 0 ? doc.discountType : null,
-        discount_value: doc.discountValue > 0 ? doc.discountValue : null,
-        promotion_code: doc.promotionCode ?? null,
-        pos_comment_lines: JSON.stringify(doc.commentLines)  // o null si vacío
+// En el Frontend (useEstimateSave.ts):
+const saveRes = await medusaFetch<{ draft_order_id: string }>('/admin/draft-orders/sync-pos', {
+    method: 'POST',
+    body: {
+        doc: usePOSStore.getState().doc,
+        order: isNew ? undefined : order,
+        actingUser
     }
-}
+})
+
+// React Query Cache Invalidation (NO MANUAL PATCHING)
+queryClient.invalidateQueries({ queryKey: ['draft-order', saveRes.draft_order_id] })
 ```
 
-> **¿Por qué items vacíos?** Medusa valida stock en el create. `add-item-force` bypasea esa validación, permitiendo agregar items con 0 o stock negativo.
+### D.3 Orquestación Interna (`sync-pos/route.ts`)
+Dentro del servidor Node.js de Medusa, el endpoint actúa como un orquestador que realiza "Local Loopbacks" (peticiones a `localhost:9000`). La latencia de red cae a `0.1ms`. El flujo procesa de manera estricta y **secuencial** (`for...of` loops) para proteger la Base de Datos:
 
-### D.3 UPDATE — Guardados subsiguientes
-
-```
-Llamada 1: POST /admin/draft-orders/{id}  (PATCH semántico en Medusa v2)
-           Body: buildUpdatePayload(doc)   ← sin 'items', solo metadata+addresses
-
-Llamada 2: GET /admin/draft-orders/{id}?fields=+items.*,+items.variant_id
-           → obtiene oldItems fresh del servidor (evita race conditions con React Query)
-
-Llamadas (parallel): DELETE y ADD/UPDATE de diferencias
-   ─ eliminar items que ya no están:
-     POST /admin/draft-orders/{id}/delete-item-force
-          { line_item_id: old.id }
-
-   ─ para cada item en doc.items:
-     Si ya existe en oldItems (matched por id ó variant_id):
-       Si cambió qty | precio | sort_order | lineDiscount | title | salesDesc:
-         POST /admin/draft-orders/{id}/update-item-force
-              {
-                  line_item_id: existing.id,
-                  quantity: item.quantity,
-                  unit_price: effectiveUnitPrice,         ← precio DESPUÉS del descuento
-                  sort_order: item.sortOrder,
-                  line_discount: item.lineDiscount,       ← se guarda en metadata
-                  original_unit_price: item.unitPrice,   ← precio BASE, se guarda en metadata
-                  custom_title: item.title,
-                  custom_description: item.salesDescription || ''
-              }
-     Si es nuevo (no existe en oldItems):
-       POST /admin/draft-orders/{id}/add-item-force
-            { variant_id, quantity, unit_price: effectiveUnitPrice, sort_order, line_discount, original_unit_price, custom_title, custom_description }
-
-Llamadas (parallel independientes):
-   ─ Si shippingOptionId cambió:
-     Nuevo: POST /admin/draft-orders/{id}/add-shipping-force
-            { shipping_option_id, custom_amount: freshPrice }
-     Removido: DELETE /admin/draft-orders/{id}/remove-shipping
-
-   ─ Si promotionCode cambió:
-     apply-existing / pos-discount POST / pos-discount DELETE
-```
-
-**computeEffectivePrice (usada en el save):**
+1. **Auto-Detección de "Local Pickup":** Si el payload no tiene ID de envío, el Backend localiza y asigna el método "store pickup" nativo.
+2. **Creación del Shell (si es *New*):** `POST /admin/draft-orders` (Enviando una lista de items **vacía** para evitar validaciones tempranas).
+3. **Sincronización de Metadata (si es *Update*):** `POST /admin/draft-orders/{id}`
+4. **Borrado de ítems:** `for (const old of removedItems)` `DELETE-ITEM-FORCE`
+5. **Adición / Actualización de ítems:** `for (const new of updatedItems)` `UPDATE-ITEM-FORCE`
+   - Nota: Usa aritmética precisa en **Centavos** `Math.round(val*100)/100` para los custom prices (después de aplicar descuentos nativos de línea) asegurando paridad estricta entre Medusa y la matemática visual de QuickBooks.
+   - Forzamiento de Título: Sobreescribe `product_title` usando la propiedad `custom_title`.
+6. **Manejo de Envíos:** `[id]/add-shipping-force`
+7. **Aplicación de Descuentos (Promotions):** `pos-discount/apply-existing`. Note: Para igualar la contabilidad de 2 decimales exactos (`$29.70 - $1.49 = $28.21`), los ajustes insertados se redondean preventivamente.
+8. **Paridad Tributaria Final:** `GET /admin/draft-orders/{id}/compute-tax` reescribe los impuestos usando la matemática $ x 100 de centavos exactos para que `metadata.computed_total` embone idénticamente con el POS a 2 decimales.
 
 ```ts
-const computeEffectivePrice = (item) => {
-    if (!item.lineDiscount || item.lineDiscount.value <= 0) return item.unitPrice
-    if (item.lineDiscount.type === 'percent') {
-        return Number((item.unitPrice * (1 - item.lineDiscount.value / 100)).toFixed(2))
-    }
-    const perUnit = item.lineDiscount.value / item.quantity
-    return Number(Math.max(0, item.unitPrice - perUnit).toFixed(2))
-}
+// Ejemplo de la matemática sincronizada de Centavos usada en compute-tax:
+const discountedSubtotalCents = Math.max(0, itemsSubtotalCents - Math.round(discountTotal * 100))
+// El impuesto computado usará la base `discountedSubtotalCents`.
 ```
+
 
 ### D.4 handleConfirmOrder — Flujo de Confirmación
 
