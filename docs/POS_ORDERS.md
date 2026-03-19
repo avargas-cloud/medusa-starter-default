@@ -267,6 +267,22 @@ await createReservationsWorkflow(req.scope).run({
 })
 ```
 
+### Patch de Persistencia de Métodos de Envío (Order Edit Versioning)
+
+**Problema:**
+Al asignar forzosamente un método de envío a una orden ya activa (ej. "Miami Store Pickup" auto-asignado por el POS), el método de envío desaparecía de la orden tras guardar si simultáneamente se calculaba un descuento o impuesto via `post-edit-sync`.
+
+**Origen:**
+Medusa v2 no almacena la relación de la orden directamente en la tabla `order_shipping_method`. Utiliza una tabla pivote (`order_shipping`) que **lleva control de versiones de la orden**. En el endpoint original (`add-shipping-force`), el método de envío inyectado se enlazaba con `version: 1` por defecto. Sin embargo, al aplicar promociones, Medusa v2 invoca su motor de `Order Edit` interno, elevando la versión activa de la orden a 2 o más, lo que volvía "invisible" (huérfana) a la línea de envío en estado de versión antigua.
+
+**Solución Implementada:**
+Se reescribió la lógica en la ruta `add-shipping-force` para hacer lo siguiente:
+1. Rescata la **verdadera `version` activa** actual empleando un query nativo contra la tabla `order`.
+2. Realiza un *soft-delete* (`deleted_at = NOW()`) forzoso global sobre la tabla pivote de la orden en `order_shipping` anulando todas sus iteraciones de envíos oxidados sin importar sus versiones.
+3. Al crear el método de envío con los métodos puros de Medusa (que siguen insertando la `version: 1` de nacimiento), el sistema lo ataja un milisegundo despúes inyectando un query update SQL estricto contra la pivote `order_shipping`, para **igualar su versión con la de la orden activa**.
+
+De esta manera, la entidad del `Order Edit` de promociones lo abarca, detecta, y clona sin problemas a su historial, perpetuando exitosamente el `Miami Store Pickup` u otros métodos.
+
 ---
 
 ## Changelog — Marzo 17, 2026

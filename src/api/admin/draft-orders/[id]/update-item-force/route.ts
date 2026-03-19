@@ -18,13 +18,15 @@ export async function POST(
     req: MedusaRequest,
     res: MedusaResponse
 ): Promise<void> {
-    const { line_item_id, quantity, unit_price, sort_order, line_discount, original_unit_price, custom_title, custom_description } = req.body as {
+    const { line_item_id, quantity, unit_price, sort_order, line_discount, original_unit_price, price_list_id, price_list_label, custom_title, custom_description } = req.body as {
         line_item_id: string
         quantity?: number
         unit_price?: number            // effective (post-discount) price in DOLLARS
         sort_order?: number            // 0-indexed display position
         line_discount?: { type: 'percent' | 'fixed'; value: number } | null  // POS discount descriptor
         original_unit_price?: number | null  // pre-discount price for POS rehydration
+        price_list_id?: string | null        // Rehydrating retail/wholesale tags
+        price_list_label?: string | 'Default' // Rehydrating retail/wholesale tags
         custom_title?: string          // User-edited title for "Special Items"
         custom_description?: string    // User-edited description for "Special Items"
     }
@@ -34,7 +36,7 @@ export async function POST(
         return
     }
 
-    if (quantity === undefined && unit_price === undefined && sort_order === undefined && line_discount === undefined && original_unit_price === undefined && custom_title === undefined && custom_description === undefined) {
+    if (quantity === undefined && unit_price === undefined && sort_order === undefined && line_discount === undefined && original_unit_price === undefined && price_list_id === undefined && price_list_label === undefined && custom_title === undefined && custom_description === undefined) {
         res.status(400).json({ message: "At least one field to update is required" })
         return
     }
@@ -52,7 +54,7 @@ export async function POST(
 
         // Persist sort_order, line_discount, and original_unit_price in metadata.
         // Always merge with existing metadata to avoid overwriting sales_description or other keys.
-        const needsMetadataUpdate = sort_order !== undefined || line_discount !== undefined || original_unit_price !== undefined || custom_description !== undefined
+        const needsMetadataUpdate = sort_order !== undefined || line_discount !== undefined || original_unit_price !== undefined || price_list_id !== undefined || price_list_label !== undefined || custom_description !== undefined
         if (needsMetadataUpdate) {
             let existingMeta: Record<string, any> = {}
             if (typeof orderModule.retrieveOrderLineItem === "function") {
@@ -68,6 +70,8 @@ export async function POST(
                 // null explicitly clears the key (discount removed); undefined = no change
                 ...(line_discount !== undefined ? { line_discount: line_discount ?? null } : {}),
                 ...(original_unit_price !== undefined ? { original_unit_price: original_unit_price ?? null } : {}),
+                ...(price_list_id !== undefined ? { price_list_id: price_list_id ?? null } : {}),
+                ...(price_list_label !== undefined ? { price_list_label: price_list_label ?? null } : {}),
             }
         }
         if (typeof orderModule.updateOrderLineItems === "function") {

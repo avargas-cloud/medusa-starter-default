@@ -1772,3 +1772,18 @@ WHERE item_id IN (
 | Tax en QB | Sincronizar el tax_total con el campo `TaxCodeRef` del Estimate en QuickBooks |
 | Cache de modo | Evitar el re-cálculo si el modo y los items no han cambiado desde el último compute |
 | Dashboard de tax | Panel admin que muestre el breakdown de taxes por período y estado |
+
+---
+
+## Changelog — Marzo 19, 2026
+
+### Patch de Persistencia de Métodos de Envío (Order Edit Versioning)
+
+**Problema:**
+Al asignar forzosamente un método de envío a una orden ya activa (ej. "Miami Store Pickup" auto-asignado por el POS), el método de envío desaparecía de la orden al ser guardada si simultáneamente se calculaba un descuento o impuesto via `post-edit-sync`. *Nota: Aunque este error se manifestaba principalmente en **Órdenes Activas** (no Estimates/Draft Orders), la mecánica arquitectónica aplica globalmente y afecta a la conversión cuando el flujo avanza al estado de Order garantizando la retroactividad.*
+
+**Origen:**
+Medusa v2 apartir de su Core no almacena la relación de la orden directamente en la tabla individual `order_shipping_method`. Utiliza una tabla pivote conjunta llamada (`order_shipping`) que **lleva el control estricto de versiones de la orden**. En endpoints customizados directos (ej `add-shipping-force`), el método de envío inyectado se enlazaba silenciosamente con `version: 1` por defecto, lo cual era ciego al esquema activo cuando el `Order Edit` de promociones lo elevaba a 2 o más.
+
+**Solución Implementada:**
+La ruta `add-shipping-force` ahora ejecuta un SQL puro contra la tabla pivote de la orden en `order_shipping` inyectando un query local (`UPDATE order_shipping SET version = $1`) inmediatamente después de la creación estandar, forzando a la relación a coincidir y **empatar su versión estrictamente con la de la orden activa real**. Esto permite que la entidad del `Order Edit` la abarque y perpetue exitosamente durante sus cálculos paralelos o en subsecuentes ciclos de vida provenientes de un POS Estimate.

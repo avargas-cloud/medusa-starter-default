@@ -139,6 +139,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                         item.quantity !== (existing.quantity ?? 1) ||
                         (item.sortOrder !== undefined && item.sortOrder !== existing.metadata?.sort_order) ||
                         JSON.stringify(item.lineDiscount ?? null) !== JSON.stringify(existing.metadata?.line_discount ?? null) ||
+                        item.unitPrice !== existing.metadata?.original_unit_price ||
+                        item.priceListId !== (existing.metadata?.price_list_id ?? null) ||
+                        item.priceListLabel !== (existing.metadata?.price_list_label ?? 'Default') ||
                         item.title !== existing.title ||
                         item.salesDescription !== existing.metadata?.sales_description
 
@@ -151,7 +154,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                                 unit_price: item.effectiveUnitPrice,
                                 ...(item.sortOrder !== undefined ? { sort_order: item.sortOrder } : {}),
                                 line_discount: item.lineDiscount,
-                                original_unit_price: item.lineDiscount ? item.unitPrice : null,
+                                original_unit_price: item.unitPrice,
+                                price_list_id: item.priceListId,
+                                price_list_label: item.priceListLabel,
                                 custom_title: item.title,
                                 custom_description: item.salesDescription,
                             })
@@ -167,7 +172,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                             unit_price: item.effectiveUnitPrice,
                             ...(item.sortOrder !== undefined ? { sort_order: item.sortOrder } : {}),
                             line_discount: item.lineDiscount,
-                            original_unit_price: item.lineDiscount ? item.unitPrice : null,
+                            original_unit_price: item.unitPrice,
+                            price_list_id: item.priceListId,
+                            price_list_label: item.priceListLabel,
                             custom_title: item.title,
                             custom_description: item.salesDescription,
                         })

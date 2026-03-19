@@ -42,21 +42,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const orderId = id as string
     const dbUrl = process.env.DATABASE_URL
 
-    // ── Idempotency guard ─────────────────────────────────────────────────────
-    try {
-        const fulfillmentModuleCheck = req.scope.resolve(Modules.FULFILLMENT) as any
-        const existingFulfillments = await fulfillmentModuleCheck.listFulfillments(
-            { order_id: orderId },
-            { select: ["id", "provider_id", "created_at"], take: 1 }
-        )
-        if (existingFulfillments?.length) {
-            console.log(`[create-fulfillment-force] ↩️ Already has fulfillment ${existingFulfillments[0].id}, returning early`)
-            return res.status(200).json({ fulfillment: existingFulfillments[0], already_fulfilled: true })
-        }
-    } catch (checkErr: any) {
-        console.warn(`[create-fulfillment-force] idempotency check failed: ${checkErr?.message?.slice(0, 60)}`)
-    }
-
     // ── Strategy 1: Native createOrderFulfillmentWorkflow ────────────────────
     try {
         const { createOrderFulfillmentWorkflow } = await import("@medusajs/core-flows")
@@ -70,7 +55,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 // Raw SQL is the reliable path for local pickup items.
                 const itemIds = items.map((i: any) => i.id)
                 await pool.query(
-                    `UPDATE order_item SET requires_shipping = false WHERE id = ANY($1)`,
+                    `UPDATE order_line_item SET requires_shipping = false WHERE id = ANY($1)`,
                     [itemIds]
                 )
                 console.log(`[create-fulfillment-force] ✅ Pre-A: requires_shipping=false for ${itemIds.length} items`)
@@ -151,7 +136,29 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 no_notification,
                 created_by: ((req as any).auth_context?.actor_id ?? "") as string,
             },
+        }).catch(err => {
+            require('fs').writeFileSync('/home/alejo/webapps/ecopowertech-workspace/tmp-strategy1-error.txt', err.message + '\n' + err.stack)
+            throw err
         })
+
+        // ── fulfilled_quantity fix (Strategy 1) ──────────────────────────
+        // Only safely increment the items that were just fulfilled
+        if (dbUrl && items.length > 0) {
+            const pool = getDbPool()
+            try {
+                for (const item of items) {
+                    await pool.query(
+                        `UPDATE order_item
+                         SET fulfilled_quantity = LEAST(quantity, COALESCE(fulfilled_quantity, 0) + $1::numeric)
+                         WHERE id = $2`,
+                        [item.quantity, item.id]
+                    )
+                }
+                console.log(`[create-fulfillment-force] ✅ Patched fulfilled_quantity for ${items.length} order_item rows (Strategy 1)`)
+            } catch (sqlErr: any) {
+                console.warn(`[create-fulfillment-force] fulfilled_quantity patch failed (non-fatal): ${sqlErr?.message}`)
+            }
+        }
 
         console.log(`[create-fulfillment-force] ✅ Strategy 1 (native workflow) succeeded`)
         return res.status(201).json({ fulfillment: (result.result as any) ?? { id: "ok" } })
@@ -206,7 +213,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         let fulfillment: any
 
         const deliveryAddress = (orderData?.shipping_address?.country_code)
-            ? orderData.shipping_address
+            ? (() => {
+                const { id, created_at, updated_at, deleted_at, ...clean } = orderData.shipping_address as any
+                return clean
+            })()
             : { address_1: '2760 W 84th St Unit 4', city: 'Hialeah', province: 'FL', postal_code: '33016', country_code: 'us' }
 
         for (const providerId of candidates) {
@@ -262,26 +272,21 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
 
         // ── fulfilled_quantity fix (Strategy 2 only) ──────────────────────────
-        // Medusa computes fulfillment_status across ALL order_item rows including
-        // historical versions from order edits (which have fulfilled_quantity=0).
-        // Fix: set fulfilled_quantity=quantity on ALL active rows so status = 'fulfilled'.
-        // (Strategy 1's native workflow handles this correctly without this patch.)
-        if (dbUrl) {
+        // Only safely increment the items that were just fulfilled
+        if (dbUrl && items.length > 0) {
             const pool = getDbPool()
             try {
-                const result = await pool.query(
-                    `UPDATE order_item
-                     SET fulfilled_quantity = quantity
-                     WHERE order_id = $1
-                       AND deleted_at IS NULL
-                       AND quantity > 0`,
-                    [orderId]
-                )
-                console.log(`[create-fulfillment-force] ✅ Patched fulfilled_quantity for ${result.rowCount} order_item rows`)
+                for (const item of items) {
+                    await pool.query(
+                        `UPDATE order_item
+                         SET fulfilled_quantity = LEAST(quantity, COALESCE(fulfilled_quantity, 0) + $1::numeric)
+                         WHERE id = $2`,
+                        [item.quantity, item.id]
+                    )
+                }
+                console.log(`[create-fulfillment-force] ✅ Patched fulfilled_quantity for ${items.length} order_item rows`)
             } catch (sqlErr: any) {
                 console.warn(`[create-fulfillment-force] fulfilled_quantity patch failed (non-fatal): ${sqlErr?.message}`)
-            } finally {
-                // shared pool — do NOT call pool.end()
             }
         }
 

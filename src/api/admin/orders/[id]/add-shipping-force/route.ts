@@ -31,23 +31,25 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     try {
         const orderModule = req.scope.resolve(Modules.ORDER) as any
 
-        // 1. Fetch existing shipping methods to remove them
-        const orderRes = await fetch(
-            `${base}/admin/orders/${id}?fields=+shipping_methods.*`,
-            { headers: authHeaders }
-        )
-        if (orderRes.ok) {
-            const { order } = await orderRes.json()
-            const existingMethods: any[] = order?.shipping_methods ?? []
-            for (const sm of existingMethods) {
-                try {
-                    if (typeof orderModule.deleteOrderShippingMethods === "function") {
-                        await orderModule.deleteOrderShippingMethods([sm.id])
-                        console.log(`[orders/add-shipping-force] Removed shipping method: ${sm.id}`)
-                    }
-                } catch (e: any) {
-                    console.warn(`[orders/add-shipping-force] Could not remove ${sm.id}:`, e?.message)
-                }
+        // 1. Fetch the true Order version and remove stale shipping methods via raw SQL
+        const dbUrl = process.env.DATABASE_URL
+        let currentVersion = 1
+        const pool = getDbPool()
+        
+        if (dbUrl) {
+            try {
+                // Fetch current order version
+                const vRes = await pool.query<{ version: number }>(`SELECT version FROM "order" WHERE id = $1 LIMIT 1`, [id])
+                if (vRes.rows.length > 0) currentVersion = vRes.rows[0].version
+
+                // Hard-delete existing shipping links to ensure clean state across versions
+                await pool.query(
+                    `UPDATE order_shipping SET deleted_at = NOW() WHERE order_id = $1 AND deleted_at IS NULL`,
+                    [id]
+                )
+                console.log(`[orders/add-shipping-force] Cleared existing shipping methods for order ${id} (version ${currentVersion})`)
+            } catch (e: any) {
+                console.warn(`[orders/add-shipping-force] Failed to initialize version/cleanup:`, e?.message)
             }
         }
 
@@ -64,6 +66,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         // 3. Create the new shipping method directly on the order if provided
         if (shipping_option_id) {
             const amountDollars = custom_amount ?? 0
+            
+            // Note: createOrderShippingMethods strictly creates it with version: 1 inside the OrderModule
             await orderModule.createOrderShippingMethods(id, [{
                 shipping_option_id,
                 name: shippingOptionName,
@@ -71,22 +75,28 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             }])
             console.log(`[orders/add-shipping-force] Applied ${shippingOptionName} ($${amountDollars}) to order ${id}`)
 
-            // 4. Insert a 0% tax_line for the new shipping method.
-            // Shipping is never taxed, but Medusa Admin requires tax_lines to exist
-            // on each shipping method or crashes when the user expands "Shipping Subtotal".
-            const dbUrl = process.env.DATABASE_URL
+            // 4. Force version parity and inject 0% tax_line 
             if (dbUrl) {
-                const pool = getDbPool()
                 try {
-                    // Find the newly created shipping method for this order
-                    const smRes = await pool.query<{ id: string }>(
-                        `SELECT id FROM order_shipping_method
+                    // Find the newly created shipping method link for this order
+                    const smRes = await pool.query<{ shipping_method_id: string }>(
+                        `SELECT shipping_method_id FROM order_shipping
                          WHERE order_id = $1 AND deleted_at IS NULL
                          ORDER BY created_at DESC LIMIT 1`,
                         [id]
                     )
-                    const shippingMethodId = smRes.rows[0]?.id
+                    const shippingMethodId = smRes.rows[0]?.shipping_method_id
+                    
                     if (shippingMethodId) {
+                        // Upgrade the shipping method link to match the actual active order version
+                        if (currentVersion > 1) {
+                            await pool.query(
+                                `UPDATE order_shipping SET version = $1 WHERE order_id = $2 AND shipping_method_id = $3`,
+                                [currentVersion, id, shippingMethodId]
+                            )
+                            console.log(`[orders/add-shipping-force] Upgraded shipping link ${shippingMethodId} to match order version ${currentVersion}`)
+                        }
+
                         const taxLineId = `taxline_sm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
                         await pool.query(
                             `INSERT INTO order_shipping_method_tax_line
@@ -109,7 +119,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 }
             }
         } else {
-            console.log(`[orders/add-shipping-force] Cleared shipping methods from order ${id}`)
+            console.log(`[orders/add-shipping-force] Shipping option clearing completed for order ${id}`)
         }
 
         res.status(200).json({ success: true })

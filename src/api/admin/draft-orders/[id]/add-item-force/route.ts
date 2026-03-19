@@ -18,13 +18,15 @@ export async function POST(
     res: MedusaResponse
 ): Promise<void> {
     const { id } = req.params as { id: string }
-    const { variant_id, quantity = 1, unit_price, sort_order, line_discount, original_unit_price, custom_title, custom_description } = req.body as {
+    const { variant_id, quantity = 1, unit_price, sort_order, line_discount, original_unit_price, price_list_id, price_list_label, custom_title, custom_description } = req.body as {
         variant_id: string
         quantity?: number
         unit_price?: number            // effective (post-discount) price in DOLLARS
         sort_order?: number            // 0-indexed display position for drag-to-reorder
         line_discount?: { type: 'percent' | 'fixed'; value: number } | null  // POS discount descriptor
         original_unit_price?: number | null  // pre-discount price for POS rehydration
+        price_list_id?: string | null        // Rehydrating retail/wholesale tags
+        price_list_label?: string | 'Default' // Rehydrating retail/wholesale tags
         custom_title?: string          // User-edited title for "Special Items"
         custom_description?: string    // User-edited description for "Special Items"
     }
@@ -186,6 +188,8 @@ export async function POST(
                 ...(sort_order !== undefined ? { sort_order } : {}),
                 ...(line_discount ? { line_discount } : {}),
                 ...(original_unit_price != null ? { original_unit_price } : {}),
+                ...(price_list_id ? { price_list_id } : {}),
+                ...(price_list_label ? { price_list_label } : {}),
             },
         }])
 
