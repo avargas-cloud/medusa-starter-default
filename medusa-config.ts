@@ -251,6 +251,9 @@ module.exports = defineConfig({
       resolve: "./src/modules/invoices",
     },
     {
+      resolve: "./src/modules/credit_memos",
+    },
+    {
       resolve: "./src/modules/finance",
     },
     {
