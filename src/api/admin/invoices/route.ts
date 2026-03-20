@@ -88,12 +88,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const balance_due = body.total - body.amount_paid
 
     // Step 1: Create the invoice (no nested items — hasMany must be created separately)
+    const initialStatus = balance_due <= 0 ? 'paid' : (body.amount_paid > 0 ? 'partial' : 'issued')
+    
     const invoice = await invoiceService.createPosInvoices({
         invoice_number,
         order_id:       body.order_id,
         fulfillment_id: body.fulfillment_id ?? null,
         customer_id:    body.customer_id,
-        status:         'issued' as const,
+        status:         initialStatus as 'issued' | 'paid' | 'partial',
         subtotal:       body.subtotal,
         discount:       body.discount ?? 0,
         shipping:       body.shipping ?? 0,

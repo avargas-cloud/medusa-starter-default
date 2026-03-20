@@ -136,6 +136,16 @@
           "nullable": true,
           "mappedType": "text"
         },
+        "medusa_payment_synced": {
+          "name": "medusa_payment_synced",
+          "type": "boolean",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "default": "false",
+          "mappedType": "boolean"
+        },
         "locked_order_id": {
           "name": "locked_order_id",
           "type": "text",
@@ -172,6 +182,15 @@
           "primary": false,
           "nullable": true,
           "mappedType": "text"
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "json"
         },
         "raw_amount": {
           "name": "raw_amount",

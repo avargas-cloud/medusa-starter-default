@@ -138,6 +138,27 @@ Subscriber `finance-payment-captured` fires on `payment.captured` → creates `C
 
 ---
 
+## Changelog — Marzo 20, 2026
+
+### Introducción del Módulo "Transactions" y Event Bus
+
+**Problema:**
+Medusa nativamente y nuestro módulo `CustomerPayment` inicial trataban a todos los pagos como entidades 100% aisladas. Sin embargo, en un ambiente POS uncajero puede seleccionar "Cobrar", y el sistema recibe `$200` en efectivo al mismo tiempo que deduce `$50` de un *Store Credit* previo, todo para apagar el saldo de 2 Invoices diferentes a la vez. Al carecer de una agrupación padre, la auditoría del cierre de caja (o la auditoría del propio recibo físico del cliente) resultaba en líneas huérfanas imposibles de vincular. A su vez, QuickBooks carecía de un *Trigger* centralizado para saber cuándo exportar el abono.
+
+**Solución Implementada:**
+1. **El concepto de Transaction ID (`transaction_id`):** En lugar de crear una tabla SQL nueva y masiva, la arquitectura fue abstraída y resuelta elegantemente a nivel de Frontend inyectando un agrupador universal en la propiedad `metadata` del JSON Payload (tanto en `POST /payments` como en `POST /:id/apply`).
+   - Siempre que se presione el botón gigantesco verde de "Capture / Finish Order", la aplicación genera un **`transaction_id` amigable estilo base36 (`txn_01H...`)**.
+   - Si se crean 1 o más records de `CustomerPayment` y/o `PaymentApplication` en esa fracción de segundo, _todos_ llevarán calcado ese id en `metadata.transaction_id`.
+   - El POS expone la ruta `/transactions` que simplemente consume la base de pagos pero los procesa con Javascript en batch, logrando inferir que "$200 Cash + $50 Store Credit" formaron el `txn_01H...` total de `$250`.
+   - **Referencia Amigable:** El recibo y las interfaces muestran el decoded ID (ej: *Ref No. 1042X*) ahorrando usar UUIDs ilegibles para el cliente de mostrador.
+
+2. **Event Bus Emitted (QuickBooks Sync):**
+   - El `route.ts` del admin api `/admin/finance/payments` y su par `/apply` ahora inyectan `req.scope.resolve(Modules.EVENT_BUS)`.
+   - Tras grabarse el pago exitosamente en la BD subyacente de Finance module, lanzan `await eventBus.emit({ name: "pos.payment.created", data: { id } })` (o `applied`).
+   - Esto habilita limpiamente a que los _Subscribers_ asyncrónicos puedan recoger el evento en background, leer qué invoice fue pagado, y enviar el respectivo JSON contra la cola de `bridge-server` hacia QuickBooks Desktop sin frenar ni un milisegundo al cajero en la pantalla principal.
+
+---
+
 ## Files Reference
 
 ```

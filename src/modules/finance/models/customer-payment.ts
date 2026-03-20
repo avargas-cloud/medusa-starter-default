@@ -41,11 +41,11 @@ const CustomerPayment = model.define('customer_payment', {
     // web source: always true (payment came FROM Medusa)
     // pos source: false until registerMedusaPayment() runs and succeeds
     medusa_payment_synced: model.boolean().default(false),
-    // The order this payment is locked to (web: always set; POS: set when applied)
     locked_order_id:       model.text().nullable(),        // web payments are locked to their order
     received_at:         model.dateTime(),
     notes:               model.text().nullable(),
     created_by:          model.text().nullable(),        // admin user email / "system" for subscribers
+    metadata:            model.json().nullable(),        // Extensibility (QuickBooks exact method, contexts, etc)
     applications:        model.hasMany(() => PaymentApplication, { mappedBy: 'payment' }),
 })
 

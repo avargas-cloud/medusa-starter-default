@@ -1,7 +1,19 @@
 import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
-import { markPaymentCollectionAsPaid } from "@medusajs/core-flows"
 import { FINANCE_MODULE } from '../../../../../../modules/finance'
 import { INVOICE_MODULE } from '../../../../../../modules/invoices'
+import { registerMedusaPayment } from '../../../../invoices/register-medusa-payment'
+
+function getNum(val: any): number {
+    if (val === null || val === undefined) return 0;
+    if (typeof val === 'number') return val;
+    if (typeof val === 'string') return Number(val);
+    if (typeof val === 'object') {
+        if ('toNumber' in val && typeof val.toNumber === 'function') return val.toNumber();
+        if ('numeric' in val) return Number(val.numeric);
+        if ('value' in val) return Number(val.value);
+    }
+    return Number(val) || 0;
+}
 
 /**
  * POST /admin/finance/payments/:id/apply
@@ -95,33 +107,30 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
         // 6. Recalculate invoice totals and status
         const allInvoicePayments = await invoiceService.listInvoicePayments({ invoice_id: invoice_id })
-        const totalInvoicePaid = allInvoicePayments.reduce((sum: number, p: any) => sum + Number(p.amount), 0)
-        const balanceDue = Math.max(0, Number(invoice.total) - totalInvoicePaid)
+        const totalInvoicePaid = allInvoicePayments.reduce((sum: number, p: any) => sum + getNum(p.amount), 0)
+        const balanceDue = Math.max(0, getNum(invoice.total) - totalInvoicePaid)
         const newInvoiceStatus = balanceDue <= 0 ? 'paid' : 'partial'
 
-        await invoiceService.updatePosInvoices(
-            { id: invoice_id },
-            { amount_paid: totalInvoicePaid, balance_due: balanceDue, status: newInvoiceStatus }
-        )
+        await invoiceService.updatePosInvoices({
+            id: invoice_id,
+            amount_paid: totalInvoicePaid,
+            balance_due: balanceDue,
+            status: newInvoiceStatus
+        })
 
-        // 7. Mark native payment collection as paid if invoice is fully paid
-        if (newInvoiceStatus === 'paid' && invoice.order_id) {
-            try {
-                const query = req.scope.resolve("query")
-                const { data: [order] } = await query.graph({
-                    entity: 'order',
-                    fields: ['payment_collections.*'],
-                    filters: { id: invoice.order_id }
-                })
-                
-                const pcId = order?.payment_collections?.[0]?.id
-                if (pcId) {
-                    await markPaymentCollectionAsPaid(req.scope).run({
-                        input: { order_id: invoice.order_id, payment_collection_id: pcId }
-                    })
-                }
-            } catch (err: any) {
-                req.scope.resolve('logger').warn(`[Medusa Native] Failed to mark order payment collection as paid (${invoice.order_id}): ` + err.message)
+        // 7. Register in Medusa native Payment Module (best-effort, every payment)
+        if (invoice.order_id) {
+            const medusaPaymentId = await registerMedusaPayment(req.scope, {
+                order_id:       invoice.order_id,
+                amount:         amount_applied,
+                payment_method: payment.method === 'credit_memo' ? 'credit' : payment.method,
+                invoice_total:  getNum(invoice.total),
+            })
+            if (medusaPaymentId) {
+                await financeService.updateCustomerPayments(
+                    { id: paymentId },
+                    { medusa_payment_synced: true }
+                ).catch(() => {}) // non-fatal
             }
         }
 

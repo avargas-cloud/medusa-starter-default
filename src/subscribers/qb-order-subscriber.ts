@@ -493,7 +493,7 @@ async function handleFulfillmentCreated(
     }
 
     // Read via compat helpers — supports both old flat fields and new JSON shape
-    const qbSoTxnId: string | undefined = getSoTxnId(order.metadata)
+    let qbSoTxnId: string | undefined = getSoTxnId(order.metadata)
     const qbPaymentTxnId: string | undefined = getLatestPaymentTxnId(order.metadata)
 
     logger.info(`${LOG_PREFIX} QB data — customerId=${qbCustomerId ?? "MISSING"}, soTxnId=${qbSoTxnId ?? "MISSING"}, paymentTxnId=${qbPaymentTxnId ?? "none"}`)
@@ -503,8 +503,43 @@ async function handleFulfillmentCreated(
         return
     }
 
+    // Calculate fulfillment amount (partial fulfillment support)
+    let fulfillmentAmount = order.total || 0
+    let isPartial = false
+    if (data.items && Array.isArray(data.items) && data.items.length > 0) {
+        const orderItemsMap = new Map<string, any>((order.items || []).map((i: any) => [i.id, i]))
+        const partialTotal = data.items.reduce((sum: number, fi: any) => {
+            const orderItem = orderItemsMap.get(fi.item_id || fi.id)
+            if (!orderItem) return sum
+            return sum + (orderItem.unit_price * fi.quantity)
+        }, 0)
+        
+        const totalOrderQty = (order.items || []).reduce((sum: number, i: any) => sum + i.quantity, 0)
+        const fulfillmentQty = data.items.reduce((sum: number, fi: any) => sum + fi.quantity, 0)
+        
+        if (fulfillmentQty < totalOrderQty) {
+            isPartial = true
+        }
+
+        if (partialTotal > 0) fulfillmentAmount = partialTotal
+        logger.info(`${LOG_PREFIX} Fulfillment: $${(fulfillmentAmount / 100).toFixed(2)} of $${((order.total || 0) / 100).toFixed(2)} total (isPartial: ${isPartial})`)
+    } else {
+        logger.info(`${LOG_PREFIX} Full fulfillment: $${(fulfillmentAmount / 100).toFixed(2)}`)
+    }
+
     if (!qbSoTxnId) {
-        logger.info(`${LOG_PREFIX} ℹ️ No qb_sales_order_txn_id found — creating a STANDALONE INVOICE directly.`)
+        if (isPartial) {
+            logger.info(`${LOG_PREFIX} ⚠️ Partial fulfillment detected but NO Sales Order exists yet! Real-Time Smart Lazy Evaluation: Forcing Sales Order creation before Invoice...`)
+            // Force SO creation right now by calling handleOrderPlaced with isCron=true to bypass POS delay guard
+            await handleOrderPlaced({ id: orderId }, orderModule, customerModule, _container, logger, true)
+            
+            // Re-fetch order metadata to get the newly created qbSoTxnId
+            const refreshedOrder = await orderModule.retrieveOrder(orderId)
+            qbSoTxnId = getSoTxnId(refreshedOrder.metadata || {})
+            logger.info(`${LOG_PREFIX} 🔄 Post-Lazy-Eval soTxnId=${qbSoTxnId ?? "FAILED TO CREATE"}`)
+        } else {
+            logger.info(`${LOG_PREFIX} ℹ️ No qb_sales_order_txn_id found (100% fulfillment) — creating a STANDALONE INVOICE directly.`)
+        }
     }
 
     // --- Standalone Invoice Prep (if no SO exists) ---
@@ -543,21 +578,6 @@ async function handleFulfillmentCreated(
 
         const hasTax = order.tax_total && order.tax_total > 0
         salesTaxCode = hasTax ? qbConfig.defaultSalesTaxCode : undefined
-    }
-
-    // Calculate fulfillment amount (partial fulfillment support)
-    let fulfillmentAmount = order.total || 0
-    if (data.items && Array.isArray(data.items) && data.items.length > 0) {
-        const orderItemsMap = new Map<string, any>((order.items || []).map((i: any) => [i.id, i]))
-        const partialTotal = data.items.reduce((sum: number, fi: any) => {
-            const orderItem = orderItemsMap.get(fi.item_id || fi.id)
-            if (!orderItem) return sum
-            return sum + (orderItem.unit_price * fi.quantity)
-        }, 0)
-        if (partialTotal > 0) fulfillmentAmount = partialTotal
-        logger.info(`${LOG_PREFIX} Partial fulfillment: $${(fulfillmentAmount / 100).toFixed(2)} of $${((order.total || 0) / 100).toFixed(2)} total`)
-    } else {
-        logger.info(`${LOG_PREFIX} Full fulfillment: $${(fulfillmentAmount / 100).toFixed(2)}`)
     }
 
     const result = await processInvoiceInQb({

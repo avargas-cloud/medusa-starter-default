@@ -97,13 +97,14 @@ async function main() {
             console.log("   No orders found to delete.")
         }
 
-        // ── Step 6: Draft Orders table (if separate in this Medusa version) ─
-        const draftCheck = await client.query(`
-            SELECT table_name FROM information_schema.tables WHERE table_name = 'draft_order'
-        `)
-        if (draftCheck.rows.length > 0) {
-            console.log("6. Deleting draft_order records")
-            await client.query(`DELETE FROM draft_order`)
+        // ── Step 7: Orphan Cleanup ───────────────────────────────────────────
+        if (INCLUDE_DRAFTS) {
+            console.log("7. Deep cleaning all remaining orphaned records (Nuclear Option)...");
+            await client.query(`DELETE FROM order_shipping_method`);
+            await client.query(`DELETE FROM order_address`);
+            await client.query(`DELETE FROM payment_session`);
+            await client.query(`DELETE FROM payment_collection`);
+            console.log("   ✓ Orphaned tables cleared.");
         }
 
         await client.query("COMMIT")

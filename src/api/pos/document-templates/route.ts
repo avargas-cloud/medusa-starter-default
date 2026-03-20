@@ -28,7 +28,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         let query = 'SELECT * FROM pos_document_template'
         const params: any[] = []
 
-        if (doc_type && ["estimate", "order", "invoice"].includes(doc_type)) {
+        if (doc_type && ["estimate", "order", "invoice", "return", "statement", "payment"].includes(doc_type)) {
             query += ' WHERE doc_type = $1'
             params.push(doc_type)
         }
@@ -51,7 +51,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         await db.connect()
         const body = req.body as {
             name: string
-            doc_type: "estimate" | "order" | "invoice"
+            doc_type: "estimate" | "order" | "invoice" | "return" | "statement" | "payment"
             field_config?: Record<string, any>
             layout_data?: any[]
             layout_guides?: any[]

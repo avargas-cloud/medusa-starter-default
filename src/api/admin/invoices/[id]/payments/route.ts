@@ -12,6 +12,18 @@ import { INVOICE_MODULE } from '../../../../../modules/invoices'
 import { FINANCE_MODULE } from '../../../../../modules/finance'
 import { registerMedusaPayment } from '../../register-medusa-payment'
 
+function getNum(val: any): number {
+    if (val === null || val === undefined) return 0;
+    if (typeof val === 'number') return val;
+    if (typeof val === 'string') return Number(val);
+    if (typeof val === 'object') {
+        if ('toNumber' in val && typeof val.toNumber === 'function') return val.toNumber();
+        if ('numeric' in val) return Number(val.numeric);
+        if ('value' in val) return Number(val.value);
+    }
+    return Number(val) || 0;
+}
+
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const id = req.params.id!
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
@@ -99,21 +111,23 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
         // 5. Re-sum all payments and update the invoice status
         const allPayments = await invoiceService.listInvoicePayments({ invoice_id: id })
-        const totalPaid = allPayments.reduce((sum: number, p: any) => sum + Number(p.amount), 0)
-        const balanceDue = Math.max(0, Number(invoice.total) - totalPaid)
+        const totalPaid = allPayments.reduce((sum: number, p: any) => sum + getNum(p.amount), 0)
+        const balanceDue = Math.max(0, getNum(invoice.total) - totalPaid)
         const newStatus = balanceDue <= 0 ? 'paid' : 'partial'
 
-        await invoiceService.updatePosInvoices(
-            { id },
-            { amount_paid: totalPaid, balance_due: balanceDue, status: newStatus }
-        )
+        await invoiceService.updatePosInvoices({
+            id,
+            amount_paid: totalPaid,
+            balance_due: balanceDue,
+            status: newStatus
+        })
 
         // 6. Register in Medusa native Payment Module (best-effort, every payment)
         const medusaPaymentId = await registerMedusaPayment(req.scope, {
             order_id:       invoice.order_id,
             amount,
             payment_method,
-            invoice_total:  Number(invoice.total),
+            invoice_total:  getNum(invoice.total),
         })
         if (medusaPaymentId) {
             await financeService.updateCustomerPayments(

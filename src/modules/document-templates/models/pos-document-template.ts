@@ -8,7 +8,7 @@ import { model } from "@medusajs/utils"
 const PosDocumentTemplate = model.define('pos_document_template', {
     id:           model.id().primaryKey(),
     name:         model.text(),                              // "Invoice Ecopowertech"
-    doc_type:     model.enum(['estimate', 'order', 'invoice']),
+    doc_type:     model.enum(['estimate', 'order', 'invoice', 'return', 'statement', 'payment']),
     is_default:   model.boolean().default(false),
     thumbnail:    model.text().nullable(),                   // base64 or Minio URL
     field_config: model.json().default({}),                 // FieldConfig object

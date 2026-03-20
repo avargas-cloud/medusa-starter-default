@@ -227,6 +227,22 @@ POST   /admin/orders/:id/cancel         (Medusa)
 | Tax no se actualiza al editar orden | ✅ RESUELTO (2026-03-16): `post-edit-sync` y `apply-discount-force` ahora respetan `pos_tax_rate=0` para EXEMPT |
 | Payment Pending vs Order Total Mismatch | ✅ RESUELTO (2026-03-17): `convert-force` recalcula explícitamente el `payment_collection.amount` basándose en la matemática del POS `(Subtotal - Discount) + Tax`. |
 
+## Changelog — Marzo 20, 2026
+
+### Bloqueo Read-Only para Órdenes Voided (Canceladas)
+
+**Problema:**
+A diferencia de los Estimates (que no tienen tracción contable real), las Órdenes en Medusa interactúan con reservas de inventario y lógicas de pagos. Si una orden era anulada (`status === 'canceled'`), la UI del POS seguía permitiendo modificar notas, correos, y agregar items, desencadenando requests REST a una orden finalizada causando errores extraños. Al mismo tiempo, el usuario carecía de un feedback visual inmediato sobre el estatus terminal de la venta.
+
+**Solución Implementada:**
+1. **Identificador `isVoided`:** Se agregó el check `const isVoided = order.order?.status === 'canceled'` directamente en la raíz de `app/(pos)/orders/[id]/page.tsx`.
+2. **Badge Visual:** El `TopBar` ahora evalúa `isVoided` como prioridad máxima antes que `isFullyInvoiced`, renderizando un badge rojo nativo de "VOIDED".
+3. **Bloqueo Selectivo en UI:**
+   - La barra inferior (Notas, Shipping, Promotions) y la tabla de cliente superior reciben las clases de Tailwind `pointer-events-none opacity-60 grayscale`. Esto asegura que el click esté físicamente desactivado pero permitiendo leer los datos legados de la orden.
+   - El `LineItemsTable` también recibe el bloqueo de opacidad, lo que significa que ya no se pueden ajustar cantidades.
+   - Los botones del Toolbar Principal (`onSave`, `onDiscard`, `onCreateInvoice`, `onPayment`) se evalúan como nulos (`!isVoided ? ... : undefined`). El componente dinámicamente esconde todos los flujos de "Escritura", dejando disponibles **únicamente opciones de solo-lectura** como Print, Email y The History panel.
+   - Todo el subset de de "Agregar Ítems" (`ItemSearch`, boton `Categories`, boton `Discounts`, btn `Comment`) usa un conditional rendering de React (`{!isVoided && ...}`) ocultándose por completo.
+
 ---
 
 ## Changelog — Marzo 19, 2026

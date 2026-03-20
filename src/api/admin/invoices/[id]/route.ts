@@ -8,6 +8,18 @@
 import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
 import { INVOICE_MODULE } from '../../../../modules/invoices'
 
+function getNum(val: any): number {
+    if (val === null || val === undefined) return 0;
+    if (typeof val === 'number') return val;
+    if (typeof val === 'string') return Number(val);
+    if (typeof val === 'object') {
+        if ('toNumber' in val && typeof val.toNumber === 'function') return val.toNumber();
+        if ('numeric' in val) return Number(val.numeric);
+        if ('value' in val) return Number(val.value);
+    }
+    return Number(val) || 0;
+}
+
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
     const id = req.params.id!
@@ -48,14 +60,17 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
 
         // Recalculate balance from existing payments
         const payments = await invoiceService.listInvoicePayments({ invoice_id: id }).catch(() => [])
-        const totalPaid = payments.reduce((sum: number, p: any) => sum + Number(p.amount), 0)
-        const balanceDue = total - totalPaid
+        const totalPaid = payments.reduce((sum: number, p: any) => sum + getNum(p.amount), 0)
+        const balanceDue = getNum(total) - totalPaid
         const newStatus = balanceDue <= 0 ? 'paid' : (totalPaid > 0 ? 'partial' : invoice.status)
 
-        await invoiceService.updatePosInvoices(
-            { id },
-            { total, balance_due: balanceDue, amount_paid: totalPaid, status: newStatus }
-        )
+        await invoiceService.updatePosInvoices({
+            id,
+            total,
+            balance_due: balanceDue,
+            amount_paid: totalPaid,
+            status: newStatus
+        })
 
         const updated = await invoiceService.retrievePosInvoice(id)
         return res.json({ invoice: updated })

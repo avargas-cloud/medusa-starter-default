@@ -146,12 +146,12 @@ module.exports = defineConfig({
         redisUrl: process.env.REDIS_URL,
         redisOptions: {
           connectTimeout: 45000,
-          keepAlive: 5000,
-          // Max 50 retries (~8min total), then stop flooding logs.
-          // Railway Redis is still reachable; this just prevents }}} spam.
+          keepAlive: 10000,
+          pingInterval: 20000, // Explicit PING to keep Railway proxy alive
+          enableOfflineQueue: true,
+          family: 4,
           retryStrategy: (times: number) => {
-            if (times > 10) return null  // stop after 10 tries (~3 min), then silence
-            return Math.min(times * 3000, 30000)  // 3s → 30s backoff
+            return Math.min(times * 3000, 30000)
           },
         },
       },
@@ -162,9 +162,11 @@ module.exports = defineConfig({
         redis: {
           redisUrl: process.env.REDIS_URL,
           connectTimeout: 45000,
-          keepAlive: 5000,
+          keepAlive: 10000,
+          pingInterval: 20000,
+          enableOfflineQueue: true,
+          family: 4,
           retryStrategy: (times: number) => {
-            if (times > 10) return null
             return Math.min(times * 3000, 30000)
           },
         },
@@ -176,9 +178,11 @@ module.exports = defineConfig({
         redisUrl: process.env.REDIS_URL,
         redisOptions: {
           connectTimeout: 45000,
-          keepAlive: 5000,
+          keepAlive: 10000,
+          pingInterval: 20000,
+          enableOfflineQueue: true,
+          family: 4,
           retryStrategy: (times: number) => {
-            if (times > 10) return null
             return Math.min(times * 3000, 30000)
           },
         },
@@ -196,9 +200,11 @@ module.exports = defineConfig({
               redisUrl: process.env.REDIS_URL,
               redisOptions: {
                 connectTimeout: 45000,
-                keepAlive: 5000,
+                keepAlive: 10000,
+                pingInterval: 20000,
+                enableOfflineQueue: true,
+                family: 4,
                 retryStrategy: (times: number) => {
-                  if (times > 10) return null
                   return Math.min(times * 3000, 30000)
                 },
               },

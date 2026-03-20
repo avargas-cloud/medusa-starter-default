@@ -138,6 +138,20 @@ La interacción entre el Store POS y la base de datos para la generación de PDF
 
 Click en fila → `Link href={'/invoices/${inv.order_id}'}` → carga la vista de detalle de la orden referenciada.
 
+## Changelog — Marzo 20, 2026
+
+### Multi-Payments y Store Credits en el UI de Invoices
+
+**Problema:**
+Previamente la tabla principal de Invoice List y la vista detallada Invoice Receipt intentaban deducir el "Payment Method" asumiendo que un Invoice recibía un sólo pago global, lo cual fallaba si el cliente usaba 50% Cash y 50% Store Credit. Adicionalmente, el `CompleteOrderModal` permitía ingresar montos aleatorios superiores a la deuda en "Cash" causando desajustes contables.
+
+**Solución Implementada:**
+1. **Recorte Dinámico de Inputs (Cap):** Las barras de Cash / Card de todos los UI limits (CompleteOrder, CapturePayment) ahora están limitadas lógicamente por un `requiredCashCents`. Si la orden totaliza $1000 y el usuario selecciona $200 de crédito a favor, las cajas limitarán la escritura de montos externos a máximo $800, y los botones de "%" calcularán base a los $800 restantes. 
+2. **Display Compuesto por Transactions:**
+   - Si un Invoice recibe fondos de más de 1 fuente, la columna de listado `/invoices` ahora renderizará `Mixed` u `Other` en el badge de Payments para protegerse.
+   - En la vista individual `[/id]`, el array de `payment_applications` se mapea renderizando renglones detallados de "Store Credit Application - ID", así como "Deposit Application" en verde antes de totalizar el gran Total.
+   - Al estar unificados bajo un `transaction_id`, el Invoice puede navegar hacia el recibo transaccional de `/transactions/:id` detallando el origen genésico de los fondos y en cuales otras facturas impactaron dichos fondos al mismo tiempo.
+
 ---
 
 ## Changelog — Marzo 18, 2026
