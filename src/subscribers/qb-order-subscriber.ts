@@ -125,6 +125,11 @@ async function qbOrderSubscriber({ event, container }: SubscriberArgs<any>) {
             case "pos.invoice.created":
                 await handleFulfillmentCreated(event.data, orderModule, customerModule, container, logger)
                 break
+            case "pos.payment.created":
+                // Route directly to the isolated qbPosPaymentSubscriber file
+                const qbPosPaymentSubscriber = require("./qb-pos-payment-subscriber").default
+                await qbPosPaymentSubscriber({ event, container })
+                break
             case "order.canceled":
                 await handleOrderCanceled(event.data, orderModule, logger)
                 break
@@ -598,6 +603,7 @@ async function handleFulfillmentCreated(
         paymentAmount: fulfillmentAmount,
         prebuiltItems,
         salesTaxCode,
+        memo: order.metadata?.pos_notes ? `POS Note: ${order.metadata.pos_notes}` : undefined,
     })
 
     if (result.skipped) {
@@ -845,6 +851,7 @@ export const config: SubscriberConfig = {
         "order.canceled",
         "order.customer_transferred",
         "pos.invoice.created",
+        "pos.payment.created",
     ],
     context: {
         subscriberId: "qb-order-subscriber",

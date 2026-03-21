@@ -577,6 +577,7 @@ export async function processInvoiceInQb(invoice: {
     paymentAmount?: number
     prebuiltItems?: QbOrderItem[] // Used if no qbSoTxnId
     salesTaxCode?: string         // Used if no qbSoTxnId
+    memo?: string
 }): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
@@ -601,6 +602,7 @@ export async function processInvoiceInQb(invoice: {
         LinkToTxnID: invoice.qbSoTxnId,
         items: invoice.prebuiltItems,
         salesTaxCode: invoice.salesTaxCode,
+        memo: invoice.memo || `Medusa Invoice #${invoice.orderDisplayId || invoice.orderId}`,
     })
 
     if (!invResult.success) {

@@ -1,4 +1,4 @@
-import { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
+import { SubscriberArgs } from "@medusajs/framework"
 import { Modules, ContainerRegistrationKeys } from "@medusajs/utils"
 import { FINANCE_MODULE } from "../modules/finance"
 import { processPaymentCaptureInQb, ensureCustomerInQb } from "../lib/quickbooks/order-flow-core"
@@ -23,7 +23,7 @@ export default async function qbPosPaymentSubscriber({ event, container }: Subsc
 
     try {
         const query = container.resolve(ContainerRegistrationKeys.QUERY)
-        const financeService = container.resolve(FINANCE_MODULE)
+        const financeService = container.resolve(FINANCE_MODULE) as any
         const customerModule = container.resolve(Modules.CUSTOMER)
 
         // 1. Fetch the Payment
@@ -157,9 +157,4 @@ export default async function qbPosPaymentSubscriber({ event, container }: Subsc
     }
 }
 
-export const config: SubscriberConfig = {
-    event: "pos.payment.created",
-    context: {
-        subscriberId: "qb-pos-payment-subscriber",
-    },
-}
+

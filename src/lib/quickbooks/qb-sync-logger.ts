@@ -25,7 +25,7 @@
  */
 
 import { Client } from "pg"
-import os from "os"
+import * as os from "os"
 
 /** Identifies where this code is running: Railway service name or local hostname */
 const SERVER_LABEL: string = process.env.RAILWAY_SERVICE_NAME
