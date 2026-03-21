@@ -28,6 +28,7 @@ export interface QbOrderItem {
     productName?: string // QB Item FullName fallback (e.g. "SHIPPING & HANDLING")
     quantity?: number   // optional — QB Subtotal/Discount item types must NOT have quantity (Error 3060)
     price?: number      // in dollars (e.g., 29.99) — optional, QB uses default if omitted
+    amount?: number     // in dollars (e.g., 59.98) — optional, mathematically price * quantity
     unitOfMeasure?: string  // e.g. "each" — prevents QB UOM multiplication when price is set
     desc?: string
     /** When true, the QBXML builder skips InventorySiteRef (required for non-inventory items like shipping) */
@@ -90,6 +91,7 @@ export interface QbCreateInvoicePayload {
     date?: string           // "YYYY-MM-DD"
     LinkToTxnID?: string    // Sales Order TxnID (for linked invoices)
     templateRef?: string
+    memo?: string           // Standard Memo field in QB
     items?: QbOrderItem[]   // Only needed for standalone invoices (not linked to SO)
     taxExempt?: boolean     // true → CustomerSalesTaxCodeRef = "Exempt"
     salesTaxCode?: string   // e.g. "Sale Tax 7%" — overrides customer default

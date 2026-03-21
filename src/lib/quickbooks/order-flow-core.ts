@@ -220,6 +220,7 @@ export function buildQbItems(items: MedusaOrderForQb["items"], metadata?: Record
                     productId: item.variant!.metadata!.quickbooks_id as string,
                     quantity: item.quantity,
                     price: effectiveUnitPriceCents / 100,  // cents → dollars for QB
+                    amount: (effectiveUnitPriceCents * item.quantity) / 100,
                     unitOfMeasure: (item.variant?.metadata?.quickbooks_uom as string) || undefined,
                     desc: sanitizeForQb(
                         item.metadata?.sales_description
@@ -289,6 +290,7 @@ export function buildQbOrderDiscountLines(
             // IMPORTANT: QB Discount item type does NOT accept Quantity either. Omit it; use price only.
             productName: "Discount",
             price: discountDollars,
+            amount: discountDollars,
             desc: sanitizeForQb(`Order Discount${pctStr}`),
             noSite: true,
         },
@@ -331,6 +333,7 @@ export function buildShippingQbItem(shippingMethods: any[], shippingItemIdOverri
         productId: shippingItemIdOverride || process.env.QB_SHIPPING_ITEM_ID || "800006A3-1395258131",
         quantity: 1,
         price: amount,   // dollars → QB sends Amount = price * qty
+        amount: amount,
         desc: name,
         noSite: true,   // shipping is a non-inventory item — QB error 3140 if Site is set
     }

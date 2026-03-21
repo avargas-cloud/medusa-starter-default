@@ -59,6 +59,9 @@ import {
 const LOG_PREFIX = "[QB-ORDER]"
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
 
+/** Helper: safely extract floating point numbers from Medusa BigNumber objects */
+const getFloat = (val: any) => Number(val?.numeric_ ?? val) || 0
+
 // Sales Channel IDs from .env
 // POS orders skip the subscriber — the POS app calls the QB bridge directly.
 // Web Store orders go through the subscriber as usual.
@@ -119,6 +122,7 @@ async function qbOrderSubscriber({ event, container }: SubscriberArgs<any>) {
                 await handlePaymentCaptured(event.data, orderModule, customerModule, logger)
                 break
             case "order.fulfillment_created":
+            case "pos.invoice.created":
                 await handleFulfillmentCreated(event.data, orderModule, customerModule, container, logger)
                 break
             case "order.canceled":
@@ -554,14 +558,19 @@ async function handleFulfillmentCreated(
             .filter((item: any) => (item.quantity ?? 0) > 0)
             .map((item: any) => ({
                 ...item,
-                unit_price: Math.round((item.unit_price || 0) * 100),
-                subtotal: undefined, // Force buildQbItems to use original unit_price, ignore item-level discounts
+                unit_price: Math.round(getFloat(item.unit_price) * 100),
+                subtotal: item.subtotal !== undefined ? Math.round(getFloat(item.subtotal) * 100) : undefined, // Force buildQbItems to use original unit_price, ignore item-level discounts
             }))
 
         prebuiltItems = buildQbItems(activeItems, order.metadata)
 
+        const shippingMethodsFormatted = ((order as any).shipping_methods || []).map((sm: any) => ({
+            ...sm,
+            amount: getFloat(sm.amount)
+        }))
+
         const shippingItem = buildShippingQbItem(
-            (order as any).shipping_methods || [],
+            shippingMethodsFormatted,
             qbConfig.shippingItemId
         )
         if (shippingItem) {
@@ -570,13 +579,13 @@ async function handleFulfillmentCreated(
         }
 
         if (orderDiscountTotal > 0) {
-            const orderSubtotal = Math.round((order.subtotal || 0) * 100)
+            const orderSubtotal = Math.round(getFloat(order.subtotal) * 100)
             const discountPercent = orderSubtotal > 0 ? (orderDiscountTotal / orderSubtotal) * 100 : null
             buildQbOrderDiscountLines(orderDiscountTotal, discountPercent).forEach(l => prebuiltItems!.push(l))
             logger.info(`${LOG_PREFIX} Discount lines added to standalone invoice: -$${(orderDiscountTotal/100).toFixed(2)}`)
         }
 
-        const hasTax = order.tax_total && order.tax_total > 0
+        const hasTax = getFloat(order.tax_total) > 0
         salesTaxCode = hasTax ? qbConfig.defaultSalesTaxCode : undefined
     }
 
@@ -835,6 +844,7 @@ export const config: SubscriberConfig = {
         "order.fulfillment_created",
         "order.canceled",
         "order.customer_transferred",
+        "pos.invoice.created",
     ],
     context: {
         subscriberId: "qb-order-subscriber",

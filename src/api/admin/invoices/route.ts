@@ -8,7 +8,7 @@ import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
 import { INVOICE_MODULE } from '../../../modules/invoices'
 import { FINANCE_MODULE } from '../../../modules/finance'
 import { registerMedusaPayment } from './register-medusa-payment'
-
+import { Modules } from '@medusajs/utils'
 // ── GET /admin/invoices?order_id=:id ─────────────────────────────────────────
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
@@ -72,8 +72,8 @@ interface CreateInvoiceBody {
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
     const financeService = req.scope.resolve(FINANCE_MODULE)
+    const eventBus = req.scope.resolve(Modules.EVENT_BUS)
     const body = req.body as CreateInvoiceBody
-
 
     if (!body.order_id || !body.customer_id || !body.items?.length) {
         return res.status(400).json({ error: 'order_id, customer_id, and items are required' })
@@ -125,6 +125,17 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             }))
         )
     }
+    
+    // Helper mapper for methods
+    function mapPosMethodToDbEnum(method: string): any {
+        if (['visa', 'mastercard', 'discover', 'amex', 'capital_one', 'debit_card', 'card'].includes(method)) return 'card';
+        if (['e_check', 'checking_account', 'transfer', 'wire_transfer', 'ach'].includes(method)) return 'ach';
+        if (['paypal', 'money_order'].includes(method)) return 'other';
+        if (method === 'credit') return 'credit_memo';
+        if (['cash', 'check', 'zelle'].includes(method)) return method;
+        return 'other';
+    }
+
     // Step 3: If an initial payment amount is sent, record it in ALL ledgers
     if (body.amount_paid > 0) {
         const paymentDate = new Date()
@@ -177,15 +188,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 }
             }
         } else {
-function mapPosMethodToDbEnum(method: string): any {
-    if (['visa', 'mastercard', 'discover', 'amex', 'capital_one', 'debit_card'].includes(method)) return 'card';
-    if (['e_check', 'checking_account', 'transfer', 'wire_transfer'].includes(method)) return 'ach';
-    if (['paypal', 'money_order'].includes(method)) return 'other';
-    if (method === 'credit') return 'credit_memo';
-    if (['cash', 'check', 'zelle'].includes(method)) return method;
-    return 'other';
-}
-
             // B. Finance Module global AR Ledger (New Money via Cash/Card/etc)
             const customerPayment = await financeService.createCustomerPayments({
                 customer_id: body.customer_id,
@@ -199,6 +201,20 @@ function mapPosMethodToDbEnum(method: string): any {
                 type: 'payment',
                 status: 'applied',
                 medusa_payment_synced: false, // will be updated after Medusa sync
+                metadata: {
+                    deposit_type: 'INVOICE',
+                    order_id: body.order_id,
+                    order_display_id: body.order_display_id,
+                    pos_payment_method: body.payment_method,
+                    invoices_affected: [(invoice as any).id],
+                    invoices_affected_friendly: [String(body.order_display_id)]
+                }
+            })
+
+            // Fire event so QuickBooks catches the POS payment immediately
+            await eventBus.emit({
+                name: "pos.payment.created",
+                data: { id: customerPayment.id }
             })
 
             // C. Finance Application
@@ -226,6 +242,16 @@ function mapPosMethodToDbEnum(method: string): any {
             }
         }
     }
+
+    // Fire custom Invoice created event for QB Sync Smart Lazy Evaluation
+    await eventBus.emit({
+        name: "pos.invoice.created",
+        data: {
+            order_id: body.order_id,
+            invoice_id: (invoice as any).id,
+            items: body.items,
+        }
+    })
 
     // Re-fetch with relations for the response
     const full = await invoiceService.retrievePosInvoice((invoice as any).id, {
