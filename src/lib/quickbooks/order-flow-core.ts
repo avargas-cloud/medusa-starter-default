@@ -36,6 +36,8 @@ import { buildQbCustomerName } from "./build-customer-name"
 import {
     checkBridgeHealth,
     createCustomerInQb,
+    getCustomerEditSequence,
+    updateCustomerInQb,
     createSalesOrderInQb,
     convertEstimateToSalesOrder,
     receivePaymentInQb,
@@ -68,10 +70,16 @@ export interface MedusaOrderForQb {
         phone?: string | null
         metadata?: Record<string, any>
         addresses?: Array<{
+            id: string
             address_1?: string
+            address_2?: string
             city?: string
             province?: string
             postal_code?: string
+            is_default_billing?: boolean
+            is_default_shipping?: boolean
+            // metadata fallback (Medusa stores flags here too)
+            metadata?: Record<string, any>
         }>
     }
     items?: Array<{
@@ -136,9 +144,27 @@ export async function ensureCustomerInQb(
 
     log(`${prefix} Customer ${customer.id} has no qb_list_id — creating in QB...`)
 
-    const billingAddress = customer.addresses?.[0]
+    const addrs = customer.addresses ?? []
+
+    // Resolve billing address: prefer is_default_billing flag, fall back to first address
+    const billingAddress =
+        addrs.find(a => a.is_default_billing || a.metadata?.is_default_billing) ??
+        addrs[0]
+
+    // Resolve shipping address: prefer is_default_shipping flag, fall back to first address
+    const shippingAddress =
+        addrs.find(a => a.is_default_shipping || a.metadata?.is_default_shipping) ??
+        addrs[0]
+
+    const mapAddr = (a: typeof addrs[0] | undefined) =>
+        a ? { Addr1: a.address_1, City: a.city, State: a.province, PostalCode: a.postal_code } : undefined
+
     const qbName = buildQbCustomerName(customer)
 
+    // QB Enterprise 2012 native fields (no custom fields via QBXML):
+    // Name, FirstName, LastName, CompanyName, Email, Phone,
+    // BillAddress, ShipAddress, CustomerType, PriceLevel,
+    // AltContact ("Alt. Contact" field), Cc ("Cc" field)
     const createResult = await createCustomerInQb({
         Name: qbName,
         FirstName: customer.first_name || undefined,
@@ -146,12 +172,13 @@ export async function ensureCustomerInQb(
         CompanyName: customer.company_name || undefined,
         Email: customer.email,
         Phone: customer.phone || undefined,
-        BillAddress: billingAddress ? {
-            Addr1: billingAddress.address_1,
-            City: billingAddress.city,
-            State: billingAddress.province,
-            PostalCode: billingAddress.postal_code,
-        } : undefined,
+        BillAddress: mapAddr(billingAddress),
+        ShipAddress: mapAddr(shippingAddress),
+        CustomerType: customer.metadata?.qb_customer_type || undefined,
+        PriceLevel: customer.metadata?.qb_price_level || undefined,
+        AltContact: customer.metadata?.alt_contact || undefined,
+        AltPhone: customer.metadata?.alt_phone || undefined,
+        // Note: <Cc> is not valid in QBXML 10.0 — stored in Medusa metadata only
     })
 
     if (!createResult.success) {
@@ -177,6 +204,75 @@ export async function ensureCustomerInQb(
     }
 
     return { success: true, qbCustomerId }
+}
+
+/**
+ * Syncs all editable fields from a Medusa customer to QuickBooks via CustomerMod.
+ * If the customer has no qb_list_id, creates it first via ensureCustomerInQb.
+ *
+ * Address mapping:
+ *   - default_billing address → BillAddress
+ *   - all other addresses     → ShipToAddress[] (keyed by Medusa address.id)
+ *     On each sync, the FULL list is sent, so QB replaces ShipTo entries by Name:
+ *     existing ShipTo with the same Name = updated; new ids = added.
+ */
+export async function syncCustomerToQb(
+    customer: NonNullable<MedusaOrderForQb["customer"]>,
+    customerModule: any,
+    log: (msg: string) => void = console.log
+): Promise<{ success: boolean; qbCustomerId?: string; error?: string }> {
+    const prefix = DRY_RUN ? "[QB DRY RUN]" : "[QB]"
+
+    // No qb_list_id → create first
+    const qbListId: string = customer.metadata?.qb_list_id
+    if (!qbListId) {
+        log(`${prefix} Customer ${customer.id} has no qb_list_id — creating via syncCustomerToQb`)
+        return ensureCustomerInQb(customer, customerModule, log)
+    }
+
+    log(`${prefix} Syncing customer ${customer.id} → QB ListID ${qbListId}`)
+
+    // ── Get QB EditSequence (required for CustomerMod) ─────────────────
+    const editSequence = await getCustomerEditSequence(qbListId, log)
+    if (!editSequence) {
+        return { success: false, error: `Could not get EditSequence for QB customer ${qbListId}` }
+    }
+
+    // ── Map Medusa addresses to QB address types ────────────────────────
+    const addrs = customer.addresses ?? []
+
+    const billingAddr = addrs.find(a => a.is_default_billing || a.metadata?.is_default_billing)
+    const shippingAddr = addrs.find(a => !(a.is_default_billing || a.metadata?.is_default_billing))
+
+    const mapAddr = (a: typeof addrs[0] | undefined) =>
+        a ? { Addr1: a.address_1, Addr2: a.address_2, City: a.city, State: a.province, PostalCode: a.postal_code } : undefined
+
+    const qbName = buildQbCustomerName(customer)
+
+    // ── Send CustomerMod ───────────────────────────────────────────────
+    const modResult = await updateCustomerInQb({
+        Name: qbName,
+        ListID: qbListId,
+        EditSequence: editSequence,
+        FirstName: customer.first_name || undefined,
+        LastName: customer.last_name || undefined,
+        CompanyName: customer.company_name || undefined,
+        Email: customer.email,
+        Phone: customer.phone || undefined,
+        BillAddress: mapAddr(billingAddr),
+        ShipAddress: mapAddr(shippingAddr),
+        CustomerType: customer.metadata?.qb_customer_type || undefined,
+        PriceLevel: customer.metadata?.qb_price_level || undefined,
+        AltContact: customer.metadata?.alt_contact || undefined,
+        AltPhone: customer.metadata?.alt_phone || undefined,
+    }, log)
+
+    if (!modResult.success) {
+        return { success: false, error: modResult.error }
+    }
+
+    log(`${prefix} ✅ Customer ${customer.id} synced to QB successfully`)
+    return { success: true, qbCustomerId: qbListId }
 }
 
 // ─── Shared: Build QB Items ────────────────────────────────────────────────────
