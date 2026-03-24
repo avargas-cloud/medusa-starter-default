@@ -1,4 +1,4 @@
-import { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
+import { SubscriberArgs } from "@medusajs/framework"
 import { Modules, ContainerRegistrationKeys } from "@medusajs/utils"
 import { FINANCE_MODULE } from "../../../modules/finance"
 import { processPaymentCaptureInQb, ensureCustomerInQb } from "../order-flow-core"
