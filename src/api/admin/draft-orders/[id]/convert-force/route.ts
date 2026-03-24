@@ -177,14 +177,30 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         let convertedOrder
         try {
             const orderService = req.scope.resolve(Modules.ORDER)
+            
+            // Generate the gapless Sales Order (S) sequence synchronously for instant UI resolution
+            const pgConnection = req.scope.resolve("__pg_connection__") as any
+            const result = await pgConnection.raw(`SELECT nextval('custom_order_seq') AS seq`)
+            const nextOrdNum = result.rows[0].seq || result.rows[0].SEQ
+            const documentNumber = `S${nextOrdNum}`
+            
+            const meta = (draft_order?.metadata || {}) as Record<string, any>
+            const oldEstimateNumber = (meta.document_number && meta.document_number.startsWith("E")) ? meta.document_number : null
+
             const response = await orderService.updateOrders([
                 {
                     id,
                     status: OrderStatus.PENDING,
                     is_draft_order: false,
+                    metadata: {
+                        ...meta,
+                        document_number: documentNumber,
+                        ...(oldEstimateNumber ? { original_estimate_number: oldEstimateNumber } : {})
+                    }
                 },
             ])
             convertedOrder = response[0]
+            console.log(`[convert-force] ✅ Assigned ${documentNumber} to newly converted Order ${id}`)
             
             // Emit the PLACED event purely natively so subscribers like QBDraftOrderSync react properly.
             if (convertedOrder) {

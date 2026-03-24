@@ -1,0 +1,263 @@
+import { ContainerRegistrationKeys } from "@medusajs/utils"
+import { getDbPool } from "../../../api/utils/db-pool"
+import { processInvoiceInQb, buildQbItems, buildShippingQbItem, buildQbOrderDiscountLines } from "../order-flow-core"
+import { buildInvoicePatch, getEstimateTxnId, getSoTxnId, getLatestPaymentTxnId } from "../qb-metadata-types"
+import { LOG_PREFIX, getQbConfig, getFloat } from "./utils"
+import { handleOrderPlaced } from "./handle-order-placed"
+
+export async function handleFulfillmentCreated(
+    data: any,
+    orderModule: any,
+    customerModule: any,
+    _container: any,
+    logger: any
+) {
+    const orderId = data.order_id || data.id
+    logger.info(`${LOG_PREFIX} ── order.fulfillment_created → orderId=${orderId} ──`)
+    logger.info(`${LOG_PREFIX} Fulfillment event data: ${JSON.stringify(data)}`)
+
+    let order: any
+    try {
+        const query = _container.resolve(ContainerRegistrationKeys.QUERY)
+        const { data: [fetchedOrder] } = await query.graph({
+            entity: "order",
+            fields: [
+                "id", "display_id", "status", "metadata", "tax_total", "total",
+                "sales_channel_id",
+                "customer_id",
+                "subtotal",
+                "discount_total",
+                "promotions.*",
+                "promotions.application_method.*",
+                "items.*",
+                "items.item.unit_price",
+                "items.variant.*",
+                "items.variant.metadata",
+                "customer.*",
+                "customer.metadata",
+                "shipping_methods.*"
+            ],
+            filters: { id: orderId }
+        })
+
+        if (!fetchedOrder) throw new Error(`Query returned no order for id ${orderId}`)
+        order = fetchedOrder
+        logger.info(`${LOG_PREFIX} Order fetched for Invoice: #${order.display_id}, customer_id=${order.customer_id}`)
+        logger.info(`${LOG_PREFIX} Order metadata: ${JSON.stringify(order.metadata || {})}`)
+    } catch (err: any) {
+        logger.error(`${LOG_PREFIX} ❌ Failed to fetch order ${orderId}: ${err.message}`)
+        return
+    }
+
+    let qbCustomerId: string | undefined = order.metadata?.qb_list_id
+
+    if (!qbCustomerId && order.customer_id) {
+        logger.info(`${LOG_PREFIX} qb_list_id not in order.metadata — fetching customer ${order.customer_id}...`)
+        try {
+            const customer = await customerModule.retrieveCustomer(order.customer_id)
+            qbCustomerId = customer.metadata?.qb_list_id
+            logger.info(`${LOG_PREFIX} Customer metadata: ${JSON.stringify(customer.metadata || {})}`)
+        } catch (custErr: any) {
+            logger.warn(`${LOG_PREFIX} ⚠️ Could not fetch customer: ${custErr.message}`)
+        }
+    }
+
+    let qbSoTxnId: string | undefined = getSoTxnId(order.metadata)
+    const qbPaymentTxnId: string | undefined = getLatestPaymentTxnId(order.metadata)
+
+    logger.info(`${LOG_PREFIX} QB data — customerId=${qbCustomerId ?? "MISSING"}, soTxnId=${qbSoTxnId ?? "MISSING"}, paymentTxnId=${qbPaymentTxnId ?? "none"}`)
+
+    if (!qbCustomerId) {
+        logger.warn(`${LOG_PREFIX} ❌ Missing required qb_list_id for invoice creation.`)
+        return
+    }
+
+    let fulfillmentAmount = order.total || 0
+    let isPartial = false
+    let fulfillmentItems: any[] = data.items && Array.isArray(data.items) ? data.items : []
+
+    if (data.fulfillment_id && fulfillmentItems.length === 0) {
+        try {
+            const query = _container.resolve(ContainerRegistrationKeys.QUERY)
+            const { data: [fulfillment] } = await query.graph({
+                entity: "fulfillment",
+                fields: ["items.*"],
+                filters: { id: data.fulfillment_id }
+            })
+            if (fulfillment && fulfillment.items) {
+                fulfillmentItems = fulfillment.items
+            }
+        } catch (e: any) {
+            logger.warn(`${LOG_PREFIX} Failed to fetch fulfillment items: ${e.message}`)
+        }
+    }
+
+    if (fulfillmentItems.length > 0) {
+        const orderItemsMap = new Map<string, any>((order.items || []).map((i: any) => [i.id, i]))
+        const partialTotal = fulfillmentItems.reduce((sum: number, fi: any) => {
+            const orderItem = orderItemsMap.get(fi.item_id || fi.id)
+            if (!orderItem) return sum
+            return sum + (orderItem.unit_price * fi.quantity)
+        }, 0)
+        
+        const totalOrderQty = (order.items || []).reduce((sum: number, i: any) => sum + i.quantity, 0)
+        const fulfillmentQty = fulfillmentItems.reduce((sum: number, fi: any) => sum + fi.quantity, 0)
+        
+        if (fulfillmentQty < totalOrderQty) {
+            isPartial = true
+        }
+
+        if (partialTotal > 0) fulfillmentAmount = partialTotal
+        const fAmountFloat = getFloat(fulfillmentAmount)
+        const oTotalFloat = getFloat(order.total || 0)
+        logger.info(`${LOG_PREFIX} Fulfillment: $${fAmountFloat.toFixed(2)} of $${oTotalFloat.toFixed(2)} total (isPartial: ${isPartial})`)
+    } else {
+        const fAmountFloat = getFloat(fulfillmentAmount)
+        logger.info(`${LOG_PREFIX} Full fulfillment: $${fAmountFloat.toFixed(2)} (no item details resolved)`)
+    }
+
+    const qbEstimateTxnId = getEstimateTxnId(order.metadata)
+
+    if (!qbSoTxnId) {
+        if (isPartial) {
+            logger.info(`${LOG_PREFIX} ⚠️ Partial fulfillment detected but NO Sales Order exists yet! Real-Time Smart Lazy Evaluation: Forcing Sales Order creation before Invoice...`)
+            await handleOrderPlaced({ id: orderId }, orderModule, customerModule, _container, logger, true)
+            
+            const refreshedOrder = await orderModule.retrieveOrder(orderId)
+            qbSoTxnId = getSoTxnId(refreshedOrder.metadata || {})
+            logger.info(`${LOG_PREFIX} 🔄 Post-Lazy-Eval soTxnId=${qbSoTxnId ?? "FAILED TO CREATE"}`)
+        } else if (qbEstimateTxnId) {
+            logger.info(`${LOG_PREFIX} ℹ️ 100% fulfillment derived from Estimate. Linking Invoice directly to Estimate ${qbEstimateTxnId} (skipping SO).`)
+        } else {
+            logger.info(`${LOG_PREFIX} ℹ️ No linked documents found (100% fulfillment) — creating a STANDALONE INVOICE directly.`)
+        }
+    }
+
+    const linkedTxnId = qbSoTxnId || (!isPartial ? qbEstimateTxnId : undefined)
+
+    let prebuiltItems: any[] | undefined
+    let salesTaxCode: string | undefined
+
+    if (!linkedTxnId || (linkedTxnId === qbSoTxnId && isPartial)) {
+        const qbConfig = await getQbConfig()
+        const orderDiscountTotal = Math.round((order.discount_total || 0) * 100)
+
+        const activeItems = (order.items || [])
+            .filter((item: any) => {
+                 if (linkedTxnId === qbSoTxnId && isPartial) {
+                     const fi = fulfillmentItems.find((i: any) => {
+                         if (i.item_id && i.item_id === item.id) return true
+                         if (i.id && i.id === item.id) return true
+                         if (i.variant_id && i.variant_id === item.variant_id) return true
+                         if (i.sku && item.variant?.sku && i.sku === item.variant.sku) return true
+                         return false
+                     })
+                     if (!fi || fi.quantity <= 0) return false
+                     item.fulfillment_quantity = fi.quantity
+                     return true
+                 }
+                 return (item.quantity ?? 0) > 0
+            })
+            .map((item: any) => ({
+                ...item,
+                quantity: item.fulfillment_quantity ?? item.quantity,
+                unit_price: Math.round(getFloat(item.unit_price) * 100),
+                subtotal: item.subtotal !== undefined ? Math.round(getFloat(item.subtotal) * 100) : undefined,
+            }))
+
+        prebuiltItems = buildQbItems(activeItems, order.metadata)
+
+        const shippingMethodsFormatted = ((order as any).shipping_methods || []).map((sm: any) => ({
+            ...sm,
+            amount: getFloat(sm.amount)
+        }))
+        const shippingItem = buildShippingQbItem(
+            shippingMethodsFormatted,
+            qbConfig.shippingItemId
+        )
+        if (shippingItem) {
+            prebuiltItems.push(shippingItem)
+            logger.info(`${LOG_PREFIX} Shipping line added for invoice: $${shippingItem.price?.toFixed(2)}`)
+        }
+
+        if (orderDiscountTotal > 0) {
+            const orderSubtotal = Math.round(getFloat(order.subtotal) * 100)
+            const discountPercent = orderSubtotal > 0 ? (orderDiscountTotal / orderSubtotal) * 100 : null
+            buildQbOrderDiscountLines(orderDiscountTotal, discountPercent).forEach(l => prebuiltItems!.push(l))
+            logger.info(`${LOG_PREFIX} Discount lines added to invoice: -$${(orderDiscountTotal/100).toFixed(2)}`)
+        }
+
+        if (linkedTxnId === qbSoTxnId && isPartial) {
+            const { getSalesOrderDetailsFromQb } = require("../../quickbooks/qb-bridge-client")
+            const soDetails = await getSalesOrderDetailsFromQb(linkedTxnId)
+            
+            if (soDetails.success && soDetails.linesByProductId) {
+                logger.info(`[QB-DEBUG] linesByProductId: ${JSON.stringify(soDetails.linesByProductId)}`)
+                logger.info(`[QB-DEBUG] prebuiltItems: ${JSON.stringify(prebuiltItems)}`)
+                prebuiltItems.forEach((item: any) => {
+                    const pid = item.productId
+                    if (pid && soDetails.linesByProductId![pid]) {
+                        item.LinkToTxnLineID = soDetails.linesByProductId![pid]
+                    }
+                })
+                logger.info(`${LOG_PREFIX} Successfully mapped ${prebuiltItems.filter(i => i.LinkToTxnLineID).length} TxnLineIDs for Partial Invoice!`)
+            } else {
+                logger.warn(`${LOG_PREFIX} ⚠️ Failed to fetch SO details for Partial Invoice TxnLineIDs: ${soDetails.error}`)
+            }
+        }
+
+        const hasTax = getFloat(order.tax_total) > 0
+        salesTaxCode = hasTax ? qbConfig.defaultSalesTaxCode : undefined
+    }
+    const pool = getDbPool()
+    let memo = order.metadata?.pos_notes ? `POS Note: ${order.metadata.pos_notes}` : undefined
+    
+    try {
+        const invRes = await pool.query(
+            `SELECT invoice_number FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`,
+            [data.fulfillment_id]
+        )
+        const seq = invRes.rows[0]?.invoice_number
+        if (seq) {
+            memo = memo ? `${memo} | Invoice INV${seq}` : `Invoice INV${seq}`
+        }
+    } catch (e) {
+    }
+
+    const result = await processInvoiceInQb({
+        orderId,
+        orderDisplayId: order.display_id,
+        qbCustomerId,
+        qbSoTxnId: linkedTxnId,
+        qbPaymentTxnId,
+        paymentAmount: getFloat(fulfillmentAmount),
+        prebuiltItems,
+        salesTaxCode,
+        memo,
+    })
+
+    if (result.skipped) {
+        logger.info(`${LOG_PREFIX} ⏭️ Invoice skipped (QB disabled)`)
+        return
+    }
+    if (result.error) {
+        logger.error(`${LOG_PREFIX} ❌ processInvoiceInQb error: ${result.error}`)
+        return
+    }
+
+    if (result.txnId || result.operationId) {
+        try {
+            const fulfillmentId: string | null = (data.fulfillment_id as string | undefined) ?? null
+            const patch = buildInvoicePatch(order.metadata || {}, {
+                txnId:         result.txnId || null,
+                refNumber:     result.refNumber || null,
+                operationId:   result.operationId || null,
+                fulfillmentId,
+            })
+            await orderModule.updateOrders(orderId, { metadata: patch })
+            logger.info(`${LOG_PREFIX} ✅ Saved invoice metadata — TxnID=${result.txnId}, Ref=${result.refNumber}, ful=${fulfillmentId}`)
+        } catch (metaErr: any) {
+            logger.error(`${LOG_PREFIX} ⚠️ Failed to save invoice metadata: ${metaErr.message}`)
+        }
+    }
+}

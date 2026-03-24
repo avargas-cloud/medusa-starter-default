@@ -1,0 +1,224 @@
+import { DRY_RUN, bridgeFetch, pollRawOperationResult } from "./core"
+import { QbCreateEstimatePayload, QbUpdateEstimatePayload, QbConvertEstimatePayload, QbBridgeResult, QbAsyncResult } from "./types"
+
+/**
+ * Creates an Estimate in QuickBooks (async — used for Draft Orders).
+ * Returns operationId. Poll for txnId (qb_estimate_txn_id) + refNumber (qb_estimate_ref).
+ */
+export async function createEstimateInQb(
+    payload: QbCreateEstimatePayload
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        console.log(`[QB DRY RUN] Would create Estimate for:`, payload.customerId, `(${payload.items.length} items)`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN", txnId: "DRY_RUN_ESTIMATE_TXNID", refNumber: "DRY_RUN_REF" } }
+    }
+
+    try {
+        const body = {
+            ...payload,
+            templateRef: payload.templateRef || undefined,  // Only send if explicitly set
+        }
+        const data = await bridgeFetch("POST", "/api/estimates", body)
+        const operationId = data?.operationId
+        if (!operationId) throw new Error("Bridge did not return an operationId for Estimate")
+        return { success: true, data: { operationId } }
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}
+
+/**
+ * Updates an existing QB Estimate (for Draft Order re-sync).
+ */
+export async function updateEstimateInQb(
+    payload: QbUpdateEstimatePayload
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        console.log(`[QB DRY RUN] Would update Estimate ${payload.txnId} (${payload.items.length} items)`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN", txnId: payload.txnId } }
+    }
+
+    try {
+        console.log(`[QB] Querying estimate ${payload.txnId} to get EditSequence...`)
+        const queryResp = await bridgeFetch("GET", `/api/estimates/${payload.txnId}`)
+        const queryOpId = queryResp?.operationId
+        if (!queryOpId) throw new Error("Bridge did not return operationId for estimate query")
+
+        const rawResult = await pollRawOperationResult(queryOpId)
+
+        const estRet =
+            rawResult?.QBXML?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+            rawResult?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+            rawResult?.EstimateRet ??
+            rawResult?.EstimateQueryRs?.EstimateRet
+
+        if (!estRet?.EditSequence) {
+            throw new Error(`Could not extract EditSequence from estimate query result. Raw: ${JSON.stringify(rawResult).slice(0, 200)}`)
+        }
+
+        const editSequence = estRet.EditSequence as string
+        const existingLines = estRet.EstimateLineRet
+        const linesArr: any[] = Array.isArray(existingLines)
+            ? existingLines
+            : (existingLines ? [existingLines] : [])
+
+        const qbLinesByProductId: Record<string, string> = {}
+        for (const line of linesArr) {
+            const productId = line?.ItemRef?.ListID
+            const txnLineId = line?.TxnLineID
+            if (productId && txnLineId) qbLinesByProductId[productId] = txnLineId
+        }
+
+        const modItems = payload.items.map(item => {
+            const pid = item.productId
+            const txnLineId = pid ? qbLinesByProductId[pid] : undefined
+            return {
+                ...(txnLineId ? { TxnLineID: txnLineId } : {}),
+                ...(pid ? { productId: pid } : {}),
+                ...(item.productName ? { productName: item.productName } : {}),
+                quantity: item.quantity,
+                price: item.price,
+                desc: item.desc,
+            }
+        })
+
+        const modResp = await bridgeFetch("PUT", `/api/estimates/${payload.txnId}`, {
+            EditSequence: editSequence,
+            items: modItems,
+            memo: payload.memo,
+            ...(payload.isActive !== undefined ? { IsActive: payload.isActive } : {}),
+            ...(payload.taxExempt === true ? { taxExempt: true } : {}),
+            ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
+        })
+
+        const operationId = modResp?.operationId
+        if (!operationId) throw new Error("Bridge did not return operationId for estimate update (mod)")
+
+        console.log(`[QB] ✅ Estimate update queued. OperationID: ${operationId}`)
+        return { success: true, data: { operationId, txnId: payload.txnId } }
+
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}
+
+/**
+ * Converts an existing Estimate into a Sales Order (async).
+ */
+export async function convertEstimateToSalesOrder(
+    payload: QbConvertEstimatePayload
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        console.log(`[QB DRY RUN] Would convert Estimate ${payload.estimateTxnId} to Sales Order`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN", txnId: "DRY_RUN_CONVERT_TXNID", refNumber: "DRY_RUN_REF" } }
+    }
+
+    try {
+        const data = await bridgeFetch("POST", "/api/sales-orders/convert-from-estimate", payload)
+        const operationId = data?.operationId
+        if (!operationId) throw new Error("Bridge did not return an operationId for convert-from-estimate")
+        return { success: true, data: { operationId } }
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}
+
+/**
+ * Deactivates an Estimate in QuickBooks (sets IsActive = false).
+ */
+export async function deactivateEstimateInQb(
+    estimateTxnId: string,
+    log: (msg: string) => void = console.log
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        log(`[QB DRY RUN] Would deactivate Estimate ${estimateTxnId}`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN", txnId: estimateTxnId } }
+    }
+
+    try {
+        log(`[QB] Querying Estimate ${estimateTxnId} to get EditSequence for deactivation...`)
+        const queryResp = await bridgeFetch("GET", `/api/estimates/${estimateTxnId}`)
+        const queryOpId = queryResp?.operationId
+        if (!queryOpId) throw new Error("Bridge did not return operationId for Estimate query")
+
+        const rawResult = await pollRawOperationResult(queryOpId)
+
+        const estRet =
+            rawResult?.QBXML?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+            rawResult?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+            rawResult?.EstimateRet ??
+            rawResult?.EstimateQueryRs?.EstimateRet
+
+        if (!estRet?.EditSequence) {
+            throw new Error(`Could not extract EditSequence from Estimate query. Raw: ${JSON.stringify(rawResult).slice(0, 200)}`)
+        }
+
+        const editSequence = estRet.EditSequence as string
+        log(`[QB] EditSequence obtained: ${editSequence}. Deactivating Estimate...`)
+
+        const modResp = await bridgeFetch("PUT", `/api/estimates/${estimateTxnId}`, {
+            EditSequence: editSequence,
+            IsActive: false,
+        })
+
+        const operationId = modResp?.operationId
+        if (!operationId) throw new Error("Bridge did not return operationId for Estimate deactivation")
+
+        log(`[QB] Estimate ${estimateTxnId} deactivation queued (op: ${operationId})`)
+        return { success: true, data: { operationId, txnId: estimateTxnId } }
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}
+
+/**
+ * Cancels an Estimate in QuickBooks (zeros all line quantities via EstimateMod).
+ */
+export async function cancelEstimateInQb(
+    estimateTxnId: string,
+    log: (msg: string) => void = console.log
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        log(`[QB DRY RUN] Would cancel Estimate ${estimateTxnId}`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN", txnId: estimateTxnId } }
+    }
+
+    try {
+        log(`[QB] Querying Estimate ${estimateTxnId} to get EditSequence and lines for cancellation...`)
+        const queryResp = await bridgeFetch("GET", `/api/estimates/${estimateTxnId}`)
+        const queryOpId = queryResp?.operationId
+        if (!queryOpId) throw new Error("Bridge did not return operationId for Estimate query")
+
+        const rawResult = await pollRawOperationResult(queryOpId)
+
+        const estRet =
+            rawResult?.QBXML?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+            rawResult?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+            rawResult?.EstimateRet ??
+            rawResult?.EstimateQueryRs?.EstimateRet
+
+        if (!estRet?.EditSequence) {
+            throw new Error(`Could not extract EditSequence from Estimate query. Raw: ${JSON.stringify(rawResult).slice(0, 200)}`)
+        }
+
+        const editSequence = estRet.EditSequence as string
+
+        const existingLines = estRet.EstimateLineRet
+        const linesArr: any[] = Array.isArray(existingLines) ? existingLines : (existingLines ? [existingLines] : [])
+        const lines = linesArr.map(line => ({ TxnLineID: line?.TxnLineID })).filter(l => l.TxnLineID)
+
+        log(`[QB] EditSequence obtained: ${editSequence}. Extracted ${lines.length} lines. Canceling Estimate...`)
+
+        const data = await bridgeFetch("DELETE", `/api/estimates/${estimateTxnId}`, {
+            EditSequence: editSequence,
+            lines,
+        })
+        const operationId = data?.operationId
+        if (!operationId) throw new Error("Bridge did not return operationId for Estimate cancel")
+
+        log(`[QB] Estimate ${estimateTxnId} cancel queued (op: ${operationId})`)
+        return { success: true, data: { operationId, txnId: estimateTxnId } }
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}

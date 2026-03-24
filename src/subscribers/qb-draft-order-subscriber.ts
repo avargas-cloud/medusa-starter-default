@@ -166,7 +166,7 @@ export async function handleDraftOrderCreated(data: any, container: any, logger:
         draftOrderId,
         qbCustomerId: custResult.qbCustomerId!,
         items: qbItems,
-        memo: `Draft Order ${draftOrderId}`,
+        memo: draftOrder.metadata?.document_number as string || `E${draftOrder.display_id}`,
     })
 
     if (result.error) {

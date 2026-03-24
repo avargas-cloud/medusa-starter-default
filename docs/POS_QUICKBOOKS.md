@@ -127,22 +127,35 @@ async function ensureCustomerInQb(customer, sql) {
 
 ## Subscriber Guard
 
-`qb-order-subscriber.ts` skipea **todos los eventos** para órdenes del canal POS:
+`qb-order-subscriber.ts` skipea de forma explícita los eventos de facturación para órdenes originadas en el POS para prevenir colisiones asíncronas:
 
 ```typescript
-const POS_CHANNEL_ID = process.env.POS_SALES_CHANNEL_ID ?? ""
+// Aplicado dentro del caso "order.fulfillment_created"
+const query = container.resolve("query")
+const { data: [fetchedOrder] } = await query.graph({
+    entity: "order",
+    fields: ["metadata"],
+    filters: { id: orderIdStr }
+})
 
-function isPosOrder(order: any): boolean {
-    if (!POS_CHANNEL_ID) return false
-    return order.sales_channel_id === POS_CHANNEL_ID
+if (fetchedOrder?.metadata?.pos_created) {
+    logger.info(`[QB-ORDER] ⏭️ Skipping order.fulfillment_created for POS order ${orderIdStr}...`)
+    break // Abandona el listener
 }
-
-// Aplicado en: order.placed, order.payment_captured,
-//              order.fulfillment_created, order.canceled,
-//              order.customer_transferred
 ```
 
-> **Por qué:** El POS llama los endpoints QB directamente y con mayor control. El subscriber es para el Web Store (automático).
+> **Por qué:** El POS llama los endpoints QB directamente usando un patrón **Direct Execution background thread** (`setTimeout` dentro del handler REST) garantizando su ejecución sincrónica contra QuickBooks. El subscriber asíncrono BullMQ queda reservado estrictamente para el Web Store.
+
+---
+
+## Prevención de Colisiones (Concurrency & Locks)
+
+Un escenario crítico superado en la arquitectura POS es cuando **múltiples vendedores cobran órdenes exactamente al mismo tiempo**. El sistema está blindado contra *"Race Conditions"* y datos superpuestos mediante 3 capas mecánicas:
+
+1. **Direct Execution (Node.js):** Al evitar la cola nativa de eventos de Medusa (BullMQ) —la cual tiene un bug estructurado de pérdida de payloads bajo alta carga— cada orden dispara su propio hilo en Node.js que nunca se "droppea".
+2. **SQLite FIFO Queue (QB Bridge):** Cuando Medusa dispara 4 peticiones a la vez (Ej: Factura A, Factura B, Pago A, Pago B), el Bridge de QB no colapsa a QuickBooks Desktop. El Bridge es una base de datos SQLite ultra-rápida (tabla `operations`) que actúa como cola transaccional. Anota ambas facturas secuencialmente (`Pending`). QB WebConnector realiza Long-Polling (cada 20s) y procesará la petición #1, y al terminar, se llevará la petición #2.
+3. **Long-Polling TxnID Awaiter:** El `pos.payment.applied` **nunca se enviará al Bridge de QB** hasta que el código verifique que la factura padre ya existe y retorne su `TxnID`. 
+   - *Mecánica:* El hilo del Pago en Medusa ejecuta un ciclo iterativo (`for(i=0; i<20; i++)`) pausando 20 segundos entre intentos (hasta 400s totales). Recién cuando QuickBooks reporta haber digerido exitosamente el `Invoice` (y el TxnID es inyectado de vuelta a la metadata de la orden), el `Payment` se libera e ingresa al Bridge como `Pending`. Esto prohíbe errores de sincronización (Ej Error 3140 o huérfanos).
 
 ---
 

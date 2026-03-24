@@ -146,6 +146,15 @@
           "default": "false",
           "mappedType": "boolean"
         },
+        "qb": {
+          "name": "qb",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "json"
+        },
         "locked_order_id": {
           "name": "locked_order_id",
           "type": "text",

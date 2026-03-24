@@ -1,4 +1,5 @@
 import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
+import { Modules } from '@medusajs/utils'
 import { FINANCE_MODULE } from '../../../../../../modules/finance'
 import { INVOICE_MODULE } from '../../../../../../modules/invoices'
 import { registerMedusaPayment } from '../../../../invoices/register-medusa-payment'
@@ -33,6 +34,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     const financeService = req.scope.resolve(FINANCE_MODULE)
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
+    const eventBus = req.scope.resolve(Modules.EVENT_BUS)
 
     try {
         // 1. Fetch the CustomerPayment with its current applications
@@ -138,6 +140,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const updatedPayment = await financeService.retrieveCustomerPayment(paymentId, {
             relations: ['applications']
         })
+
+        // 8. Fire event for QB Sync to link the existing Unapplied Credit to the Invoice
+        try {
+            await eventBus.emit({
+                name: "pos.payment.applied",
+                data: {
+                    payment_id: paymentId,
+                    invoice_id: invoice_id,
+                    order_id: invoice.order_id,
+                    amount_applied,
+                    application_id: application.id
+                }
+            })
+        } catch (emitErr: any) {
+            req.scope.resolve('logger').error(`Failed to emit pos.payment.applied: ${emitErr.message}`)
+        }
 
         return res.json({ payment: updatedPayment, application })
         

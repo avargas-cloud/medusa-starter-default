@@ -41,6 +41,11 @@ const CustomerPayment = model.define('customer_payment', {
     // web source: always true (payment came FROM Medusa)
     // pos source: false until registerMedusaPayment() runs and succeeds
     medusa_payment_synced: model.boolean().default(false),
+    
+    // QuickBooks Sync Tracking
+    // Stores: { status: 'yes' | 'no' | 'processing', txn_id?: string, operation_id?: string }
+    qb:                    model.json().nullable(),
+
     locked_order_id:       model.text().nullable(),        // web payments are locked to their order
     received_at:         model.dateTime(),
     notes:               model.text().nullable(),

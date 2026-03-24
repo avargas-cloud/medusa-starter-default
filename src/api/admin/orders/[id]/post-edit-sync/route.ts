@@ -317,6 +317,48 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             logger.warn(`[post-edit-sync] Discount reconciliation non-fatal: ${e.message}`)
         }
     }
+    
+    // ── Update QuickBooks Sales Order (Sync Edits) ───────────────────────────
+    try {
+        const qbEnabled = process.env.QB_ORDER_FLOW_ENABLED === "true"
+        if (qbEnabled) {
+            const { data: qbOrderData } = await query.graph({
+                entity: "order",
+                fields: [
+                    "id", "metadata", "items.*", "items.item.unit_price", "items.variant.*", "items.variant.metadata"
+                ],
+                filters: { id }
+            })
+            const qbOrder = qbOrderData?.[0]
+            
+            // Dynamic import because of path nesting
+            const { getSoTxnId } = require("../../../../../lib/quickbooks/qb-metadata-types")
+            const { updateSalesOrderInQb } = require("../../../../../lib/quickbooks/qb-bridge-client")
+            const { buildQbItems } = require("../../../../../lib/quickbooks/order-flow-core")
+            
+            const txnId = getSoTxnId(qbOrder?.metadata)
+            
+            if (txnId && qbOrder?.items && qbOrder.items.length > 0) {
+                logger.info(`[post-edit-sync] QB integration: Pushing Sales Order modifications to txnId=${txnId}...`)
+                const modItems = buildQbItems(qbOrder.items, qbOrder.metadata)
+                
+                const qbRes = await updateSalesOrderInQb({
+                    txnId,
+                    items: modItems
+                })
+                
+                if (qbRes.success) {
+                    logger.info(`[post-edit-sync] ✅ QB Sales Order queue successful! opId=${qbRes.data?.operationId}`)
+                    results.qb_sync = qbRes.data?.operationId
+                } else {
+                    logger.error(`[post-edit-sync] ❌ QB SO Mod failed: ${qbRes.error}`)
+                    results.qb_error = qbRes.error
+                }
+            }
+        }
+    } catch (e: any) {
+        logger.warn(`[post-edit-sync] QuickBooks SO mod sync non-fatal err: ${e.message}`)
+    }
 
     res.status(200).json({ success: true, ...results })
 }

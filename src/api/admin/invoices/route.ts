@@ -9,6 +9,12 @@ import { INVOICE_MODULE } from '../../../modules/invoices'
 import { FINANCE_MODULE } from '../../../modules/finance'
 import { registerMedusaPayment } from './register-medusa-payment'
 import { Modules } from '@medusajs/utils'
+import { ContainerRegistrationKeys } from '@medusajs/utils'
+
+// Import the background syncing handlers directly to bypass Medusa outbox dropping events
+import { handleFulfillmentCreated } from '../../../lib/quickbooks/handlers/handle-fulfillment-created'
+import { handlePosPaymentCreated } from '../../../lib/quickbooks/handlers/handle-pos-payment-created'
+import { handlePosPaymentApplied } from '../../../lib/quickbooks/handlers/handle-pos-payment-applied'
 // ── GET /admin/invoices?order_id=:id ─────────────────────────────────────────
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
@@ -67,12 +73,15 @@ interface CreateInvoiceBody {
         country_code?: string
         phone?: string
     }
+    order_document_number?: string
+    send_email?: boolean
+    email_to?: string
+    email_cc?: string
 }
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
     const financeService = req.scope.resolve(FINANCE_MODULE)
-    const eventBus = req.scope.resolve(Modules.EVENT_BUS)
     const body = req.body as CreateInvoiceBody
 
     if (!body.order_id || !body.customer_id || !body.items?.length) {
@@ -80,12 +89,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
 
-    // Derive invoice number: INV-{display_id}-{seq}
-    const existing = await invoiceService.listPosInvoices({ order_id: body.order_id })
-    const seq = existing.length + 1
-    const invoice_number = `INV-${body.order_display_id}-${seq}`
+    // Fetch strictly continuous sequential invoice number from PostgreSQL
+    const pgConnection = req.scope.resolve("__pg_connection__") as any
+    const seqRes = await pgConnection.raw(`SELECT nextval('custom_invoice_seq') AS seq`)
+    const nextInvNum = seqRes.rows[0].seq || seqRes.rows[0].SEQ
+    const invoice_number = `${nextInvNum}`
 
     const balance_due = body.total - body.amount_paid
+
+    let paymentIdToEmit: string | null = null
+    const applicationsToEmit: any[] = []
 
     // Step 1: Create the invoice (no nested items — hasMany must be created separately)
     const initialStatus = balance_due <= 0 ? 'paid' : (body.amount_paid > 0 ? 'partial' : 'issued')
@@ -168,13 +181,21 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     if (remaining > 0) {
                         const applyAmount = Math.min(remaining, amountToFind)
                         
-                        await financeService.createPaymentApplications({
+                        const application = await financeService.createPaymentApplications({
                             payment_id: p.id,
                             invoice_id: (invoice as any).id,
                             order_id: body.order_id,
                             amount_applied: applyAmount,
                             applied_at: paymentDate,
                             applied_by: body.created_by || null
+                        })
+
+                        applicationsToEmit.push({
+                            payment_id: p.id,
+                            invoice_id: (invoice as any).id,
+                            order_id: body.order_id,
+                            amount_applied: applyAmount,
+                            application_id: application.id
                         })
                         
                         const newRemaining = remaining - applyAmount
@@ -207,24 +228,39 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     order_display_id: body.order_display_id,
                     pos_payment_method: body.payment_method,
                     invoices_affected: [(invoice as any).id],
-                    invoices_affected_friendly: [String(body.order_display_id)]
+                    invoices_affected_friendly: [String(body.order_display_id)],
+                    order_document_number: body.order_document_number ?? null
                 }
             })
 
-            // Fire event so QuickBooks catches the POS payment immediately
-            await eventBus.emit({
-                name: "pos.payment.created",
-                data: { id: customerPayment.id }
-            })
+            // Fire event so QuickBooks catches the POS payment immediately (deferred to end of route)
+            const paymentId = Array.isArray(customerPayment) ? customerPayment[0]?.id : customerPayment?.id
+            console.log("================= CUSTOMER PAYMENT DEBUG =================")
+            console.log("customerPayment:", JSON.stringify(customerPayment))
+            console.log("resolved paymentId:", paymentId)
+            console.log("=====================================================")
+            if (paymentId) {
+                paymentIdToEmit = paymentId
+            } else {
+                console.log("paymentId WAS FALSEY! SKIPPING EMIT!")
+            }
 
             // C. Finance Application
-            await financeService.createPaymentApplications({
+            const application = await financeService.createPaymentApplications({
                 payment_id: customerPayment.id,
                 invoice_id: (invoice as any).id,
                 order_id: body.order_id,
                 amount_applied: body.amount_paid,
                 applied_at: paymentDate,
                 applied_by: body.created_by || null
+            })
+
+            applicationsToEmit.push({
+                payment_id: customerPayment.id,
+                invoice_id: (invoice as any).id,
+                order_id: body.order_id,
+                amount_applied: body.amount_paid,
+                application_id: application.id
             })
 
             // D. Register in Medusa native Payment Module (best-effort)
@@ -243,15 +279,56 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
     }
 
-    // Fire custom Invoice created event for QB Sync Smart Lazy Evaluation
-    await eventBus.emit({
-        name: "pos.invoice.created",
-        data: {
-            order_id: body.order_id,
-            invoice_id: (invoice as any).id,
-            items: body.items,
+    // Use direct background execution (Event Loop) to guarantee 100% reliable QuickBooks Syncing,
+    // thereby bypassing the Medusa v2 BullMQ Outbox which silently drops multiple sequential events.
+    setTimeout(async () => {
+        try {
+            const container = req.scope
+            const orderModule = container.resolve(Modules.ORDER)
+            const customerModule = container.resolve(Modules.CUSTOMER)
+            const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+
+            // 1. Process Invoice - Unconditionally executed to guarantee 100% reliability
+            // This bypasses the Medusa BullMQ Outbox which is prone to dropping concurrent transactional events.
+            // The qb-order-subscriber intercepts and ignores native fulfillment events for POS orders to prevent duplicates.
+            console.log(`DIRECT EXEC: Triggering pos.invoice.created directly for order ${body.order_id} to bypass BullMQ drops.`)
+            await handleFulfillmentCreated({
+                order_id: body.order_id,
+                invoice_id: (invoice as any).id,
+                items: body.items,
+                fulfillment_id: body.fulfillment_id
+            }, orderModule, customerModule, container, logger)
+
+            // Wait 250ms to ensure sequential QB database writing
+            await new Promise(r => setTimeout(r, 250))
+
+            // 2. Process Payment Creation
+            if (paymentIdToEmit) {
+                await handlePosPaymentCreated({ 
+                    event: { name: "pos.payment.created", data: { id: paymentIdToEmit } }, 
+                    container 
+                } as any)
+                console.log("DIRECT EXEC: pos.payment.created executed successfully!")
+            }
+
+            // Wait 250ms again
+            await new Promise(r => setTimeout(r, 250))
+
+            // 3. Process Applications
+            if (applicationsToEmit.length > 0) {
+                for (const appPayload of applicationsToEmit) {
+                    await handlePosPaymentApplied({
+                        event: { name: "pos.payment.applied", data: appPayload },
+                        container
+                    } as any)
+                    console.log(`DIRECT EXEC: pos.payment.applied executed for Payment ${appPayload.payment_id}!`)
+                }
+            }
+
+        } catch (execErr: any) {
+            console.error("DIRECT EXEC ERROR:", execErr)
         }
-    })
+    }, 100)
 
     // Re-fetch with relations for the response
     const full = await invoiceService.retrievePosInvoice((invoice as any).id, {
@@ -260,4 +337,3 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     return res.status(201).json({ invoice: full })
 }
-

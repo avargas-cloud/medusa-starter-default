@@ -44,14 +44,15 @@ async function main() {
         }
 
         // ── Step 4: Item Allocations (Inventory Reservations) ───────────────
-        console.log("4. Deleting Item Allocations / Reservations (reservation_item)")
+        console.log("4. Deleting Item Allocations / Reservations (reservation_item) and resetting levels")
         await client.query("SAVEPOINT pre_reservations")
         try {
             await client.query(`DELETE FROM reservation_item`)
+            await client.query(`UPDATE inventory_level SET reserved_quantity = 0, raw_reserved_quantity = '{"value": "0", "precision": 20}'::jsonb`)
             await client.query("RELEASE SAVEPOINT pre_reservations")
         } catch (e) {
             await client.query("ROLLBACK TO pre_reservations")
-            console.warn("   ⚠ reservation_item not found, skipping")
+            console.warn("   ⚠ reservation_item not found or could not update levels, skipping")
         }
 
         // ── Step 5: ALL Orders (draft + non-draft) ───────────────────────────

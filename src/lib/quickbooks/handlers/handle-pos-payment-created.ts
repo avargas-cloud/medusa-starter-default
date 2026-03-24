@@ -1,14 +1,12 @@
-import { SubscriberArgs } from "@medusajs/framework"
+import { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
 import { Modules, ContainerRegistrationKeys } from "@medusajs/utils"
-import { FINANCE_MODULE } from "../modules/finance"
-import { processPaymentCaptureInQb, ensureCustomerInQb } from "../lib/quickbooks/order-flow-core"
-import { applyPaymentToInvoiceInQb } from "../lib/quickbooks/qb-bridge-client"
-import { getLatestInvoiceTxnId } from "../lib/quickbooks/qb-metadata-types"
+import { FINANCE_MODULE } from "../../../modules/finance"
+import { processPaymentCaptureInQb, ensureCustomerInQb } from "../order-flow-core"
 
 const LOG_PREFIX = "[QB-POS-PAYMENT]"
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
 
-export default async function qbPosPaymentSubscriber({ event, container }: SubscriberArgs<any>) {
+export async function handlePosPaymentCreated({ event, container }: SubscriberArgs<any>) {
     const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
 
     if (!ENABLED) {
@@ -114,39 +112,10 @@ export default async function qbPosPaymentSubscriber({ event, container }: Subsc
             }
         }
 
-        // 4. Auto-Apply to QB Invoice if deposit_type === 'INVOICE'
+        // 4. Log intention based on deposit_type
         const depositType = payment.metadata?.deposit_type
-        if (depositType === 'INVOICE' && orderId && result.txnId) {
-            logger.info(`${LOG_PREFIX} 🔄 Payment is for an INVOICE. Checking if QB Invoice exists for order ${orderId}...`)
-            
-            // Query the order to get its QB metadata
-            const { data: [order] } = await query.graph({
-                entity: "order",
-                fields: ["id", "metadata"],
-                filters: { id: orderId }
-            })
-
-            if (order && order.metadata) {
-                const invoiceTxnId = getLatestInvoiceTxnId(order.metadata)
-                
-                if (invoiceTxnId) {
-                    logger.info(`${LOG_PREFIX} 🎯 Applying Payment (TxnID: ${result.txnId}) -> Invoice (TxnID: ${invoiceTxnId}) in QB...`)
-                    const applyResult = await applyPaymentToInvoiceInQb({
-                        customerId: qbCustomerId as string,
-                        amount: (payment.amount as number) / 100, // dollars
-                        invoiceId: invoiceTxnId,
-                        creditTxnId: result.txnId
-                    })
-
-                    if (!applyResult.success) {
-                        logger.error(`${LOG_PREFIX} ⚠️ Failed to apply payment to invoice in QB: ${applyResult.error}`)
-                    } else {
-                        logger.info(`${LOG_PREFIX} ✅ Successfully applied Payment to Invoice in QuickBooks!`)
-                    }
-                } else {
-                    logger.warn(`${LOG_PREFIX} ⚠️ order ${orderId} does not have a qb_invoice_txn_id yet. Payment will remain unapplied in QB until manually matched.`)
-                }
-            }
+        if (depositType === 'INVOICE') {
+            logger.info(`${LOG_PREFIX} ℹ️ Payment is for an INVOICE. The unapplied credit was created successfully. Application to the Invoice will be handled by pos.payment.applied.`)
         } else if (depositType === 'ORDER') {
             logger.info(`${LOG_PREFIX} ℹ️ Payment is for an ORDER. It will sit as unapplied credit until the final Standalone Invoice or Linked Invoice applies it.`)
         }
@@ -156,5 +125,4 @@ export default async function qbPosPaymentSubscriber({ event, container }: Subsc
         logger.error(err.stack)
     }
 }
-
 

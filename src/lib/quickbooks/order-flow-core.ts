@@ -413,7 +413,7 @@ export async function processOrderInQb(
                 items: soItems,
                 taxExempt,
                 salesTaxCode: options?.salesTaxCode,
-                memo: `Medusa Order #${order.display_id || order.id} — from Estimate ${order.metadata?.qb_estimate_ref || estimateTxnId}`,
+                memo: `Order ${order.metadata?.document_number || order.display_id || order.id} — from Estimate ${order.metadata?.original_estimate_number || order.metadata?.qb_estimate_ref || estimateTxnId}`,
             })
         } else {
             const orderDate = getDateString(order.created_at)
@@ -423,7 +423,7 @@ export async function processOrderInQb(
                 items: soItems,
                 taxExempt,
                 salesTaxCode: options?.salesTaxCode,
-                memo: `Medusa Web Order #${order.display_id || order.id}`,
+                memo: `Order ${order.metadata?.document_number || order.display_id || order.id}`,
             })
         }
 
@@ -518,7 +518,7 @@ export async function processPaymentCaptureInQb(capture: {
         amount: amountDollars,
         paymentMethod: capture.paymentMethod,
         refNumber: `PAY-${capture.orderDisplayId || capture.orderId}`,
-        memo: `Web Order #${capture.orderDisplayId || capture.orderId}`,
+        memo: `Payment for Order ${capture.orderDisplayId || capture.orderId}`,
         autoApply: false,
     })
 
@@ -577,6 +577,7 @@ export async function processInvoiceInQb(invoice: {
     paymentAmount?: number
     prebuiltItems?: QbOrderItem[] // Used if no qbSoTxnId
     salesTaxCode?: string         // Used if no qbSoTxnId
+    refNumber?: string            // Custom Invoice Number
     memo?: string
 }): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
@@ -600,9 +601,10 @@ export async function processInvoiceInQb(invoice: {
         customerId: invoice.qbCustomerId,
         date: getDateString(),
         LinkToTxnID: invoice.qbSoTxnId,
+        refNumber: invoice.refNumber,
         items: invoice.prebuiltItems,
         salesTaxCode: invoice.salesTaxCode,
-        memo: invoice.memo || `Medusa Invoice #${invoice.orderDisplayId || invoice.orderId}`,
+        memo: invoice.memo || `Invoice ${invoice.orderDisplayId || invoice.orderId}`,
     })
 
     if (!invResult.success) {
@@ -701,7 +703,7 @@ export async function processEstimateInQb(draft: {
         customerId: draft.qbCustomerId,
         date: draft.date || getDateString(),
         items: draft.items,
-        memo: draft.memo || `Draft Order ${draft.draftOrderId}`,
+        memo: draft.memo || `E${draft.draftOrderId}`,
         ...(draft.taxExempt === true ? { taxExempt: true } : {}),
         ...(draft.salesTaxCode ? { salesTaxCode: draft.salesTaxCode } : {}),
     })

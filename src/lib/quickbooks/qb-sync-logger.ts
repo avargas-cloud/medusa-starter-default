@@ -41,6 +41,7 @@ export type QbOperation =
     | "estimate"
     | "payment"
     | "invoice"
+    | "void_invoice"
     | "cancel"
     | "customer_transfer"
     | "inventory_sync"

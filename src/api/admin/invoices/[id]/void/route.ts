@@ -8,6 +8,7 @@ import { Modules } from "@medusajs/utils"
 import { getDbPool } from '../../../../utils/db-pool'
 import { INVOICE_MODULE } from '../../../../../modules/invoices'
 import { FINANCE_MODULE } from '../../../../../modules/finance'
+import { recalculateOrderStatus } from '../../../../../utils/order-utils'
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
@@ -199,6 +200,33 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         void_reason: void_reason ?? null,
     })
     
+    // 3. DYNAMICALLY REVERT PARENT MEDUSA ORDER STATUSES
+    if (invoice.order_id) {
+        // Attempt to natively cancel the Medusa fulfillment if present, before recalculating
+        if (invoice.fulfillment_id) {
+            try {
+                const fulfillmentModule = req.scope.resolve(Modules.FULFILLMENT)
+                await fulfillmentModule.cancelFulfillment(invoice.fulfillment_id)
+                console.log(`[VOID INVOICE] Canceled native fulfillment ${invoice.fulfillment_id}`)
+            } catch (fErr: any) {
+                console.warn(`[VOID INVOICE] Could not cancel fulfillment natively:`, fErr.message)
+            }
+        }
+        
+        // Oracle calculation based purely on order items stock and active POS Invoices
+        await recalculateOrderStatus(invoice.order_id, req.scope)
+    }
+    
+    const eventBus = req.scope.resolve(Modules.EVENT_BUS)
+    await eventBus.emit({
+        name: "pos.invoice.voided",
+        data: {
+            order_id: invoice.order_id,
+            invoice_id: id,
+            fulfillment_id: invoice.fulfillment_id ?? null,
+        }
+    })
+
     console.log(`[VOID INVOICE] Final API Response Payload ready. Success.`)
 
     return res.json({ invoice: updated, total_reversed: totalReversed })

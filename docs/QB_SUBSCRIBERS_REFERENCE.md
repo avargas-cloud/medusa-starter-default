@@ -181,13 +181,12 @@ unit_price: Math.round((item.item?.unit_price ?? item.unit_price ?? 0) * 100)
 
 **Trigger:** `order.fulfillment_created`
 
-**Flujo:**
-```
+**Flujo Web (Normal):**
 1. Fetch order (con items, customer, shipping, metadata)
-2. If no SO (qb_sales_order_txn_id) → skip
-3. processInvoiceInQb() → QB Invoice (aplica pago si existe)
-4. Guarda qb_invoice_txn_id + qb_invoice_ref en metadata
-```
+2. **Guardian POS (Marzo 2026):** Si `order.metadata.pos_created === true`, abandona el proceso de inmediato. El POS usa el patrón interno de "Direct Execution" (`POST /admin/invoices`) evitando fallos de inestabilidad en la cola asíncrona de BullMQ/Redis.
+3. If no SO (qb_sales_order_txn_id) → skip
+4. processInvoiceInQb() → QB Invoice (aplica pago si existe)
+5. Guarda qb_invoice_txn_id + qb_invoice_ref en metadata
 
 **Metadata que lee:** `qb_sales_order_txn_id`, `qb_payment_txn_id`, `qb_list_id`
 **Metadata que escribe:** `qb_invoice_txn_id`, `qb_invoice_ref`

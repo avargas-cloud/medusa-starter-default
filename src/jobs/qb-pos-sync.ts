@@ -3,7 +3,7 @@ import { Modules, ContainerRegistrationKeys } from "@medusajs/utils"
 import { Client } from "pg"
 import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard"
 import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger"
-import { handleOrderPlaced } from "../subscribers/qb-order-subscriber"
+import { handleOrderPlaced } from "../lib/quickbooks/handlers/handle-order-placed"
 import { handleDraftOrderCreated } from "../subscribers/qb-draft-order-subscriber"
 import { getEstimateTxnId, getSoTxnId, getLatestInvoiceTxnId } from "../lib/quickbooks/qb-metadata-types"
 
@@ -44,6 +44,7 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
             SELECT id, metadata
             FROM "order"
             WHERE sales_channel_id = $1
+              AND is_draft_order = false
               AND canceled_at IS NULL
               AND created_at <= NOW() - INTERVAL '1 hour'
               AND created_at >= NOW() - INTERVAL '24 hours'

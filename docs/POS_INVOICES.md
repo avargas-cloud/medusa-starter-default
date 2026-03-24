@@ -92,6 +92,25 @@ La interacción entre el Store POS y la base de datos para la generación de PDF
 - `POST /admin/invoices/{id}/payments`: Permite registrar un abono parcial (ej. $50 Cash, $200 Card), actualizando el `amount_paid` y `balance_due` matemáticamente en el servidor y estampándolo en la tirilla u hoja PDF de Invoices en tiempo real.
 - `POST /admin/invoices/{id}/void`: Destruye el balance y marca el snapshot como inválido.
 
+### 6.1 Direct Execution Pattern (QuickBooks Sync)
+**Decisión Arquitectónica (Marzo 23, 2026):**
+Previamente, el endpoint `POST /admin/invoices` delegaba la creación de la factura en QuickBooks al Bus de Eventos de Medusa (BullMQ) lanzando `order.fulfillment_created`. Sin embargo, debido a intermitencias graves en entornos Vercel/Railway donde BullMQ descartaba ("dropped") eventos críticos silenciosamente, se cambió a un patrón de **Direct Execution**.
+
+1. Tras crear el registro nativo de fulfillment y factura en Postgres, el endpoint **no espera a Redis**.
+2. Dispara inmediatamente la función `handleFulfillmentCreated()` envolviéndola en un `setTimeout(..., 100)` para no bloquear el retorno HTTP 200 a la interfaz del POS.
+3. El proceso de fondo (Background Thread) asíncrono se encarga de crear el Invoice en QB y aplicar cualquier pago previo, garantizando un 100% de éxito («Fire and Forget» seguro).
+4. El Subscriber global `qb-order-subscriber.ts` fue modificado para **ignorar explícitamente** cualquier evento `order.fulfillment_created` de órdenes que contengan `metadata.pos_created === true`, protegiendo el sistema contra facturación duplicada en QuickBooks.
+
+### 6.2 Partial Fulfillments (Surgical Line Extraction)
+**Decisión Arquitectónica (Protección de Despachos Parciales)**
+Previamente, emitir una factura POS ocasionaba que el Bridge de QuickBooks convirtiera ciegamente **toda la Orden de Venta (Sales Order)** en un Invoice, sin importar si el cliente se estaba llevando solo el 10% de la mercancía.
+
+Para resolver esto y soportar flujos B2B reales (Despachos Parciales o Backorders):
+1. **Inyección Estricta del `fulfillment_id`:** El endpoint interno envía explícitamente el UUID del `Fulfillment` de Medusa originado en la interfaz de usuario al QB Bridge (`fulfillmentId`).
+2. **Iteración Quirúrgica:** Dentro del QB Bridge (`invoiceBuilder`), en lugar de mapear el vector `order.items` general, el motor ahora interroga el array encapsulado `fulfillment.items`. 
+3. **Mapeo Cuantitativo Reversivo:** De cada item despachado, lee la cantidad exacta (`item.quantity`) levantada por el operario, y cruza esta ID con las filas originales para extraer el precio unitario y descuentos proporcionales.
+4. **QuickBooks Resultante:** Invoice (Factura) generada en QuickBooks refleja de manera impecable y exacta **solamente los SKUs empacados y despachados** en esa ronda particular. El balance restante queda flotando vivo dentro del Sales Order de QB aguardando el próximo Pick & Pack (próxima Factura parcial).
+
 ---
 
 ## 7. Dashboard de Invoices (`/invoices`)
