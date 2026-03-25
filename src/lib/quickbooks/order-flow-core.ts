@@ -309,17 +309,17 @@ export function buildQbItems(items: MedusaOrderForQb["items"], metadata?: Record
             // Both item-level discounts (per-item promotions) and order-level distributed discounts
             // are reflected here. Price is always per-unit in dollars for QB.
             const originalTotal = (item.unit_price || 0) * item.quantity
-            const effectiveUnitPriceCents =
+            const effectiveUnitPrice =
                 item.subtotal !== undefined && item.subtotal < originalTotal && item.subtotal > 0
-                    ? Math.round(item.subtotal / item.quantity) // discounted subtotal ÷ qty → per-unit cents
+                    ? Number((item.subtotal / item.quantity).toFixed(2)) // discounted subtotal ÷ qty
                     : (item.unit_price || 0)                   // no discount → original unit price
             return ({
                 _sortOrder: typeof item.metadata?.sort_order === "number" ? item.metadata.sort_order : 9999,
                 qbItem: {
                     productId: item.variant!.metadata!.quickbooks_id as string,
                     quantity: item.quantity,
-                    price: effectiveUnitPriceCents / 100,  // cents → dollars for QB
-                    amount: (effectiveUnitPriceCents * item.quantity) / 100,
+                    price: effectiveUnitPrice,
+                    amount: Number((effectiveUnitPrice * item.quantity).toFixed(2)),
                     unitOfMeasure: (item.variant?.metadata?.quickbooks_uom as string) || undefined,
                     desc: sanitizeForQb(
                         item.metadata?.sales_description
@@ -368,12 +368,12 @@ export function buildQbItems(items: MedusaOrderForQb["items"], metadata?: Record
  * @param discountPercent    - Optional human-readable % to include in the description
  */
 export function buildQbOrderDiscountLines(
-    discountTotalCents: number,
+    discountTotal: number,
     discountPercent?: number | null
 ): QbOrderItem[] {
-    if (!discountTotalCents || discountTotalCents <= 0) return []
+    if (!discountTotal || discountTotal <= 0) return []
 
-    const discountDollars = discountTotalCents / 100
+    const discountDollars = discountTotal
     const pctStr = discountPercent != null ? ` (${discountPercent.toFixed(0)}%)` : ""
 
     return [
@@ -600,7 +600,7 @@ export async function processPaymentCaptureInQb(capture: {
     if (!guard.pass) return { enabled: false, skipped: true }
 
     const prefix = DRY_RUN ? "[QB DRY RUN]" : "[QB]"
-    const amountDollars = (capture.amount / 100)
+    const amountDollars = capture.amount
 
     console.log(`${prefix} Recording payment of $${amountDollars.toFixed(2)} for order #${capture.orderDisplayId || capture.orderId}...`)
 
@@ -744,7 +744,7 @@ export async function processInvoiceInQb(invoice: {
 
         const applyResult = await applyPaymentToInvoiceInQb({
             customerId: invoice.qbCustomerId,
-            amount: (invoice.paymentAmount / 100),
+            amount: invoice.paymentAmount,
             invoiceId: invTxnId,
             creditTxnId: invoice.qbPaymentTxnId,
         })

@@ -35,6 +35,7 @@ export interface QbInvoiceMeta {
     txn_id:         string
     operation_id:   string | null
     fulfillment_id: string | null    // Medusa fulfillment ID (null for legacy)
+    invoice_id?:    string | null    // POS Invoice ID for explicit mapping
     synced_at:      string
 }
 
@@ -219,6 +220,7 @@ export function buildInvoicePatch(
         refNumber: string | null
         operationId: string | null
         fulfillmentId?: string | null
+        invoiceId?: string | null
     }
 ): Record<string, any> {
     const now = new Date().toISOString()
@@ -230,6 +232,7 @@ export function buildInvoicePatch(
         ref_number:     opts.refNumber ?? opts.txnId ?? "",
         operation_id:   opts.operationId,
         fulfillment_id: opts.fulfillmentId ?? null,
+        invoice_id:     opts.invoiceId ?? null,
         synced_at:      now,
     }
     return {

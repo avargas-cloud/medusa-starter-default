@@ -19,20 +19,22 @@ import { handlePosPaymentApplied } from '../../../lib/quickbooks/handlers/handle
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
-    const { order_id, customer_id } = req.query as Record<string, string>
+    const { order_id, customer_id, created_at, status, limit, offset } = req.query as Record<string, any>
 
     const filters: Record<string, unknown> = {}
-    if (order_id) {
-        filters.order_id = order_id
-    }
-    if (customer_id) {
-        filters.customer_id = customer_id
-    }
+    if (order_id) filters.order_id = order_id
+    if (customer_id) filters.customer_id = customer_id
+    if (created_at) filters.created_at = created_at
+    if (status) filters.status = status
 
-    const invoices = await invoiceService.listPosInvoices(filters, {
+    const config: Record<string, any> = {
         relations: ['items', 'tracking_links'],
         order: { created_at: 'DESC' },
-    })
+    }
+    if (limit) config.take = parseInt(limit, 10)
+    if (offset) config.skip = parseInt(offset, 10)
+
+    const invoices = await invoiceService.listPosInvoices(filters, config)
 
     return res.json({ invoices })
 }

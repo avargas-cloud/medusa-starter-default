@@ -99,6 +99,16 @@ export interface QbCreateInvoicePayload {
     salesTaxCode?: string
 }
 
+export interface QbCreateCreditMemoPayload {
+    customerId: string
+    date?: string
+    refNumber?: string
+    memo?: string
+    items?: QbOrderItem[]
+    taxExempt?: boolean
+    salesTaxCode?: string
+}
+
 export interface QbCreateEstimatePayload {
     customerId: string
     date: string

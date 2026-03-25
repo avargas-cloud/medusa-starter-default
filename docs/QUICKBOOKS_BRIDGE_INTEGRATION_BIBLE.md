@@ -218,11 +218,23 @@ Para migrar los clientes a Medusa V2 con todos los datos B2B (Términos, Impuest
 
 ---
 
-### 7. Sincronización de Inventario (Optimizada)
+### 7. Sincronización de Inventario y Precios (Motor In-Memory Bulk Sync)
 
-El sistema ahora **filtra automáticamente** los productos inactivos para acelerar la carga (de ~5000 a ~2000 productos).
+El sistema filtra automáticamente los productos en la base de datos de Medusa y procesa los cambios de QuickBooks usando un motor de sincronización de Ultra-Alta Velocidad (implementado Marzo 2026).
 
-**Para probar la descarga masiva:**
+**El Problema Anterior (Stalling):**
+Procesar 2500 ítems secuencialmente mediante peticiones `await` aisladas o inserts individuales colapsaba el sistema (100% CPU lock) y el tiempo superaba los 10 minutos. Adicionalmente, forzar etiquetas inútiles o filtros DTD en `ItemSitesQueryRq` inflaba el XML a ~15MB estancando el Web Connector en 20%.
+
+**La Solución (In-Memory Maps + Mass Batching):**
+1. **Reducción de Payload:** Se eliminaron etiquetas inútiles (ej: `<InventorySiteRef>`) del query nativo, reduciendo el XML casi a la mitad (7MB) y evitando que QB Desktop crashee.
+2. **Pre-Fetch Completo:** Al iniciar el sync en Medusa (`sync-inventory-core.ts` y `sync-prices-core.ts`), **TODOS** los niveles de inventario y precios se extraen de PostgreSQL a la RAM en una única consulta gigante limitless, para luego ser cacheados en un `Map()`.
+3. **Array Mutation:** El largo bucle de 2500 iteraciones ya **no** usa bloqueos de base de datos (`await`); las validaciones contra el Hash Map ocurren en un par de milisegundos.
+4. **Ejecución Bulk:** Las ediciones, inserciones o eliminaciones se apilan en arrays transaccionales (`updatesToApply`, `createsToApply`, `deletesToApply`). Se envían hacia las APIs base en bloques masivos _Chunks_ de tamaño = 500, insertando cientos de filas por milisegundo.
+5. **Garbage Collection:** Ya que el scope vive dentro del contexto CLI, tras su ejecución el GC de Node drena y libera las listas hash previniendo Memory Leaks absolutos automáticamente.
+
+⏳ **Resultado:** El tiempo de sincronozacion Backend bajó a **~1-2 segundos** logrando una performance óptima en producción sin asfixiar la conexión de base de datos.
+ 
+**Para probar la descarga masiva antigua:**
 Debido a que PowerShell viejo (v2.0) tiene problemas con JSONs grandes, usa el script de Node.js incluido:
 
 ```powershell
@@ -281,6 +293,7 @@ $res.operation.qbxmlResponse
     *   **Solución:** Mapear SIEMPRE por `ListID` (`<ItemRef><ListID>800006A3-...</ListID></ItemRef>`) en los builders en lugar de `<FullName>`, en particular para items fijos de servicio/envío.
 3.  **Amount vs Rate en Estimates:** En `<EstimateLineAdd>` o `<EstimateLineMod>`, enviar `<Amount>` en lugar de `<Rate>`. QuickBooks re-calcula el rate erróneamente multiplicándolo por el Cost si se envía el Rate.
 4. **Solución general:** Usar siempre la función `escapeXml()` en los builders (ya implementada).
+5. **Filtros Ilegales en ItemSitesQueryRq (Inventario):** QB Desktop 2012/v11.0 strict mode rechaza anidar `<ItemFilter>` (como `<ActiveStatus>`) dentro de `<ItemSiteFilter>`. Provoca el mismo flag silencioso de crasheo DTD `0x80040400`. **Solución implementada:** Remover todas las etiquetas de filtro por estado o cantidad al nivel del `<ItemSitesQueryRq>` en el Builder del Bridge, y que Node.js las ignore y filtre nativamente contra la lista de variantes activas conectadas en Medusa desde la BD de PostgreSQL en milisegundos.
 
 ### 🛑 Error 3070: "String is too long"
 **Síntoma:** Falla al crear Invoice o Payment.

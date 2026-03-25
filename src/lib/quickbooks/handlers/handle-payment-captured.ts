@@ -23,6 +23,11 @@ export async function handlePaymentCaptured(
         return
     }
 
+    if (order.metadata?.pos_created) {
+        logger.info(`${LOG_PREFIX} ⏭️ Skipping order.payment_captured for POS order ${orderId}. Payment is handled by pos.payment.created event.`)
+        return
+    }
+
     let qbCustomerId: string | undefined = order.metadata?.qb_list_id
 
     if (!qbCustomerId && order.customer_id) {
@@ -45,7 +50,7 @@ export async function handlePaymentCaptured(
     logger.info(`${LOG_PREFIX} Using qb_list_id=${qbCustomerId}`)
 
     const amount = data.amount ?? order.total ?? 0
-    logger.info(`${LOG_PREFIX} Payment amount: ${amount} (cents) = $${(amount / 100).toFixed(2)}`)
+    logger.info(`${LOG_PREFIX} Payment amount: $${amount.toFixed(2)}`)
 
     const paymentMethod = "Credit Card"
 
@@ -73,7 +78,7 @@ export async function handlePaymentCaptured(
             logger.info(`${LOG_PREFIX} Auto-applying new payment ${result.txnId} to latest Invoice ${latestInvoiceTxnId}...`)
             const applyResult = await applyPaymentToInvoiceInQb({
                 customerId: qbCustomerId,
-                amount: (amount / 100),
+                amount: amount,
                 invoiceId: latestInvoiceTxnId,
                 creditTxnId: result.txnId,
             })

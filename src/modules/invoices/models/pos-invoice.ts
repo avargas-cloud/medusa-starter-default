@@ -31,6 +31,7 @@ const PosInvoice = model.define('pos_invoice', {
     notes:          model.text().nullable(),
     created_by:     model.text().nullable(), // admin user email/id
     shipping_address: model.json().nullable(), // snapshot of order.shipping_address at creation time
+    metadata:       model.json().nullable(), // Extensibility (QB ref, etc.)
     items:          model.hasMany(() => PosInvoiceItem, { mappedBy: 'invoice' }),
     tracking_links: model.hasMany(() => InvoiceTracking, { mappedBy: 'invoice' }),
 })

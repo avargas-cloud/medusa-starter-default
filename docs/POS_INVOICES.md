@@ -199,3 +199,18 @@ onSuccess={(invoice) => {
     order.router.push(`/invoices/${invoice.order_id}`)
 }}
 ```
+
+---
+
+## Changelog — Marzo 24, 2026
+
+### Eliminación del Cálculo Dinámico en Invoices (Parche 0.01 Cent)
+**Problema:** En el componente `OrderSummary.tsx` dentro de `InvoicePage.tsx`, el total, subtotal e impuesto se derivaban de reducciones matemáticas matemáticas asumiendo descuentos. Ocasionalmente esto producía errores flotantes que sumaban `/ 100` ocasionando facturas visuales de $85.64 cuando postgres y QuickBooks dictaban $85.63.
+**Solución:** Los Facturadores de lectura (`InvoicePage`) tienen terminantemente prohibido calcular cosas matemáticas. Todo se renderiza directamente mapeando la llave base desde `activeInvoice.tax`, `activeInvoice.total` y `activeInvoice.subtotal` alojados estáticos en postgres tras la ejecución perfecta nativa oficial de Medusa v2.
+
+### Insignia "DELIVERED" estricta por Fulfillment ID
+**Problema:** Las etiquetas de envío carecían de distinción visual rápida en facturas que ya habían egresado de almacén. Típicamente el POS marcaba que una factura estaba "Pending Fulfillment" basándose erróneamente en el paraguas total de la orden principal.
+**Solución Implementada:** La variable local `isInvoiceFulfilled` se actualizó para ser agresivamente directa al ID base: 
+1. Realiza una búsqueda dentro del array de la orden extraído `order.order?.fulfillments?.find((f: any) => f.id === activeInvoice.fulfillment_id)`.
+2. Revisa sus timestamps nativas `shipped_at`, `delivered_at`, ó si contiene trazas array dentro de la propiedad `labels` (Guías por Transportista). 
+3. Dependiendo de los datos, el badge renderizado en el UI será `"DELIVERED"` (color morado fuerte) ó `"PENDING FULFILLMENT"` para ayudar de un vistazo al representante de ventas.

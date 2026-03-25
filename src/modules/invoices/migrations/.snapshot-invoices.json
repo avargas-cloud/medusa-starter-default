@@ -50,7 +50,7 @@
           "primary": false,
           "nullable": false,
           "length": 6,
-          "default": "Wed Mar 18 2026 15:42:53 GMT-0400 (Eastern Daylight Time)",
+          "default": "Wed Mar 25 2026 13:17:29 GMT-0400 (Eastern Daylight Time)",
           "mappedType": "datetime"
         },
         "notes": {
@@ -345,6 +345,15 @@
         },
         "shipping_address": {
           "name": "shipping_address",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "mappedType": "json"
+        },
+        "metadata": {
+          "name": "metadata",
           "type": "jsonb",
           "unsigned": false,
           "autoincrement": false,

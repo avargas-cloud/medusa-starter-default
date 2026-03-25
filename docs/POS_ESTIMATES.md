@@ -1787,3 +1787,10 @@ Medusa v2 apartir de su Core no almacena la relación de la orden directamente e
 
 **Solución Implementada:**
 La ruta `add-shipping-force` ahora ejecuta un SQL puro contra la tabla pivote de la orden en `order_shipping` inyectando un query local (`UPDATE order_shipping SET version = $1`) inmediatamente después de la creación estandar, forzando a la relación a coincidir y **empatar su versión estrictamente con la de la orden activa real**. Esto permite que la entidad del `Order Edit` la abarque y perpetue exitosamente durante sus cálculos paralelos o en subsecuentes ciclos de vida provenientes de un POS Estimate.
+
+### 33. Spectator Mode en Estimates (`isReadOnly`)
+**Contexto:** Evitar sobreescrituras en Estimates cuando dos o más vendedores abren la misma cotización en simultáneo.
+**Solución Implementada:** Al integrarse el sistema de Local Lock (BroadcastChannel + Redis), el estimate renderizado adopta dinámicamente el estado `isReadOnly: true` para calificar a cualquier visitante secundario como Spectator:
+- Componentes modulares (`CustomerStrip`, `NoteArea`, Menú de envíos) adoptan clases Tailwind `pointer-events-none opacity-60 grayscale` deteniendo la interacción física de golpe.
+- `LineItemsTable` desactiva nativamente el Drag&Drop (Sortable), tachos de basura y la digitación numérica de campos `qty`.
+- Los flujos primarios transaccionales del `DocumentToolbar` (Save, Duplicate, Confirm Order) se inhabilitan protegiendo la base de datos de redis.

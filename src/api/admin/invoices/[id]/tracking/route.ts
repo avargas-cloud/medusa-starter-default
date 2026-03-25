@@ -11,6 +11,7 @@ interface TrackingBody {
     tracking_number: string
     tracking_url?: string
     shipped_at?: string  // ISO date string
+    fulfillment_id?: string // Native Medusa fulfillment link
 }
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
@@ -36,6 +37,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         tracking_url:    body.tracking_url ?? null,
         shipped_at:      body.shipped_at ? new Date(body.shipped_at) : null,
     })
+
+    // If a fulfillment relationship was provided during tracking creation, persist it to the Invoice
+    if (body.fulfillment_id) {
+        await invoiceService.updatePosInvoices({
+            id,
+            fulfillment_id: body.fulfillment_id,
+        })
+    }
 
     return res.status(201).json({ tracking })
 }

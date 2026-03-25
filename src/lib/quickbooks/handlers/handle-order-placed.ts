@@ -103,23 +103,23 @@ export async function handleOrderPlaced(
             logger.warn(`${LOG_PREFIX} ⚠️ Order ${orderId} has no customer_id`)
         }
 
-        const orderDiscountTotal = Math.round((order.discount_total || 0) * 100)
+        const orderDiscountTotal = Number(order.discount_total || 0)
 
         const activeItems = (order.items || [])
             .filter((item: any) => (item.quantity ?? 0) > 0)
             .map((item: any) => ({
                 ...item,
-                unit_price: Math.round((item.unit_price || 0) * 100),
+                unit_price: Number(item.unit_price || 0),
                 subtotal: undefined,
             }))
 
         const qbItems = buildQbItems(activeItems, order.metadata)
 
         if (orderDiscountTotal > 0) {
-            const orderSubtotal = Math.round((order.subtotal || 0) * 100)
+            const orderSubtotal = Number(order.subtotal || 0)
             const discountPercent = orderSubtotal > 0 ? (orderDiscountTotal / orderSubtotal) * 100 : null
             buildQbOrderDiscountLines(orderDiscountTotal, discountPercent).forEach(l => qbItems.push(l))
-            logger.info(`${LOG_PREFIX} Discount lines added: -$${(orderDiscountTotal/100).toFixed(2)}`)
+            logger.info(`${LOG_PREFIX} Discount lines added: -$${orderDiscountTotal.toFixed(2)}`)
         }
 
         const shippingItem = buildShippingQbItem(

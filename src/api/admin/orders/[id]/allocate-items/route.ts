@@ -43,14 +43,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         // 2. Get order items via Medusa admin API (internal HTTP — uses Medusa ORM, not new Pool)
         //    order.items[].id = order_line_item.id (correct line_item_id for reservations)
         const orderRes = await fetch(
-            `${base}/admin/orders/${orderId}?fields=id,+items.id,+items.quantity,+items.variant_id`,
+            `${base}/admin/orders/${orderId}?fields=id,*items,*items.detail`,
             { headers: authHeaders }
         )
         if (!orderRes.ok) {
             return res.status(400).json({ error: `Cannot fetch order: ${orderRes.status}` })
         }
         const { order } = await orderRes.json()
-        const orderItems: { id: string; quantity: number; variant_id: string | null }[] = order?.items ?? []
+        const orderItems: any[] = order?.items ?? []
 
         if (!orderItems.length) {
             return res.status(200).json({ allocated: [], message: "No items found" })
@@ -60,7 +60,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         //    Per-item lookup so a single DB error doesn't silently skip other items.
         for (const item of orderItems) {
             const lineItemId = item.id  // order_line_item.id ✅
-            const quantity = Number(item.quantity)
+            const fulfilledQty = Number(item.detail?.fulfilled_quantity || 0)
+            const quantity = Math.max(0, Number(item.quantity) - fulfilledQty)
             const variantId = item.variant_id
 
             if (!variantId) {
@@ -77,6 +78,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     { take: 1 }
                 )
                 if (existing?.length) {
+                    if (quantity === 0) {
+                        await inventoryModule.deleteReservationItems([existing[0].id])
+                        results.push({ line_item_id: lineItemId, status: "deleted_allocation", reservation_id: existing[0].id })
+                        console.log(`[allocate-items] 🗑️ Deleted reservation ${existing[0].id} (pending qt=0)`)
+                        continue
+                    }
                     if (Number(existing[0].quantity) === quantity) {
                         results.push({ line_item_id: lineItemId, status: "already_allocated", reservation_id: existing[0].id })
                         continue
@@ -84,6 +91,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                         existingResId = existing[0].id
                         console.log(`[allocate-items] 📝 Quantity changed for ${lineItemId}: ${existing[0].quantity} -> ${quantity}`)
                     }
+                } else if (quantity === 0) {
+                    continue // Nothing to reserve, nothing to delete
                 }
 
                 // Get inventory_item_id per variant via remoteQuery
@@ -153,7 +162,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                             await inventoryModule.updateReservationItems(existingResId, { quantity })
                         }
                     } catch (e) {
-                        await inventoryModule.updateReservationItems([{ id: existingResId, quantity }]).catch(() => {})
+                        await inventoryModule.updateReservationItems(existingResId, { quantity }).catch(() => {})
                     }
                     results.push({ line_item_id: lineItemId, status: "updated_allocation", reservation_id: existingResId })
                     console.log(`[allocate-items] 🔄 Updated reservation ${existingResId} to ${quantity}×`)

@@ -329,19 +329,37 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             logger.warn(`[post-edit-sync] Discount reconciliation non-fatal: ${e.message}`)
         }
     }
-    
+    // ── Update Allocations (Sync Inventory Reservations) ─────────────────────
+    try {
+        const allocRes = await fetch(`${base}/admin/orders/${id}/allocate-items`, {
+            method: "POST", headers: authHeaders, body: "{}"
+        })
+        if (allocRes.ok) {
+            results.allocations = await allocRes.json()
+            logger.info(`[post-edit-sync] ✅ Allocations updated successfully!`)
+        } else {
+            logger.warn(`[post-edit-sync] ⚠️ Failed to update allocations: ${allocRes.status}`)
+        }
+    } catch (e: any) {
+        logger.warn(`[post-edit-sync] Failed to sync allocations: ${e.message}`)
+    }
+
     // ── Update QuickBooks Sales Order (Sync Edits) ───────────────────────────
     try {
         const qbEnabled = process.env.QB_ORDER_FLOW_ENABLED === "true"
-        if (qbEnabled) {
+        const skipQb = (req.body as any).skip_qb === true
+        if (qbEnabled && !skipQb) {
             const { data: qbOrderData } = await query.graph({
                 entity: "order",
                 fields: [
-                    "id", "metadata", "items.*", "items.item.unit_price", "items.variant.*", "items.variant.metadata"
+                    "id", "version", "metadata", "items.*", "items.variant.*", "items.variant.metadata"
                 ],
                 filters: { id }
             })
             const qbOrder = qbOrderData?.[0]
+            if (qbOrder && qbOrder.items && qbOrder.items.length === 0) {
+                logger.warn(`[post-edit-sync] ⚠️ Order fetched has no items!`)
+            }
             
             // Dynamic import because of path nesting
             const { getSoTxnId } = require("../../../../../lib/quickbooks/qb-metadata-types")
@@ -354,19 +372,25 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 logger.info(`[post-edit-sync] QB integration: Pushing Sales Order modifications to txnId=${txnId}...`)
                 const modItems = buildQbItems(qbOrder.items, qbOrder.metadata)
                 
-                const qbRes = await updateSalesOrderInQb({
+                // Run async fire-and-forget so POS UI doesn't hang waiting for Web Connector
+                updateSalesOrderInQb({
                     txnId,
                     items: modItems
+                }).then((qbRes: any) => {
+                    if (qbRes.success) {
+                        logger.info(`[post-edit-sync] ✅ Async QB Sales Order queue successful! opId=${qbRes.data?.operationId}`)
+                    } else {
+                        logger.error(`[post-edit-sync] ❌ Async QB SO Mod failed: ${qbRes.error}`)
+                    }
+                }).catch((e: any) => {
+                    logger.error(`[post-edit-sync] ❌ Async QB SO Mod Exception: ${e.message}`)
                 })
                 
-                if (qbRes.success) {
-                    logger.info(`[post-edit-sync] ✅ QB Sales Order queue successful! opId=${qbRes.data?.operationId}`)
-                    results.qb_sync = qbRes.data?.operationId
-                } else {
-                    logger.error(`[post-edit-sync] ❌ QB SO Mod failed: ${qbRes.error}`)
-                    results.qb_error = qbRes.error
-                }
+                results.qb_sync = "queued_async"
             }
+        } else if (skipQb) {
+            logger.info(`[post-edit-sync] ⏭️ Skipping async QB SO Mod (skip_qb=true, no changes)`)
+            results.qb_sync = "skipped_clean"
         }
     } catch (e: any) {
         logger.warn(`[post-edit-sync] QuickBooks SO mod sync non-fatal err: ${e.message}`)

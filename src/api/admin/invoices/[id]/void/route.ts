@@ -202,14 +202,63 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     
     // 3. DYNAMICALLY REVERT PARENT MEDUSA ORDER STATUSES
     if (invoice.order_id) {
-        // Attempt to natively cancel the Medusa fulfillment if present, before recalculating
         if (invoice.fulfillment_id) {
             try {
-                const fulfillmentModule = req.scope.resolve(Modules.FULFILLMENT)
-                await fulfillmentModule.cancelFulfillment(invoice.fulfillment_id)
-                console.log(`[VOID INVOICE] Canceled native fulfillment ${invoice.fulfillment_id}`)
+                // Medusa natively blocks canceling a Fulfillment once it has been "Shipped" 
+                // Since this is a POS hard-void, we surgically revert the item counts and nuke the physical tree.
+                const pool = getDbPool()
+                
+                // 1. Find the exact quantities that were fulfilled in THIS specific fulfillment
+                const fItems = await pool.query(
+                    `SELECT line_item_id, quantity FROM fulfillment_item WHERE fulfillment_id = $1 AND deleted_at IS NULL`, 
+                    [invoice.fulfillment_id]
+                )
+
+                // 2. Reverse the counts in Medusa's high-precision JSONB schema
+                for (const fItem of fItems.rows) {
+                     // Reverse fulfilled quantity
+                     await pool.query(`
+                        UPDATE order_item 
+                        SET 
+                            fulfilled_quantity = GREATEST(0, fulfilled_quantity - $1::numeric),
+                            raw_fulfilled_quantity = jsonb_set(
+                                raw_fulfilled_quantity, 
+                                '{value}', 
+                                to_jsonb(GREATEST(0, (raw_fulfilled_quantity->>'value')::numeric - $1::numeric)::text), 
+                                false
+                            )
+                        WHERE item_id = $2
+                     `, [fItem.quantity, fItem.line_item_id])
+                     
+                     // Restore allocated (reservation) quantity
+                     try {
+                         await pool.query(`
+                            UPDATE reservation_item 
+                            SET 
+                                quantity = quantity + $1::numeric,
+                                raw_quantity = jsonb_set(
+                                    raw_quantity, 
+                                    '{value}', 
+                                    to_jsonb(((raw_quantity->>'value')::numeric + $1::numeric)::text), 
+                                    false
+                                )
+                            WHERE line_item_id = $2 AND deleted_at IS NULL
+                         `, [fItem.quantity, fItem.line_item_id])
+                         console.log(`[VOID INVOICE] Reversed ${fItem.quantity} units (Fulfilled -> Allocated) for item ${fItem.line_item_id}`)
+                     } catch (err) {
+                         console.warn(`[VOID INVOICE] Could not restore allocation for ${fItem.line_item_id}`, err)
+                     }
+                }
+
+                // 3. Delete the fulfillment records
+                await pool.query(`UPDATE fulfillment_label SET deleted_at = NOW() WHERE fulfillment_id = $1`, [invoice.fulfillment_id])
+                await pool.query(`UPDATE fulfillment_item SET deleted_at = NOW() WHERE fulfillment_id = $1`, [invoice.fulfillment_id])
+                await pool.query(`UPDATE order_fulfillment SET deleted_at = NOW() WHERE fulfillment_id = $1`, [invoice.fulfillment_id])
+                await pool.query(`UPDATE fulfillment SET deleted_at = NOW(), canceled_at = NOW() WHERE id = $1`, [invoice.fulfillment_id])
+                
+                console.log(`[VOID INVOICE] Surgically Nuked native fulfillment ${invoice.fulfillment_id}`)
             } catch (fErr: any) {
-                console.warn(`[VOID INVOICE] Could not cancel fulfillment natively:`, fErr.message)
+                console.warn(`[VOID INVOICE] Could not nuke fulfillment natively:`, fErr.message)
             }
         }
         

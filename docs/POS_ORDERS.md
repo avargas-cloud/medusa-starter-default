@@ -237,11 +237,23 @@ A diferencia de los Estimates (que no tienen tracción contable real), las Órde
 **Solución Implementada:**
 1. **Identificador `isVoided`:** Se agregó el check `const isVoided = order.order?.status === 'canceled'` directamente en la raíz de `app/(pos)/orders/[id]/page.tsx`.
 2. **Badge Visual:** El `TopBar` ahora evalúa `isVoided` como prioridad máxima antes que `isFullyInvoiced`, renderizando un badge rojo nativo de "VOIDED".
-3. **Bloqueo Selectivo en UI:**
+3. **Bloqueo Selectivo en UI (`isReadOnly` / `isVoided`):**
    - La barra inferior (Notas, Shipping, Promotions) y la tabla de cliente superior reciben las clases de Tailwind `pointer-events-none opacity-60 grayscale`. Esto asegura que el click esté físicamente desactivado pero permitiendo leer los datos legados de la orden.
-   - El `LineItemsTable` también recibe el bloqueo de opacidad, lo que significa que ya no se pueden ajustar cantidades.
-   - Los botones del Toolbar Principal (`onSave`, `onDiscard`, `onCreateInvoice`, `onPayment`) se evalúan como nulos (`!isVoided ? ... : undefined`). El componente dinámicamente esconde todos los flujos de "Escritura", dejando disponibles **únicamente opciones de solo-lectura** como Print, Email y The History panel.
-   - Todo el subset de de "Agregar Ítems" (`ItemSearch`, boton `Categories`, boton `Discounts`, btn `Comment`) usa un conditional rendering de React (`{!isVoided && ...}`) ocultándose por completo.
+   - El `LineItemsTable` recibe la propiedad `isReadOnly`. Las basuras, edición qty y DnD quedan congelados.
+   - Los botones del Toolbar Principal (`onSave`, `onDiscard`, `onCreateInvoice`, `onPayment`) se evalúan como nulos si la orden está voided o la pestaña está bloqueada por concurrencia. El componente oculta nativamente todos los flujos de "Escritura".
+   - Botones como `Categories`, `Discounts`, `Comment` quedan deshabilitados/ocultos.
+
+---
+
+## Changelog — Marzo 24, 2026
+
+### Parche Lógico: Detección de Modificación de Descuentos
+**Problema:** Al interactuar con el *BulkDiscountModal* en órdenes previas y limpiar manualmente a 0% el descuento a un ítem y guardarlo, el array `updates` era filtrado indebidamente provocando que la interfaz no enviara el parche de descuento de retorno a Medusa para remover el descuento viejo.
+**Solución:** Se cambió la compuerta de evaluación. En lugar de procesar los items filtrando por `item.lineDiscount > 0`, la UI ahora evalúa explícitamente altas nulas y de limpieza permitiendo variables `<=` ó `>= 0`, obligando a disparar el update local inclusive si el valor digitado representó un descuento de $0.00.
+
+### Interceptor Quirúrgico de Envíos (CompleteOrderModal)
+**Problema:** Al clickear "Create Invoice / Fulfill", el cajero solía notar discrepancias con el costo del método de envío en el mismo instante de cobrar. Cambiar el costo a través del layout principal era molesto dado que el modal ya estaba abierto.
+**Solución:** El componente `CompleteOrderModal` ahora intercepta su botón final. Sí el usuario sobrescribe el input del Shipping dentro del modal, la arquitectura emite silenciosamente la mutación de Medusa (`admin/orders/${medusaId}/shipping-methods/${methodId}`) actualizando la raíz maestra *antes* de proceder, gatilla un diálogo de Confirmación temporal para transparentar el cambio a nivel caja ("Order modified before Invoicing"), y luego reanuda la construcción de Fulfillments usando los números en base de datos frescos.
 
 ---
 

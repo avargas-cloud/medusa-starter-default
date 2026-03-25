@@ -52,6 +52,28 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 [fulfillmentId, invId]
             )
             console.log(`[create-fulfillment-force] ✅ Bound fulfillment ${fulfillmentId} to Invoice ${invId}`)
+
+            // Feature Upgrade: inherit QB ref from invoice metadata onto the new fulfillment metadata
+            try {
+                const invRes = await pool.query(`SELECT metadata FROM pos_invoice WHERE id = $1`, [invId])
+                const invMeta = invRes.rows[0]?.metadata || {}
+                
+                if (invMeta.qb_txn_id) {
+                    const fulfillmentModule = req.scope.resolve(Modules.FULFILLMENT) as any
+                    const fRes = await fulfillmentModule.retrieveFulfillment(fulfillmentId)
+                    await fulfillmentModule.updateFulfillment(fulfillmentId, {
+                        metadata: {
+                            ...(fRes.metadata || {}),
+                            qb_txn_id: invMeta.qb_txn_id,
+                            qb_ref_number: invMeta.qb_ref_number
+                        }
+                    })
+                    console.log(`[create-fulfillment-force] ✅ Copied QB Ref ${invMeta.qb_ref_number} onto Medusa Fulfillment ${fulfillmentId}`)
+                }
+            } catch (metaErr: any) {
+                console.warn(`[create-fulfillment-force] Failed to inherit QB meta to fulfillment: ${metaErr?.message}`)
+            }
+
         } catch (err: any) {
             console.warn(`[create-fulfillment-force] Failed to bind to pos_invoice: ${err?.message}`)
         }

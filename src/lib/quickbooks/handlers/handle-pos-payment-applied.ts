@@ -77,7 +77,7 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
     }
 
     // 4. Fire the Bridge Request to Apply Payment to Invoice!
-    logger.info(`${LOG_PREFIX} 🎯 Applying Payment (TxnID: ${paymentTxnId}, Amount: $${(amount_applied/100).toFixed(2)}) -> Invoice (TxnID: ${invoiceTxnId}) in QB...`)
+    logger.info(`${LOG_PREFIX} 🎯 Applying Payment (TxnID: ${paymentTxnId}, Amount: $${amount_applied.toFixed(2)}) -> Invoice (TxnID: ${invoiceTxnId}) in QB...`)
     
     // Fetch the customer based on the order to get QB List ID if needed
     // (applyPaymentToInvoiceInQb needs customerId)
@@ -97,7 +97,7 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
     const applyResult = await applyPaymentToInvoiceInQb({
         customerId: customerQbId,
         invoiceId: invoiceTxnId,
-        amount: (amount_applied / 100),
+        amount: amount_applied,
         creditTxnId: paymentTxnId
     })
 

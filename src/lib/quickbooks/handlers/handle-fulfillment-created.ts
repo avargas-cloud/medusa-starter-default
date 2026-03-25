@@ -137,7 +137,7 @@ export async function handleFulfillmentCreated(
 
     const pool = getDbPool()
     let memo = order.metadata?.pos_notes ? `POS Note: ${order.metadata.pos_notes}` : undefined
-    let invoiceShippingCents: number | undefined;
+    let invoiceShippingAmount: number | undefined;
 
     try {
         let sql = `SELECT invoice_number, shipping FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
@@ -156,7 +156,7 @@ export async function handleFulfillmentCreated(
                 memo = memo ? `${memo} | Invoice INV${seq}` : `Invoice INV${seq}`
             }
             if (row.shipping !== undefined && row.shipping !== null) {
-                invoiceShippingCents = Number(row.shipping)
+                invoiceShippingAmount = Number(row.shipping)
             }
         }
     } catch (e) {
@@ -167,7 +167,7 @@ export async function handleFulfillmentCreated(
 
     if (!linkedTxnId || (linkedTxnId === qbSoTxnId && isPartial)) {
         const qbConfig = await getQbConfig()
-        const orderDiscountTotal = Math.round((order.discount_total || 0) * 100)
+        const orderDiscountTotal = getFloat(order.discount_total || 0)
 
         const activeItems = (order.items || [])
             .filter((item: any) => {
@@ -188,17 +188,17 @@ export async function handleFulfillmentCreated(
             .map((item: any) => ({
                 ...item,
                 quantity: item.fulfillment_quantity ?? item.quantity,
-                unit_price: Math.round(getFloat(item.unit_price) * 100),
-                subtotal: item.subtotal !== undefined ? Math.round(getFloat(item.subtotal) * 100) : undefined,
+                unit_price: getFloat(item.unit_price),
+                subtotal: item.subtotal !== undefined ? getFloat(item.subtotal) : undefined,
             }))
 
         prebuiltItems = buildQbItems(activeItems, order.metadata)
 
         if (orderDiscountTotal > 0) {
-            const orderSubtotal = Math.round(getFloat(order.subtotal) * 100)
+            const orderSubtotal = getFloat(order.subtotal)
             const discountPercent = orderSubtotal > 0 ? (orderDiscountTotal / orderSubtotal) * 100 : null
             buildQbOrderDiscountLines(orderDiscountTotal, discountPercent).forEach(l => prebuiltItems!.push(l))
-            logger.info(`${LOG_PREFIX} Discount lines added to invoice: -$${(orderDiscountTotal/100).toFixed(2)}`)
+            logger.info(`${LOG_PREFIX} Discount lines added to invoice: -$${orderDiscountTotal.toFixed(2)}`)
         }
 
         let shippingMethodsFormatted = ((order as any).shipping_methods || []).map((sm: any) => ({
@@ -206,14 +206,14 @@ export async function handleFulfillmentCreated(
             amount: getFloat(sm.amount)
         }))
 
-        if (invoiceShippingCents !== undefined) {
+        if (invoiceShippingAmount !== undefined) {
             if (shippingMethodsFormatted.length > 0) {
-                shippingMethodsFormatted[0].amount = invoiceShippingCents / 100
+                shippingMethodsFormatted[0].amount = invoiceShippingAmount
                 shippingMethodsFormatted = [shippingMethodsFormatted[0]]
-            } else if (invoiceShippingCents > 0) {
+            } else if (invoiceShippingAmount > 0) {
                 shippingMethodsFormatted = [{
                     name: "Shipping",
-                    amount: invoiceShippingCents / 100
+                    amount: invoiceShippingAmount
                 }]
             } else {
                 shippingMethodsFormatted = []
@@ -275,13 +275,54 @@ export async function handleFulfillmentCreated(
     if (result.txnId || result.operationId) {
         try {
             const fulfillmentId: string | null = (data.fulfillment_id as string | undefined) ?? null
+            const invoiceId: string | null = (data.invoice_id as string | undefined) ?? null
             const patch = buildInvoicePatch(order.metadata || {}, {
                 txnId:         result.txnId || null,
                 refNumber:     result.refNumber || null,
                 operationId:   result.operationId || null,
                 fulfillmentId,
+                invoiceId,
             })
             await orderModule.updateOrders(orderId, { metadata: patch })
+
+            // Feature Upgrade: Store QB data natively onto the invoice (and fulfillment if immediate delivery)
+            if (invoiceId) {
+                try {
+                    const invoiceModule = _container.resolve("invoice") // pos_invoice service
+                    const inv = await invoiceModule.retrievePosInvoice(invoiceId)
+                    const existingInvMeta = inv.metadata || {}
+                    await invoiceModule.updatePosInvoices({
+                        id: invoiceId,
+                        metadata: {
+                            ...existingInvMeta,
+                            qb_txn_id: result.txnId || null,
+                            qb_ref_number: result.refNumber || result.txnId || null,
+                            qb_operation_id: result.operationId || null
+                        }
+                    })
+                    logger.info(`${LOG_PREFIX} ✅ Saved native QB Meta to POS Invoice ${invoiceId}`)
+                } catch (metaErr: any) {
+                    logger.warn(`${LOG_PREFIX} Failed to save native QB Meta to POS Invoice ${invoiceId}: ${metaErr.message}`)
+                }
+            }
+
+            if (fulfillmentId) {
+                try {
+                    const fulfillmentModule = _container.resolve("fulfillment")
+                    const ful = await fulfillmentModule.retrieveFulfillment(fulfillmentId)
+                    const existingFulMeta = ful.metadata || {}
+                    await fulfillmentModule.updateFulfillment(fulfillmentId, {
+                        metadata: {
+                            ...existingFulMeta,
+                            qb_txn_id: result.txnId || null,
+                            qb_ref_number: result.refNumber || result.txnId || null,
+                        }
+                    })
+                    logger.info(`${LOG_PREFIX} ✅ Saved native QB Meta to Fulfillment ${fulfillmentId}`)
+                } catch (fulErr: any) {
+                    logger.warn(`${LOG_PREFIX} Failed to save native QB Meta to Fulfillment ${fulfillmentId}: ${fulErr.message}`)
+                }
+            }
             logger.info(`${LOG_PREFIX} ✅ Saved invoice metadata — TxnID=${result.txnId}, Ref=${result.refNumber}, ful=${fulfillmentId}`)
         } catch (metaErr: any) {
             logger.error(`${LOG_PREFIX} ⚠️ Failed to save invoice metadata: ${metaErr.message}`)

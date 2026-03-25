@@ -58,6 +58,9 @@ La implementación en backend (`backend/src/api/admin/documents/[type]/[id]/lock
 Al recibir un `POST /lock`, el sistema intenta el comando `SET key payload EX 60 NX`. 
 Una característica vital implementada es la **reconexión por misma sesión (`sessionId`)**. Si el key ya existe, el servidor lee el payload; si el `sessionId` del cliente entrante coincide con el del dueño actual, infiere que es la **misma pestaña reconectando** (ej. React Strict Mode haciendo re-mounts) y le renueva el TTL otorgándole éxito (200 OK) en lugar de un conflicto (409 Conflict).
 
+**Negociación Anti-Zombies (`x-hijack-zombie`):**
+Si la petición trae el header `x-hijack-zombie: true`, la API ignora que el Lock le pertenezca a otra pestaña del mismo usuario y lo secuestra a la fuerza. Este mecanismo es necesario para escenarios de "Hard Refresh" (F5) donde el BroadcastChannel de la pestaña anterior murió abruptamente.
+
 ### 4.2. Liberación Segura mediante Scripts Lua
 Liberar un bloqueo usando `DELETE /lock` entraña un riesgo de carrera: un cliente rezagado podría intentar borrar un bloqueo que ya expiró y fue adquirido por alguien más.
 Para solucionar esto, el backend usa un **Lua Script atómico** que lee la llave, verifica si el `token` coincide exactamente con el del solicitante y solo ahí ejecuta el comando `DEL`.
@@ -95,11 +98,17 @@ interface LockState {
 }
 ```
 
-### 5.2. Owner Logic Vs. Spectator Polling
+### 5.2. Owner Logic Vs. Spectator Polling (BroadcastChannel)
 El ciclo de vida React reacciona al intento inicial de `acquireLock()`:
-- Tras éxito (200), inicializa un `setInterval` cada 30 segundos llamando a la ruta `heartbeat/route.ts`.
-- Tras fracaso (409), el hook asume que es el perdedor (`Spectator`) e inicializa un Polling de "mirada" cada 15 segundos (`GET /lock`).
-- Apenas el polling reporta que la llave en Redis fue eliminada (`locked: false`), el hook automáticamente suspende la espera, dispara una refactura de Lock, se roba el control y desactiva las protecciones Read-Only en la UI.
+- Tras éxito (200), inicializa un `setInterval` cada 30 segundos llamando a la ruta `heartbeat/route.ts`. Mantiene abierto un  `BroadcastChannel` `pos:lock:{type}:{id}` donde escucha mensajes tipo `PING`. Si recibe un `PING`, la instancia Owner responde instantáneamente con un `PONG`.
+- Tras fracaso (409) donde el dueño actual **es el mismo usuario**: El hook envía un `PING` por el `BroadcastChannel`. Si en 150ms no recibe un `PONG`, asume que la otra pestaña colapsó o se hizo F5 ("Zombie"). Vuelve a hacer `POST /lock` inyectando el header `x-hijack-zombie: true` para robarse el lock. Si **sí recibe un PONG**, entonces la otra pestaña está viva genuinamente y el hook decae a modo `Spectator`.
+- En modo `Spectator`, inicializa un Polling de "mirada" cada 15 segundos (`GET /lock`). Apenas el polling reporta que la llave en Redis fue eliminada (`locked: false`), el hook automáticamente suspende la espera, dispara una refactura de Lock, se roba el control y desactiva las protecciones Read-Only en la UI.
+
+### 5.3. Interfaz Gráfica (`isReadOnly` Propagation)
+Las vistas principales de la aplicación (`InvoicePage.tsx`, `OrderPage.tsx`, `EstimatePage.tsx`) reaccionan transversalmente a la bandera `isReadOnly`:
+- **Toolbar Actions Desactivadas:** Operaciones mutadoras (Capture Payment, View Tracking, Refund, Void, Duplicate, Save Draft) detienen optimísticamente la acción y el botón se desactiva.
+- **Micro-Componentes Cegados:** Cajas de comentarios (`NoteArea`), Módulos de Envíos, Metadatos e incluso el selector de Cliente se envuelven con las clases de Tailwind `pointer-events-none opacity-60 grayscale` logrando un congelamiento nativo sin forzar redibujos complejos por props de React.
+- **Tablas Desactivadas:** En las grillas como `LineItemsTable`, las basuras (Delete), controles numéricos de cantidad y drag-n-drop (DND) observan `isReadOnly` directamente para anular sus funciones.
 
 ### 5.3 Fetch Keepalive (Destrucciones de Tab)
 Una adición excepcional integrada en el evento `releaseLock()` del Unmount del Frontend es la bandera nativa de navegador `keepalive: true`.
