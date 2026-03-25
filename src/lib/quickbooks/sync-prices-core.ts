@@ -192,11 +192,34 @@ export async function syncPricesCore(
         }
 
         // 4. Update ONLY Prices (with comparison)
-        log("\n💵 Processing Price Updates...")
+        log("\n💵 Processing Price Updates in Bulk...")
 
         const qbMap = new Map(qbData.map((item: any) => [item.ListID, item]))
 
+        const priceSetIds = qbVariants
+            .map((v: any) => v.price_set?.id)
+            .filter(Boolean) as string[]
 
+        log("🔍 Fetching existing Medusa prices...")
+        const allPrices = priceSetIds.length > 0
+            ? await pricingModule.listPrices({ price_set_id: priceSetIds }, { take: 100000 })
+            : []
+
+        // Map price_set_id -> Price[]
+        const pricesMap = new Map<string, any[]>()
+        for (const p of allPrices) {
+            const psId = p.price_set_id!
+            if (!pricesMap.has(psId)) pricesMap.set(psId, [])
+            pricesMap.get(psId)!.push(p)
+        }
+
+        const retailUpdates: any[] = []
+        const retailCreates: any[] = []
+        const retailDeletes: string[] = []
+
+        const wholesaleUpdates: any[] = []
+        const wholesaleCreates: any[] = []
+        const wholesaleDeletes: string[] = []
 
         for (const variant of qbVariants) {
             const qbId = (variant.metadata as any)?.quickbooks_id
@@ -208,7 +231,7 @@ export async function syncPricesCore(
                 continue
             }
 
-            const newPrice = parseFloat(qbItem.SalesPrice)
+            const newPrice = parseFloat(qbItem.SalesPrice || "")
 
             if (!variant.price_set) {
                 stats.skippedNoPrice++
@@ -222,108 +245,143 @@ export async function syncPricesCore(
                 continue
             }
 
-            // Get current price to compare
-            try {
-                const { data: currentPrices } = await query.graph({
-                    entity: "price",
-                    fields: ["id", "amount", "price_list_id"],
-                    filters: {
-                        price_set_id: variant.price_set.id,
-                        currency_code: "usd"
-                    }
+            // Get current prices from RAM
+            const currentPrices = pricesMap.get(variant.price_set.id) || []
+            
+            // Find default retail prices (no price list attached)
+            const defaultPrices = currentPrices.filter((p: any) => !p.price_list_id)
+            const currentAmount = defaultPrices[0]?.amount ?? 0
+
+            // Compare dollars to dollars — skip if unchanged (within $0.01 tolerance)
+            // AND there are no duplicates to clean up
+            if (Math.abs(currentAmount - newPrice) < 0.01 && defaultPrices.length <= 1) {
+                stats.skippedNoChange++
+                // Notice: User requested that if Retail skips, Wholesale skips too.
+                continue
+            }
+
+            if (dryRun) {
+                const wsPreview = wholesalePriceListId ? ` (wholesale would be: $${smartRound(newPrice * 0.9).toFixed(2)})` : ""
+                log(`   [DRY RUN] Would update ${variant.sku || variant.id}: $${currentAmount.toFixed(2)} → $${newPrice.toFixed(2)}${wsPreview}`)
+                stats.updatedPrice++
+                if (wholesalePriceListId) stats.updatedWholesale++
+                continue
+            }
+
+            // Queue Retail Price Update
+            if (defaultPrices.length > 0) {
+                retailUpdates.push({
+                    id: defaultPrices[0].id,
+                    amount: newPrice,
                 })
-
-                // Find default retail prices (no price list attached)
-                const defaultPrices = currentPrices.filter((p: any) => !p.price_list_id)
-                const currentAmount = defaultPrices[0]?.amount ?? 0
-
-                // Medusa v2 stores prices in MAJOR UNITS (dollars), NOT cents.
-                // QB also sends dollars (e.g., SalesPrice: "29.99")
-                // So we compare dollars to dollars directly — no conversion needed.
-                // Reference: sync-qb-inventory.ts line 194: "v2: Store dollars directly, NO × 100"
-
-                // NOTE: Anomaly guard removed — QB prices are authoritative.
-                // High Medusa prices (e.g. $607 vs QB $7.49) are the historical
-                // cents-as-dollars bug. We trust QB and overwrite.
-
-                // Compare dollars to dollars — skip if unchanged (within $0.01 tolerance)
-                // AND there are no duplicates to clean up
-                if (Math.abs(currentAmount - newPrice) < 0.01 && defaultPrices.length <= 1) {
-                    stats.skippedNoChange++
-                    continue
+                
+                // Cleanup duplicates if they exist
+                if (defaultPrices.length > 1) {
+                    const duplicateIds = defaultPrices.slice(1).map((p: any) => p.id)
+                    retailDeletes.push(...duplicateIds)
                 }
+            } else {
+                retailCreates.push({
+                    price_set_id: variant.price_set.id,
+                    currency_code: "usd",
+                    amount: newPrice,
+                    rules: {}
+                })
+            }
 
-                if (dryRun) {
-                    const wsPreview = wholesalePriceListId ? ` (wholesale would be: $${smartRound(newPrice * 0.9).toFixed(2)})` : ""
-                    log(`   [DRY RUN] Would update ${variant.sku || variant.id}: $${currentAmount.toFixed(2)} → $${newPrice.toFixed(2)}${wsPreview}`)
-                    stats.updatedPrice++
-                    if (wholesalePriceListId) stats.updatedWholesale++
-                    continue
-                }
+            stats.updatedPrice++
 
-                // Update Price — Medusa v2: store in dollars directly (major units)
-                if (defaultPrices.length > 0) {
-                    // Update the first existing default price
-                    await (pricingModule as any).updatePrices([
-                        {
-                            id: defaultPrices[0].id,
-                            amount: newPrice,
-                        }
-                    ])
+            // Queue Wholesale Price Update ONLY if Retail changed
+            if (wholesalePriceListId && variant.price_set) {
+                const wholesalePrice = smartRound(newPrice * 0.9)
+                const existingWholesale = currentPrices.filter((p: any) => p.price_list_id === wholesalePriceListId)
 
-                    // Cleanup duplicates if they exist (fixing duplicated retail prices)
-                    if (defaultPrices.length > 1) {
-                        const duplicateIds = defaultPrices.slice(1).map((p: any) => p.id)
-                        await (pricingModule as any).deletePrices(duplicateIds)
-                        warn(`   🧹 Cleaned up ${duplicateIds.length} duplicate retail prices for ${variant.sku}`)
+                if (existingWholesale.length > 0) {
+                    wholesaleUpdates.push({
+                        id: existingWholesale[0].id,
+                        amount: wholesalePrice
+                    })
+                    // Cleanup duplicates for wholesale if they exist
+                    if (existingWholesale.length > 1) {
+                        const duplicateIds = existingWholesale.slice(1).map((p: any) => p.id)
+                        wholesaleDeletes.push(...duplicateIds)
                     }
                 } else {
-                    // Create new price if not exists
-                    await (pricingModule as any).createPrices([
-                        {
-                            price_set_id: variant.price_set.id,
-                            currency_code: "usd",
-                            amount: newPrice,
-                            rules: {}
-                        }
-                    ])
+                    wholesaleCreates.push({
+                        price_set_id: variant.price_set.id,
+                        price_list_id: wholesalePriceListId,
+                        currency_code: "usd",
+                        amount: wholesalePrice,
+                        rules: wholesaleGroupId ? { customer_group_id: wholesaleGroupId } : {}
+                    })
                 }
+                stats.updatedWholesale++
+            }
+        }
 
-                stats.updatedPrice++
-                log(`   💵 Retail updated ${variant.sku || variant.id}: $${currentAmount.toFixed(2)} → $${newPrice.toFixed(2)}`)
+        // 5. Apply Queued Changes in BULK
+        if (!dryRun) {
+            log(`⚡ Applying Retail: ${retailUpdates.length} updates, ${retailCreates.length} creates, ${retailDeletes.length} deletes in mass batches...`)
+            const BULK_SIZE = 500
 
-                // Update wholesale for THIS variant only — per-variant, no delete-all
-                if (wholesalePriceListId && variant.price_set) {
-                    const wholesalePrice = smartRound(newPrice * 0.9)
-                    try {
-                        // Find and delete only THIS variant's existing wholesale price
-                        const existingWholesale = await pricingModule.listPrices({
-                            price_set_id: [variant.price_set.id],
-                            price_list_id: [wholesalePriceListId]
-                        })
-                        if (existingWholesale.length > 0) {
-                            await (pricingModule as any).deletePrices(existingWholesale.map((p: any) => p.id))
-                        }
-                        // Create new wholesale price for this variant
-                        await (pricingModule as any).createPrices([{
-                            price_set_id: variant.price_set.id,
-                            price_list_id: wholesalePriceListId,
-                            currency_code: "usd",
-                            amount: wholesalePrice,
-                            rules: wholesaleGroupId ? { customer_group_id: wholesaleGroupId } : {}
-                        }])
-                        stats.updatedWholesale++
-                        log(`   🏷️  Wholesale updated ${variant.sku || variant.id}: $${wholesalePrice.toFixed(2)} (10% off)`)
-                    } catch (wsErr: any) {
-                        warn(`   ⚠️  Wholesale update failed for ${variant.sku}: ${wsErr.message}`)
+            // RETAIL BATCHES
+            if (retailUpdates.length > 0) {
+                for (let i = 0; i < retailUpdates.length; i += BULK_SIZE) {
+                    const chunk = retailUpdates.slice(i, i + BULK_SIZE)
+                    try { await (pricingModule as any).updatePrices(chunk) } 
+                    catch (err: any) { logger.error(`   ❌ Retail update chunk failed: ${err.message}`) }
+                }
+                log(`   ✅ Retail existing prices adjusted...`)
+            }
+
+            if (retailCreates.length > 0) {
+                for (let i = 0; i < retailCreates.length; i += BULK_SIZE) {
+                    const chunk = retailCreates.slice(i, i + BULK_SIZE)
+                    try { await (pricingModule as any).createPrices(chunk) } 
+                    catch (err: any) { logger.error(`   ❌ Retail create chunk failed: ${err.message}`) }
+                }
+                log(`   ✅ Retail new prices created...`)
+            }
+
+            if (retailDeletes.length > 0) {
+                for (let i = 0; i < retailDeletes.length; i += BULK_SIZE) {
+                    const chunk = retailDeletes.slice(i, i + BULK_SIZE)
+                    try { await (pricingModule as any).deletePrices(chunk) } 
+                    catch (err: any) { logger.error(`   ❌ Retail delete chunk failed: ${err.message}`) }
+                }
+                log(`   🧹 Reatail duplicate prices cleaned...`)
+            }
+
+            // WHOLESALE BATCHES
+            if (wholesalePriceListId) {
+                log(`⚡ Applying Wholesale: ${wholesaleUpdates.length} updates, ${wholesaleCreates.length} creates, ${wholesaleDeletes.length} deletes in mass batches...`)
+                
+                if (wholesaleUpdates.length > 0) {
+                    for (let i = 0; i < wholesaleUpdates.length; i += BULK_SIZE) {
+                        const chunk = wholesaleUpdates.slice(i, i + BULK_SIZE)
+                        try { await (pricingModule as any).updatePrices(chunk) } 
+                        catch (err: any) { logger.error(`   ❌ Wholesale update chunk failed: ${err.message}`) }
                     }
+                    log(`   ✅ Wholesale existing prices adjusted...`)
                 }
 
-                if (stats.updatedPrice % 25 === 0) {
-                    log(`   ✅ Progress: ${stats.updatedPrice} prices updated...`)
+                if (wholesaleCreates.length > 0) {
+                    for (let i = 0; i < wholesaleCreates.length; i += BULK_SIZE) {
+                        const chunk = wholesaleCreates.slice(i, i + BULK_SIZE)
+                        try { await (pricingModule as any).createPrices(chunk) } 
+                        catch (err: any) { logger.error(`   ❌ Wholesale create chunk failed: ${err.message}`) }
+                    }
+                    log(`   ✅ Wholesale new prices created...`)
                 }
-            } catch (err: any) {
-                logger.error(`   ❌ ${variant.sku}: Price Update Failed - ${err.message}`)
+
+                if (wholesaleDeletes.length > 0) {
+                    for (let i = 0; i < wholesaleDeletes.length; i += BULK_SIZE) {
+                        const chunk = wholesaleDeletes.slice(i, i + BULK_SIZE)
+                        try { await (pricingModule as any).deletePrices(chunk) } 
+                        catch (err: any) { logger.error(`   ❌ Wholesale delete chunk failed: ${err.message}`) }
+                    }
+                    log(`   🧹 Wholesale duplicate prices cleaned...`)
+                }
             }
         }
 

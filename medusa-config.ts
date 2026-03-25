@@ -27,8 +27,14 @@ module.exports = defineConfig({
         acquireTimeoutMillis: 30000,
       }
     },
-    // TEMPORARY: Disabled Redis to debug Order API Cache issue
     redisUrl: process.env.REDIS_URL,
+    redisOptions: {
+      connectTimeout: 45000,
+      keepAlive: 10000,        // TCP keepalive — prevents Railway proxy from dropping idle socket
+      enableOfflineQueue: true,
+      family: 4,
+      retryStrategy: (times: number) => Math.min(times * 3000, 30000),
+    },
     // CRITICAL: Enable subscribers by setting workerMode to 'shared'
     // Without this, subscribers will NOT load (even if code is correct)
     workerMode: (process.env.WORKER_MODE || "shared") as "shared" | "worker" | "server",

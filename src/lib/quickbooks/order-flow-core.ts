@@ -243,6 +243,8 @@ export async function syncCustomerToQb(
 
     const billingAddr = addrs.find(a => a.is_default_billing || a.metadata?.is_default_billing)
     const shippingAddr = addrs.find(a => !(a.is_default_billing || a.metadata?.is_default_billing))
+    // We intentionally ignore additional addresses; syncing them as ShipToAddress crashes QBW32 CustomerMod
+    // B2B multi-location should be architected using the "Jobs" (Sub-Customers) pattern in QuickBooks instead.
 
     const mapAddr = (a: typeof addrs[0] | undefined) =>
         a ? { Addr1: a.address_1, Addr2: a.address_2, City: a.city, State: a.province, PostalCode: a.postal_code } : undefined
@@ -261,6 +263,7 @@ export async function syncCustomerToQb(
         Phone: customer.phone || undefined,
         BillAddress: mapAddr(billingAddr),
         ShipAddress: mapAddr(shippingAddr),
+        // ShipToAddress is explicitly omitted
         CustomerType: customer.metadata?.qb_customer_type || undefined,
         PriceLevel: customer.metadata?.qb_price_level || undefined,
         AltContact: customer.metadata?.alt_contact || undefined,
@@ -590,6 +593,8 @@ export async function processPaymentCaptureInQb(capture: {
     amount: number        // in cents (Medusa v2)
     paymentMethod: string
     qbCustomerId: string
+    refNumber?: string
+    memo?: string
 }): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
@@ -599,13 +604,16 @@ export async function processPaymentCaptureInQb(capture: {
 
     console.log(`${prefix} Recording payment of $${amountDollars.toFixed(2)} for order #${capture.orderDisplayId || capture.orderId}...`)
 
+    const paymentRefNumber = capture.refNumber || `PAY-${capture.orderDisplayId || capture.orderId}`
+    const paymentMemo = capture.memo || `Payment for Order ${capture.orderDisplayId || capture.orderId}`
+
     const logId = await QbSyncLogger.start({
         operation: "payment",
         orderId: capture.orderId,
         orderDisplayId: capture.orderDisplayId,
         eventType: "order.payment_captured",
         triggeredBy: "event",
-        message: `Recording payment of $${amountDollars.toFixed(2)} for order #${capture.orderDisplayId || capture.orderId}`,
+        message: `Recording payment of $${amountDollars.toFixed(2)} (${paymentRefNumber})`,
         metadata: { amount: amountDollars, paymentMethod: capture.paymentMethod },
     })
 
@@ -613,8 +621,8 @@ export async function processPaymentCaptureInQb(capture: {
         customerId: capture.qbCustomerId,
         amount: amountDollars,
         paymentMethod: capture.paymentMethod,
-        refNumber: `PAY-${capture.orderDisplayId || capture.orderId}`,
-        memo: `Payment for Order ${capture.orderDisplayId || capture.orderId}`,
+        refNumber: paymentRefNumber.substring(0, 20),
+        memo: paymentMemo,
         autoApply: false,
     })
 

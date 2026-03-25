@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types"
-import { syncInventoryCore } from "../../lib/quickbooks/sync-inventory-core"
+import { syncInventoryCore } from "../../../lib/quickbooks/sync-inventory-core"
 import { Client } from "pg"
 
 /**

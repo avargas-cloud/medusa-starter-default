@@ -135,6 +135,33 @@ export async function handleFulfillmentCreated(
 
     const linkedTxnId = qbSoTxnId || (!isPartial ? qbEstimateTxnId : undefined)
 
+    const pool = getDbPool()
+    let memo = order.metadata?.pos_notes ? `POS Note: ${order.metadata.pos_notes}` : undefined
+    let invoiceShippingCents: number | undefined;
+
+    try {
+        let sql = `SELECT invoice_number, shipping FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
+        let params: any[] = [data.fulfillment_id];
+
+        if (data.invoice_id) {
+            sql = `SELECT invoice_number, shipping FROM pos_invoice WHERE id = $1 LIMIT 1`;
+            params = [data.invoice_id];
+        }
+
+        const invRes = await pool.query(sql, params)
+        const row = invRes.rows[0];
+        if (row) {
+            const seq = row.invoice_number
+            if (seq) {
+                memo = memo ? `${memo} | Invoice INV${seq}` : `Invoice INV${seq}`
+            }
+            if (row.shipping !== undefined && row.shipping !== null) {
+                invoiceShippingCents = Number(row.shipping)
+            }
+        }
+    } catch (e) {
+    }
+
     let prebuiltItems: any[] | undefined
     let salesTaxCode: string | undefined
 
@@ -167,10 +194,32 @@ export async function handleFulfillmentCreated(
 
         prebuiltItems = buildQbItems(activeItems, order.metadata)
 
-        const shippingMethodsFormatted = ((order as any).shipping_methods || []).map((sm: any) => ({
+        if (orderDiscountTotal > 0) {
+            const orderSubtotal = Math.round(getFloat(order.subtotal) * 100)
+            const discountPercent = orderSubtotal > 0 ? (orderDiscountTotal / orderSubtotal) * 100 : null
+            buildQbOrderDiscountLines(orderDiscountTotal, discountPercent).forEach(l => prebuiltItems!.push(l))
+            logger.info(`${LOG_PREFIX} Discount lines added to invoice: -$${(orderDiscountTotal/100).toFixed(2)}`)
+        }
+
+        let shippingMethodsFormatted = ((order as any).shipping_methods || []).map((sm: any) => ({
             ...sm,
             amount: getFloat(sm.amount)
         }))
+
+        if (invoiceShippingCents !== undefined) {
+            if (shippingMethodsFormatted.length > 0) {
+                shippingMethodsFormatted[0].amount = invoiceShippingCents / 100
+                shippingMethodsFormatted = [shippingMethodsFormatted[0]]
+            } else if (invoiceShippingCents > 0) {
+                shippingMethodsFormatted = [{
+                    name: "Shipping",
+                    amount: invoiceShippingCents / 100
+                }]
+            } else {
+                shippingMethodsFormatted = []
+            }
+        }
+
         const shippingItem = buildShippingQbItem(
             shippingMethodsFormatted,
             qbConfig.shippingItemId
@@ -178,13 +227,6 @@ export async function handleFulfillmentCreated(
         if (shippingItem) {
             prebuiltItems.push(shippingItem)
             logger.info(`${LOG_PREFIX} Shipping line added for invoice: $${shippingItem.price?.toFixed(2)}`)
-        }
-
-        if (orderDiscountTotal > 0) {
-            const orderSubtotal = Math.round(getFloat(order.subtotal) * 100)
-            const discountPercent = orderSubtotal > 0 ? (orderDiscountTotal / orderSubtotal) * 100 : null
-            buildQbOrderDiscountLines(orderDiscountTotal, discountPercent).forEach(l => prebuiltItems!.push(l))
-            logger.info(`${LOG_PREFIX} Discount lines added to invoice: -$${(orderDiscountTotal/100).toFixed(2)}`)
         }
 
         if (linkedTxnId === qbSoTxnId && isPartial) {
@@ -209,21 +251,6 @@ export async function handleFulfillmentCreated(
         const hasTax = getFloat(order.tax_total) > 0
         salesTaxCode = hasTax ? qbConfig.defaultSalesTaxCode : undefined
     }
-    const pool = getDbPool()
-    let memo = order.metadata?.pos_notes ? `POS Note: ${order.metadata.pos_notes}` : undefined
-    
-    try {
-        const invRes = await pool.query(
-            `SELECT invoice_number FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`,
-            [data.fulfillment_id]
-        )
-        const seq = invRes.rows[0]?.invoice_number
-        if (seq) {
-            memo = memo ? `${memo} | Invoice INV${seq}` : `Invoice INV${seq}`
-        }
-    } catch (e) {
-    }
-
     const result = await processInvoiceInQb({
         orderId,
         orderDisplayId: order.display_id,

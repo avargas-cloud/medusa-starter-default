@@ -69,14 +69,21 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             }
 
             try {
+                let existingResId: string | undefined
+
                 // Idempotent: check by order_line_item.id
                 const existing = await inventoryModule.listReservationItems(
                     { line_item_id: lineItemId },
                     { take: 1 }
                 )
                 if (existing?.length) {
-                    results.push({ line_item_id: lineItemId, status: "already_allocated", reservation_id: existing[0].id })
-                    continue
+                    if (Number(existing[0].quantity) === quantity) {
+                        results.push({ line_item_id: lineItemId, status: "already_allocated", reservation_id: existing[0].id })
+                        continue
+                    } else {
+                        existingResId = existing[0].id
+                        console.log(`[allocate-items] 📝 Quantity changed for ${lineItemId}: ${existing[0].quantity} -> ${quantity}`)
+                    }
                 }
 
                 // Get inventory_item_id per variant via remoteQuery
@@ -135,23 +142,38 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     console.warn(`[allocate-items] Level check failed for ${inventoryItemId}: ${levelErr.message?.slice(0, 80)}`)
                 }
 
-                // Create reservation — succeeds even at 0 stock (allow_backorder=true + level exists)
-                const { result } = await createReservationsWorkflow(req.scope).run({
-                    input: {
-                        reservations: [{
-                            inventory_item_id: inventoryItemId,
-                            location_id,
-                            quantity,
-                            line_item_id: lineItemId,
-                            allow_backorder: true // Bypass 0 stock validation
-                        }],
-                    },
-                })
-
-
-                const reservation = result?.[0]
-                results.push({ line_item_id: lineItemId, status: "allocated", reservation_id: reservation?.id })
-                console.log(`[allocate-items] ✅ Reserved ${quantity}× variant=${variantId} → ${reservation?.id}`)
+                if (existingResId) {
+                    try {
+                        const { updateReservationsWorkflow } = require("@medusajs/core-flows")
+                        if (updateReservationsWorkflow) {
+                            await updateReservationsWorkflow(req.scope).run({
+                                input: { updates: [{ id: existingResId, quantity }] }
+                            })
+                        } else {
+                            await inventoryModule.updateReservationItems(existingResId, { quantity })
+                        }
+                    } catch (e) {
+                        await inventoryModule.updateReservationItems([{ id: existingResId, quantity }]).catch(() => {})
+                    }
+                    results.push({ line_item_id: lineItemId, status: "updated_allocation", reservation_id: existingResId })
+                    console.log(`[allocate-items] 🔄 Updated reservation ${existingResId} to ${quantity}×`)
+                } else {
+                    // Create reservation — succeeds even at 0 stock (allow_backorder=true + level exists)
+                    const { result } = await createReservationsWorkflow(req.scope).run({
+                        input: {
+                            reservations: [{
+                                inventory_item_id: inventoryItemId,
+                                location_id,
+                                quantity,
+                                line_item_id: lineItemId,
+                                allow_backorder: true // Bypass 0 stock validation
+                            }],
+                        },
+                    })
+                    const reservation = result?.[0]
+                    results.push({ line_item_id: lineItemId, status: "allocated", reservation_id: reservation?.id })
+                    console.log(`[allocate-items] ✅ Reserved ${quantity}× variant=${variantId} → ${reservation?.id}`)
+                }
 
             } catch (err: any) {
                 console.warn(`[allocate-items] Failed for ${lineItemId}: ${err?.message?.slice(0, 120)}`)

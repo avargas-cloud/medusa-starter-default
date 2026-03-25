@@ -76,6 +76,44 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
             return
         }
 
+        const depositType = payment.metadata?.deposit_type
+        const invoiceIds = payment.metadata?.invoices_affected as string[] | undefined
+        
+        let refNumber: string | undefined
+        let memo: string | undefined
+
+        if (depositType === 'INVOICE' && invoiceIds?.length) {
+            try {
+                const { data: [inv] } = await query.graph({
+                    entity: "pos_invoice",
+                    fields: ["invoice_number"],
+                    filters: { id: invoiceIds[0] }
+                })
+                if (inv?.invoice_number) {
+                    refNumber = `PAY-INV-${inv.invoice_number}`
+                    memo = `Payment for Invoice ${inv.invoice_number}`
+                }
+            } catch (err: any) {
+                logger.warn(`${LOG_PREFIX} Could not fetch pos_invoice ${invoiceIds[0]}: ${err.message}`)
+            }
+            
+            // Fallback if pos_invoice lookup fails
+            if (!refNumber) {
+                const invoiceFriendlyIds = payment.metadata?.invoices_affected_friendly as string[] | undefined
+                if (invoiceFriendlyIds?.length) {
+                    const displayStr = invoiceFriendlyIds.join(', ')
+                    refNumber = `PAY-INV-${displayStr}`
+                    memo = `Payment for Invoice ${displayStr}`
+                }
+            }
+        } 
+        
+        // Final fallback if not an invoice or no invoice data
+        if (!refNumber) {
+            refNumber = `PAY-${orderDisplayId || orderId}`
+            memo = `Payment for Order ${orderDisplayId || orderId}`
+        }
+
         // 3. Register Payment as ReceivePayment in QuickBooks
         // This drops the deposit into QB as an unapplied credit (linked to the correct Customer)
         const result = await processPaymentCaptureInQb({
@@ -83,7 +121,9 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
             orderDisplayId: (orderDisplayId as number) || undefined,
             amount: payment.amount as number, // already cents
             paymentMethod: (payment.metadata?.pos_payment_method as string) || (payment.method as string),
-            qbCustomerId: qbCustomerId as string
+            qbCustomerId: qbCustomerId as string,
+            refNumber,
+            memo
         })
 
         if (result.skipped) {
@@ -113,7 +153,6 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
         }
 
         // 4. Log intention based on deposit_type
-        const depositType = payment.metadata?.deposit_type
         if (depositType === 'INVOICE') {
             logger.info(`${LOG_PREFIX} ℹ️ Payment is for an INVOICE. The unapplied credit was created successfully. Application to the Invoice will be handled by pos.payment.applied.`)
         } else if (depositType === 'ORDER') {

@@ -24,8 +24,23 @@ export interface QbCreateCustomerPayload {
         State?: string
         PostalCode?: string
     }
+    ShipAddress?: {
+        Addr1?: string
+        City?: string
+        State?: string
+        PostalCode?: string
+    }
     CustomerType?: string
     PriceLevel?: string
+    AltContact?: string  // Native QB "Alt. Contact" field (Address Info tab)
+    AltPhone?: string    // Native QB "Alt. Phone" field (Address Info tab)
+    // Note: Cc is NOT valid in QBXML 10.0 — stored in Medusa metadata only
+}
+
+export interface QbUpdateCustomerPayload extends Omit<QbCreateCustomerPayload, 'Name'> {
+    Name: string        // QB customer name (must match existing record)
+    ListID: string      // QB ListID from metadata.qb_list_id
+    EditSequence: string // QB EditSequence (obtained via CustomerQuery)
 }
 
 export interface QbCreateSalesOrderPayload {
@@ -120,6 +135,7 @@ export interface QbAsyncResult {
     operationId: string
     txnId?: string
     refNumber?: string
+    listId?: string  // Customer operations return listId (QB ListID) instead of txnId
 }
 
 export interface QbBridgeResult<T = any> {

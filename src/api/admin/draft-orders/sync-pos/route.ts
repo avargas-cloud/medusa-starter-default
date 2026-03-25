@@ -69,7 +69,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                         custom_description: item.salesDescription,
                         sort_order: item.sortOrder
                     })
-                }).catch(e => logger.warn(`Add item force failed on create: ${e.message}`))
+                })
             }
 
             // 3. Shipping
@@ -125,7 +125,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 if (!newItems.find((n: any) => n.localId === old.id)) {
                     await localFetch(`/admin/draft-orders/${resolvedId}/delete-item-force`, {
                         method: "POST", body: JSON.stringify({ line_item_id: old.id })
-                    }).catch(e => logger.warn(`Delete item failed: ${e.message}`))
+                    })
                 }
             }
 
@@ -160,7 +160,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                                 custom_title: item.title,
                                 custom_description: item.salesDescription,
                             })
-                        }).catch(e => logger.warn(`Update item failed: ${e.message}`))
+                        })
                         itemsChanged = true
                     }
                 } else {
@@ -178,7 +178,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                             custom_title: item.title,
                             custom_description: item.salesDescription,
                         })
-                    }).catch(e => logger.warn(`Add item failed: ${e.message}`))
+                    })
                     itemsChanged = true
                 }
             }

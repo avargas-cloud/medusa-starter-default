@@ -22,6 +22,97 @@ export const OPTIONS = async (req: MedusaRequest, res: MedusaResponse) => {
     res.status(204).end()
 }
 
+export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+    setCorsHeaders(req, res)
+    
+    const body = req.body as { variant_ids?: string[], cart_total_cents?: number }
+    if (!body || !Array.isArray(body.variant_ids)) {
+        res.status(400).json({ error: "variant_ids array required" })
+        return
+    }
+
+    const client = new Client({ connectionString: process.env.DATABASE_URL })
+
+    try {
+        await client.connect()
+
+        const settingsResult = await client.query(`
+            SELECT
+                free_shipping_minimum,
+                regular_ground_shipping_price,
+                long_item_ground_shipping_price,
+                override_ups_ground
+            FROM shipping_settings
+            LIMIT 1
+        `)
+
+        const settings = settingsResult.rows[0] || {
+            free_shipping_minimum: 20000,
+            regular_ground_shipping_price: 1499,
+            long_item_ground_shipping_price: 3499,
+            override_ups_ground: true
+        }
+
+        const variantIds = body.variant_ids.filter(Boolean)
+        const cartTotalCents = body.cart_total_cents || 0
+
+        const isFree = cartTotalCents >= settings.free_shipping_minimum
+
+        let isLong = false
+        const LONG_THRESHOLD = 30
+
+        if (!isFree && variantIds.length > 0) {
+            const longViaInv = await client.query(`
+                SELECT pv.id
+                FROM product_variant pv
+                JOIN product_variant_inventory_item pvii ON pvii.variant_id = pv.id
+                JOIN inventory_item ii ON ii.id = pvii.inventory_item_id
+                WHERE pv.id = ANY($1)
+                  AND (ii.length > $2 OR ii.width > $2 OR ii.height > $2)
+                LIMIT 1
+            `, [variantIds, LONG_THRESHOLD])
+
+            if (longViaInv.rows.length > 0) {
+                isLong = true
+            } else {
+                const longViaVariant = await client.query(`
+                    SELECT id FROM product_variant
+                    WHERE id = ANY($1)
+                      AND (length > $2 OR width > $2 OR height > $2)
+                    LIMIT 1
+                `, [variantIds, LONG_THRESHOLD])
+                isLong = longViaVariant.rows.length > 0
+            }
+        }
+
+        let priceCents = 0
+        if (isFree) {
+            priceCents = 0
+        } else if (isLong) {
+            priceCents = settings.long_item_ground_shipping_price
+        } else {
+            priceCents = settings.regular_ground_shipping_price
+        }
+
+        res.json({
+            ground: {
+                price: priceCents / 100,
+                price_cents: priceCents,
+                is_free: isFree,
+                is_long: isLong
+            },
+            settings,
+            cart_total_cents: cartTotalCents
+        })
+
+    } catch (error: any) {
+        console.error("Error in POST /shipping-preview:", error)
+        res.status(500).json({ error: "Failed to calculate shipping preview", details: error.message })
+    } finally {
+        await client.end()
+    }
+}
+
 /**
  * GET /shipping-preview?cart_id=cart_xxx
  * GET /shipping-preview?order_id=order_xxx   ← also accepts draft-order IDs

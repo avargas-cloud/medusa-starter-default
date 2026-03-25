@@ -245,12 +245,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     }
 
     // ── Discount Reconciliation (Safety Net) ─────────────────────────────────
-    // pos_discount_amount = POS-computed dollar amount (e.g. $2.65), ALWAYS provided when discount exists.
+    // pos_discount_amount = POS-computed dollar amount (e.g. $2.65 or 0), ALWAYS provided when discount exists or is removed.
     // If not available, fall back to discount_value only when it is a fixed dollar amount (not a percent rate).
-    const reconDiscountAmt = (pos_discount_amount && pos_discount_amount > 0)
+    const reconDiscountAmt = (pos_discount_amount !== undefined && pos_discount_amount !== null)
         ? pos_discount_amount
         : (discount_value && discount_value > 0 && discount_type === 'fixed' ? discount_value : undefined)
-    if (reconDiscountAmt && reconDiscountAmt > 0) {
+    
+    if (reconDiscountAmt !== undefined && reconDiscountAmt >= 0) {
         try {
             const recheckRes = await fetch(
                 `${base}/admin/orders/${id}?fields=discount_total`,
@@ -274,18 +275,29 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                         )
                         const adjs = adjRes.rows
                         if (adjs.length > 0) {
-                            const totalAdj = adjs.reduce((s, r) => s + Number(r.amount), 0)
-                            for (const adj of adjs) {
-                                const proportion = totalAdj > 0 ? Number(adj.amount) / totalAdj : 1 / adjs.length
-                                const newAmt = Number((proportion * posDiscount).toFixed(6))
-                                const rawAmt = JSON.stringify({ value: String(newAmt), precision: 20 })
+                            if (posDiscount === 0) {
+                                // FULL DELETE OF ADJUSTMENTS TO REMOVE DISCOUNT
                                 await discPool.query(
-                                    `UPDATE order_line_item_adjustment SET amount = $1, raw_amount = $2, updated_at = NOW() WHERE id = $3`,
-                                    [newAmt, rawAmt, adj.id]
+                                    `DELETE FROM order_line_item_adjustment 
+                                     WHERE item_id IN (SELECT oi.item_id FROM order_item oi WHERE oi.order_id = $1)`,
+                                    [id]
                                 )
+                                logger.info(`[post-edit-sync] ✅ Forced discount to ZERO: Deleted ${adjs.length} adjustments`)
+                                results.discount_forced = 0
+                            } else {
+                                const totalAdj = adjs.reduce((s, r) => s + Number(r.amount), 0)
+                                for (const adj of adjs) {
+                                    const proportion = totalAdj > 0 ? Number(adj.amount) / totalAdj : 1 / adjs.length
+                                    const newAmt = Number((proportion * posDiscount).toFixed(6))
+                                    const rawAmt = JSON.stringify({ value: String(newAmt), precision: 20 })
+                                    await discPool.query(
+                                        `UPDATE order_line_item_adjustment SET amount = $1, raw_amount = $2, updated_at = NOW() WHERE id = $3`,
+                                        [newAmt, rawAmt, adj.id]
+                                    )
+                                }
+                                logger.info(`[post-edit-sync] ✅ Forced discount: ${adjs.length} adjustments corrected to sum $${posDiscount}`)
+                                results.discount_forced = posDiscount
                             }
-                            logger.info(`[post-edit-sync] ✅ Forced discount: ${adjs.length} adjustments corrected to sum $${posDiscount}`)
-                            results.discount_forced = posDiscount
                         }
 
                         // CRITICAL: Also update order_summary so the admin DISPLAY shows the correct discount_total.

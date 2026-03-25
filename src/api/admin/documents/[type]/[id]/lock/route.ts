@@ -87,9 +87,28 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       await redis.expire(key, LOCK_TTL)
       return res.status(200).json({ locked: true, token: data.token, message: 'Lock renewed (same session)' })
     }
-    // Different session (including same user in another tab) — 409 Conflict
+
+    // NEW LOGIC: Self-Hijacking with BroadcastChannel Validation
+    // If the browser killed the keepalive DELETE during an F5 refresh, the lock stays as a "Zombie" for 60s.
+    // The frontend's BroadcastChannel checks if the other tab is dead. If it is dead, it sends x-hijack-zombie: true.
+    // If the EXACT SAME userId asks to hijack, and explicitly provides the header, steal it.
+    const isHijackRequest = req.headers['x-hijack-zombie'] === 'true'
+    if (data.userId === userId && isHijackRequest) {
+      const hijackedPayload = JSON.stringify({
+        userId,
+        userName,
+        sessionId: sessionId || lockToken,
+        token: lockToken,
+        lockedAt: new Date().toISOString(),
+      })
+      await redis.set(key, hijackedPayload, 'EX', LOCK_TTL)
+      return res.status(200).json({ locked: true, token: lockToken, message: 'Lock hijacked by same user (zombie/refresh)' })
+    }
+
+    // Different session (including completely different users) — 409 Conflict
     return res.status(409).json({
       error: 'Document is locked',
+      userId: data.userId,
       lockedBy: data.userName,
       lockedAt: data.lockedAt,
     })

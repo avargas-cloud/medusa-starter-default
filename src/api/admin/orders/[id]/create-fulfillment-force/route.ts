@@ -29,9 +29,10 @@ import { getDbPool } from "../../../../utils/db-pool"
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const { id } = req.params
-    const { items, location_id, no_notification = true } = req.body as {
+    const { items, location_id, invoice_id, no_notification = true } = req.body as {
         items: { id: string; quantity: number }[]
         location_id: string
+        invoice_id?: string
         no_notification?: boolean
     }
 
@@ -41,6 +42,20 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     const orderId = id as string
     const dbUrl = process.env.DATABASE_URL
+    const pool = dbUrl ? getDbPool() : null
+
+    async function bindFulfillmentToInvoice(fulfillmentId: string, invId: string) {
+        if (!pool || !fulfillmentId || !invId) return
+        try {
+            await pool.query(
+                `UPDATE pos_invoice SET fulfillment_id = $1 WHERE id = $2`,
+                [fulfillmentId, invId]
+            )
+            console.log(`[create-fulfillment-force] ✅ Bound fulfillment ${fulfillmentId} to Invoice ${invId}`)
+        } catch (err: any) {
+            console.warn(`[create-fulfillment-force] Failed to bind to pos_invoice: ${err?.message}`)
+        }
+    }
 
     // ── Strategy 1: Native createOrderFulfillmentWorkflow ────────────────────
     try {
@@ -161,7 +176,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
 
         console.log(`[create-fulfillment-force] ✅ Strategy 1 (native workflow) succeeded`)
-        return res.status(201).json({ fulfillment: (result.result as any) ?? { id: "ok" } })
+        const returnedFulfillment = (result.result as any) ?? { id: "ok" }
+        if (invoice_id && returnedFulfillment.id !== "ok") {
+            await bindFulfillmentToInvoice(returnedFulfillment.id, invoice_id)
+        }
+        return res.status(201).json({ fulfillment: returnedFulfillment })
 
     } catch (workflowErr: any) {
         console.warn(`[create-fulfillment-force] ⚠️ Strategy 1 failed (${workflowErr?.message?.slice(0, 100)}), falling back to Strategy 2...`)
@@ -274,10 +293,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         // ── fulfilled_quantity fix (Strategy 2 only) ──────────────────────────
         // Only safely increment the items that were just fulfilled
         if (dbUrl && items.length > 0) {
-            const pool = getDbPool()
+            const pool2 = getDbPool()
             try {
                 for (const item of items) {
-                    await pool.query(
+                    await pool2.query(
                         `UPDATE order_item
                          SET fulfilled_quantity = LEAST(quantity, COALESCE(fulfilled_quantity, 0) + $1::numeric)
                          WHERE id = $2`,
@@ -288,6 +307,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             } catch (sqlErr: any) {
                 console.warn(`[create-fulfillment-force] fulfilled_quantity patch failed (non-fatal): ${sqlErr?.message}`)
             }
+        }
+
+        if (invoice_id && fulfillment?.id) {
+            await bindFulfillmentToInvoice(fulfillment.id, invoice_id)
         }
 
         return res.status(201).json({ fulfillment })

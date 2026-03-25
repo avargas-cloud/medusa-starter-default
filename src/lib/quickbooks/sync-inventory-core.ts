@@ -239,9 +239,22 @@ export async function syncInventoryCore(
 
         const qbMap = new Map(qbData.map((item: any) => [item.ItemInventoryRef?.ListID, item]))
 
-        // 6. Process each variant
+        // 6. Pre-fetch ALL current inventory levels to avoid 2400 sequential DB queries
+        log("🔍 Fetching existing Medusa inventory levels...")
+        const allLevels = await inventoryService.listInventoryLevels(
+            { location_id: locationId },
+            { take: 10000 }
+        )
+        const levelsMap = new Map()
+        for (const level of allLevels) {
+            levelsMap.set(level.inventory_item_id, level)
+        }
+
+        // 7. Process each variant entirely in-memory first
         const preview: SyncInventoryPreviewItem[] = []
         const anomalies: SyncInventoryPreviewItem[] = []
+        const updatesToApply: any[] = []
+        const createsToApply: any[] = []
 
         for (const variant of qbVariants) {
             const qbId = (variant.metadata as any)?.quickbooks_id
@@ -249,9 +262,8 @@ export async function syncInventoryCore(
 
             if (!qbItem) {
                 stats.missingInQb++
-                // warn(`   ⚠️ ${variant.sku} — not found in QB response`)
-                // Nota: QuickBooks ItemSitesQuery omite productos sin historial en la bodega. 
-                // Asumimos stock 0 para mantener Medusa correcto y silenciamos el log para evitar ruido.
+                // QuickBooks ItemSitesQuery omits products not physically tracked in the site
+                // We assume stock 0
                 qbItem = {
                     QuantityOnHand: "0",
                     ItemInventoryRef: { ListID: qbId, FullName: variant.sku }
@@ -274,30 +286,16 @@ export async function syncInventoryCore(
                 continue
             }
 
-            // Clamp negatives to 0 — QB can report negative stock due to over-sales or data errors
+            // Clamp negatives to 0
             const newStock = rawStock < 0 ? 0 : rawStock
 
-            // Get current stock from Medusa
-            const levels = await inventoryService.listInventoryLevels({
-                inventory_item_id: inventoryItemId,
-                location_id: locationId
-            })
-            const currentStock = levels[0]?.stocked_quantity ?? 0
+            // Get current stock from pre-fetched RAM Map
+            const level = levelsMap.get(inventoryItemId)
+            const currentStock = level?.stocked_quantity ?? 0
             const delta = newStock - currentStock
 
-            if (rawStock < 0) {
-                // Si mandan negativo pero Medusa ya lo tenía en 0, no es de alarmarse (ya estaba out of stock)
-                if (currentStock > 0) {
-                    warn(`   ⚠️ ${variant.sku}: QB reported negative stock (${rawStock}) → clamped to 0 (Medusa had ${currentStock})`)
-                } else {
-                    // Silencioso o log normal de consola (sin el ⚠️) para no asustar, pues igual se hará skip si delta == 0
-                    // console.log(`   [Info] ${variant.sku}: QB has negative stock (${rawStock}), Medusa is already 0.`)
-                }
-            }
-
-            // DEBUG: Log comparison for diagnostics (remove once bug is found)
-            if (variant.sku === 'EAP-AS1-8S' || stats.foundInQb <= 5) {
-                console.log(`[QB-DEBUG] ${variant.sku}: QB.QuantityOnHand="${qbItem.QuantityOnHand}" raw=${rawStock} new=${newStock} | Medusa.stocked=${currentStock} | levels.length=${levels.length} | delta=${delta}`)
+            if (rawStock < 0 && currentStock > 0) {
+                warn(`   ⚠️ ${variant.sku}: QB reported negative stock (${rawStock}) → clamped to 0 (Medusa had ${currentStock})`)
             }
 
             // Skip if no change
@@ -337,29 +335,52 @@ export async function syncInventoryCore(
                 log(`   [DRY] ${variant.sku}: ${currentStock} → ${newStock} (${delta > 0 ? "+" : ""}${delta}) ${flag}${anomalyReason ? ` — ${anomalyReason}` : ""}`)
                 stats.wouldUpdate!++
             } else {
-                // LIVE: apply the update
-                try {
-                    if (levels.length > 0 && levels[0]) {
-                        await inventoryService.updateInventoryLevels({
-                            id: levels[0].id,
-                            inventory_item_id: inventoryItemId,
-                            location_id: locationId,
-                            stocked_quantity: newStock
-                        })
-                    } else {
-                        await inventoryService.createInventoryLevels({
-                            inventory_item_id: inventoryItemId,
-                            location_id: locationId,
-                            stocked_quantity: newStock,
-                            incoming_quantity: 0
-                        })
+                // Queue for bulk application
+                if (level) {
+                    updatesToApply.push({
+                        id: level.id,
+                        inventory_item_id: inventoryItemId,
+                        location_id: locationId,
+                        stocked_quantity: newStock
+                    })
+                } else {
+                    createsToApply.push({
+                        inventory_item_id: inventoryItemId,
+                        location_id: locationId,
+                        stocked_quantity: newStock,
+                        incoming_quantity: 0
+                    })
+                }
+            }
+        }
+
+        // 8. Apply queued changes in BULK (PostgreSQL batches)
+        if (!dryRun) {
+            log(`⚡ Applying ${updatesToApply.length} updates and ${createsToApply.length} creations in mass batches...`)
+            const BULK_SIZE = 500
+
+            if (updatesToApply.length > 0) {
+                for (let i = 0; i < updatesToApply.length; i += BULK_SIZE) {
+                    const chunk = updatesToApply.slice(i, i + BULK_SIZE)
+                    try {
+                        await inventoryService.updateInventoryLevels(chunk)
+                        stats.updatedStock += chunk.length
+                        log(`   ✅ Batch progress: ${stats.updatedStock}/${updatesToApply.length} existing items adjusted...`)
+                    } catch (err: any) {
+                        logger.error(`   ❌ Update chunk failed: ${err.message}`)
                     }
-                    stats.updatedStock++
-                    if (stats.updatedStock % 25 === 0) {
-                        log(`   ✅ Progress: ${stats.updatedStock} items updated...`)
+                }
+            }
+
+            if (createsToApply.length > 0) {
+                for (let i = 0; i < createsToApply.length; i += BULK_SIZE) {
+                    const chunk = createsToApply.slice(i, i + BULK_SIZE)
+                    try {
+                        await inventoryService.createInventoryLevels(chunk)
+                        log(`   ✅ Batch progress: +${chunk.length} new records created...`)
+                    } catch (err: any) {
+                        logger.error(`   ❌ Create chunk failed: ${err.message}`)
                     }
-                } catch (err: any) {
-                    logger.error(`   ❌ ${variant.sku}: Inventory update failed — ${err.message}`)
                 }
             }
         }

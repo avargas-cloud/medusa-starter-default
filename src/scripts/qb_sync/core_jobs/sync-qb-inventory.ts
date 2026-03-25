@@ -119,21 +119,42 @@ export default async function syncQbInventory({ container, args }: ExecArgs) {
                     }).filter((i: any) => i.ListID) // Ensure valid ID
 
                     logger.info(`🎉 Parsed ${qbData.length} items from XML.`)
-                } else if (statusJson.operation.result?.ItemQueryRs) {
-                    // Parsing logic for JSON (fallback)
-                    const queryRs = statusJson.operation.result?.ItemQueryRs || {}
-                    const inventoryItems = queryRs.ItemInventoryRet || []
-                    const nonInventoryItems = queryRs.ItemNonInventoryRet || []
-                    const serviceItems = queryRs.ItemServiceRet || []
-                    const groupItems = queryRs.ItemGroupRet || []
-                    qbData = [...inventoryItems, ...nonInventoryItems, ...serviceItems]
                 } else {
-                    qbData = statusJson.operation.data // Legacy fallback
+                    let resultObj = statusJson.operation.result;
+                    // If result is wrapped in an array, unwrap it securely
+                    if (Array.isArray(resultObj) && resultObj.length > 0) {
+                        resultObj = resultObj[0];
+                    }
+
+                    // Unwrap QBXML object if present
+                    if (resultObj?.QBXML?.QBXMLMsgsRs) {
+                        resultObj = resultObj.QBXML.QBXMLMsgsRs;
+                    }
+
+                    if (resultObj?.ItemQueryRs) {
+                        const queryRs = resultObj.ItemQueryRs;
+                        const inventoryItems = Array.isArray(queryRs.ItemInventoryRet) ? queryRs.ItemInventoryRet : (queryRs.ItemInventoryRet ? [queryRs.ItemInventoryRet] : []);
+                        const nonInventoryItems = Array.isArray(queryRs.ItemNonInventoryRet) ? queryRs.ItemNonInventoryRet : (queryRs.ItemNonInventoryRet ? [queryRs.ItemNonInventoryRet] : []);
+                        const serviceItems = Array.isArray(queryRs.ItemServiceRet) ? queryRs.ItemServiceRet : (queryRs.ItemServiceRet ? [queryRs.ItemServiceRet] : []);
+                        qbData = [...inventoryItems, ...nonInventoryItems, ...serviceItems];
+                    } else if (resultObj?.ItemSitesQueryRs) {
+                        const queryRs = resultObj.ItemSitesQueryRs;
+                        const siteRet = Array.isArray(queryRs.ItemSitesRet) ? queryRs.ItemSitesRet : (queryRs.ItemSitesRet ? [queryRs.ItemSitesRet] : []);
+                        qbData = siteRet.map((s: any) => ({
+                            ListID: s.ItemInventoryRef?.ListID,
+                            QuantityOnHand: s.QuantityOnHand,
+                            Name: s.ItemInventoryRef?.FullName
+                        })).filter((i: any) => i.ListID);
+                    } else {
+                        logger.warn(`Unrecognized result structure! Root keys: ${Object.keys(resultObj || {})}`);
+                        qbData = Array.isArray(statusJson.operation.data) ? statusJson.operation.data : [];
+                    }
                 }
 
-                logger.info(`🎉 Sync Completed! Total items: ${qbData.length || 0}`)
+                logger.info(`🎉 Sync Completed! Total items: ${qbData?.length || 0}`)
                 break
             } else if (statusJson.operation.status === "failed") {
+
                 logger.error(`❌ Operation Failed: ${statusJson.operation.message}`)
                 return
             }
@@ -148,7 +169,6 @@ export default async function syncQbInventory({ container, args }: ExecArgs) {
 
     // 5. Processing Updates
     logger.info("\n🔄 Processing Updates...")
-    let updatedPrice = 0
     let updatedStock = 0
     let missingInQb = 0
 
@@ -174,62 +194,33 @@ export default async function syncQbInventory({ container, args }: ExecArgs) {
             continue
         }
 
-        logger.info(`👉 Processing ${variant.sku}...`)
-
-        const newPrice = parseFloat(qbItem.SalesPrice)
+        // Set silent parsing by default, only log meaningful discrepancies
         const newStock = parseInt(qbItem.QuantityOnHand)
         const variantTitle = `${variant.sku}` // Short log
 
-        // --- Price Update ---
-        if (variant.price_set) {
-            if (!isNaN(newPrice)) {
-                if (isDryRun) {
-                    logger.info(`   [DRY] Price ${variantTitle}: -> $${newPrice}`)
-                } else {
-                    logger.info(`   💵 Updating Price for ${variantTitle}...`)
-                    try {
-                        await pricingModule.updatePriceSets(variant.price_set.id, {
-                            prices: [
-                                {
-                                    amount: newPrice, // v2: Store dollars directly, NO × 100
-                                    currency_code: "usd",
-                                    rules: {}
-                                }
-                            ]
-                        })
-                        logger.info(`   ✅ Price Updated.`)
-                        updatedPrice++
-                    } catch (err: any) {
-                        logger.error(`   ❌ Price Update Failed: ${err.message}`)
-                    }
-                }
-            }
-        } else {
-            logger.warn(`   ❌ ${variantTitle}: No Price Set linked.`)
-        }
-
         // --- Inventory Update ---
-        // 1. Ensure inventory item exists (Medusa v2 manages stock via InventoryItem, not Variant directly)
-
         let inventoryItemId = variant.inventory_items?.[0]?.inventory_item_id
 
         if (inventoryItemId) {
             if (!isNaN(newStock)) {
                 if (isDryRun) {
-                    logger.info(`   [DRY] Stock ${variantTitle}: -> ${newStock}`)
+                    // Only log DRY run differences, but we'd need to fetch the level to know for sure. 
+                    // Let's just log it if we really need to, but skip to keep logs clean
                 } else {
                     try {
-                        // Update Inventory Level
-                        // We must check if a level exists for this location
-                        logger.info(`   📦 Checking Inventory Level for ${variantTitle} (Item: ${inventoryItemId})...`)
-
                         const levels = await inventoryService.listInventoryLevels({
                             inventory_item_id: inventoryItemId,
                             location_id: locationId
                         })
 
                         if (levels.length > 0) {
-                            logger.info(`   🔄 Updating existing level (ID: ${levels[0].id})...`)
+                            const currentStock = levels[0].stocked_quantity;
+                            if (currentStock === newStock) {
+                                // No change, skip database mutation AND log
+                                continue;
+                            }
+
+                            logger.info(`   🔄 [${variantTitle}] Updating Stock: ${currentStock} -> ${newStock}`);
                             await inventoryService.updateInventoryLevels({
                                 id: levels[0].id,
                                 inventory_item_id: inventoryItemId,
@@ -237,7 +228,7 @@ export default async function syncQbInventory({ container, args }: ExecArgs) {
                                 stocked_quantity: newStock
                             })
                         } else {
-                            logger.info(`   ✨ Creating new level...`)
+                            logger.info(`   ✨ [${variantTitle}] Creating new level with Stock: ${newStock}`);
                             await inventoryService.createInventoryLevels({
                                 inventory_item_id: inventoryItemId,
                                 location_id: locationId,
@@ -245,10 +236,9 @@ export default async function syncQbInventory({ container, args }: ExecArgs) {
                                 incoming_quantity: 0
                             })
                         }
-                        logger.info(`   ✅ Stock Updated.`)
                         updatedStock++
                     } catch (err: any) {
-                        logger.error(`   ❌ Inventory Update Failed: ${err.message}`)
+                        logger.error(`   ❌ Inventory Update Failed for ${variantTitle}: ${err.message}`)
                     }
                 }
             }
@@ -264,7 +254,6 @@ export default async function syncQbInventory({ container, args }: ExecArgs) {
     logger.info(`Found in QB:           ${qbVariants.length - missingInQb}`)
     logger.info(`Missing in QB:         ${missingInQb}`)
     logger.info(`Updated Inventory:     ${updatedStock}`)
-    logger.info(`Updated Prices:        ${updatedPrice}`)
     logger.info(`${"=".repeat(50)}\n`)
 
 }

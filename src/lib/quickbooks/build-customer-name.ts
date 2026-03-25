@@ -1,15 +1,16 @@
 /**
  * build-customer-name.ts
  *
- * Builds the QuickBooks customer display name with Medusa customer ID suffix
- * to prevent duplicates of popular names (e.g., multiple "Joe Smith" in QB).
+ * Builds the QuickBooks customer display name from company or full name.
  *
  * Priority:
- *   1. CompanyName + " #" + shortId   → "Green Energy LLC #ab12cd34"
- *   2. FullName + " #" + shortId      → "Joe Smith #ab12cd34"
+ *   1. CompanyName  → "Green Energy LLC"
+ *   2. FullName     → "Joe Smith"
  *
  * QB Name field limit: 41 characters total.
- * shortId = last 8 chars of Medusa customer.id
+ *
+ * No suffix is added. If QB rejects the name as duplicate, the caller
+ * should handle that error (logged + returned as error from ensureCustomerInQb).
  */
 
 export function buildQbCustomerName(customer: {
@@ -18,20 +19,15 @@ export function buildQbCustomerName(customer: {
     last_name?: string | null
     id: string
 }): string {
-    // Use last 8 chars of Medusa ID for uniqueness without being too long
-    const shortId = customer.id.replace(/[^a-zA-Z0-9]/g, "").slice(-8)
-    const suffix = ` #${shortId}` // e.g., " #ab12cd34" = 10 chars
-    const maxNameLen = 41 - suffix.length // QB limit is 41 chars total
+    const MAX_LEN = 41 // QB hard limit
 
     if (customer.company_name?.trim()) {
-        const name = customer.company_name.trim().slice(0, maxNameLen)
-        return `${name}${suffix}`
+        return customer.company_name.trim().slice(0, MAX_LEN)
     }
 
     const first = (customer.first_name || "").trim()
     const last = (customer.last_name || "").trim()
-    const fullName = `${first} ${last}`.trim().slice(0, maxNameLen)
-    return `${fullName}${suffix}`
+    return `${first} ${last}`.trim().slice(0, MAX_LEN)
 }
 
 /**
@@ -46,6 +42,6 @@ if (require.main === module) {
     ]
     for (const t of tests) {
         const name = buildQbCustomerName(t)
-        console.log(`[${name.length} chars] ${name}`)
+        console.log(`[${name.length} chars] "${name}"`)
     }
 }
