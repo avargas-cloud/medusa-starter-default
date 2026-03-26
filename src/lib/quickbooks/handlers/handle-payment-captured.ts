@@ -1,7 +1,7 @@
 import { processPaymentCaptureInQb } from "../order-flow-core"
 import { buildPaymentPatch, getLatestInvoiceTxnId } from "../qb-metadata-types"
 import { applyPaymentToInvoiceInQb } from "../qb-bridge-client"
-import { LOG_PREFIX } from "./utils"
+import { LOG_PREFIX, isPosOrder } from "./utils"
 
 export async function handlePaymentCaptured(
     data: any,
@@ -23,7 +23,7 @@ export async function handlePaymentCaptured(
         return
     }
 
-    if (order.metadata?.pos_created) {
+    if (isPosOrder(order)) {
         logger.info(`${LOG_PREFIX} ⏭️ Skipping order.payment_captured for POS order ${orderId}. Payment is handled by pos.payment.created event.`)
         return
     }

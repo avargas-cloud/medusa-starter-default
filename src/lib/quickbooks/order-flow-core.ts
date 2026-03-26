@@ -51,6 +51,7 @@ import {
 } from "./qb-bridge-client"
 import { isQbIntegrationEnabled } from "./qb-integration-guard"
 import { QbSyncLogger } from "./qb-sync-logger"
+import { createSalesReceiptInQb } from "./client/sales-receipts"
 
 const ORDER_FLOW_ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
 const DRY_RUN = process.env.QB_DRY_RUN === "true"
@@ -766,6 +767,106 @@ export async function processInvoiceInQb(invoice: {
     })
 
     return { enabled: true, operationId: asyncData.operationId, txnId: invTxnId, refNumber: invRefNumber }
+}
+
+// ─── 3.5 Process Sales Receipt (Fully Paid POS Cash Sale) ──────────────────────
+
+function mapPaymentMethodToQb(method: string | undefined): string | undefined {
+    if (!method) return undefined
+    const m = method.toLowerCase().trim()
+    switch (m) {
+        case "cash": return "Cash"
+        case "visa": return "Visa"
+        case "mastercard": return "MasterCard"
+        case "zelle": return "Zelle"
+        case "check": return "Check"
+        case "amex":
+        case "american express": return "American Express"
+        case "discover": return "Discover"
+        default:
+            return method.charAt(0).toUpperCase() + method.slice(1)
+    }
+}
+
+/**
+ * Called when an order is completed natively at the POS and fully paid at the time of creation.
+ * Creates a Sales Receipt in QB matching the payment directly without using Sales Order / Invoice / ReceivePayment.
+ */
+export async function processSalesReceiptInQb(receipt: {
+    orderId: string
+    orderDisplayId?: number
+    qbCustomerId: string
+    paymentMethod?: string
+    prebuiltItems?: QbOrderItem[]
+    salesTaxCode?: string
+    refNumber?: string
+    memo?: string
+}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean; skipReason?: string }> {
+    const guard = await runGuards()
+    if (!guard.pass) return { enabled: false, skipped: true }
+
+    const prefix = DRY_RUN ? "[QB DRY RUN]" : "[QB]"
+
+    const logId = await QbSyncLogger.start({
+        operation: "sales_receipt",
+        orderId: receipt.orderId,
+        orderDisplayId: receipt.orderDisplayId,
+        eventType: "pos.sales_receipt.created",
+        triggeredBy: "event",
+        message: `Creating Sales Receipt for order #${receipt.orderDisplayId || receipt.orderId}`,
+        metadata: { paymentMethod: receipt.paymentMethod },
+    })
+
+    console.log(`${prefix} Creating Sales Receipt for order #${receipt.orderDisplayId || receipt.orderId}...`)
+
+    const srResult = await createSalesReceiptInQb({
+        customerId: receipt.qbCustomerId,
+        date: getDateString(),
+        refNumber: receipt.refNumber,
+        items: receipt.prebuiltItems || [],
+        salesTaxCode: receipt.salesTaxCode,
+        paymentMethod: mapPaymentMethodToQb(receipt.paymentMethod),
+        memo: receipt.memo || `Sales Receipt for Order ${receipt.orderDisplayId || receipt.orderId}`,
+    })
+
+    if (!srResult.success) {
+        console.error(`[QB] ❌ Failed to create Sales Receipt: ${srResult.error}`)
+        await QbSyncLogger.fail(logId, srResult.error || "Sales Receipt creation failed")
+        return { enabled: true, error: srResult.error }
+    }
+
+    const asyncData = srResult.data!
+    console.log(`${prefix} ✅ Sales Receipt queued. OperationID: ${asyncData.operationId}`)
+
+    let srTxnId = asyncData.txnId
+    let srRefNumber = asyncData.refNumber
+
+    if (!srTxnId && asyncData.operationId !== "DRY_RUN") {
+        try {
+            const pollResult = await pollOperationResult(asyncData.operationId)
+            srTxnId = pollResult.txnId
+            srRefNumber = pollResult.refNumber
+        } catch (pollErr: any) {
+            console.error(`[QB] ❌ Sales Receipt polling failed: ${pollErr.message}`)
+            await QbSyncLogger.fail(logId, `Polling failed: ${pollErr.message}`)
+            return { enabled: true, error: `Polling failed: ${pollErr.message}` }
+        }
+    }
+
+    if (srTxnId) {
+        console.log(`${prefix} ✅ Sales Receipt created. TxnID: ${srTxnId}, Ref: ${srRefNumber || "pending"}`)
+    }
+
+    await QbSyncLogger.complete(logId, {
+        qbTxnId: srTxnId,
+        qbRefNumber: srRefNumber,
+        qbOperationId: asyncData.operationId,
+        message: srTxnId
+            ? `Sales Receipt created — TxnID: ${srTxnId}`
+            : `Sales Receipt queued — OperationID: ${asyncData.operationId}`,
+    })
+
+    return { enabled: true, operationId: asyncData.operationId, txnId: srTxnId, refNumber: srRefNumber }
 }
 
 // ─── 4. Process Estimate (Draft Order) ────────────────────────────────────────

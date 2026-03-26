@@ -42,6 +42,7 @@ export type QbOperation =
     | "payment"
     | "invoice"
     | "void_invoice"
+    | "sales_receipt"
     | "cancel"
     | "customer_transfer"
     | "inventory_sync"

@@ -138,22 +138,24 @@ export async function handleFulfillmentCreated(
     const pool = getDbPool()
     let memo = order.metadata?.pos_notes ? `POS Note: ${order.metadata.pos_notes}` : undefined
     let invoiceShippingAmount: number | undefined;
+    let invRefNumber: string | undefined;
 
     try {
-        let sql = `SELECT invoice_number, shipping FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
+        let sql = `SELECT invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
         let params: any[] = [data.fulfillment_id];
 
         if (data.invoice_id) {
-            sql = `SELECT invoice_number, shipping FROM pos_invoice WHERE id = $1 LIMIT 1`;
+            sql = `SELECT invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping FROM pos_invoice WHERE id = $1 LIMIT 1`;
             params = [data.invoice_id];
         }
 
         const invRes = await pool.query(sql, params)
         const row = invRes.rows[0];
         if (row) {
-            const seq = row.invoice_number
+            const seq = row.qb_ref_number || row.invoice_number
             if (seq) {
-                memo = memo ? `${memo} | Invoice INV${seq}` : `Invoice INV${seq}`
+                invRefNumber = String(seq)
+                memo = memo ? `${memo} | Invoice ${seq}` : `Invoice ${seq}`
             }
             if (row.shipping !== undefined && row.shipping !== null) {
                 invoiceShippingAmount = Number(row.shipping)
@@ -261,6 +263,7 @@ export async function handleFulfillmentCreated(
         prebuiltItems,
         salesTaxCode,
         memo,
+        refNumber: invRefNumber,
     })
 
     if (result.skipped) {
@@ -287,22 +290,30 @@ export async function handleFulfillmentCreated(
 
             // Feature Upgrade: Store QB data natively onto the invoice (and fulfillment if immediate delivery)
             if (invoiceId) {
+                let invoiceService: any
                 try {
-                    const invoiceModule = _container.resolve("invoice") // pos_invoice service
-                    const inv = await invoiceModule.retrievePosInvoice(invoiceId)
-                    const existingInvMeta = inv.metadata || {}
-                    await invoiceModule.updatePosInvoices({
-                        id: invoiceId,
-                        metadata: {
-                            ...existingInvMeta,
-                            qb_txn_id: result.txnId || null,
-                            qb_ref_number: result.refNumber || result.txnId || null,
-                            qb_operation_id: result.operationId || null
-                        }
-                    })
-                    logger.info(`${LOG_PREFIX} ✅ Saved native QB Meta to POS Invoice ${invoiceId}`)
-                } catch (metaErr: any) {
-                    logger.warn(`${LOG_PREFIX} Failed to save native QB Meta to POS Invoice ${invoiceId}: ${metaErr.message}`)
+                    invoiceService = _container.resolve("invoices")
+                } catch (e) {
+                    logger.warn(`${LOG_PREFIX} ⚠️ Invoice module not registered, skipped saving QB TxnID to invoice metadata.`)
+                }
+                
+                if (invoiceService) {
+                    try {
+                        const inv = await invoiceService.retrievePosInvoice(invoiceId)
+                        const existingInvMeta = inv.metadata || {}
+                        await invoiceService.updatePosInvoices({
+                            id: invoiceId,
+                            metadata: {
+                                ...existingInvMeta,
+                                qb_txn_id: result.txnId || null,
+                                qb_ref_number: result.refNumber ? `INV-${result.refNumber}` : (result.txnId ? `INV-${result.txnId}` : null),
+                                qb_operation_id: result.operationId || null
+                            }
+                        })
+                        logger.info(`${LOG_PREFIX} ✅ Saved native QB Meta to POS Invoice ${invoiceId}`)
+                    } catch (metaErr: any) {
+                        logger.warn(`${LOG_PREFIX} Failed to save native QB Meta to POS Invoice ${invoiceId}: ${metaErr.message}`)
+                    }
                 }
             }
 
@@ -315,7 +326,7 @@ export async function handleFulfillmentCreated(
                         metadata: {
                             ...existingFulMeta,
                             qb_txn_id: result.txnId || null,
-                            qb_ref_number: result.refNumber || result.txnId || null,
+                            qb_ref_number: result.refNumber ? `INV-${result.refNumber}` : (result.txnId ? `INV-${result.txnId}` : null),
                         }
                     })
                     logger.info(`${LOG_PREFIX} ✅ Saved native QB Meta to Fulfillment ${fulfillmentId}`)

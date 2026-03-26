@@ -20,6 +20,8 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
 
     logger.info(`${LOG_PREFIX} 📥 Received ${event.name} for payment ${paymentId}`)
 
+    const pool = require("../../../api/utils/db-pool").getDbPool()
+
     try {
         const query = container.resolve(ContainerRegistrationKeys.QUERY)
         const financeService = container.resolve(FINANCE_MODULE) as any
@@ -119,6 +121,17 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
         if (!refNumber) {
             refNumber = `PAY-${orderDisplayId || orderId}`
             memo = `Payment for Order ${orderDisplayId || orderId}`
+        }
+
+        // Apply Global Gapless Sequence for Payments
+        try {
+            const seqRes = await pool.query(`SELECT nextval('custom_payment_seq')`)
+            const paySeq = seqRes.rows[0].nextval || seqRes.rows[0].NEXTVAL
+            if (paySeq) {
+                refNumber = `PAY-${paySeq}`
+            }
+        } catch (e: any) {
+            logger.warn(`${LOG_PREFIX} Could not fetch native custom_payment_seq: ${e.message}`)
         }
 
         if (payment.type === "refund") {

@@ -55,8 +55,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     try {
+        // Fetch strictly continuous sequential payment number from PostgreSQL
+        const pgConnection = req.scope.resolve("__pg_connection__") as any
+        const seqRes = await pgConnection.raw(`SELECT nextval('custom_payment_seq') AS seq`).catch(() => ({ rows: [{ seq: null }] }))
+        const nextPayNum = seqRes.rows[0]?.seq || seqRes.rows[0]?.SEQ ? Number(seqRes.rows[0].seq || seqRes.rows[0].SEQ) : null
+
         const payment = await financeService.createCustomerPayments({
             customer_id,
+            display_id: nextPayNum,
             amount,
             method: mappedMethod as any,
             reference: reference || null,
@@ -72,11 +78,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             status: 'available' // A new manual payment is always available until applied
         })
         
-        // Emit event for QuickBooks syncing
-        await eventBus.emit({
+        // Emit event for QuickBooks syncing (best-effort async over BullMQ)
+        eventBus.emit({
             name: "pos.payment.created",
             data: { id: payment.id }
-        })
+        }).catch((err: any) => console.error(err))
+
+        // Bypass BullMQ to ensure reliability in POS and to enable internal polling loop on QB handler
+        setTimeout(() => {
+            const qbHandler = require("../../../../lib/quickbooks/handlers/handle-pos-payment-created").handlePosPaymentCreated
+            qbHandler({ event: { name: "pos.payment.created", data: { id: payment.id } }, container: req.scope })
+                .catch((e: any) => console.error("[QB-POS-PAYMENT] Async dispatch failed:", e))
+        }, 1000)
         
         return res.json({ payment })
     } catch (err: any) {

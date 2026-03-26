@@ -21,9 +21,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         }
 
         if (action === "create" || id === "new" || !id || id.startsWith('new:')) {
+            const pgConnection = req.scope.resolve("__pg_connection__") as any
+            const seqRes = await pgConnection.raw(`SELECT nextval('custom_invoice_seq') AS seq`)
+            const nextCmNum = seqRes.rows[0].seq || seqRes.rows[0].SEQ
+            const cmNumber = `CM-${nextCmNum}`
+
             // 1. Create wrapper
             const created = await creditMemoService.createPosCreditMemoes({
-                credit_memo_number: `CM-${Date.now()}`, // Temporary or sequential
+                credit_memo_number: cmNumber,
                 order_id: payload.order_id || null,
                 invoice_id: payload.invoice_id || null,
                 customer_id: payload.customer_id || null,
@@ -50,12 +55,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 await creditMemoService.createPosCreditMemoItems(itemsToCreate)
             }
             
-            // Generate a better CM number once we have the ID using Postgres sequences or just ID-based
-            const suffix = resolvedId.split('_')[1]?.substring(0, 6).toUpperCase() || Date.now().toString().substring(6)
-            await creditMemoService.updatePosCreditMemoes({
-                id: resolvedId,
-                credit_memo_number: `CM-${suffix}`
-            })
+            // No need to update CM number suffix as we used proper pg sequence from the start
 
         } else {
             // UPDATE EXISTING

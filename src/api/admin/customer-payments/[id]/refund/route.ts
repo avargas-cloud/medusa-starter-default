@@ -40,9 +40,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 { status: 'voided', notes: notes ?? payment.notes }
             )
         } else {
+            const pgConnection = req.scope.resolve("__pg_connection__") as any
+            const seqPgRes = await pgConnection.raw(`SELECT nextval('custom_payment_seq') AS seq`).catch(() => ({ rows: [{ seq: null }] }))
+            const nextPayNum = seqPgRes.rows[0]?.seq || seqPgRes.rows[0]?.SEQ ? Number(seqPgRes.rows[0].seq || seqPgRes.rows[0].SEQ) : null
+
             // Partial refund — create a negative CustomerPayment of type 'refund'
             await financeService.createCustomerPayments({
                 customer_id: payment.customer_id,
+                display_id: nextPayNum,
                 amount: refundAmount,
                 method: payment.method,
                 reference: payment.reference ?? null,

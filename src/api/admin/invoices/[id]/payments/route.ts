@@ -74,9 +74,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             return 'other';
         }
 
+        // Fetch strictly continuous sequential payment number
+        const pgConnection = req.scope.resolve("__pg_connection__") as any
+        const seqPgRes = await pgConnection.raw(`SELECT nextval('custom_payment_seq') AS seq`).catch(() => ({ rows: [{ seq: null }] }))
+        const nextPayNum = seqPgRes.rows[0]?.seq || seqPgRes.rows[0]?.SEQ ? Number(seqPgRes.rows[0].seq || seqPgRes.rows[0].SEQ) : null
+
         // 2. Create the CustomerPayment (The core AR ledger entry)
         const customerPayment = await financeService.createCustomerPayments({
             customer_id,
+            display_id: nextPayNum,
             amount,
             method: mapPosMethodToDbEnum(payment_method),
             reference: reference || null,

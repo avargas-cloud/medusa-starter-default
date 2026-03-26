@@ -1,4 +1,4 @@
-import { DRY_RUN, bridgeFetch, pollRawOperationResult } from "./core"
+import { DRY_RUN, bridgeFetch, pollRawOperationResult, pollOperationResult } from "./core"
 import { QbCreateSalesReceiptPayload, QbBridgeResult, QbAsyncResult } from "./types"
 
 /**
@@ -77,8 +77,10 @@ export async function voidSalesReceiptInQb(
         const data = await bridgeFetch("DELETE", `/api/sales-receipts/${receiptTxnId}`)
         const operationId = data?.operationId
         if (!operationId) throw new Error("Bridge did not return operationId for Sales Receipt void")
+        
         log(`[QB] Sales Receipt ${receiptTxnId} void queued (op: ${operationId})`)
-        return { success: true, data: { operationId, txnId: receiptTxnId } }
+        const result = await pollOperationResult(operationId, log)
+        return { success: true, data: result }
     } catch (err: any) {
         return { success: false, error: err.message }
     }

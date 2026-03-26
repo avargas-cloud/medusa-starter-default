@@ -156,7 +156,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             voided_by: null // system
         })
 
-        // Re-evaluate the source CustomerPayment status (partially_applied vs available)
+        // Re-evaluate the source CustomerPayment status (partially_applied vs available vs voided)
         const currentPaymentDesc = await financeService.retrieveCustomerPayment(app.payment.id, {
             relations: ['applications']
         })
@@ -165,9 +165,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const stillActive = currentPaymentDesc.applications.filter((a: any) => !a.voided_at && a.id !== app.id)
         const totalStillApplied = stillActive.reduce((sum: number, a: any) => sum + Number(a.amount_applied), 0)
         
+        const isSRPayment = currentPaymentDesc.metadata?.is_sales_receipt_payment === true
+        
         await financeService.updateCustomerPayments({
             id: currentPaymentDesc.id,
-            status: totalStillApplied === 0 ? 'available' : 'partially_applied'
+            status: isSRPayment ? 'voided' : (totalStillApplied === 0 ? 'available' : 'partially_applied'),
+            notes: isSRPayment ? ((currentPaymentDesc.notes || '') + `\nAuto-voided via Sales Receipt ${invoice.invoice_number || id} voiding`).trim() : currentPaymentDesc.notes
         })
         
         // D. Refund Native Medusa Payment (best effort, to keep ledger synced)
@@ -239,6 +242,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         id,
         amount_paid: 0, // Hard zero-out
         subtotal:    0,
+        discount:    0,
+        shipping:    0,
         tax:         0,
         total:       0,
         balance_due: 0,
@@ -246,6 +251,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         voided_at:  new Date(),
         void_reason: void_reason ?? null,
     })
+
+    // Also zero out individual item amounts so reports don't pick up 'fake' historical line items
+    try {
+        const pool = getDbPool()
+        await pool.query(
+            `UPDATE pos_invoice_item SET unit_price = 0, total = 0 WHERE invoice_id = $1 AND deleted_at IS NULL`,
+            [id]
+        )
+        console.log(`[VOID INVOICE] Zeroed out items for invoice ${id}`)
+    } catch (e: any) {
+        console.error(`[VOID INVOICE] Non-fatal error zeroing out invoice items: ${e.message}`)
+    }
     
     // 3. DYNAMICALLY REVERT PARENT MEDUSA ORDER STATUSES
     if (invoice.order_id) {

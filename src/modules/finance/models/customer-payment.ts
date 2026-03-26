@@ -26,6 +26,7 @@ import { PaymentApplication } from './payment-application'
  */
 const CustomerPayment = model.define('customer_payment', {
     id:                  model.id({ prefix: 'cpay' }).primaryKey(),
+    display_id:          model.number().nullable(),      // Sequence-driven easy identifier
     customer_id:         model.text(),                  // always required — no orphan payments
     source:              model.enum(['web', 'pos']).default('pos'),
     type:                model.enum(['payment', 'refund', 'credit_memo']).default('payment'),

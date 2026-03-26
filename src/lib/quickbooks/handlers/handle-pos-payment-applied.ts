@@ -2,7 +2,6 @@ import { SubscriberArgs } from "@medusajs/framework"
 import { ContainerRegistrationKeys } from "@medusajs/utils"
 import { FINANCE_MODULE } from "../../../modules/finance"
 import { applyPaymentToInvoiceInQb, pollOperationResult } from "../qb-bridge-client"
-import { getLatestInvoiceTxnId } from "../qb-metadata-types"
 
 const LOG_PREFIX = "[QB-POS-PAYMENT-APPLIED]"
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
@@ -33,37 +32,52 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
         return
     }
 
-    const paymentTxnId = payment.metadata?.qb_txn_id as string
+    let paymentTxnId = payment.metadata?.qb_txn_id as string | undefined
+
+    // Wait for the payment to finish syncing to QB if it hasn't yet (up to 400 seconds)
     if (!paymentTxnId) {
-        logger.warn(`${LOG_PREFIX} Payment ${payment_id} has no qb_txn_id. Cannot apply it in QuickBooks.`)
-        return
-    }
-
-    // 2. Fetch the order metadata to get the invoiceTxnId
-    const { data: [order] } = await query.graph({
-        entity: "order",
-        fields: ["id", "metadata"],
-        filters: { id: order_id }
-    })
-
-    if (!order || !order.metadata) {
-        logger.warn(`${LOG_PREFIX} Order ${order_id} not found or missing metadata. Cannot find invoiceTxnId.`)
-        return
-    }
-
-    let invoiceTxnId = getLatestInvoiceTxnId(order.metadata)
-
-    // 3. Polling for up to 400 seconds if the Invoice hasn't finished syncing yet (20 attempts of 20 seconds)
-    if (!invoiceTxnId) {
-        logger.info(`${LOG_PREFIX} ⏳ Invoice TxnID not found immediately. Polling for up to 400 seconds to let Invoice Sync finish...`)
+        logger.info(`${LOG_PREFIX} ⏳ Payment TxnID not found immediately. Polling for up to 400 seconds to let Payment Sync finish...`)
         for (let i = 0; i < 20; i++) {
             await new Promise(res => setTimeout(res, 20000))
-            const { data: [refreshedOrder] } = await query.graph({
-                entity: "order",
+            const refreshedPayment = await financeService.retrieveCustomerPayment(payment_id).catch(() => null)
+            paymentTxnId = refreshedPayment?.metadata?.qb_txn_id as string | undefined
+            if (paymentTxnId) {
+                logger.info(`${LOG_PREFIX} ⏳ Found paymentTxnId: ${paymentTxnId} on attempt ${i + 1}`)
+                break
+            }
+        }
+    }
+
+    if (!paymentTxnId) {
+        logger.warn(`${LOG_PREFIX} Payment ${payment_id} still has no qb_txn_id after polling. Cannot apply it in QuickBooks.`)
+        return
+    }
+
+    // 2. Fetch the Invoice metadata to get the qb_txn_id
+    let { data: [invoice] } = await query.graph({
+        entity: "pos_invoice",
+        fields: ["id", "metadata"],
+        filters: { id: invoice_id }
+    })
+
+    if (!invoice) {
+        logger.warn(`${LOG_PREFIX} Invoice ${invoice_id} not found. Cannot apply payment.`)
+        return
+    }
+
+    let invoiceTxnId = invoice.metadata?.qb_txn_id as string | undefined
+
+    // 3. Polling for up to 100 seconds if the Invoice hasn't finished syncing yet (10 attempts of 10 seconds)
+    if (!invoiceTxnId) {
+        logger.info(`${LOG_PREFIX} ⏳ Invoice TxnID not found immediately. Polling for up to 100 seconds to let Invoice Sync finish...`)
+        for (let i = 0; i < 10; i++) {
+            await new Promise(res => setTimeout(res, 10000))
+            const { data: [refreshedInvoice] } = await query.graph({
+                entity: "pos_invoice",
                 fields: ["metadata"],
-                filters: { id: order_id }
+                filters: { id: invoice_id }
             })
-            invoiceTxnId = getLatestInvoiceTxnId(refreshedOrder?.metadata || {})
+            invoiceTxnId = refreshedInvoice?.metadata?.qb_txn_id as string | undefined
             if (invoiceTxnId) {
                 logger.info(`${LOG_PREFIX} ⏳ Found invoiceTxnId: ${invoiceTxnId} on attempt ${i + 1}`)
                 break
@@ -97,7 +111,7 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
     const applyResult = await applyPaymentToInvoiceInQb({
         customerId: customerQbId,
         invoiceId: invoiceTxnId,
-        amount: amount_applied,
+        amount: amount_applied / 100,
         creditTxnId: paymentTxnId
     })
 

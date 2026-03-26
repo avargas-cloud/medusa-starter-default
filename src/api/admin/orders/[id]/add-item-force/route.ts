@@ -53,7 +53,7 @@ export async function POST(
         try {
             const [variant] = await productModule.listProductVariants(
                 { id: [variant_id] },
-                { relations: ["prices", "product", "product.metadata", "metadata"] }
+                { relations: ["product", "product.metadata", "metadata"] }
             ) as any[]
 
             if (!variant) {

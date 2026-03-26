@@ -1,4 +1,5 @@
 import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
+import { Modules } from '@medusajs/utils'
 import { FINANCE_MODULE } from '../../../../../../modules/finance'
 import { INVOICE_MODULE } from '../../../../../../modules/invoices'
 
@@ -18,6 +19,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     const financeService = req.scope.resolve(FINANCE_MODULE)
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
+    const eventBus = req.scope.resolve(Modules.EVENT_BUS)
 
     try {
         // 1. Retrieve the application directly
@@ -95,6 +97,21 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     }
                 )
             }
+        }
+
+        // 6. Fire event for QB Sync to Unapply the payment from the Invoice
+        try {
+            await eventBus.emit({
+                name: "pos.payment.unapplied",
+                data: {
+                    payment_id: application.payment.id,
+                    invoice_id: application.invoice_id,
+                    amount_unapplied: application.amount_applied,
+                    application_id: application.id
+                }
+            })
+        } catch (emitErr: any) {
+            req.scope.resolve('logger').error(`Failed to emit pos.payment.unapplied: ${emitErr.message}`)
         }
 
         return res.json({ success: true, application: voidedApplication })

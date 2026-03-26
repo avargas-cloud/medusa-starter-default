@@ -24,6 +24,7 @@ import { handleFulfillmentCreated } from "../lib/quickbooks/handlers/handle-fulf
 import { handleOrderCanceled } from "../lib/quickbooks/handlers/handle-order-canceled"
 import { handleInvoiceVoided } from "../lib/quickbooks/handlers/handle-invoice-voided"
 import { handleCustomerTransferred } from "../lib/quickbooks/handlers/handle-customer-transferred"
+import { isPosOrder } from "../lib/quickbooks/handlers/utils"
 
 export default async function qbOrderSubscriber({
     event: { name, data },
@@ -55,10 +56,10 @@ export default async function qbOrderSubscriber({
                     const query = container.resolve("query")
                     const { data: [fetchedOrder] } = await query.graph({
                         entity: "order",
-                        fields: ["metadata"],
+                        fields: ["metadata", "sales_channel_id"],
                         filters: { id: orderIdStr }
                     })
-                    if (fetchedOrder?.metadata?.pos_created) {
+                    if (isPosOrder(fetchedOrder)) {
                         logger.info(`[QB-ORDER] ⏭️ Skipping order.fulfillment_created for POS order ${orderIdStr}. POS invoices are strictly handled by direct-exec to bypass unreliable BullMQ outbox.`)
                         break
                     }

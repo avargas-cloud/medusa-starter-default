@@ -133,8 +133,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 // Determine the total value of the credit memo (sum of items + tax if applicable)
                 const cmTotal = creditMemo.total || creditMemo.subtotal || creditMemo.items.reduce((sum: number, i: any) => sum + (i.quantity * i.unit_price), 0)
                 
+                const pgConnection = req.scope.resolve("__pg_connection__") as any
+                const seqPgRes = await pgConnection.raw(`SELECT nextval('custom_payment_seq') AS seq`).catch(() => ({ rows: [{ seq: null }] }))
+                const nextPayNum = seqPgRes.rows[0]?.seq || seqPgRes.rows[0]?.SEQ ? Number(seqPgRes.rows[0].seq || seqPgRes.rows[0].SEQ) : null
+
                 await financeService.createCustomerPayments({
                     customer_id: creditMemo.customer_id,
+                    display_id: nextPayNum,
                     amount: cmTotal,
                     method: 'credit_memo',
                     reference: creditMemo.credit_memo_number ? `CM-${creditMemo.credit_memo_number}` : `CM-${creditMemo.id.slice(-6)}`,

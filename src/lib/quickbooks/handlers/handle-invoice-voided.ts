@@ -1,6 +1,7 @@
-import { voidInvoiceInQb } from "../qb-bridge-client"
+import { voidInvoiceInQb, voidSalesReceiptInQb } from "../qb-bridge-client"
 import { QbSyncLogger } from "../qb-sync-logger"
 import { LOG_PREFIX } from "./utils"
+import { getDbPool } from "../../../api/utils/db-pool"
 
 export async function handleInvoiceVoided(data: any, orderModule: any, logger: any) {
     const { order_id, invoice_id, fulfillment_id } = data
@@ -32,40 +33,57 @@ export async function handleInvoiceVoided(data: any, orderModule: any, logger: a
 
     const { txn_id: invoiceTxnId, ref_number: invoiceRef } = targetInv
 
+    let isSalesReceipt = false
+    try {
+        const pool = getDbPool()
+        const res = await pool.query(`SELECT metadata FROM pos_invoice WHERE id = $1`, [invoice_id])
+        if (res.rows[0]?.metadata?.is_sales_receipt) {
+            isSalesReceipt = true
+        }
+    } catch (e: any) {
+        isSalesReceipt = invoiceRef?.startsWith('SR-') || false
+    }
+    
+    const documentTypeName = isSalesReceipt ? "Sales Receipt" : "Invoice"
+
     let logId: string | undefined
     try {
         logId = await QbSyncLogger.start({
-            operation: "void_invoice",
+            operation: isSalesReceipt ? "void_sales_receipt" as any : "void_invoice",
             orderId: order_id,
             orderDisplayId: order.display_id,
             eventType: "pos.invoice.voided",
-            message: `Voiding QB Invoice ${invoiceRef ?? invoiceTxnId} for Order #${order.display_id}`,
+            message: `Voiding QB ${documentTypeName} ${invoiceRef ?? invoiceTxnId} for Order #${order.display_id}`,
         })
     } catch (logErr: any) {
         logger.warn(`${LOG_PREFIX} ⚠️ Could not start sync log: ${logErr.message}`)
     }
 
-    logger.info(`${LOG_PREFIX} Voiding QB Invoice ${invoiceTxnId}...`)
-    const result = await voidInvoiceInQb(invoiceTxnId, (msg) => logger.info(msg))
+    logger.info(`${LOG_PREFIX} Voiding QB ${documentTypeName} ${invoiceTxnId}...`)
+    
+    // Dynamically choose correct Bridge method
+    const result = isSalesReceipt 
+        ? await voidSalesReceiptInQb(invoiceTxnId, (msg) => logger.info(msg))
+        : await voidInvoiceInQb(invoiceTxnId, (msg) => logger.info(msg))
     
     if (logId) {
         if (!result.success) {
-            logger.error(`${LOG_PREFIX} ⚠️ Failed to void invoice: ${result.error}`)
-            await QbSyncLogger.fail(logId, `Invoice void failed: ${result.error}`)
+            logger.error(`${LOG_PREFIX} ⚠️ Failed to void ${documentTypeName.toLowerCase()}: ${result.error}`)
+            await QbSyncLogger.fail(logId, `${documentTypeName} void failed: ${result.error}`)
         } else {
-            logger.info(`${LOG_PREFIX} ✅ Invoice void queued (op: ${result.data?.operationId})`)
+            logger.info(`${LOG_PREFIX} ✅ ${documentTypeName} void queued (op: ${result.data?.operationId})`)
             await QbSyncLogger.complete(logId, {
                 qbTxnId: invoiceTxnId,
                 qbRefNumber: invoiceRef,
                 qbOperationId: result.data?.operationId,
-                message: `Invoice ${invoiceRef ?? invoiceTxnId} voided in QB`,
+                message: `${documentTypeName} ${invoiceRef ?? invoiceTxnId} voided in QB`,
             })
         }
     } else {
         if (!result.success) {
-            logger.error(`${LOG_PREFIX} ⚠️ Failed to void invoice: ${result.error}`)
+            logger.error(`${LOG_PREFIX} ⚠️ Failed to void ${documentTypeName.toLowerCase()}: ${result.error}`)
         } else {
-            logger.info(`${LOG_PREFIX} ✅ Invoice void queued (op: ${result.data?.operationId})`)
+            logger.info(`${LOG_PREFIX} ✅ ${documentTypeName} void queued (op: ${result.data?.operationId})`)
         }
     }
 }

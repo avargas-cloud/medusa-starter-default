@@ -1,6 +1,7 @@
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
 import { handlePosPaymentCreated } from "../lib/quickbooks/handlers/handle-pos-payment-created"
 import { handlePosPaymentApplied } from "../lib/quickbooks/handlers/handle-pos-payment-applied"
+import { handlePosPaymentUnapplied } from "../lib/quickbooks/handlers/handle-pos-payment-unapplied"
 
 export default async function qbPaymentSubscriber({
     event: { name, data },
@@ -23,6 +24,9 @@ export default async function qbPaymentSubscriber({
             case "pos.payment.applied":
                 await handlePosPaymentApplied({ event: { name, data }, container } as SubscriberArgs<any>)
                 break
+            case "pos.payment.unapplied":
+                await handlePosPaymentUnapplied({ event: { name, data }, container } as SubscriberArgs<any>)
+                break
             default:
                 logger.warn(`[QB-PAYMENT] ⚠️ Unhandled event type: ${name}`)
         }
@@ -36,6 +40,7 @@ export const config: SubscriberConfig = {
     event: [
         "pos.payment.created",
         "pos.payment.applied",
+        "pos.payment.unapplied",
     ],
     context: {
         subscriberId: "qb-payment-subscriber",

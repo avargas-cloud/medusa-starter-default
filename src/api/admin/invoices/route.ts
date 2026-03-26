@@ -15,6 +15,7 @@ import { ContainerRegistrationKeys } from '@medusajs/utils'
 import { handleFulfillmentCreated } from '../../../lib/quickbooks/handlers/handle-fulfillment-created'
 import { handlePosPaymentCreated } from '../../../lib/quickbooks/handlers/handle-pos-payment-created'
 import { handlePosPaymentApplied } from '../../../lib/quickbooks/handlers/handle-pos-payment-applied'
+import { handleSalesReceiptCreated } from '../../../lib/quickbooks/handlers/handle-sales-receipt-created'
 // ── GET /admin/invoices?order_id=:id ─────────────────────────────────────────
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
@@ -79,6 +80,7 @@ interface CreateInvoiceBody {
     send_email?: boolean
     email_to?: string
     email_cc?: string
+    is_sales_receipt?: boolean
 }
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
@@ -91,11 +93,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
 
-    // Fetch strictly continuous sequential invoice number from PostgreSQL
+    // Fetch strictly continuous sequential document number from PostgreSQL
     const pgConnection = req.scope.resolve("__pg_connection__") as any
-    const seqRes = await pgConnection.raw(`SELECT nextval('custom_invoice_seq') AS seq`)
+    
+    // 1. Get Medusa Invoice Sequence
+    const medusaSeqRes = await pgConnection.raw(`SELECT nextval('custom_medusa_invoice_seq') AS seq`)
+    const invoice_number = `${medusaSeqRes.rows[0].seq || medusaSeqRes.rows[0].SEQ}`
+
+    // 2. Get QB RefNumber Sequence
+    const targetSeq = body.is_sales_receipt ? 'custom_sales_receipt_seq' : 'custom_invoice_seq'
+    const seqRes = await pgConnection.raw(`SELECT nextval('${targetSeq}') AS seq`)
     const nextInvNum = seqRes.rows[0].seq || seqRes.rows[0].SEQ
-    const invoice_number = `${nextInvNum}`
+    const qb_metadata_ref_number = `${nextInvNum}`
 
     const balance_due = body.total - body.amount_paid
 
@@ -124,6 +133,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         notes:          body.notes ?? null,
         created_by:     body.created_by ?? null,
         shipping_address: body.shipping_address ?? null,
+        metadata: {
+            is_sales_receipt: !!body.is_sales_receipt,
+            qb_ref_number: qb_metadata_ref_number
+        }
     })
 
     // Step 2: Create line items linked to the invoice
@@ -211,9 +224,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 }
             }
         } else {
+            // Fetch strictly continuous sequential payment number
+            const seqPgRes = await pgConnection.raw(`SELECT nextval('custom_payment_seq') AS seq`).catch(() => ({ rows: [{ seq: null }] }))
+            const nextPayNum = seqPgRes.rows[0]?.seq || seqPgRes.rows[0]?.SEQ ? Number(seqPgRes.rows[0].seq || seqPgRes.rows[0].SEQ) : null
+
             // B. Finance Module global AR Ledger (New Money via Cash/Card/etc)
             const customerPayment = await financeService.createCustomerPayments({
                 customer_id: body.customer_id,
+                display_id: nextPayNum,
                 amount: body.amount_paid,
                 method: mapPosMethodToDbEnum(body.payment_method),
                 reference: 'Deposit',
@@ -230,8 +248,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     order_display_id: body.order_display_id,
                     pos_payment_method: body.payment_method,
                     invoices_affected: [(invoice as any).id],
-                    invoices_affected_friendly: [String(body.order_display_id)],
-                    order_document_number: body.order_document_number ?? null
+                    invoices_affected_friendly: [String(invoice_number || body.order_display_id)],
+                    order_document_number: body.order_document_number ?? null,
+                    ...(body.is_sales_receipt 
+                        ? { 
+                            qb_txn_id: "SYNCED_VIA_RECEIPT", 
+                            is_sales_receipt_payment: true // Prevents UI unapply/refund
+                          } 
+                        : {})
                 }
             })
 
@@ -242,7 +266,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             console.log("resolved paymentId:", paymentId)
             console.log("=====================================================")
             if (paymentId) {
-                paymentIdToEmit = paymentId
+                if (body.is_sales_receipt) {
+                    console.log("PAYMENT SKIPPED FOR EMIT: Sales receipt covers payment automatically.")
+                } else {
+                    paymentIdToEmit = paymentId
+                }
             } else {
                 console.log("paymentId WAS FALSEY! SKIPPING EMIT!")
             }
@@ -290,16 +318,26 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             const customerModule = container.resolve(Modules.CUSTOMER)
             const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
 
-            // 1. Process Invoice - Unconditionally executed to guarantee 100% reliability
-            // This bypasses the Medusa BullMQ Outbox which is prone to dropping concurrent transactional events.
-            // The qb-order-subscriber intercepts and ignores native fulfillment events for POS orders to prevent duplicates.
-            console.log(`DIRECT EXEC: Triggering pos.invoice.created directly for order ${body.order_id} to bypass BullMQ drops.`)
-            await handleFulfillmentCreated({
-                order_id: body.order_id,
-                invoice_id: (invoice as any).id,
-                items: body.items,
-                fulfillment_id: body.fulfillment_id
-            }, orderModule, customerModule, container, logger)
+            // 1. Process Order Document (Invoice or Sales Receipt)
+            if (body.is_sales_receipt) {
+                console.log(`DIRECT EXEC: Triggering pos.sales_receipt.created directly for order ${body.order_id}.`)
+                await handleSalesReceiptCreated({
+                    order_id: body.order_id,
+                    invoice_id: (invoice as any).id,
+                    items: body.items,
+                    fulfillment_id: body.fulfillment_id,
+                    payment_method: body.payment_method,
+                    payment_id: paymentIdToEmit
+                }, orderModule, customerModule, container, logger)
+            } else {
+                console.log(`DIRECT EXEC: Triggering pos.invoice.created directly for order ${body.order_id} to bypass BullMQ drops.`)
+                await handleFulfillmentCreated({
+                    order_id: body.order_id,
+                    invoice_id: (invoice as any).id,
+                    items: body.items,
+                    fulfillment_id: body.fulfillment_id
+                }, orderModule, customerModule, container, logger)
+            }
 
             // Wait 250ms to ensure sequential QB database writing
             await new Promise(r => setTimeout(r, 250))
@@ -318,12 +356,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
             // 3. Process Applications
             if (applicationsToEmit.length > 0) {
-                for (const appPayload of applicationsToEmit) {
-                    await handlePosPaymentApplied({
-                        event: { name: "pos.payment.applied", data: appPayload },
-                        container
-                    } as any)
-                    console.log(`DIRECT EXEC: pos.payment.applied executed for Payment ${appPayload.payment_id}!`)
+                if (body.is_sales_receipt) {
+                    console.log("DIRECT EXEC: Skipping pos.payment.applied emit because this is a Sales Receipt.")
+                } else {
+                    for (const appPayload of applicationsToEmit) {
+                        await handlePosPaymentApplied({
+                            event: { name: "pos.payment.applied", data: appPayload },
+                            container
+                        } as any)
+                        console.log(`DIRECT EXEC: pos.payment.applied executed for Payment ${appPayload.payment_id}!`)
+                    }
                 }
             }
 

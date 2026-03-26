@@ -79,7 +79,7 @@ export async function handleDraftOrderCreated(data: any, container: any, logger:
     let draftOrder: any
     try {
         const { data: results } = await query.graph({
-            entity: "draft_order",
+            entity: "order",
             fields: [
                 "id",
                 "metadata",
@@ -187,7 +187,7 @@ export async function handleDraftOrderCreated(data: any, container: any, logger:
             const orderModule = container.resolve(Modules.ORDER)
             const currentMetadata = draftOrder.metadata || {}
 
-            await orderModule.updateDraftOrders?.(draftOrderId, {
+            await orderModule.updateOrders(draftOrderId, {
                 metadata: {
                     ...currentMetadata,
                     qb_list_id: custResult.qbCustomerId,         // ← Customer QB ID for downstream events

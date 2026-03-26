@@ -28,16 +28,25 @@ export default async function documentNumberSubscriber({
             const meta = (order.metadata || {}) as Record<string, any>
             if (meta.document_number) return // Already assigned
 
-            // We simply use Medusa's native display_id prefixed with 'E' since Estimates are temporary 
-            // and natively disappear upon conversion anyway. No need to waste a gapless Postgres sequence here.
+            // Fetch natively from Postgres sequence using Knex
+            let nextEstNum: string | number = order.display_id
+            try {
+                const result = await pgConnection.raw(`SELECT nextval('custom_estimate_seq') AS seq`)
+                nextEstNum = result.rows[0].seq || result.rows[0].SEQ
+            } catch (e: any) {
+                logger.error(`${LOG_PREFIX} Failed to fetch custom_estimate_seq: ${e.message}`)
+            }
+
             const documentNumber = `E${order.display_id}`
+            const qbEstimateRef = `E${nextEstNum}`
             
-            logger.info(`${LOG_PREFIX} Assigned ${documentNumber} to Draft Order ${order.id}`)
+            logger.info(`${LOG_PREFIX} Assigned ${documentNumber} (QB Ref: ${qbEstimateRef}) to Draft Order ${order.id}`)
 
             await orderModule.updateOrders(order.id, {
                 metadata: {
                     ...(order.metadata || {}),
-                    document_number: documentNumber
+                    document_number: documentNumber,
+                    qb_ref_number: qbEstimateRef
                 }
             })
         } 
