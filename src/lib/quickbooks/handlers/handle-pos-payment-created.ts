@@ -123,7 +123,7 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
 
         if (payment.type === "refund") {
             logger.info(`${LOG_PREFIX} 🔄 Generating Generic Credit Memo for POS Refund...`)
-            const amountAbs = Math.abs(payment.amount as number)
+            const amountAbs = Math.abs(payment.amount as number) / 100
             
             const cmResult = await createCreditMemoInQb({
                 customerId: qbCustomerId as string,
@@ -166,7 +166,7 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
         const result = await processPaymentCaptureInQb({
             orderId: (orderId as string) || `payment_${paymentId}`,
             orderDisplayId: (orderDisplayId as number) || undefined,
-            amount: payment.amount as number, // V2 native DOLLAR decimal
+            amount: (payment.amount as number) / 100, // Convert cents to QB dollars
             paymentMethod: (payment.metadata?.pos_payment_method as string) || (payment.method as string),
             qbCustomerId: qbCustomerId as string,
             refNumber,

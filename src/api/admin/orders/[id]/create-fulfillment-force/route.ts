@@ -197,8 +197,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             }
         }
 
-        console.log(`[create-fulfillment-force] ✅ Strategy 1 (native workflow) succeeded`)
         const returnedFulfillment = (result.result as any) ?? { id: "ok" }
+        
         if (invoice_id && returnedFulfillment.id !== "ok") {
             await bindFulfillmentToInvoice(returnedFulfillment.id, invoice_id)
         }
@@ -334,6 +334,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         if (invoice_id && fulfillment?.id) {
             await bindFulfillmentToInvoice(fulfillment.id, invoice_id)
         }
+
+
 
         return res.status(201).json({ fulfillment })
 

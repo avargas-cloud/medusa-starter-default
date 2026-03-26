@@ -49,7 +49,8 @@ export async function handlePaymentCaptured(
 
     logger.info(`${LOG_PREFIX} Using qb_list_id=${qbCustomerId}`)
 
-    const amount = data.amount ?? order.total ?? 0
+    const amountInCents = data.amount ?? order.total ?? 0
+    const amount = amountInCents / 100
     logger.info(`${LOG_PREFIX} Payment amount: $${amount.toFixed(2)}`)
 
     const paymentMethod = "Credit Card"

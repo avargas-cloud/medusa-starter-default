@@ -100,6 +100,7 @@ export async function updateSalesOrderInQb(
                 ...(item.productName ? { productName: item.productName } : {}),
                 quantity: item.quantity,
                 price: item.price,
+                amount: item.amount,
                 desc: item.desc,
                 noSite: item.noSite,
             }

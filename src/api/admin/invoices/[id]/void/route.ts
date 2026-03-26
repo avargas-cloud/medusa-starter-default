@@ -54,8 +54,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
         if (locationId) {
             // Get original order items line references via join with order_line_item
-            const orderRes = await pool.query<{ id: string, variant_id: string, variant_sku: string }>(
-                `SELECT oi.id, oli.variant_id, oli.variant_sku 
+            const orderRes = await pool.query<{ id: string, line_item_id: string, variant_id: string, variant_sku: string }>(
+                `SELECT oi.id, oli.id as line_item_id, oli.variant_id, oli.variant_sku 
                  FROM order_item oi
                  JOIN order_line_item oli ON oi.item_id = oli.id
                  WHERE oi.order_id = $1`, 
@@ -99,7 +99,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 const invItemRes = await pool.query<{ inventory_item_id: string }>(
                      `SELECT inventory_item_id FROM product_variant_inventory_item
                       WHERE variant_id = $1 AND deleted_at IS NULL LIMIT 1`,
-                     [posItem.variant_id]
+                     [reqItem.variant_id]
                 )
                 const inventoryItemId = invItemRes.rows[0]?.inventory_item_id
                 
@@ -117,7 +117,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                                     inventory_item_id: inventoryItemId,
                                     location_id: locationId,
                                     quantity: qtyToRevert,
-                                    line_item_id: reqItem.id,
+                                    line_item_id: reqItem.line_item_id,
+                                    allow_backorder: true,
                                     description: `Auto-restored via Void of Invoice ${invoice.invoice_number || invoice.id}`
                                 }]
                             }
@@ -168,6 +169,52 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             id: currentPaymentDesc.id,
             status: totalStillApplied === 0 ? 'available' : 'partially_applied'
         })
+        
+        // D. Refund Native Medusa Payment (best effort, to keep ledger synced)
+        try {
+            const query = req.scope.resolve('query')
+            const paymentModule = req.scope.resolve('payment')
+            const { data: [order] } = await query.graph({
+                entity: 'order',
+                fields: ['payment_collections.payments.id', 'payment_collections.payments.amount', 'payment_collections.payments.captures.*', 'payment_collections.payments.refunds.*'],
+                filters: { id: invoice.order_id }
+            })
+            if (order?.payment_collections?.length) {
+                let amountToRefund = Number(app.amount_applied) / 100 // dollars
+                for (const pc of order.payment_collections) {
+                    if (amountToRefund <= 0) break
+                    
+                    if (pc) {
+                        // Find a fully captured base payment
+                        const payment = pc.payments?.find((p: any) => p.captured_at && !p.canceled_at)
+                        if (payment) {
+                            const availableForRefund = Number(payment.amount) - Number(payment.refunds?.reduce((sum: number, r: any) => sum + Number(r.amount), 0) || 0)
+                            const refundChunk = Math.min(amountToRefund, availableForRefund)
+
+                            if (availableForRefund > 0 && refundChunk > 0) {
+                                console.log(`[VOID INVOICE] Proceeding with Native Refund of ${refundChunk} cents from Payment ${payment.id}`)
+                                
+                                await paymentModule.refundPayment({
+                                    payment_id: payment.id,
+                                    amount: refundChunk,
+                                    created_by: "pos-void-hook",
+                                    note: `Auto-refunded via Void of Invoice ${invoice.invoice_number || invoice.id}`
+                                }).catch((e: any) => console.error("[VOID INVOICE] Refund failed for payment", payment.id, e.message))
+                                
+                                console.log(`[VOID INVOICE] Native Refund Successful for Payment ${payment.id}`)
+                                amountToRefund -= refundChunk
+                            } else {
+                                console.warn(`[VOID INVOICE] Payment ${payment.id} does not have enough unrefunded balance (${availableForRefund} vs ${refundChunk}). Cannot auto-refund.`)
+                            }
+                        } else {
+                            console.warn(`[VOID INVOICE] No fully captured payment found in PaymentCollection ${pc.id}. Cannot auto-refund.`)
+                        }
+                    }
+                }
+            }
+        } catch (e: any) {
+            console.error(`[VOID INVOICE] Non-fatal error refunding native Medusa payment: ${e.message}`)
+        }
         
         // Create an offsetting negative payment record in the Invoice ledger for auditing
         await invoiceService.createInvoicePayments({
@@ -230,24 +277,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                         WHERE item_id = $2
                      `, [fItem.quantity, fItem.line_item_id])
                      
-                     // Restore allocated (reservation) quantity
-                     try {
-                         await pool.query(`
-                            UPDATE reservation_item 
-                            SET 
-                                quantity = quantity + $1::numeric,
-                                raw_quantity = jsonb_set(
-                                    raw_quantity, 
-                                    '{value}', 
-                                    to_jsonb(((raw_quantity->>'value')::numeric + $1::numeric)::text), 
-                                    false
-                                )
-                            WHERE line_item_id = $2 AND deleted_at IS NULL
-                         `, [fItem.quantity, fItem.line_item_id])
-                         console.log(`[VOID INVOICE] Reversed ${fItem.quantity} units (Fulfilled -> Allocated) for item ${fItem.line_item_id}`)
-                     } catch (err) {
-                         console.warn(`[VOID INVOICE] Could not restore allocation for ${fItem.line_item_id}`, err)
-                     }
+                     // The allocated (reservation) quantity is natively restored by createReservationsWorkflow in Step 0C.
+                     // We previously ran a manual SQL update here that caused duplicate allocations.
                 }
 
                 // 3. Delete the fulfillment records
