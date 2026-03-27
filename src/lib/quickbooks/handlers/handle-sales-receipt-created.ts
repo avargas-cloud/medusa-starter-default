@@ -162,6 +162,14 @@ export async function handleSalesReceiptCreated(
     const hasTax = getFloat(order.tax_total) > 0
     salesTaxCode = hasTax ? qbConfig.defaultSalesTaxCode : undefined
 
+    try {
+        await orderModule.updateOrders(orderId, {
+            metadata: { ...(order.metadata || {}), qb_sync_status: "creating" }
+        })
+    } catch (mErr) {
+        logger.warn(`${LOG_PREFIX} Could not set creating status: ${mErr}`)
+    }
+
     const result = await processSalesReceiptInQb({
         orderId,
         orderDisplayId: order.display_id,
@@ -179,6 +187,11 @@ export async function handleSalesReceiptCreated(
     }
     if (result.error) {
         logger.error(`${LOG_PREFIX} ❌ processSalesReceiptInQb error: ${result.error}`)
+        try {
+            await orderModule.updateOrders(orderId, {
+                metadata: { ...(order.metadata || {}), qb_sync_status: "error" }
+            })
+        } catch (mErr) {}
         return
     }
 
@@ -195,6 +208,7 @@ export async function handleSalesReceiptCreated(
                 operationId:   result.operationId || null,
                 fulfillmentId,
                 invoiceId,
+                syncStatus:    "child_synced",
             })
             
             await orderModule.updateOrders(orderId, { 

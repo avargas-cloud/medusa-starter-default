@@ -136,6 +136,12 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
 
         if (payment.type === "refund") {
             logger.info(`${LOG_PREFIX} 🔄 Generating Generic Credit Memo for POS Refund...`)
+            try {
+                await financeService.updateCustomerPayments({
+                    id: paymentId,
+                    metadata: { ...(payment.metadata || {}), qb_sync_status: "creating" }
+                })
+            } catch (mErr) {}
             const amountAbs = Math.abs(payment.amount as number) / 100
             
             const cmResult = await createCreditMemoInQb({
@@ -156,6 +162,12 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
 
             if (!cmResult.success) {
                 logger.error(`${LOG_PREFIX} ❌ Failed to create Generic Credit Memo: ${cmResult.error}`)
+                try {
+                    await financeService.updateCustomerPayments({
+                        id: paymentId,
+                        metadata: { ...(payment.metadata || {}), qb_sync_status: "error" }
+                    })
+                } catch (mErr) {}
                 return
             }
 
@@ -164,7 +176,11 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
                 try {
                     await financeService.updateCustomerPayments({
                         id: paymentId,
-                        metadata: { ...(payment.metadata || {}), qb_operation_id: opId }
+                        metadata: { 
+                            ...(payment.metadata || {}), 
+                            qb_operation_id: opId,
+                            qb_sync_status: "synced"
+                        }
                     })
                     logger.info(`${LOG_PREFIX} ✅ Generic Credit Memo queued: ${opId}`)
                 } catch (err: any) {
@@ -176,6 +192,15 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
 
         // 3. Register Payment as ReceivePayment in QuickBooks
         // This drops the deposit into QB as an unapplied credit (linked to the correct Customer)
+        try {
+            await financeService.updateCustomerPayments({
+                id: paymentId,
+                metadata: { ...(payment.metadata || {}), qb_sync_status: "creating" }
+            })
+        } catch (mErr) {
+            logger.warn(`${LOG_PREFIX} Could not set creating status: ${mErr}`)
+        }
+
         const result = await processPaymentCaptureInQb({
             orderId: (orderId as string) || `payment_${paymentId}`,
             orderDisplayId: (orderDisplayId as number) || undefined,
@@ -192,6 +217,12 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
         }
         if (result.error) {
             logger.error(`${LOG_PREFIX} ❌ QB Payment Capture failed: ${result.error}`)
+            try {
+                await financeService.updateCustomerPayments({
+                    id: paymentId,
+                    metadata: { ...(payment.metadata || {}), qb_sync_status: "error" }
+                })
+            } catch (mErr) {}
             return
         }
 
@@ -202,6 +233,7 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
                     id: paymentId,
                     metadata: {
                         ...(payment.metadata || {}),
+                        qb_sync_status: "synced",
                         qb_txn_id: result.txnId || null,
                         qb_operation_id: result.operationId || null,
                     }

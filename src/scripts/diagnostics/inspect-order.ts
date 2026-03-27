@@ -22,6 +22,7 @@ export default async function inspectOrder({ container }: { container: MedusaCon
       entity: "order",
       fields: [
         "id", "display_id", "status", "payment_status", "fulfillment_status", "version",
+        "is_draft_order",
         "total", "subtotal", "tax_total", "discount_total", "metadata",
         "created_at", "updated_at",
         "customer.*",
@@ -46,6 +47,7 @@ export default async function inspectOrder({ container }: { container: MedusaCon
     console.log("📋 GENERAL INFO")
     console.log(`ID: ${order.id}`)
     console.log(`Display ID: ${order.display_id}`)
+    console.log(`Is Draft Order: ${order.is_draft_order ? '✅ YES' : '❌ NO'}`)
     console.log(`Status: ${order.status}`)
     console.log(`Fulfillment Status: ${order.fulfillment_status}`)
     console.log(`Payment Status: ${order.payment_status}`)
@@ -115,7 +117,7 @@ export default async function inspectOrder({ container }: { container: MedusaCon
       console.log(`    Requested Qty: ${item.quantity}`)
       console.log(`    Fulfilled Qty: ${item.detail?.fulfilled_quantity ?? (item.fulfilled_quantity || 0)}`)
       console.log(`    Allocated/Reserved Qty: ${allocatedQty} (Reservations: ${itemReservations.length})`)
-      if (allocatedQty < item.quantity) {
+      if (allocatedQty < item.quantity && !order.is_draft_order) {
         console.log(`    ⚠️ BACKORDERED/MISSING ALLOCATION: ${item.quantity - allocatedQty}`)
       }
       console.log(`    Unit Price: ${Number(item.unit_price || 0).toFixed(2)}`)

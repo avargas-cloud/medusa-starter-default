@@ -183,7 +183,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 filters: { id: invoice.order_id }
             })
             if (order?.payment_collections?.length) {
-                let amountToRefund = Number(app.amount_applied) / 100 // dollars
+                let amountToRefund = Number(app.amount_applied) // dollars removed, kept natively in cents
                 for (const pc of order.payment_collections) {
                     if (amountToRefund <= 0) break
                     
@@ -312,6 +312,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         
         // Oracle calculation based purely on order items stock and active POS Invoices
         await recalculateOrderStatus(invoice.order_id, req.scope)
+
+        // 4. CANCEL DIRECT SALES ORDERS ENTIRELY
+        const isSalesReceipt = invoice.metadata?.is_sales_receipt === true || invoice.qb_ref_number?.startsWith?.('SR-') || invoice.invoice_number?.startsWith?.('SR-')
+        if (isSalesReceipt) {
+            try {
+                const { cancelOrderWorkflow } = await import("@medusajs/core-flows")
+                console.log(`[VOID INVOICE] Canceling Medusa order ${invoice.order_id} natively since it was a Direct Sale`)
+                
+                await cancelOrderWorkflow(req.scope).run({
+                    input: { order_id: invoice.order_id }
+                })
+                console.log(`[VOID INVOICE] Successfully native-canceled Medusa Order ${invoice.order_id}`)
+            } catch (cErr: any) {
+                console.warn(`[VOID INVOICE] Could not natively cancel Medusa Order ${invoice.order_id}:`, cErr.message)
+            }
+        }
     }
     
     const eventBus = req.scope.resolve(Modules.EVENT_BUS)

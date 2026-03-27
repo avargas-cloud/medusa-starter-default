@@ -52,6 +52,13 @@ export interface QbPaymentMeta {
 export const QB_DIRECT_SALES = "Direct Sales" as const
 
 export type QbSyncStatus =
+    | "creating"
+    | "editing"
+    | "voiding"
+    | "synced"
+    | "child_synced"
+    | "voided"
+    | "error"
     | "pending"                // queued but QBWC hasn't processed yet
     | "direct_invoice"         // < 1h, paid immediately (no SO created)
     | "sales_order"            // SO created by cron / subscriber
@@ -170,7 +177,7 @@ export function getLatestPaymentRef(meta: Record<string, any> | null | undefined
 /** Build the metadata patch for an Estimate sync result. */
 export function buildEstimatePatch(
     existingMeta: Record<string, any>,
-    opts: { txnId: string; refNumber: string | null; operationId: string | null }
+    opts: { txnId: string; refNumber: string | null; operationId: string | null; syncStatus?: QbSyncStatus }
 ): Record<string, any> {
     const patch: QbEstimateMeta = {
         txn_id:       opts.txnId,
@@ -181,6 +188,7 @@ export function buildEstimatePatch(
     return {
         ...existingMeta,
         qb_estimate:   patch,
+        qb_sync_status: opts.syncStatus ?? "synced",
         qb_synced_at:  patch.synced_at,
     }
 }
@@ -221,6 +229,7 @@ export function buildInvoicePatch(
         operationId: string | null
         fulfillmentId?: string | null
         invoiceId?: string | null
+        syncStatus?: QbSyncStatus
     }
 ): Record<string, any> {
     const now = new Date().toISOString()
@@ -238,6 +247,7 @@ export function buildInvoicePatch(
     return {
         ...existingMeta,
         qb_invoices:  [...existing, newEntry],
+        qb_sync_status: opts.syncStatus ?? "synced",
         qb_synced_at: now,
     }
 }
@@ -251,6 +261,7 @@ export function buildPaymentPatch(
         operationId: string | null
         amount: number
         method: string
+        syncStatus?: QbSyncStatus
     }
 ): Record<string, any> {
     const now = new Date().toISOString()
@@ -268,6 +279,7 @@ export function buildPaymentPatch(
     return {
         ...existingMeta,
         qb_payments:  [...existing, newEntry],
+        qb_sync_status: opts.syncStatus ?? "synced",
         qb_synced_at: now,
     }
 }

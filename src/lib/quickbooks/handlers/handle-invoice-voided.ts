@@ -61,6 +61,15 @@ export async function handleInvoiceVoided(data: any, orderModule: any, logger: a
 
     logger.info(`${LOG_PREFIX} Voiding QB ${documentTypeName} ${invoiceTxnId}...`)
     
+    // Inject pre-flight metadata so UI shows "VOIDING..."
+    try {
+        await orderModule.updateOrders(order_id, {
+            metadata: { ...(order.metadata || {}), qb_sync_status: "voiding" }
+        })
+    } catch (mErr) {
+        logger.warn(`${LOG_PREFIX} Could not set voiding status: ${mErr}`)
+    }
+
     // Dynamically choose correct Bridge method
     const result = isSalesReceipt 
         ? await voidSalesReceiptInQb(invoiceTxnId, (msg) => logger.info(msg))
@@ -70,6 +79,11 @@ export async function handleInvoiceVoided(data: any, orderModule: any, logger: a
         if (!result.success) {
             logger.error(`${LOG_PREFIX} ⚠️ Failed to void ${documentTypeName.toLowerCase()}: ${result.error}`)
             await QbSyncLogger.fail(logId, `${documentTypeName} void failed: ${result.error}`)
+            try {
+                await orderModule.updateOrders(order_id, {
+                    metadata: { ...(order.metadata || {}), qb_sync_status: "error" }
+                })
+            } catch (mErr) {}
         } else {
             logger.info(`${LOG_PREFIX} ✅ ${documentTypeName} void queued (op: ${result.data?.operationId})`)
             await QbSyncLogger.complete(logId, {
@@ -78,12 +92,29 @@ export async function handleInvoiceVoided(data: any, orderModule: any, logger: a
                 qbOperationId: result.data?.operationId,
                 message: `${documentTypeName} ${invoiceRef ?? invoiceTxnId} voided in QB`,
             })
+            // Wait, note that a void operation in the queue might need polling, but voiding usually returns true quickly or queues it.
+            // Let's optimisticly set voided or rely on the webhook. The manual sync only cares if it's explicitly 'error' to retry.
+            try {
+                await orderModule.updateOrders(order_id, {
+                    metadata: { ...(order.metadata || {}), qb_sync_status: "voided" }
+                })
+            } catch (mErr) {}
         }
     } else {
         if (!result.success) {
             logger.error(`${LOG_PREFIX} ⚠️ Failed to void ${documentTypeName.toLowerCase()}: ${result.error}`)
+            try {
+                await orderModule.updateOrders(order_id, {
+                    metadata: { ...(order.metadata || {}), qb_sync_status: "error" }
+                })
+            } catch (mErr) {}
         } else {
             logger.info(`${LOG_PREFIX} ✅ ${documentTypeName} void queued (op: ${result.data?.operationId})`)
+            try {
+                await orderModule.updateOrders(order_id, {
+                    metadata: { ...(order.metadata || {}), qb_sync_status: "voided" }
+                })
+            } catch (mErr) {}
         }
     }
 }

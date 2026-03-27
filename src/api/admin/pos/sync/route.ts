@@ -14,13 +14,13 @@ const LOG_PREFIX = "[POST /admin/pos/sync]"
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const logger = req.scope.resolve(ContainerRegistrationKeys.LOGGER)
-    const { type, id } = req.body as { type?: string, id?: string }
+    const { type, id, action = "sync" } = req.body as { type?: string, id?: string, action?: "sync" | "void" }
 
     if (!type || !id) {
         return res.status(400).json({ error: "Missing type or id" })
     }
 
-    logger.info(`${LOG_PREFIX} 🔥 Manual QB Sync Executed: type=${type}, id=${id}`)
+    logger.info(`${LOG_PREFIX} 🔥 Manual QB Action Executed: type=${type}, id=${id}, action=${action}`)
 
     try {
         const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)
@@ -37,6 +37,25 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 })
                 
                 if (!order) return res.status(404).json({ error: "Estimate not found" })
+                if (action === 'void') {
+                    if (!getEstimateTxnId(order.metadata || {})) {
+                        return res.status(400).json({ error: "Cannot close: Estimate is not in QuickBooks." })
+                    }
+                    try {
+                        await orderModule.updateOrders(id, { metadata: { ...(order.metadata || {}), qb_sync_status: "voiding" } })
+                    } catch (e) {}
+                    // QuickBooks doesn't natively support "VoidEstimate", but we can mark it inactive/sync status voided.
+                    const { closeEstimateInQb } = require('../../../../../lib/quickbooks/qb-bridge-client')
+                    if (closeEstimateInQb) {
+                        await closeEstimateInQb(getEstimateTxnId(order.metadata || {}), (m: string) => logger.info(m))
+                    }
+                    try {
+                        const refreshed = await orderModule.retrieveOrder(id)
+                        await orderModule.updateOrders(id, { metadata: { ...(refreshed.metadata || {}), qb_sync_status: "voided" } })
+                    } catch (e) {}
+                    return res.json({ success: true, message: "Estimate close logic executed" })
+                }
+
                 if (getEstimateTxnId(order.metadata || {})) {
                     return res.status(400).json({ error: "Cannot sync: Estimate is already in QuickBooks." })
                 }
@@ -54,6 +73,23 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 })
                 
                 if (!order) return res.status(404).json({ error: "Order not found" })
+                if (action === 'void') {
+                    if (!getSoTxnId(order.metadata || {})) {
+                        return res.status(400).json({ error: "Cannot close: Order is not in QuickBooks." })
+                    }
+                    try {
+                        await orderModule.updateOrders(id, { metadata: { ...(order.metadata || {}), qb_sync_status: "voiding" } })
+                    } catch (e) {}
+                    const { handleOrderCanceled } = require("../../../../../lib/quickbooks/handlers/handle-order-canceled")
+                    await handleOrderCanceled({ id }, orderModule, logger)
+                    // Optimistically set to voided or error depending on if it works
+                    try {
+                        const refreshed = await orderModule.retrieveOrder(id)
+                        await orderModule.updateOrders(id, { metadata: { ...(refreshed.metadata || {}), qb_sync_status: "voided" } })
+                    } catch (e) {}
+                    return res.json({ success: true, message: "Order close logic executed" })
+                }
+
                 if (getSoTxnId(order.metadata || {})) {
                     return res.status(400).json({ error: "Cannot sync: Order is already in QuickBooks." })
                 }
@@ -79,7 +115,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 const invoice = await invoiceService.retrievePosInvoice(id)
                 if (!invoice) return res.status(404).json({ error: "Invoice not found" })
                 
-                if (invoice.metadata?.qb_txn_id || invoice.metadata?.qb_ref_number) {
+                if (action === 'void') {
+                    if (!invoice.metadata?.qb_txn_id && !invoice.metadata?.qb_ref_number && !invoice.metadata?.qb_invoice_txn_id && !invoice.metadata?.qb_sales_receipt_txn_id) {
+                        return res.status(400).json({ error: "Cannot void: Invoice is not in QuickBooks." })
+                    }
+                    const { handleInvoiceVoided } = require("../../../../../lib/quickbooks/handlers/handle-invoice-voided")
+                    await handleInvoiceVoided({ order_id: invoice.order_id, invoice_id: id }, orderModule, logger)
+                    return res.json({ success: true, message: "Invoice void logic executed" })
+                }
+                
+                if (invoice.metadata?.qb_txn_id || invoice.metadata?.qb_ref_number || invoice.metadata?.qb_invoice_txn_id || invoice.metadata?.qb_sales_receipt_txn_id) {
                     return res.status(400).json({ error: "Cannot sync: Invoice is already in QuickBooks." })
                 }
                 

@@ -22,13 +22,15 @@ import { getDbPool } from "../../../../utils/db-pool"
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
     const { id } = req.params as { id: string }
-    const { discount_type, discount_value, pos_discount_amount, pos_total, pos_tax_amount, pos_tax_rate } = req.body as {
+    const { discount_type, discount_value, pos_discount_amount, pos_total, pos_tax_amount, pos_tax_rate, shipping_address, billing_address } = req.body as {
         discount_type?: string
         discount_value?: number   // Raw discount value: percent rate (e.g. 5) OR fixed dollar amount
         pos_discount_amount?: number // POS-computed dollar discount amount for reconciliation (e.g. 2.65)
         pos_total?: number  // POS-computed final total in dollars (includes tax, shipping, discounts)
         pos_tax_amount?: number // POS-computed tax in dollars
         pos_tax_rate?: number   // POS-computed tax rate (e.g. 7)
+        shipping_address?: Record<string, any>
+        billing_address?: Record<string, any>
     }
 
     const base = `http://localhost:${process.env.PORT ?? 9000}`
@@ -40,6 +42,45 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     const logger = req.scope.resolve("logger")
     const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)
     const results: Record<string, any> = {}
+
+    // ── Update Order Addresses Natively via DB (Workaround for Medusa v2 native POST bug)
+    if (shipping_address || billing_address) {
+        const pool = getDbPool()
+        try {
+            const addrRes = await pool.query<{ shipping_address_id: string, billing_address_id: string }>(
+                `SELECT shipping_address_id, billing_address_id FROM "order" WHERE id = $1`,
+                [id]
+            )
+            const { shipping_address_id, billing_address_id } = addrRes.rows[0] || {}
+
+            const updateAddr = async (addrId: string, data: Record<string, any>) => {
+                if (!addrId || !data) return
+                await pool.query(
+                    `UPDATE order_address SET 
+                        first_name = $1, last_name = $2, company = $3, address_1 = $4, address_2 = $5,
+                        city = $6, province = $7, postal_code = $8, country_code = $9, phone = $10,
+                        updated_at = NOW()
+                     WHERE id = $11`,
+                    [
+                        data.first_name || '', data.last_name || '', data.company || '', data.address_1 || '', data.address_2 || '',
+                        data.city || '', data.province || '', data.postal_code || '', data.country_code || '', data.phone || '',
+                        addrId
+                    ]
+                )
+            }
+
+            if (shipping_address && shipping_address_id) {
+                await updateAddr(shipping_address_id, shipping_address)
+                logger.info(`[post-edit-sync] ✅ Force-updated shipping_address on order ${id}`)
+            }
+            if (billing_address && billing_address_id) {
+                await updateAddr(billing_address_id, billing_address)
+                logger.info(`[post-edit-sync] ✅ Force-updated billing_address on order ${id}`)
+            }
+        } catch (e: any) {
+            logger.warn(`[post-edit-sync] ⚠️ Failed to force-update addresses: ${e.message}`)
+        }
+    }
 
     // ── Apply discount + fix payment collection ───────────────────────────────
     if (discount_type && discount_value && discount_value > 0) {

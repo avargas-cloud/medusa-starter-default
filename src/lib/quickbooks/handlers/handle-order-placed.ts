@@ -139,6 +139,15 @@ export async function handleOrderPlaced(
 
         const orderWithCustomer = { ...order, customer, items: activeItems }
 
+        // Inject pre-flight metadata so UI shows "CREATING..."
+        try {
+            await orderModule.updateOrders(orderId, {
+                metadata: { ...(order.metadata || {}), qb_sync_status: "creating" }
+            })
+        } catch (mErr) {
+            logger.warn(`${LOG_PREFIX} Could not set creating status: ${mErr}`)
+        }
+
         const result = await processOrderInQb(orderWithCustomer, customerModule, {
             prebuiltItems: qbItems,
             salesTaxCode,
@@ -154,26 +163,36 @@ export async function handleOrderPlaced(
         }
         if (result.error) {
             logger.error(`${LOG_PREFIX} ❌ processOrderInQb error: ${result.error}`)
+            try {
+                await orderModule.updateOrders(orderId, {
+                    metadata: { ...(order.metadata || {}), qb_sync_status: "error" }
+                })
+            } catch (mErr) {}
             return
         }
 
         if (result.soTxnId || result.operationId) {
             try {
-                const syncStatus = estimateTxnId ? "estimate_conversion" : "sales_order"
+                // If we got here, it's definitively "synced"
                 const patch = buildSaleOrderPatch(order.metadata || {}, {
                     txnId:       result.soTxnId || null,
                     refNumber:   result.soRefNumber || null,
                     operationId: result.operationId || null,
                     customerId:  result.customerId || null,
-                    syncStatus,
+                    syncStatus:  "synced",
                 })
                 await orderModule.updateOrders(orderId, { metadata: patch })
-                logger.info(`${LOG_PREFIX} ✅ Saved SO metadata — TxnID=${result.soTxnId}, Ref=${result.soRefNumber}, OpID=${result.operationId}, status=${syncStatus}`)
+                logger.info(`${LOG_PREFIX} ✅ Saved SO metadata — TxnID=${result.soTxnId}, Ref=${result.soRefNumber}, OpID=${result.operationId}, status=synced`)
             } catch (metaErr: any) {
                 logger.error(`${LOG_PREFIX} ⚠️ Failed to save order metadata: ${metaErr.message}`)
             }
         } else {
             logger.warn(`${LOG_PREFIX} ⚠️ No soTxnId or operationId returned — QB document may not have been created`)
+            try {
+                await orderModule.updateOrders(orderId, {
+                    metadata: { ...(order.metadata || {}), qb_sync_status: "error" }
+                })
+            } catch (mErr) {}
         }
 
     } finally {

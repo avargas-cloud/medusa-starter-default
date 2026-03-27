@@ -253,6 +253,16 @@ export async function handleFulfillmentCreated(
         const hasTax = getFloat(order.tax_total) > 0
         salesTaxCode = hasTax ? qbConfig.defaultSalesTaxCode : undefined
     }
+    
+    // Inject pre-flight metadata so UI shows "CREATING..."
+    try {
+        await orderModule.updateOrders(orderId, {
+            metadata: { ...(order.metadata || {}), qb_sync_status: "creating" }
+        })
+    } catch (mErr) {
+        logger.warn(`${LOG_PREFIX} Could not set creating status: ${mErr}`)
+    }
+
     const result = await processInvoiceInQb({
         orderId,
         orderDisplayId: order.display_id,
@@ -272,6 +282,11 @@ export async function handleFulfillmentCreated(
     }
     if (result.error) {
         logger.error(`${LOG_PREFIX} ❌ processInvoiceInQb error: ${result.error}`)
+        try {
+            await orderModule.updateOrders(orderId, {
+                metadata: { ...(order.metadata || {}), qb_sync_status: "error" }
+            })
+        } catch (mErr) {}
         return
     }
 
@@ -285,6 +300,7 @@ export async function handleFulfillmentCreated(
                 operationId:   result.operationId || null,
                 fulfillmentId,
                 invoiceId,
+                syncStatus:    "synced",
             })
             await orderModule.updateOrders(orderId, { metadata: patch })
 
