@@ -47,9 +47,10 @@ export const POST = async (
             })
         }
 
-        // Check token expiry
-        const resetExpires = customer.metadata?.reset_expires as number | undefined
-        if (!resetExpires || Date.now() > resetExpires) {
+        // Check token expiry — reset_expires is stored as ISO string
+        const resetExpiresRaw = customer.metadata?.reset_expires as string | undefined
+        const resetExpiresMs = resetExpiresRaw ? new Date(resetExpiresRaw).getTime() : 0
+        if (!resetExpiresMs || Date.now() > resetExpiresMs) {
             // Clean up expired token
             const cleanMetadata = { ...customer.metadata }
             delete cleanMetadata.reset_token
