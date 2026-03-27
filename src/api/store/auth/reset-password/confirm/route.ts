@@ -1,23 +1,50 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Modules, ContainerRegistrationKeys, generateJwtToken } from "@medusajs/utils"
 import { getSql } from "../../../../../lib/db"
-import { scrypt, randomBytes } from "crypto"
+import { scrypt, randomBytes, createHash, createHmac } from "crypto"
 
-// Hash password in the same format scrypt-kdf produces (Medusa-compatible)
+// Hash password using the exact 96-byte format that scrypt-kdf produces and verifies:
+// [0-5]   "scrypt"  (6 bytes)
+// [6]     version   (1 byte,  = 0)
+// [7]     logN      (1 byte,  = 15 for N=32768)
+// [8-11]  r         (4 bytes, big-endian uint32)
+// [12-15] p         (4 bytes, big-endian uint32)
+// [16-47] salt      (32 bytes, random)
+// [48-63] checksum  (16 bytes, SHA256 of first 48 bytes)
+// [64-95] hmachash  (32 bytes, HMAC-SHA256 using scrypt-derived key)
 async function hashPassword(password: string): Promise<string> {
-    const salt = randomBytes(16)
-    const hash = await new Promise<Buffer>((resolve, reject) => {
-        scrypt(password, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (err, key) => {
+    const logN = 15  // N = 2^15 = 32768
+    const r = 8
+    const p = 1
+
+    const buf = Buffer.alloc(96)
+
+    buf.write("scrypt", 0, "ascii")
+    buf[6] = 0          // version
+    buf[7] = logN
+    buf.writeUInt32BE(r, 8)
+    buf.writeUInt32BE(p, 12)
+
+    const salt = randomBytes(32)
+    salt.copy(buf, 16)
+
+    // checksum = SHA256(buf[0..47])[0..15]
+    const checksum = createHash("sha256").update(buf.slice(0, 48)).digest().slice(0, 16)
+    checksum.copy(buf, 48)
+
+    // hmacKey = scrypt(password, salt, 64)
+    const hmacKey = await new Promise<Buffer>((resolve, reject) => {
+        scrypt(password, salt, 64, { N: 2 ** logN, r, p, maxmem: 2 ** 31 - 1 }, (err, key) => {
             if (err) reject(err)
             else resolve(key)
         })
     })
-    return Buffer.concat([
-        Buffer.from("scrypt"),
-        Buffer.from([0, 15, 0, 0, 0, 8, 0, 0, 0, 1]),
-        salt,
-        hash
-    ]).toString("base64")
+
+    // hmachash = HMAC-SHA256(buf[0..63], hmacKey[32..63])
+    const hmacHash = createHmac("sha256", hmacKey.slice(32)).update(buf.slice(0, 64)).digest()
+    hmacHash.copy(buf, 64)
+
+    return buf.toString("base64")
 }
 
 export const POST = async (
