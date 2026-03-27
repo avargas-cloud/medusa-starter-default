@@ -75,18 +75,26 @@ export const POST = async (
         }
 
         // ── Step 4: Find emailpass provider_identity ──────────────────────────
-        const providerIdentities = await (authModule as any).listProviderIdentities({
+        const emailpassProviders = await (authModule as any).listProviderIdentities({
             auth_identity_id: matchingIdentity.id,
             provider: "emailpass"
         })
 
-        const emailpassProvider = providerIdentities[0] as any
+        let emailpassProvider = emailpassProviders[0] as any
 
         if (!emailpassProvider) {
-            return res.status(404).json({
-                error: "Email/password authentication not found for this account"
-            })
+            // Case: Google OAuth user (or admin-created) with no emailpass provider.
+            // Auto-create emailpass so they can set a password (dual auth).
+            console.log(`ℹ️  No emailpass provider found for ${customer.email} — creating one (dual auth)`)
+            const created = await (authModule as any).createProviderIdentities([{
+                entity_id: customer.email,
+                provider: "emailpass",
+                auth_identity_id: matchingIdentity.id,
+                provider_metadata: {}
+            }])
+            emailpassProvider = Array.isArray(created) ? created[0] : created
         }
+
 
         // ── Step 5: GOLD STANDARD — Hash password with scrypt-kdf ────────────
         // Medusa v2 uses scrypt-kdf (NOT bcrypt). Named export { kdf }.
