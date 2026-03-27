@@ -254,6 +254,18 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
     } catch (err: any) {
         logger.error(`${LOG_PREFIX} ❌ Unhandled exception: ${err.message}`)
         logger.error(err.stack)
+        try {
+            const financeService = container.resolve(FINANCE_MODULE) as any
+            const paymentId = event.data.id
+            if (paymentId) {
+                await financeService.updateCustomerPayments({
+                    id: paymentId,
+                    metadata: { qb_sync_status: "error" } // Will merge natively by module if configured, but we can't reliably read prev metadata here if it crashed early
+                })
+            }
+        } catch (mErr) {
+            logger.error(`${LOG_PREFIX} Could not save fallback error status: ${mErr}`)
+        }
     }
 }
 

@@ -300,7 +300,7 @@ export async function handleFulfillmentCreated(
                 operationId:   result.operationId || null,
                 fulfillmentId,
                 invoiceId,
-                syncStatus:    "synced",
+                syncStatus:    "sales_order",
             })
             await orderModule.updateOrders(orderId, { metadata: patch })
 

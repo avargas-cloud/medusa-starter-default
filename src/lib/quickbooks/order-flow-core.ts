@@ -302,7 +302,7 @@ function sanitizeForQb(text: string): string {
  * Set variant.metadata.quickbooks_uom (e.g. "each") to prevent QB UOM multiplication.
  * Also parses metadata.pos_comment_lines (if present) and interleaves them based on sort_order.
  */
-export function buildQbItems(items: MedusaOrderForQb["items"], metadata?: Record<string, any>): QbOrderItem[] {
+export function buildQbItems(items: MedusaOrderForQb["items"], _metadata?: Record<string, any>): QbOrderItem[] {
     const productLines = (items || [])
         .filter(item => item.variant?.metadata?.quickbooks_id)
         .map(item => {
@@ -331,27 +331,7 @@ export function buildQbItems(items: MedusaOrderForQb["items"], metadata?: Record
             })
         })
 
-    let commentLines: any[] = []
-    if (metadata?.pos_comment_lines) {
-        try {
-            const parsed = typeof metadata.pos_comment_lines === "string"
-                ? JSON.parse(metadata.pos_comment_lines)
-                : metadata.pos_comment_lines
-            if (Array.isArray(parsed)) {
-                commentLines = parsed.map(c => ({
-                    _sortOrder: typeof c.sortOrder === "number" ? c.sortOrder : 9999,
-                    qbItem: {
-                        desc: sanitizeForQb(c.text || ""),
-                        noSite: true
-                    }
-                }))
-            }
-        } catch (e) {
-            console.warn("[QB] Failed to parse pos_comment_lines:", e)
-        }
-    }
-
-    const allLines = [...productLines, ...commentLines]
+    const allLines = [...productLines]
     allLines.sort((a, b) => a._sortOrder - b._sortOrder)
 
     return allLines.map(line => line.qbItem)

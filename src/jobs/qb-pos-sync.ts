@@ -69,17 +69,6 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
                     true // isCron flag
                 )
                 processedOrders++
-            } else if (!soTxnId && invTxnId && meta.qb_sync_status !== "child_synced") {
-                // If an invoice was created directly via POS, we deliberately skipped SO creation.
-                // Mark explicitly as 'child_synced' so the frontend correctly reads the status.
-                logger.info(`${LOG_PREFIX} Order ${row.id} skipped SO creation (Invoice already exists) - marking as child_synced`)
-                try {
-                    await orderModule.updateOrders(row.id, {
-                        metadata: { ...meta, qb_sync_status: "child_synced" }
-                    })
-                } catch (metaErr: any) {
-                    logger.warn(`${LOG_PREFIX} Failed to update child_synced status for ${row.id}: ${metaErr.message}`)
-                }
             }
         }
 

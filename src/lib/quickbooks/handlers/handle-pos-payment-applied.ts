@@ -41,8 +41,14 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
             await new Promise(res => setTimeout(res, 20000))
             const refreshedPayment = await financeService.retrieveCustomerPayment(payment_id).catch(() => null)
             paymentTxnId = refreshedPayment?.metadata?.qb_txn_id as string | undefined
+            const currentStatus = refreshedPayment?.metadata?.qb_sync_status
+
             if (paymentTxnId) {
                 logger.info(`${LOG_PREFIX} ⏳ Found paymentTxnId: ${paymentTxnId} on attempt ${i + 1}`)
+                break
+            }
+            if (currentStatus === "error") {
+                logger.error(`${LOG_PREFIX} ❌ Payment sync failed with status 'error'. Aborting application logic.`)
                 break
             }
         }
@@ -78,8 +84,14 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
                 filters: { id: invoice_id }
             })
             invoiceTxnId = refreshedInvoice?.metadata?.qb_txn_id as string | undefined
+            const currentInvStatus = refreshedInvoice?.metadata?.qb_sync_status
+
             if (invoiceTxnId) {
                 logger.info(`${LOG_PREFIX} ⏳ Found invoiceTxnId: ${invoiceTxnId} on attempt ${i + 1}`)
+                break
+            }
+            if (currentInvStatus === "error") {
+                logger.error(`${LOG_PREFIX} ❌ Invoice sync failed with status 'error'. Aborting application logic.`)
                 break
             }
         }
