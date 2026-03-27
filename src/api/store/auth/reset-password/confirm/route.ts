@@ -200,13 +200,28 @@ export const POST = async (
         // Re-link the emailpass provider to the correct auth_identity if needed.
         // Fixes the case where emailpass was linked to a legacy/orphaned auth_identity
         // whose customer_id no longer exists, causing 404 on /store/customers/me after login.
+        //
+        // SAFETY: Never re-link if the current auth_identity belongs to an admin user.
+        // When the same email is used for both admin and customer, the shared provider_identity
+        // must stay linked to the admin auth_identity — moving it breaks admin login.
         if (emailpassProvider.auth_identity_id !== matchingIdentity.id) {
-            console.log(`🔧 Re-linking emailpass provider to correct auth_identity: ${matchingIdentity.id}`)
-            await sql`
-                UPDATE provider_identity
-                SET auth_identity_id = ${matchingIdentity.id}
-                WHERE id = ${emailpassProvider.id}
+            const [currentAuthIdentity] = await sql`
+                SELECT app_metadata FROM auth_identity
+                WHERE id = ${emailpassProvider.auth_identity_id}
+                LIMIT 1
             `
+            const isAdminAuthIdentity = !!(currentAuthIdentity?.app_metadata as any)?.user_id
+
+            if (isAdminAuthIdentity) {
+                console.log(`⚠️  Skipping re-link: emailpass provider is linked to an admin auth_identity. Same email used for admin and customer — keeping admin link intact.`)
+            } else {
+                console.log(`🔧 Re-linking emailpass provider to correct auth_identity: ${matchingIdentity.id}`)
+                await sql`
+                    UPDATE provider_identity
+                    SET auth_identity_id = ${matchingIdentity.id}
+                    WHERE id = ${emailpassProvider.id}
+                `
+            }
         }
 
         // ── Step 7: Invalidate reset token ────────────────────────────────────
