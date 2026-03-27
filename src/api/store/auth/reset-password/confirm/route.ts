@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Modules, ContainerRegistrationKeys, generateJwtToken } from "@medusajs/utils"
+import { getSql } from "../../../../../lib/db"
 
 export const POST = async (
     req: MedusaRequest,
@@ -25,20 +26,19 @@ export const POST = async (
     }
 
     try {
-        const query = req.scope.resolve("query")
+        const sql = getSql()
         const authModule = req.scope.resolve(Modules.AUTH)
         const customerModule = req.scope.resolve(Modules.CUSTOMER)
         const config = req.scope.resolve(ContainerRegistrationKeys.CONFIG_MODULE)
 
-        // ── Step 1: Find customer by reset token ──────────────────────────────
-        const { data: customers } = await query.graph({
-            entity: "customer",
-            fields: ["id", "email", "first_name", "last_name", "has_account", "metadata"]
-        })
-
-        const customer = customers.find((c: any) =>
-            c.metadata?.reset_token === token
-        )
+        // ── Step 1: Find customer by reset token (SQL — avoids pagination limits) ──
+        const [customer] = await sql`
+            SELECT id, email, first_name, last_name, has_account, metadata
+            FROM customer
+            WHERE metadata->>'reset_token' = ${token}
+              AND deleted_at IS NULL
+            LIMIT 1
+        `
 
         if (!customer) {
             return res.status(400).json({
@@ -62,17 +62,22 @@ export const POST = async (
             })
         }
 
-        // ── Step 3: Find auth_identity for this customer ──────────────────────
-        const identities = await authModule.listAuthIdentities()
-        const matchingIdentity = identities.find((identity: any) =>
-            identity.app_metadata?.customer_id === customer.id
-        )
+        // ── Step 3: Find auth_identity for this customer (SQL — avoids pagination limits) ──
+        const [identityRow] = await sql`
+            SELECT id, app_metadata
+            FROM auth_identity
+            WHERE app_metadata->>'customer_id' = ${customer.id}
+              AND deleted_at IS NULL
+            LIMIT 1
+        `
 
-        if (!matchingIdentity) {
+        if (!identityRow) {
             return res.status(404).json({
                 error: "Authentication identity not found"
             })
         }
+
+        const matchingIdentity = identityRow
 
         // ── Step 4: Find emailpass provider_identity ──────────────────────────
         const emailpassProviders = await (authModule as any).listProviderIdentities({
