@@ -7,7 +7,7 @@ import { scrypt, randomBytes } from "crypto"
 async function hashPassword(password: string): Promise<string> {
     const salt = randomBytes(16)
     const hash = await new Promise<Buffer>((resolve, reject) => {
-        scrypt(password, salt, 64, { N: 32768, r: 8, p: 1 }, (err, key) => {
+        scrypt(password, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (err, key) => {
             if (err) reject(err)
             else resolve(key)
         })
