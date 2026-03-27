@@ -189,14 +189,25 @@ export const POST = async (
         // ── Step 5: Hash password (Medusa-compatible scrypt format) ──────────
         const passwordHash = await hashPassword(password)
 
-        // ── Step 6: Update provider_metadata.password in place ────────────────
-        // No SQL surgery. No deletion. No register(). Just update in place.
+        // ── Step 6: Update provider_metadata.password and fix auth_identity link ──
         await authModule.updateProviderIdentities([{
             id: emailpassProvider.id,
             provider_metadata: {
                 password: passwordHash  // Field MUST be "password", NOT "password_hash"
             }
         }])
+
+        // Re-link the emailpass provider to the correct auth_identity if needed.
+        // Fixes the case where emailpass was linked to a legacy/orphaned auth_identity
+        // whose customer_id no longer exists, causing 404 on /store/customers/me after login.
+        if (emailpassProvider.auth_identity_id !== matchingIdentity.id) {
+            console.log(`🔧 Re-linking emailpass provider to correct auth_identity: ${matchingIdentity.id}`)
+            await sql`
+                UPDATE provider_identity
+                SET auth_identity_id = ${matchingIdentity.id}
+                WHERE id = ${emailpassProvider.id}
+            `
+        }
 
         // ── Step 7: Invalidate reset token ────────────────────────────────────
         const cleanMetadata = { ...customer.metadata }
