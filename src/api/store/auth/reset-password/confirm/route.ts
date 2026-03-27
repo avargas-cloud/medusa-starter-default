@@ -79,17 +79,18 @@ export const POST = async (
 
         const matchingIdentity = identityRow
 
-        // ── Step 4: Find emailpass provider_identity ──────────────────────────
-        const emailpassProviders = await (authModule as any).listProviderIdentities({
-            auth_identity_id: matchingIdentity.id,
-            provider: "emailpass"
-        })
-
-        let emailpassProvider = emailpassProviders[0] as any
+        // ── Step 4: Find emailpass provider_identity by email (ignores which auth_identity it's linked to)
+        // Handles split-identity case: Google auth_identity + orphaned emailpass auth_identity
+        const [emailpassProvider] = await sql`
+            SELECT id, entity_id, provider, auth_identity_id, provider_metadata
+            FROM provider_identity
+            WHERE entity_id = ${customer.email}
+              AND provider = 'emailpass'
+            LIMIT 1
+        `
 
         if (!emailpassProvider) {
-            // Case: Google OAuth user (or admin-created) with no emailpass provider.
-            // Auto-create emailpass so they can set a password (dual auth).
+            // Case: Google OAuth user with no emailpass provider → create one (dual auth)
             console.log(`ℹ️  No emailpass provider found for ${customer.email} — creating one (dual auth)`)
             const created = await (authModule as any).createProviderIdentities([{
                 entity_id: customer.email,
@@ -97,15 +98,57 @@ export const POST = async (
                 auth_identity_id: matchingIdentity.id,
                 provider_metadata: {}
             }])
-            emailpassProvider = Array.isArray(created) ? created[0] : created
+            const newProvider = Array.isArray(created) ? created[0] : created
+
+            // Hash and set password on the newly created provider
+            const scryptKdf = (await import('scrypt-kdf')).default
+            const hashConfig = { logN: 15, r: 8, p: 1 }
+            const passwordHashBuffer = await scryptKdf.kdf(password, hashConfig)
+            const passwordHash = Buffer.from(passwordHashBuffer).toString('base64')
+
+            await authModule.updateProviderIdentities([{
+                id: newProvider.id,
+                provider_metadata: { password: passwordHash }
+            }])
+
+            await customerModule.updateCustomers(customer.id, {
+                metadata: (() => {
+                    const m = { ...customer.metadata }
+                    delete m.reset_token
+                    delete m.reset_expires
+                    m.password_reset_at = new Date().toISOString()
+                    return m
+                })()
+            })
+
+            console.log(`✅ Password set for Google OAuth user ${customer.email}`)
+
+            const { http } = config.projectConfig
+            const jwtToken = generateJwtToken({
+                actor_id: customer.id,
+                actor_type: "customer",
+                auth_identity_id: matchingIdentity.id,
+                app_metadata: { customer_id: customer.id }
+            }, {
+                secret: http.jwtSecret,
+                expiresIn: http.jwtExpiresIn,
+                jwtOptions: http.jwtOptions
+            })
+
+            return res.status(200).json({
+                success: true,
+                customer: { id: customer.id, email: customer.email, first_name: customer.first_name, last_name: customer.last_name },
+                token: jwtToken,
+                message: "Password set successfully! You are now logged in."
+            })
         }
 
 
-        // ── Step 5: GOLD STANDARD — Hash password with scrypt-kdf ────────────
-        // Medusa v2 uses scrypt-kdf (NOT bcrypt). Named export { kdf }.
-        const { kdf } = await import('scrypt-kdf')
+        // ── Step 5: Hash password with scrypt-kdf (Medusa native) ────────────
+        // scrypt-kdf uses default export, not named { kdf }
+        const scryptKdf = (await import('scrypt-kdf')).default
         const hashConfig = { logN: 15, r: 8, p: 1 }
-        const passwordHashBuffer = await kdf(password, hashConfig)
+        const passwordHashBuffer = await scryptKdf.kdf(password, hashConfig)
         const passwordHash = Buffer.from(passwordHashBuffer).toString('base64')
 
         // ── Step 6: Update provider_metadata.password in place ────────────────
