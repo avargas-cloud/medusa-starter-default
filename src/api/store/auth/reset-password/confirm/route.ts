@@ -1,6 +1,24 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Modules, ContainerRegistrationKeys, generateJwtToken } from "@medusajs/utils"
 import { getSql } from "../../../../../lib/db"
+import { scrypt, randomBytes } from "crypto"
+
+// Hash password in the same format scrypt-kdf produces (Medusa-compatible)
+async function hashPassword(password: string): Promise<string> {
+    const salt = randomBytes(16)
+    const hash = await new Promise<Buffer>((resolve, reject) => {
+        scrypt(password, salt, 64, { N: 32768, r: 8, p: 1 }, (err, key) => {
+            if (err) reject(err)
+            else resolve(key)
+        })
+    })
+    return Buffer.concat([
+        Buffer.from("scrypt"),
+        Buffer.from([0, 15, 0, 0, 0, 8, 0, 0, 0, 1]),
+        salt,
+        hash
+    ]).toString("base64")
+}
 
 export const POST = async (
     req: MedusaRequest,
@@ -101,10 +119,7 @@ export const POST = async (
             const newProvider = Array.isArray(created) ? created[0] : created
 
             // Hash and set password on the newly created provider
-            const scryptKdf = (await import('scrypt-kdf')).default
-            const hashConfig = { logN: 15, r: 8, p: 1 }
-            const passwordHashBuffer = await scryptKdf.kdf(password, hashConfig)
-            const passwordHash = Buffer.from(passwordHashBuffer).toString('base64')
+            const passwordHash = await hashPassword(password)
 
             await authModule.updateProviderIdentities([{
                 id: newProvider.id,
@@ -144,12 +159,8 @@ export const POST = async (
         }
 
 
-        // ── Step 5: Hash password with scrypt-kdf (Medusa native) ────────────
-        // scrypt-kdf uses default export, not named { kdf }
-        const scryptKdf = (await import('scrypt-kdf')).default
-        const hashConfig = { logN: 15, r: 8, p: 1 }
-        const passwordHashBuffer = await scryptKdf.kdf(password, hashConfig)
-        const passwordHash = Buffer.from(passwordHashBuffer).toString('base64')
+        // ── Step 5: Hash password (Medusa-compatible scrypt format) ──────────
+        const passwordHash = await hashPassword(password)
 
         // ── Step 6: Update provider_metadata.password in place ────────────────
         // No SQL surgery. No deletion. No register(). Just update in place.
