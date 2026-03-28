@@ -7,12 +7,15 @@ import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger"
 /**
  * QuickBooks Inventory Auto-Sync — cron fires every 10 minutes.
  *
- * The actual sync only executes when the configured interval has elapsed
- * since the last successful sync (inventory_interval_minutes in the DB).
- * This allows the user to configure 30/60/etc min without needing
- * Medusa to support dynamic cron schedules.
+ * The actual sync only executes when:
+ *  1. No inventory sync is currently in progress (in-progress guard via qb_sync_log)
+ *  2. The configured interval has elapsed since the last sync attempt
+ *     (slot-based check against last_inventory_sync in the DB)
+ *  3. Store hours allow it (if inventory_respect_hours is enabled)
  *
- * Also respects store hours if inventory_respect_hours is enabled.
+ * last_inventory_sync is updated at the START of a sync (not just on success).
+ * This prevents two backend instances (local + Railway) from both passing the
+ * slot check and launching concurrent syncs.
  */
 export default async function qbInventorySyncHandler(container: MedusaContainer) {
     const TAG = "[QB-INVENTORY-AUTO]"
@@ -60,11 +63,30 @@ export default async function qbInventorySyncHandler(container: MedusaContainer)
             return
         }
 
+        // ─── In-progress guard ────────────────────────────────────────────────────
+        // Prevents concurrent syncs when two backend instances (e.g. local + Railway)
+        // are running simultaneously, or when a previous sync is still polling.
+        // Looks for any inventory_sync entry with status='processing' in the last
+        // (interval + 5 min) window — generous enough to cover the 10-min poll timeout.
+        const guardWindowMin = inventory_interval_minutes + 5
+        const { rows: inProgress } = await client.query(
+            `SELECT id FROM qb_sync_log
+             WHERE operation = 'inventory_sync'
+               AND status = 'processing'
+               AND initiated_at > NOW() - ($1 || ' minutes')::INTERVAL
+             LIMIT 1`,
+            [guardWindowMin]
+        )
+        if (inProgress.length > 0) {
+            console.log(`${TAG} ⚠️  Sync already in progress — skipping to avoid concurrent runs.`)
+            return
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         // ─── Slot-based interval check ────────────────────────────────────────────
-        // Runs at exact clock-aligned multiples of the interval (e.g. 10min → :00,:10,:20,…).
-        // Instead of measuring elapsed time (which drifts when syncs take ~50s), we ask:
-        // "Has a sync already run in the current Nmin time slot?"
-        // slot = floor(now_ms / interval_ms)  →  same integer = same slot, different = new slot.
+        // Runs at exact clock-aligned multiples of the interval (e.g. 20min → :00,:20,:40,…).
+        // last_inventory_sync is updated at START (see below) so both local + Railway
+        // instances will see the same slot and the second one will skip.
         const intervalMs = inventory_interval_minutes * 60 * 1000
         const nowSlot = Math.floor(Date.now() / intervalMs)
         const lastSlot = last_inventory_sync
@@ -107,6 +129,12 @@ export default async function qbInventorySyncHandler(container: MedusaContainer)
         }
         // ─────────────────────────────────────────────────────────────────────
 
+        // Mark the slot as taken BEFORE starting — prevents a second instance from
+        // passing the slot check while this sync is still running (takes 2–10 min).
+        await client.query(
+            `UPDATE quickbooks_config SET last_inventory_sync = NOW(), updated_at = NOW() WHERE id = 'default'`
+        )
+
         const logId = await QbSyncLogger.start({
             operation: "inventory_sync",
             syncType: "inventory",
@@ -119,9 +147,6 @@ export default async function qbInventorySyncHandler(container: MedusaContainer)
         const result = await syncInventoryCore(container as any)
 
         if (result.success) {
-            await client.query(
-                `UPDATE quickbooks_config SET last_inventory_sync = NOW(), updated_at = NOW() WHERE id = 'default'`
-            )
             const msg = `Done: ${result.stats.updatedStock} levels updated`
             console.log(`${TAG} ✅ ${msg}`)
 
