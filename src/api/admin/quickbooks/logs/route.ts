@@ -101,3 +101,24 @@ export async function GET(
         await client.end()
     }
 }
+
+/**
+ * DELETE /admin/quickbooks/logs
+ * Clears all rows from qb_sync_log.
+ */
+export async function DELETE(
+    _req: MedusaRequest,
+    res: MedusaResponse
+): Promise<void> {
+    const client = new Client({ connectionString: process.env.DATABASE_URL })
+    try {
+        await client.connect()
+        const { rowCount } = await client.query("DELETE FROM qb_sync_log")
+        res.json({ success: true, deleted: rowCount })
+    } catch (err: any) {
+        console.error("[QB Logs DELETE] Error:", err)
+        res.status(500).json({ error: "Failed to clear logs" })
+    } finally {
+        await client.end()
+    }
+}

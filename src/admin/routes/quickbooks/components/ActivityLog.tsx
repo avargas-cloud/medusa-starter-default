@@ -225,6 +225,75 @@ const LogRow = ({ log }: { log: LogEntry }) => {
     )
 }
 
+// ─── Clear Log Button ─────────────────────────────────────────────────────────
+
+function ClearLogButton({ onDone }: { onDone: () => void }) {
+    const [showModal, setShowModal] = useState(false)
+    const [input, setInput]         = useState("")
+    const [loading, setLoading]     = useState(false)
+
+    const handleClear = async () => {
+        if (input.trim() !== "CONFIRM") return
+        setLoading(true)
+        try {
+            await fetch("/admin/quickbooks/logs", { method: "DELETE", credentials: "include" })
+            onDone()
+        } catch { /* non-blocking */ } finally {
+            setLoading(false)
+            setShowModal(false)
+            setInput("")
+        }
+    }
+
+    return (
+        <>
+            <button
+                onClick={() => { setInput(""); setShowModal(true) }}
+                className="px-2 py-1 rounded text-[11px] font-semibold border transition-colors bg-red-600 hover:bg-red-700 text-white border-red-700"
+            >
+                Clear Log
+            </button>
+
+            {showModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+                    <div className="bg-ui-bg-base rounded-lg shadow-xl border border-ui-border-base p-5 w-80">
+                        <p className="text-sm font-semibold text-ui-fg-base mb-1">Clear Activity Log</p>
+                        <p className="text-xs text-ui-fg-subtle mb-4">
+                            This will permanently delete all entries from the QB sync log. This action cannot be undone.
+                        </p>
+                        <p className="text-xs text-ui-fg-muted mb-1">
+                            Type <span className="font-mono font-bold text-red-600">CONFIRM</span> to proceed:
+                        </p>
+                        <input
+                            autoFocus
+                            value={input}
+                            onChange={e => setInput(e.target.value)}
+                            onKeyDown={e => { if (e.key === "Enter") handleClear() }}
+                            className="w-full border border-ui-border-base rounded px-2 py-1 text-xs font-mono mb-3 bg-ui-bg-field text-ui-fg-base focus:outline-none focus:ring-1 focus:ring-red-500"
+                            placeholder="CONFIRM"
+                        />
+                        <div className="flex gap-2 justify-end">
+                            <button
+                                onClick={() => { setShowModal(false); setInput("") }}
+                                className="px-3 py-1 rounded text-xs border border-ui-border-base text-ui-fg-base hover:bg-ui-bg-subtle"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleClear}
+                                disabled={input.trim() !== "CONFIRM" || loading}
+                                className="px-3 py-1 rounded text-xs font-semibold bg-red-600 hover:bg-red-700 text-white disabled:opacity-40"
+                            >
+                                {loading ? "Clearing…" : "Clear"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </>
+    )
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 type ActivityLogProps = {
@@ -284,14 +353,17 @@ export const ActivityLog = ({ autoRefresh = false }: ActivityLogProps) => {
                             All QuickBooks operations — order events and background syncs
                         </Text>
                     </div>
-                    <Button
-                        variant="secondary"
-                        size="small"
-                        onClick={() => fetchLogs()}
-                        isLoading={loading}
-                    >
-                        <ArrowPath className="w-3 h-3 mr-1" /> Refresh
-                    </Button>
+                    <div className="flex items-center gap-2">
+                        <ClearLogButton onDone={() => { setPage(0); fetchLogs(0, category, status) }} />
+                        <Button
+                            variant="secondary"
+                            size="small"
+                            onClick={() => fetchLogs()}
+                            isLoading={loading}
+                        >
+                            <ArrowPath className="w-3 h-3 mr-1" /> Refresh
+                        </Button>
+                    </div>
                 </div>
 
                 {/* Filters */}
