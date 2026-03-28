@@ -41,8 +41,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const { default: postgres } = await import('postgres')
         const sql = postgres(process.env.DATABASE_URL!)
 
-        // ── 2. Find & delete any existing emailpass identities for this email ──
-        // This ensures the re-register below always uses emailpass's internal hash
+        // ── 2. Find existing emailpass identities for this email ──────────────
+        // Preserve customer_id if the email already belongs to a store customer,
+        // so both POS login and storefront login work after activation.
         const existing = await sql`
             SELECT ai.id as auth_identity_id, ai.app_metadata
             FROM auth_identity ai
@@ -53,21 +54,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         `
 
         let existingUserId: string | undefined
+        let existingCustomerId: string | undefined
 
         for (const row of existing) {
             const meta = row.app_metadata ?? {}
-            // Preserve user_id if this is a user-scoped identity
-            if (meta.actor_type === 'user' && meta.user_id) {
-                existingUserId = meta.user_id
-            }
-            // Hard-delete provider_identity + auth_identity
+            // Preserve user_id if this was already a POS/admin identity
+            if (meta.user_id) existingUserId = meta.user_id
+            // Preserve customer_id if this email is also a store customer
+            if (meta.customer_id) existingCustomerId = meta.customer_id
+            // Hard-delete provider_identity + auth_identity so we can re-register cleanly
             await sql`DELETE FROM provider_identity WHERE auth_identity_id = ${row.auth_identity_id}`
             await sql`DELETE FROM auth_identity WHERE id = ${row.auth_identity_id}`
         }
 
         await sql.end()
 
-        logger?.info?.(`[POS-ACTIVATE] Cleared ${existing.length} existing identities for ${decoded.email}`)
+        logger?.info?.(`[POS-ACTIVATE] Cleared ${existing.length} existing identities for ${decoded.email}${existingCustomerId ? ` (preserving customer_id: ${existingCustomerId})` : ''}`)
 
         // ── 3. Register fresh credentials (emailpass uses internal hash) ────────
         const authResult = await authModule.register('emailpass', {
@@ -108,10 +110,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             }
         }
 
-        // ── 5. Link auth_identity → Medusa user ────────────────────────────────
+        // ── 5. Link auth_identity → Medusa user (+ preserve customer_id if merged) ──
         await authModule.updateAuthIdentities([{
             id: authResult.authIdentity.id,
-            app_metadata: { actor_type: 'user', user_id: userId },
+            app_metadata: {
+                actor_type: 'user',
+                user_id: userId,
+                // If this email already existed as a store customer, inject customer_id
+                // so both POS login and storefront (customer) login work from the same identity.
+                ...(existingCustomerId ? { customer_id: existingCustomerId } : {}),
+            },
         }])
 
         logger?.info?.(`[POS-ACTIVATE] ✅ Activated ${decoded.email}`)
