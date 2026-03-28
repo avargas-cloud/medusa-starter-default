@@ -213,7 +213,19 @@ export const POST = async (
             const isAdminAuthIdentity = !!(currentAuthIdentity?.app_metadata as any)?.user_id
 
             if (isAdminAuthIdentity) {
-                console.log(`⚠️  Skipping re-link: emailpass provider is linked to an admin auth_identity. Same email used for admin and customer — keeping admin link intact.`)
+                // Same email used for admin and customer.
+                // Keep the provider_identity linked to the admin auth_identity (don't move it).
+                // Instead, inject customer_id into the admin auth_identity's app_metadata so that
+                // Medusa can resolve both admin and customer tokens from the same identity.
+                const existingCustomerId = (currentAuthIdentity?.app_metadata as any)?.customer_id
+                if (existingCustomerId !== customer.id) {
+                    console.log(`🔧 Admin+customer same email: injecting customer_id into admin auth_identity`)
+                    await sql`
+                        UPDATE auth_identity
+                        SET app_metadata = app_metadata || ${JSON.stringify({ customer_id: customer.id })}::jsonb
+                        WHERE id = ${emailpassProvider.auth_identity_id}
+                    `
+                }
             } else {
                 console.log(`🔧 Re-linking emailpass provider to correct auth_identity: ${matchingIdentity.id}`)
                 await sql`
