@@ -17,32 +17,36 @@
 // ─── Document shapes ──────────────────────────────────────────────────────────
 
 export interface QbEstimateMeta {
-    ref_number:   string           // e.g. "EST-0042" or the QB auto-ref
-    txn_id:       string           // QB TxnID returned by QBWC
-    operation_id: string | null    // bridge operation ID (null once confirmed)
-    synced_at:    string           // ISO 8601 timestamp
+    ref_number:    string           // e.g. "EST-0042" or the QB auto-ref
+    txn_id:        string           // QB TxnID returned by QBWC
+    operation_id:  string | null    // bridge operation ID (null once confirmed)
+    edit_sequence: string | null    // QB EditSequence — required for Mod ops; cached from Add/Mod response
+    synced_at:     string           // ISO 8601 timestamp
 }
 
 export interface QbSalesOrderMeta {
-    ref_number:   string
-    txn_id:       string
-    operation_id: string | null
-    synced_at:    string
+    ref_number:    string
+    txn_id:        string
+    operation_id:  string | null
+    edit_sequence: string | null
+    synced_at:     string
 }
 
 export interface QbInvoiceMeta {
     ref_number:     string
     txn_id:         string
     operation_id:   string | null
+    edit_sequence:  string | null
     fulfillment_id: string | null    // Medusa fulfillment ID (null for legacy)
     invoice_id?:    string | null    // POS Invoice ID for explicit mapping
     synced_at:      string
 }
 
 export interface QbPaymentMeta {
-    ref_number:   string | null
-    txn_id:       string
-    operation_id: string | null
+    ref_number:    string | null
+    txn_id:        string
+    operation_id:  string | null
+    edit_sequence: string | null
     amount:        number           // cents
     method:        string           // e.g. "cash", "check", "Credit Card"
     synced_at:     string
@@ -177,19 +181,20 @@ export function getLatestPaymentRef(meta: Record<string, any> | null | undefined
 /** Build the metadata patch for an Estimate sync result. */
 export function buildEstimatePatch(
     existingMeta: Record<string, any>,
-    opts: { txnId: string; refNumber: string | null; operationId: string | null; syncStatus?: QbSyncStatus }
+    opts: { txnId: string; refNumber: string | null; operationId: string | null; editSequence?: string | null; syncStatus?: QbSyncStatus }
 ): Record<string, any> {
     const patch: QbEstimateMeta = {
-        txn_id:       opts.txnId,
-        ref_number:   opts.refNumber ?? opts.txnId,
-        operation_id: opts.operationId,
-        synced_at:    new Date().toISOString(),
+        txn_id:        opts.txnId,
+        ref_number:    opts.refNumber ?? opts.txnId,
+        operation_id:  opts.operationId,
+        edit_sequence: opts.editSequence ?? null,
+        synced_at:     new Date().toISOString(),
     }
     return {
         ...existingMeta,
-        qb_estimate:   patch,
+        qb_estimate:    patch,
         qb_sync_status: opts.syncStatus ?? "synced",
-        qb_synced_at:  patch.synced_at,
+        qb_synced_at:   patch.synced_at,
     }
 }
 
@@ -200,16 +205,18 @@ export function buildSaleOrderPatch(
         txnId: string | null
         refNumber: string | null
         operationId: string | null
+        editSequence?: string | null
         customerId?: string | null
         syncStatus?: QbSyncStatus
     }
 ): Record<string, any> {
     const now = new Date().toISOString()
     const patch: QbSalesOrderMeta = {
-        txn_id:       opts.txnId ?? "",
-        ref_number:   opts.refNumber ?? opts.txnId ?? "",
-        operation_id: opts.operationId,
-        synced_at:    now,
+        txn_id:        opts.txnId ?? "",
+        ref_number:    opts.refNumber ?? opts.txnId ?? "",
+        operation_id:  opts.operationId,
+        edit_sequence: opts.editSequence ?? null,
+        synced_at:     now,
     }
     return {
         ...existingMeta,
@@ -227,6 +234,7 @@ export function buildInvoicePatch(
         txnId: string | null
         refNumber: string | null
         operationId: string | null
+        editSequence?: string | null
         fulfillmentId?: string | null
         invoiceId?: string | null
         syncStatus?: QbSyncStatus
@@ -240,6 +248,7 @@ export function buildInvoicePatch(
         txn_id:         opts.txnId ?? "",
         ref_number:     opts.refNumber ?? opts.txnId ?? "",
         operation_id:   opts.operationId,
+        edit_sequence:  opts.editSequence ?? null,
         fulfillment_id: opts.fulfillmentId ?? null,
         invoice_id:     opts.invoiceId ?? null,
         synced_at:      now,
@@ -259,6 +268,7 @@ export function buildPaymentPatch(
         txnId: string | null
         refNumber: string | null
         operationId: string | null
+        editSequence?: string | null
         amount: number
         method: string
         syncStatus?: QbSyncStatus
@@ -269,9 +279,10 @@ export function buildPaymentPatch(
         ? existingMeta.qb_payments
         : []
     const newEntry: QbPaymentMeta = {
-        txn_id:       opts.txnId ?? "",
-        ref_number:   opts.refNumber,
-        operation_id: opts.operationId,
+        txn_id:        opts.txnId ?? "",
+        ref_number:    opts.refNumber,
+        operation_id:  opts.operationId,
+        edit_sequence: opts.editSequence ?? null,
         amount:        opts.amount,
         method:        opts.method,
         synced_at:     now,

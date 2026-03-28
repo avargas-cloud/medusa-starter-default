@@ -67,14 +67,24 @@ export default async function qbPipelineConsolidator(
 
                 await confirmPipelineRow(row.id, txnId, refNumber, op.result ?? null)
 
-                // Cache EditSequence if present (saves a round trip on next Mod)
-                const editSeq = op.result?.EditSequence || op.EditSequence
+                // EditSequence: prefer the top-level field (set by bridge since fix),
+                // fall back to digging into the raw result for older ops
+                const editSeq: string | null =
+                    op.editSequence ||
+                    op.result?.EditSequence ||
+                    op.result?.QBXML?.QBXMLMsgsRs?.EstimateAddRs?.EstimateRet?.EditSequence ||
+                    op.result?.QBXML?.QBXMLMsgsRs?.SalesOrderAddRs?.SalesOrderRet?.EditSequence ||
+                    op.result?.QBXML?.QBXMLMsgsRs?.InvoiceAddRs?.InvoiceRet?.EditSequence ||
+                    null
+
+                // Cache EditSequence so update/mod ops can skip the GET round-trip
                 if (editSeq && txnId) {
                     await cacheEditSequence(row.step, txnId, editSeq)
                 }
 
-                // Write TxnID back to order metadata so POS reflects confirmed sync status
-                if (row.step === "estimate" && txnId && row.order_id) {
+                // Write TxnID + EditSequence back to order metadata so POS reflects confirmed
+                // sync status and future Mod ops have EditSequence ready without a GET
+                if (txnId && row.order_id) {
                     try {
                         const orderModule = container.resolve(Modules.ORDER)
                         const { rows: metaRows } = await pool.query(
@@ -82,14 +92,40 @@ export default async function qbPipelineConsolidator(
                             [row.order_id]
                         )
                         const existingMeta = metaRows[0]?.metadata || {}
-                        const patch = buildEstimatePatch(existingMeta, {
-                            txnId,
-                            refNumber,
-                            operationId: null, // confirmed — no longer in-flight
-                            syncStatus: "synced",
-                        })
+
+                        let patch: Record<string, any>
+                        if (row.step === "estimate") {
+                            patch = buildEstimatePatch(existingMeta, {
+                                txnId,
+                                refNumber,
+                                operationId: null,
+                                editSequence: editSeq,
+                                syncStatus: "synced",
+                            })
+                        } else {
+                            // For other steps, only update if we have an editSequence to save
+                            // (full patches for SO/Invoice/Payment are written by their own handlers)
+                            if (!editSeq) {
+                                logger.info(`${LOG_PREFIX} ℹ️ No metadata update needed for step=${row.step} (no editSequence)`)
+                                continue
+                            }
+                            // Merge editSequence into existing qb_<step> sub-object
+                            const stepKey = row.step === "sales_order" ? "qb_sales_order"
+                                : row.step === "invoice" ? "qb_invoices"
+                                : null
+                            if (stepKey && stepKey !== "qb_invoices") {
+                                const existing = existingMeta[stepKey] || {}
+                                patch = {
+                                    ...existingMeta,
+                                    [stepKey]: { ...existing, edit_sequence: editSeq },
+                                }
+                            } else {
+                                patch = existingMeta // nothing to merge safely
+                            }
+                        }
+
                         await orderModule.updateOrders(row.order_id, { metadata: patch })
-                        logger.info(`${LOG_PREFIX} ✅ Updated order ${row.order_id} metadata with estimate TxnID=${txnId}`)
+                        logger.info(`${LOG_PREFIX} ✅ Updated order ${row.order_id} metadata — step=${row.step}, TxnID=${txnId}, editSequence=${editSeq ? "✓" : "—"}`)
                     } catch (metaErr: any) {
                         logger.warn(`${LOG_PREFIX} ⚠️ Could not update order metadata for ${row.order_id}: ${metaErr.message}`)
                     }
