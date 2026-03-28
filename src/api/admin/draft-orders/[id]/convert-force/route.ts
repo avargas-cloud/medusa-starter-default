@@ -254,8 +254,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         try {
             // 7a. Read order metadata and customer info
             let isExempt = false
-            let computedTaxFromMeta = 0    // metadata.computed_tax_amount (POS rounding, matches QB)
-            let computedTotalFromMeta = 0  // metadata.computed_total (POS rounding, matches QB)
             try {
                 const { data } = await query.graph({
                     entity: "order",
@@ -264,8 +262,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 })
                 const orderInfo = data?.[0]
                 if (orderInfo) {
-                    computedTaxFromMeta = Number(orderInfo.metadata?.computed_tax_amount ?? 0)
-                    computedTotalFromMeta = Number(orderInfo.metadata?.computed_total ?? 0)
                     const taxMode = String(orderInfo?.metadata?.tax_mode ?? "auto")
                     console.log(`[convert-force] order.metadata.tax_mode = "${taxMode}"`)
 
@@ -346,10 +342,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                         }
                     } catch { /* non-fatal */ }
 
-                    // 7e. Update order_summary with tax and corrected totals.
-                    // PRIORITY: metadata.computed_tax_amount (POS rounding, matches QB) > liveTaxTotal (Medusa native, may differ by $0.01)
-                    // Root cause: Medusa computes 0.07 × 73.50 = 5.145 → 5.14 (float truncation).
-                    // POS computes Math.round(7350 × 0.07) / 100 = 515/100 = 5.15 (matches QB).
+                    // 7e. Update order_summary with tax and corrected totals
                     const sumRes = await client.query<{ id: string; totals: any }>(
                         `SELECT id, totals FROM order_summary
                          WHERE order_id = $1 AND deleted_at IS NULL
@@ -358,20 +351,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                     )
                     if (sumRes.rows[0]) {
                         const { id: sumId, totals } = sumRes.rows[0]
-                        const taxToUse = computedTaxFromMeta > 0 ? computedTaxFromMeta : liveTaxTotal
                         const discountTotal = Number(totals.discount_total || 0)
-                        const newTotal = computedTotalFromMeta > 0
-                            ? computedTotalFromMeta
-                            : Number(totals.original_order_total || 0) + taxToUse - discountTotal
-                        if (computedTaxFromMeta > 0 && computedTaxFromMeta !== liveTaxTotal) {
-                            console.log(`[convert-force] Tax override: Medusa=$${liveTaxTotal.toFixed(2)} → POS/QB=$${computedTaxFromMeta.toFixed(2)} (metadata.computed_tax_amount)`)
-                        }
+                        const newTotal = Number(totals.original_order_total || 0) + liveTaxTotal - discountTotal
                         await client.query(
                             `UPDATE order_summary SET totals = $1, updated_at = NOW() WHERE id = $2`,
                             [JSON.stringify({
                                 ...totals,
-                                tax_total: taxToUse,
-                                raw_tax_total: { value: String(taxToUse), precision: 20 },
+                                tax_total: liveTaxTotal,
+                                raw_tax_total: { value: String(liveTaxTotal), precision: 20 },
                                 accounting_total: newTotal,
                                 raw_accounting_total: { value: String(newTotal), precision: 20 },
                                 current_order_total: newTotal,
@@ -380,7 +367,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                                 raw_pending_difference: { value: String(newTotal), precision: 20 },
                             }), sumId]
                         )
-                        console.log(`[convert-force] ✅ order_summary: tax=$${taxToUse.toFixed(2)} total=$${newTotal.toFixed(2)}`)
+                        console.log(`[convert-force] ✅ order_summary: tax=$${liveTaxTotal.toFixed(2)} total=$${newTotal.toFixed(2)}`)
                         await fixPaymentCollection(newTotal)
                     }
                 }
