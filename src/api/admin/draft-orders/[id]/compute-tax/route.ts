@@ -281,6 +281,48 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
             computed_discount: discountTotal,
         }).catch(() => {})
 
+        // ── Sync order_summary with POS-computed totals ────────────────────────
+        // Prevents $0.01 rounding drift: Medusa computes 0.07 × 73.50 = 5.145 → $5.14,
+        // while POS uses Math.round(cents × rate) / 100 = $5.15 (matches QuickBooks).
+        // This applies to both draft estimates and confirmed orders.
+        try {
+            const db = getTaxCleanupPool()
+            const client = await db.connect()
+            try {
+                const sumRes = await client.query<{ id: string; totals: any }>(
+                    `SELECT id, totals FROM order_summary
+                     WHERE order_id = $1 AND deleted_at IS NULL
+                     ORDER BY version DESC LIMIT 1`,
+                    [id]
+                )
+                if (sumRes.rows[0]) {
+                    const { id: sumId, totals } = sumRes.rows[0]
+                    const prevTax = Number(totals.tax_total || 0)
+                    if (Math.abs(prevTax - amount) > 0.001 || Math.abs(Number(totals.current_order_total || 0) - computedTotal) > 0.001) {
+                        await client.query(
+                            `UPDATE order_summary SET totals = $1, updated_at = NOW() WHERE id = $2`,
+                            [JSON.stringify({
+                                ...totals,
+                                tax_total: amount,
+                                raw_tax_total: { value: String(amount), precision: 20 },
+                                accounting_total: computedTotal,
+                                raw_accounting_total: { value: String(computedTotal), precision: 20 },
+                                current_order_total: computedTotal,
+                                raw_current_order_total: { value: String(computedTotal), precision: 20 },
+                                pending_difference: computedTotal,
+                                raw_pending_difference: { value: String(computedTotal), precision: 20 },
+                            }), sumId]
+                        )
+                        console.log(`[compute-tax] ✅ order_summary synced: tax $${prevTax.toFixed(2)} → $${amount.toFixed(2)}, total → $${computedTotal.toFixed(2)}`)
+                    }
+                }
+            } finally {
+                client.release()
+            }
+        } catch (sumErr: any) {
+            console.warn(`[compute-tax] order_summary sync soft-failed: ${sumErr?.message}`)
+        }
+
         res.status(200).json({ amount, rate, reason, exempt, mode: effectiveMode, subtotal: itemsSubtotal, shippingSubtotal, autoMode })
     } catch (e: any) {
         console.error("[compute-tax] GET Error:", e?.message)
