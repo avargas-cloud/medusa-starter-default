@@ -99,16 +99,30 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
             const meta = row.metadata || {}
             const estTxnId = getEstimateTxnId(meta)
 
-            if (!estTxnId) {
-                logger.info(`${LOG_PREFIX} Processing delayed Estimate for draft order: ${row.id}`)
-                await handleDraftOrderCreated(
-                    { id: row.id }, // mock event payload
-                    container,
-                    logger,
-                    true // isCron flag
-                )
-                processedDrafts++
+            if (estTxnId) continue // already confirmed in metadata
+
+            // Check pipeline table — only retry if no operation exists or latest failed
+            const { rows: pipelineCheck } = await client.query(
+                `SELECT status FROM qb_order_pipeline
+                 WHERE order_id = $1 AND step = 'estimate'
+                 ORDER BY created_at DESC LIMIT 1`,
+                [row.id]
+            )
+            const latestPipelineStatus = pipelineCheck[0]?.status as string | undefined
+
+            if (latestPipelineStatus === "submitted" || latestPipelineStatus === "confirmed") {
+                logger.info(`${LOG_PREFIX} Skipping estimate for ${row.id} — pipeline already ${latestPipelineStatus}`)
+                continue
             }
+
+            logger.info(`${LOG_PREFIX} Processing delayed Estimate for draft order: ${row.id} (pipeline: ${latestPipelineStatus ?? "none"})`)
+            await handleDraftOrderCreated(
+                { id: row.id }, // mock event payload
+                container,
+                logger,
+                true // isCron flag
+            )
+            processedDrafts++
         }
 
         logger.info(`${LOG_PREFIX} ✅ POS Async Sync complete. Created ${processedOrders} Sales Orders and ${processedDrafts} Estimates.`)

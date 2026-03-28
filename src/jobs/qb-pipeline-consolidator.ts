@@ -1,8 +1,9 @@
 import type { MedusaContainer } from "@medusajs/framework/types"
-import { ContainerRegistrationKeys } from "@medusajs/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 import { bridgeFetch } from "../lib/quickbooks/client/core"
 import { getDbPool } from "../api/utils/db-pool"
 import { confirmPipelineRow, failPipelineRow, cacheEditSequence } from "../lib/quickbooks/qb-pipeline"
+import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types"
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]"
 
@@ -70,6 +71,28 @@ export default async function qbPipelineConsolidator(
                 const editSeq = op.result?.EditSequence || op.EditSequence
                 if (editSeq && txnId) {
                     await cacheEditSequence(row.step, txnId, editSeq)
+                }
+
+                // Write TxnID back to order metadata so POS reflects confirmed sync status
+                if (row.step === "estimate" && txnId && row.order_id) {
+                    try {
+                        const orderModule = container.resolve(Modules.ORDER)
+                        const { rows: metaRows } = await pool.query(
+                            `SELECT metadata FROM "order" WHERE id = $1`,
+                            [row.order_id]
+                        )
+                        const existingMeta = metaRows[0]?.metadata || {}
+                        const patch = buildEstimatePatch(existingMeta, {
+                            txnId,
+                            refNumber,
+                            operationId: null, // confirmed — no longer in-flight
+                            syncStatus: "synced",
+                        })
+                        await orderModule.updateOrders(row.order_id, { metadata: patch })
+                        logger.info(`${LOG_PREFIX} ✅ Updated order ${row.order_id} metadata with estimate TxnID=${txnId}`)
+                    } catch (metaErr: any) {
+                        logger.warn(`${LOG_PREFIX} ⚠️ Could not update order metadata for ${row.order_id}: ${metaErr.message}`)
+                    }
                 }
 
                 logger.info(`${LOG_PREFIX} ✅ Confirmed row ${row.id} (${row.step}) — TxnID=${txnId}, Ref=${refNumber}`)
