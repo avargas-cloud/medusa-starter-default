@@ -456,19 +456,24 @@ const token = generateJwtToken({
 
 ### Password Hashing
 
-**Método**: Scrypt (via Medusa's `authModule.register()`)
+**Regla general**: Para los flujos de **registro** (Cases 1, 2, 3), usar el método nativo de Medusa:
 
-**NUNCA hacerlo manualmente:**
 ```typescript
-// ❌ INCORRECTO - No hacer
-const hashedPassword = await scrypt(password, salt, {...})
-
-// ✅ CORRECTO - Usar método nativo
+// ✅ REGISTRO: Usar método nativo — hash automático
 const { authIdentity } = await authModule.register("emailpass", {
     body: { email, password }
 })
-// Password hash se crea automáticamente en provider_identity
 ```
+
+**Excepción — Reset de contraseña**: El endpoint `/store/auth/reset-password/confirm` usa `crypto` nativo de Node.js para producir el **formato scrypt-kdf de 96 bytes** que Medusa verifica internamente. Esto fue necesario porque `authModule.register()` no permite actualizar un `provider_identity` existente — solo crea nuevos.
+
+```typescript
+// ✅ RESET: Nativo Node.js crypto (96-byte scrypt-kdf format)
+import { scrypt, randomBytes, createHash, createHmac } from "crypto"
+// Ver AUTHENTICATION_BACKEND_API_SPEC.md → "Password Hashing" para el código completo
+```
+
+> **⚠️ No usar el paquete npm `scrypt-kdf`** — usar los módulos nativos de Node.js. El formato binario (checksum SHA256 + HMAC-SHA256) es idéntico al que produce la librería.
 
 ### JWT Token Generation
 
@@ -855,6 +860,39 @@ await sql`
 
 ---
 
+### Error: "Login fails after password reset" (Split Auth Identity)
+
+**Síntoma**: Password reset exitoso (200), pero el login posterior retorna "Invalid email or password" aunque las credenciales sean correctas.
+
+**Causa**: El `provider_identity` de `emailpass` está vinculado a un `auth_identity` **legado** cuyo `app_metadata.customer_id` apunta a un ID de cliente que ya no existe (ej. `cus_legacy_aeac1670...`). Esto ocurre en clientes que se registraron con Google OAuth y tienen un `auth_identity` duplicado con un ID muerto.
+
+**Flujo del fallo:**
+```
+Login OK → Verifica hash ✅ → Busca customer por app_metadata.customer_id
+→ customer_id = cus_legacy_... (no existe) → 404 → "Invalid email or password"
+```
+
+**Solución** (ya implementada en `reset-password/confirm`): El endpoint detecta si el `emailpass` provider está vinculado al `auth_identity` incorrecto y lo re-vincula via SQL directo al `auth_identity` correcto. Esto sucede automáticamente durante cualquier reset de contraseña.
+
+**Si el problema ocurre sin reset de contraseña**, ejecutar SQL de diagnóstico:
+```sql
+-- Encontrar providers de emailpass vinculados a identidades huérfanas
+SELECT pi.id, pi.entity_id, pi.auth_identity_id,
+       ai.app_metadata->>'customer_id' as linked_customer_id
+FROM provider_identity pi
+JOIN auth_identity ai ON ai.id = pi.auth_identity_id
+WHERE pi.provider = 'emailpass'
+  AND NOT EXISTS (
+    SELECT 1 FROM customer c
+    WHERE c.id = ai.app_metadata->>'customer_id'
+      AND c.deleted_at IS NULL
+  );
+```
+
+Ver `AUTHENTICATION_BACKEND_API_SPEC.md` → "Split Auth Identity" para más detalles y SQL de corrección.
+
+---
+
 ### SendGrid: 401 Unauthorized
 
 **Causa**: API key inválido o sender email no verificado.
@@ -946,6 +984,6 @@ npx tsx src/scripts/get-activation-token.ts
 
 ---
 
-**Documentación actualizada**: 2026-02-02  
-**Versión**: 1.0  
-**Autor**: Sistema de Autenticación EcoPowerTech
+**Documentación actualizada**: 2026-03-27
+**Versión**: 1.1
+**Cambios v1.1**: Actualizado Password Hashing con excepción para reset-password; añadido Troubleshooting para split auth_identity (login falla después de reset).

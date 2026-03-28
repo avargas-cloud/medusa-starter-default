@@ -340,88 +340,150 @@ Expiration: 1 hour
 ```
 
 **💡 Technical Implementation**:
-- Uses `authModule.register()` - same method as account creation
-- Password hashed with scrypt-kdf (Medusa native)
-- Validates new password ≠ current password using `authModule.authenticate()`
-- Auto-generates JWT with 24h expiration
+- Uses **native Node.js `crypto`** (NOT the `scrypt-kdf` package) to produce the exact 96-byte binary format
+- All lookups use **direct SQL** (avoids Medusa module pagination limits)
+- Handles **split auth_identity** edge case: re-links `emailpass` provider to the correct `auth_identity` when mismatched
+- Handles **Google-only users** who have no `emailpass` provider: creates one on the fly
+- Auto-generates JWT with `generateJwtToken()`
 
-**Implementation** (Gold Standard - scrypt-kdf):
+**Implementation** (current production code):
 ```typescript
-// 1. Find customer by reset token
-const customer = await query.graph({
-    entity: "customer",
-    filters: { metadata: { reset_token: token } }
-})
+import { scrypt, randomBytes, createHash, createHmac } from "crypto"
 
-// 2. Validate token expiration
-if (new Date() > new Date(customer.metadata.reset_expires)) {
-    return res.status(400).json({ error: "Token expired" })
+// 1. Hash password using the exact 96-byte scrypt-kdf format
+async function hashPassword(password: string): Promise<string> {
+    const logN = 15, r = 8, p = 1
+    const buf = Buffer.alloc(96)
+    buf.write("scrypt", 0, "ascii")                       // [0-5]  "scrypt"
+    buf[6] = 0; buf[7] = logN                              // [6] version, [7] logN
+    buf.writeUInt32BE(r, 8); buf.writeUInt32BE(p, 12)     // [8-15] r, p (big-endian)
+    const salt = randomBytes(32)
+    salt.copy(buf, 16)                                     // [16-47] salt
+    const checksum = createHash("sha256")
+        .update(buf.slice(0, 48)).digest().slice(0, 16)
+    checksum.copy(buf, 48)                                 // [48-63] SHA256 checksum
+    const hmacKey = await new Promise<Buffer>((resolve, reject) =>
+        scrypt(password, salt, 64, { N: 2 ** logN, r, p, maxmem: 2 ** 31 - 1 },
+            (err, key) => err ? reject(err) : resolve(key)))
+    const hmacHash = createHmac("sha256", hmacKey.slice(32))
+        .update(buf.slice(0, 64)).digest()
+    hmacHash.copy(buf, 64)                                 // [64-95] HMAC-SHA256
+    return buf.toString("base64")
 }
 
-// 3. Find auth_identity
-const authIdentities = await authModule.listAuthIdentities({
-    filters: { app_metadata: { customer_id: customer.id } }
-})
+// 2. Find customer by reset token (SQL — avoids pagination limits)
+const [customer] = await sql`
+    SELECT id, email, first_name, last_name, has_account, metadata
+    FROM customer
+    WHERE metadata->>'reset_token' = ${token}
+      AND deleted_at IS NULL
+    LIMIT 1
+`
 
-// 4. Find provider_identity (emailpass)
-const providerIdentities = await authModule.listProviderIdentities({
-    filters: {
-        auth_identity_id: authIdentity.id,
-        provider: "emailpass"
-    }
-})
+// 3. Validate token expiration
+const resetExpiresMs = customer.metadata?.reset_expires
+    ? new Date(customer.metadata.reset_expires).getTime() : 0
+if (!resetExpiresMs || Date.now() > resetExpiresMs) {
+    // Clean up expired token and return 400
+}
 
-// 5. Hash password with scrypt-kdf (Medusa native)
-const scrypt = (await import('scrypt-kdf')).default
-const hashConfig = { logN: 15, r: 8, p: 1 }
-const passwordHashBuffer = await scrypt.kdf(password, hashConfig)
-const passwordHash = Buffer.from(passwordHashBuffer).toString('base64')
+// 4. Find auth_identity by customer_id (SQL)
+const [identityRow] = await sql`
+    SELECT id, app_metadata FROM auth_identity
+    WHERE app_metadata->>'customer_id' = ${customer.id}
+      AND deleted_at IS NULL
+    LIMIT 1
+`
 
-// 6. Update provider_metadata.password
+// 5. Find emailpass provider_identity by email (SQL — handles split-identity)
+const [emailpassProvider] = await sql`
+    SELECT id, entity_id, provider, auth_identity_id, provider_metadata
+    FROM provider_identity
+    WHERE entity_id = ${customer.email}
+      AND provider = 'emailpass'
+    LIMIT 1
+`
+
+// 6. If no emailpass provider (Google-only user): create one
+if (!emailpassProvider) {
+    // Create provider_identity + set password hash
+    // Auto-login with JWT
+}
+
+// 7. Update password hash
+const passwordHash = await hashPassword(password)
 await authModule.updateProviderIdentities([{
-    id: providerIdentity.id,
-    provider_metadata: {
-        password: passwordHash  // Field is "password", NOT "password_hash"
-    }
+    id: emailpassProvider.id,
+    provider_metadata: { password: passwordHash }  // field MUST be "password"
 }])
 
-// 7. Clear reset token
-await customerModule.updateCustomers(customer.id, {
-    metadata: {
-        ...customer.metadata,
-        reset_token: null,
-        reset_expires: null
-    }
-})
+// 8. Re-link provider to correct auth_identity if mismatched (SQL)
+if (emailpassProvider.auth_identity_id !== identityRow.id) {
+    await sql`
+        UPDATE provider_identity
+        SET auth_identity_id = ${identityRow.id}
+        WHERE id = ${emailpassProvider.id}
+    `
+}
+
+// 9. Clear reset token and return JWT
 ```
 
 **Critical Notes**:
-- ✅ Use `scrypt-kdf` (NOT bcrypt) - Medusa's native hasher
+- ✅ Use **native `crypto`** (`scrypt`, `createHash`, `createHmac`) — do NOT use the `scrypt-kdf` npm package
+- ✅ The 96-byte format: `"scrypt"` + version + logN + r + p + salt(32) + SHA256checksum(16) + HMAC-SHA256(32)
 - ✅ Store in `provider_metadata.password` (NOT `password_hash`)
-- ✅ Convert hash to base64 string with `Buffer.from().toString('base64')`
-- ✅ Hash config must be `{ logN: 15, r: 8, p: 1 }`
+- ✅ All DB lookups use **direct SQL** (Medusa module pagination limits cause 404s on large datasets)
+- ✅ Re-link `auth_identity_id` via SQL when emailpass provider is linked to a wrong/legacy identity
 
 ---
 
 ## Password Hashing
 
-### Scrypt Format (Medusa v2 Compatible)
+### Scrypt-kdf 96-Byte Format (Medusa v2 Compatible)
 
+Medusa's `emailpass` provider uses the **scrypt-kdf** binary format for password hashing.
+The hash is **96 bytes** encoded as base64, with this exact layout:
+
+```
+Offset  Len  Field
+------  ---  -----
+ 0-5      6  ASCII "scrypt"
+ 6        1  version (always 0x00)
+ 7        1  logN    (0x0F = 15, so N = 2^15 = 32768)
+ 8-11     4  r       (big-endian uint32, value = 8)
+12-15     4  p       (big-endian uint32, value = 1)
+16-47    32  salt    (random bytes)
+48-63    16  checksum (first 16 bytes of SHA-256 of bytes 0..47)
+64-95    32  hmachash (HMAC-SHA-256 using scrypt-derived key[32..63] over bytes 0..63)
+```
+
+**Implementation using native Node.js `crypto`** (do NOT use the `scrypt-kdf` npm package):
 ```typescript
-const salt = randomBytes(16)
-const hashedPassword = await scryptAsync(password, salt, 64) as Buffer
-const passwordHash = Buffer.concat([
-  Buffer.from('scrypt'),                           // 6 bytes: identifier
-  Buffer.from([0, 15, 0, 0, 0, 8, 0, 0, 0, 1]),   // 10 bytes: params header
-  salt,                                             // 16 bytes: salt
-  hashedPassword                                    // 64 bytes: hash
-]).toString('base64')                               // Final: 128 char base64
+import { scrypt, randomBytes, createHash, createHmac } from "crypto"
+
+async function hashPassword(password: string): Promise<string> {
+    const logN = 15, r = 8, p = 1
+    const buf = Buffer.alloc(96)
+    buf.write("scrypt", 0, "ascii")
+    buf[6] = 0; buf[7] = logN
+    buf.writeUInt32BE(r, 8); buf.writeUInt32BE(p, 12)
+    const salt = randomBytes(32)
+    salt.copy(buf, 16)
+    const checksum = createHash("sha256")
+        .update(buf.slice(0, 48)).digest().slice(0, 16)
+    checksum.copy(buf, 48)
+    const hmacKey = await new Promise<Buffer>((resolve, reject) =>
+        scrypt(password, salt, 64, { N: 2 ** logN, r, p, maxmem: 2 ** 31 - 1 },
+            (err, key) => err ? reject(err) : resolve(key)))
+    const hmacHash = createHmac("sha256", hmacKey.slice(32))
+        .update(buf.slice(0, 64)).digest()
+    hmacHash.copy(buf, 64)
+    return buf.toString("base64")
+}
 ```
 
-**Example hash**:
-```
-c2NyeXB0AA8AAAAIAAAAAREogG7jKAkCDhyl7TP2vgyOKs/nMGHFS48g1BVcZCbl69ptZSWgDvVysuk7DpqBgiryw3Z8HxiNhFGlDtjq1n0qzs7ZdRVE1REoi3TIvbTZ
-```
+**Note**: The output is 96 bytes = 128 chars in base64. This is verified to pass Medusa's native `scrypt-kdf.verify()` check used by the `emailpass` provider on login.
 
 ---
 
@@ -598,7 +660,75 @@ curl -X POST http://localhost:9000/store/auth/activate \
 
 ## Error Handling
 
-### Common Issues
+### Split Auth Identity (Google OAuth + EmailPass)
+
+### The Problem
+
+Some customers were created via **Google OAuth** and also have a legacy `auth_identity` record with a dead `customer_id`. This produces two `auth_identity` rows for the same customer:
+
+| `auth_identity.id` | `app_metadata.customer_id` | Status |
+|-------------------|---------------------------|--------|
+| `authid_01...`    | `cus_01...` (real)        | ✅ Valid |
+| `authid_legacy_...` | `cus_legacy_...` (dead) | ❌ Orphaned |
+
+Meanwhile, the `emailpass` `provider_identity` for that email may be linked to the **orphaned** `auth_identity_id` — meaning:
+
+1. Password verification succeeds (hash is correct)
+2. Medusa looks up the customer via `app_metadata.customer_id = cus_legacy_...`
+3. Customer not found → **404 error** → login fails
+
+### The Fix (applied in `reset-password/confirm`)
+
+During password reset, after updating the hash, the endpoint checks if the emailpass provider is linked to the wrong `auth_identity` and re-links it via direct SQL:
+
+```typescript
+// Find the real auth_identity for this customer
+const [identityRow] = await sql`
+    SELECT id FROM auth_identity
+    WHERE app_metadata->>'customer_id' = ${customer.id}
+      AND deleted_at IS NULL
+    LIMIT 1
+`
+
+// Re-link provider to correct auth_identity
+if (emailpassProvider.auth_identity_id !== identityRow.id) {
+    await sql`
+        UPDATE provider_identity
+        SET auth_identity_id = ${identityRow.id}
+        WHERE id = ${emailpassProvider.id}
+    `
+}
+```
+
+This fix is transparent — it runs silently and only triggers when a mismatch exists. After a successful password reset, subsequent logins always succeed.
+
+### How to Detect in Production
+
+```sql
+-- Find customers with split auth identities
+SELECT c.id, c.email, COUNT(ai.id) as identity_count
+FROM customer c
+JOIN auth_identity ai ON ai.app_metadata->>'customer_id' = c.id
+WHERE c.deleted_at IS NULL
+GROUP BY c.id, c.email
+HAVING COUNT(ai.id) > 1;
+
+-- Find emailpass providers linked to orphaned identities
+SELECT pi.id, pi.entity_id, pi.auth_identity_id,
+       ai.app_metadata->>'customer_id' as linked_customer_id
+FROM provider_identity pi
+JOIN auth_identity ai ON ai.id = pi.auth_identity_id
+WHERE pi.provider = 'emailpass'
+  AND NOT EXISTS (
+    SELECT 1 FROM customer c
+    WHERE c.id = ai.app_metadata->>'customer_id'
+      AND c.deleted_at IS NULL
+  );
+```
+
+---
+
+## Common Issues
 
 #### Duplicate Customer on Activation
 **Error**: `IDX_customer_email_has_account_unique` constraint violation
@@ -742,4 +872,4 @@ COOKIE_SECRET=your-cookie-secret
 - ✅ Password Reset - Tested 2026-02-03
 - ✅ Login (custom + gold standard) - Tested 2026-02-03
 
-**Last Updated**: 2026-02-03
+**Last Updated**: 2026-03-27 — Added 96-byte scrypt-kdf format, split auth_identity fix, SQL-first lookup pattern for reset-password/confirm.
