@@ -1,6 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Client } from "pg"
 import { bridgeFetch } from "../../../../lib/quickbooks/client/core"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 
 /**
  * GET /admin/quickbooks/pipeline
@@ -43,6 +44,27 @@ export async function GET(
             WHERE status = 'submitted'
               AND bridge_op_id IS NULL
               AND submitted_at < NOW() - INTERVAL '10 minutes'
+        `)
+
+        // Auto-timeout: submitted rows with bridge_op_id older than 15 min (QBWC not responding) → failed
+        await client.query(`
+            UPDATE qb_order_pipeline
+            SET status    = 'failed',
+                failed_at = NOW(),
+                error     = 'QBWC did not respond within 15 minutes — QuickBooks Desktop may be offline or QBWC disconnected'
+            WHERE status = 'submitted'
+              AND bridge_op_id IS NOT NULL
+              AND submitted_at < NOW() - INTERVAL '15 minutes'
+        `)
+
+        // Auto-timeout: pending rows older than 30 min (handler never re-submitted) → failed
+        await client.query(`
+            UPDATE qb_order_pipeline
+            SET status    = 'failed',
+                failed_at = NOW(),
+                error     = 'Operation stuck in pending — handler did not re-submit within 30 minutes'
+            WHERE status = 'pending'
+              AND created_at < NOW() - INTERVAL '30 minutes'
         `)
 
         const conditions: string[] = []
@@ -122,7 +144,11 @@ export async function POST(
     res: MedusaResponse
 ): Promise<void> {
     // POST /admin/quickbooks/pipeline?action=retry&id=<uuid>
-    // Resets a failed row to pending so the cron retries it
+    // Re-submits a failed operation immediately:
+    //   1. Reads the row (step, order_id, reference_id)
+    //   2. Deletes it (handler will create a fresh submitted row)
+    //   3. Resets qb_sync_status on the entity so the guard allows re-sync
+    //   4. Calls the appropriate handler in the background
     const rowId  = req.query.id     as string | undefined
     const action = req.query.action as string | undefined
 
@@ -131,26 +157,115 @@ export async function POST(
         return
     }
 
+    const logger = req.scope.resolve(ContainerRegistrationKeys.LOGGER)
+    const LOG_PREFIX = "[QB Pipeline Retry]"
+
     const client = new Client({ connectionString: process.env.DATABASE_URL })
     try {
         await client.connect()
-        const { rowCount } = await client.query(`
-            UPDATE qb_order_pipeline
-            SET status       = 'pending',
-                error        = NULL,
-                failed_at    = NULL,
-                bridge_op_id = NULL,
-                retry_count  = retry_count + 1
-            WHERE id = $1 AND status = 'failed'
-        `, [rowId])
 
-        if (!rowCount) {
-            res.status(404).json({ error: "Row not found or not in failed status" })
+        // 1. Read the row (failed or stuck-pending)
+        const { rows } = await client.query(
+            `SELECT id, step, order_id, reference_id, reference_type, retry_count
+             FROM qb_order_pipeline WHERE id = $1 AND status IN ('failed', 'pending')`,
+            [rowId]
+        )
+        if (!rows.length) {
+            res.status(404).json({ error: "Row not found or not in retryable status (must be failed or pending)" })
             return
         }
-        res.json({ success: true, message: "Row reset to pending — cron will retry it" })
+        const row = rows[0]
+
+        // 2. Reset row to 'pending' so it stays visible in the UI while the handler runs.
+        //    writePipelineRow will atomically swap it to 'submitted' once the bridge_op_id is known.
+        await client.query(
+            `UPDATE qb_order_pipeline
+             SET status       = 'pending',
+                 error        = NULL,
+                 failed_at    = NULL,
+                 submitted_at = NULL,
+                 bridge_op_id = NULL,
+                 qb_txn_id    = NULL,
+                 qb_ref_number = NULL,
+                 retry_count  = retry_count + 1
+             WHERE id = $1`,
+            [rowId]
+        )
+
+        // 3. Reset qb_sync_status on the entity so guards allow re-sync
+        if (row.order_id) {
+            try {
+                const orderModule = req.scope.resolve(Modules.ORDER)
+                const order = await orderModule.retrieveOrder(row.order_id)
+                const meta = (order as any).metadata || {}
+                // Only reset if it's in a blocking non-error state
+                const currentStatus = meta.qb_sync_status
+                if (currentStatus && currentStatus !== "error" && currentStatus !== "voided") {
+                    await orderModule.updateOrders(row.order_id, {
+                        metadata: { ...meta, qb_sync_status: "error" }
+                    })
+                }
+            } catch (metaErr: any) {
+                logger.warn(`${LOG_PREFIX} Could not reset qb_sync_status: ${metaErr.message}`)
+            }
+        }
+
+        // 4. Fire the appropriate handler in the background
+        const retryCount = (row.retry_count ?? 0) + 1
+        logger.info(`${LOG_PREFIX} Retrying step=${row.step} order=${row.order_id} retry#${retryCount}`)
+
+        ;(async () => {
+            try {
+                const orderModule   = req.scope.resolve(Modules.ORDER)
+                const customerModule = req.scope.resolve(Modules.CUSTOMER)
+
+                switch (row.step) {
+                    case "estimate": {
+                        const { handleDraftOrderCreated } = require("../../../../subscribers/qb-draft-order-subscriber")
+                        await handleDraftOrderCreated({ id: row.order_id }, req.scope, logger, true)
+                        break
+                    }
+                    case "sales_order": {
+                        const { handleOrderPlaced } = require("../../../../lib/quickbooks/handlers/handle-order-placed")
+                        await handleOrderPlaced({ id: row.order_id }, orderModule, customerModule, req.scope, logger, false)
+                        break
+                    }
+                    case "invoice": {
+                        const { handleFulfillmentCreated } = require("../../../../lib/quickbooks/handlers/handle-fulfillment-created")
+                        await handleFulfillmentCreated(
+                            { order_id: row.order_id, fulfillment_id: row.reference_id, invoice_id: row.reference_id },
+                            orderModule, customerModule, req.scope, logger
+                        )
+                        break
+                    }
+                    case "sales_receipt": {
+                        const { handleSalesReceiptCreated } = require("../../../../lib/quickbooks/handlers/handle-sales-receipt-created")
+                        await handleSalesReceiptCreated(
+                            { order_id: row.order_id, fulfillment_id: row.reference_id, invoice_id: row.reference_id },
+                            orderModule, customerModule, req.scope, logger
+                        )
+                        break
+                    }
+                    case "payment": {
+                        const { handlePosPaymentCreated } = require("../../../../lib/quickbooks/handlers/handle-pos-payment-created")
+                        await handlePosPaymentCreated({
+                            event: { name: "pos.payment.created", data: { id: row.reference_id ?? row.order_id } },
+                            container: req.scope as any,
+                            pluginOptions: {}
+                        })
+                        break
+                    }
+                    default:
+                        logger.warn(`${LOG_PREFIX} No retry handler for step=${row.step}`)
+                }
+            } catch (handlerErr: any) {
+                logger.error(`${LOG_PREFIX} Background retry failed: ${handlerErr.message}`)
+            }
+        })()
+
+        res.json({ success: true, message: `Retrying ${row.step} — re-submitted to bridge` })
     } catch (err: any) {
-        console.error("[QB Pipeline POST] Error:", err)
+        logger.error(`${LOG_PREFIX} Error: ${err.message}`)
         res.status(500).json({ error: "Failed to retry" })
     } finally {
         await client.end()

@@ -36,9 +36,22 @@ export interface WritePipelineRowInput {
 /**
  * Inserts a new row into qb_order_pipeline.
  * Returns the inserted row's UUID.
+ *
+ * Before inserting, any existing 'pending' row for the same order_id+step is
+ * deleted. This enables the Retry flow: the UI keeps the row visible as
+ * 'pending', and when the handler re-submits it atomically swaps to 'submitted'.
  */
 export async function writePipelineRow(input: WritePipelineRowInput): Promise<string> {
     const pool = getDbPool()
+
+    // Swap out any pending row for the same order+step (retry transition)
+    if (input.orderId && input.step) {
+        await pool.query(
+            `DELETE FROM qb_order_pipeline
+             WHERE order_id = $1 AND step = $2 AND status = 'pending'`,
+            [input.orderId, input.step]
+        )
+    }
 
     const { rows } = await pool.query(
         `INSERT INTO qb_order_pipeline

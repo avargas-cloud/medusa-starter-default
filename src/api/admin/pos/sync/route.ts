@@ -56,12 +56,19 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     return res.json({ success: true, message: "Estimate close logic executed" })
                 }
 
-                if (getEstimateTxnId(order.metadata || {})) {
-                    return res.status(400).json({ error: "Cannot sync: Estimate is already in QuickBooks." })
+                const estimateTxnId = getEstimateTxnId(order.metadata || {})
+                const syncStatus   = order.metadata?.qb_sync_status as string | undefined
+                const inFlight     = syncStatus && syncStatus !== "error" && syncStatus !== "voided"
+                if (estimateTxnId || inFlight) {
+                    const reason = estimateTxnId
+                        ? "Estimate is already confirmed in QuickBooks."
+                        : `Estimate is already in progress (status: ${syncStatus}).`
+                    return res.status(400).json({ error: `Cannot sync: ${reason}` })
                 }
-                
-                // Force sync!
-                await handleDraftOrderCreated({ id }, req.scope, logger, false)
+
+                // Fire-and-forget — pass isCron=true to bypass the POS "delay 1h" guard
+                handleDraftOrderCreated({ id }, req.scope, logger, true)
+                    .catch((err: any) => logger.error(`${LOG_PREFIX} Background estimate sync error: ${err.message}`))
                 return res.json({ success: true, message: "Estimate sync queued" })
             }
 
@@ -90,10 +97,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     return res.json({ success: true, message: "Order close logic executed" })
                 }
 
-                if (getSoTxnId(order.metadata || {})) {
-                    return res.status(400).json({ error: "Cannot sync: Order is already in QuickBooks." })
+                const soTxnId      = getSoTxnId(order.metadata || {})
+                const soSyncStatus = order.metadata?.qb_sync_status as string | undefined
+                const soInFlight   = soSyncStatus && soSyncStatus !== "error" && soSyncStatus !== "voided"
+                if (soTxnId || soInFlight) {
+                    const reason = soTxnId
+                        ? "Sales Order is already confirmed in QuickBooks."
+                        : `Sales Order is already in progress (status: ${soSyncStatus}).`
+                    return res.status(400).json({ error: `Cannot sync: ${reason}` })
                 }
-                
+
                 // Safety Lock: Check if fully or partially invoiced.
                 // In POS, if "pos_invoice" exists for this order, we block the SO manual sync
                 const { data: invoices } = await query.graph({
@@ -106,7 +119,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     return res.status(400).json({ error: "Cannot manual-sync Order: Products are already invoiced. Use Invoice manual sync instead to preserve accounting links." })
                 }
 
-                await handleOrderPlaced({ id }, orderModule, customerModule, req.scope, logger, false)
+                handleOrderPlaced({ id }, orderModule, customerModule, req.scope, logger, false)
+                    .catch((err: any) => logger.error(`${LOG_PREFIX} Background order sync error: ${err.message}`))
                 return res.json({ success: true, message: "Sales Order sync queued" })
             }
 
@@ -124,41 +138,48 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     return res.json({ success: true, message: "Invoice void logic executed" })
                 }
                 
-                if (invoice.metadata?.qb_txn_id || invoice.metadata?.qb_ref_number || invoice.metadata?.qb_invoice_txn_id || invoice.metadata?.qb_sales_receipt_txn_id) {
+                const invTxnId = invoice.metadata?.qb_txn_id || invoice.metadata?.qb_ref_number
+                    || invoice.metadata?.qb_invoice_txn_id || invoice.metadata?.qb_sales_receipt_txn_id
+                if (invTxnId) {
                     return res.status(400).json({ error: "Cannot sync: Invoice is already in QuickBooks." })
                 }
-                
+
                 const { data: [order] } = await query.graph({
                     entity: "order",
                     fields: ["metadata", "customer_id", "status"],
                     filters: { id: invoice.order_id }
                 })
-                
+
+                // Block if order is already mid-sync (creating/pending) — prevents duplicate invoice
+                const orderSyncStatus = order?.metadata?.qb_sync_status as string | undefined
+                if (orderSyncStatus === "creating") {
+                    return res.status(400).json({ error: "Cannot sync: Order sync is still in progress. Wait for it to complete." })
+                }
+
                 const soTxnId = getSoTxnId(order?.metadata || {})
                 
                 // INTELLIGENT ROUTING
                 if (soTxnId) {
                     // Scenario 1: Order -> Invoice (LinkToTxn)
                     logger.info(`${LOG_PREFIX} Intelligent Sync -> Has Sales Order -> Dispatching InvoiceAdd`)
-                    await handleFulfillmentCreated(
+                    handleFulfillmentCreated(
                         { order_id: invoice.order_id, fulfillment_id: invoice.fulfillment_id, invoice_id: id },
                         orderModule,
                         customerModule,
                         req.scope,
                         logger
-                    )
-                    return res.json({ success: true, message: "InvoiceAdd via handleFulfillmentCreated queued" })
+                    ).catch((err: any) => logger.error(`${LOG_PREFIX} Background invoice sync error: ${err.message}`))
+                    return res.json({ success: true, message: "InvoiceAdd queued" })
                 } else {
                     // Scenario 2: Direct POS Sale
-                    // Verify if it is fully paid. If the user clicks manual sync on an invoice, usually they want to force it.
                     logger.info(`${LOG_PREFIX} Intelligent Sync -> No Sales Order -> Dispatching SalesReceiptAdd`)
-                    await handleSalesReceiptCreated(
+                    handleSalesReceiptCreated(
                         { order_id: invoice.order_id, fulfillment_id: invoice.fulfillment_id, invoice_id: id },
                         orderModule,
                         customerModule,
                         req.scope,
                         logger
-                    )
+                    ).catch((err: any) => logger.error(`${LOG_PREFIX} Background sales receipt sync error: ${err.message}`))
                     return res.json({ success: true, message: "SalesReceiptAdd queued" })
                 }
             }
@@ -168,47 +189,45 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 const payment = await financeService.retrieveCustomerPayment(id, { relations: ["applications"] })
                 if (!payment) return res.status(404).json({ error: "Payment not found" })
                 
-                if (payment.metadata?.qb_txn_id) {
-                    return res.status(400).json({ error: "Cannot sync: Payment is already in QuickBooks." })
+                const payTxnId      = payment.metadata?.qb_txn_id as string | undefined
+                const paySyncStatus = payment.metadata?.qb_sync_status as string | undefined
+                const payInFlight   = paySyncStatus && paySyncStatus !== "error" && paySyncStatus !== "voided"
+                if (payTxnId || payInFlight) {
+                    const reason = payTxnId
+                        ? "Payment is already confirmed in QuickBooks."
+                        : `Payment is already in progress (status: ${paySyncStatus}).`
+                    return res.status(400).json({ error: `Cannot sync: ${reason}` })
                 }
-                
-                // DOUBLE SEQUENCE:
-                // 1. Create it in QB (ReceivePaymentAdd or Generic Refund)
-                logger.info(`${LOG_PREFIX} Sequence 1/2: handlePosPaymentCreated (Creates TxnID in QB)`)
-                await handlePosPaymentCreated({ 
-                    event: { name: 'pos.payment.created', data: { id } }, 
-                    container: req.scope as any,
-                    pluginOptions: {}
-                })
-                
-                // 2. Apply it for each application if it has a TxnID now
-                // Re-fetch to get the new qb_txn_id
-                const refreshedPayment = await financeService.retrieveCustomerPayment(id, { relations: ["applications"] })
-                
-                if (refreshedPayment.applications && refreshedPayment.applications.length > 0) {
-                    logger.info(`${LOG_PREFIX} Sequence 2/2: handlePosPaymentApplied (Applying to invoice)`)
-                    for (const app of refreshedPayment.applications) {
-                        if (app.invoice_id) { 
-                            await handlePosPaymentApplied({
-                                event: { 
-                                    name: 'pos.payment.applied', 
-                                    data: { 
-                                        payment_id: refreshedPayment.id, 
-                                        invoice_id: app.invoice_id, 
-                                        order_id: app.order_id, 
-                                        amount_applied: Number(app.amount_applied) 
-                                    } 
-                                },
-                                container: req.scope as any,
-                                pluginOptions: {}
-                            })
+
+                // Fire-and-forget — double sequence runs in background
+                ;(async () => {
+                    try {
+                        logger.info(`${LOG_PREFIX} Sequence 1/2: handlePosPaymentCreated`)
+                        await handlePosPaymentCreated({
+                            event: { name: 'pos.payment.created', data: { id } },
+                            container: req.scope as any,
+                            pluginOptions: {}
+                        })
+                        const refreshedPayment = await financeService.retrieveCustomerPayment(id, { relations: ["applications"] })
+                        if (refreshedPayment.applications?.length > 0) {
+                            logger.info(`${LOG_PREFIX} Sequence 2/2: handlePosPaymentApplied`)
+                            for (const app of refreshedPayment.applications) {
+                                if (app.invoice_id) {
+                                    await handlePosPaymentApplied({
+                                        event: { name: 'pos.payment.applied', data: { payment_id: refreshedPayment.id, invoice_id: app.invoice_id, order_id: app.order_id, amount_applied: Number(app.amount_applied) } },
+                                        container: req.scope as any,
+                                        pluginOptions: {}
+                                    })
+                                }
+                            }
+                        } else {
+                            logger.info(`${LOG_PREFIX} Sequence 2/2 skipped: No payment applications found`)
                         }
+                    } catch (err: any) {
+                        logger.error(`${LOG_PREFIX} Background payment sync error: ${err.message}`)
                     }
-                } else {
-                    logger.info(`${LOG_PREFIX} Sequence 2/2 skipped: No payment applications found`)
-                }
-                
-                return res.json({ success: true, message: "Payment created and application queued sequentially" })
+                })()
+                return res.json({ success: true, message: "Payment sync queued" })
             }
 
             case "return": {
@@ -221,12 +240,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     return res.status(400).json({ error: "Cannot sync: Refund is already in QuickBooks." })
                 }
                 
-                await handlePosPaymentCreated({ 
-                    event: { name: 'pos.payment.created', data: { id } }, 
+                handlePosPaymentCreated({
+                    event: { name: 'pos.payment.created', data: { id } },
                     container: req.scope as any,
                     pluginOptions: {}
-                })
-                
+                }).catch((err: any) => logger.error(`${LOG_PREFIX} Background refund sync error: ${err.message}`))
                 return res.json({ success: true, message: "Refund/CreditMemo sync queued" })
             }
 

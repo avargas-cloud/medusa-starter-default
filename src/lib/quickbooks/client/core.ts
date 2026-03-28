@@ -56,9 +56,17 @@ export async function pollOperationResult(
                 const refNumber = op.refNumber || op.result?.RefNumber
                 // Customer operations return listId instead of txnId
                 const listId = op.listId || op.result?.ListID
+                // EditSequence — prefer top-level field set by bridge, fall back to nested XML result
+                const editSequence: string | undefined =
+                    op.editSequence ||
+                    op.result?.EditSequence ||
+                    op.result?.QBXML?.QBXMLMsgsRs?.EstimateAddRs?.EstimateRet?.EditSequence ||
+                    op.result?.QBXML?.QBXMLMsgsRs?.SalesOrderAddRs?.SalesOrderRet?.EditSequence ||
+                    op.result?.QBXML?.QBXMLMsgsRs?.InvoiceAddRs?.InvoiceRet?.EditSequence ||
+                    undefined
                 log(`[QB] ✅ Operation completed. TxnID: ${txnId ?? listId}, RefNumber: ${refNumber}`)
                 // Return listId as txnId so customer callers can use result.txnId for the ListID
-                return { operationId, txnId: txnId ?? listId, refNumber, listId }
+                return { operationId, txnId: txnId ?? listId, refNumber, listId, editSequence }
             }
 
             if (op.status === "failed") {

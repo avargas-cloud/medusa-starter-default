@@ -151,5 +151,5 @@ export default async function qbPipelineConsolidator(
 
 export const config = {
     name: "qb-pipeline-consolidator",
-    schedule: "*/2 * * * *",
+    schedule: "*/1 * * * *", // TODO: change back to */2 after testing
 }

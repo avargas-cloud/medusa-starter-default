@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react"
-import { Container, Heading, Text, Button } from "@medusajs/ui"
+import { Container, Heading, Text, Button, Badge } from "@medusajs/ui"
 import { ArrowPath } from "@medusajs/icons"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -67,20 +67,18 @@ const REF_TYPE_LABELS: Record<string, string> = {
 
 // ─── Status Badge ─────────────────────────────────────────────────────────────
 
+type BadgeColor = "orange" | "blue" | "green" | "red" | "grey"
+
 function StatusBadge({ status }: { status: PipelineStatus }) {
-    const map: Record<PipelineStatus, { color: string; label: string }> = {
-        pending:   { color: "bg-yellow-100 text-yellow-800 border-yellow-200",  label: "Pending"   },
-        submitted: { color: "bg-blue-100 text-blue-800 border-blue-200",        label: "Submitted" },
-        confirmed: { color: "bg-green-100 text-green-800 border-green-200",     label: "Confirmed" },
-        failed:    { color: "bg-red-100 text-red-800 border-red-200",           label: "Failed"    },
-        skipped:   { color: "bg-gray-100 text-gray-600 border-gray-200",        label: "Skipped"   },
+    const map: Record<PipelineStatus, { color: BadgeColor; label: string }> = {
+        pending:   { color: "orange", label: "Pending"   },
+        submitted: { color: "blue",   label: "Submitted" },
+        confirmed: { color: "green",  label: "Confirmed" },
+        failed:    { color: "red",    label: "Failed"    },
+        skipped:   { color: "grey",   label: "Skipped"   },
     }
-    const s = map[status] ?? { color: "bg-gray-100 text-gray-600 border-gray-200", label: status }
-    return (
-        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border ${s.color}`}>
-            {s.label}
-        </span>
-    )
+    const s = map[status] ?? { color: "grey" as BadgeColor, label: status }
+    return <Badge color={s.color} size="xsmall">{s.label}</Badge>
 }
 
 // ─── Relative time ────────────────────────────────────────────────────────────
@@ -115,9 +113,9 @@ function PipelineRow({ row, onRetry, retrying }: {
         <>
             <tr
                 className={`border-b border-ui-border-base text-xs transition-colors ${
-                    row.status === "failed" ? "bg-red-50/40" :
-                    row.status === "pending" ? "bg-yellow-50/20" :
-                    row.status === "submitted" ? "bg-blue-50/20" : ""
+                    row.status === "failed"    ? "bg-red-50/5"    :
+                    row.status === "pending"   ? "bg-yellow-50/5" :
+                    row.status === "submitted" ? "bg-blue-50/5"   : ""
                 }`}
             >
                 {/* Step */}
@@ -173,9 +171,26 @@ function PipelineRow({ row, onRetry, retrying }: {
                     ) : "0"}
                 </td>
 
-                {/* Time */}
+                {/* Created */}
                 <td className="px-3 py-2 text-ui-fg-muted whitespace-nowrap">
-                    {relTime(row.confirmed_at ?? row.failed_at ?? row.submitted_at ?? row.created_at)}
+                    {relTime(row.created_at)}
+                </td>
+
+                {/* Updated */}
+                <td className="px-3 py-2 whitespace-nowrap">
+                    {(() => {
+                        const updated = row.confirmed_at ?? row.failed_at ?? row.submitted_at
+                        if (!updated) return <span className="text-ui-fg-muted">—</span>
+                        return (
+                            <span className={
+                                row.status === "confirmed" ? "text-green-500" :
+                                row.status === "failed"    ? "text-red-400"   :
+                                "text-ui-fg-subtle"
+                            }>
+                                {relTime(updated)}
+                            </span>
+                        )
+                    })()}
                 </td>
 
                 {/* Actions */}
@@ -189,7 +204,7 @@ function PipelineRow({ row, onRetry, retrying }: {
                                 {expanded ? "▲ hide" : "▼ error"}
                             </button>
                         )}
-                        {row.status === "failed" && (
+                        {(row.status === "failed" || row.status === "pending") && (
                             <button
                                 onClick={() => onRetry(row.id)}
                                 disabled={retrying}
@@ -204,9 +219,9 @@ function PipelineRow({ row, onRetry, retrying }: {
 
             {/* Error expansion row */}
             {expanded && row.error && (
-                <tr className="bg-red-50 border-b border-red-200">
-                    <td colSpan={8} className="px-4 py-2">
-                        <pre className="text-[10px] text-red-700 whitespace-pre-wrap break-all font-mono">
+                <tr className="bg-red-50/5 border-b border-ui-border-base">
+                    <td colSpan={9} className="px-4 py-2">
+                        <pre className="text-[10px] text-red-400 whitespace-pre-wrap break-all font-mono">
                             {row.error}
                         </pre>
                     </td>
@@ -405,19 +420,19 @@ export function PipelineTable() {
 
                 {/* Summary badges */}
                 <div className="flex items-center gap-2 mb-3 flex-wrap">
-                    {[
-                        { key: "pending",   label: "Pending",   color: "bg-yellow-100 text-yellow-800 border-yellow-200" },
-                        { key: "submitted", label: "Submitted", color: "bg-blue-100 text-blue-800 border-blue-200"       },
-                        { key: "confirmed", label: "Confirmed", color: "bg-green-100 text-green-800 border-green-200"    },
-                        { key: "failed",    label: "Failed",    color: "bg-red-100 text-red-800 border-red-200"          },
-                        { key: "skipped",   label: "Skipped",   color: "bg-gray-100 text-gray-600 border-gray-200"       },
-                    ].map(({ key, label, color }) => {
+                    {([
+                        { key: "pending",   label: "Pending",   color: "orange" },
+                        { key: "submitted", label: "Submitted", color: "blue"   },
+                        { key: "confirmed", label: "Confirmed", color: "green"  },
+                        { key: "failed",    label: "Failed",    color: "red"    },
+                        { key: "skipped",   label: "Skipped",   color: "grey"   },
+                    ] as { key: string; label: string; color: BadgeColor }[]).map(({ key, label, color }) => {
                         const count = counts[key as keyof PipelineCounts] ?? 0
                         if (count === 0) return null
                         return (
-                            <span key={key} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold border ${color}`}>
-                                {label} <span className="font-bold">{count}</span>
-                            </span>
+                            <Badge key={key} color={color} size="xsmall">
+                                {label} {count}
+                            </Badge>
                         )
                     })}
                     {Object.values(counts).every(v => !v || v === 0) && (
@@ -478,7 +493,8 @@ export function PipelineTable() {
                                     <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Depends On</th>
                                     <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">QB TxnID</th>
                                     <th className="px-3 py-2 text-center font-semibold text-ui-fg-subtle">Retries</th>
-                                    <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Time</th>
+                                    <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Created</th>
+                                    <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Updated</th>
                                     <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Actions</th>
                                 </tr>
                             </thead>

@@ -26,7 +26,8 @@ import {
     buildQbOrderDiscountLines,
     processEstimateInQb,
 } from "../lib/quickbooks/order-flow-core"
-import { writePipelineRow } from "../lib/quickbooks/qb-pipeline"
+import { writePipelineRow, cacheEditSequence } from "../lib/quickbooks/qb-pipeline"
+import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types"
 
 const LOG_PREFIX = "[QB-DRAFT]"
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
@@ -134,19 +135,14 @@ export async function handleDraftOrderCreated(data: any, container: any, logger:
 
     logger.info(`${LOG_PREFIX} ✅ Customer in QB: qb_list_id=${custResult.qbCustomerId}`)
 
-    // Build QB items — query.graph returns unit_price in DOLLARS; buildQbItems expects CENTS
-    const itemsForQb = (draftOrder.items || []).map((item: any) => ({
-        ...item,
-        unit_price: Math.round((item.unit_price || 0) * 100), // dollars → cents for buildQbItems
-        subtotal: undefined, // Force buildQbItems to use original unit_price
-    }))
-    const qbItems = buildQbItems(itemsForQb, draftOrder.metadata)
+    // Build QB items — query.graph returns unit_price in DOLLARS; buildQbItems also expects DOLLARS
+    const qbItems = buildQbItems(draftOrder.items || [], draftOrder.metadata)
 
-    const orderDiscountTotal = Math.round((draftOrder.discount_total || 0) * 100)
-    if (orderDiscountTotal > 0) {
-        const orderSubtotal = Math.round((draftOrder.subtotal || 0) * 100)
-        const discountPercent = orderSubtotal > 0 ? (orderDiscountTotal / orderSubtotal) * 100 : null
-        buildQbOrderDiscountLines(orderDiscountTotal, discountPercent).forEach(l => qbItems.push(l))
+    const orderDiscountDollars = draftOrder.discount_total || 0
+    if (orderDiscountDollars > 0) {
+        const orderSubtotal = draftOrder.subtotal || 0
+        const discountPercent = orderSubtotal > 0 ? (orderDiscountDollars / orderSubtotal) * 100 : null
+        buildQbOrderDiscountLines(orderDiscountDollars, discountPercent).forEach(l => qbItems.push(l))
     }
 
     logger.info(`${LOG_PREFIX} QB-linked items: ${qbItems.length} of ${draftOrder.items?.length ?? 0} total`)
@@ -212,17 +208,31 @@ export async function handleDraftOrderCreated(data: any, container: any, logger:
             const orderModule = container.resolve(Modules.ORDER)
             const currentMetadata = draftOrder.metadata || {}
 
-            await orderModule.updateOrders(draftOrderId, {
-                metadata: {
-                    ...currentMetadata,
-                    qb_list_id: custResult.qbCustomerId,         // ← Customer QB ID for downstream events
-                    qb_estimate_txn_id: result.txnId || null,
-                    qb_estimate_ref: result.refNumber || null,
-                    qb_estimate_operation_id: result.operationId || null,
-                    qb_synced_at: new Date().toISOString(),
-                },
-            })
-            logger.info(`${LOG_PREFIX} ✅ Saved estimate metadata to draft order ${draftOrderId}`)
+            // Determine sync status: "pending" if still waiting for QBWC, "synced" if already confirmed
+            const isAsync = !!result.operationId && !result.txnId
+            const patch = buildEstimatePatch(
+                { ...currentMetadata, qb_list_id: custResult.qbCustomerId },
+                {
+                    txnId:        result.txnId || "",
+                    refNumber:    result.refNumber || null,
+                    operationId:  result.operationId || null,
+                    editSequence: result.editSequence || null,
+                    syncStatus:   isAsync ? "pending" : "synced",
+                }
+            )
+
+            // Cache EditSequence so future Mod ops skip the GET round-trip
+            if (result.editSequence && result.txnId) {
+                try {
+                    await cacheEditSequence("estimate", result.txnId, result.editSequence)
+                    logger.info(`${LOG_PREFIX} ✅ Cached EditSequence for Estimate TxnID=${result.txnId}`)
+                } catch (cacheErr: any) {
+                    logger.warn(`${LOG_PREFIX} ⚠️ Could not cache EditSequence: ${cacheErr.message}`)
+                }
+            }
+
+            await orderModule.updateOrders(draftOrderId, { metadata: patch })
+            logger.info(`${LOG_PREFIX} ✅ Saved estimate metadata to draft order ${draftOrderId} (status=${isAsync ? "pending" : "synced"})`)
         } catch (metaErr: any) {
             logger.error(`${LOG_PREFIX} ⚠️ Failed to save draft order metadata: ${metaErr.message}`)
             logger.error(`${LOG_PREFIX} ⚠️ QB Estimate WAS created (TxnID=${result.txnId}) but metadata not saved. Manual update needed.`)

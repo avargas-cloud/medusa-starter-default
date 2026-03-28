@@ -1,4 +1,5 @@
 import { MedusaContainer } from "@medusajs/framework/types"
+import { Client } from "pg"
 
 export default async function inspectOrder({ container }: { container: MedusaContainer }) {
   const query = container.resolve("query") as any
@@ -131,11 +132,80 @@ export default async function inspectOrder({ container }: { container: MedusaCon
     })
     console.log("=========================================")
 
+    // ─── QuickBooks Status ──────────────────────────────────────────────────
+    console.log("\n🔗 QUICKBOOKS STATUS")
+    const meta = order.metadata || {}
+    const qbSyncStatus = meta.qb_sync_status ?? null
+
+    // Support both old flat format and new nested format
+    const estimateTxnId  = meta.qb_estimate?.txn_id  ?? meta.qb_estimate_txn_id  ?? null
+    const estimateRef    = meta.qb_estimate?.ref_number ?? meta.qb_estimate_ref   ?? null
+    const estimateEditSeq = meta.qb_estimate?.edit_sequence ?? null
+    const soTxnId        = meta.qb_sales_order?.txn_id  ?? meta.qb_sales_order_txn_id ?? null
+    const soRef          = meta.qb_sales_order?.ref_number ?? meta.qb_sales_order_ref  ?? null
+    const soEditSeq      = meta.qb_sales_order?.edit_sequence ?? null
+    const invoices: any[] = Array.isArray(meta.qb_invoices) ? meta.qb_invoices : []
+    const payments: any[] = Array.isArray(meta.qb_payments) ? meta.qb_payments : []
+    const listId         = meta.qb_list_id ?? null
+    const syncedAt       = meta.qb_synced_at ?? null
+
+    console.log(`  Sync Status : ${qbSyncStatus ?? "— not set"}`)
+    console.log(`  QB List ID  : ${listId ?? "— not set (customer not in QB)"}`)
+    console.log(`  Last Synced : ${syncedAt ?? "—"}`)
+    console.log()
+    console.log(`  Estimate    : ${estimateTxnId ? `TxnID=${estimateTxnId}  Ref=${estimateRef}  EditSeq=${estimateEditSeq ?? "—"}` : "— not synced"}`)
+    console.log(`  Sales Order : ${soTxnId       ? `TxnID=${soTxnId}        Ref=${soRef}        EditSeq=${soEditSeq ?? "—"}` : "— not synced"}`)
+    if (invoices.length) {
+      invoices.forEach((inv: any, i: number) => {
+        console.log(`  Invoice[${i}]  : TxnID=${inv.txn_id}  Ref=${inv.ref_number}  EditSeq=${inv.edit_sequence ?? "—"}  FulfID=${inv.fulfillment_id ?? "—"}`)
+      })
+    } else {
+      console.log(`  Invoices    : — none`)
+    }
+    if (payments.length) {
+      payments.forEach((pay: any, i: number) => {
+        console.log(`  Payment[${i}]  : TxnID=${pay.txn_id}  Amount=$${(pay.amount / 100).toFixed(2)}  Method=${pay.method}`)
+      })
+    } else {
+      console.log(`  Payments    : — none`)
+    }
+
+    // ─── Pipeline rows for this order ──────────────────────────────────────
+    console.log("\n📊 QB PIPELINE (qb_order_pipeline)")
+    const dbClient = new Client({ connectionString: process.env.DATABASE_URL })
+    try {
+      await dbClient.connect()
+      const { rows: pipelineRows } = await dbClient.query(
+        `SELECT step, status, bridge_op_id, qb_txn_id, qb_ref_number, error, retry_count,
+                created_at, submitted_at, confirmed_at, failed_at
+         FROM qb_order_pipeline
+         WHERE order_id = $1
+         ORDER BY created_at ASC`,
+        [order.id]
+      )
+      if (pipelineRows.length === 0) {
+        console.log("  (no pipeline rows)")
+      } else {
+        pipelineRows.forEach((row: any) => {
+          const ts = row.confirmed_at ?? row.failed_at ?? row.submitted_at ?? row.created_at
+          const tsStr = ts ? new Date(ts).toISOString() : "—"
+          const icon = row.status === "confirmed" ? "✅"
+            : row.status === "failed"    ? "❌"
+            : row.status === "submitted" ? "⏳"
+            : row.status === "pending"   ? "🕐"
+            : "⏭️"
+          console.log(`  ${icon} [${row.step.padEnd(12)}] status=${row.status.padEnd(10)} retries=${row.retry_count}  TxnID=${row.qb_txn_id ?? "—"}  OpID=${row.bridge_op_id?.slice(0, 8) ?? "—"}  ts=${tsStr}`)
+          if (row.error) console.log(`       error: ${row.error}`)
+        })
+      }
+    } catch (pgErr: any) {
+      console.log(`  ⚠️ Could not query pipeline: ${pgErr.message}`)
+    } finally {
+      await dbClient.end()
+    }
+
     console.log("\n--- FULL METADATA DUMP ---")
     console.log(JSON.stringify(order.metadata, null, 2))
-    
-    // console.log("\n--- FULL RAW OBJECT DUMP ---")
-    // console.log(JSON.stringify(order, null, 2))
 
   } catch (error) {
     console.error("❌ Error fetching order:", error)

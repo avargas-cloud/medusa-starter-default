@@ -863,7 +863,7 @@ export async function processEstimateInQb(draft: {
     date?: string
     taxExempt?: boolean    // true if Medusa order has no tax (tax_total === 0)
     salesTaxCode?: string  // QB sales tax code name (e.g. "Sale Tax 7%") — overrides customer default
-}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean; skipReason?: string }> {
+}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; editSequence?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
 
@@ -904,12 +904,14 @@ export async function processEstimateInQb(draft: {
 
     let txnId = asyncData.txnId
     let refNumber = asyncData.refNumber
+    let editSequence: string | undefined
 
     if (!txnId && asyncData.operationId !== "DRY_RUN") {
         try {
             const pollResult = await pollOperationResult(asyncData.operationId)
             txnId = pollResult.txnId
             refNumber = pollResult.refNumber
+            editSequence = pollResult.editSequence
         } catch (pollErr: any) {
             console.error(`[QB] ❌ Estimate polling failed: ${pollErr.message}`)
             await QbSyncLogger.fail(logId, `Polling failed: ${pollErr.message}`)
@@ -918,7 +920,7 @@ export async function processEstimateInQb(draft: {
     }
 
     if (txnId) {
-        console.log(`${prefix} ✅ Estimate created. TxnID: ${txnId}, Ref: ${refNumber || "pending"}`)
+        console.log(`${prefix} ✅ Estimate created. TxnID: ${txnId}, Ref: ${refNumber || "pending"}, EditSeq: ${editSequence || "—"}`)
     }
 
     await QbSyncLogger.complete(logId, {
@@ -930,7 +932,7 @@ export async function processEstimateInQb(draft: {
             : `Estimate queued — OperationID: ${asyncData.operationId}`,
     })
 
-    return { enabled: true, operationId: asyncData.operationId, txnId, refNumber }
+    return { enabled: true, operationId: asyncData.operationId, txnId, refNumber, editSequence }
 }
 
 // ─── 5. Update Estimate (Draft Order Re-sync) ──────────────────────────────────

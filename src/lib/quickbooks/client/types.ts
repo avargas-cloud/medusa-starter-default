@@ -145,7 +145,8 @@ export interface QbAsyncResult {
     operationId: string
     txnId?: string
     refNumber?: string
-    listId?: string  // Customer operations return listId (QB ListID) instead of txnId
+    listId?: string      // Customer operations return listId (QB ListID) instead of txnId
+    editSequence?: string
 }
 
 export interface QbBridgeResult<T = any> {

@@ -174,13 +174,13 @@ export async function handleOrderPlaced(
 
         if (result.soTxnId || result.operationId) {
             try {
-                // If we got here, it's definitively "synced"
+                const isAsync = !!result.operationId && !result.soTxnId
                 const patch = buildSaleOrderPatch(order.metadata || {}, {
                     txnId:       result.soTxnId || null,
                     refNumber:   result.soRefNumber || null,
                     operationId: result.operationId || null,
                     customerId:  result.customerId || null,
-                    syncStatus:  "synced",
+                    syncStatus:  isAsync ? "pending" : "synced",
                 })
                 await orderModule.updateOrders(orderId, { metadata: patch })
                 logger.info(`${LOG_PREFIX} ✅ Saved SO metadata — TxnID=${result.soTxnId}, Ref=${result.soRefNumber}, OpID=${result.operationId}, status=synced`)
