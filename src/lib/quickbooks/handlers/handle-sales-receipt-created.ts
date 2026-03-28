@@ -2,7 +2,10 @@ import { ContainerRegistrationKeys } from "@medusajs/utils"
 import { getDbPool } from "../../../api/utils/db-pool"
 import { processSalesReceiptInQb, buildQbItems, buildShippingQbItem, buildQbOrderDiscountLines } from "../order-flow-core"
 import { buildInvoicePatch } from "../qb-metadata-types"
+import { getSoTxnId, getEstimateTxnId } from "../qb-metadata-types"
 import { LOG_PREFIX, getQbConfig, getFloat } from "./utils"
+import { writePipelineRow } from "../qb-pipeline"
+import { handleFulfillmentCreated } from "./handle-fulfillment-created"
 
 export async function handleSalesReceiptCreated(
     data: any,
@@ -63,6 +66,28 @@ export async function handleSalesReceiptCreated(
         logger.warn(`${LOG_PREFIX} ❌ Missing required qb_list_id for Sales Receipt creation.`)
         return
     }
+
+    // ── Sales Receipt Qualification Guard ────────────────────────────────────
+    // A Sales Receipt is only valid if NO QB Sales Order or Estimate already
+    // exists for this order. If the 1-hour POS cron ran first and created a
+    // Sales Order (or Estimate), we must fall back to a regular Invoice so we
+    // don't create a duplicate/conflicting document in QB Desktop.
+    const existingSoTxnId = getSoTxnId(order.metadata)
+    const existingEstimateTxnId = getEstimateTxnId(order.metadata)
+
+    const hasRealSo = existingSoTxnId && existingSoTxnId !== "SKIPPED_SALES_RECEIPT"
+    const hasRealEstimate = !!existingEstimateTxnId
+
+    if (hasRealSo || hasRealEstimate) {
+        logger.warn(
+            `${LOG_PREFIX} ⚠️ Order already has a QB document ` +
+            `(SO=${existingSoTxnId ?? "none"}, Estimate=${existingEstimateTxnId ?? "none"}). ` +
+            `Cannot create Sales Receipt — falling back to Invoice.`
+        )
+        await handleFulfillmentCreated(data, orderModule, customerModule, _container, logger)
+        return
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     let fulfillmentItems: any[] = data.items && Array.isArray(data.items) ? data.items : []
 
@@ -192,10 +217,38 @@ export async function handleSalesReceiptCreated(
                 metadata: { ...(order.metadata || {}), qb_sync_status: "error" }
             })
         } catch (mErr) {}
+        try {
+            await writePipelineRow({
+                orderId,
+                referenceId:   data.invoice_id || null,
+                referenceType: data.invoice_id ? "pos_invoice" : null,
+                step:   "sales_receipt",
+                status: "failed",
+                error:  result.error,
+            })
+        } catch (pErr: any) {
+            logger.warn(`${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`)
+        }
         return
     }
 
     if (result.txnId || result.operationId) {
+        // Record in pipeline
+        try {
+            await writePipelineRow({
+                orderId,
+                referenceId:   data.invoice_id || null,
+                referenceType: data.invoice_id ? "pos_invoice" : null,
+                step:        "sales_receipt",
+                status:      result.operationId && !result.txnId ? "submitted" : "confirmed",
+                bridgeOpId:  result.operationId || null,
+                qbTxnId:     result.txnId || null,
+                qbRefNumber: result.refNumber || null,
+            })
+        } catch (pErr: any) {
+            logger.warn(`${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`)
+        }
+
         try {
             const fulfillmentId: string | null = (data.fulfillment_id as string | undefined) ?? null
             const invoiceId: string | null = (data.invoice_id as string | undefined) ?? null

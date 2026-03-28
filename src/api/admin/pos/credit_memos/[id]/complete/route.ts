@@ -5,6 +5,7 @@ import { Modules } from "@medusajs/utils"
 import { createCreditMemoInQb } from "../../../../../../lib/quickbooks/client"
 import { ensureCustomerInQb } from "../../../../../../lib/quickbooks/order-flow-core"
 import { FINANCE_MODULE } from "../../../../../../modules/finance"
+import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline"
 
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
     const logger = req.scope.resolve("logger")
@@ -109,8 +110,35 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                     if (cmResult.success && cmResult.data?.operationId) {
                         qbOperationId = cmResult.data.operationId
                         logger.info(`[credit_memos complete] QB Sync queued: ${qbOperationId}`)
+
+                        // Record credit_memo step in pipeline
+                        try {
+                            await writePipelineRow({
+                                referenceId:   id,
+                                referenceType: "credit_memo",
+                                step:          "credit_memo",
+                                status:        "submitted",
+                                bridgeOpId:    qbOperationId,
+                                qbRefNumber:   creditMemo.credit_memo_number ? `CM-${creditMemo.credit_memo_number}` : null,
+                            })
+                        } catch (pErr: any) {
+                            logger.warn(`[credit_memos complete] Could not write pipeline row: ${pErr.message}`)
+                        }
                     } else {
                         logger.error(`[credit_memos complete] QB Sync failed: ${cmResult.error}`)
+
+                        // Record failure in pipeline
+                        try {
+                            await writePipelineRow({
+                                referenceId:   id,
+                                referenceType: "credit_memo",
+                                step:          "credit_memo",
+                                status:        "failed",
+                                error:         cmResult.error || "QB credit memo creation failed",
+                            })
+                        } catch (pErr: any) {
+                            logger.warn(`[credit_memos complete] Could not write pipeline row: ${pErr.message}`)
+                        }
                     }
                 }
             }
@@ -127,31 +155,66 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         })
 
         // -- AR LEDGER SYNC BEGIN --
-        // As requested: generate a new Payment(Credit) in the Finance Ledger to represent the value
+        // Register a Finance Ledger entry based on the chosen refund method:
+        //   store_credit → type:'credit_memo', status:'available'  (credit for future purchases)
+        //   refund       → type:'refund',      status:'applied'    (physical refund done by staff)
+        const { refund_method } = req.body as { refund_method?: string }
+        const isStoreCredit = !refund_method || refund_method === 'store_credit'
+
         if (creditMemo.customer_id) {
             try {
-                // Determine the total value of the credit memo (sum of items + tax if applicable)
-                const cmTotal = creditMemo.total || creditMemo.subtotal || creditMemo.items.reduce((sum: number, i: any) => sum + (i.quantity * i.unit_price), 0)
-                
+                const cmTotal = creditMemo.total || creditMemo.subtotal
+                    || creditMemo.items.reduce((sum: number, i: any) => sum + (i.quantity * i.unit_price), 0)
+
                 const pgConnection = req.scope.resolve("__pg_connection__") as any
-                const seqPgRes = await pgConnection.raw(`SELECT nextval('custom_payment_seq') AS seq`).catch(() => ({ rows: [{ seq: null }] }))
-                const nextPayNum = seqPgRes.rows[0]?.seq || seqPgRes.rows[0]?.SEQ ? Number(seqPgRes.rows[0].seq || seqPgRes.rows[0].SEQ) : null
+                const seqPgRes = await pgConnection.raw(`SELECT nextval('custom_payment_seq') AS seq`)
+                    .catch(() => ({ rows: [{ seq: null }] }))
+                const nextPayNum = seqPgRes.rows[0]?.seq || seqPgRes.rows[0]?.SEQ
+                    ? Number(seqPgRes.rows[0].seq || seqPgRes.rows[0].SEQ)
+                    : null
+
+                const cmRef = creditMemo.credit_memo_number
+                    ? `CM-${creditMemo.credit_memo_number}`
+                    : `CM-${creditMemo.id.slice(-6)}`
 
                 await financeService.createCustomerPayments({
                     customer_id: creditMemo.customer_id,
-                    display_id: nextPayNum,
-                    amount: cmTotal,
-                    method: 'credit_memo',
-                    reference: creditMemo.credit_memo_number ? `CM-${creditMemo.credit_memo_number}` : `CM-${creditMemo.id.slice(-6)}`,
-                    notes: `Store Credit generated from Return/Credit Memo`,
+                    display_id:  nextPayNum,
+                    amount:      cmTotal,
+                    method:      isStoreCredit ? 'credit_memo' : 'refund',
+                    reference:   cmRef,
+                    notes:       isStoreCredit
+                        ? `Store Credit generated from Return/Credit Memo`
+                        : `Refund — to be processed manually by staff`,
                     received_at: new Date(),
-                    created_by: 'system',
-                    source: 'pos',
-                    type: 'credit_memo',
-                    status: 'available', // This credit is now available for the customer to use
-                    medusa_payment_synced: false // Flag to prevent circular syncing if needed
+                    created_by:  'system',
+                    source:      'pos',
+                    type:        isStoreCredit ? 'credit_memo' : 'refund',
+                    status:      isStoreCredit ? 'available' : 'applied',
+                    medusa_payment_synced: false,
                 })
-                logger.info(`[credit_memos complete] Registered $${cmTotal} Store Credit in Finance Ledger for customer ${creditMemo.customer_id}`)
+
+                logger.info(
+                    `[credit_memos complete] Registered $${cmTotal} as '${isStoreCredit ? 'store_credit' : 'refund'}' ` +
+                    `in Finance Ledger for customer ${creditMemo.customer_id}`
+                )
+
+                // If this is a physical cash refund → queue a write_check pipeline row
+                // (the write_check is issued manually by staff in QB, but we track the intent)
+                if (!isStoreCredit) {
+                    try {
+                        await writePipelineRow({
+                            referenceId:   id,
+                            referenceType: "credit_memo",
+                            step:          "write_check",
+                            status:        "pending",
+                            error:         null,
+                        })
+                        logger.info(`[credit_memos complete] Queued write_check pipeline row for cash refund`)
+                    } catch (pErr: any) {
+                        logger.warn(`[credit_memos complete] Could not write write_check pipeline row: ${pErr.message}`)
+                    }
+                }
             } catch (finErr: any) {
                 logger.error(`[credit_memos complete] Failed to create Finance Ledger record: ${finErr.message}`)
             }

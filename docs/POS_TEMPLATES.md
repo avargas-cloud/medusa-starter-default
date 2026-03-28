@@ -1067,6 +1067,67 @@ The `SendEstimateModal.tsx` handles generating and attaching a PDF of the config
 
 ---
 
+## Print Data Injection: Invoice Print Snapshot (Marzo 28, 2026)
+
+### `buildRealSummary()` in `_preview/_buildRealData.ts`
+
+When printing an invoice, the summary totals must reflect the **exact snapshot stored in the database** — not derived from live order calculations, which may have changed since the invoice was created.
+
+```typescript
+export function buildRealSummary(order: any, meta: any = {}): any {
+    // Short-circuit: if print metadata is injected, use it directly
+    if (meta._print_subtotal != null) {
+        return {
+            subtotal:    meta._print_subtotal ?? 0,
+            discount:    meta._print_discount ?? 0,
+            shipping:    meta._print_shipping ?? 0,
+            tax:         meta._print_tax ?? 0,
+            total:       meta._print_total ?? 0,
+            amount_paid: meta._print_amount_paid ?? 0,
+            balance_due: meta._print_balance_due ?? 0,
+        }
+    }
+
+    // Fallback: compute from live order (for estimates/orders, not invoices)
+    return computeTotals(order)
+}
+```
+
+**Key behavior:**
+- If `meta._print_subtotal` is set (non-null), **all other print metadata is trusted** and used directly.
+- This bypasses `computeTotals()`, which recalculates from the live order.
+- Guarantees the printed document matches the invoice snapshot in the database.
+
+### Metadata Injection Pattern
+
+When `openPrintPage()` in the Invoice detail page is called:
+
+```typescript
+// Zustand draftCache stores the snapshot
+setDraftCache(prev => ({
+    ...prev,
+    [`print_invoice_${inv.id}`]: {
+        _print_subtotal: inv.subtotal,        // From DB (cents)
+        _print_discount: inv.discount,        // From DB (cents) — NOT derived
+        _print_shipping: inv.shipping,        // From DB (cents)
+        _print_tax:      inv.tax,             // From DB (cents)
+        _print_total:    inv.total,           // From DB (cents)
+        _print_amount_paid: inv.amount_paid,  // From DB (cents)
+        _print_balance_due: inv.balance_due,  // From DB (cents)
+    }
+}))
+```
+
+The print page retrieves this metadata from `draftCache[`print_invoice_${inv.id}`]` and passes it as `meta` to `buildRealSummary()`.
+
+**Why this approach:**
+1. **No mutations to active document** — draftCache is read-only during print.
+2. **No isDirty flag** — the document isn't marked as modified.
+3. **Database integrity** — totals come directly from postgres, ensuring audit trail accuracy.
+4. **Voided invoices** — still printable (all values $0.00 from DB).
+
+---
+
 ## Building a New Template Renderer from Scratch
 
 ### 1. Load Data
@@ -1148,6 +1209,54 @@ if (block.type === 'text')                                 → render block.prop
 if (block.type === 'divider')                              → render <hr />
 if (block.type === 'spacer')                               → render empty div
 ```
+
+### 8. Summary Row Rendering — Zero Values Display (Marzo 28, 2026)
+
+In the `summary` block (`BlockRenderer.tsx`), when rendering order summary rows (subtotal, discount, shipping, tax, balance, paid), values that are exactly `$0.00` are displayed as an **en-dash (–)** for cleaner visual presentation:
+
+```typescript
+// In renderSummary() of BlockRenderer.tsx
+const displayValue = (field: string, cents: number): string => {
+    if (cents === 0) {
+        // Exception: 'balance' ALWAYS shows $0.00 (important for accounting)
+        if (field === 'balance') return '$0.00'
+        // All other zero fields show en-dash
+        return '–'
+    }
+    return `$${(cents / 100).toFixed(2)}`
+}
+
+// Applied to:
+// - shipping (freight)
+// - tax
+// - discount
+// - order_discount
+// - deposit
+// - paid (amount_paid)
+//
+// NOT applied to:
+// - balance (always shows $0.00 — critical for accounting)
+// - subtotal (never zero if there are items)
+// - total
+```
+
+**Rationale:**
+- Zero-value rows (like "Shipping: $0.00" on a local pickup) clutter the PDF.
+- En-dash (–) provides visual clarity: "this charge doesn't apply."
+- **Exception:** Balance always shows `$0.00` because it's critical for accounting reconciliation. A balance of $0.00 explicitly means "fully paid" or "settled."
+
+**Invoice Printing Note:**
+When printing a **voided invoice**, all monetary values are $0.00 in the database. The summary will render:
+```
+Subtotal: –
+Discount: –
+Shipping: –
+Tax: –
+Balance: $0.00
+Paid: –
+```
+
+This is correct — a voided invoice has no financial value.
 
 ---
 

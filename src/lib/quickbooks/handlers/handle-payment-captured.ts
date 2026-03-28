@@ -2,6 +2,7 @@ import { processPaymentCaptureInQb } from "../order-flow-core"
 import { buildPaymentPatch, getLatestInvoiceTxnId } from "../qb-metadata-types"
 import { applyPaymentToInvoiceInQb } from "../qb-bridge-client"
 import { LOG_PREFIX, isPosOrder } from "./utils"
+import { writePipelineRow } from "../qb-pipeline"
 
 export async function handlePaymentCaptured(
     data: any,
@@ -69,10 +70,34 @@ export async function handlePaymentCaptured(
     }
     if (result.error) {
         logger.error(`${LOG_PREFIX} ❌ processPaymentCaptureInQb error: ${result.error}`)
+        try {
+            await writePipelineRow({
+                orderId,
+                step:   "payment",
+                status: "failed",
+                error:  result.error,
+            })
+        } catch (pErr: any) {
+            logger.warn(`${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`)
+        }
         return
     }
 
     if (result.txnId || result.operationId) {
+        // Record payment in pipeline
+        try {
+            await writePipelineRow({
+                orderId,
+                step:        "payment",
+                status:      result.operationId && !result.txnId ? "submitted" : "confirmed",
+                bridgeOpId:  result.operationId || null,
+                qbTxnId:     result.txnId || null,
+                qbRefNumber: result.refNumber || null,
+            })
+        } catch (pErr: any) {
+            logger.warn(`${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`)
+        }
+
         const latestInvoiceTxnId = getLatestInvoiceTxnId(order.metadata)
         
         if (result.txnId && latestInvoiceTxnId) {

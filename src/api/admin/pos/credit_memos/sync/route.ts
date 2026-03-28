@@ -20,6 +20,42 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             total: Math.round((totals?.total || 0) * 100)
         }
 
+        // ── Invoice-linked validation ─────────────────────────────────────────────────
+        if (payload.invoice_id && items && items.length > 0) {
+            try {
+                const pgConnection = req.scope.resolve("__pg_connection__") as any
+                const invItems = await pgConnection('pos_invoice_item')
+                    .where({ invoice_id: payload.invoice_id })
+                    .select('variant_id', 'sku', 'quantity')
+
+                if (invItems.length > 0) {
+                    for (const item of items) {
+                        const match = invItems.find((ii: any) =>
+                            (item.variantId && ii.variant_id === item.variantId) ||
+                            (item.sku && ii.sku === item.sku)
+                        )
+                        if (!match) {
+                            res.status(400).json({
+                                success: false,
+                                message: `Item "${item.title}" (${item.sku}) was not found on invoice ${payload.invoice_id}`
+                            })
+                            return
+                        }
+                        if (item.quantity > match.quantity) {
+                            res.status(400).json({
+                                success: false,
+                                message: `Return quantity ${item.quantity} exceeds invoiced quantity ${match.quantity} for "${item.title}"`
+                            })
+                            return
+                        }
+                    }
+                }
+            } catch (valErr: any) {
+                logger.warn(`[credit_memos sync] Invoice validation skipped: ${valErr.message}`)
+                // Non-blocking — continue if validation query fails
+            }
+        }
+
         if (action === "create" || id === "new" || !id || id.startsWith('new:')) {
             const pgConnection = req.scope.resolve("__pg_connection__") as any
             const seqRes = await pgConnection.raw(`SELECT nextval('custom_invoice_seq') AS seq`)

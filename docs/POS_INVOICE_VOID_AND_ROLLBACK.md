@@ -22,6 +22,49 @@ Para solucionar esto, desarrollamos el `Surgical Rollback`. Al anular un Invoice
 
 ---
 
+## 1.5 QB Bridge Void Behavior (Marzo 28, 2026)
+
+Cuando una factura POS se anula mediante `POST /admin/invoices/{id}/void`, el backend realiza una operación llamada `TxnVoidRq` (DELETE request) al QB Bridge. Esto es exactamente el comportamiento **nativo de QuickBooks Desktop**.
+
+### Comportamiento Correcto del QB Void
+
+En QuickBooks Desktop, cuando se anula una transacción (Txn):
+1. **Todas las cantidades de items se establecen a 0** (zeroed out).
+2. **El total de la transacción se establece a $0.00**.
+3. **La transacción sigue visible en los reportes** pero se marca como voided.
+4. **Los reportes de ingresos y antigüedad de AR (Accounts Receivable) automáticamente excluyen transacciones voided**.
+
+### Comportamiento POS en PostgreSQL (Marzo 28, 2026)
+
+Cuando el endpoint `POST /admin/invoices/{id}/void` se ejecuta:
+1. **Campos monetarios en `pos_invoice`:** Se establecen a 0
+   - `subtotal = 0`
+   - `discount = 0`
+   - `shipping = 0`
+   - `tax = 0`
+   - `total = 0`
+   - `balance_due = 0`
+   - `amount_paid = 0` (devuelve el dinero al cliente)
+
+2. **Campos de items en `pos_invoice_item`:** Se establecen a 0
+   - `unit_price = 0`
+   - `total = 0` (para cada item)
+
+3. **Status:** Se marca como `status = 'voided'` y se captura `voided_at = NOW()`
+
+4. **Reversión de relaciones:** Los `PaymentApplication` vinculados se marcan con `voided_at` y el dinero se retorna al perfil del cliente.
+
+### Razón Técnica
+
+El QB Bridge implementa `TxnVoidRq` que es la operación nativa de QB Desktop. Esto garantiza que:
+- El POS y QB permanecen sincronizados bit-a-bit.
+- No hay necesidad de lógica custom para "eliminar" o "revertir" en QB.
+- Los reportes automáticamente excluyen voided transactions.
+
+**Conclusión:** Una factura voided con $0.00 es contablemente correcta. Cuando se imprime, muestra todos los valores como $0.00.
+
+---
+
 ## 2. Archivos Clave en el Repositorio
 
 Si necesitas editar, expandir o debuggear el proceso de Void, estos son los archivos absolutos donde ocurre la magia en la aplicación `ecopowertech-workspace`:

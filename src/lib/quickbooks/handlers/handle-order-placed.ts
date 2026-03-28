@@ -2,6 +2,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils"
 import { processOrderInQb, buildQbItems, buildShippingQbItem, buildQbOrderDiscountLines } from "../order-flow-core"
 import { buildSaleOrderPatch, getEstimateTxnId, getSoTxnId, getSoOperationId } from "../qb-metadata-types"
 import { LOG_PREFIX, getQbConfig, isPosOrder, processingOrders } from "./utils"
+import { writePipelineRow } from "../qb-pipeline"
 
 export async function handleOrderPlaced(
     data: any,
@@ -186,6 +187,20 @@ export async function handleOrderPlaced(
             } catch (metaErr: any) {
                 logger.error(`${LOG_PREFIX} ⚠️ Failed to save order metadata: ${metaErr.message}`)
             }
+
+            // Record in pipeline
+            try {
+                await writePipelineRow({
+                    orderId,
+                    step:         "sales_order",
+                    status:       result.operationId && !result.soTxnId ? "submitted" : "confirmed",
+                    bridgeOpId:   result.operationId || null,
+                    qbTxnId:      result.soTxnId || null,
+                    qbRefNumber:  result.soRefNumber || null,
+                })
+            } catch (pErr: any) {
+                logger.warn(`${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`)
+            }
         } else {
             logger.warn(`${LOG_PREFIX} ⚠️ No soTxnId or operationId returned — QB document may not have been created`)
             try {
@@ -193,6 +208,18 @@ export async function handleOrderPlaced(
                     metadata: { ...(order.metadata || {}), qb_sync_status: "error" }
                 })
             } catch (mErr) {}
+
+            // Record failure in pipeline
+            try {
+                await writePipelineRow({
+                    orderId,
+                    step:   "sales_order",
+                    status: "failed",
+                    error:  result.error || "No txnId or operationId returned from bridge",
+                })
+            } catch (pErr: any) {
+                logger.warn(`${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`)
+            }
         }
 
     } finally {

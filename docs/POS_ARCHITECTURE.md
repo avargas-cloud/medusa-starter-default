@@ -33,6 +33,7 @@ pos.ecopowertech.com (Next.js 15)
 | 📊 Dashboard | `/dashboard` | [POS_DASHBOARD.md](./POS_DASHBOARD.md) |
 | 🧾 Estimates | `/estimates`, `/estimates/[id]` | [POS_ESTIMATES.md](./POS_ESTIMATES.md) |
 | 📦 Orders | `/orders`, `/orders/[id]` | [POS_ORDERS.md](./POS_ORDERS.md) |
+| 🧾 Invoices | `/invoices`, `/invoices/[id]` | [POS_INVOICES.md](./POS_INVOICES.md) |
 | 💳 Capture Payment | `/capture-payment` | [POS_CAPTURE_PAYMENT.md](./POS_CAPTURE_PAYMENT.md) |
 | 👤 Customers | `/customers`, `/customers/[id]` | [POS_CUSTOMERS.md](./POS_CUSTOMERS.md) |
 | 📋 Inventory | `/inventory` | [POS_INVENTORY.md](./POS_INVENTORY.md) |
@@ -130,6 +131,41 @@ ecopowertech-store-pos/
 ├── lib/medusa.ts                        ← medusaFetch (Bearer JWT)
 └── middleware.ts                        ← PUBLIC_PATHS guard
 ```
+
+---
+
+## Draft Cache (draftCache) — Safe Print Snapshots (Marzo 28, 2026)
+
+The POS uses a Zustand store `posStore.draftCache` to temporarily hold print metadata without modifying the active document:
+
+```typescript
+// In posStore (Zustand):
+interface DraftCache {
+    [key: string]: Record<string, any>
+}
+
+// Usage:
+setDraftCache(prev => ({
+    ...prev,
+    [`print_invoice_${invoice.id}`]: {
+        _print_subtotal: invoice.subtotal,
+        _print_discount: invoice.discount,
+        _print_shipping: invoice.shipping,
+        _print_tax:      invoice.tax,
+        _print_total:    invoice.total,
+        _print_amount_paid: invoice.amount_paid,
+        _print_balance_due: invoice.balance_due,
+    }
+}))
+```
+
+**Design Goals:**
+- **No mutations:** Active document is never modified.
+- **No isDirty flag:** Printing doesn't mark document as edited.
+- **Snapshot fidelity:** Print totals come directly from the database.
+- **Temporary storage:** Cleared after print navigation.
+
+**File:** `ecopowertech-store-pos/lib/pos-store.ts` (Zustand store definition)
 
 ---
 

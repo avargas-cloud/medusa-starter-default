@@ -4,6 +4,7 @@ import { processInvoiceInQb, buildQbItems, buildShippingQbItem, buildQbOrderDisc
 import { buildInvoicePatch, getEstimateTxnId, getSoTxnId, getLatestPaymentTxnId } from "../qb-metadata-types"
 import { LOG_PREFIX, getQbConfig, getFloat } from "./utils"
 import { handleOrderPlaced } from "./handle-order-placed"
+import { writePipelineRow } from "../qb-pipeline"
 
 export async function handleFulfillmentCreated(
     data: any,
@@ -287,10 +288,38 @@ export async function handleFulfillmentCreated(
                 metadata: { ...(order.metadata || {}), qb_sync_status: "error" }
             })
         } catch (mErr) {}
+        try {
+            await writePipelineRow({
+                orderId,
+                referenceId:   data.invoice_id || data.fulfillment_id || null,
+                referenceType: data.invoice_id ? "pos_invoice" : "fulfillment",
+                step:   "invoice",
+                status: "failed",
+                error:  result.error,
+            })
+        } catch (pErr: any) {
+            logger.warn(`${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`)
+        }
         return
     }
 
     if (result.txnId || result.operationId) {
+        // Record in pipeline
+        try {
+            await writePipelineRow({
+                orderId,
+                referenceId:   data.invoice_id || data.fulfillment_id || null,
+                referenceType: data.invoice_id ? "pos_invoice" : "fulfillment",
+                step:          "invoice",
+                status:        result.operationId && !result.txnId ? "submitted" : "confirmed",
+                bridgeOpId:    result.operationId || null,
+                qbTxnId:       result.txnId || null,
+                qbRefNumber:   result.refNumber || null,
+            })
+        } catch (pErr: any) {
+            logger.warn(`${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`)
+        }
+
         try {
             const fulfillmentId: string | null = (data.fulfillment_id as string | undefined) ?? null
             const invoiceId: string | null = (data.invoice_id as string | undefined) ?? null

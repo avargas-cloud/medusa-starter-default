@@ -54,11 +54,15 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
         let processedOrders = 0
         for (const row of orderRows) {
             const meta = row.metadata || {}
-            const soTxnId = getSoTxnId(meta)
-            const invTxnId = getLatestInvoiceTxnId(meta)
+            const soTxnId    = getSoTxnId(meta)
+            const invTxnId   = getLatestInvoiceTxnId(meta)
+            // A submitted-but-not-yet-confirmed Sales Receipt sets qb_invoice_operation_id
+            // before the consolidator confirms it. Skip those too so we don't create a
+            // duplicate Sales Order while the SR is still in-flight.
+            const hasPendingInvoiceOp = !!(meta.qb_invoice_operation_id || meta.qb_sales_receipt_operation_id)
 
-            // Needs a Sales Order if it has no SO and no Invoice
-            if (!soTxnId && !invTxnId) {
+            // Needs a Sales Order only if: no SO, no Invoice, AND no in-flight operation
+            if (!soTxnId && !invTxnId && !hasPendingInvoiceOp) {
                 logger.info(`${LOG_PREFIX} Processing delayed Sales Order for order: ${row.id}`)
                 await handleOrderPlaced(
                     { id: row.id }, // mock event payload

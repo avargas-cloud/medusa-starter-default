@@ -26,6 +26,7 @@ import {
     buildQbOrderDiscountLines,
     processEstimateInQb,
 } from "../lib/quickbooks/order-flow-core"
+import { writePipelineRow } from "../lib/quickbooks/qb-pipeline"
 
 const LOG_PREFIX = "[QB-DRAFT]"
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
@@ -171,6 +172,16 @@ export async function handleDraftOrderCreated(data: any, container: any, logger:
 
     if (result.error) {
         logger.error(`${LOG_PREFIX} ❌ processEstimateInQb error: ${result.error}`)
+        try {
+            await writePipelineRow({
+                orderId: draftOrderId,
+                step:    "estimate",
+                status:  "failed",
+                error:   result.error,
+            })
+        } catch (pErr: any) {
+            logger.warn(`${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`)
+        }
         return
     }
 
@@ -183,6 +194,20 @@ export async function handleDraftOrderCreated(data: any, container: any, logger:
 
     // Save estimate metadata to draft order
     if (result.txnId || result.operationId) {
+        // Record in pipeline
+        try {
+            await writePipelineRow({
+                orderId:     draftOrderId,
+                step:        "estimate",
+                status:      result.operationId && !result.txnId ? "submitted" : "confirmed",
+                bridgeOpId:  result.operationId || null,
+                qbTxnId:     result.txnId || null,
+                qbRefNumber: result.refNumber || null,
+            })
+        } catch (pErr: any) {
+            logger.warn(`${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`)
+        }
+
         try {
             const orderModule = container.resolve(Modules.ORDER)
             const currentMetadata = draftOrder.metadata || {}

@@ -32,6 +32,33 @@ Dado que Medusa v2 no posee una entidad nativa "Invoice" B2B compleja por defect
 - **Snapshot de Seguridad:** A diferencia de las Órdenes donde cambiar el Address actualiza toda la orden, el `PosInvoice` toma un snapshot inmutable del `shipping_address`, `items`, y `subtotals` en el momento preciso de la creación. Esto garantiza la integridad contable sin importar si la orden original sufre mutaciones de metadatos más adelante.
 - **Pagos y Tracking Links:** Incorpora relaciones nativas 1:N hacia `InvoicePayment` (registrando abonos parciales, fechas y métodos) y `InvoiceTracking` (URL y Guías de envío por Courier).
 
+### PosInvoice TypeScript Interface (Marzo 28, 2026)
+
+El interface `PosInvoice` en `ecopowertech-store-pos/lib/invoices.ts` ahora incluye el campo `discount`:
+
+```typescript
+export interface PosInvoice {
+    id:           string
+    order_id:     string
+    invoice_number: string
+    fulfillment_id?: string
+    status:       InvoiceStatus          // draft | issued | partial | paid | voided
+    subtotal:     number                 // cents
+    discount:     number                 // cents — NEW (Marzo 28, 2026)
+    shipping:     number                 // cents
+    tax:          number                 // cents
+    total:        number                 // cents
+    amount_paid:  number                 // cents
+    balance_due:  number                 // cents
+    payment_method?: string               // 'cash' | 'check' | 'card' | 'ach' | 'credit' | 'mixed'
+    issued_at?:   string | null
+    voided_at?:   string | null
+    // ... other fields
+}
+```
+
+**Razón del cambio:** El campo `discount` siempre estuvo presente en las respuestas del backend, pero no estaba documentado en el interface TypeScript del frontend. Esto causaba que el código de print intente derivar el descuento manualmente desde `subtotal - total`, lo cual es propenso a errores de redondeo. Ahora se lee directamente desde `inv.discount` guardado en la DB (en centavos).
+
 ---
 
 ## 3. UI Layout & Shared Context (Read-Only)
@@ -45,6 +72,75 @@ A pesar de ser una página de facturas, la aplicación **reutiliza el mismo `use
 3. **Restricción de Acciones:** A nivel de interfaz, el Toolbar desactiva las capacidades de edición de productos por contexto. Los items no pueden alterarse.
 4. **Guardado de Metadatos:** El único evento de guardado permitido en la vista de Invoices es el parcheo (`PATCH`) de los metadatos de la orden padre (ej. Notas internas, Terms, Lead Time, P.O).
 5. **Retro-Compatibilidad Agnóstica:** Debido a variables evolutivas, el inicializador global (`useOrderData.ts`) intentará buscar claves agnósticas (como `lead_time`) y si no existen, consumirá automáticamente cualquier metadato arrastrado bajo el prefijo legacy `estimate_lead_time`. Esto consolida Invoices históricas sin scripts de migración.
+
+### Read-Only Enforcement (Marzo 28, 2026)
+
+**Cambio de Arquitectura:** La página de factura es completamente de lectura. Las secciones `ShippingSection`, `PromotionsSection`, y `NoteArea` son **siempre de solo lectura**:
+- **ShippingSection**: La propiedad `onOpenModal` se pasa como `undefined`, deshabilitando cualquier diálogo modal de edición de envío.
+- **PromotionsSection** y **NoteArea**: Se aplica `pointer-events-none opacity-60` en su contenedor, deshabilita visualmente cualquier interacción.
+- **NoteArea component**: Se fuerza `isReadOnly={true}` para bloquear ediciones de notas.
+
+**Justificación:** Un Invoice es un snapshot inmutable de una factura emitida. No debe permitirse cambios en envío, promociones o notas después de su creación. El único cambio permitido es el metadata de la orden padre vía `PATCH`.
+
+### Expanded Items Modal (Marzo 28, 2026)
+
+El componente `InvoiceItemsExpandedModal.tsx` proporciona una vista full-screen (92vw × 90vh) de los items facturados en un portal modal:
+- **Encabezado:** Muestra "Read-only — exact invoice snapshot" para reforzar la inmutabilidad.
+- **Contenido:** Renderiza `LineItemsTable` con `itemsOverride` apuntando a los items exactos de la factura capturada.
+- **Pie de página:** Muestra los totales de factura (subtotal, discount, shipping, tax, balance_due) inyectados desde el snapshot de la factura en la base de datos.
+
+Este componente no permite ediciones. Solo visualiza el state de la factura en el momento exacto de su emisión.
+
+---
+
+## 3.5 Safe Invoice Print Snapshot (draftCache Approach — Marzo 28, 2026)
+
+Cuando el usuario abre una factura y hace clic en "Print", el frontend debe generar un PDF que refleje exactamente el estado de la factura en la base de datos — **sin modificar** el documento activo ni marcar `isDirty`.
+
+### Flujo de `openPrintPage()`
+
+```typescript
+// ecopowertech-store-pos/app/(pos)/invoices/[id]/page.tsx
+async function openPrintPage() {
+    // 1. Construir un snapshot completo de la factura (inv es PosInvoice de la DB)
+    const invoiceMeta = {
+        _print_subtotal: inv.subtotal,        // Injected from DB
+        _print_discount: inv.discount,        // Read directly from DB (NOT derived)
+        _print_shipping: inv.shipping,        // Injected from DB
+        _print_tax: inv.tax,                  // Injected from DB
+        _print_total: inv.total,              // Injected from DB
+        _print_amount_paid: inv.amount_paid,  // Injected from DB
+        _print_balance_due: inv.balance_due,  // Injected from DB
+    }
+
+    // 2. Inyectar el snapshot en draftCache (Zustand store)
+    // NO toca el documento activo; NO cambia isDirty
+    setDraftCache(prev => ({
+        ...prev,
+        [`print_invoice_${inv.id}`]: invoiceMeta
+    }))
+
+    // 3. Navegar a la página de print con la plantilla
+    router.push(`/print/[templateId]?inv=${inv.id}`)
+}
+```
+
+### Razón del Enfoque `draftCache`
+
+**Antes (problema):** El endpoint de print intenta recalcular los totales dinámicamente desde el orden vivo, lo cual puede producir valores que no coinciden con el snapshot guardado en postgres si la orden ha sido modificada desde la facturación.
+
+**Ahora (solución):** Los totales se **inyectan directamente desde la base de datos** vía metadatos, garantizando que:
+1. El PDF impreso refleja el estado contable exacto guardado en postgres.
+2. No se modifica el documento activo en `posStore`.
+3. `isDirty` permanece sin cambios (no activa "Save pending").
+4. Se evitan recalculos dinámicos que pueden producir discrepancias de centavos.
+
+### Handling de Invoices Voided
+
+Las facturas anuladas (`status === 'voided'`) **sí pueden imprimirse**:
+- Todos sus valores en la DB se establecen a $0.00 (subtotal, discount, shipping, tax, total, balance_due).
+- El PDF impreso mostrará todos estos valores como $0.00.
+- Esto es correcto desde el punto de vista contable: un Invoice voided es un documento nulo sin valor.
 
 ---
 
@@ -199,6 +295,34 @@ onSuccess={(invoice) => {
     order.router.push(`/invoices/${invoice.order_id}`)
 }}
 ```
+
+---
+
+## Changelog — Marzo 28, 2026
+
+### Fix: invoicedQuantity Staleness After Invoice Creation
+
+**Problema:** Cuando se creaba un nuevo invoice desde `CompleteOrderModal`, la propiedad `invoicedQuantity` en la tabla de items se quedaba en 0 para todos los items a pesar de que la factura se hubiera creado correctamente. La página seguía mostrando "Available: X" en lugar de actualizar a "Invoiced: X" después de crear la factura.
+
+**Causa:** En `useOrderData.ts`, el hook de hidratación que calcula `invoicedQuantity` no incluía `invoicesData` en su dependency array. Cuando los datos de facturas llegaban del servidor, el effect no se re-ejecutaba, dejando los cálculos estancados.
+
+**Solución:** Se agregó `invoicesData` al array de dependencias del useEffect:
+```typescript
+// ecopowertech-store-pos/app/(pos)/orders/[id]/hooks/useOrderData.ts
+useEffect(() => {
+    // ... hydration logic that computes invoicedQuantity ...
+}, [order?.id, invoicesData])  // ← Added invoicesData
+```
+
+**Resultado:** Después de crear un invoice, la tabla de items se actualiza automáticamente mostrando las cantidades facturadas correctas.
+
+### ShippingSection Prop Made Optional
+
+**Cambio:** La propiedad `onOpenModal` del componente `ShippingSection` cambió de requerida a opcional (`onOpenModal?: () => void`).
+
+**Razón:** En la página de invoices (read-only), no hay modal de edición de envío. Pasar `onOpenModal={undefined}` ahora es válido en lugar de requerir una función dummy.
+
+**Ubicación:** `ecopowertech-store-pos/components/pos/ShippingSection.tsx`
 
 ---
 

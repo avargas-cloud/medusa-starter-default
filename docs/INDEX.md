@@ -133,6 +133,9 @@
 | [QUICKBOOKS_BRIDGE_NODE_V12_COMPATIBILITY.md](QUICKBOOKS_BRIDGE_NODE_V12_COMPATIBILITY.md) | Node.js v12 compatibility fixes for Windows Server 2008 |
 | [QUICKBOOKS_CUSTOMER_IMPORT.md](QUICKBOOKS_CUSTOMER_IMPORT.md) | Customer import: field mapping, deduplication, verification |
 | [QB_SUBSCRIBERS_REFERENCE.md](QB_SUBSCRIBERS_REFERENCE.md) | Reference for all QB event subscribers — handlers, idempotency, metadata keys |
+| [QB_PIPELINE_ARCHITECTURE.md](QB_PIPELINE_ARCHITECTURE.md) | **Pipeline tracking system** — `qb_order_pipeline` table, consolidator cron, EditSequence cache, SR guard |
+| [QB_DOCUMENT_FLOW_REDESIGN.md](QB_DOCUMENT_FLOW_REDESIGN.md) | Decision tree: which QB document gets created for each order type (Web/POS/Estimate) |
+| [POS_ASYNC_QB_SYNC_ARCHITECTURE.md](POS_ASYNC_QB_SYNC_ARCHITECTURE.md) | POS async sync — 1-hour delay, cron jobs, race condition guard |
 | [DRAFT_ORDER_ADVANCED_UI.md](DRAFT_ORDER_ADVANCED_UI.md) | **Complete guide** to the Advanced Draft Orders page + QB Estimate lifecycle |
 | [SALES_ORDERS_UI.md](SALES_ORDERS_UI.md) | Admin UI for confirmed Sales Orders: filters, QB ref column, Show Cancelled |
 | [POS_INVOICE.md](POS_INVOICE.md) | Admin UI for Invoices: fulfilled orders with QB Invoice tracking |

@@ -6,8 +6,8 @@
 | Campo | Detalle |
 |-------|---------|
 | **Ubicación** | `backend/src/subscribers/` |
-| **Última revisión** | 2026-03-17 |
-| **Relacionado con** | `DRAFT_ORDER_ADVANCED_UI.md` (sección 14), `QB_BRIDGE_CLIENT.md` |
+| **Última revisión** | 2026-03-28 |
+| **Relacionado con** | `DRAFT_ORDER_ADVANCED_UI.md` (sección 14), `QB_BRIDGE_CLIENT.md`, `QB_DOCUMENT_FLOW_REDESIGN.md` |
 
 ---
 
@@ -191,6 +191,33 @@ unit_price: Math.round((item.item?.unit_price ?? item.unit_price ?? 0) * 100)
 **Metadata que lee:** `qb_sales_order_txn_id`, `qb_payment_txn_id`, `qb_list_id`
 **Metadata que escribe:** `qb_invoice_txn_id`, `qb_invoice_ref`
 
+### Sales Receipt Qualification Guard
+
+**Contexto:** Cuando se crea un `pos.sales_receipt` (venta completa con pago inmediato), el handler intenta crear un QB Sales Receipt. Pero si el cron ya creó un Sales Order o Estimate para la misma orden, el Sales Receipt será redundante.
+
+**Guard Logic en `handle-sales-receipt-created.ts`:**
+```typescript
+// Antes de crear Sales Receipt, verificar si ya existe SO o Estimate
+const soTxnId = getSoTxnId(order.metadata)  // Lee nested + flat shape
+const estimateTxnId = getEstimateTxnId(order.metadata)
+
+if (soTxnId || estimateTxnId) {
+    // Ya existe documento QB anterior → recurrir a Invoice en lugar de Sales Receipt
+    await handleFulfillmentCreated(order)
+    return
+}
+
+// No hay SO ni Estimate → proceder a crear Sales Receipt
+await processSalesReceiptInQb(...)
+```
+
+**Propósito:** Evitar duplicados de QB documents cuando el cron de 1 hora ya procesó el SO/Estimate.
+
+**Caso específico:** Cuando un cliente POS hace una compra con pago inmediato, pero el cron corre justo antes:
+1. Cron crea Sales Order (porque orden tiene 45 minutos)
+2. Fulfillment se dispara → intenta crear Sales Receipt
+3. Guard detect SO existente → crea Invoice en su lugar (correcto, no duplica SO)
+
 ---
 
 ### Handler: `handleOrderCanceled`
@@ -238,7 +265,13 @@ unit_price: Math.round((item.item?.unit_price ?? item.unit_price ?? 0) * 100)
 
 Crea un QB Estimate automáticamente cuando se crea un Draft Order en el Admin.
 
-> **Nota:** Este subscriber maneja `draft_order.created` (el evento nativo de Medusa para draft orders). Es diferente de `order.updated` en `qb-metadata-init-subscriber.ts`.
+> **CRÍTICO:** El evento `draft_order.created` **NUNCA dispara en Medusa v2**. Este subscriber está efectivamente en código muerto.
+>
+> La función `handleDraftOrderCreated` existe y funciona correctamente, pero se invoca **exclusivamente** por:
+> 1. El cron `qb-pos-sync.ts` (cada 30 minutos, para órdenes POS con `is_draft_order=true` y sin `qb_estimate_txn_id`)
+> 2. El endpoint manual de sincronización (`POST /admin/pos/sync`)
+>
+> El subscriber config registra el evento nativo, pero la configuración de Medusa v2 no lo emite. Esto es diferente de `order.updated` en `qb-metadata-init-subscriber.ts`.
 
 ### Evento que maneja
 
@@ -321,6 +354,108 @@ export const config: SubscriberConfig = {
 
 ---
 
+## 4. Pipeline Table Integration — `qb_order_pipeline`
+
+**Desde Marzo 2026:** Todos los handlers QB escriben a la tabla `qb_order_pipeline` inmediatamente después de enviar una operación al bridge.
+
+### Tabla `qb_order_pipeline`
+
+```sql
+CREATE TABLE qb_order_pipeline (
+    id UUID PRIMARY KEY,
+    order_id UUID NOT NULL,
+    reference_id TEXT,              -- invoice_id, fulfillment_id, sales_receipt_id, etc.
+    reference_type VARCHAR,         -- 'invoice', 'fulfillment', 'sales_receipt', 'credit_memo'
+    step VARCHAR NOT NULL,          -- 'estimate', 'sales_order', 'invoice', 'sales_receipt', 'payment', 'credit_memo', 'write_check'
+    status VARCHAR NOT NULL,        -- 'pending', 'submitted', 'confirmed', 'failed', 'skipped'
+    depends_on UUID,                -- reference a otra fila (ej: invoice_pending si SO no existe)
+    bridge_op_id TEXT,              -- operationId del bridge
+    retry_count INT DEFAULT 0,
+    qb_txn_id TEXT,                -- TxnID confirmado por QB/QBWC
+    qb_ref_number TEXT,            -- Ref # confirmado (ej "6175")
+    qb_result JSONB,               -- Full QB response
+    payload JSONB,                 -- Original request payload
+    error TEXT,                    -- Error message si falló
+    submitted_at TIMESTAMP,        -- Cuando se envió al bridge
+    confirmed_at TIMESTAMP,        -- Cuando QBWC confirmó
+    failed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_qb_order_pipeline_order_id ON qb_order_pipeline(order_id);
+CREATE INDEX idx_qb_order_pipeline_status ON qb_order_pipeline(status);
+CREATE INDEX idx_qb_order_pipeline_bridge_op_id ON qb_order_pipeline(bridge_op_id);
+```
+
+### Flujo de Escritura
+
+Cada handler escribe una fila cuando envía a bridge:
+
+```typescript
+// Ejemplo: handleOrderPlaced → Sales Order
+await writePipelineRow({
+    orderId: order.id,
+    referenceName: order.id,
+    referenceType: 'order',
+    step: 'sales_order',
+    status: 'submitted',
+    bridgeOpId: response.operationId,
+    payload: qbItem,
+    submittedAt: new Date(),
+})
+```
+
+**Estados posibles:**
+- `pending` — No se ha enviado a bridge (futuro)
+- `submitted` — Enviado al bridge, esperando QBWC
+- `confirmed` — QBWC procesó exitosamente (qb_txn_id populated)
+- `failed` — QBWC encontró un error
+- `skipped` — No se ejecutó (ej: no hay items QB-linked)
+
+### Consolidador de Pipeline (`qb-pipeline-consolidator`)
+
+**Cron:** Cada 2 minutos (`*/2 * * * *`)
+
+**Lógica:**
+```typescript
+1. SELECT * FROM qb_order_pipeline WHERE status='submitted' AND bridge_op_id IS NOT NULL LIMIT 50
+2. Para cada fila:
+    a. GET /api/sync/status/{operationId} en el bridge
+    b. Si completada:
+        - confirmPipelineRow(rowId, txnId, refNumber, result)
+        - cacheEditSequence(step, qbId, editSeq)
+    c. Si falló:
+        - failPipelineRow(rowId, errorMessage)
+3. Log cada cambio a Activity Log
+```
+
+**Tabla de Cache — `qb_edit_sequence_cache`:**
+
+```sql
+CREATE TABLE qb_edit_sequence_cache (
+    entity_type VARCHAR NOT NULL,   -- 'estimate', 'sales_order', 'invoice', 'payment'
+    qb_id TEXT NOT NULL,            -- TxnID de QB
+    edit_seq TEXT NOT NULL,         -- EditSequence de QB
+    cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(entity_type, qb_id)
+);
+```
+
+**Propósito:** Cuando se necesita hacer una operación posterior (ej: modificar un SO existente, cerrar un SO), primero se fetch el EditSequence actual del cache. Si no está en cache, se hace un GET al bridge.
+
+### Uso en Handlers Actualizados
+
+**Handlers que escriben pipeline (desde Marzo 2026):**
+- `handle-order-placed.ts` → `sales_order` step
+- `handle-fulfillment-created.ts` → `invoice` step
+- `handle-sales-receipt-created.ts` → `sales_receipt` step
+- `handle-payment-captured.ts` → `payment` step
+- `qb-draft-order-subscriber.ts` / `handleDraftOrderCreated` → `estimate` step
+- `credit_memos/[id]/complete/route.ts` → `credit_memo` step, y para reembolsos en cash también `write_check` con status `pending`
+
+---
+
 ## Event Delivery — `emit-order-events.ts`
 
 **Archivo:** `backend/src/workflows/hooks/emit-order-events.ts`
@@ -348,7 +483,13 @@ cancelHooks.orderCanceled(
 
 ## Todos los Metadata Keys — Referencia Completa
 
+> **Forma Antigua (Flat):** Órdenes antes de Marzo 2026 tienen claves planas (`qb_so_txn_id`, `qb_estimate_txn_id`, etc.).
+> **Forma Nueva (Nested):** Nuevas órdenes usan forma anidada (`qb_sales_order: {...}`, `qb_estimate: {...}`, etc.).
+> **Lectores Helper:** Funciones en `src/lib/quickbooks/qb-metadata-types.ts` leen ambas formas automáticamente.
+
 ### En order metadata
+
+#### Forma Antigua (Flat — Backward Compat)
 
 | Key | Quién lo escribe | Descripción |
 |-----|------------------|-------------|
@@ -356,22 +497,57 @@ cancelHooks.orderCanceled(
 | `qb_sales_order_operation_id` | `handleOrderPlaced` | Bridge operationId — QBWC pending |
 | `qb_sales_order_txn_id` | QBWC callback → `handleOrderPlaced` | QB Sales Order TxnID (confirmado) |
 | `qb_sales_order_ref` | QBWC callback → `handleOrderPlaced` | QB Sales Order Ref # (e.g. "6175") |
+| `qb_estimate_txn_id` | cron / subscriber | QB Estimate TxnID |
+| `qb_estimate_ref` | cron / subscriber | QB Estimate Ref # |
 | `qb_payment_txn_id` | `handlePaymentCaptured` | QB Payment TxnID |
 | `qb_payment_ref` | `handlePaymentCaptured` | QB Payment Ref # |
 | `qb_invoice_txn_id` | `handleFulfillmentCreated` | QB Invoice TxnID |
 | `qb_invoice_ref` | `handleFulfillmentCreated` | QB Invoice Ref # |
 | `qb_synced_at` | Varios | ISO timestamp del último sync |
 
+#### Forma Nueva (Nested — 2026+)
+
+| Key | Estructura | Descripción |
+|-----|-----------|-------------|
+| `qb_sales_order` | `{ txn_id, ref_number, operation_id, synced_at }` | Sales Order completo |
+| `qb_estimate` | `{ txn_id, ref_number, operation_id, synced_at }` | Estimate completo |
+| `qb_invoices` | `[{ txn_id, ref_number, operation_id, synced_at }]` | Array de invoices |
+| `qb_payments` | `[{ txn_id, ref_number, operation_id, synced_at }]` | Array de payments |
+| `qb_list_id` | string | QB Customer ListID (sigue siendo plano) |
+
+**Lectores Helper (leen ambas formas):**
+```typescript
+getSoTxnId(metadata)           // → txn_id o null
+getEstimateTxnId(metadata)     // → txn_id o null
+getLatestInvoiceTxnId(metadata) // → último txn_id de array o null
+getLatestPaymentTxnId(metadata) // → último txn_id de array o null
+```
+
+**Constructores de Patch (escriben forma anidada):**
+```typescript
+buildSaleOrderPatch(txnId, refNumber, operationId)
+buildEstimatePatch(txnId, refNumber, operationId)
+buildInvoicePatch(txnId, refNumber, operationId)
+buildPaymentPatch(txnId, refNumber, operationId)
+```
+
 ### En draft order metadata
 
 | Key | Quién lo escribe | Descripción |
 |-----|------------------|-------------|
-| `qb_estimate_ref` | `qb-draft-order-subscriber` o manual | QB Estimate Ref # |
-| `qb_estimate_txn_id` | `qb-draft-order-subscriber` o manual | QB Estimate TxnID |
+| `qb_estimate_ref` | `qb-draft-order-subscriber` o cron | QB Estimate Ref # |
+| `qb_estimate_txn_id` | `qb-draft-order-subscriber` o cron | QB Estimate TxnID |
 | `qb_estimate_operation_id` | `qb-draft-order-subscriber` | Bridge operationId (QBWC pending) |
 | `qb_estimate_status` | `qb-draft-order-subscriber` | "Created", "Sent", etc. |
 | `qb_list_id` | `qb-draft-order-subscriber` | QB Customer ListID |
 | `qb_synced_at` | `qb-draft-order-subscriber` | ISO timestamp |
+
+### Sentinelas Especiales
+
+| Key | Valor | Significado |
+|-----|-------|-------------|
+| `qb_so_txn_id` | `"SKIPPED_SALES_RECEIPT"` | Sales Receipt fue creada directamente, no crear SO en el cron |
+| `is_draft_order` | `false` | Draft fue convertido (via `convert-force`), cron no debe crear Estimate |
 
 ---
 
@@ -472,17 +648,20 @@ Ver detalles completos en `DRAFT_ORDER_ADVANCED_UI.md` → sección 14 → "Nigh
 
 ## Known Issues & Fixes
 
-| Issue | Root Cause | Fix |
-|-------|-----------|-----|
-| Cancel no dispara → SO queda abierto | `emit-order-events.ts` usaba `{ order_id }` pero el hook recibe `{ order }` | Ahora usa `order?.id` |
-| Duplicate Sales Orders | `convert-force` llamaba `/admin/quickbooks/order` explícitamente Y el subscriber también disparaba | Removidas todas las llamadas explícitas — subscriber es el único trigger |
-| Web order price ×100 en QB | Subscriber usaba `items.unit_price` (cents de order_item) y multiplicaba ×100 | Ahora usa `items.item.unit_price` de order_line_item |
-| Cancel Activity Log sin QB Ref # | `QbSyncLogger.complete()` no recibía `qbRefNumber` | Ahora lee `qb_sales_order_ref` / `qb_invoice_ref` y lo pasa |
-| `completed` en log pero SO abierto en QB | Optimistic complete: log marca completed cuando el close se *encola*, no cuando QBWC lo ejecuta | Nightly verify job confirma el estado real |
-| Subscriber no recibe eventos en dev | Redis event bus es asíncrono/unreliable en dev | `emit-order-events.ts` re-emite sincrónicamente desde workflow hooks |
-| QB Error 3175 (locked transaction) | QB Desktop tiene el documento abierto | Cerrar en QB Desktop, luego re-sync |
-| **Discount/Subtotal faltaban en SO** | Lógica antigua solo aplicaba descuento en órdenes con promo de tipo "order-level" | Ahora TODOS los descuentos (cualquier tipo) generan líneas Subtotal + Discount |
-| **QB Error 3060 en Subtotal/Discount líneas** | Se enviaba `<Quantity>1</Quantity>` que QB rechaza para estos item types | `buildQbOrderDiscountLines` ahora omite quantity completamente |
-| **QB Error 3170 — Amount must be positive** | Manual resync route: unit_price del Admin API (dólares) no se multiplicaba ×100 → price=0.2225 → Amount=0.89, discount ($4.45) > total → negativo | Route ahora multiplica unit_price ×100 igual que el subscriber |
-| **Discount Amount vacío en QB** | Manual route pasaba discount_total en dólares (4.45) directo a `buildQbOrderDiscountLines` que esperaba cents → dividía 4.45/100=0.044 | Route ahora multiplica ×100 antes de llamar la función |
-| **Shipping incluido en descuento** | Shipping se agregaba antes des las líneas Subtotal+Discount → QB lo sumaba en el Subtotal | Shipping ahora siempre va como ÚLTIMA línea (después de Subtotal y Discount) |
+| Issue | Root Cause | Fix | Status |
+|-------|-----------|-----|--------|
+| `draft_order.created` never fires | Medusa v2 no emite el evento nativo | `handleDraftOrderCreated` se invoca via cron + endpoint manual | ✅ Documented |
+| POS Sales Receipt duplica SO | Cron crea SO mientras SR aún se procesa (in-flight SR) | Check `hasPendingInvoiceOp()` en cron antes de SO | ✅ Fixed Mar 2026 |
+| Cancel no dispara → SO queda abierto | `emit-order-events.ts` usaba `{ order_id }` pero el hook recibe `{ order }` | Ahora usa `order?.id` | ✅ Fixed |
+| Duplicate Sales Orders | `convert-force` llamaba `/admin/quickbooks/order` explícitamente Y el subscriber también disparaba | Removidas todas las llamadas explícitas — subscriber es el único trigger | ✅ Fixed |
+| Web order price ×100 en QB | Subscriber usaba `items.unit_price` (cents de order_item) y multiplicaba ×100 | Ahora usa `items.item.unit_price` de order_line_item | ✅ Fixed |
+| Cancel Activity Log sin QB Ref # | `QbSyncLogger.complete()` no recibía `qbRefNumber` | Ahora lee `qb_sales_order_ref` / `qb_invoice_ref` y lo pasa | ✅ Fixed |
+| `completed` en log pero SO abierto en QB | Optimistic complete: log marca completed cuando el close se *encola*, no cuando QBWC lo ejecuta | Nightly verify job confirma el estado real | ✅ Mitigated |
+| Subscriber no recibe eventos en dev | Redis event bus es asíncrono/unreliable en dev | `emit-order-events.ts` re-emite sincrónicamente desde workflow hooks | ✅ Fixed |
+| QB Error 3175 (locked transaction) | QB Desktop tiene el documento abierto | Cerrar en QB Desktop, luego re-sync | ⚠️ Operational |
+| **Discount/Subtotal faltaban en SO** | Lógica antigua solo aplicaba descuento en órdenes con promo de tipo "order-level" | Ahora TODOS los descuentos (cualquier tipo) generan líneas Subtotal + Discount | ✅ Fixed |
+| **QB Error 3060 en Subtotal/Discount líneas** | Se enviaba `<Quantity>1</Quantity>` que QB rechaza para estos item types | `buildQbOrderDiscountLines` ahora omite quantity completamente | ✅ Fixed |
+| **QB Error 3170 — Amount must be positive** | Manual resync route: unit_price del Admin API (dólares) no se multiplicaba ×100 → price=0.2225 → Amount=0.89, discount ($4.45) > total → negativo | Route ahora multiplica unit_price ×100 igual que el subscriber | ✅ Fixed |
+| **Discount Amount vacío en QB** | Manual route pasaba discount_total en dólares (4.45) directo a `buildQbOrderDiscountLines` que esperaba cents → dividía 4.45/100=0.044 | Route ahora multiplica ×100 antes de llamar la función | ✅ Fixed |
+| **Shipping incluido en descuento** | Shipping se agregaba antes des las líneas Subtotal+Discount → QB lo sumaba en el Subtotal | Shipping ahora siempre va como ÚLTIMA línea (después de Subtotal y Discount) | ✅ Fixed |
+| Sales Receipt sin SO existente causa error | Handler intenta crear SR pero no valida si SO ya existe | Sales Receipt Qualification Guard ahora verifica SO + Estimate existentes | ✅ Fixed Mar 2026 |

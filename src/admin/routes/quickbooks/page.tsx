@@ -7,6 +7,7 @@ import { StoreHoursSection } from "./components/StoreHoursSection"
 import { SyncCard } from "./components/SyncCard"
 import { AuditModal } from "./components/AuditModal"
 import { ActivityLog } from "./components/ActivityLog"
+import { PipelineTable } from "./components/PipelineTable"
 
 // ─── Interval options ─────────────────────────────────────────────────────────
 const INVENTORY_INTERVALS = [
@@ -404,6 +405,9 @@ const QuickBooksPage = () => {
 
             {/* Activity Log */}
             <ActivityLog />
+
+            {/* QB Operations Pipeline — real-time queue */}
+            <PipelineTable />
 
             {/* Modals */}
             {reportModal && (

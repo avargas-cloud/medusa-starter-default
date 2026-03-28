@@ -1,0 +1,96 @@
+import type { MedusaContainer } from "@medusajs/framework/types"
+import { ContainerRegistrationKeys } from "@medusajs/utils"
+import { bridgeFetch } from "../lib/quickbooks/client/core"
+import { getDbPool } from "../api/utils/db-pool"
+import { confirmPipelineRow, failPipelineRow, cacheEditSequence } from "../lib/quickbooks/qb-pipeline"
+
+const LOG_PREFIX = "[QB-CONSOLIDATOR]"
+
+/**
+ * Runs every 2 minutes.
+ * - Polls bridge for submitted pipeline rows that have a bridge_op_id
+ * - Marks them confirmed or failed based on bridge response
+ * - Saves EditSequence from confirmed responses to the cache
+ */
+export default async function qbPipelineConsolidator(
+    container: MedusaContainer
+): Promise<void> {
+    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+
+    if (process.env.QB_ORDER_FLOW_ENABLED !== "true") return
+
+    const pool = getDbPool()
+
+    // Fetch all submitted rows that have a bridge_op_id (up to 50 at a time)
+    let submittedRows: Array<{
+        id: string
+        order_id: string | null
+        reference_id: string | null
+        step: string
+        bridge_op_id: string
+        retry_count: number
+    }>
+
+    try {
+        const { rows } = await pool.query(`
+            SELECT id, order_id, reference_id, step, bridge_op_id, retry_count
+            FROM qb_order_pipeline
+            WHERE status = 'submitted'
+              AND bridge_op_id IS NOT NULL
+            ORDER BY created_at ASC
+            LIMIT 50
+        `)
+        submittedRows = rows
+    } catch (err: any) {
+        logger.error(`${LOG_PREFIX} Failed to query submitted rows: ${err.message}`)
+        return
+    }
+
+    if (submittedRows.length === 0) return
+
+    logger.info(`${LOG_PREFIX} Polling ${submittedRows.length} submitted operations...`)
+
+    for (const row of submittedRows) {
+        try {
+            const statusRes = await bridgeFetch("GET", `/api/sync/status/${row.bridge_op_id}`)
+            const op = statusRes?.operation
+
+            if (!op) {
+                logger.warn(`${LOG_PREFIX} No operation data for ${row.bridge_op_id} (row ${row.id})`)
+                continue
+            }
+
+            if (op.status === "completed") {
+                const txnId     = op.txnId     || op.result?.TxnID     || op.listId || op.result?.ListID || null
+                const refNumber = op.refNumber || op.result?.RefNumber || null
+
+                await confirmPipelineRow(row.id, txnId, refNumber, op.result ?? null)
+
+                // Cache EditSequence if present (saves a round trip on next Mod)
+                const editSeq = op.result?.EditSequence || op.EditSequence
+                if (editSeq && txnId) {
+                    await cacheEditSequence(row.step, txnId, editSeq)
+                }
+
+                logger.info(`${LOG_PREFIX} ✅ Confirmed row ${row.id} (${row.step}) — TxnID=${txnId}, Ref=${refNumber}`)
+
+            } else if (op.status === "failed") {
+                const errMsg = op.error || "QB operation failed (no details)"
+                await failPipelineRow(row.id, errMsg)
+                logger.warn(`${LOG_PREFIX} ❌ Failed row ${row.id} (${row.step}): ${errMsg}`)
+
+            } else {
+                // Still pending/processing on bridge side — nothing to do yet
+                logger.info(`${LOG_PREFIX} ⏳ Row ${row.id} (${row.step}) bridge status: ${op.status}`)
+            }
+
+        } catch (pollErr: any) {
+            logger.warn(`${LOG_PREFIX} ⚠️ Error polling row ${row.id} op ${row.bridge_op_id}: ${pollErr.message}`)
+        }
+    }
+}
+
+export const config = {
+    name: "qb-pipeline-consolidator",
+    schedule: "*/2 * * * *",
+}

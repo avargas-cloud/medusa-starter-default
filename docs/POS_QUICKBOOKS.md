@@ -5,7 +5,7 @@
 | **Módulo** | QuickBooks Integration (backend) |
 | **Bridge URL** | `https://qb.eptbridge.com` |
 | **Protocolo** | QBXML via QB Desktop SDK |
-| **Última revisión** | 2026-03-06 |
+| **Última revisión** | 2026-03-28 |
 
 ---
 
@@ -30,14 +30,18 @@ El **QB Bridge** es un servicio Node.js que corre localmente (en la red de la em
 
 ## Documentos QB por Flujo
 
-| Situación | POS Doc | QB Doc |
-|-----------|---------|---------|
-| Venta con pago inmediato | Sales Receipt | Sales Receipt |
-| Venta on account (B2B) | Sales Order | Sales Order → Invoice |
-| Cotización | Estimate | Estimate |
-| Cotización aprobada | Estimate → Order | Estimate → Sales Order |
-| Pago recibido | Capture Payment | Receive Payment |
-| Ajuste de crédito | Credit Ledger entry | (manual en QB) |
+| Situación | POS Doc | QB Doc | Notas |
+|-----------|---------|---------|-------|
+| Venta web con pago inmediato | Order | Sales Order → Invoice | Web order: SO creado inmediatamente |
+| Venta POS con pago inmediato (< 1hr) | Order | Sales Receipt | Cron no crea SO (sentinel SKIPPED_SALES_RECEIPT) |
+| Venta POS con pago inmediato (> 1hr) | Order | Sales Order + Invoice | Cron crea SO primero, luego handler crea Invoice |
+| Venta POS SIN pago inmediato | Order | Sales Order | Cron crea SO después de 1+ horas |
+| Venta on account (B2B) | Order | Sales Order → Invoice | Pago diferido |
+| Cotización (< 1hr) | (no QB) | (nada) | Estimado reciente, no se synca a QB |
+| Cotización (1-24hr) | (no QB) | Estimate | Cron crea Estimate después de 1+ hora |
+| Cotización aprobada/convertida | Order | Estimate → Sales Order | El cron detecta `is_draft_order=false`, skippea Estimate |
+| Pago recibido | Capture Payment | Receive Payment | Vinculado al customer, sin aplicar |
+| Ajuste de crédito | Credit Ledger entry | (manual en QB) | Future feature |
 
 ---
 
@@ -111,17 +115,64 @@ async function ensureCustomerInQb(customer, sql) {
 
 ## Metadata QB en Órdenes
 
+### Forma Antigua (Flat — Backward Compat, pre-2026)
+
 ```json
 {
-  "qb_sales_receipt_txn_id": "12345",
-  "qb_sales_receipt_operation_id": "op_xxx",
-  "qb_so_txn_id": "67890",
-  "qb_so_number": "SO-1234",
+  "qb_list_id": "ABC123",
+  "qb_sales_order_txn_id": "67890",
+  "qb_sales_order_ref": "SO-1234",
   "qb_estimate_txn_id": "11111",
-  "qb_estimate_number": "EST-001",
-  "qb_invoice_txn_ids": ["22222", "33333"]
+  "qb_estimate_ref": "EST-001",
+  "qb_sales_receipt_txn_id": "12345",
+  "qb_invoice_txn_id": "22222",
+  "qb_payment_txn_id": "33333",
+  "qb_synced_at": "2026-03-28T10:30:00Z"
 }
 ```
+
+### Forma Nueva (Nested — 2026+)
+
+```json
+{
+  "qb_list_id": "ABC123",
+  "qb_sales_order": {
+    "txn_id": "67890",
+    "ref_number": "SO-1234",
+    "operation_id": "op_xyz",
+    "synced_at": "2026-03-28T10:30:00Z"
+  },
+  "qb_estimate": {
+    "txn_id": "11111",
+    "ref_number": "EST-001",
+    "operation_id": "op_abc",
+    "synced_at": "2026-03-28T10:25:00Z"
+  },
+  "qb_invoices": [
+    {
+      "txn_id": "22222",
+      "ref_number": "INV-001",
+      "operation_id": "op_def",
+      "synced_at": "2026-03-28T10:35:00Z"
+    }
+  ],
+  "qb_payments": [
+    {
+      "txn_id": "33333",
+      "ref_number": "PMT-001",
+      "operation_id": "op_ghi",
+      "synced_at": "2026-03-28T10:40:00Z"
+    }
+  ]
+}
+```
+
+### Sentinelas Especiales
+
+| Campo | Valor | Significado |
+|-------|-------|-------------|
+| `qb_so_txn_id` | `"SKIPPED_SALES_RECEIPT"` | Sales Receipt fue creada directamente sin SO previo; NO crear SO en cron |
+| `is_draft_order` | `false` | Draft order fue convertido; NO crear Estimate en cron |
 
 ---
 
