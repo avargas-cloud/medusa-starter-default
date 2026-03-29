@@ -52,7 +52,9 @@ export async function pollOperationResult(
             if (!op) continue
 
             if (op.status === "completed") {
-                const msgs = op.result?.QBXML?.QBXMLMsgsRs || op.result?.QBXMLMsgsRs
+                // EditSequence — covers ALL QB document types, Add + Mod, all nesting levels
+                const r = op.result || {}
+                const msgs = r.QBXML?.QBXMLMsgsRs || r.QBXMLMsgsRs || {}
                 const txnId =
                     op.txnId ||
                     op.result?.TxnID ||
@@ -61,9 +63,6 @@ export async function pollOperationResult(
                 const refNumber = op.refNumber || op.result?.RefNumber
                 // Customer operations return listId instead of txnId
                 const listId = op.listId || op.result?.ListID
-                // EditSequence — covers ALL QB document types, Add + Mod, all nesting levels
-                const r = op.result || {}
-                const msgs = r.QBXML?.QBXMLMsgsRs || r.QBXMLMsgsRs || {}
                 const editSequence: string | undefined =
                     op.editSequence ||
                     r.EditSequence ||
