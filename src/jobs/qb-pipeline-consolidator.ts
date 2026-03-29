@@ -62,8 +62,22 @@ export default async function qbPipelineConsolidator(
             }
 
             if (op.status === "completed") {
-                const txnId     = op.txnId     || op.result?.TxnID     || op.listId || op.result?.ListID || null
-                const refNumber = op.refNumber || op.result?.RefNumber || null
+                const msgs = op.result?.QBXML?.QBXMLMsgsRs || op.result?.QBXMLMsgsRs
+                const txnId     =
+                    op.txnId     ||
+                    op.result?.TxnID     ||
+                    op.listId            ||
+                    op.result?.ListID    ||
+                    // Nested fallback for ReceivePaymentAdd/Mod responses (apply_payment step)
+                    msgs?.ReceivePaymentAddRs?.ReceivePaymentRet?.TxnID ||
+                    msgs?.ReceivePaymentModRs?.ReceivePaymentRet?.TxnID ||
+                    null
+                const refNumber =
+                    op.refNumber ||
+                    op.result?.RefNumber ||
+                    msgs?.ReceivePaymentAddRs?.ReceivePaymentRet?.RefNumber ||
+                    msgs?.ReceivePaymentModRs?.ReceivePaymentRet?.RefNumber ||
+                    null
 
                 await confirmPipelineRow(row.id, txnId, refNumber, op.result ?? null)
 
@@ -84,6 +98,31 @@ export default async function qbPipelineConsolidator(
 
                 // Write TxnID + EditSequence back to order metadata so POS reflects confirmed
                 // sync status and future Mod ops have EditSequence ready without a GET
+                // For payment steps: write qb_txn_id to customer_payment.metadata so that
+                // handlePosPaymentApplied can find it without waiting 400s for a value that
+                // was never set (the payment handler only writes txnId when the bridge returns
+                // it synchronously; async confirmations come through this consolidator path).
+                if (txnId && row.step === "payment" && row.reference_id) {
+                    try {
+                        const { rows: cpRows } = await pool.query(
+                            `SELECT metadata FROM customer_payment WHERE id = $1`,
+                            [row.reference_id]
+                        )
+                        const cpMeta = cpRows[0]?.metadata || {}
+                        if (!cpMeta.qb_txn_id) {
+                            await pool.query(
+                                `UPDATE customer_payment
+                                 SET metadata = COALESCE(metadata, '{}') || $2::jsonb
+                                 WHERE id = $1`,
+                                [row.reference_id, JSON.stringify({ qb_txn_id: txnId, qb_sync_status: "synced" })]
+                            )
+                            logger.info(`${LOG_PREFIX} ✅ Wrote qb_txn_id=${txnId} to customer_payment ${row.reference_id}`)
+                        }
+                    } catch (cpErr: any) {
+                        logger.warn(`${LOG_PREFIX} ⚠️ Could not update customer_payment metadata: ${cpErr.message}`)
+                    }
+                }
+
                 if (txnId && row.order_id) {
                     try {
                         const orderModule = container.resolve(Modules.ORDER)

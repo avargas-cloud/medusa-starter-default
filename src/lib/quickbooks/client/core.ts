@@ -52,17 +52,45 @@ export async function pollOperationResult(
             if (!op) continue
 
             if (op.status === "completed") {
-                const txnId = op.txnId || op.result?.TxnID
+                const msgs = op.result?.QBXML?.QBXMLMsgsRs || op.result?.QBXMLMsgsRs
+                const txnId =
+                    op.txnId ||
+                    op.result?.TxnID ||
+                    msgs?.ReceivePaymentAddRs?.ReceivePaymentRet?.TxnID ||
+                    msgs?.ReceivePaymentModRs?.ReceivePaymentRet?.TxnID
                 const refNumber = op.refNumber || op.result?.RefNumber
                 // Customer operations return listId instead of txnId
                 const listId = op.listId || op.result?.ListID
-                // EditSequence — prefer top-level field set by bridge, fall back to nested XML result
+                // EditSequence — covers ALL QB document types, Add + Mod, all nesting levels
+                const r = op.result || {}
+                const msgs = r.QBXML?.QBXMLMsgsRs || r.QBXMLMsgsRs || {}
                 const editSequence: string | undefined =
                     op.editSequence ||
-                    op.result?.EditSequence ||
-                    op.result?.QBXML?.QBXMLMsgsRs?.EstimateAddRs?.EstimateRet?.EditSequence ||
-                    op.result?.QBXML?.QBXMLMsgsRs?.SalesOrderAddRs?.SalesOrderRet?.EditSequence ||
-                    op.result?.QBXML?.QBXMLMsgsRs?.InvoiceAddRs?.InvoiceRet?.EditSequence ||
+                    r.EditSequence ||
+                    // ── Add responses ──────────────────────────────────────────
+                    msgs.EstimateAddRs?.EstimateRet?.EditSequence ||
+                    msgs.SalesOrderAddRs?.SalesOrderRet?.EditSequence ||
+                    msgs.InvoiceAddRs?.InvoiceRet?.EditSequence ||
+                    msgs.SalesReceiptAddRs?.SalesReceiptRet?.EditSequence ||
+                    msgs.ReceivePaymentAddRs?.ReceivePaymentRet?.EditSequence ||
+                    msgs.CreditMemoAddRs?.CreditMemoRet?.EditSequence ||
+                    msgs.CheckAddRs?.CheckRet?.EditSequence ||
+                    // ── Mod responses ──────────────────────────────────────────
+                    msgs.EstimateModRs?.EstimateRet?.EditSequence ||
+                    msgs.SalesOrderModRs?.SalesOrderRet?.EditSequence ||
+                    msgs.InvoiceModRs?.InvoiceRet?.EditSequence ||
+                    msgs.SalesReceiptModRs?.SalesReceiptRet?.EditSequence ||
+                    msgs.ReceivePaymentModRs?.ReceivePaymentRet?.EditSequence ||
+                    msgs.CreditMemoModRs?.CreditMemoRet?.EditSequence ||
+                    msgs.CheckModRs?.CheckRet?.EditSequence ||
+                    // ── Flat fallbacks (bridge may hoist Ret directly) ─────────
+                    r.EstimateRet?.EditSequence ||
+                    r.SalesOrderRet?.EditSequence ||
+                    r.InvoiceRet?.EditSequence ||
+                    r.SalesReceiptRet?.EditSequence ||
+                    r.ReceivePaymentRet?.EditSequence ||
+                    r.CreditMemoRet?.EditSequence ||
+                    r.CheckRet?.EditSequence ||
                     undefined
                 log(`[QB] ✅ Operation completed. TxnID: ${txnId ?? listId}, RefNumber: ${refNumber}`)
                 // Return listId as txnId so customer callers can use result.txnId for the ListID
