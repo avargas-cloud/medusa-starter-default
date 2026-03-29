@@ -356,9 +356,12 @@ export async function handleFulfillmentCreated(
                 operationId:   result.operationId || null,
                 fulfillmentId,
                 invoiceId,
-                syncStatus:    "sales_order",
+                syncStatus:    "child_synced",
             })
-            await orderModule.updateOrders(orderId, { metadata: patch })
+            // If no Sales Order was involved (standalone invoice), mark qb_so_txn_id with
+            // a sentinel so the cron knows not to create a duplicate Sales Order for this order.
+            const extraMeta = !qbSoTxnId ? { qb_so_txn_id: "SKIPPED_INVOICED" } : {}
+            await orderModule.updateOrders(orderId, { metadata: { ...patch, ...extraMeta } })
 
             // Feature Upgrade: Store QB data natively onto the invoice (and fulfillment if immediate delivery)
             if (invoiceId) {
