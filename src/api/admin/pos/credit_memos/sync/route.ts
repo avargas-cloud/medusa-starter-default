@@ -63,7 +63,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             const cmNumber = `CM-${nextCmNum}`
 
             // 1. Create wrapper
-            const created = await creditMemoService.createPosCreditMemoes({
+            const created = await creditMemoService.createPosCreditMemos({
                 credit_memo_number: cmNumber,
                 order_id: payload.order_id || null,
                 invoice_id: payload.invoice_id || null,
@@ -96,7 +96,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         } else {
             // UPDATE EXISTING
             
-            await creditMemoService.updatePosCreditMemoes({
+            await creditMemoService.updatePosCreditMemos({
                 id: resolvedId,
                 customer_id: payload.customer_id || null,
                 notes: payload.notes || null,
