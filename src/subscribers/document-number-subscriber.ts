@@ -22,31 +22,25 @@ export default async function documentNumberSubscriber({
         })
 
         if (eventName === "order.updated") {
-            // Only assign Estimate sequence if it is a draft
+            // Only assign document number to draft orders (Estimates)
             if (order.status !== "draft") return
 
             const meta = (order.metadata || {}) as Record<string, any>
             if (meta.document_number) return // Already assigned
 
-            // Fetch natively from Postgres sequence using Knex
-            let nextEstNum: string | number = order.display_id
-            try {
-                const result = await pgConnection.raw(`SELECT nextval('custom_estimate_seq') AS seq`)
-                nextEstNum = result.rows[0].seq || result.rows[0].SEQ
-            } catch (e: any) {
-                logger.error(`${LOG_PREFIX} Failed to fetch custom_estimate_seq: ${e.message}`)
-            }
-
+            // Internal display number only — "E1268" is for our UI, not for QB.
+            // QB assigns its own RefNumber (E1010, E1011…) when the Estimate is actually
+            // created in QuickBooks. Pre-assigning from custom_estimate_seq here caused
+            // sequence gaps whenever a POS order bypassed the QB estimate step entirely
+            // (e.g. converted directly to a Sales Receipt).
             const documentNumber = `E${order.display_id}`
-            const qbEstimateRef = `E${nextEstNum}`
-            
-            logger.info(`${LOG_PREFIX} Assigned ${documentNumber} (QB Ref: ${qbEstimateRef}) to Draft Order ${order.id}`)
+
+            logger.info(`${LOG_PREFIX} Assigned ${documentNumber} to Draft Order ${order.id}`)
 
             await orderModule.updateOrders(order.id, {
                 metadata: {
                     ...(order.metadata || {}),
                     document_number: documentNumber,
-                    qb_ref_number: qbEstimateRef
                 }
             })
         } 

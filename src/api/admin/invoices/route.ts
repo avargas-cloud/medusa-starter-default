@@ -16,6 +16,7 @@ import { handleFulfillmentCreated } from '../../../lib/quickbooks/handlers/handl
 import { handlePosPaymentCreated } from '../../../lib/quickbooks/handlers/handle-pos-payment-created'
 import { handlePosPaymentApplied } from '../../../lib/quickbooks/handlers/handle-pos-payment-applied'
 import { handleSalesReceiptCreated } from '../../../lib/quickbooks/handlers/handle-sales-receipt-created'
+import { writePipelineRow, skipSalesOrderPipelineRow } from '../../../lib/quickbooks/qb-pipeline'
 // ── GET /admin/invoices?order_id=:id ─────────────────────────────────────────
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
@@ -109,6 +110,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const balance_due = body.total - body.amount_paid
 
     let paymentIdToEmit: string | null = null
+    let nextPayNum: number | null = null
     const applicationsToEmit: any[] = []
 
     // Step 1: Create the invoice (no nested items — hasMany must be created separately)
@@ -226,7 +228,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         } else {
             // Fetch strictly continuous sequential payment number
             const seqPgRes = await pgConnection.raw(`SELECT nextval('custom_payment_seq') AS seq`).catch(() => ({ rows: [{ seq: null }] }))
-            const nextPayNum = seqPgRes.rows[0]?.seq || seqPgRes.rows[0]?.SEQ ? Number(seqPgRes.rows[0].seq || seqPgRes.rows[0].SEQ) : null
+            nextPayNum = seqPgRes.rows[0]?.seq || seqPgRes.rows[0]?.SEQ ? Number(seqPgRes.rows[0].seq || seqPgRes.rows[0].SEQ) : null
 
             // B. Finance Module global AR Ledger (New Money via Cash/Card/etc)
             const customerPayment = await financeService.createCustomerPayments({
@@ -309,6 +311,87 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
     }
 
+    // Write upfront pipeline rows immediately so the UI shows the complete expected flow
+    // before any QB handler runs. Each row starts as 'waiting' and transitions in-place.
+    if (process.env.QB_ORDER_FLOW_ENABLED === "true") {
+        try {
+            if (body.is_sales_receipt) {
+                // ── Sales Receipt flow ────────────────────────────────────────
+                // Payment is embedded in the Sales Receipt — QB handles it internally.
+                // Only one pipeline row needed.
+                await writePipelineRow({
+                    orderId: body.order_id,
+                    referenceId: (invoice as any).id,
+                    referenceType: "pos_invoice",
+                    step: "sales_receipt",
+                    status: "waiting",
+                    medusaRefNumber: `INV-${nextInvNum}`,
+                })
+            } else {
+                // ── Invoice flow ──────────────────────────────────────────────
+                // 1. Invoice row — waiting. No SO dependency (independent QB doc).
+                const invoicePipelineRowId = await writePipelineRow({
+                    orderId: body.order_id,
+                    referenceId: (invoice as any).id,
+                    referenceType: "pos_invoice",
+                    step: "invoice",
+                    status: "waiting",
+                    medusaRefNumber: `INV-${nextInvNum}`,
+                })
+
+                // 2. Payment row — waiting (only for non-credit new payments)
+                if (paymentIdToEmit) {
+                    await writePipelineRow({
+                        orderId: body.order_id,
+                        referenceId: paymentIdToEmit,
+                        referenceType: "customer_payment",
+                        step: "payment",
+                        status: "waiting",
+                        medusaRefNumber: nextPayNum ? `PAY-${nextPayNum}` : null,
+                    })
+                }
+
+                // 3. Apply-payment row — one per application, each depends on invoice
+                for (const app of applicationsToEmit) {
+                    const applyPayRef = app.payment_id
+                    // Use nextPayNum only for the newly-created payment; look up others
+                    let applyMedusaRef: string | null =
+                        (paymentIdToEmit && app.payment_id === paymentIdToEmit && nextPayNum)
+                            ? `PAY-${nextPayNum}`
+                            : null
+                    if (!applyMedusaRef && applyPayRef) {
+                        try {
+                            const payRes = await pgConnection.raw(
+                                `SELECT display_id FROM customer_payment WHERE id = ?`,
+                                [applyPayRef]
+                            )
+                            if (payRes.rows[0]?.display_id) applyMedusaRef = `PAY-${payRes.rows[0].display_id}`
+                        } catch {}
+                    }
+                    await writePipelineRow({
+                        orderId: body.order_id,
+                        referenceId: applyPayRef,
+                        referenceType: "customer_payment",
+                        step: "apply_payment",
+                        status: "waiting",
+                        dependsOn: invoicePipelineRowId,
+                        medusaRefNumber: applyMedusaRef,
+                    })
+                }
+            }
+            // Skip the Sales Order pipeline row for this order — a full invoice/sales receipt
+            // supersedes the need for a QB Sales Order. Do this immediately so the cron never
+            // picks up the order for SO creation.
+            try {
+                await skipSalesOrderPipelineRow(body.order_id)
+            } catch (skipErr: any) {
+                console.warn("Could not skip SO pipeline row:", skipErr.message)
+            }
+        } catch (upfrontErr: any) {
+            console.error("Failed to write upfront pipeline rows:", upfrontErr.message)
+        }
+    }
+
     // Use direct background execution (Event Loop) to guarantee 100% reliable QuickBooks Syncing,
     // thereby bypassing the Medusa v2 BullMQ Outbox which silently drops multiple sequential events.
     setTimeout(async () => {
@@ -354,18 +437,19 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             // Wait 250ms again
             await new Promise(r => setTimeout(r, 250))
 
-            // 3. Process Applications
+            // 3. Process Applications — run in parallel so multiple payments don't
+            //    block each other (each may poll the bridge for up to 400s).
             if (applicationsToEmit.length > 0) {
                 if (body.is_sales_receipt) {
                     console.log("DIRECT EXEC: Skipping pos.payment.applied emit because this is a Sales Receipt.")
                 } else {
-                    for (const appPayload of applicationsToEmit) {
+                    await Promise.all(applicationsToEmit.map(async (appPayload) => {
                         await handlePosPaymentApplied({
                             event: { name: "pos.payment.applied", data: appPayload },
                             container
                         } as any)
                         console.log(`DIRECT EXEC: pos.payment.applied executed for Payment ${appPayload.payment_id}!`)
-                    }
+                    }))
                 }
             }
 

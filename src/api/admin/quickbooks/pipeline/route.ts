@@ -1,7 +1,8 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Client } from "pg"
-import { bridgeFetch } from "../../../../lib/quickbooks/client/core"
+import { bridgeFetch, pollOperationResult } from "../../../../lib/quickbooks/client/core"
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
+import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline"
 
 /**
  * GET /admin/quickbooks/pipeline
@@ -93,16 +94,28 @@ export async function GET(
                 p.retry_count,
                 p.qb_txn_id,
                 p.qb_ref_number,
+                p.medusa_ref_number,
                 p.error,
                 p.created_at,
                 p.submitted_at,
                 p.confirmed_at,
                 p.failed_at,
-                -- Include parent step name for context
+                -- Order display_id for grouping rows by order
+                ord.display_id AS order_display_id,
+                -- Include parent step info for context
                 dep.step AS depends_on_step,
-                dep.status AS depends_on_status
+                dep.status AS depends_on_status,
+                dep.medusa_ref_number AS depends_on_medusa_ref,
+                -- For apply_payment: also join the payment row for dual-dependency display
+                pay_dep.medusa_ref_number AS payment_dep_ref,
+                pay_dep.status AS payment_dep_status
             FROM qb_order_pipeline p
+            LEFT JOIN "order" ord ON ord.id = p.order_id
             LEFT JOIN qb_order_pipeline dep ON dep.id = p.depends_on
+            LEFT JOIN qb_order_pipeline pay_dep
+                ON p.step = 'apply_payment'
+                AND pay_dep.reference_id = p.reference_id
+                AND pay_dep.step = 'payment'
             ${where}
             ORDER BY p.created_at DESC
             LIMIT $${p} OFFSET $${p + 1}
@@ -164,33 +177,59 @@ export async function POST(
     try {
         await client.connect()
 
-        // 1. Read the row (failed or stuck-pending)
+        // 1. Atomically claim the row — only 'failed' and 'waiting' are retryable.
+        //    'pending' is excluded because it means a handler is already in-flight;
+        //    retrying it would send a second request to QB and create duplicates.
+        //    Stuck-pending rows will auto-timeout to 'failed' via the GET auto-timeout logic.
         const { rows } = await client.query(
-            `SELECT id, step, order_id, reference_id, reference_type, retry_count
-             FROM qb_order_pipeline WHERE id = $1 AND status IN ('failed', 'pending')`,
+            `UPDATE qb_order_pipeline
+             SET status      = 'pending',
+                 error       = NULL,
+                 failed_at   = NULL,
+                 submitted_at = NULL,
+                 bridge_op_id = NULL,
+                 qb_txn_id   = NULL,
+                 qb_ref_number = NULL,
+                 retry_count = retry_count + 1
+             WHERE id = $1 AND status IN ('failed', 'waiting')
+             RETURNING id, step, order_id, reference_id, reference_type, retry_count, bridge_op_id`,
             [rowId]
         )
         if (!rows.length) {
-            res.status(404).json({ error: "Row not found or not in retryable status (must be failed or pending)" })
+            res.status(404).json({ error: "Row not found or not retryable (must be 'failed' or 'waiting'; 'pending' rows are actively processing — wait for timeout)" })
             return
         }
         const row = rows[0]
 
-        // 2. Reset row to 'pending' so it stays visible in the UI while the handler runs.
-        //    writePipelineRow will atomically swap it to 'submitted' once the bridge_op_id is known.
-        await client.query(
-            `UPDATE qb_order_pipeline
-             SET status       = 'pending',
-                 error        = NULL,
-                 failed_at    = NULL,
-                 submitted_at = NULL,
-                 bridge_op_id = NULL,
-                 qb_txn_id    = NULL,
-                 qb_ref_number = NULL,
-                 retry_count  = retry_count + 1
-             WHERE id = $1`,
-            [rowId]
-        )
+        // 2a. If we already have a bridge_op_id, just re-poll — do NOT resubmit to avoid duplicates
+        if (row.bridge_op_id) {
+            await client.end()
+            logger.info(`${LOG_PREFIX} Found existing bridge_op_id=${row.bridge_op_id} — polling instead of resubmitting`)
+
+            ;(async () => {
+                try {
+                    const pollResult = await pollOperationResult(row.bridge_op_id, (m: string) => logger.info(m))
+                    if (pollResult?.txnId) {
+                        await writePipelineRow({
+                            orderId: row.order_id,
+                            step: row.step,
+                            status: "confirmed",
+                            bridgeOpId: row.bridge_op_id,
+                            qbTxnId: pollResult.txnId,
+                            qbRefNumber: pollResult.refNumber ?? null,
+                        })
+                        logger.info(`${LOG_PREFIX} ✅ Re-poll confirmed TxnID=${pollResult.txnId}`)
+                    } else {
+                        logger.warn(`${LOG_PREFIX} ⚠️ Re-poll did not return txnId — bridge op may still be pending`)
+                    }
+                } catch (pollErr: any) {
+                    logger.error(`${LOG_PREFIX} Re-poll failed: ${pollErr.message}`)
+                }
+            })()
+
+            res.json({ message: "Re-polling existing bridge operation", bridge_op_id: row.bridge_op_id })
+            return
+        }
 
         // 3. Reset qb_sync_status on the entity so guards allow re-sync
         if (row.order_id) {
@@ -198,7 +237,6 @@ export async function POST(
                 const orderModule = req.scope.resolve(Modules.ORDER)
                 const order = await orderModule.retrieveOrder(row.order_id)
                 const meta = (order as any).metadata || {}
-                // Only reset if it's in a blocking non-error state
                 const currentStatus = meta.qb_sync_status
                 if (currentStatus && currentStatus !== "error" && currentStatus !== "voided") {
                     await orderModule.updateOrders(row.order_id, {
@@ -207,6 +245,24 @@ export async function POST(
                 }
             } catch (metaErr: any) {
                 logger.warn(`${LOG_PREFIX} Could not reset qb_sync_status: ${metaErr.message}`)
+            }
+        }
+
+        // 3b. For payment/apply_payment steps: also reset the customer_payment entity's qb_sync_status
+        if ((row.step === "payment" || row.step === "apply_payment") && row.reference_id) {
+            try {
+                const financeService = req.scope.resolve("finance")
+                const payment = await financeService.retrieveCustomerPayment(row.reference_id)
+                const pmeta = (payment as any).metadata || {}
+                if (pmeta.qb_sync_status && pmeta.qb_sync_status !== "error") {
+                    await financeService.updateCustomerPayments({
+                        id: row.reference_id,
+                        metadata: { ...pmeta, qb_sync_status: "error" }
+                    })
+                    logger.info(`${LOG_PREFIX} Reset payment qb_sync_status for ${row.reference_id}`)
+                }
+            } catch (pmErr: any) {
+                logger.warn(`${LOG_PREFIX} Could not reset payment qb_sync_status: ${pmErr.message}`)
             }
         }
 
@@ -252,6 +308,31 @@ export async function POST(
                             event: { name: "pos.payment.created", data: { id: row.reference_id ?? row.order_id } },
                             container: req.scope as any,
                             pluginOptions: {}
+                        })
+                        break
+                    }
+                    case "apply_payment": {
+                        const { handlePosPaymentApplied } = require("../../../../lib/quickbooks/handlers/handle-pos-payment-applied")
+                        // Fetch the application to get invoice_id and amount_applied
+                        const applyClient = new Client({ connectionString: process.env.DATABASE_URL })
+                        await applyClient.connect()
+                        const { rows: appRows } = await applyClient.query(
+                            `SELECT payment_id, invoice_id, order_id, amount_applied FROM customer_payment_application WHERE payment_id = $1 AND voided_at IS NULL LIMIT 1`,
+                            [row.reference_id]
+                        )
+                        await applyClient.end()
+                        const appRow = appRows[0]
+                        await handlePosPaymentApplied({
+                            event: {
+                                name: "pos.payment.applied",
+                                data: {
+                                    payment_id: row.reference_id,
+                                    invoice_id: appRow?.invoice_id ?? null,
+                                    order_id: appRow?.order_id ?? row.order_id,
+                                    amount_applied: appRow?.amount_applied ?? 0,
+                                }
+                            },
+                            container: req.scope as any,
                         })
                         break
                     }

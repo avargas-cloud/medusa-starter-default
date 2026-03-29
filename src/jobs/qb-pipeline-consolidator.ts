@@ -68,15 +68,16 @@ export default async function qbPipelineConsolidator(
                     op.result?.TxnID     ||
                     op.listId            ||
                     op.result?.ListID    ||
-                    // Nested fallback for ReceivePaymentAdd/Mod responses (apply_payment step)
                     msgs?.ReceivePaymentAddRs?.ReceivePaymentRet?.TxnID ||
                     msgs?.ReceivePaymentModRs?.ReceivePaymentRet?.TxnID ||
+                    msgs?.CreditMemoAddRs?.CreditMemoRet?.TxnID         ||
                     null
                 const refNumber =
                     op.refNumber ||
                     op.result?.RefNumber ||
                     msgs?.ReceivePaymentAddRs?.ReceivePaymentRet?.RefNumber ||
                     msgs?.ReceivePaymentModRs?.ReceivePaymentRet?.RefNumber ||
+                    msgs?.CreditMemoAddRs?.CreditMemoRet?.RefNumber         ||
                     null
 
                 await confirmPipelineRow(row.id, txnId, refNumber, op.result ?? null)
@@ -89,6 +90,7 @@ export default async function qbPipelineConsolidator(
                     op.result?.QBXML?.QBXMLMsgsRs?.EstimateAddRs?.EstimateRet?.EditSequence ||
                     op.result?.QBXML?.QBXMLMsgsRs?.SalesOrderAddRs?.SalesOrderRet?.EditSequence ||
                     op.result?.QBXML?.QBXMLMsgsRs?.InvoiceAddRs?.InvoiceRet?.EditSequence ||
+                    msgs?.CreditMemoAddRs?.CreditMemoRet?.EditSequence ||
                     null
 
                 // Cache EditSequence so update/mod ops can skip the GET round-trip
@@ -102,6 +104,47 @@ export default async function qbPipelineConsolidator(
                 // handlePosPaymentApplied can find it without waiting 400s for a value that
                 // was never set (the payment handler only writes txnId when the bridge returns
                 // it synchronously; async confirmations come through this consolidator path).
+                // Credit memo step: write TxnID + EditSequence to pos_credit_memo
+                // so future void operations can reference the QB record.
+                if (txnId && row.step === "credit_memo" && row.reference_id) {
+                    try {
+                        await pool.query(
+                            `UPDATE pos_credit_memo
+                             SET qb_txn_id = $2, qb_edit_sequence = $3
+                             WHERE id = $1`,
+                            [row.reference_id, txnId, editSeq ?? null]
+                        )
+                        logger.info(`${LOG_PREFIX} ✅ Wrote qb_txn_id=${txnId} + editSeq to pos_credit_memo ${row.reference_id}`)
+                    } catch (cmErr: any) {
+                        logger.warn(`${LOG_PREFIX} ⚠️ Could not update pos_credit_memo: ${cmErr.message}`)
+                    }
+
+                    // Also propagate qb_txn_id to the customer_payment (store credit) derived
+                    // from this credit memo — so it can be used as a QB credit when applying
+                    // to a future invoice via POST /api/payments/{qb_txn_id}/apply
+                    try {
+                        const { rows: cmRows } = await pool.query(
+                            `SELECT credit_memo_number FROM pos_credit_memo WHERE id = $1`,
+                            [row.reference_id]
+                        )
+                        const cmNumber = cmRows[0]?.credit_memo_number // e.g. "CM-20066"
+                        if (cmNumber) {
+                            const { rowCount } = await pool.query(
+                                `UPDATE customer_payment
+                                 SET metadata = COALESCE(metadata, '{}') || $2::jsonb
+                                 WHERE reference = $1
+                                   AND (metadata->>'qb_txn_id') IS NULL`,
+                                [cmNumber, JSON.stringify({ qb_txn_id: txnId, qb_sync_status: "synced" })]
+                            )
+                            if (rowCount && rowCount > 0) {
+                                logger.info(`${LOG_PREFIX} ✅ Wrote qb_txn_id=${txnId} to customer_payment linked to ${cmNumber}`)
+                            }
+                        }
+                    } catch (cpErr: any) {
+                        logger.warn(`${LOG_PREFIX} ⚠️ Could not propagate qb_txn_id to customer_payment: ${cpErr.message}`)
+                    }
+                }
+
                 if (txnId && row.step === "payment" && row.reference_id) {
                     try {
                         const { rows: cpRows } = await pool.query(

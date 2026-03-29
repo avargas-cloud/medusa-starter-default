@@ -239,6 +239,20 @@ export const QbSyncLogger = {
     },
 
     /**
+     * Persists the bridge operationId to the log entry mid-flight — call this
+     * immediately after queueing (before polling starts) so the recovery job
+     * can resume polling if the server restarts while waiting.
+     */
+    async setOperationId(logId: string, operationId: string): Promise<void> {
+        return withDb(undefined, async (db) => {
+            await db.query(
+                `UPDATE qb_sync_log SET qb_operation_id = $2 WHERE id = $1`,
+                [logId, operationId]
+            )
+        })
+    },
+
+    /**
      * Delete log entries older than `retentionDays` days.
      * Called by quickbooks-daily-sync.ts as a fallback when pg_cron is not available.
      * Default: 90 days retention.

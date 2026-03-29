@@ -28,8 +28,9 @@ export async function receivePaymentInQb(
 }
 
 /**
- * Applies a payment credit to an invoice (async — closes the accounting loop).
- * Called after createInvoiceInQb(), using the payment TxnID from receivePaymentInQb().
+ * Applies an existing unapplied ReceivePayment credit to an invoice via ReceivePaymentMod.
+ * Uses POST /api/payments/{creditTxnId}/apply — modifies the existing QB payment in-place
+ * rather than creating a new one. This is the counterpart to /unapply.
  */
 export async function applyPaymentToInvoiceInQb(payload: {
     customerId: string
@@ -43,11 +44,10 @@ export async function applyPaymentToInvoiceInQb(payload: {
     }
 
     try {
-        const data = await bridgeFetch("POST", `/api/payments`, {
+        const data = await bridgeFetch("POST", `/api/payments/${payload.creditTxnId}/apply`, {
             customerId: payload.customerId,
             invoiceId: payload.invoiceId,
             amount: payload.amount,
-            creditTxnId: payload.creditTxnId
         })
         const operationId = data?.operationId
         if (!operationId) throw new Error("Bridge did not return an operationId for apply-payment")

@@ -2,6 +2,7 @@ import { SubscriberArgs } from "@medusajs/framework"
 import { ContainerRegistrationKeys } from "@medusajs/utils"
 import { FINANCE_MODULE } from "../../../modules/finance"
 import { applyPaymentToInvoiceInQb, pollOperationResult } from "../qb-bridge-client"
+import { writePipelineRow } from "../qb-pipeline"
 
 const LOG_PREFIX = "[QB-POS-PAYMENT-APPLIED]"
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
@@ -33,6 +34,8 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
     }
 
     let paymentTxnId = payment.metadata?.qb_txn_id as string | undefined
+    // Declare here so it's available in all early-exit error paths below
+    const medusaPayRef = (payment as any).display_id ? `PAY-${(payment as any).display_id}` : null
 
     // Wait for the payment to finish syncing to QB if it hasn't yet (up to 400 seconds)
     if (!paymentTxnId) {
@@ -56,6 +59,14 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
 
     if (!paymentTxnId) {
         logger.warn(`${LOG_PREFIX} Payment ${payment_id} still has no qb_txn_id after polling. Cannot apply it in QuickBooks.`)
+        try {
+            await writePipelineRow({
+                orderId: order_id, referenceId: payment_id, referenceType: "customer_payment",
+                step: "apply_payment", status: "failed",
+                medusaRefNumber: medusaPayRef,
+                error: "Payment not yet synced to QB — retry after payment is confirmed",
+            })
+        } catch {}
         return
     }
 
@@ -102,8 +113,22 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
         return
     }
 
-    // 4. Fire the Bridge Request to Apply Payment to Invoice!
-    logger.info(`${LOG_PREFIX} 🎯 Applying Payment (TxnID: ${paymentTxnId}, Amount: $${amount_applied.toFixed(2)}) -> Invoice (TxnID: ${invoiceTxnId}) in QB...`)
+    // 4. Write pre-flight pipeline row
+    try {
+        await writePipelineRow({
+            orderId:       order_id,
+            referenceId:   payment_id,
+            referenceType: "customer_payment",
+            step:          "apply_payment",
+            status:        "pending",
+            medusaRefNumber: medusaPayRef,
+        })
+    } catch (pErr: any) {
+        logger.warn(`${LOG_PREFIX} Could not write pre-flight pipeline row: ${pErr.message}`)
+    }
+
+    // 5. Fire the Bridge Request to Apply Payment to Invoice!
+    logger.info(`${LOG_PREFIX} 🎯 Applying Payment (TxnID: ${paymentTxnId}, Amount: $${(amount_applied / 100).toFixed(2)}) -> Invoice (TxnID: ${invoiceTxnId}) in QB...`)
     
     // Fetch the customer based on the order to get QB List ID if needed
     // (applyPaymentToInvoiceInQb needs customerId)
@@ -129,15 +154,33 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
 
     if (!applyResult.success) {
         logger.error(`${LOG_PREFIX} ❌ Failed to apply payment in QB: ${applyResult.error}`)
+        try {
+            await writePipelineRow({
+                orderId: order_id, referenceId: payment_id, referenceType: "customer_payment",
+                step: "apply_payment", status: "failed",
+                medusaRefNumber: medusaPayRef, error: applyResult.error || "Apply failed",
+            })
+        } catch {}
     } else {
         const opId = applyResult.data?.operationId
         if (opId && opId !== "DRY_RUN") {
             logger.info(`${LOG_PREFIX} ✅ Application request queued. OperationID: ${opId}`)
             try {
+                await writePipelineRow({
+                    orderId: order_id, referenceId: payment_id, referenceType: "customer_payment",
+                    step: "apply_payment", status: "submitted",
+                    medusaRefNumber: medusaPayRef, bridgeOpId: opId,
+                })
+            } catch {}
+            try {
                 const finalResult = await pollOperationResult(opId, (m: string) => logger.info(m))
-                
                 if (finalResult && finalResult.txnId) {
                     logger.info(`${LOG_PREFIX} ✅ Successfully applied payment to invoice in QB! TxnID: ${finalResult.txnId}`)
+                    await writePipelineRow({
+                        orderId: order_id, referenceId: payment_id, referenceType: "customer_payment",
+                        step: "apply_payment", status: "confirmed",
+                        medusaRefNumber: medusaPayRef, bridgeOpId: opId, qbTxnId: finalResult.txnId,
+                    }).catch(() => {})
                 } else {
                     logger.warn(`${LOG_PREFIX} ⚠️ Polling completed but no TxnID returned by WebConnector.`)
                 }
@@ -146,6 +189,13 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
             }
         } else {
             logger.info(`${LOG_PREFIX} ✅ Dry-run or instant success reported.`)
+            try {
+                await writePipelineRow({
+                    orderId: order_id, referenceId: payment_id, referenceType: "customer_payment",
+                    step: "apply_payment", status: "confirmed",
+                    medusaRefNumber: medusaPayRef,
+                })
+            } catch {}
         }
     }
 }

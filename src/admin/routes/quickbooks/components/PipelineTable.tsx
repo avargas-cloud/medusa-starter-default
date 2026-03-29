@@ -4,7 +4,7 @@ import { ArrowPath } from "@medusajs/icons"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type PipelineStatus = "pending" | "submitted" | "confirmed" | "failed" | "skipped"
+type PipelineStatus = "pending" | "submitted" | "confirmed" | "failed" | "skipped" | "waiting"
 
 interface PipelineRow {
     id: string
@@ -16,15 +16,20 @@ interface PipelineRow {
     depends_on: string | null
     depends_on_step: string | null
     depends_on_status: string | null
+    depends_on_medusa_ref: string | null
+    payment_dep_ref: string | null
+    payment_dep_status: string | null
     bridge_op_id: string | null
     retry_count: number
     qb_txn_id: string | null
     qb_ref_number: string | null
+    medusa_ref_number: string | null
     error: string | null
     created_at: string
     submitted_at: string | null
     confirmed_at: string | null
     failed_at: string | null
+    order_display_id: number | null
 }
 
 interface PipelineCounts {
@@ -33,6 +38,7 @@ interface PipelineCounts {
     confirmed?: number
     failed?: number
     skipped?: number
+    waiting?: number
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -71,11 +77,12 @@ type BadgeColor = "orange" | "blue" | "green" | "red" | "grey"
 
 function StatusBadge({ status }: { status: PipelineStatus }) {
     const map: Record<PipelineStatus, { color: BadgeColor; label: string }> = {
-        pending:   { color: "orange", label: "Pending"   },
-        submitted: { color: "blue",   label: "Submitted" },
-        confirmed: { color: "green",  label: "Confirmed" },
-        failed:    { color: "red",    label: "Failed"    },
-        skipped:   { color: "grey",   label: "Skipped"   },
+        pending:   { color: "orange",  label: "Pending"     },
+        submitted: { color: "blue",    label: "Submitted"   },
+        confirmed: { color: "green",   label: "Confirmed"   },
+        failed:    { color: "red",     label: "Failed"      },
+        skipped:   { color: "grey",    label: "Skipped"     },
+        waiting:   { color: "blue",    label: "Waiting"     },
     }
     const s = map[status] ?? { color: "grey" as BadgeColor, label: status }
     return <Badge color={s.color} size="xsmall">{s.label}</Badge>
@@ -105,17 +112,18 @@ function PipelineRow({ row, onRetry, retrying }: {
     const [expanded, setExpanded] = useState(false)
     const icon  = STEP_ICONS[row.step]  ?? "📎"
     const label = STEP_LABELS[row.step] ?? row.step
-    const refLabel = row.reference_type ? (REF_TYPE_LABELS[row.reference_type] ?? row.reference_type) : "—"
-    const refId = row.order_id ?? row.reference_id ?? "—"
-    const shortRef = refId !== "—" ? refId.slice(-8) : "—"
+    const refLabel = row.reference_type ? (REF_TYPE_LABELS[row.reference_type] ?? row.reference_type) : null
+    const medusaRef = row.medusa_ref_number ?? null
+    const qbRef     = row.qb_ref_number     ?? null
 
     return (
         <>
             <tr
                 className={`border-b border-ui-border-base text-xs transition-colors ${
-                    row.status === "failed"    ? "bg-red-50/5"    :
-                    row.status === "pending"   ? "bg-yellow-50/5" :
-                    row.status === "submitted" ? "bg-blue-50/5"   : ""
+                    row.status === "failed"    ? "bg-red-50/5"      :
+                    row.status === "pending"   ? "bg-yellow-50/5"  :
+                    row.status === "submitted" ? "bg-blue-50/5"    :
+                    row.status === "waiting"   ? "bg-purple-50/5"  : ""
                 }`}
             >
                 {/* Step */}
@@ -126,31 +134,81 @@ function PipelineRow({ row, onRetry, retrying }: {
                     </span>
                 </td>
 
-                {/* Reference */}
-                <td className="px-3 py-2 whitespace-nowrap text-ui-fg-subtle">
-                    <span className="text-[10px] font-medium text-ui-fg-muted uppercase mr-1">{refLabel}</span>
-                    <span className="font-mono">…{shortRef}</span>
+                {/* Order */}
+                <td className="px-3 py-2 whitespace-nowrap">
+                    {row.order_display_id ? (
+                        <span className="font-mono text-[11px] text-ui-fg-subtle">#{row.order_display_id}</span>
+                    ) : (
+                        <span className="text-ui-fg-muted">—</span>
+                    )}
+                </td>
+
+                {/* Medusa Ref */}
+                <td className="px-3 py-2 whitespace-nowrap">
+                    {medusaRef ? (
+                        <span className="font-mono font-semibold text-ui-fg-base">{medusaRef}</span>
+                    ) : refLabel ? (
+                        <span className="text-[10px] text-ui-fg-muted">{refLabel}</span>
+                    ) : (
+                        <span className="text-ui-fg-muted">—</span>
+                    )}
+                </td>
+
+                {/* QB Ref — payments have no user-visible QB ref number, show Medusa ref instead */}
+                <td className="px-3 py-2 whitespace-nowrap">
+                    {qbRef ? (
+                        <span className="font-mono text-xs text-violet-600 font-semibold">{qbRef}</span>
+                    ) : (row.step === "payment" || row.step === "apply_payment") && medusaRef ? (
+                        <span className="font-mono text-xs text-ui-fg-base font-semibold">{medusaRef}</span>
+                    ) : row.status === "skipped" ? (
+                        <span className="text-ui-fg-muted">—</span>
+                    ) : (
+                        <span className="text-ui-fg-muted text-[10px]">pending…</span>
+                    )}
                 </td>
 
                 {/* Status */}
-                <td className="px-3 py-2">
+                <td className="px-3 py-2 whitespace-nowrap">
                     <StatusBadge status={row.status} />
                 </td>
 
                 {/* Depends on */}
                 <td className="px-3 py-2 text-ui-fg-subtle">
-                    {row.depends_on_step ? (
-                        <span className="flex items-center gap-1">
-                            <span className="text-ui-fg-muted">{STEP_LABELS[row.depends_on_step] ?? row.depends_on_step}</span>
-                            {row.depends_on_status === "confirmed" ? (
-                                <span className="text-green-600">✓</span>
-                            ) : (
-                                <span className="text-yellow-600">⏳</span>
-                            )}
-                        </span>
-                    ) : (
-                        <span className="text-ui-fg-muted">—</span>
-                    )}
+                    <span className="flex flex-col gap-0.5">
+                        {row.depends_on_step ? (
+                            <span className="flex items-center gap-1">
+                                <span className="text-ui-fg-muted text-[11px]">{STEP_LABELS[row.depends_on_step] ?? row.depends_on_step}</span>
+                                {row.depends_on_medusa_ref && (
+                                    <span className="font-mono font-semibold text-[11px] text-ui-fg-base">{row.depends_on_medusa_ref}</span>
+                                )}
+                                {row.depends_on_status === "confirmed" ? (
+                                    <span className="text-green-600 text-[10px]">✓</span>
+                                ) : (
+                                    <span className="text-yellow-600 text-[10px]">⏳</span>
+                                )}
+                            </span>
+                        ) : null}
+                        {row.step === "apply_payment" && row.payment_dep_ref ? (
+                            <span className="flex items-center gap-1">
+                                <span className="text-ui-fg-muted text-[11px]">Payment</span>
+                                <span className="font-mono font-semibold text-[11px] text-ui-fg-base">{row.payment_dep_ref}</span>
+                                {row.payment_dep_status === "confirmed" ? (
+                                    <span className="text-green-600 text-[10px]">✓</span>
+                                ) : (
+                                    <span className="text-yellow-600 text-[10px]">⏳</span>
+                                )}
+                            </span>
+                        ) : null}
+                        {row.step === "sales_order" && row.status === "waiting" && !row.depends_on_step ? (
+                            <span className="flex items-center gap-1">
+                                <span className="text-[10px]">🕐</span>
+                                <span className="text-ui-fg-muted text-[11px] italic">1 Hour Window</span>
+                            </span>
+                        ) : null}
+                        {!row.depends_on_step && !(row.step === "apply_payment" && row.payment_dep_ref) && !(row.step === "sales_order" && row.status === "waiting") && (
+                            <span className="text-ui-fg-muted">—</span>
+                        )}
+                    </span>
                 </td>
 
                 {/* QB TxnID */}
@@ -196,7 +254,7 @@ function PipelineRow({ row, onRetry, retrying }: {
                 {/* Actions */}
                 <td className="px-3 py-2">
                     <div className="flex items-center gap-1">
-                        {row.error && (
+                        {row.error && row.status !== "skipped" && (
                             <button
                                 onClick={() => setExpanded(v => !v)}
                                 className="text-[10px] text-red-600 hover:underline"
@@ -204,7 +262,7 @@ function PipelineRow({ row, onRetry, retrying }: {
                                 {expanded ? "▲ hide" : "▼ error"}
                             </button>
                         )}
-                        {(row.status === "failed" || row.status === "pending") && (
+                        {(row.status === "failed" || row.status === "waiting") && (
                             <button
                                 onClick={() => onRetry(row.id)}
                                 disabled={retrying}
@@ -220,7 +278,7 @@ function PipelineRow({ row, onRetry, retrying }: {
             {/* Error expansion row */}
             {expanded && row.error && (
                 <tr className="bg-red-50/5 border-b border-ui-border-base">
-                    <td colSpan={9} className="px-4 py-2">
+                    <td colSpan={10} className="px-4 py-2">
                         <pre className="text-[10px] text-red-400 whitespace-pre-wrap break-all font-mono">
                             {row.error}
                         </pre>
@@ -328,19 +386,21 @@ function FlushButton({ target, onDone }: { target: FlushTarget; onDone: () => vo
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export function PipelineTable() {
+    const PAGE_SIZE = 12
     const [rows, setRows]       = useState<PipelineRow[]>([])
     const [counts, setCounts]   = useState<PipelineCounts>({})
     const [total, setTotal]     = useState(0)
+    const [page, setPage]       = useState(0)
     const [loading, setLoading] = useState(false)
     const [statusFilter, setStatusFilter] = useState<string>("all")
     const [stepFilter, setStepFilter]     = useState<string>("all")
     const [retryingId, setRetryingId]     = useState<string | null>(null)
     const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-    const fetchPipeline = useCallback(async (silent = false) => {
+    const fetchPipeline = useCallback(async (silent = false, pg = page) => {
         if (!silent) setLoading(true)
         try {
-            const params = new URLSearchParams({ limit: "50" })
+            const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(pg * PAGE_SIZE) })
             if (statusFilter !== "all") params.set("status", statusFilter)
             if (stepFilter   !== "all") params.set("step",   stepFilter)
 
@@ -353,7 +413,7 @@ export function PipelineTable() {
         } catch { /* non-blocking */ } finally {
             if (!silent) setLoading(false)
         }
-    }, [statusFilter, stepFilter])
+    }, [statusFilter, stepFilter, page])
 
     // Initial load + filter changes
     useEffect(() => { fetchPipeline() }, [fetchPipeline])
@@ -421,6 +481,7 @@ export function PipelineTable() {
                 {/* Summary badges */}
                 <div className="flex items-center gap-2 mb-3 flex-wrap">
                     {([
+                        { key: "waiting",   label: "Waiting",   color: "purple" },
                         { key: "pending",   label: "Pending",   color: "orange" },
                         { key: "submitted", label: "Submitted", color: "blue"   },
                         { key: "confirmed", label: "Confirmed", color: "green"  },
@@ -448,6 +509,7 @@ export function PipelineTable() {
                         className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base"
                     >
                         <option value="all">All Statuses</option>
+                        <option value="waiting">Waiting</option>
                         <option value="pending">Pending</option>
                         <option value="submitted">Submitted</option>
                         <option value="confirmed">Confirmed</option>
@@ -488,7 +550,9 @@ export function PipelineTable() {
                             <thead className="bg-ui-bg-subtle border-b border-ui-border-base">
                                 <tr>
                                     <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Step</th>
-                                    <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Reference</th>
+                                    <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Order</th>
+                                    <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Medusa Ref</th>
+                                    <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">QB Ref</th>
                                     <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Status</th>
                                     <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Depends On</th>
                                     <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">QB TxnID</th>
@@ -509,6 +573,31 @@ export function PipelineTable() {
                                 ))}
                             </tbody>
                         </table>
+                    </div>
+                )}
+
+                {/* Pagination */}
+                {Math.ceil(total / PAGE_SIZE) > 1 && (
+                    <div className="flex items-center justify-between mt-3 pt-3 border-t border-ui-border-base">
+                        <span className="text-xs text-ui-fg-muted">
+                            Page {page + 1} of {Math.ceil(total / PAGE_SIZE)}
+                        </span>
+                        <div className="flex gap-2">
+                            <button
+                                disabled={page === 0}
+                                onClick={() => { setPage(p => p - 1); fetchPipeline(false, page - 1) }}
+                                className="text-xs px-3 py-1 rounded border border-ui-border-base disabled:opacity-40 hover:bg-ui-bg-subtle"
+                            >
+                                ← Prev
+                            </button>
+                            <button
+                                disabled={page >= Math.ceil(total / PAGE_SIZE) - 1}
+                                onClick={() => { setPage(p => p + 1); fetchPipeline(false, page + 1) }}
+                                className="text-xs px-3 py-1 rounded border border-ui-border-base disabled:opacity-40 hover:bg-ui-bg-subtle"
+                            >
+                                Next →
+                            </button>
+                        </div>
                     </div>
                 )}
             </div>

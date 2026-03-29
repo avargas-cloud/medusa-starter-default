@@ -45,7 +45,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                         await orderModule.updateOrders(id, { metadata: { ...(order.metadata || {}), qb_sync_status: "voiding" } })
                     } catch (e) {}
                     // QuickBooks doesn't natively support "VoidEstimate", but we can mark it inactive/sync status voided.
-                    const { closeEstimateInQb } = require('../../../../../lib/quickbooks/qb-bridge-client')
+                    const { closeEstimateInQb } = require('../../../../lib/quickbooks/qb-bridge-client')
                     if (closeEstimateInQb) {
                         await closeEstimateInQb(getEstimateTxnId(order.metadata || {}), (m: string) => logger.info(m))
                     }
@@ -57,13 +57,84 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 }
 
                 const estimateTxnId = getEstimateTxnId(order.metadata || {})
-                const syncStatus   = order.metadata?.qb_sync_status as string | undefined
-                const inFlight     = syncStatus && syncStatus !== "error" && syncStatus !== "voided"
-                if (estimateTxnId || inFlight) {
-                    const reason = estimateTxnId
-                        ? "Estimate is already confirmed in QuickBooks."
-                        : `Estimate is already in progress (status: ${syncStatus}).`
-                    return res.status(400).json({ error: `Cannot sync: ${reason}` })
+                const syncStatus    = order.metadata?.qb_sync_status as string | undefined
+                const inFlight      = syncStatus && ['creating', 'editing', 'pending'].includes(syncStatus)
+
+                // If Estimate already exists → Mod in the background, return immediately
+                if (estimateTxnId) {
+                    ;(async () => {
+                        try {
+                            const { buildQbItems, buildQbOrderDiscountLines } = require("../../../../lib/quickbooks/order-flow-core")
+                            const { updateEstimateInQb } = require("../../../../lib/quickbooks/client/estimates")
+                            const { cacheEditSequence } = require("../../../../lib/quickbooks/qb-pipeline")
+
+                            const { data: [fullOrder] } = await query.graph({
+                                entity: "order",
+                                fields: [
+                                    "id", "metadata", "tax_total", "subtotal", "discount_total",
+                                    "items.*", "items.variant.*", "items.variant.metadata",
+                                ],
+                                filters: { id }
+                            })
+
+                            if (!fullOrder) throw new Error(`Order ${id} not found`)
+
+                            const activeItems = (fullOrder.items || [])
+                                .filter((item: any) => (item.quantity ?? 0) > 0)
+                                .map((item: any) => ({ ...item, unit_price: Number(item.unit_price || 0), subtotal: undefined }))
+
+                            const qbItems = buildQbItems(activeItems, fullOrder.metadata)
+
+                            const discountTotal = Number(fullOrder.discount_total || 0)
+                            if (discountTotal > 0) {
+                                const subtotal = Number(fullOrder.subtotal || 0)
+                                const pct = subtotal > 0 ? (discountTotal / subtotal) * 100 : null
+                                buildQbOrderDiscountLines(discountTotal, pct).forEach((l: any) => qbItems.push(l))
+                            }
+
+                            const hasTax = fullOrder.tax_total && fullOrder.tax_total > 0
+
+                            logger.info(`${LOG_PREFIX} Estimate already exists (${estimateTxnId}) — running EstimateMod with ${qbItems.length} items`)
+
+                            const modResult = await updateEstimateInQb({
+                                txnId: estimateTxnId,
+                                items: qbItems,
+                                ...(hasTax ? {} : { taxExempt: true }),
+                            })
+
+                            if (!modResult.success) {
+                                logger.error(`${LOG_PREFIX} ❌ Estimate Mod failed: ${modResult.error}`)
+                                return
+                            }
+
+                            if (modResult.data?.operationId) {
+                                const { pollOperationResult } = require("../../../../lib/quickbooks/client/core")
+                                const pollResult = await pollOperationResult(modResult.data.operationId)
+                                if (pollResult.editSequence) {
+                                    await cacheEditSequence("estimate", estimateTxnId, pollResult.editSequence)
+                                    const refreshed = await orderModule.retrieveOrder(id)
+                                    await orderModule.updateOrders(id, {
+                                        metadata: {
+                                            ...(refreshed.metadata || {}),
+                                            qb_estimate: {
+                                                ...((refreshed.metadata?.qb_estimate as object) || {}),
+                                                edit_sequence: pollResult.editSequence,
+                                            }
+                                        }
+                                    })
+                                    logger.info(`${LOG_PREFIX} ✅ Estimate Mod confirmed — EditSeq=${pollResult.editSequence}`)
+                                }
+                            }
+                        } catch (bgErr: any) {
+                            logger.error(`${LOG_PREFIX} Background Estimate Mod error: ${bgErr.message}`)
+                        }
+                    })()
+
+                    return res.json({ success: true, message: "Estimate update queued" })
+                }
+
+                if (inFlight) {
+                    return res.status(400).json({ error: `Cannot sync: Estimate is already in progress (status: ${syncStatus}).` })
                 }
 
                 // Fire-and-forget — pass isCron=true to bypass the POS "delay 1h" guard
@@ -87,7 +158,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     try {
                         await orderModule.updateOrders(id, { metadata: { ...(order.metadata || {}), qb_sync_status: "voiding" } })
                     } catch (e) {}
-                    const { handleOrderCanceled } = require("../../../../../lib/quickbooks/handlers/handle-order-canceled")
+                    const { handleOrderCanceled } = require("../../../../lib/quickbooks/handlers/handle-order-canceled")
                     await handleOrderCanceled({ id }, orderModule, logger)
                     // Optimistically set to voided or error depending on if it works
                     try {
@@ -99,12 +170,111 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
                 const soTxnId      = getSoTxnId(order.metadata || {})
                 const soSyncStatus = order.metadata?.qb_sync_status as string | undefined
-                const soInFlight   = soSyncStatus && soSyncStatus !== "error" && soSyncStatus !== "voided"
-                if (soTxnId || soInFlight) {
-                    const reason = soTxnId
-                        ? "Sales Order is already confirmed in QuickBooks."
-                        : `Sales Order is already in progress (status: ${soSyncStatus}).`
-                    return res.status(400).json({ error: `Cannot sync: ${reason}` })
+                // Only block on SO-specific in-progress states — "synced"/"child_synced" belongs to the Estimate, not SO
+                const soInFlight   = soSyncStatus && ['creating', 'editing', 'pending'].includes(soSyncStatus)
+
+                // If SO already exists → Mod (update) in the background, return immediately
+                if (soTxnId) {
+                    ;(async () => {
+                        try {
+                            const { buildQbItems, buildShippingQbItem, buildQbOrderDiscountLines } = require("../../../../lib/quickbooks/order-flow-core")
+                            const { updateSalesOrderInQb } = require("../../../../lib/quickbooks/client/sales-orders")
+                            const { getQbConfig } = require("../../../../lib/quickbooks/handlers/utils")
+                            const { cacheEditSequence } = require("../../../../lib/quickbooks/qb-pipeline")
+                            const { pollOperationResult } = require("../../../../lib/quickbooks/client/core")
+
+                            const { data: [fullOrder] } = await query.graph({
+                                entity: "order",
+                                fields: [
+                                    "id", "metadata", "tax_total", "subtotal", "discount_total",
+                                    "customer_id", "customer.*", "customer.metadata",
+                                    "items.*", "items.variant.*", "items.variant.metadata",
+                                    "shipping_methods.*",
+                                ],
+                                filters: { id }
+                            })
+
+                            if (!fullOrder) throw new Error(`Order ${id} not found`)
+
+                            const qbConfig = await getQbConfig()
+                            const activeItems = (fullOrder.items || [])
+                                .filter((item: any) => (item.quantity ?? 0) > 0)
+                                .map((item: any) => ({ ...item, unit_price: Number(item.unit_price || 0), subtotal: undefined }))
+
+                            const qbItems = buildQbItems(activeItems, fullOrder.metadata)
+
+                            const discountTotal = Number(fullOrder.discount_total || 0)
+                            if (discountTotal > 0) {
+                                const subtotal = Number(fullOrder.subtotal || 0)
+                                const pct = subtotal > 0 ? (discountTotal / subtotal) * 100 : null
+                                buildQbOrderDiscountLines(discountTotal, pct).forEach((l: any) => qbItems.push(l))
+                            }
+
+                            const shippingItem = buildShippingQbItem(fullOrder.shipping_methods || [], qbConfig.shippingItemId)
+                            if (shippingItem) qbItems.push(shippingItem)
+
+                            const hasTax = fullOrder.tax_total && fullOrder.tax_total > 0
+                            const salesTaxCode = hasTax ? qbConfig.defaultSalesTaxCode : undefined
+                            const qbListId = (fullOrder.customer as any)?.metadata?.qb_list_id || fullOrder.metadata?.qb_list_id
+
+                            logger.info(`${LOG_PREFIX} SO already exists (${soTxnId}) — running SalesOrderMod with ${qbItems.length} items`)
+
+                            const modResult = await updateSalesOrderInQb({
+                                txnId: soTxnId,
+                                ...(qbListId ? { customerId: qbListId } : {}),
+                                items: qbItems,
+                                ...(salesTaxCode ? { salesTaxCode } : { taxExempt: true }),
+                            })
+
+                            if (!modResult.success) {
+                                logger.error(`${LOG_PREFIX} ❌ SO Mod failed: ${modResult.error}`)
+                                return
+                            }
+
+                            if (modResult.data?.operationId) {
+                                const pollResult = await pollOperationResult(modResult.data.operationId)
+                                if (pollResult.editSequence) {
+                                    await cacheEditSequence("sales_order", soTxnId, pollResult.editSequence)
+                                    const refreshed = await orderModule.retrieveOrder(id)
+                                    await orderModule.updateOrders(id, {
+                                        metadata: {
+                                            ...(refreshed.metadata || {}),
+                                            qb_sales_order: {
+                                                ...((refreshed.metadata?.qb_sales_order as object) || {}),
+                                                edit_sequence: pollResult.editSequence,
+                                            }
+                                        }
+                                    })
+                                    logger.info(`${LOG_PREFIX} ✅ SO Mod confirmed — EditSeq=${pollResult.editSequence}`)
+                                }
+                            }
+                        } catch (bgErr: any) {
+                            logger.error(`${LOG_PREFIX} Background SO Mod error: ${bgErr.message}`)
+                        }
+                    })()
+
+                    return res.json({ success: true, message: "Sales Order update queued" })
+                }
+
+                // If metadata says in-flight, verify there is actually an active pipeline row.
+                // If not, the status is stale (server restarted mid-operation) — allow retry.
+                if (soInFlight) {
+                    const { getDbPool } = require("../../../utils/db-pool")
+                    const pool = getDbPool()
+                    const { rows: activeRows } = await pool.query(
+                        `SELECT id FROM qb_order_pipeline
+                         WHERE order_id = $1 AND step = 'sales_order' AND status IN ('pending','submitted')
+                         LIMIT 1`,
+                        [id]
+                    )
+                    if (activeRows.length > 0) {
+                        return res.status(400).json({ error: `Cannot sync: Sales Order is already in progress (status: ${soSyncStatus}).` })
+                    }
+                    // Stale state — clear it and allow retry
+                    logger.warn(`${LOG_PREFIX} ⚠️ Stale qb_sync_status="${soSyncStatus}" with no active pipeline row — clearing and retrying`)
+                    try {
+                        await orderModule.updateOrders(id, { metadata: { ...(order.metadata || {}), qb_sync_status: null } })
+                    } catch (e) {}
                 }
 
                 // Safety Lock: Check if fully or partially invoiced.
@@ -114,12 +284,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     fields: ["id"],
                     filters: { order_id: id }
                 })
-                
+
                 if (invoices && invoices.length > 0) {
                     return res.status(400).json({ error: "Cannot manual-sync Order: Products are already invoiced. Use Invoice manual sync instead to preserve accounting links." })
                 }
 
-                handleOrderPlaced({ id }, orderModule, customerModule, req.scope, logger, false)
+                // isCron=true bypasses the POS 1-hour delay guard (manual sync = explicit override)
+                handleOrderPlaced({ id }, orderModule, customerModule, req.scope, logger, true)
                     .catch((err: any) => logger.error(`${LOG_PREFIX} Background order sync error: ${err.message}`))
                 return res.json({ success: true, message: "Sales Order sync queued" })
             }
@@ -133,7 +304,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     if (!invoice.metadata?.qb_txn_id && !invoice.metadata?.qb_ref_number && !invoice.metadata?.qb_invoice_txn_id && !invoice.metadata?.qb_sales_receipt_txn_id) {
                         return res.status(400).json({ error: "Cannot void: Invoice is not in QuickBooks." })
                     }
-                    const { handleInvoiceVoided } = require("../../../../../lib/quickbooks/handlers/handle-invoice-voided")
+                    const { handleInvoiceVoided } = require("../../../../lib/quickbooks/handlers/handle-invoice-voided")
                     await handleInvoiceVoided({ order_id: invoice.order_id, invoice_id: id }, orderModule, logger)
                     return res.json({ success: true, message: "Invoice void logic executed" })
                 }
@@ -141,7 +312,35 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 const invTxnId = invoice.metadata?.qb_txn_id || invoice.metadata?.qb_ref_number
                     || invoice.metadata?.qb_invoice_txn_id || invoice.metadata?.qb_sales_receipt_txn_id
                 if (invTxnId) {
-                    return res.status(400).json({ error: "Cannot sync: Invoice is already in QuickBooks." })
+                    // Already in QB → fetch + cache EditSequence in background
+                    ;(async () => {
+                        try {
+                            const { bridgeFetch, pollRawOperationResult } = require("../../../../lib/quickbooks/client/core")
+                            const { cacheEditSequence } = require("../../../../lib/quickbooks/qb-pipeline")
+                            const isSR = !!(invoice.metadata?.qb_sales_receipt_txn_id
+                                || invoice.metadata?.is_sales_receipt === true
+                                || invoice.metadata?.is_sales_receipt === "true")
+                            const endpoint = isSR ? "sales-receipts" : "invoices"
+                            const entityType = isSR ? "sales_receipt" : "invoice"
+                            const resp = await bridgeFetch("GET", `/api/${endpoint}/${invTxnId}`)
+                            if (!resp?.operationId) return
+                            const raw = await pollRawOperationResult(resp.operationId)
+                            const editSeq =
+                                raw?.QBXML?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet?.EditSequence ||
+                                raw?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet?.EditSequence ||
+                                raw?.InvoiceRet?.EditSequence ||
+                                raw?.QBXML?.QBXMLMsgsRs?.SalesReceiptQueryRs?.SalesReceiptRet?.EditSequence ||
+                                raw?.QBXMLMsgsRs?.SalesReceiptQueryRs?.SalesReceiptRet?.EditSequence ||
+                                raw?.SalesReceiptRet?.EditSequence
+                            if (editSeq) {
+                                await cacheEditSequence(entityType, invTxnId, String(editSeq))
+                                logger.info(`${LOG_PREFIX} ✅ Cached EditSeq for ${entityType} ${invTxnId}: ${editSeq}`)
+                            }
+                        } catch (bgErr: any) {
+                            logger.warn(`${LOG_PREFIX} ⚠️ Could not refresh invoice EditSeq: ${bgErr.message}`)
+                        }
+                    })()
+                    return res.json({ success: true, message: "Invoice already in QuickBooks — EditSequence refresh queued" })
                 }
 
                 const { data: [order] } = await query.graph({
@@ -191,12 +390,32 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 
                 const payTxnId      = payment.metadata?.qb_txn_id as string | undefined
                 const paySyncStatus = payment.metadata?.qb_sync_status as string | undefined
-                const payInFlight   = paySyncStatus && paySyncStatus !== "error" && paySyncStatus !== "voided"
-                if (payTxnId || payInFlight) {
-                    const reason = payTxnId
-                        ? "Payment is already confirmed in QuickBooks."
-                        : `Payment is already in progress (status: ${paySyncStatus}).`
-                    return res.status(400).json({ error: `Cannot sync: ${reason}` })
+                const payInFlight   = paySyncStatus && ['creating', 'editing', 'pending'].includes(paySyncStatus)
+                if (payTxnId) {
+                    // Already in QB → fetch + cache EditSequence in background
+                    ;(async () => {
+                        try {
+                            const { bridgeFetch, pollRawOperationResult } = require("../../../../lib/quickbooks/client/core")
+                            const { cacheEditSequence } = require("../../../../lib/quickbooks/qb-pipeline")
+                            const resp = await bridgeFetch("GET", `/api/payments/${payTxnId}`)
+                            if (!resp?.operationId) return
+                            const raw = await pollRawOperationResult(resp.operationId)
+                            const editSeq =
+                                raw?.QBXML?.QBXMLMsgsRs?.ReceivePaymentQueryRs?.ReceivePaymentRet?.EditSequence ||
+                                raw?.QBXMLMsgsRs?.ReceivePaymentQueryRs?.ReceivePaymentRet?.EditSequence ||
+                                raw?.ReceivePaymentRet?.EditSequence
+                            if (editSeq) {
+                                await cacheEditSequence("payment", payTxnId, String(editSeq))
+                                logger.info(`${LOG_PREFIX} ✅ Cached EditSeq for payment ${payTxnId}: ${editSeq}`)
+                            }
+                        } catch (bgErr: any) {
+                            logger.warn(`${LOG_PREFIX} ⚠️ Could not refresh payment EditSeq: ${bgErr.message}`)
+                        }
+                    })()
+                    return res.json({ success: true, message: "Payment already in QuickBooks — EditSequence refresh queued" })
+                }
+                if (payInFlight) {
+                    return res.status(400).json({ error: `Cannot sync: Payment is already in progress (status: ${paySyncStatus}).` })
                 }
 
                 // Fire-and-forget — double sequence runs in background
@@ -237,7 +456,28 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 if (!payment || payment.type !== "refund") return res.status(404).json({ error: "Refund not found" })
                 
                 if (payment.metadata?.qb_txn_id) {
-                    return res.status(400).json({ error: "Cannot sync: Refund is already in QuickBooks." })
+                    // Already in QB → fetch + cache EditSequence in background
+                    const refundTxnId = payment.metadata.qb_txn_id as string
+                    ;(async () => {
+                        try {
+                            const { bridgeFetch, pollRawOperationResult } = require("../../../../lib/quickbooks/client/core")
+                            const { cacheEditSequence } = require("../../../../lib/quickbooks/qb-pipeline")
+                            const resp = await bridgeFetch("GET", `/api/checks/${refundTxnId}`)
+                            if (!resp?.operationId) return
+                            const raw = await pollRawOperationResult(resp.operationId)
+                            const editSeq =
+                                raw?.QBXML?.QBXMLMsgsRs?.CheckQueryRs?.CheckRet?.EditSequence ||
+                                raw?.QBXMLMsgsRs?.CheckQueryRs?.CheckRet?.EditSequence ||
+                                raw?.CheckRet?.EditSequence
+                            if (editSeq) {
+                                await cacheEditSequence("write_check", refundTxnId, String(editSeq))
+                                logger.info(`${LOG_PREFIX} ✅ Cached EditSeq for write_check ${refundTxnId}: ${editSeq}`)
+                            }
+                        } catch (bgErr: any) {
+                            logger.warn(`${LOG_PREFIX} ⚠️ Could not refresh refund EditSeq: ${bgErr.message}`)
+                        }
+                    })()
+                    return res.json({ success: true, message: "Refund already in QuickBooks — EditSequence refresh queued" })
                 }
                 
                 handlePosPaymentCreated({
@@ -253,7 +493,32 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 const creditMemo = await creditMemoService.retrievePosCreditMemo(id, { relations: ["items"] })
                 if (!creditMemo) return res.status(404).json({ error: "Credit Memo not found" })
                 if (creditMemo.status !== 'completed') return res.status(400).json({ error: "Only completed credit memos can be synced to QuickBooks." })
-                
+
+                const cmTxnId = creditMemo.metadata?.qb_txn_id as string | undefined
+                if (cmTxnId) {
+                    // Already in QB → fetch + cache EditSequence in background
+                    ;(async () => {
+                        try {
+                            const { bridgeFetch, pollRawOperationResult } = require("../../../../lib/quickbooks/client/core")
+                            const { cacheEditSequence } = require("../../../../lib/quickbooks/qb-pipeline")
+                            const resp = await bridgeFetch("GET", `/api/credit-memos/${cmTxnId}`)
+                            if (!resp?.operationId) return
+                            const raw = await pollRawOperationResult(resp.operationId)
+                            const editSeq =
+                                raw?.QBXML?.QBXMLMsgsRs?.CreditMemoQueryRs?.CreditMemoRet?.EditSequence ||
+                                raw?.QBXMLMsgsRs?.CreditMemoQueryRs?.CreditMemoRet?.EditSequence ||
+                                raw?.CreditMemoRet?.EditSequence
+                            if (editSeq) {
+                                await cacheEditSequence("credit_memo", cmTxnId, String(editSeq))
+                                logger.info(`${LOG_PREFIX} ✅ Cached EditSeq for credit_memo ${cmTxnId}: ${editSeq}`)
+                            }
+                        } catch (bgErr: any) {
+                            logger.warn(`${LOG_PREFIX} ⚠️ Could not refresh credit memo EditSeq: ${bgErr.message}`)
+                        }
+                    })()
+                    return res.json({ success: true, message: "Credit Memo already in QuickBooks — EditSequence refresh queued" })
+                }
+
                 const customerModule = req.scope.resolve(Modules.CUSTOMER)
                 let customer
                 try {
@@ -262,7 +527,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     return res.status(404).json({ error: "Customer not found for this Credit Memo." })
                 }
                 
-                const { ensureCustomerInQb } = require('../../../../../../lib/quickbooks/order-flow-core')
+                const { ensureCustomerInQb } = require('../../../../lib/quickbooks/order-flow-core')
                 const custResult: any = await ensureCustomerInQb(customer, customerModule, (m: string) => logger.info(m))
                 
                 if (!custResult.success || !custResult.qbCustomerId) {
@@ -278,7 +543,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     desc: item.title
                 }))
 
-                const { createCreditMemoInQb } = require('../../../../../../lib/quickbooks/client')
+                const { createCreditMemoInQb } = require('../../../../lib/quickbooks/client')
                 const cmResult = await createCreditMemoInQb({
                     customerId: custResult.qbCustomerId,
                     date: creditMemo.completed_at ? new Date(creditMemo.completed_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],

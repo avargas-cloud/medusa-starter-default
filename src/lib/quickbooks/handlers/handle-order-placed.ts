@@ -2,7 +2,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils"
 import { processOrderInQb, buildQbItems, buildShippingQbItem, buildQbOrderDiscountLines } from "../order-flow-core"
 import { buildSaleOrderPatch, getEstimateTxnId, getSoTxnId, getSoOperationId } from "../qb-metadata-types"
 import { LOG_PREFIX, getQbConfig, isPosOrder, processingOrders } from "./utils"
-import { writePipelineRow } from "../qb-pipeline"
+import { writePipelineRow, cacheEditSequence } from "../qb-pipeline"
 
 export async function handleOrderPlaced(
     data: any,
@@ -50,6 +50,13 @@ export async function handleOrderPlaced(
 
         if (!isCron && isPosOrder(order)) {
             logger.info(`${LOG_PREFIX} ⏭️ POS order (channel: ${order.sales_channel_id}) — Sales Order creation delayed by 1 hour (handled by cron), skipping immediate sync`)
+            const soFriendlyRef = (order.metadata?.document_number as string | undefined)
+                || (order.display_id ? `#${order.display_id}` : null)
+            try {
+                await writePipelineRow({ orderId, step: "sales_order", status: "waiting", medusaRefNumber: soFriendlyRef })
+            } catch (pErr: any) {
+                logger.warn(`${LOG_PREFIX} ⚠️ Could not write waiting pipeline row: ${pErr.message}`)
+            }
             return
         }
 
@@ -149,9 +156,28 @@ export async function handleOrderPlaced(
             logger.warn(`${LOG_PREFIX} Could not set creating status: ${mErr}`)
         }
 
+        // Write "pending" pipeline row immediately so it appears in the UI before polling starts.
+        // Include medusaRefNumber so the cron path (which may not have a prior "waiting" row
+        // with the ref already set) also shows the Medusa reference in the pipeline UI.
+        const soFriendlyRef = (order.metadata?.document_number as string | undefined)
+            || (order.display_id ? `S${order.display_id}` : null)
+        try {
+            await writePipelineRow({
+                orderId,
+                step:            "sales_order",
+                status:          "pending",
+                medusaRefNumber: soFriendlyRef,
+            })
+        } catch (pErr: any) {
+            logger.warn(`${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${pErr.message}`)
+        }
+
         const result = await processOrderInQb(orderWithCustomer, customerModule, {
             prebuiltItems: qbItems,
             salesTaxCode,
+            onSubmitted: async (operationId) => {
+                await writePipelineRow({ orderId: orderWithCustomer.id, step: "sales_order", status: "submitted", bridgeOpId: operationId })
+            },
         })
 
         if (result.skipped) {
@@ -176,14 +202,25 @@ export async function handleOrderPlaced(
             try {
                 const isAsync = !!result.operationId && !result.soTxnId
                 const patch = buildSaleOrderPatch(order.metadata || {}, {
-                    txnId:       result.soTxnId || null,
-                    refNumber:   result.soRefNumber || null,
-                    operationId: result.operationId || null,
-                    customerId:  result.customerId || null,
-                    syncStatus:  isAsync ? "pending" : "synced",
+                    txnId:        result.soTxnId || null,
+                    refNumber:    result.soRefNumber || null,
+                    operationId:  result.operationId || null,
+                    editSequence: result.editSequence || null,
+                    customerId:   result.customerId || null,
+                    syncStatus:   isAsync ? "pending" : "synced",
                 })
                 await orderModule.updateOrders(orderId, { metadata: patch })
-                logger.info(`${LOG_PREFIX} ✅ Saved SO metadata — TxnID=${result.soTxnId}, Ref=${result.soRefNumber}, OpID=${result.operationId}, status=synced`)
+                logger.info(`${LOG_PREFIX} ✅ Saved SO metadata — TxnID=${result.soTxnId}, Ref=${result.soRefNumber}, EditSeq=${result.editSequence ?? "none"}, OpID=${result.operationId}`)
+
+                // Cache EditSequence for future Mod ops
+                if (result.editSequence && result.soTxnId) {
+                    try {
+                        await cacheEditSequence("sales_order", result.soTxnId, result.editSequence)
+                        logger.info(`${LOG_PREFIX} ✅ Cached EditSequence for SO TxnID=${result.soTxnId}`)
+                    } catch (cacheErr: any) {
+                        logger.warn(`${LOG_PREFIX} ⚠️ Could not cache EditSequence: ${cacheErr.message}`)
+                    }
+                }
             } catch (metaErr: any) {
                 logger.error(`${LOG_PREFIX} ⚠️ Failed to save order metadata: ${metaErr.message}`)
             }

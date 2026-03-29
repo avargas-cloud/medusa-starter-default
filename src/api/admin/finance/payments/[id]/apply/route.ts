@@ -1,8 +1,10 @@
 import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
-import { Modules } from '@medusajs/utils'
 import { FINANCE_MODULE } from '../../../../../../modules/finance'
 import { INVOICE_MODULE } from '../../../../../../modules/invoices'
 import { registerMedusaPayment } from '../../../../invoices/register-medusa-payment'
+import { writePipelineRow } from '../../../../../../lib/quickbooks/qb-pipeline'
+import { handlePosPaymentApplied } from '../../../../../../lib/quickbooks/handlers/handle-pos-payment-applied'
+import { getDbPool } from '../../../../../utils/db-pool'
 
 function getNum(val: any): number {
     if (val === null || val === undefined) return 0;
@@ -34,7 +36,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     const financeService = req.scope.resolve(FINANCE_MODULE)
     const invoiceService = req.scope.resolve(INVOICE_MODULE)
-    const eventBus = req.scope.resolve(Modules.EVENT_BUS)
 
     try {
         // 1. Fetch the CustomerPayment with its current applications
@@ -141,20 +142,65 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             relations: ['applications']
         })
 
-        // 8. Fire event for QB Sync to link the existing Unapplied Credit to the Invoice
-        try {
-            await eventBus.emit({
-                name: "pos.payment.applied",
-                data: {
-                    payment_id: paymentId,
-                    invoice_id: invoice_id,
-                    order_id: invoice.order_id,
-                    amount_applied,
-                    application_id: application.id
+        // 8. Write upfront apply_payment pipeline row + fire QB sync via direct exec (bypass BullMQ)
+        if (process.env.QB_ORDER_FLOW_ENABLED === "true" && invoice.order_id) {
+            // Look up the payment's display_id for the medusa ref
+            let applyMedusaRef: string | null = null
+            try {
+                const payForRef = await financeService.retrieveCustomerPayment(paymentId)
+                if ((payForRef as any).display_id) {
+                    applyMedusaRef = `PAY-${(payForRef as any).display_id}`
                 }
-            })
-        } catch (emitErr: any) {
-            req.scope.resolve('logger').error(`Failed to emit pos.payment.applied: ${emitErr.message}`)
+            } catch {}
+
+            // Look up invoice pipeline row to set dependsOn
+            let invoicePipelineRowId: string | null = null
+            try {
+                const pool = getDbPool()
+                const { rows: invRows } = await pool.query(
+                    `SELECT id FROM qb_order_pipeline
+                     WHERE order_id = $1 AND step = 'invoice' AND reference_id = $2
+                     ORDER BY created_at DESC LIMIT 1`,
+                    [invoice.order_id, invoice_id]
+                )
+                invoicePipelineRowId = invRows[0]?.id ?? null
+            } catch {}
+
+            // Upfront waiting row — gives instant UI visibility before handler runs
+            try {
+                await writePipelineRow({
+                    orderId: invoice.order_id,
+                    referenceId: paymentId,
+                    referenceType: "customer_payment",
+                    step: "apply_payment",
+                    status: "waiting",
+                    dependsOn: invoicePipelineRowId,
+                    medusaRefNumber: applyMedusaRef,
+                })
+            } catch (rowErr: any) {
+                req.scope.resolve('logger').warn(`[apply] Could not write upfront pipeline row: ${rowErr.message}`)
+            }
+
+            // Direct exec — reliable, bypasses BullMQ outbox
+            setTimeout(async () => {
+                try {
+                    await handlePosPaymentApplied({
+                        event: {
+                            name: "pos.payment.applied",
+                            data: {
+                                payment_id: paymentId,
+                                invoice_id: invoice_id,
+                                order_id: invoice.order_id,
+                                amount_applied,
+                                application_id: application.id,
+                            },
+                        },
+                        container: req.scope,
+                    } as any)
+                } catch (execErr: any) {
+                    req.scope.resolve('logger').error(`[apply] Direct exec pos.payment.applied failed: ${execErr.message}`)
+                }
+            }, 100)
         }
 
         return res.json({ payment: updatedPayment, application })

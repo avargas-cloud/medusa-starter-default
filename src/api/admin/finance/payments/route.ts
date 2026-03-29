@@ -1,6 +1,7 @@
 import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
-import { Modules } from '@medusajs/utils'
 import { FINANCE_MODULE } from '../../../../modules/finance'
+import { writePipelineRow } from '../../../../lib/quickbooks/qb-pipeline'
+import { handlePosPaymentCreated } from '../../../../lib/quickbooks/handlers/handle-pos-payment-created'
 
 /**
  * GET /admin/finance/payments
@@ -31,7 +32,6 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const financeService = req.scope.resolve(FINANCE_MODULE)
-    const eventBus = req.scope.resolve(Modules.EVENT_BUS)
     const { customer_id, amount, method, reference, notes, received_at, created_by, source, type, metadata } = req.body as any
 
     if (!customer_id) {
@@ -78,19 +78,35 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             status: 'available' // A new manual payment is always available until applied
         })
         
-        // Emit event for QuickBooks syncing (best-effort async over BullMQ)
-        eventBus.emit({
-            name: "pos.payment.created",
-            data: { id: payment.id }
-        }).catch((err: any) => console.error(err))
+        // Write upfront pipeline row + direct exec (bypasses BullMQ outbox)
+        if (process.env.QB_ORDER_FLOW_ENABLED === "true") {
+            const orderId: string | null = (metadata as any)?.order_id ?? null
+            try {
+                await writePipelineRow({
+                    orderId,
+                    referenceId: payment.id,
+                    referenceType: "customer_payment",
+                    step: "payment",
+                    status: "waiting",
+                    medusaRefNumber: nextPayNum ? `PAY-${nextPayNum}` : null,
+                })
+            } catch (rowErr: any) {
+                console.warn(`[finance/payments] Could not write upfront pipeline row: ${rowErr.message}`)
+            }
 
-        // Bypass BullMQ to ensure reliability in POS and to enable internal polling loop on QB handler
-        setTimeout(() => {
-            const qbHandler = require("../../../../lib/quickbooks/handlers/handle-pos-payment-created").handlePosPaymentCreated
-            qbHandler({ event: { name: "pos.payment.created", data: { id: payment.id } }, container: req.scope })
-                .catch((e: any) => console.error("[QB-POS-PAYMENT] Async dispatch failed:", e))
-        }, 1000)
-        
+            setTimeout(async () => {
+                try {
+                    await handlePosPaymentCreated({
+                        event: { name: "pos.payment.created", data: { id: payment.id } },
+                        container: req.scope as any,
+                        pluginOptions: {},
+                    })
+                } catch (execErr: any) {
+                    console.error(`[finance/payments] Direct exec pos.payment.created failed: ${execErr.message}`)
+                }
+            }, 100)
+        }
+
         return res.json({ payment })
     } catch (err: any) {
         return res.status(500).json({ error: err.message })

@@ -307,7 +307,7 @@ export const ActivityLog = ({ autoRefresh = false }: ActivityLogProps) => {
     const [page, setPage] = useState(0)
     const [category, setCategory] = useState<LogCategory>("all")
     const [status, setStatus] = useState<string>("all")
-    const LIMIT = 25
+    const LIMIT = 12
 
     const fetchLogs = useCallback(async (pg = page, cat = category, st = status) => {
         setLoading(true)

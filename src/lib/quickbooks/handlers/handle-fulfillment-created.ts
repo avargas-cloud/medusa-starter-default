@@ -4,7 +4,7 @@ import { processInvoiceInQb, buildQbItems, buildShippingQbItem, buildQbOrderDisc
 import { buildInvoicePatch, getEstimateTxnId, getSoTxnId, getLatestPaymentTxnId } from "../qb-metadata-types"
 import { LOG_PREFIX, getQbConfig, getFloat } from "./utils"
 import { handleOrderPlaced } from "./handle-order-placed"
-import { writePipelineRow } from "../qb-pipeline"
+import { writePipelineRow, cacheEditSequence, skipSalesOrderPipelineRow } from "../qb-pipeline"
 
 export async function handleFulfillmentCreated(
     data: any,
@@ -159,7 +159,8 @@ export async function handleFulfillmentCreated(
                 memo = memo ? `${memo} | Invoice ${seq}` : `Invoice ${seq}`
             }
             if (row.shipping !== undefined && row.shipping !== null) {
-                invoiceShippingAmount = Number(row.shipping)
+                // pos_invoice.shipping is stored in cents — convert to dollars for QB
+                invoiceShippingAmount = Number(row.shipping) / 100
             }
         }
     } catch (e) {
@@ -264,6 +265,20 @@ export async function handleFulfillmentCreated(
         logger.warn(`${LOG_PREFIX} Could not set creating status: ${mErr}`)
     }
 
+    // Skip the Sales Order pipeline row — an Invoice supersedes the need for a separate SO.
+    try {
+        await skipSalesOrderPipelineRow(orderId)
+    } catch (skipErr: any) {
+        logger.warn(`${LOG_PREFIX} ⚠️ Could not skip SO pipeline row: ${skipErr.message}`)
+    }
+
+    // Write "pending" pipeline row immediately so it appears in the UI before polling starts
+    try {
+        await writePipelineRow({ orderId, step: "invoice", status: "pending" })
+    } catch (pErr: any) {
+        logger.warn(`${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${pErr.message}`)
+    }
+
     const result = await processInvoiceInQb({
         orderId,
         orderDisplayId: order.display_id,
@@ -275,6 +290,9 @@ export async function handleFulfillmentCreated(
         salesTaxCode,
         memo,
         refNumber: invRefNumber,
+        onSubmitted: async (operationId) => {
+            await writePipelineRow({ orderId, step: "invoice", status: "submitted", bridgeOpId: operationId })
+        },
     })
 
     if (result.skipped) {
@@ -318,6 +336,15 @@ export async function handleFulfillmentCreated(
             })
         } catch (pErr: any) {
             logger.warn(`${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`)
+        }
+
+        if (result.editSequence && result.txnId) {
+            try {
+                await cacheEditSequence("invoice", result.txnId, result.editSequence)
+                logger.info(`${LOG_PREFIX} ✅ Cached EditSequence for Invoice TxnID=${result.txnId}`)
+            } catch (cacheErr: any) {
+                logger.warn(`${LOG_PREFIX} ⚠️ Could not cache EditSequence: ${cacheErr.message}`)
+            }
         }
 
         try {

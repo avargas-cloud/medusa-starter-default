@@ -8,8 +8,8 @@ const PosCreditMemo = model.define('pos_credit_memo', {
     invoice_id:         model.text().nullable(), // FK -> Parent PosInvoice
     customer_id:        model.text().nullable(), // FK -> Medusa Customer
     
-    // draft (being edited in POS), completed (inventory returned + synced to QB), voided
-    status:             model.enum(['draft', 'completed', 'voided']).default('draft'),
+    // open (saved/created in POS), completed (inventory returned + synced to QB), voided
+    status:             model.enum(['created', 'completed', 'voided']).default('created'),
     
     subtotal:           model.bigNumber().default(0), // pre-tax total of items
     discount:           model.bigNumber().default(0), // global discount
@@ -17,6 +17,11 @@ const PosCreditMemo = model.define('pos_credit_memo', {
     shipping:           model.number().default(0),    // shipping refund
     total:              model.bigNumber().default(0), // final refund/credit total
     
+    shipping_option_id:   model.text().nullable(),
+    shipping_option_name: model.text().nullable(),
+    qb_txn_id:            model.text().nullable(),   // QB TxnID after sync — needed for void
+    qb_edit_sequence:     model.text().nullable(),   // QB EditSequence — needed for void/mod
+
     completed_at:       model.dateTime().nullable(),
     voided_at:          model.dateTime().nullable(),
     void_reason:        model.text().nullable(),

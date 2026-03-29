@@ -19,13 +19,14 @@ export async function createSalesReceiptInQb(
             refNumber: payload.refNumber,
             date: payload.date,
             PaymentMethod: payload.paymentMethod,
-            SalesRep: payload.salesRep,
             memo: payload.memo,
+            salesTaxCode: payload.salesTaxCode,
             items: payload.items.map(item => ({
                 productId: item.productId,
                 productName: item.productName,
                 quantity: item.quantity,
                 price: item.price,
+                amount: item.amount,
                 desc: item.desc,
             })),
         })

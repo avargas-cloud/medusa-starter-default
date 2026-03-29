@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
+import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline"
 
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
     const logger = req.scope.resolve("logger")
@@ -95,6 +96,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                         discount_value: order_discount > 0 ? order_discount : undefined
                     })
                 }).catch(e => logger.warn(`Discount failed on create: ${e.message}`))
+            }
+
+            // Write "waiting" pipeline row immediately so it appears in the QB Pipeline UI
+            // (Medusa v2 does not emit draft_order.created — we must write this directly)
+            if (process.env.QB_ORDER_FLOW_ENABLED === "true" && resolvedId) {
+                const friendlyRef = displayId ? `E${displayId}` : null
+                writePipelineRow({ orderId: resolvedId, step: "estimate", status: "waiting", medusaRefNumber: friendlyRef })
+                    .catch(e => logger.warn(`[sync-pos] Could not write waiting pipeline row: ${e.message}`))
             }
 
         } else if (action === "update") {

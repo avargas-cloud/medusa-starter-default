@@ -3,7 +3,7 @@ import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos"
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service"
 import { Modules } from "@medusajs/utils"
 import { createCreditMemoInQb } from "../../../../../../lib/quickbooks/client"
-import { ensureCustomerInQb } from "../../../../../../lib/quickbooks/order-flow-core"
+import { ensureCustomerInQb, buildQbOrderDiscountLines, buildShippingQbItem } from "../../../../../../lib/quickbooks/order-flow-core"
 import { FINANCE_MODULE } from "../../../../../../modules/finance"
 import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline"
 
@@ -27,14 +27,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             return
         }
         
-        if (creditMemo.status !== 'draft') {
+        if (creditMemo.status !== 'created') {
             res.status(400).json({ message: "Credit Memo is already completed or voided" })
             return
         }
 
         // Restock Inventory for every variant in the credit memo
-        const defaultLocation = await stockLocationService.listStockLocations({ name: "Default" })
-        const locationId = defaultLocation[0]?.id
+        // Use the first active stock location (no assumption on name)
+        const allLocations = await stockLocationService.listStockLocations({})
+        const locationId = allLocations[0]?.id
 
         if (locationId) {
             for (const item of creditMemo.items) {
@@ -88,23 +89,44 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 if (custResult.success && custResult.qbCustomerId) {
                     const qbCustomerId = custResult.qbCustomerId
                     
-                    // Map items for QB Payload
-                    const qbItems = creditMemo.items.map((item: any) => ({
-                        productId: item.variant_id || item.product_id, // QB matcher falls back nicely
-                        productName: item.title,
-                        quantity: item.quantity,
-                        price: item.unit_price,
-                        amount: item.quantity * item.unit_price,
-                        desc: item.title
-                    }))
+                    // Map items for QB Payload.
+                    // unit_price is stored in cents → divide by 100 for QB dollars.
+                    // productId is intentionally omitted — we use FullName (SKU) so QB
+                    // can resolve the item without needing its internal ListID.
+                    const qbItems = creditMemo.items.map((item: any) => {
+                        const unitPriceDollars = (item.unit_price || 0) / 100
+                        return {
+                            productName: item.sku || item.title,
+                            quantity:    item.quantity,
+                            price:       unitPriceDollars,
+                            amount:      Number((unitPriceDollars * item.quantity).toFixed(2)),
+                            desc:        item.description || item.title,
+                        }
+                    })
+
+                    // Add order-level discount lines (Subtotal + Discount QB items)
+                    if (creditMemo.discount > 0) {
+                        const discountDollars = creditMemo.discount / 100
+                        buildQbOrderDiscountLines(discountDollars).forEach((l: any) => qbItems.push(l))
+                    }
+
+                    // Add shipping line if applicable
+                    if (creditMemo.shipping > 0) {
+                        const shippingDollars = creditMemo.shipping / 100
+                        const shippingItem = buildShippingQbItem([{
+                            amount: shippingDollars,
+                            name: creditMemo.shipping_option_name || 'Shipping',
+                        }])
+                        if (shippingItem) qbItems.push(shippingItem)
+                    }
 
                     logger.info(`[credit_memos complete] Mirroring Credit Memo to QB for customer ${qbCustomerId}...`)
                     const cmResult = await createCreditMemoInQb({
                         customerId: qbCustomerId,
-                        date: new Date().toISOString().split('T')[0],
-                        refNumber: creditMemo.credit_memo_number ? `CM-${creditMemo.credit_memo_number}` : `CM-${creditMemo.id.slice(-6)}`,
-                        memo: `Medusa POS Credit Memo`,
-                        items: qbItems
+                        refNumber:  creditMemo.credit_memo_number || undefined,
+                        date:       new Date().toISOString().split('T')[0],
+                        memo:       `POS Return ${creditMemo.credit_memo_number || ''}`.trim(),
+                        items:      qbItems,
                     })
 
                     if (cmResult.success && cmResult.data?.operationId) {
@@ -114,12 +136,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                         // Record credit_memo step in pipeline
                         try {
                             await writePipelineRow({
-                                referenceId:   id,
-                                referenceType: "credit_memo",
-                                step:          "credit_memo",
-                                status:        "submitted",
-                                bridgeOpId:    qbOperationId,
-                                qbRefNumber:   creditMemo.credit_memo_number ? `CM-${creditMemo.credit_memo_number}` : null,
+                                referenceId:      id,
+                                referenceType:    "credit_memo",
+                                step:             "credit_memo",
+                                status:           "submitted",
+                                bridgeOpId:       qbOperationId,
+                                medusaRefNumber:  creditMemo.credit_memo_number ?? null,
+                                qbRefNumber:      creditMemo.credit_memo_number ?? null,
                             })
                         } catch (pErr: any) {
                             logger.warn(`[credit_memos complete] Could not write pipeline row: ${pErr.message}`)
@@ -147,12 +170,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         }
         // -- QUICKBOOKS SYNC END --
 
-        // Mark Credit Memo as completed
-        await creditMemoService.updatePosCreditMemoes({
-            id,
-            status: 'completed',
-            completed_at: new Date()
-        })
+        // Mark Credit Memo as completed — discover method name at runtime
+        const updateMethodName = typeof (creditMemoService as any).updatePosCreditMemos === 'function'
+            ? 'updatePosCreditMemos'
+            : typeof (creditMemoService as any).updatePosCreditMemoes === 'function'
+            ? 'updatePosCreditMemoes'
+            : Object.keys(creditMemoService as any).find(k => k.startsWith('update') && k.toLowerCase().includes('credit'))
+        if (!updateMethodName) throw new Error('Cannot find updatePosCreditMemo* method on service')
+        await (creditMemoService as any)[updateMethodName]({ id, status: 'completed', completed_at: new Date() })
 
         // -- AR LEDGER SYNC BEGIN --
         // Register a Finance Ledger entry based on the chosen refund method:
@@ -174,8 +199,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                     : null
 
                 const cmRef = creditMemo.credit_memo_number
-                    ? `CM-${creditMemo.credit_memo_number}`
-                    : `CM-${creditMemo.id.slice(-6)}`
+                    ?? `CM-${creditMemo.id.slice(-6)}`
 
                 await financeService.createCustomerPayments({
                     customer_id: creditMemo.customer_id,

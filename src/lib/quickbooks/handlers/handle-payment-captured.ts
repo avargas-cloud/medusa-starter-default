@@ -56,12 +56,22 @@ export async function handlePaymentCaptured(
 
     const paymentMethod = "Credit Card"
 
+    // Write "pending" pipeline row immediately so it appears in the UI before polling starts
+    try {
+        await writePipelineRow({ orderId, step: "payment", status: "pending" })
+    } catch (pErr: any) {
+        logger.warn(`${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${pErr.message}`)
+    }
+
     const result = await processPaymentCaptureInQb({
         orderId,
         orderDisplayId: order.display_id,
         amount,
         paymentMethod,
         qbCustomerId,
+        onSubmitted: async (operationId) => {
+            await writePipelineRow({ orderId, step: "payment", status: "submitted", bridgeOpId: operationId })
+        },
     })
 
     if (result.skipped) {

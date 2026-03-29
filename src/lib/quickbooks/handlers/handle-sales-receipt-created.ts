@@ -4,7 +4,7 @@ import { processSalesReceiptInQb, buildQbItems, buildShippingQbItem, buildQbOrde
 import { buildInvoicePatch } from "../qb-metadata-types"
 import { getSoTxnId, getEstimateTxnId } from "../qb-metadata-types"
 import { LOG_PREFIX, getQbConfig, getFloat } from "./utils"
-import { writePipelineRow } from "../qb-pipeline"
+import { writePipelineRow, cacheEditSequence, skipSalesOrderPipelineRow } from "../qb-pipeline"
 import { handleFulfillmentCreated } from "./handle-fulfillment-created"
 
 export async function handleSalesReceiptCreated(
@@ -127,10 +127,15 @@ export async function handleSalesReceiptCreated(
             const seq = row.qb_ref_number || row.invoice_number
             if (seq) {
                 srRefNumber = String(seq)
-                memo = memo ? `${memo} | Sales Receipt ${seq}` : `Sales Receipt ${seq}`
+            }
+            // Memo: always reference the Medusa invoice number so it can be traced back
+            if (row.invoice_number) {
+                const invLabel = `Medusa Invoice ${row.invoice_number}`
+                memo = memo ? `${memo} | ${invLabel}` : invLabel
             }
             if (row.shipping !== undefined && row.shipping !== null) {
-                invoiceShippingAmount = Number(row.shipping)
+                // pos_invoice.shipping is stored in cents — convert to dollars for QB
+                invoiceShippingAmount = Number(row.shipping) / 100
             }
         }
     } catch (e) {
@@ -195,6 +200,26 @@ export async function handleSalesReceiptCreated(
         logger.warn(`${LOG_PREFIX} Could not set creating status: ${mErr}`)
     }
 
+    // Skip the Sales Order pipeline row — a Sales Receipt supersedes the need for a separate SO.
+    try {
+        await skipSalesOrderPipelineRow(orderId)
+    } catch (skipErr: any) {
+        logger.warn(`${LOG_PREFIX} ⚠️ Could not skip SO pipeline row: ${skipErr.message}`)
+    }
+
+    // Pre-flight: transition waiting → pending so the UI shows progress
+    try {
+        await writePipelineRow({
+            orderId,
+            referenceId:   data.invoice_id || null,
+            referenceType: data.invoice_id ? "pos_invoice" : null,
+            step:   "sales_receipt",
+            status: "pending",
+        })
+    } catch (pErr: any) {
+        logger.warn(`${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${pErr.message}`)
+    }
+
     const result = await processSalesReceiptInQb({
         orderId,
         orderDisplayId: order.display_id,
@@ -204,6 +229,16 @@ export async function handleSalesReceiptCreated(
         salesTaxCode,
         refNumber: srRefNumber,
         memo,
+        onSubmitted: async (operationId) => {
+            await writePipelineRow({
+                orderId,
+                referenceId: data.invoice_id || null,
+                referenceType: data.invoice_id ? "pos_invoice" : null,
+                step: "sales_receipt",
+                status: "submitted",
+                bridgeOpId: operationId,
+            })
+        },
     })
 
     if (result.skipped) {
@@ -249,10 +284,19 @@ export async function handleSalesReceiptCreated(
             logger.warn(`${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`)
         }
 
+        if (result.editSequence && result.txnId) {
+            try {
+                await cacheEditSequence("sales_receipt", result.txnId, result.editSequence)
+                logger.info(`${LOG_PREFIX} ✅ Cached EditSequence for Sales Receipt TxnID=${result.txnId}`)
+            } catch (cacheErr: any) {
+                logger.warn(`${LOG_PREFIX} ⚠️ Could not cache EditSequence: ${cacheErr.message}`)
+            }
+        }
+
         try {
             const fulfillmentId: string | null = (data.fulfillment_id as string | undefined) ?? null
             const invoiceId: string | null = (data.invoice_id as string | undefined) ?? null
-            
+
             // Critical Step: Pre-emptively write SKIPPED_SALES_RECEIPT so the cron doesn't create an SO
             const existingOrderMeta = order.metadata || {}
             const basePatch = buildInvoicePatch(existingOrderMeta, {

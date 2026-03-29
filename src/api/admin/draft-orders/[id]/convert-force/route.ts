@@ -201,7 +201,25 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             ])
             convertedOrder = response[0]
             console.log(`[convert-force] ✅ Assigned ${documentNumber} to newly converted Order ${id}`)
-            
+
+            // Write SO waiting pipeline row directly — reliable, bypasses BullMQ outbox.
+            // The BullMQ event below may also fire the handler, but writePipelineRow upserts
+            // the waiting row so no duplicate is created.
+            if (process.env.QB_ORDER_FLOW_ENABLED === "true") {
+                try {
+                    const { writePipelineRow } = require("../../../../../lib/quickbooks/qb-pipeline")
+                    await writePipelineRow({
+                        orderId: id,
+                        step: "sales_order",
+                        status: "waiting",
+                        medusaRefNumber: documentNumber,
+                    })
+                    console.log(`[convert-force] ✅ Wrote SO waiting pipeline row for ${documentNumber}`)
+                } catch (pErr: any) {
+                    console.warn(`[convert-force] ⚠️ Could not write SO pipeline row: ${pErr.message}`)
+                }
+            }
+
             // Emit the PLACED event purely natively so subscribers like QBDraftOrderSync react properly.
             if (convertedOrder) {
                 const eventBus = req.scope.resolve(Modules.EVENT_BUS)

@@ -39,8 +39,9 @@ const POS_CHANNEL_ID = process.env.POS_SALES_CHANNEL_ID ?? ""
 function isPosOrder(order: any): boolean {
     // Primary check: sales channel ID (set via POS_SALES_CHANNEL_ID env var)
     if (POS_CHANNEL_ID && order.sales_channel_id === POS_CHANNEL_ID) return true
-    // Fallback: metadata flag set by POS app on all orders (works without env var)
-    if (order.metadata?.pos_created === true) return true
+    // Fallback: metadata flag set by POS app — stored as string "true" or boolean true
+    const posCreated = order.metadata?.pos_created
+    if (posCreated === true || posCreated === "true") return true
     return false
 }
 
@@ -74,6 +75,24 @@ export async function handleDraftOrderCreated(data: any, container: any, logger:
     const draftOrderId = data.id
     logger.info(`${LOG_PREFIX} ── draft_order.created → ${draftOrderId} ──`)
 
+    // Duplicate guard: skip if an estimate is already submitted or confirmed for this order
+    try {
+        const { getDbPool } = require("../api/utils/db-pool")
+        const pool = getDbPool()
+        const { rows: existing } = await pool.query(
+            `SELECT id FROM qb_order_pipeline
+             WHERE order_id = $1 AND step = 'estimate' AND status IN ('submitted','confirmed')
+             LIMIT 1`,
+            [draftOrderId]
+        )
+        if (existing.length > 0) {
+            logger.info(`${LOG_PREFIX} ⏭️ Estimate already submitted/confirmed for ${draftOrderId} — skipping duplicate`)
+            return
+        }
+    } catch (dupErr: any) {
+        logger.warn(`${LOG_PREFIX} ⚠️ Could not check duplicate pipeline row: ${dupErr.message}`)
+    }
+
     const query = container.resolve(ContainerRegistrationKeys.QUERY)
     const customerModule = container.resolve(Modules.CUSTOMER)
 
@@ -84,6 +103,7 @@ export async function handleDraftOrderCreated(data: any, container: any, logger:
             entity: "order",
             fields: [
                 "id",
+                "sales_channel_id",
                 "metadata",
                 "subtotal",
                 "discount_total",
@@ -115,6 +135,14 @@ export async function handleDraftOrderCreated(data: any, container: any, logger:
     // unless they are converted to a real order before then.
     if (!isCron && isPosOrder(draftOrder)) {
         logger.info(`${LOG_PREFIX} ⏭️ POS Draft Order — QB sync delayed by 1 hour (handled by cron), skipping subscriber`)
+        const friendlyRef = (draftOrder.metadata?.document_number as string | undefined)
+            || (draftOrder.display_id ? `E${draftOrder.display_id}` : undefined)
+        try {
+            await writePipelineRow({ orderId: draftOrderId, step: "estimate", status: "waiting", medusaRefNumber: friendlyRef ?? null })
+            logger.info(`${LOG_PREFIX} ✅ Wrote waiting pipeline row for ${draftOrderId} (${friendlyRef ?? "no ref"})`)
+        } catch (pErr: any) {
+            logger.error(`${LOG_PREFIX} ❌ Could not write waiting pipeline row: ${pErr.message}`)
+        }
         return
     }
 
@@ -158,12 +186,25 @@ export async function handleDraftOrderCreated(data: any, container: any, logger:
         logger.info(`${LOG_PREFIX} Item[${i}]: productId=${item.productId}, qty=${item.quantity}, price=$${item.price}, uom=${item.unitOfMeasure ?? "none"}`)
     })
 
+    // Write "pending" pipeline row immediately so it appears in the UI before polling starts
+    // (also transitions any existing "waiting" row to "pending" in-place)
+    const friendlyEstRef = (draftOrder.metadata?.document_number as string | undefined)
+        || (draftOrder.display_id ? `E${draftOrder.display_id}` : undefined)
+    try {
+        await writePipelineRow({ orderId: draftOrderId, step: "estimate", status: "pending", medusaRefNumber: friendlyEstRef ?? null })
+    } catch (pErr: any) {
+        logger.warn(`${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${pErr.message}`)
+    }
+
     // Create Estimate
     const result = await processEstimateInQb({
         draftOrderId,
         qbCustomerId: custResult.qbCustomerId!,
         items: qbItems,
         memo: draftOrder.metadata?.document_number as string || `E${draftOrder.display_id}`,
+        onSubmitted: async (operationId) => {
+            await writePipelineRow({ orderId: draftOrderId, step: "estimate", status: "submitted", bridgeOpId: operationId })
+        },
     })
 
     if (result.error) {

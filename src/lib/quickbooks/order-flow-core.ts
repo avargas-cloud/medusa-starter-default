@@ -51,6 +51,7 @@ import {
 } from "./qb-bridge-client"
 import { isQbIntegrationEnabled } from "./qb-integration-guard"
 import { QbSyncLogger } from "./qb-sync-logger"
+import { getEstimateTxnId } from "./qb-metadata-types"
 import { createSalesReceiptInQb } from "./client/sales-receipts"
 
 const ORDER_FLOW_ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
@@ -109,6 +110,7 @@ export interface OrderFlowResult {
     operationId?: string         // Bridge async operation ID
     soTxnId?: string             // QB Sales Order TxnID (after polling)
     soRefNumber?: string         // QB Sales Order RefNumber (human-readable)
+    editSequence?: string        // QB EditSequence (returned by Add/Mod responses)
     error?: string
 }
 
@@ -428,7 +430,7 @@ export function buildShippingQbItem(shippingMethods: any[], shippingItemIdOverri
 export async function processOrderInQb(
     order: MedusaOrderForQb,
     customerModule: any,
-    options?: { prebuiltItems?: QbOrderItem[]; salesTaxCode?: string }
+    options?: { prebuiltItems?: QbOrderItem[]; salesTaxCode?: string; onSubmitted?: (operationId: string) => Promise<void> }
 ): Promise<OrderFlowResult> {
     const guard = await runGuards()
     if (!guard.pass) return guard.result!
@@ -480,7 +482,8 @@ export async function processOrderInQb(
         }
 
         // 4. Check if this order came from a Draft (has estimate to convert)
-        const estimateTxnId = order.metadata?.qb_estimate_txn_id
+        // Use getEstimateTxnId() to handle both new shape (qb_estimate.txn_id) and old flat field
+        const estimateTxnId = getEstimateTxnId(order.metadata)
         const taxExempt = !order.tax_total || order.tax_total === 0
         let soResult
 
@@ -515,16 +518,23 @@ export async function processOrderInQb(
 
         const asyncData = soResult.data!
         console.log(`${prefix} ✅ Sales Order queued. OperationID: ${asyncData.operationId}`)
+        QbSyncLogger.setOperationId(logId, asyncData.operationId).catch(() => {})
 
-        // 5. Poll for result (txnId + refNumber)
+        if (options?.onSubmitted && asyncData.operationId !== "DRY_RUN") {
+            try { await options.onSubmitted(asyncData.operationId) } catch {}
+        }
+
+        // 5. Poll for result (txnId + refNumber + editSequence)
         let txnId = asyncData.txnId
         let refNumber = asyncData.refNumber
+        let editSequence: string | undefined
 
         if (!txnId && asyncData.operationId !== "DRY_RUN") {
             try {
                 const pollResult = await pollOperationResult(asyncData.operationId)
                 txnId = pollResult.txnId
                 refNumber = pollResult.refNumber
+                editSequence = pollResult.editSequence
             } catch (pollErr: any) {
                 console.error(`[QB] ❌ Polling failed: ${pollErr.message}`)
                 await QbSyncLogger.fail(logId, `Polling failed: ${pollErr.message}`)
@@ -533,7 +543,7 @@ export async function processOrderInQb(
         }
 
         if (txnId) {
-            console.log(`${prefix} ✅ Sales Order created. TxnID: ${txnId}, Ref: ${refNumber || "pending"}`)
+            console.log(`${prefix} ✅ Sales Order created. TxnID: ${txnId}, Ref: ${refNumber || "pending"}, EditSeq: ${editSequence ?? "none"}`)
         }
 
         await QbSyncLogger.complete(logId, {
@@ -553,6 +563,7 @@ export async function processOrderInQb(
             operationId: asyncData.operationId,
             soTxnId: txnId,
             soRefNumber: refNumber,
+            editSequence,
         }
 
     } catch (err: any) {
@@ -576,6 +587,7 @@ export async function processPaymentCaptureInQb(capture: {
     qbCustomerId: string
     refNumber?: string
     memo?: string
+    onSubmitted?: (operationId: string) => Promise<void>
 }): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
@@ -585,7 +597,6 @@ export async function processPaymentCaptureInQb(capture: {
 
     console.log(`${prefix} Recording payment of $${amountDollars.toFixed(2)} for order #${capture.orderDisplayId || capture.orderId}...`)
 
-    const paymentRefNumber = capture.refNumber || `PAY-${capture.orderDisplayId || capture.orderId}`
     const paymentMemo = capture.memo || `Payment for Order ${capture.orderDisplayId || capture.orderId}`
 
     const logId = await QbSyncLogger.start({
@@ -594,7 +605,7 @@ export async function processPaymentCaptureInQb(capture: {
         orderDisplayId: capture.orderDisplayId,
         eventType: "order.payment_captured",
         triggeredBy: "event",
-        message: `Recording payment of $${amountDollars.toFixed(2)} (${paymentRefNumber})`,
+        message: `Recording payment of $${amountDollars.toFixed(2)}`,
         metadata: { amount: amountDollars, paymentMethod: capture.paymentMethod },
     })
 
@@ -602,7 +613,6 @@ export async function processPaymentCaptureInQb(capture: {
         customerId: capture.qbCustomerId,
         amount: amountDollars,
         paymentMethod: capture.paymentMethod,
-        refNumber: paymentRefNumber.substring(0, 20),
         memo: paymentMemo,
         autoApply: false,
     })
@@ -615,6 +625,11 @@ export async function processPaymentCaptureInQb(capture: {
 
     const asyncData = result.data!
     console.log(`${prefix} ✅ Payment queued. OperationID: ${asyncData.operationId}`)
+    QbSyncLogger.setOperationId(logId, asyncData.operationId).catch(() => {})
+
+    if (capture.onSubmitted && asyncData.operationId !== "DRY_RUN") {
+        try { await capture.onSubmitted(asyncData.operationId) } catch {}
+    }
 
     let txnId = asyncData.txnId
     let refNumber = asyncData.refNumber
@@ -664,7 +679,8 @@ export async function processInvoiceInQb(invoice: {
     salesTaxCode?: string         // Used if no qbSoTxnId
     refNumber?: string            // Custom Invoice Number
     memo?: string
-}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean; skipReason?: string }> {
+    onSubmitted?: (operationId: string) => Promise<void>  // Persist bridge_op_id before polling
+}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; editSequence?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
 
@@ -686,7 +702,6 @@ export async function processInvoiceInQb(invoice: {
         customerId: invoice.qbCustomerId,
         date: getDateString(),
         LinkToTxnID: invoice.qbSoTxnId,
-        refNumber: invoice.refNumber,
         items: invoice.prebuiltItems,
         salesTaxCode: invoice.salesTaxCode,
         memo: invoice.memo || `Invoice ${invoice.orderDisplayId || invoice.orderId}`,
@@ -700,15 +715,23 @@ export async function processInvoiceInQb(invoice: {
 
     const asyncData = invResult.data!
     console.log(`${prefix} ✅ Invoice queued. OperationID: ${asyncData.operationId}`)
+    QbSyncLogger.setOperationId(logId, asyncData.operationId).catch(() => {})
+
+    // Persist bridge_op_id immediately so Retry can re-poll even if server crashes during polling
+    if (invoice.onSubmitted && asyncData.operationId !== "DRY_RUN") {
+        try { await invoice.onSubmitted(asyncData.operationId) } catch {}
+    }
 
     let invTxnId = asyncData.txnId
     let invRefNumber = asyncData.refNumber
+    let invEditSequence: string | undefined
 
     if (!invTxnId && asyncData.operationId !== "DRY_RUN") {
         try {
             const pollResult = await pollOperationResult(asyncData.operationId)
             invTxnId = pollResult.txnId
             invRefNumber = pollResult.refNumber
+            invEditSequence = pollResult.editSequence
         } catch (pollErr: any) {
             console.error(`[QB] ❌ Invoice polling failed: ${pollErr.message}`)
             await QbSyncLogger.fail(logId, `Polling failed: ${pollErr.message}`)
@@ -717,7 +740,7 @@ export async function processInvoiceInQb(invoice: {
     }
 
     if (invTxnId) {
-        console.log(`${prefix} ✅ Invoice created. TxnID: ${invTxnId}, Ref: ${invRefNumber || "pending"}`)
+        console.log(`${prefix} ✅ Invoice created. TxnID: ${invTxnId}, Ref: ${invRefNumber || "pending"}, EditSeq: ${invEditSequence ?? "none"}`)
     }
 
     if (invTxnId && invoice.qbPaymentTxnId && invoice.paymentAmount) {
@@ -746,7 +769,7 @@ export async function processInvoiceInQb(invoice: {
             : `Invoice queued — OperationID: ${asyncData.operationId}`,
     })
 
-    return { enabled: true, operationId: asyncData.operationId, txnId: invTxnId, refNumber: invRefNumber }
+    return { enabled: true, operationId: asyncData.operationId, txnId: invTxnId, refNumber: invRefNumber, editSequence: invEditSequence }
 }
 
 // ─── 3.5 Process Sales Receipt (Fully Paid POS Cash Sale) ──────────────────────
@@ -756,10 +779,13 @@ function mapPaymentMethodToQb(method: string | undefined): string | undefined {
     const m = method.toLowerCase().trim()
     switch (m) {
         case "cash": return "Cash"
+        case "card":
+        case "credit card": return "Credit Card"
         case "visa": return "Visa"
         case "mastercard": return "MasterCard"
         case "zelle": return "Zelle"
         case "check": return "Check"
+        case "ach": return "EFT"
         case "amex":
         case "american express": return "American Express"
         case "discover": return "Discover"
@@ -778,10 +804,11 @@ export async function processSalesReceiptInQb(receipt: {
     qbCustomerId: string
     paymentMethod?: string
     prebuiltItems?: QbOrderItem[]
+    onSubmitted?: (operationId: string) => Promise<void>  // Persist bridge_op_id before polling
     salesTaxCode?: string
     refNumber?: string
     memo?: string
-}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean; skipReason?: string }> {
+}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; editSequence?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
 
@@ -802,7 +829,6 @@ export async function processSalesReceiptInQb(receipt: {
     const srResult = await createSalesReceiptInQb({
         customerId: receipt.qbCustomerId,
         date: getDateString(),
-        refNumber: receipt.refNumber,
         items: receipt.prebuiltItems || [],
         salesTaxCode: receipt.salesTaxCode,
         paymentMethod: mapPaymentMethodToQb(receipt.paymentMethod),
@@ -817,15 +843,23 @@ export async function processSalesReceiptInQb(receipt: {
 
     const asyncData = srResult.data!
     console.log(`${prefix} ✅ Sales Receipt queued. OperationID: ${asyncData.operationId}`)
+    QbSyncLogger.setOperationId(logId, asyncData.operationId).catch(() => {})
+
+    // Persist bridge_op_id immediately so Retry can re-poll even if server crashes during polling
+    if (receipt.onSubmitted && asyncData.operationId !== "DRY_RUN") {
+        try { await receipt.onSubmitted(asyncData.operationId) } catch {}
+    }
 
     let srTxnId = asyncData.txnId
     let srRefNumber = asyncData.refNumber
+    let srEditSequence: string | undefined
 
     if (!srTxnId && asyncData.operationId !== "DRY_RUN") {
         try {
             const pollResult = await pollOperationResult(asyncData.operationId)
             srTxnId = pollResult.txnId
             srRefNumber = pollResult.refNumber
+            srEditSequence = pollResult.editSequence
         } catch (pollErr: any) {
             console.error(`[QB] ❌ Sales Receipt polling failed: ${pollErr.message}`)
             await QbSyncLogger.fail(logId, `Polling failed: ${pollErr.message}`)
@@ -834,7 +868,7 @@ export async function processSalesReceiptInQb(receipt: {
     }
 
     if (srTxnId) {
-        console.log(`${prefix} ✅ Sales Receipt created. TxnID: ${srTxnId}, Ref: ${srRefNumber || "pending"}`)
+        console.log(`${prefix} ✅ Sales Receipt created. TxnID: ${srTxnId}, Ref: ${srRefNumber || "pending"}, EditSeq: ${srEditSequence ?? "none"}`)
     }
 
     await QbSyncLogger.complete(logId, {
@@ -846,7 +880,7 @@ export async function processSalesReceiptInQb(receipt: {
             : `Sales Receipt queued — OperationID: ${asyncData.operationId}`,
     })
 
-    return { enabled: true, operationId: asyncData.operationId, txnId: srTxnId, refNumber: srRefNumber }
+    return { enabled: true, operationId: asyncData.operationId, txnId: srTxnId, refNumber: srRefNumber, editSequence: srEditSequence }
 }
 
 // ─── 4. Process Estimate (Draft Order) ────────────────────────────────────────
@@ -861,8 +895,9 @@ export async function processEstimateInQb(draft: {
     items: QbOrderItem[]
     memo?: string
     date?: string
-    taxExempt?: boolean    // true if Medusa order has no tax (tax_total === 0)
-    salesTaxCode?: string  // QB sales tax code name (e.g. "Sale Tax 7%") — overrides customer default
+    taxExempt?: boolean
+    salesTaxCode?: string
+    onSubmitted?: (operationId: string) => Promise<void>
 }): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; editSequence?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
@@ -901,6 +936,11 @@ export async function processEstimateInQb(draft: {
 
     const asyncData = estResult.data!
     console.log(`${prefix} ✅ Estimate queued. OperationID: ${asyncData.operationId}`)
+    QbSyncLogger.setOperationId(logId, asyncData.operationId).catch(() => {})
+
+    if (draft.onSubmitted && asyncData.operationId !== "DRY_RUN") {
+        try { await draft.onSubmitted(asyncData.operationId) } catch {}
+    }
 
     let txnId = asyncData.txnId
     let refNumber = asyncData.refNumber
@@ -985,6 +1025,7 @@ export async function processUpdateEstimateInQb(draft: {
 
     const asyncData = estResult.data!
     console.log(`${prefix} ✅ Estimate update queued. OperationID: ${asyncData.operationId}`)
+    QbSyncLogger.setOperationId(logId, asyncData.operationId).catch(() => {})
 
     let txnId = asyncData.txnId || draft.estimateTxnId
     let refNumber: string | undefined
