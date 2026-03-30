@@ -179,9 +179,26 @@ export async function handleOrderPlaced(
             logger.warn(`${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${pErr.message}`)
         }
 
+        // Re-read document_number fresh from DB — the document-number subscriber may have
+        // written it after our initial order fetch (concurrent event handlers).
+        const orderPrefix = isPosOrder(order) ? "POS Order" : "Web Order"
+        let soMemo: string
+        try {
+            const pool = getDbPool()
+            const { rows } = await pool.query(
+                `SELECT metadata->>'document_number' AS document_number FROM "order" WHERE id = $1`,
+                [orderId]
+            )
+            const docNum = rows[0]?.document_number as string | undefined
+            soMemo = `${orderPrefix} ${docNum || order.display_id || orderId}`
+        } catch {
+            soMemo = `${orderPrefix} ${order.metadata?.document_number || order.display_id || orderId}`
+        }
+
         const result = await processOrderInQb(orderWithCustomer, customerModule, {
             prebuiltItems: qbItems,
             salesTaxCode,
+            memo: soMemo,
             onSubmitted: async (operationId) => {
                 await writePipelineRow({ orderId: orderWithCustomer.id, step: "sales_order", status: "submitted", bridgeOpId: operationId })
             },

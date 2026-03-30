@@ -430,7 +430,7 @@ export function buildShippingQbItem(shippingMethods: any[], shippingItemIdOverri
 export async function processOrderInQb(
     order: MedusaOrderForQb,
     customerModule: any,
-    options?: { prebuiltItems?: QbOrderItem[]; salesTaxCode?: string; onSubmitted?: (operationId: string) => Promise<void> }
+    options?: { prebuiltItems?: QbOrderItem[]; salesTaxCode?: string; memo?: string; onSubmitted?: (operationId: string) => Promise<void> }
 ): Promise<OrderFlowResult> {
     const guard = await runGuards()
     if (!guard.pass) return guard.result!
@@ -496,7 +496,9 @@ export async function processOrderInQb(
                 items: soItems,
                 taxExempt,
                 salesTaxCode: options?.salesTaxCode,
-                memo: `Order ${order.metadata?.document_number || order.display_id || order.id} — from Estimate ${order.metadata?.original_estimate_number || order.metadata?.qb_estimate_ref || estimateTxnId}`,
+                memo: options?.memo
+                    ? `${options.memo} — from Estimate ${order.metadata?.original_estimate_number || order.metadata?.qb_estimate_ref || estimateTxnId}`
+                    : `Order ${order.metadata?.document_number || order.display_id || order.id} — from Estimate ${order.metadata?.original_estimate_number || order.metadata?.qb_estimate_ref || estimateTxnId}`,
             })
         } else {
             const orderDate = getDateString(order.created_at)
@@ -506,7 +508,7 @@ export async function processOrderInQb(
                 items: soItems,
                 taxExempt,
                 salesTaxCode: options?.salesTaxCode,
-                memo: `Order ${order.metadata?.document_number || order.display_id || order.id}`,
+                memo: options?.memo || `Order ${order.metadata?.document_number || order.display_id || order.id}`,
             })
         }
 
