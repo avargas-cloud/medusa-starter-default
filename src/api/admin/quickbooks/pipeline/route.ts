@@ -59,13 +59,14 @@ export async function GET(
         `)
 
         // Auto-timeout: pending rows older than 30 min (handler never re-submitted) → failed
+        // Uses updated_at so reactivated rows (confirmed→pending) don't immediately time out
         await client.query(`
             UPDATE qb_order_pipeline
             SET status    = 'failed',
                 failed_at = NOW(),
                 error     = 'Operation stuck in pending — handler did not re-submit within 30 minutes'
             WHERE status = 'pending'
-              AND created_at < NOW() - INTERVAL '30 minutes'
+              AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '30 minutes'
         `)
 
         const conditions: string[] = []
@@ -97,6 +98,7 @@ export async function GET(
                 p.medusa_ref_number,
                 p.error,
                 p.created_at,
+                p.updated_at,
                 p.submitted_at,
                 p.confirmed_at,
                 p.failed_at,
@@ -119,7 +121,7 @@ export async function GET(
                 AND pay_dep.reference_id = p.reference_id
                 AND pay_dep.step = 'payment'
             ${where}
-            ORDER BY p.created_at DESC
+            ORDER BY COALESCE(p.updated_at, p.created_at) DESC
             LIMIT $${p} OFFSET $${p + 1}
         `, [...values, limit, offset])
 

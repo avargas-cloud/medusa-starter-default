@@ -96,6 +96,28 @@ export async function writePipelineRow(input: WritePipelineRowInput): Promise<st
             [input.orderId ?? null, input.step, input.medusaRefNumber ?? null, input.qbRefNumber ?? null, input.referenceId ?? null]
         )
         if (fromWaiting.length > 0) return fromWaiting[0].id as string
+
+        // Re-activation: if confirmed/failed/skipped, reset to pending (MOD/VOID/retry scenario).
+        // Preserves qb_txn_id (needed for Mod operations). Increments retry_count on failed.
+        const { rows: reactivated } = await pool.query(
+            `UPDATE qb_order_pipeline
+             SET status            = 'pending',
+                 error             = NULL,
+                 failed_at         = NULL,
+                 submitted_at      = NULL,
+                 bridge_op_id      = NULL,
+                 qb_result         = NULL,
+                 medusa_ref_number = COALESCE($3, medusa_ref_number),
+                 retry_count       = CASE WHEN status = 'failed' THEN retry_count + 1 ELSE retry_count END
+             WHERE step = $2 AND status IN ('confirmed', 'failed', 'skipped')
+               AND (
+                 ($1::text IS NOT NULL AND order_id = $1::text AND ($4::text IS NULL OR reference_id = $4::text))
+                 OR ($1::text IS NULL AND $4::text IS NOT NULL AND reference_id = $4::text)
+               )
+             RETURNING id`,
+            [input.orderId ?? null, input.step, input.medusaRefNumber ?? null, input.referenceId ?? null]
+        )
+        if (reactivated.length > 0) return reactivated[0].id as string
     }
 
     // For non-pending/non-waiting statuses: try to UPDATE the existing pending OR submitted row in-place.

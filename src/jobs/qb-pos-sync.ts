@@ -137,7 +137,7 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
             const { rows: pipelineCheck } = await client.query(
                 `SELECT status FROM qb_order_pipeline
                  WHERE order_id = $1 AND step = 'estimate'
-                 ORDER BY created_at DESC LIMIT 1`,
+                 ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 1`,
                 [row.id]
             )
             const latestPipelineStatus = pipelineCheck[0]?.status as string | undefined

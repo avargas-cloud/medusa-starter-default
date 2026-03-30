@@ -38,7 +38,7 @@ export default async function qbPipelineConsolidator(
             FROM qb_order_pipeline
             WHERE status = 'submitted'
               AND bridge_op_id IS NOT NULL
-            ORDER BY created_at ASC
+            ORDER BY COALESCE(updated_at, created_at) ASC
             LIMIT 50
         `)
         submittedRows = rows
