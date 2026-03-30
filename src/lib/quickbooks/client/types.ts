@@ -141,6 +141,16 @@ export interface QbCreateSalesReceiptPayload {
     memo?: string
 }
 
+export interface QbCreateCheckPayload {
+    customerId: string          // QB ListID of the customer (payee)
+    bankAccountListId: string   // QB ListID of the bank account to draw from
+    amount: number              // dollars (not cents)
+    date?: string               // ISO date string (YYYY-MM-DD)
+    refNumber?: string          // human-readable reference (e.g. "CM-20045")
+    memo?: string               // check memo
+    expenseAccountName?: string // QB FullName of expense account (default: "Accounts Receivable")
+}
+
 export interface QbAsyncResult {
     operationId: string
     txnId?: string

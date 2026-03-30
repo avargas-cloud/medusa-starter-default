@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react"
+import { useEffect, useState, useCallback, useRef, type ReactNode } from "react"
 import { Container, Heading, Text, Button, Badge } from "@medusajs/ui"
 import { ArrowPath } from "@medusajs/icons"
 
@@ -88,18 +88,26 @@ function StatusBadge({ status }: { status: PipelineStatus }) {
     return <Badge color={s.color} size="xsmall">{s.label}</Badge>
 }
 
-// ─── Relative time ────────────────────────────────────────────────────────────
+// ─── Pipeline date formatter ──────────────────────────────────────────────────
+// < 24 h → time only ("10:32 AM")
+// ≥ 24 h → date on top + time below ("Mar 28 / 10:32 AM")
 
-function relTime(iso: string | null): string {
+function formatPipelineDate(iso: string | null): ReactNode {
     if (!iso) return "—"
-    const diff = Date.now() - new Date(iso).getTime()
-    const s = Math.floor(diff / 1000)
-    if (s < 60)  return `${s}s ago`
-    const m = Math.floor(s / 60)
-    if (m < 60)  return `${m}m ago`
-    const h = Math.floor(m / 60)
-    if (h < 24)  return `${h}h ago`
-    return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    const d = new Date(iso)
+    const tz = "America/New_York"
+    const timeStr  = d.toLocaleTimeString("en-US",  { hour: "numeric", minute: "2-digit", hour12: true, timeZone: tz })
+    const dateStr  = d.toLocaleDateString("en-US",  { month: "short", day: "numeric", timeZone: tz })
+    const todayStr = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: tz })
+
+    if (dateStr === todayStr) return timeStr
+
+    return (
+        <span className="flex flex-col leading-tight">
+            <span>{dateStr}</span>
+            <span className="text-[10px] opacity-60">{timeStr}</span>
+        </span>
+    )
 }
 
 // ─── Row component ────────────────────────────────────────────────────────────
@@ -137,7 +145,7 @@ function PipelineRow({ row, onRetry, retrying }: {
                 {/* Order */}
                 <td className="px-3 py-2 whitespace-nowrap">
                     {row.order_display_id ? (
-                        <span className="font-mono text-[11px] text-ui-fg-subtle">#{row.order_display_id}</span>
+                        <span className="font-mono text-[11px] text-ui-fg-subtle">{row.order_display_id}</span>
                     ) : (
                         <span className="text-ui-fg-muted">—</span>
                     )}
@@ -230,12 +238,12 @@ function PipelineRow({ row, onRetry, retrying }: {
                 </td>
 
                 {/* Created */}
-                <td className="px-3 py-2 text-ui-fg-muted whitespace-nowrap">
-                    {relTime(row.created_at)}
+                <td className="px-3 py-2 text-ui-fg-muted">
+                    {formatPipelineDate(row.created_at)}
                 </td>
 
                 {/* Updated */}
-                <td className="px-3 py-2 whitespace-nowrap">
+                <td className="px-3 py-2">
                     {(() => {
                         const updated = row.confirmed_at ?? row.failed_at ?? row.submitted_at
                         if (!updated) return <span className="text-ui-fg-muted">—</span>
@@ -245,7 +253,7 @@ function PipelineRow({ row, onRetry, retrying }: {
                                 row.status === "failed"    ? "text-red-400"   :
                                 "text-ui-fg-subtle"
                             }>
-                                {relTime(updated)}
+                                {formatPipelineDate(updated)}
                             </span>
                         )
                     })()}

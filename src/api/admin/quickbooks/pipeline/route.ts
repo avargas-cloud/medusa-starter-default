@@ -100,8 +100,8 @@ export async function GET(
                 p.submitted_at,
                 p.confirmed_at,
                 p.failed_at,
-                -- Order display_id for grouping rows by order
-                ord.display_id AS order_display_id,
+                -- Order display_id: direct for order rows, via pos_credit_memo for credit_memo rows
+                COALESCE(ord.display_id, cm_ord.display_id) AS order_display_id,
                 -- Include parent step info for context
                 dep.step AS depends_on_step,
                 dep.status AS depends_on_status,
@@ -111,6 +111,8 @@ export async function GET(
                 pay_dep.status AS payment_dep_status
             FROM qb_order_pipeline p
             LEFT JOIN "order" ord ON ord.id = p.order_id
+            LEFT JOIN pos_credit_memo cm ON p.reference_type = 'credit_memo' AND cm.id = p.reference_id
+            LEFT JOIN "order" cm_ord ON cm_ord.id = cm.order_id
             LEFT JOIN qb_order_pipeline dep ON dep.id = p.depends_on
             LEFT JOIN qb_order_pipeline pay_dep
                 ON p.step = 'apply_payment'
@@ -334,6 +336,27 @@ export async function POST(
                             },
                             container: req.scope as any,
                         })
+                        break
+                    }
+                    case "write_check": {
+                        // write_check retries require user to re-select the bank account.
+                        // Reset CustomerPayment.qb to null so it reappears in /accounting as "Pending QB".
+                        if (row.reference_id) {
+                            try {
+                                const retryPool = require("../../../../api/utils/db-pool").getDbPool()
+                                await retryPool.query(
+                                    `UPDATE customer_payment SET qb = NULL WHERE id = $1`,
+                                    [row.reference_id]
+                                )
+                                await retryPool.query(
+                                    `UPDATE qb_order_pipeline SET status = 'failed', error = $2 WHERE id = $1`,
+                                    [row.id, "Retry: re-process from Accounting page — bank account selection required"]
+                                )
+                                logger.info(`${LOG_PREFIX} write_check reset → CustomerPayment ${row.reference_id} qb=null, ready for re-process from Accounting`)
+                            } catch (wcRetryErr: any) {
+                                logger.warn(`${LOG_PREFIX} Could not reset write_check: ${wcRetryErr.message}`)
+                            }
+                        }
                         break
                     }
                     default:

@@ -1,84 +1,114 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { qbRefunds } from "../../../../../lib/quickbooks/client"
+import { FINANCE_MODULE } from "../../../../../modules/finance"
+import { Modules } from "@medusajs/utils"
+import { bridgeFetch, DRY_RUN } from "../../../../../lib/quickbooks/client/core"
+import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline"
 
-export const POST = async (
-  req: MedusaRequest,
-  res: MedusaResponse
-) => {
-  const { refund_id, qb_bank_account_id } = req.body as { refund_id: string; qb_bank_account_id: string }
-  if (!refund_id || !qb_bank_account_id) {
-      return res.status(400).json({ error: "Missing refund_id or qb_bank_account_id" })
+/**
+ * POST /admin/finance/qb-refunds/sync
+ * Fire-and-forget: enqueues a WriteCheck to the bridge and writes a submitted
+ * pipeline row. The consolidator cron confirms/fails it and updates CustomerPayment.qb.
+ * Body: { customer_payment_id, qb_bank_account_id }
+ */
+export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  const { customer_payment_id, qb_bank_account_id } = req.body as {
+    customer_payment_id: string
+    qb_bank_account_id: string
   }
 
-  const query = req.scope.resolve("query")
-  
-  // 1. Fetch the refund to ensure it exists and get amount/payment linkage
-  const { data: refunds } = await query.graph({
-    entity: "refund",
-    filters: { id: refund_id },
-    fields: [
-        "id", 
-        "amount", 
-        "payment.*", 
-        "payment.order.*",
-        "payment.order.customer.*",
-        "metadata"
-    ]
-  })
-  const refund = refunds[0]
-  if (!refund) return res.status(404).json({ error: "Refund not found" })
-  if (refund.metadata?.qb_synced) return res.status(400).json({ error: "Refund is already synced to QuickBooks" })
+  if (!customer_payment_id || !qb_bank_account_id) {
+    return res.status(400).json({ error: "Missing customer_payment_id or qb_bank_account_id" })
+  }
 
-  // 2. Fetch the Bank Account ListID
-  const { data: banks } = await query.graph({
-      entity: "qb_bank_account",
-      filters: { id: qb_bank_account_id },
-      fields: ["id", "list_id"]
-  })
-  const bank = banks[0]
-  if (!bank) return res.status(404).json({ error: "Bank Account not found" })
+  const financeService = req.scope.resolve(FINANCE_MODULE)
+  const customerModule = req.scope.resolve(Modules.CUSTOMER)
 
-  // 3. Extract necessary fields
-  const customerListId = (refund.payment as any)?.order?.customer?.metadata?.qb_list_id
-  const originalPaymentTxnId = (refund.payment as any)?.metadata?.qb_txn_id
+  // 1. Fetch the CustomerPayment
+  const payments = await financeService.listCustomerPayments({ id: customer_payment_id } as any)
+  const payment = (payments as any[])[0]
+  if (!payment) return res.status(404).json({ error: "CustomerPayment not found" })
+  if (payment.type !== "refund") return res.status(400).json({ error: "Payment is not a refund" })
+  if (payment.qb?.status === "yes") return res.status(400).json({ error: "Already synced to QuickBooks" })
 
-  if (!customerListId) return res.status(400).json({ error: "Original customer does not have a QB List ID mapped." })
-  if (!originalPaymentTxnId) return res.status(400).json({ error: "Original payment was never synced to QB, cannot orchestrate refund." })
+  // 2. Fetch the bank account
+  const banks = await financeService.listQbBankAccounts({ id: qb_bank_account_id } as any)
+  const bank = (banks as any[])[0]
+  if (!bank) return res.status(404).json({ error: "Bank account not found" })
 
-  // Convert amount from cents to dollars
-  const amountDollars = refund.amount / 100
-
+  // 3. Fetch customer QB ListID
+  let customer: any
   try {
-      // 4. Call the bridge orchestration
-      const syncResult = await qbRefunds.syncRefund({
-          refundId: refund.id,
-          amount: amountDollars,
-          originalPaymentTxnId: originalPaymentTxnId as string,
-          customerListId: customerListId as string,
-          bankAccountListId: bank.list_id
-      })
-
-      // 5. If successful, update the Refund's metadata in Medusa
-      // In Medusa v2 natively, we use the payment module or directly update it via modules.
-      // But we can use the remote link or query. Actually, we use the Payment Module to update the refund.
-      const paymentModule = req.scope.resolve("payment")
-      
-      const newMetadata = {
-          ...(refund.metadata || {}),
-          qb_synced: true,
-          qb_check_txn_id: syncResult.checkTxnId,
-          qb_zero_payment_txn_id: syncResult.receivePaymentTxnId
-      }
-
-      await (paymentModule as any).updatePaymentRefunds({
-          id: refund.id,
-          metadata: newMetadata
-      })
-
-      return res.json({ success: true, result: syncResult })
-
-  } catch (e: any) {
-      console.error("[QB-SYNC-REFUND] Failed:", e)
-      return res.status(500).json({ error: e.message })
+    customer = await customerModule.retrieveCustomer(payment.customer_id)
+  } catch {
+    return res.status(404).json({ error: "Customer not found" })
   }
+  const customerListId = customer?.metadata?.qb_list_id
+  if (!customerListId) {
+    return res.status(400).json({ error: "Customer does not have a QB ListID — sync customer first" })
+  }
+
+  const amountDollars = (Number(payment.amount) / 100).toFixed(2)
+  const payLabel = payment.display_id ? `PAY-${payment.display_id}` : customer_payment_id.slice(-8).toUpperCase()
+  const refLabel = (payment.reference && payment.reference.length <= 20)
+    ? payment.reference
+    : payLabel
+  const medusaRef = `Refund ${payLabel}`
+
+  if (DRY_RUN) {
+    await writePipelineRow({
+      referenceId:     customer_payment_id,
+      referenceType:   "customer_payment",
+      step:            "write_check",
+      status:          "confirmed",
+      qbTxnId:         "DRY-RUN-CHECK-TXN",
+      medusaRefNumber: refLabel,
+    })
+    return res.json({ success: true, dry_run: true })
+  }
+
+  // 4. Enqueue CheckAdd to bridge
+  let enqueueRes: any
+  try {
+    enqueueRes = await bridgeFetch("POST", "/api/sync/enqueue", {
+      type: "check",
+      action: "add",
+      data: {
+        AccountRef:     { ListID: bank.list_id },
+        PayeeEntityRef: { ListID: customerListId },
+        TxnDate:        new Date().toISOString().split("T")[0],
+        RefNumber:      refLabel,
+        Memo:           `POS Refund — ${refLabel}`,
+        ExpenseLineAdd: [{
+          AccountRef:  { FullName: "Accounts Receivable" },
+          Amount:      amountDollars,
+          Memo:        `Refund for ${refLabel}`,
+          CustomerRef: { ListID: customerListId },
+        }],
+      },
+    })
+  } catch (e: any) {
+    return res.status(500).json({ error: `Bridge enqueue failed: ${e.message}` })
+  }
+
+  if (!enqueueRes?.operation_id) {
+    return res.status(500).json({ error: "Bridge did not return operation_id" })
+  }
+
+  // 5. Write pipeline row as submitted (consolidator will confirm/fail)
+  await writePipelineRow({
+    referenceId:     customer_payment_id,
+    referenceType:   "customer_payment",
+    step:            "write_check",
+    status:          "submitted",
+    bridgeOpId:      enqueueRes.operation_id,
+    medusaRefNumber: medusaRef,
+  })
+
+  // 6. Mark CustomerPayment.qb as processing so it doesn't re-appear before consolidator runs
+  await financeService.updateCustomerPayments(
+    { id: customer_payment_id },
+    { qb: { status: "processing", operation_id: enqueueRes.operation_id } }
+  )
+
+  return res.json({ success: true, queued: true, operation_id: enqueueRes.operation_id })
 }
