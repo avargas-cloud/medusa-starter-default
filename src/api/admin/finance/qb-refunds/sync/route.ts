@@ -95,7 +95,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   }
 
   // 5. Write pipeline row as submitted (consolidator will confirm/fail)
-  await writePipelineRow({
+  const writeCheckRowId = await writePipelineRow({
     referenceId:     customer_payment_id,
     referenceType:   "customer_payment",
     step:            "write_check",
@@ -103,6 +103,22 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     bridgeOpId:      enqueueRes.operation_id,
     medusaRefNumber: medusaRef,
   })
+
+  // 5b. If this is a credit memo refund, queue a refund_payment row (waiting)
+  //     Consolidator will activate it after write_check confirms, applying
+  //     the check TxnID against the credit memo TxnID via ReceivePaymentAdd.
+  const isCreditMemoRefund = payment.reference && String(payment.reference).startsWith("CM-")
+  if (isCreditMemoRefund) {
+    await writePipelineRow({
+      referenceId:     customer_payment_id,
+      referenceType:   "customer_payment",
+      step:            "refund_payment",
+      status:          "waiting",
+      dependsOn:       writeCheckRowId,
+      medusaRefNumber: medusaRef,
+      payload:         { customerListId, creditMemoRef: payment.reference },
+    })
+  }
 
   // 6. Mark CustomerPayment.qb as processing so it doesn't re-appear before consolidator runs
   await financeService.updateCustomerPayments(

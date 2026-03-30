@@ -51,18 +51,20 @@ const STEP_LABELS: Record<string, string> = {
     payment:       "Payment",
     apply_payment: "Apply Payment",
     credit_memo:   "Credit Memo",
-    write_check:   "Write Check",
+    write_check:    "Write Check",
+    refund_payment: "Refund Payment",
 }
 
 const STEP_ICONS: Record<string, string> = {
-    estimate:      "📋",
-    sales_order:   "🧾",
-    sales_receipt: "🏷️",
-    invoice:       "📄",
-    payment:       "💳",
-    apply_payment: "🔗",
-    credit_memo:   "↩️",
-    write_check:   "✍️",
+    estimate:       "📋",
+    sales_order:    "🧾",
+    sales_receipt:  "🏷️",
+    invoice:        "📄",
+    payment:        "💳",
+    apply_payment:  "🔗",
+    credit_memo:    "↩️",
+    write_check:    "✍️",
+    refund_payment: "🔄",
 }
 
 const REF_TYPE_LABELS: Record<string, string> = {
@@ -538,6 +540,7 @@ export function PipelineTable() {
                         <option value="apply_payment">Apply Payment</option>
                         <option value="credit_memo">Credit Memo</option>
                         <option value="write_check">Write Check</option>
+                        <option value="refund_payment">Refund Payment</option>
                     </select>
                     <span className="text-xs text-ui-fg-muted ml-auto">
                         {total} total operation{total !== 1 ? "s" : ""}

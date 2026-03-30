@@ -1,33 +1,51 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { FINANCE_MODULE } from "../../../../../modules/finance"
+import { Modules } from "@medusajs/utils"
 
-export const GET = async (
-  req: MedusaRequest,
-  res: MedusaResponse
-) => {
-  const query = req.scope.resolve("query")
-  
-  // Fetch refunds that are NOT synced to QB
-  const { data: refunds } = await query.graph({
-    entity: "refund",
-    fields: [
-      "id",
-      "amount",
-      "created_at",
-      "payment.*",
-      "payment.order.*",
-      "payment.order.customer.*",
-    ],
-    // Only refunds that lack the qb_synced metadata flag
-    filters: {
-        // In medusa we can filter JSON columns optionally, but usually doing a simple map post-fetch is safer if filters fail
-    }
+/**
+ * GET /admin/finance/qb-refunds/pending
+ *
+ * Returns CustomerPayments of type='refund' that have not yet been synced to QB
+ * (qb is null OR qb.status !== 'yes').
+ * Enriched with customer name for display in the accounting page.
+ */
+export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
+  const financeService = req.scope.resolve(FINANCE_MODULE)
+  const customerModule = req.scope.resolve(Modules.CUSTOMER)
+
+  const allRefunds = await financeService.listCustomerPayments(
+    { type: "refund" } as any,
+    { order: { received_at: "DESC" } }
+  )
+
+  // Show all refunds — confirmed ones stay visible with "Confirmed" status
+  const pending = allRefunds as any[]
+
+  // Batch-fetch customer names
+  const customerIds = [
+    ...new Set(
+      pending.map((r) => r.customer_id).filter(Boolean) as string[]
+    ),
+  ]
+
+  const customers =
+    customerIds.length > 0
+      ? await customerModule.listCustomers({ id: customerIds })
+      : []
+
+  const customerMap: Record<string, any> = Object.fromEntries(
+    (customers as any[]).map((c) => [c.id, c])
+  )
+
+  const enriched = pending.map((r) => {
+    const c = customerMap[r.customer_id]
+    const customerName = c
+      ? [c.first_name, c.last_name].filter(Boolean).join(" ") ||
+        c.email ||
+        r.customer_id
+      : r.customer_id
+    return { ...r, customer_name: customerName }
   })
 
-  // We filter in-memory to safely find refunds that don't have metadata.qb_synced === true
-  const pendingRefunds = refunds.filter(r => !r.metadata?.qb_synced)
-
-  res.json({
-    refunds: pendingRefunds,
-    count: pendingRefunds.length,
-  })
+  res.json({ refunds: enriched, count: enriched.length })
 }

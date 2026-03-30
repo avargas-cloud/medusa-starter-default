@@ -9,6 +9,11 @@ export type PipelineStep =
     | "apply_payment"
     | "credit_memo"
     | "write_check"
+    | "refund_payment"
+    | "void_invoice"
+    | "void_sales_receipt"
+    | "void_sales_order"
+    | "void_credit_memo"
 
 export type PipelineStatus =
     | "pending"
