@@ -13,9 +13,10 @@ const PosInvoiceItem = model.define('pos_invoice_item', {
     variant_id:  model.text().nullable(),
     sku:         model.text().nullable(),
     description: model.text(),
-    quantity:    model.number(),
-    unit_price:  model.bigNumber(),
-    total:       model.bigNumber(),
+    quantity:           model.number(),
+    refunded_quantity:  model.number().default(0), // cumulative units refunded via credit memos
+    unit_price:         model.bigNumber(),
+    total:              model.bigNumber(),
 })
 
 export default PosInvoiceItem

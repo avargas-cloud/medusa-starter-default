@@ -9,6 +9,7 @@ const QbBankAccount = model.define('qb_bank_account', {
     list_id: model.text().unique(),
     type: model.enum(['Bank', 'CreditCard', 'OtherCurrentAsset']).default('Bank'),
     is_active: model.boolean().default(true),
+    is_default: model.boolean().default(false),
 })
 
 export { QbBankAccount }

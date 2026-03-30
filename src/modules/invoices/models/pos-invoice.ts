@@ -15,14 +15,17 @@ const PosInvoice = model.define('pos_invoice', {
     order_id:       model.text(),            // FK → Medusa Order (external)
     fulfillment_id: model.text().nullable(), // FK → Medusa Fulfillment (external)
     customer_id:    model.text(),            // FK → Medusa Customer (external)
-    status:         model.enum(['draft', 'issued', 'partial', 'paid', 'voided']).default('issued'),
+    status:         model.enum(['draft', 'issued', 'partial', 'paid', 'voided', 'partially_refunded', 'refunded']).default('issued'),
     subtotal:       model.bigNumber(),       // in cents
     discount:       model.bigNumber().default(0),  // in cents
     shipping:       model.number().default(0),     // in cents (plain numeric in DB)
     tax:            model.bigNumber(),
+    untaxed_total:  model.bigNumber(),   // total − tax, pre-computed for reporting
     total:          model.bigNumber(),
     amount_paid:    model.bigNumber(),
     balance_due:    model.bigNumber(),
+    refunded_amount:   model.bigNumber().default(0), // cumulative items refund from credit memos (cents)
+    refunded_shipping: model.bigNumber().default(0), // cumulative shipping refund from credit memos (cents)
     payment_method: model.enum(['cash', 'check', 'card', 'ach', 'credit', 'mixed']),
     issued_at:      model.dateTime().nullable(),
     paid_at:        model.dateTime().nullable(),

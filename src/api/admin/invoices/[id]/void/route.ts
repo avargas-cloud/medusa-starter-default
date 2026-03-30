@@ -166,11 +166,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const totalStillApplied = stillActive.reduce((sum: number, a: any) => sum + Number(a.amount_applied), 0)
         
         const isSRPayment = currentPaymentDesc.metadata?.is_sales_receipt_payment === true
-        
+            || currentPaymentDesc.metadata?.qb_source === 'sales_receipt'
+
         await financeService.updateCustomerPayments({
             id: currentPaymentDesc.id,
             status: isSRPayment ? 'voided' : (totalStillApplied === 0 ? 'available' : 'partially_applied'),
-            notes: isSRPayment ? ((currentPaymentDesc.notes || '') + `\nAuto-voided via Sales Receipt ${invoice.invoice_number || id} voiding`).trim() : currentPaymentDesc.notes
+            notes: isSRPayment ? ((currentPaymentDesc.notes || '') + `\nAuto-voided via Sales Receipt ${invoice.invoice_number || id} voiding`).trim() : currentPaymentDesc.notes,
+            ...(isSRPayment ? {
+                metadata: {
+                    ...(currentPaymentDesc.metadata || {}),
+                    qb_sync_status: 'voided',
+                },
+                qb: {
+                    ...(currentPaymentDesc.qb as any || {}),
+                    status: 'voided',
+                },
+            } : {}),
         })
         
         // D. Refund Native Medusa Payment (best effort, to keep ledger synced)
@@ -314,7 +325,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         await recalculateOrderStatus(invoice.order_id, req.scope)
 
         // 4. CANCEL DIRECT SALES ORDERS ENTIRELY
-        const isSalesReceipt = invoice.metadata?.is_sales_receipt === true || invoice.qb_ref_number?.startsWith?.('SR-') || invoice.invoice_number?.startsWith?.('SR-')
+        const isSalesReceipt = invoice.metadata?.is_sales_receipt === true
         if (isSalesReceipt) {
             try {
                 const { cancelOrderWorkflow } = await import("@medusajs/core-flows")

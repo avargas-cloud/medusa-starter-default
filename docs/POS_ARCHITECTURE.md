@@ -1,12 +1,13 @@
 # POS_ARCHITECTURE — EcoPowerTech Store POS
-# Índice General del Sistema POS
+
+**Last Updated:** 2026-03-29
 
 | Campo | Detalle |
 |-------|---------|
 | **App URL** | `https://pos.ecopowertech.com` (Next.js 15) |
 | **Backend** | Medusa v2 — `https://api.ecopowertech.com` |
 | **QB Bridge** | `https://qb.eptbridge.com` |
-| **Última revisión** | 2026-03-06 — v1.1 |
+| **Version** | v1.1 |
 
 ---
 
@@ -34,6 +35,7 @@ pos.ecopowertech.com (Next.js 15)
 | 🧾 Estimates | `/estimates`, `/estimates/[id]` | [POS_ESTIMATES.md](./POS_ESTIMATES.md) |
 | 📦 Orders | `/orders`, `/orders/[id]` | [POS_ORDERS.md](./POS_ORDERS.md) |
 | 🧾 Invoices | `/invoices`, `/invoices/[id]` | [POS_INVOICES.md](./POS_INVOICES.md) |
+| 🔄 Credit Memos (Returns) | `/returns` (admin) | [POS_INVOICES.md § 3–4](./POS_INVOICES.md#3-credit-memo-complete-flow) |
 | 💳 Capture Payment | `/capture-payment` | [POS_CAPTURE_PAYMENT.md](./POS_CAPTURE_PAYMENT.md) |
 | 👤 Customers | `/customers`, `/customers/[id]` | [POS_CUSTOMERS.md](./POS_CUSTOMERS.md) |
 | 📋 Inventory | `/inventory` | [POS_INVENTORY.md](./POS_INVENTORY.md) |
@@ -59,7 +61,7 @@ Medusa Sales Channels
             └── qb-order-subscriber.ts → QB sync automático
 ```
 
-**Principio clave:** La discriminación es por `sales_channel_id` — sin metadata adicional.  
+**Principio clave:** La discriminación es por `sales_channel_id` — sin metadata adicional.
 **Subscriber guard:** `isPosOrder()` en `qb-order-subscriber.ts` skipea los 5 event handlers para órdenes POS.
 
 ---
@@ -72,8 +74,8 @@ Medusa Sales Channels
 | Fase 2 — QB Sales Receipt | ✅ Completo | `POST/DELETE /admin/quickbooks/sales-receipt` |
 | Fase 3 — Credit Ledger | ✅ Completo | `customer_credit_ledger` table + 3 endpoints |
 | Fase 4 — Auth & Password Reset | ✅ Completo | Bearer JWT, SQL surgery reset flow |
-| Fase 5 — Receive Payment UI | 🟡 Pendiente | Multi-invoice payment screen |
-| Fase 6 — Per-Fulfillment Invoicing | 🟡 Pendiente | PDF por fulfillment, QB Invoice manual |
+| Fase 5 — Payments & Finance | ✅ Completo | Multi-invoice payment screen, credit memo refunds |
+| Fase 6 — Per-Fulfillment Invoicing | ✅ Completo | PDF por fulfillment, QB Invoice manual |
 | Fase 7 — User Management | 🟡 Pendiente | POS-only user profiles, admin invite |
 
 ---
@@ -116,6 +118,9 @@ backend/src/
 ├── api/
 │   ├── admin/
 │   │   ├── quickbooks/{sales-receipt,draft-order,order}/
+│   │   ├── invoices/{id}/void/route.ts
+│   │   ├── pos/credit_memos/{id}/{complete,void}/route.ts
+│   │   └── pos/sync/route.ts            ← Manual sync with intelligent void routing
 │   │   └── customers/[id]/credits/{route,apply/route}.ts
 │   └── store/
 │       └── users/
@@ -126,15 +131,23 @@ backend/src/
 ecopowertech-store-pos/
 ├── app/
 │   ├── (auth)/{login,reset-password}/
-│   └── (pos)/{dashboard,estimates,orders,capture-payment,
-│              customers,inventory,users,vendors}/
-├── lib/medusa.ts                        ← medusaFetch (Bearer JWT)
+│   └── (pos)/{dashboard,estimates,orders,invoices,capture-payment,
+│              customers,inventory,users,vendors,returns}/
+├── lib/
+│   ├── medusa.ts                        ← medusaFetch (Bearer JWT)
+│   ├── pos-store.ts                     ← Zustand store with draftCache
+│   └── qb.ts                            ← QB metadata extraction
+├── components/pos/
+│   ├── VoidDocumentModal.tsx            ← Confirmation modal for voids
+│   └── payments/
+│       ├── CreditStatement.tsx          ← Ledger with void reversals
+│       └── ...
 └── middleware.ts                        ← PUBLIC_PATHS guard
 ```
 
 ---
 
-## Draft Cache (draftCache) — Safe Print Snapshots (Marzo 28, 2026)
+## Draft Cache (draftCache) — Safe Print Snapshots
 
 The POS uses a Zustand store `posStore.draftCache` to temporarily hold print metadata without modifying the active document:
 
@@ -169,6 +182,67 @@ setDraftCache(prev => ({
 
 ---
 
+## Void Document Confirmation Modal
+
+The `VoidDocumentModal.tsx` component enforces safe void operations by requiring users to type **"VOID"** (all caps) before confirming. This applies to:
+
+- **Invoices** — Full void of the entire invoice with financial rollback
+- **Credit Memos** — Reversal of refund with inventory restock
+- **Sales Receipts** — Void immediate payment transaction
+- **Sales Orders** — Close pending order
+
+Each document type displays context-specific warning bullets explaining the consequences of the void.
+
+**File:** `ecopowertech-store-pos/components/pos/VoidDocumentModal.tsx`
+
+---
+
+## QB Pipeline & Void Tracking
+
+All QB operations (create, void, update) are tracked in `qb_order_pipeline` with full status lifecycle:
+
+- `pending` → `submitted` → `confirmed`
+- `pending` → `submitted` → `failed`
+
+**Void operations specifically:**
+- `void_invoice` — triggered by `POST /admin/invoices/:id/void`
+- `void_credit_memo` — triggered by `POST /admin/pos/credit_memos/:id/void`
+- `void_sales_receipt` — triggered by POS cancellation
+- `void_sales_order` — triggered by order cancel handler
+
+Each void row captures:
+- `medusa_ref_number` (e.g., INV-1234, CM-567)
+- `qb_ref_number` (QB-assigned reference)
+- `qb_txn_id` (QB transaction ID being voided)
+- Full status history and error messages
+
+See [QB_PIPELINE_ARCHITECTURE.md](./QB_PIPELINE_ARCHITECTURE.md) for complete pipeline documentation.
+
+---
+
+## Intelligent Void Routing (Manual Sync)
+
+The `POST /admin/pos/sync` endpoint now auto-detects voided documents:
+
+```typescript
+// Frontend detects:
+if (estimateStatus === 'voided' || status === 'voided') {
+    // Auto-pass action: 'void' to sync endpoint
+}
+
+// Backend intelligently routes:
+if (type === 'credit_memo' && (status === 'voided' || action === 'void')) {
+    // Call voidCreditMemoInQb (background, non-blocking)
+    // Write pipeline row with void tracking
+} else if (type === 'invoice' && status === 'voided') {
+    // Detect void scenario and set syncModalAction = 'void'
+}
+```
+
+**Benefit:** Users no longer receive "Only completed CMs can be synced" errors. The system intelligently routes voided documents to their respective QB void handlers.
+
+---
+
 ## Gotchas Críticos
 
 | Issue | Fix |
@@ -178,7 +252,37 @@ setDraftCache(prev => ({
 | POS cancel no voidea en QB | Llamar `DELETE /admin/quickbooks/sales-receipt` explícitamente |
 | `x-publishable-api-key` faltante en `/store/` | Leer de `NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY` |
 | Subscriber actúa en órdenes POS | Verificar `POS_SALES_CHANNEL_ID` env var en backend |
+| Void modal accepts anything | MUST type exactly **"VOID"** (case-sensitive) |
+| `voidCreditMemoInQb` returns wrong format | Fixed: now returns `{ success: true, data: result }` |
+| Invoice sync shows false green checkmark | Fixed: requires `qb_txn_id` (not just `qb_ref_number`) for `'synced'` status |
 
 ---
 
-**Versión:** 1.1 — Phases 1–4  |  **Docs:** Ver módulos individuales arriba
+## Integration Points
+
+### Backend → QB Bridge
+
+All QB operations go through the bridge via REST:
+- Direct Execution (fire-and-forget, non-blocking)
+- Background threads (setTimeout) prevent blocking HTTP response
+- Pipeline tracking enables polling and failure recovery
+
+### POS Frontend → Backend
+
+- Admin API endpoints: `/admin/quickbooks/*`, `/admin/invoices/*`, `/admin/pos/*`
+- Store API endpoints: `/store/products`, `/store/customers` (via publishable key)
+- Bearer JWT authentication with session cookies
+
+### Finance Ledger → Payments & Credits
+
+When a credit memo is completed/voided:
+1. Inventory is restocked/reversed
+2. QB sync is triggered (background)
+3. Refund is created in Medusa native Payment Module
+4. Finance Ledger entry created via `CustomerPayment`
+5. PosInvoice `refunded_amount` / `refunded_shipping` updated
+6. PosInvoiceItem `refunded_quantity` updated
+
+---
+
+**Version:** 1.1 — Complete architecture as of 2026-03-29

@@ -1,5 +1,6 @@
 import { closeSalesOrderInQb, voidInvoiceInQb } from "../qb-bridge-client"
 import { QbSyncLogger } from "../qb-sync-logger"
+import { writePipelineRow } from "../qb-pipeline"
 import { getSoTxnId, getSoRef, getLatestInvoiceTxnId, getLatestInvoiceRef } from "../qb-metadata-types"
 import { LOG_PREFIX } from "./utils"
 
@@ -62,9 +63,31 @@ export async function handleOrderCanceled(
         if (!result.success) {
             logger.error(`${LOG_PREFIX} ⚠️ Failed to void invoice: ${result.error}`)
             errorMsg = `Invoice void failed: ${result.error}`
+            try {
+                await writePipelineRow({
+                    orderId:         orderId,
+                    step:            "void_invoice",
+                    status:          "failed",
+                    qbTxnId:         invoiceTxnId,
+                    qbRefNumber:     invoiceRef ?? null,
+                    medusaRefNumber: invoiceRef ?? null,
+                    error:           result.error ?? "Invoice void failed",
+                })
+            } catch (pErr: any) { logger.warn(`${LOG_PREFIX} Could not write pipeline row: ${pErr.message}`) }
         } else {
             invoiceOpId = result.data?.operationId
             logger.info(`${LOG_PREFIX} ✅ Invoice void queued (op: ${invoiceOpId})`)
+            try {
+                await writePipelineRow({
+                    orderId:         orderId,
+                    step:            "void_invoice",
+                    status:          "submitted",
+                    bridgeOpId:      invoiceOpId ?? null,
+                    qbTxnId:         invoiceTxnId,
+                    qbRefNumber:     invoiceRef ?? null,
+                    medusaRefNumber: invoiceRef ?? null,
+                })
+            } catch (pErr: any) { logger.warn(`${LOG_PREFIX} Could not write pipeline row: ${pErr.message}`) }
         }
     }
 
@@ -74,9 +97,31 @@ export async function handleOrderCanceled(
         if (!result.success) {
             logger.error(`${LOG_PREFIX} ⚠️ Failed to close SO: ${result.error}`)
             errorMsg = errorMsg ? `${errorMsg}; SO close failed: ${result.error}` : `SO close failed: ${result.error}`
+            try {
+                await writePipelineRow({
+                    orderId:         orderId,
+                    step:            "void_sales_order",
+                    status:          "failed",
+                    qbTxnId:         soTxnId,
+                    qbRefNumber:     soRef ?? null,
+                    medusaRefNumber: soRef ?? null,
+                    error:           result.error ?? "SO close failed",
+                })
+            } catch (pErr: any) { logger.warn(`${LOG_PREFIX} Could not write pipeline row: ${pErr.message}`) }
         } else {
             soOpId = result.data?.operationId
             logger.info(`${LOG_PREFIX} ✅ SO close queued (op: ${soOpId})`)
+            try {
+                await writePipelineRow({
+                    orderId:         orderId,
+                    step:            "void_sales_order",
+                    status:          "submitted",
+                    bridgeOpId:      soOpId ?? null,
+                    qbTxnId:         soTxnId,
+                    qbRefNumber:     soRef ?? null,
+                    medusaRefNumber: soRef ?? null,
+                })
+            } catch (pErr: any) { logger.warn(`${LOG_PREFIX} Could not write pipeline row: ${pErr.message}`) }
         }
     }
 

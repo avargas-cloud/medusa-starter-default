@@ -55,10 +55,30 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     try {
-        // Fetch strictly continuous sequential payment number from PostgreSQL
         const pgConnection = req.scope.resolve("__pg_connection__") as any
+
+        // Sequential payment number
         const seqRes = await pgConnection.raw(`SELECT nextval('custom_payment_seq') AS seq`).catch(() => ({ rows: [{ seq: null }] }))
         const nextPayNum = seqRes.rows[0]?.seq || seqRes.rows[0]?.SEQ ? Number(seqRes.rows[0].seq || seqRes.rows[0].SEQ) : null
+
+        // Sequential transaction number — assign once per unique transaction_id
+        let transactionNumber: number | null = null
+        const incomingTxnId = (metadata as any)?.transaction_id
+        if (incomingTxnId) {
+            // Look for an existing payment in this transaction that already has a number
+            const existing = await financeService.listCustomerPayments(
+                { metadata: { transaction_id: incomingTxnId } } as any,
+                { take: 1 }
+            ).catch(() => [])
+            const existingNum = (existing[0] as any)?.metadata?.transaction_number
+            if (existingNum) {
+                transactionNumber = Number(existingNum)
+            } else {
+                const txnSeqRes = await pgConnection.raw(`SELECT nextval('pos_transaction_seq') AS seq`).catch(() => ({ rows: [{ seq: null }] }))
+                const raw = txnSeqRes.rows[0]?.seq ?? txnSeqRes.rows[0]?.SEQ
+                if (raw) transactionNumber = Number(raw)
+            }
+        }
 
         const payment = await financeService.createCustomerPayments({
             customer_id,
@@ -74,6 +94,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             metadata: {
                 ...(metadata || {}),
                 pos_payment_method: m, // exact original method for QB
+                ...(transactionNumber !== null ? { transaction_number: transactionNumber } : {}),
             },
             status: 'available' // A new manual payment is always available until applied
         })

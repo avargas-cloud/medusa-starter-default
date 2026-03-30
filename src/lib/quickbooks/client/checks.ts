@@ -45,6 +45,30 @@ export async function createCheckInQb(
 }
 
 /**
+ * Voids an existing Write Check in QuickBooks.
+ */
+export async function voidCheckInQb(
+    checkTxnId: string
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        return {
+            success: true,
+            dryRun: true,
+            data: { operationId: "DRY_RUN", txnId: checkTxnId },
+        }
+    }
+
+    try {
+        const data = await bridgeFetch("POST", `/api/checks/${checkTxnId}/void`, {})
+        const operationId = data?.operationId
+        if (!operationId) throw new Error("Bridge did not return an operationId for void-check")
+        return { success: true, data: { operationId, txnId: checkTxnId } }
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}
+
+/**
  * Polls for the result of a previously queued Write Check operation.
  */
 export async function pollCheckResult(

@@ -381,7 +381,7 @@ export async function handleFulfillmentCreated(
                             metadata: {
                                 ...existingInvMeta,
                                 qb_txn_id: result.txnId || null,
-                                qb_ref_number: result.refNumber ? `INV-${result.refNumber}` : (result.txnId ? `INV-${result.txnId}` : null),
+                                qb_ref_number: result.refNumber || null,
                                 qb_operation_id: result.operationId || null
                             }
                         })
@@ -401,7 +401,7 @@ export async function handleFulfillmentCreated(
                         metadata: {
                             ...existingFulMeta,
                             qb_txn_id: result.txnId || null,
-                            qb_ref_number: result.refNumber ? `INV-${result.refNumber}` : (result.txnId ? `INV-${result.txnId}` : null),
+                            qb_ref_number: result.refNumber || null,
                         }
                     })
                     logger.info(`${LOG_PREFIX} ✅ Saved native QB Meta to Fulfillment ${fulfillmentId}`)

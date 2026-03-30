@@ -77,7 +77,7 @@ export default async function qbOrderSubscriber({
                 await handleCustomerTransferred(data, orderModule, logger)
                 break
             case "pos.invoice.voided":
-                await handleInvoiceVoided(data, orderModule, logger)
+                await handleInvoiceVoided(data, orderModule, logger, container)
                 break
             default:
                 logger.warn(`[QB-ORDER] ⚠️ Unhandled event type: ${name}`)

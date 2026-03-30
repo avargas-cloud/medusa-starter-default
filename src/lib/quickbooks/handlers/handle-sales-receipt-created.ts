@@ -330,7 +330,7 @@ export async function handleSalesReceiptCreated(
                             metadata: {
                                 ...(inv.metadata || {}),
                                 qb_txn_id: result.txnId || null,
-                                qb_ref_number: result.refNumber || (result.txnId ? `SR-${result.txnId}` : null),
+                                qb_ref_number: result.refNumber || null,
                                 qb_operation_id: result.operationId || null
                             }
                         })
@@ -342,19 +342,47 @@ export async function handleSalesReceiptCreated(
                     financeService = _container.resolve("finance")
                 } catch (e) { }
 
-                if (financeService && data.payment_id) {
+                if (financeService) {
                     try {
-                        const payment = await financeService.retrieveCustomerPayment(data.payment_id)
-                        await financeService.updateCustomerPayment(payment.id, {
-                            metadata: {
-                                ...(payment.metadata || {}),
-                                qb_txn_id: result.txnId || null,
-                                qb_ref_number: result.refNumber || (result.txnId ? `SR-${result.txnId}` : null),
-                                qb_operation_id: result.operationId || null
-                            }
-                        })
-                        logger.info(`${LOG_PREFIX} ✅ Tagged Payment ${payment.id} with SR ${result.refNumber}`)
-                    } catch (payErr: any) { 
+                        // payment_id may be null for SR (invoice route intentionally omits it).
+                        // Fall back to looking up by order_id + is_sales_receipt_payment flag.
+                        let srPayment: any = null
+                        if (data.payment_id) {
+                            srPayment = await financeService.retrieveCustomerPayment(data.payment_id)
+                        } else {
+                            const payments = await financeService.listCustomerPayments({
+                                metadata: { order_id: orderId },
+                            }).catch(() => [])
+                            srPayment = (payments as any[]).find(
+                                (p: any) => p.metadata?.is_sales_receipt_payment === true || p.metadata?.order_id === orderId
+                            ) ?? null
+                        }
+
+                        if (srPayment) {
+                            // Mark as Sales Receipt source — prevents ReceivePayment duplicate in QB
+                            // and blocks apply/unapply operations (SR payments are embedded, not standalone)
+                            await financeService.updateCustomerPayments({
+                                id: srPayment.id,
+                                metadata: {
+                                    ...(srPayment.metadata || {}),
+                                    qb_txn_id: result.txnId || null,
+                                    qb_ref_number: result.refNumber || null,
+                                    qb_operation_id: result.operationId || null,
+                                    qb_sync_status: 'synced',
+                                    qb_source: 'sales_receipt',
+                                },
+                                qb: {
+                                    status: 'yes',
+                                    txn_id: result.txnId || null,
+                                    source: 'sales_receipt',
+                                    edit_sequence: 'No editable',
+                                },
+                            })
+                            logger.info(`${LOG_PREFIX} ✅ Tagged Payment ${srPayment.id} with SR ${result.refNumber} (source=sales_receipt)`)
+                        } else {
+                            logger.warn(`${LOG_PREFIX} ⚠️ Could not find SR payment for order ${orderId} to tag`)
+                        }
+                    } catch (payErr: any) {
                         logger.warn(`${LOG_PREFIX} ⚠️ Failed to tag Sales Receipt payment: ${payErr.message}`)
                     }
                 }
@@ -368,7 +396,7 @@ export async function handleSalesReceiptCreated(
                         metadata: {
                             ...(ful.metadata || {}),
                             qb_txn_id: result.txnId || null,
-                            qb_ref_number: result.refNumber || (result.txnId ? `SR-${result.txnId}` : null),
+                            qb_ref_number: result.refNumber || null,
                         }
                     })
                 } catch (fulErr: any) { }

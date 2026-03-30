@@ -37,12 +37,11 @@ export default async function documentNumberSubscriber({
 
             logger.info(`${LOG_PREFIX} Assigned ${documentNumber} to Draft Order ${order.id}`)
 
-            await orderModule.updateOrders(order.id, {
-                metadata: {
-                    ...(order.metadata || {}),
-                    document_number: documentNumber,
-                }
-            })
+            // Use atomic JSON merge to avoid race condition with other subscribers
+            await pgConnection.raw(
+                `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || $1::jsonb WHERE id = $2`,
+                [JSON.stringify({ document_number: documentNumber }), order.id]
+            )
         } 
         else if (eventName === "order.placed") {
             const meta = (order.metadata || {}) as Record<string, any>
@@ -63,13 +62,13 @@ export default async function documentNumberSubscriber({
             
             logger.info(`${LOG_PREFIX} Assigned ${documentNumber} to Order ${order.id}${oldEstimateNumber ? ` (converted from ${oldEstimateNumber})` : ''}`)
 
-            await orderModule.updateOrders(order.id, {
-                metadata: {
-                    ...meta,
-                    document_number: documentNumber,
-                    ...(oldEstimateNumber ? { original_estimate_number: oldEstimateNumber } : {})
-                }
-            })
+            // Use atomic JSON merge to avoid race condition with other subscribers
+            const patch: Record<string, string> = { document_number: documentNumber }
+            if (oldEstimateNumber) patch.original_estimate_number = oldEstimateNumber
+            await pgConnection.raw(
+                `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || $1::jsonb WHERE id = $2`,
+                [JSON.stringify(patch), order.id]
+            )
         }
     } catch (err: any) {
         console.error(`${LOG_PREFIX} Failed to assign document number: ${err.message}`)

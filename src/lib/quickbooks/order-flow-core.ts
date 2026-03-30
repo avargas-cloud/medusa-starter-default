@@ -588,7 +588,7 @@ export async function processPaymentCaptureInQb(capture: {
     refNumber?: string
     memo?: string
     onSubmitted?: (operationId: string) => Promise<void>
-}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean; skipReason?: string }> {
+}): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; editSequence?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
 
@@ -633,12 +633,14 @@ export async function processPaymentCaptureInQb(capture: {
 
     let txnId = asyncData.txnId
     let refNumber = asyncData.refNumber
+    let editSequence: string | undefined
 
     if (!txnId && asyncData.operationId !== "DRY_RUN") {
         try {
             const pollResult = await pollOperationResult(asyncData.operationId)
             txnId = pollResult.txnId
             refNumber = pollResult.refNumber
+            editSequence = pollResult.editSequence
         } catch (pollErr: any) {
             console.error(`[QB] ❌ Payment polling failed: ${pollErr.message}`)
             await QbSyncLogger.fail(logId, `Polling failed: ${pollErr.message}`)
@@ -659,7 +661,7 @@ export async function processPaymentCaptureInQb(capture: {
             : `Payment queued — OperationID: ${asyncData.operationId}`,
     })
 
-    return { enabled: true, operationId: asyncData.operationId, txnId, refNumber }
+    return { enabled: true, operationId: asyncData.operationId, txnId, refNumber, editSequence }
 }
 
 // ─── 3. Process Invoice (Fulfillment) ─────────────────────────────────────────
@@ -789,6 +791,8 @@ function mapPaymentMethodToQb(method: string | undefined): string | undefined {
         case "amex":
         case "american express": return "American Express"
         case "discover": return "Discover"
+        case "capital_one":
+        case "capital one": return "Capital One"
         default:
             return method.charAt(0).toUpperCase() + method.slice(1)
     }

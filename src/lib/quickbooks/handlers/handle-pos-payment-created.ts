@@ -3,10 +3,21 @@ import { Modules, ContainerRegistrationKeys } from "@medusajs/utils"
 import { FINANCE_MODULE } from "../../../modules/finance"
 import { processPaymentCaptureInQb, ensureCustomerInQb } from "../order-flow-core"
 import { createCreditMemoInQb } from "../client"
-import { writePipelineRow } from "../qb-pipeline"
+import { writePipelineRow, cacheEditSequence } from "../qb-pipeline"
 
 const LOG_PREFIX = "[QB-POS-PAYMENT]"
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
+
+const POS_TO_QB_METHOD: Record<string, string> = {
+    cash: "Cash", check: "Check", visa: "Visa", mastercard: "MasterCard",
+    discover: "Discover", amex: "American Express", capital_one: "Capital One",
+    debit_card: "Debit Card", card: "Credit Card", ach: "EFT",
+    zelle: "Zelle", wire_transfer: "Wire Transfer", money_order: "Check",
+}
+
+function mapPosPaymentMethod(method: string): string {
+    return POS_TO_QB_METHOD[method?.toLowerCase()] ?? method
+}
 
 export async function handlePosPaymentCreated({ event, container }: SubscriberArgs<any>) {
     const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
@@ -54,6 +65,13 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
         const existingSyncStatus = payment.metadata?.qb_sync_status as string | undefined
         if (existingSyncStatus === "synced" || existingSyncStatus === "creating") {
             logger.info(`${LOG_PREFIX} ⏭️ Skipping: payment ${paymentId} already has qb_sync_status='${existingSyncStatus}'`)
+            return
+        }
+
+        // SALES RECEIPT GUARD: payments captured inside a QB Sales Receipt are already
+        // embedded in that transaction — creating a separate ReceivePayment would duplicate it.
+        if (payment.metadata?.qb_source === 'sales_receipt') {
+            logger.info(`${LOG_PREFIX} ⏭️ Skipping: payment ${paymentId} was captured in a Sales Receipt — no standalone ReceivePayment needed`)
             return
         }
 
@@ -109,9 +127,15 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
             }
         }
         if (!memo) {
-            memo = payDisplayId
-                ? `Payment ${payDisplayId} for Order ${orderDisplayId || orderId}`
-                : `Payment for Order ${orderDisplayId || orderId}`
+            if (orderId || orderDisplayId) {
+                memo = payDisplayId
+                    ? `Payment ${payDisplayId} for Order ${orderDisplayId || orderId}`
+                    : `Payment for Order ${orderDisplayId || orderId}`
+            } else {
+                memo = payDisplayId
+                    ? `Payment ${payDisplayId} — Customer Deposit`
+                    : `Customer Deposit`
+            }
         }
 
         if (payment.type === "refund") {
@@ -199,7 +223,7 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
             orderId: (orderId as string) || `payment_${paymentId}`,
             orderDisplayId: parseInt(String(orderDisplayId || '').replace(/\D/g, ''), 10) || undefined,
             amount: (payment.amount as number) / 100,
-            paymentMethod: (payment.metadata?.pos_payment_method as string) || (payment.method as string),
+            paymentMethod: mapPosPaymentMethod((payment.metadata?.pos_payment_method as string) || (payment.method as string)),
             qbCustomerId: qbCustomerId as string,
             memo,
             onSubmitted: async (operationId) => {
@@ -233,6 +257,7 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
                         qb_sync_status: "synced",
                         qb_txn_id: result.txnId || null,
                         qb_operation_id: result.operationId || null,
+                        qb_memo: memo || null,
                     }
                 })
                 logger.info(`${LOG_PREFIX} ✅ Saved QB TxnID=${result.txnId} to POS payment ${paymentId}`)
@@ -251,6 +276,16 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
                 })
             } catch (pErr: any) {
                 logger.warn(`${LOG_PREFIX} ⚠️ Could not confirm pipeline row: ${pErr.message}`)
+            }
+            // Cache EditSequence so future ReceivePaymentMod ops (e.g. payment method change)
+            // don't need a separate GET round-trip to QB.
+            if (result.editSequence && result.txnId) {
+                try {
+                    await cacheEditSequence("payment", result.txnId, result.editSequence)
+                    logger.info(`${LOG_PREFIX} ✅ Cached EditSequence for payment TxnID=${result.txnId}`)
+                } catch (cErr: any) {
+                    logger.warn(`${LOG_PREFIX} ⚠️ Could not cache EditSequence: ${cErr.message}`)
+                }
             }
         }
 

@@ -14,6 +14,8 @@ export type PipelineStep =
     | "void_sales_receipt"
     | "void_sales_order"
     | "void_credit_memo"
+    | "void_check"
+    | "payment_method_change"
 
 export type PipelineStatus =
     | "pending"

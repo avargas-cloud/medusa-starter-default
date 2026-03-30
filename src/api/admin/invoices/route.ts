@@ -126,6 +126,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         discount:       body.discount ?? 0,
         shipping:       body.shipping ?? 0,
         tax:            body.tax,
+        untaxed_total:  body.total - body.tax,
         total:          body.total,
         amount_paid:    body.amount_paid,
         balance_due,

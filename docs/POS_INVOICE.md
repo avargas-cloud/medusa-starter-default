@@ -1,43 +1,28 @@
-# Invoices — Admin UI
-# Guide Completo del Módulo de Invoices
+# Invoices — Medusa Admin UI
 
-| Campo | Detalle |
-|-------|---------|
-| **Propósito** | Vista de órdenes de ventas totalmente cumplidas (`fulfilled`) o entregadas (`delivered`). Lista custom sobre el sistema nativo de Medusa — muestra las órdenes que ya llegaron a destino y están listas para facturación/archivo. |
-| **Última revisión** | 2026-03-06 (QB Ref # column + arquitectura compartida) |
+**Last Updated:** 2026-03-29
+
+Este documento cubre el módulo de **Invoices en el Medusa Admin Panel** (`backend/src/admin/`), que funciona como un listado filtrado de órdenes completadas lisas para facturación.
+
+> **Nota:** Este documento describe el **Admin Panel de Medusa**. Para la página de **Invoice del POS** (`ecopowertech-store-pos/app/(pos)/invoices/[id]/`), ver [POS_INVOICES.md](./POS_INVOICES.md).
+
+---
 
 ## Resumen Ejecutivo
 
-✅ **Lista custom** en `/app/orders-2-invoices` — no reemplaza el detalle nativo de Medusa  
-✅ **Filtro por fulfillment_status** — muestra `fulfilled` y `delivered` exclusivamente  
-✅ **QB Ref # column** — columna en 2da posición (numero de Sales Order o Invoice en QB)  
-✅ **Arquitectura compartida** — reutiliza `useOrdersList`, `OrdersTable`, `OrdersControls`, `OrdersFooter` de `sales-orders/`  
-✅ **Búsqueda client-side** — por #, nombre, empresa, email y teléfono  
-✅ **Sorteo client-side** — por #, fecha, total  
-✅ **Paginación** — 20 órdenes por página  
-✅ **Detalle via Medusa nativo** — click navega a `/orders/:id` (página nativa de Medusa)  
-✅ **Sin botón Create** — las invoices no se crean manualmente; son órdenes que completaron su ciclo  
-✅ **QB Widget en detalle** — widget `quickbooks-order-widget.tsx` inyectado en `order.details.before`  
+✅ **Lista custom** en `/app/orders-2-invoices` — no reemplaza el detalle nativo de Medusa
+✅ **Filtro por fulfillment_status** — muestra `fulfilled` y `delivered` exclusivamente
+✅ **QB Ref # column** — columna en 2da posición (numero de Sales Order o Invoice en QB)
+✅ **Arquitectura compartida** — reutiliza `useOrdersList`, `OrdersTable`, `OrdersControls`, `OrdersFooter` de `sales-orders/`
+✅ **Búsqueda client-side** — por #, nombre, empresa, email y teléfono
+✅ **Sorteo client-side** — por #, fecha, total
+✅ **Paginación** — 20 órdenes por página
+✅ **Detalle via Medusa nativo** — click navega a `/orders/:id` (página nativa de Medusa)
+✅ **Sin botón Create** — las invoices no se crean manualmente; son órdenes que completaron su ciclo
 
 ---
 
-## Table of Contents
-
-1. [File Structure](#1-file-structure)
-2. [Arquitectura General](#2-arquitectura-general)
-3. [Sidebar Config & Ordenamiento](#3-sidebar-config--ordenamiento)
-4. [Filtro de Fulfillment](#4-filtro-de-fulfillment)
-5. [Componentes Compartidos](#5-componentes-compartidos)
-6. [Columnas de la Tabla](#6-columnas-de-la-tabla)
-7. [Detail View: Medusa Nativo + QB Widget](#7-detail-view-medusa-nativo--qb-widget)
-8. [Lifecycle: Sales Order → Invoice](#8-lifecycle-sales-order--invoice)
-9. [QuickBooks Integration en Invoices](#9-quickbooks-integration-en-invoices)
-10. [Diferencias clave vs Sales Orders](#10-diferencias-clave-vs-sales-orders)
-11. [Known Issues & Gotchas](#11-known-issues--gotchas)
-
----
-
-## 1. File Structure
+## File Structure
 
 ```
 backend/src/
@@ -46,9 +31,6 @@ backend/src/
 │   ├── routes/
 │   │   ├── orders-2-invoices/
 │   │   │   └── page.tsx                  ← Entrada de sidebar (config + render)
-│   │   │
-│   │   ├── invoices/
-│   │   │   └── page.tsx                  ← Página original (sin config de sidebar)
 │   │   │
 │   │   └── sales-orders/                 ← Lógica compartida (hook + components)
 │   │       ├── hooks/
@@ -63,14 +45,9 @@ backend/src/
     └── order/route.ts                    ← POST: sync/re-sync orden como QB Sales Order
 ```
 
-> **¿Por qué `orders-2-invoices` e `invoices`?**  
-> El prefijo numérico controla el orden en la sidebar de Medusa.  
-> La lógica real vive en `invoices/` (sin prefijo). `orders-2-invoices/page.tsx` solo  
-> reexporta la config y el componente con el nombre correcto para que Medusa lo registre en el lugar correcto.
-
 ---
 
-## 2. Arquitectura General
+## Arquitectura General
 
 ```
 orders-2-invoices/page.tsx
@@ -83,14 +60,14 @@ orders-2-invoices/page.tsx
     └── OrdersFooter    (count + Prev/Next)
 ```
 
-La página es **idéntica a Sales Orders** en estructura, con dos diferencias:
+La página es **idéntica a Sales Orders** en estructura, con dos diferencias clave:
 1. `fulfillmentFilters = ["fulfilled", "delivered"]` en lugar de `["not_fulfilled", "partially_fulfilled"]`
 2. **Sin botón "Create"** — las invoices son read-mostly
-3. **Sin toggle Show Cancelled** — actualmente no implementado en Invoices (los `OrdersControls` no reciben `onToggleCancelled`)
+3. **Sin toggle Show Cancelled** — actualmente no implementado en Invoices
 
 ---
 
-## 3. Sidebar Config & Ordenamiento
+## Sidebar Config & Ordenamiento
 
 ```typescript
 // orders-2-invoices/page.tsx
@@ -109,7 +86,7 @@ export const config = defineRouteConfig({
 
 ---
 
-## 4. Filtro de Fulfillment
+## Filtro de Fulfillment
 
 ### ¿Qué es una "Invoice" en este contexto?
 
@@ -129,16 +106,13 @@ En la terminología EcoPowerTech, un **Invoice** es cualquier orden de Medusa cu
 | `fulfilled` | **Invoices** ✅ |
 | `delivered` | **Invoices** ✅ |
 
-> **Nota sobre canceladas:** El hook `useOrdersList` filtra `status !== "canceled"` por defecto.  
-> Pero en la página de Invoices **no se expone el toggle Show Cancelled** — las canceladas son invisibles.  
-> Si se necesita ver invoices canceladas, hacerlo directamente desde Medusa nativo o agregar el toggle.
+**Nota sobre canceladas:** El hook `useOrdersList` filtra `status !== "canceled"` por defecto. Pero en la página de Invoices **no se expone el toggle Show Cancelled** — las canceladas son invisibles. Si se necesita ver invoices canceladas, hacerlo directamente desde Medusa nativo o agregar el toggle.
 
 ---
 
-## 5. Componentes Compartidos
+## Componentes Compartidos
 
-Invoices reutiliza **exactamente** los mismos componentes que Sales Orders sin modificación.  
-Ver documentación completa en [SALES_ORDERS_UI.md → Sección 5](./SALES_ORDERS_UI.md#5-componentes-compartidos).
+Invoices reutiliza **exactamente** los mismos componentes que Sales Orders sin modificación. Ver documentación completa en [SALES_ORDERS_UI.md → Sección 5](./SALES_ORDERS_UI.md#5-componentes-compartidos) si existe ese archivo.
 
 ### Resumen de uso en Invoices
 
@@ -174,7 +148,7 @@ const InvoicesPage = () => {
 
 ---
 
-## 6. Columnas de la Tabla
+## Columnas de la Tabla
 
 Idénticas a Sales Orders. Misma definición de grid CSS.
 
@@ -196,7 +170,7 @@ En la columna QB Ref #, las órdenes en Invoices pueden tener:
 
 ---
 
-## 7. Detail View: Medusa Nativo + QB Widget
+## Detail View: Medusa Nativo + QB Widget
 
 **Invoices NO tiene página de detalle custom.** Click en fila navega a:
 
@@ -206,7 +180,7 @@ En la columna QB Ref #, las órdenes en Invoices pueden tener:
 
 ### QuickBooks Order Widget
 
-**Archivo:** `admin/widgets/quickbooks-order-widget.tsx`  
+**Archivo:** `admin/widgets/quickbooks-order-widget.tsx`
 **Zone:** `order.details.before`
 
 Mismo widget que en Sales Orders. En el contexto de Invoices, es especialmente relevante porque aquí se pueden ver los TxnIDs de tipo Invoice:
@@ -224,7 +198,7 @@ Mismo widget que en Sales Orders. En el contexto de Invoices, es especialmente r
 
 ---
 
-## 8. Lifecycle: Sales Order → Invoice
+## Lifecycle: Sales Order → Invoice
 
 ```
 [Sales Order] (orders-1-sales)
@@ -251,7 +225,7 @@ Mismo widget que en Sales Orders. En el contexto de Invoices, es especialmente r
 
 ### Transición automática
 
-La aparición de una orden en Invoices es **completamente automática** — no hay acción manual.  
+La aparición de una orden en Invoices es **completamente automática** — no hay acción manual.
 Cuando el personal de fulfillment marca todos los items como "fulfilled" en Medusa:
 1. Medusa actualiza `fulfillment_status → "fulfilled"` en la orden
 2. La orden deja de aparecer en Sales Orders (ya no cumple el filtro `not_fulfilled | partially_fulfilled`)
@@ -261,7 +235,7 @@ Cuando el personal de fulfillment marca todos los items como "fulfilled" en Medu
 
 ---
 
-## 9. QuickBooks Integration en Invoices
+## QuickBooks Integration en Invoices
 
 Cuando una orden llega a estado `fulfilled`, el Sales Order en QuickBooks Desktop debería estar en estado **"Closed"** o tener una Invoice asociada. Medusa no automatiza esto directamente — el proceso QB sigue el lifecycle del Draft Order:
 
@@ -287,7 +261,7 @@ Si una orden `fulfilled` se cancela en Medusa:
 
 ---
 
-## 10. Diferencias Clave vs Sales Orders
+## Diferencias Clave vs Sales Orders
 
 | Aspecto | Sales Orders | Invoices |
 |---------|-------------|---------|
@@ -302,7 +276,7 @@ Si una orden `fulfilled` se cancela en Medusa:
 
 ---
 
-## 11. Known Issues & Gotchas
+## Known Issues & Gotchas
 
 ### Sin Show Cancelled en Invoices
 
@@ -340,17 +314,4 @@ El nombre `"Default Sales Channel"` se normaliza a `"Default"` en la columna Cha
 
 ---
 
-**Última actualización:** 2026-03-06  
-**Versión:** 1.0 — Documentación inicial
-
----
-
-## Nota: POS Invoice y Order Summary
-
-> Este documento cubre el módulo de **Invoices del Admin Panel** de Medusa (`backend/src/admin/`).
->
-> La página de **Invoice del POS** (`ecopowertech-store-pos/app/(pos)/invoices/[id]/page.tsx`) es una entidad separada. Usa el mismo componente compartido `components/pos/OrderSummary.tsx`.
->
-> **Marzo 13, 2026:** El Order Summary del POS fue actualizado para separar descuentos inline vs. global. Ver `POS_ESTIMATES.md § 29` para la documentación completa del cambio.
->
-> **Marzo 17, 2026:** La tabla de line-items del POS ahora admite **Custom Labels** inyectados desde el Template Engine para esta vista y cuenta con columnas dinámicas para `Invoiced Qty` (`fulfilled_quantity`) y `Backordered Qty`, permitiendo facturación visual precisa de despachos parciales.
+**Version:** 1.0 — Documentation consolidated 2026-03-29

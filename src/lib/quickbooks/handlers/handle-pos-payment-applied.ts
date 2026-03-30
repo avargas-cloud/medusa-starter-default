@@ -33,6 +33,13 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
         return
     }
 
+    // SALES RECEIPT GUARD: payments embedded in a QB Sales Receipt cannot be applied
+    // to an invoice separately — the SR already captures the full transaction.
+    if (payment.metadata?.qb_source === 'sales_receipt') {
+        logger.info(`${LOG_PREFIX} ⏭️ Skipping apply: payment ${payment_id} was captured in a Sales Receipt — apply/unapply not supported in QB for SR payments`)
+        return
+    }
+
     let paymentTxnId = payment.metadata?.qb_txn_id as string | undefined
     // Declare here so it's available in all early-exit error paths below
     const medusaPayRef = (payment as any).display_id ? `PAY-${(payment as any).display_id}` : null

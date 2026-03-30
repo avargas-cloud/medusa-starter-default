@@ -1,12 +1,13 @@
 # QB Order Pipeline — Arquitectura Completa
 
+**Last Updated:** 2026-03-29
+
 | Campo | Detalle |
 |-------|---------|
 | **Módulo** | QuickBooks Pipeline Tracking |
 | **Archivos clave** | `src/lib/quickbooks/qb-pipeline.ts`, `src/jobs/qb-pipeline-consolidator.ts` |
 | **Tablas DB** | `qb_order_pipeline`, `qb_edit_sequence_cache` |
-| **Última revisión** | 2026-03-28 |
-| **Relacionado con** | `QB_SUBSCRIBERS_REFERENCE.md`, `QB_DOCUMENT_FLOW_REDESIGN.md`, `POS_ASYNC_QB_SYNC_ARCHITECTURE.md` |
+| **Relacionado con** | `QB_SUBSCRIBERS_REFERENCE.md`, `POS_QUICKBOOKS.md`, `POS_ASYNC_QB_SYNC_ARCHITECTURE.md` |
 
 ---
 
@@ -28,13 +29,14 @@ Tabla principal. Un registro por cada documento QB creado (o intentado) para cad
 CREATE TABLE qb_order_pipeline (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     order_id        TEXT,                    -- Medusa order/draft order ID
-    reference_id    TEXT,                    -- pos_invoice.id, fulfillment.id, etc.
+    reference_id    TEXT,                    -- pos_invoice.id, fulfillment.id, credit_memo.id, etc.
     reference_type  TEXT,                    -- 'pos_invoice', 'fulfillment', 'credit_memo'
     step            TEXT NOT NULL,           -- Ver enum de steps abajo
     status          TEXT NOT NULL,           -- Ver enum de statuses abajo
     depends_on      UUID REFERENCES qb_order_pipeline(id),
     bridge_op_id    TEXT,                    -- operationId devuelto por el bridge
     retry_count     INTEGER DEFAULT 0,
+    medusa_ref_number TEXT,                 -- e.g., INV-1234, CM-567 (for voids)
     qb_txn_id       TEXT,                    -- TxnID de QB Desktop (confirmado)
     qb_ref_number   TEXT,                    -- Número de referencia QB (e.g. "6175")
     qb_result       JSONB,                   -- Respuesta completa del bridge
@@ -48,18 +50,22 @@ CREATE TABLE qb_order_pipeline (
 );
 ```
 
-#### Steps válidos
+#### Steps válidos (Enumeración Completa)
 
-| Step | Descripción | Handler |
-|------|-------------|---------|
-| `estimate` | QB Estimate (cotización) | `handleDraftOrderCreated` |
-| `sales_order` | QB Sales Order | `handleOrderPlaced` |
-| `sales_receipt` | QB Sales Receipt (venta inmediata con pago) | `handleSalesReceiptCreated` |
-| `invoice` | QB Invoice (factura parcial o diferida) | `handleFulfillmentCreated` |
-| `payment` | QB Receive Payment | `handlePaymentCaptured` / `handlePosPaymentCreated` |
-| `apply_payment` | QB aplicación de pago a Invoice | `handlePosPaymentApplied` |
-| `credit_memo` | QB Credit Memo | `credit_memos/.../complete/route.ts` |
-| `write_check` | Cheque físico de reembolso (tracking manual) | `credit_memos/.../complete/route.ts` |
+| Step | Descripción | Handler/Trigger |
+|------|-------------|-----------------|
+| `estimate` | QB Estimate (cotización) | `handleDraftOrderCreated` (subscriber + cron) |
+| `sales_order` | QB Sales Order | `handleOrderPlaced` (subscriber) / `qb-pos-sync` (cron) |
+| `sales_receipt` | QB Sales Receipt (venta inmediata con pago) | `handleSalesReceiptCreated` (POS payment flow) |
+| `invoice` | QB Invoice (factura parcial o diferida) | `handleFulfillmentCreated` (POS invoice creation) |
+| `payment` | QB Receive Payment | `handlePaymentCaptured` (web) / `handlePosPaymentCreated` (POS) |
+| `apply_payment` | QB aplicación de pago a Invoice | `handlePosPaymentApplied` (POS payment application) |
+| `credit_memo` | QB Credit Memo (refund) | `POST /admin/pos/credit_memos/:id/complete` (POS returns) |
+| `void_credit_memo` | Anulación de Credit Memo en QB | `POST /admin/pos/credit_memos/:id/void` (POS void returns) |
+| `void_invoice` | Anulación de Invoice en QB | `POST /admin/invoices/:id/void` (invoice void) |
+| `void_sales_receipt` | Anulación de Sales Receipt en QB | Invoice void handler / POS cancellation |
+| `void_sales_order` | Anulación de Sales Order en QB | `handle-order-canceled.ts` (order cancel subscriber) |
+| `write_check` | Cheque físico de reembolso (tracking manual) | `POST /admin/pos/credit_memos/:id/complete` (cash refunds) |
 
 #### Statuses del ciclo de vida
 
@@ -68,15 +74,13 @@ pending → submitted → confirmed
                    ↘ failed
 ```
 
-| Status | Significado |
-|--------|-------------|
-| `pending` | Registrado pero no enviado al bridge todavía |
-| `submitted` | Enviado al bridge, esperando que QBWC procese (`bridge_op_id` presente) |
-| `confirmed` | QBWC procesó con éxito, `qb_txn_id` confirmado |
-| `failed` | El bridge o QBWC reportó error |
-| `skipped` | No aplica para esta orden (e.g. SR en orden que ya tiene SO) |
-
-> **Nota:** Las filas con `status='pending'` son escritas manualmente (e.g. `write_check` para rastrear reembolsos que se hacen en QB Desktop, no via bridge). Ningún cron las procesa automáticamente.
+| Status | Significado | Lifecycle |
+|--------|-------------|-----------|
+| `pending` | Registrado pero no enviado al bridge todavía | Filas `write_check` — nunca se auto-procesan |
+| `submitted` | Enviado al bridge, esperando que QBWC procese (`bridge_op_id` presente) | Poll by consolidator every 2 min |
+| `confirmed` | QBWC procesó con éxito, `qb_txn_id` confirmado | Final success state |
+| `failed` | El bridge o QBWC reportó error | Final error state — requires manual intervention |
+| `skipped` | No aplica para esta orden (e.g. SR en orden que ya tiene SO) | Terminal state — no further action |
 
 ---
 
@@ -147,6 +151,7 @@ interface WritePipelineRowInput {
     dependsOn?:     string | null   // UUID de fila padre (para secuencias)
     bridgeOpId?:    string | null   // operationId del bridge (si ya fue submitted)
     retryCount?:    number
+    medusaRefNumber?: string | null // e.g., INV-1234, CM-567 (for voids)
     qbTxnId?:       string | null   // Si se confirmó síncronamente
     qbRefNumber?:   string | null
     qbResult?:      object | null
@@ -269,16 +274,92 @@ if (!soTxnId && !invTxnId && !hasPendingInvoiceOp) {
 
 ## Handlers que escriben al pipeline
 
-| Handler | Step | Reference |
-|---------|------|-----------|
-| `handle-order-placed.ts` | `sales_order` | `orderId` |
-| `handle-fulfillment-created.ts` | `invoice` | `referenceId = invoice_id \|\| fulfillment_id` |
-| `handle-sales-receipt-created.ts` | `sales_receipt` | `referenceId = invoice_id` |
-| `handle-payment-captured.ts` | `payment` | `orderId` |
-| `handle-pos-payment-created.ts` | `payment` | `orderId` |
-| `handleDraftOrderCreated` (subscriber) | `estimate` | `orderId` (draft order) |
-| `credit_memos/[id]/complete/route.ts` | `credit_memo` | `referenceId = credit_memo.id` |
-| `credit_memos/[id]/complete/route.ts` | `write_check` | `referenceId = credit_memo.id` (cash refunds) |
+| Handler | Step | Reference | Void Support |
+|---------|------|-----------|--------------|
+| `handle-order-placed.ts` | `sales_order` | `orderId` | ✅ `void_sales_order` |
+| `handle-fulfillment-created.ts` | `invoice` | `referenceId = invoice_id \|\| fulfillment_id` | — |
+| `handle-sales-receipt-created.ts` | `sales_receipt` | `referenceId = invoice_id` | ✅ `void_sales_receipt` |
+| `handle-payment-captured.ts` | `payment` | `orderId` | — |
+| `handle-pos-payment-created.ts` | `payment` | `orderId` | — |
+| `handleDraftOrderCreated` (subscriber) | `estimate` | `orderId` (draft order) | — |
+| `POST /admin/pos/credit_memos/:id/complete` | `credit_memo` | `referenceId = cm.id`, `medusaRefNumber = CM-{id}` | ✅ `void_credit_memo` |
+| `POST /admin/pos/credit_memos/:id/void` | `void_credit_memo` | `referenceId = cm.id`, `medusaRefNumber`, `qbRefNumber`, `qbTxnId` | — |
+| `POST /admin/invoices/:id/void` | `void_invoice` | `referenceId = invoice_id`, `medusaRefNumber = INV-{id}` | — |
+| `POST /admin/pos/sync` (manual) | varies | Based on document type and action | ✅ Auto-routing to void handlers |
+| `handle-order-canceled.ts` | `void_sales_order` | `orderId`, `medusaRefNumber` | — |
+
+---
+
+## Void Pipeline Rows
+
+Cuando un documento QB es anulado (voided), se escribe una nueva fila de pipeline con `step` comenzando con `void_`:
+
+### Estructura de Void Rows
+
+```sql
+INSERT INTO qb_order_pipeline (
+    order_id,               -- Medusa order ID (if applicable)
+    reference_id,           -- credit_memo.id, invoice.id, etc.
+    reference_type,         -- 'credit_memo', 'invoice', 'sales_receipt', 'sales_order'
+    step,                   -- 'void_credit_memo', 'void_invoice', 'void_sales_receipt', 'void_sales_order'
+    status,                 -- 'submitted' (fire-and-forget) or 'confirmed' (sync complete)
+    medusa_ref_number,      -- CM-12345 | INV-67890 | SR-99999 | SO-55555
+    qb_ref_number,          -- QB-assigned ref (e.g., "CM-3", "INV-22", "SR-88")
+    qb_txn_id,              -- QB TxnID of the voided document
+    payload,                -- { reason: '...' } or void metadata
+    submitted_at,           -- Timestamp when void sent to QB Bridge
+    confirmed_at            -- Timestamp when QBWC confirmed the void
+)
+```
+
+### Void Lifecycle
+
+**On void request (e.g., credit memo void):**
+```typescript
+await writePipelineRow({
+    orderId: cm.order_id,
+    referenceId: cm.id,
+    referenceType: 'credit_memo',
+    step: 'void_credit_memo',
+    status: 'submitted',
+    medusaRefNumber: cm.medusa_ref_number,  // e.g., CM-20070
+    qbRefNumber: cm.qb_ref_number,          // e.g., CM-3
+    qbTxnId: cm.qb_txn_id,                  // from metadata
+    payload: { reason: 'Customer request' }
+})
+```
+
+**On consolidator confirmation:**
+The consolidator polls the bridge, and once `op.status === 'completed'`, it calls:
+```typescript
+await confirmPipelineRow(rowId, qbTxnId, qbRefNumber, qbResult)
+```
+
+This marks the void as confirmed and caches the updated `EditSequence`.
+
+---
+
+## Sales Receipt Qualification Guard
+
+El handler `handleSalesReceiptCreated` tiene un guard que verifica que la orden no tenga ya un documento QB antes de crear el Sales Receipt:
+
+```typescript
+const existingSoTxnId = getSoTxnId(order.metadata)
+const existingEstimateTxnId = getEstimateTxnId(order.metadata)
+
+const hasRealSo = existingSoTxnId && existingSoTxnId !== "SKIPPED_SALES_RECEIPT"
+const hasRealEstimate = !!existingEstimateTxnId
+
+if (hasRealSo || hasRealEstimate) {
+    // Fallback: crear Invoice en lugar de Sales Receipt
+    await handleFulfillmentCreated(data, ...)
+    return
+}
+```
+
+**¿Por qué?** Si el cron de 1 hora corrió antes que el pago llegara, ya hay un Sales Order o Estimate en QB. No se puede crear un Sales Receipt sobre un SO/Estimate existente — se crea un Invoice vinculado.
+
+**Sentinel `SKIPPED_SALES_RECEIPT`:** Cuando un Sales Receipt es creado exitosamente, el handler escribe `qb_so_txn_id = "SKIPPED_SALES_RECEIPT"` en la metadata de la orden. Esto previene que el cron `qb-pos-sync` intente crear un Sales Order para esa orden después de la ventana de 1 hora.
 
 ---
 
@@ -304,33 +385,15 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
   -d '{"type":"order","id":"<order_id>"}' \
   http://localhost:9000/admin/pos/sync
 
+# Con acción específica (inteligente void routing):
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"credit_memo","id":"<cm_id>","action":"void"}' \
+  http://localhost:9000/admin/pos/sync
+
 # Tipos válidos: "order", "estimate", "invoice", "payment", "return", "credit_memo"
 # Acciones válidas: "sync" (default), "void"
 ```
-
----
-
-## Sales Receipt Qualification Guard
-
-El handler `handleSalesReceiptCreated` tiene un guard que verifica que la orden no tenga ya un documento QB antes de crear el Sales Receipt:
-
-```typescript
-const existingSoTxnId = getSoTxnId(order.metadata)
-const existingEstimateTxnId = getEstimateTxnId(order.metadata)
-
-const hasRealSo = existingSoTxnId && existingSoTxnId !== "SKIPPED_SALES_RECEIPT"
-const hasRealEstimate = !!existingEstimateTxnId
-
-if (hasRealSo || hasRealEstimate) {
-    // Fallback: crear Invoice en lugar de Sales Receipt
-    await handleFulfillmentCreated(data, ...)
-    return
-}
-```
-
-**¿Por qué?** Si el cron de 1 hora corrió antes que el pago llegara, ya hay un Sales Order o Estimate en QB. No se puede crear un Sales Receipt sobre un SO/Estimate existente — se crea un Invoice vinculado.
-
-**Sentinel `SKIPPED_SALES_RECEIPT`:** Cuando un Sales Receipt es creado exitosamente, el handler escribe `qb_so_txn_id = "SKIPPED_SALES_RECEIPT"` en la metadata de la orden. Esto previene que el cron `qb-pos-sync` intente crear un Sales Order para esa orden después de la ventana de 1 hora.
 
 ---
 
@@ -378,6 +441,20 @@ POS Draft Order / Estimate (> 1h, never confirmed)
 │   [2 minutos después]
 │
 └─ qb-pipeline-consolidator → confirmPipelineRow → pipeline confirmed
+
+
+Credit Memo Void
+│
+├─ POST /admin/pos/credit_memos/:id/void
+│    ├─ Inventory reversal
+│    ├─ Void finance ledger entry
+│    ├─ voidCreditMemoInQb() → bridge → operationId (background)
+│    ├─ writePipelineRow(step='void_credit_memo', status='submitted', medusaRefNumber, qbTxnId)
+│    └─ Return response immediately (fire-and-forget)
+│
+│   [2 minutos después]
+│
+└─ qb-pipeline-consolidator → confirmPipelineRow → void confirmed
 ```
 
 ---
@@ -413,6 +490,13 @@ FROM qb_order_pipeline
 WHERE order_id = '<order_id>'
 ORDER BY created_at;
 
+-- Void operations in pipeline
+SELECT id, step, order_id, medusa_ref_number, qb_ref_number, qb_txn_id, status, error
+FROM qb_order_pipeline
+WHERE step LIKE 'void_%'
+ORDER BY created_at DESC
+LIMIT 20;
+
 -- Cache de EditSequence actual
 SELECT entity_type, qb_id, edit_seq, cached_at
 FROM qb_edit_sequence_cache
@@ -432,6 +516,7 @@ LIMIT 20;
 | Muchas filas `pending` | `write_check` steps creados para reembolsos manuales | Normal — son solo tracking, no se auto-procesan |
 | Pipeline vacío | QB_ORDER_FLOW_ENABLED=false o tablas no creadas | Verificar env var y que las tablas existen en DB |
 | Consolidador no confirma filas | Bridge devuelve status diferente de 'completed'/'failed' | Revisar status exacto en bridge: `GET /api/sync/status/:opId` |
+| Void operation stuck in submitted | Void handler failed or bridge timeout | Check bridge logs; manually retry with POST /admin/pos/sync |
 
 ---
 

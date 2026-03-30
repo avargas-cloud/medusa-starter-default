@@ -160,11 +160,13 @@ export default async function qbPipelineConsolidator(
                         logger.warn(`${LOG_PREFIX} ⚠️ Could not update CustomerPayment qb after write_check: ${wcErr.message}`)
                     }
 
-                    // Activate waiting refund_payment rows (credit memo refunds only)
+                    // Activate waiting refund_payment rows (ALL refund types)
+                    // CM refunds: creditTxnId = credit memo QB TxnID
+                    // Direct payment refunds: creditTxnId = original ReceivePayment QB TxnID
                     if (txnId) {
                         try {
                             const { rows: rpRows } = await pool.query(
-                                `SELECT rp.id, rp.reference_id
+                                `SELECT rp.id, rp.reference_id, rp.payload
                                  FROM qb_order_pipeline rp
                                  WHERE rp.step = 'refund_payment'
                                    AND rp.status = 'waiting'
@@ -173,8 +175,10 @@ export default async function qbPipelineConsolidator(
                             )
                             for (const rpRow of rpRows) {
                                 try {
+                                    const rpPayload = rpRow.payload ?? {}
                                     const { rows: cpRows } = await pool.query(
-                                        `SELECT cp.reference, cp.amount, cust.metadata->>'qb_list_id' AS customer_list_id
+                                        `SELECT cp.reference, cp.amount, cp.metadata,
+                                                cust.metadata->>'qb_list_id' AS customer_list_id
                                          FROM customer_payment cp
                                          JOIN customer cust ON cust.id = cp.customer_id
                                          WHERE cp.id = $1`,
@@ -185,23 +189,42 @@ export default async function qbPipelineConsolidator(
                                         logger.warn(`${LOG_PREFIX} ⚠️ No customer QB ListID for refund_payment ${rpRow.id}`)
                                         continue
                                     }
-                                    const { rows: cmRows } = await pool.query(
-                                        `SELECT qb_txn_id FROM pos_credit_memo WHERE credit_memo_number = $1`,
-                                        [cp.reference]
-                                    )
-                                    const creditMemoTxnId = cmRows[0]?.qb_txn_id
-                                    if (!creditMemoTxnId) {
-                                        logger.warn(`${LOG_PREFIX} ⚠️ No QB TxnID for credit memo ${cp.reference} — refund_payment skipped`)
-                                        continue
+
+                                    // Determine creditTxnId based on refund type
+                                    let creditTxnId: string | null = null
+
+                                    if (rpPayload.type === "credit_memo") {
+                                        // CM refund: credit = QB Credit Memo TxnID
+                                        const { rows: cmRows } = await pool.query(
+                                            `SELECT qb_txn_id FROM pos_credit_memo WHERE credit_memo_number = $1`,
+                                            [cp.reference]
+                                        )
+                                        creditTxnId = cmRows[0]?.qb_txn_id ?? null
+                                        if (!creditTxnId) {
+                                            logger.warn(`${LOG_PREFIX} ⚠️ No QB TxnID for credit memo ${cp.reference} — refund_payment skipped`)
+                                            continue
+                                        }
+                                    } else {
+                                        // Direct payment refund: credit = original ReceivePayment QB TxnID
+                                        creditTxnId = rpPayload.originalPaymentTxnId ?? cp.metadata?.qb_txn_id ?? null
+                                        if (!creditTxnId) {
+                                            logger.warn(`${LOG_PREFIX} ⚠️ No original ReceivePayment TxnID for refund_payment ${rpRow.id} — skipping`)
+                                            continue
+                                        }
                                     }
-                                    const amountDollars = Number(Number(cp.amount) / 100).toFixed(2)
+
+                                    const refundAmount = cp.metadata?.refund_amount
+                                        ? Number(cp.metadata.refund_amount)
+                                        : Number(cp.amount)
+                                    const amountDollars = Number(refundAmount / 100).toFixed(2)
+
                                     const rpRes = await bridgeFetch("POST", "/api/sync/enqueue", {
                                         type: "receive-payment",
                                         action: "add",
                                         data: {
                                             customerId:    cp.customer_list_id,
-                                            invoiceId:     txnId,          // write check TxnID = open AR debit to close
-                                            creditTxnId:   creditMemoTxnId, // credit memo = credit to apply
+                                            invoiceId:     txnId,       // write check TxnID = open AR debit to close
+                                            creditTxnId:   creditTxnId, // original payment or credit memo = credit to apply
                                             amount:        Number(amountDollars),
                                             totalAmount:   0,
                                             paymentAmount: 0,
@@ -217,7 +240,7 @@ export default async function qbPipelineConsolidator(
                                          WHERE id = $1`,
                                         [rpRow.id, rpRes.operation_id]
                                     )
-                                    logger.info(`${LOG_PREFIX} ✅ refund_payment ${rpRow.id} activated → bridge op ${rpRes.operation_id}`)
+                                    logger.info(`${LOG_PREFIX} ✅ refund_payment ${rpRow.id} activated (${rpPayload.type ?? 'direct'}) → bridge op ${rpRes.operation_id}`)
                                 } catch (rpErr: any) {
                                     logger.warn(`${LOG_PREFIX} ⚠️ Failed to activate refund_payment ${rpRow.id}: ${rpErr.message}`)
                                 }
@@ -311,6 +334,99 @@ export default async function qbPipelineConsolidator(
         } catch (pollErr: any) {
             logger.warn(`${LOG_PREFIX} ⚠️ Error polling row ${row.id} op ${row.bridge_op_id}: ${pollErr.message}`)
         }
+    }
+
+    // ── Recovery pass ──────────────────────────────────────────────────────────
+    // Find waiting refund_payment rows whose depends_on write_check is already
+    // confirmed but were never activated (e.g. server restarted mid-confirmation).
+    try {
+        const { rows: orphanRows } = await pool.query(`
+            SELECT rp.id, rp.reference_id, rp.payload, wc.qb_txn_id AS check_txn_id
+            FROM qb_order_pipeline rp
+            JOIN qb_order_pipeline wc ON wc.id = rp.depends_on
+            WHERE rp.step   = 'refund_payment'
+              AND rp.status = 'waiting'
+              AND wc.step   = 'write_check'
+              AND wc.status = 'confirmed'
+              AND wc.qb_txn_id IS NOT NULL
+        `)
+
+        if (orphanRows.length > 0) {
+            logger.info(`${LOG_PREFIX} 🔄 Recovery: found ${orphanRows.length} orphaned refund_payment row(s) to activate`)
+        }
+
+        for (const rpRow of orphanRows) {
+            try {
+                const checkTxnId: string = rpRow.check_txn_id
+                const rpPayload = rpRow.payload ?? {}
+
+                const { rows: cpRows } = await pool.query(
+                    `SELECT cp.reference, cp.amount, cp.metadata,
+                            cust.metadata->>'qb_list_id' AS customer_list_id
+                     FROM customer_payment cp
+                     JOIN customer cust ON cust.id = cp.customer_id
+                     WHERE cp.id = $1`,
+                    [rpRow.reference_id]
+                )
+                const cp = cpRows[0]
+                if (!cp?.customer_list_id) {
+                    logger.warn(`${LOG_PREFIX} ⚠️ Recovery: no customer QB ListID for refund_payment ${rpRow.id}`)
+                    continue
+                }
+
+                let creditTxnId: string | null = null
+                if (rpPayload.type === "credit_memo") {
+                    const { rows: cmRows } = await pool.query(
+                        `SELECT qb_txn_id FROM pos_credit_memo WHERE credit_memo_number = $1`,
+                        [cp.reference]
+                    )
+                    creditTxnId = cmRows[0]?.qb_txn_id ?? null
+                    if (!creditTxnId) {
+                        logger.warn(`${LOG_PREFIX} ⚠️ Recovery: no QB TxnID for credit memo ${cp.reference} — skipping ${rpRow.id}`)
+                        continue
+                    }
+                } else {
+                    creditTxnId = rpPayload.originalPaymentTxnId ?? cp.metadata?.qb_txn_id ?? null
+                    if (!creditTxnId) {
+                        logger.warn(`${LOG_PREFIX} ⚠️ Recovery: no original payment TxnID for refund_payment ${rpRow.id} — skipping`)
+                        continue
+                    }
+                }
+
+                const refundAmount = cp.metadata?.refund_amount
+                    ? Number(cp.metadata.refund_amount)
+                    : Number(cp.amount)
+                const amountDollars = Number(refundAmount / 100).toFixed(2)
+
+                const rpRes = await bridgeFetch("POST", "/api/sync/enqueue", {
+                    type: "receive-payment",
+                    action: "add",
+                    data: {
+                        customerId:    cp.customer_list_id,
+                        invoiceId:     checkTxnId,
+                        creditTxnId:   creditTxnId,
+                        amount:        Number(amountDollars),
+                        totalAmount:   0,
+                        paymentAmount: 0,
+                    },
+                })
+                if (!rpRes?.operation_id) {
+                    logger.warn(`${LOG_PREFIX} ⚠️ Recovery: bridge did not return operation_id for ${rpRow.id}`)
+                    continue
+                }
+                await pool.query(
+                    `UPDATE qb_order_pipeline
+                     SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW()
+                     WHERE id = $1`,
+                    [rpRow.id, rpRes.operation_id]
+                )
+                logger.info(`${LOG_PREFIX} ✅ Recovery: refund_payment ${rpRow.id} activated (${rpPayload.type ?? 'direct'}) → bridge op ${rpRes.operation_id}`)
+            } catch (recErr: any) {
+                logger.warn(`${LOG_PREFIX} ⚠️ Recovery: failed to activate ${rpRow.id}: ${recErr.message}`)
+            }
+        }
+    } catch (recoveryErr: any) {
+        logger.warn(`${LOG_PREFIX} ⚠️ Recovery pass error: ${recoveryErr.message}`)
     }
 }
 

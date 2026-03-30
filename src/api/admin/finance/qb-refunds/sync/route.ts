@@ -2,13 +2,17 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { FINANCE_MODULE } from "../../../../../modules/finance"
 import { Modules } from "@medusajs/utils"
 import { bridgeFetch, DRY_RUN } from "../../../../../lib/quickbooks/client/core"
-import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline"
+import { writePipelineRow, getCachedEditSequence } from "../../../../../lib/quickbooks/qb-pipeline"
 
 /**
  * POST /admin/finance/qb-refunds/sync
  * Fire-and-forget: enqueues a WriteCheck to the bridge and writes a submitted
  * pipeline row. The consolidator cron confirms/fails it and updates CustomerPayment.qb.
  * Body: { customer_payment_id, qb_bank_account_id }
+ *
+ * Supports both:
+ *   - New style: original payment with status='refunded'/'partial_refunded'
+ *   - Legacy:    separate record with type='refund'
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   const { customer_payment_id, qb_bank_account_id } = req.body as {
@@ -27,8 +31,47 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   const payments = await financeService.listCustomerPayments({ id: customer_payment_id } as any)
   const payment = (payments as any[])[0]
   if (!payment) return res.status(404).json({ error: "CustomerPayment not found" })
-  if (payment.type !== "refund") return res.status(400).json({ error: "Payment is not a refund" })
-  if (payment.qb?.status === "yes") return res.status(400).json({ error: "Already synced to QuickBooks" })
+
+  // Validate it's a refundable record
+  const isLegacyRefund = payment.type === "refund"
+  const isNewStyleRefund = payment.type !== "refund" && ["refunded", "partial_refunded"].includes(payment.status)
+  if (!isLegacyRefund && !isNewStyleRefund) {
+    return res.status(400).json({ error: "Payment is not a refund" })
+  }
+  if (payment.qb?.status === "yes") {
+    return res.status(400).json({ error: "Already synced to QuickBooks" })
+  }
+
+  // 1b. Guard: for new-style refunds the payment IS the original — check its QB sync status.
+  //     For legacy refunds, check the original payment referenced in notes.
+  if (isNewStyleRefund) {
+    const qbSynced = payment.metadata?.qb_sync_status === "synced" || !!payment.metadata?.qb_txn_id
+    if (!qbSynced) {
+      return res.status(400).json({
+        error: "Original payment has not been confirmed in QuickBooks yet. Wait for it to sync before processing the refund.",
+        code: "ORIGINAL_PAYMENT_NOT_SYNCED",
+      })
+    }
+  } else if (isLegacyRefund) {
+    const originalPaymentIdMatch = (payment.notes ?? "").match(/cpay_\w+/)
+    if (originalPaymentIdMatch) {
+      try {
+        const origPayments = await financeService.listCustomerPayments({ id: originalPaymentIdMatch[0] } as any)
+        const origPayment = (origPayments as any[])[0]
+        if (origPayment) {
+          const qbSynced = origPayment.metadata?.qb_sync_status === "synced" || !!origPayment.metadata?.qb_txn_id
+          if (!qbSynced) {
+            return res.status(400).json({
+              error: "Original payment has not been confirmed in QuickBooks yet.",
+              code: "ORIGINAL_PAYMENT_NOT_SYNCED",
+            })
+          }
+        }
+      } catch {
+        // Non-fatal — proceed
+      }
+    }
+  }
 
   // 2. Fetch the bank account
   const banks = await financeService.listQbBankAccounts({ id: qb_bank_account_id } as any)
@@ -47,7 +90,13 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     return res.status(400).json({ error: "Customer does not have a QB ListID — sync customer first" })
   }
 
-  const amountDollars = (Number(payment.amount) / 100).toFixed(2)
+  // 4. Determine refund amount and reference label
+  //    New style: use metadata.refund_amount; legacy: use payment.amount
+  const rawAmount = isNewStyleRefund && payment.metadata?.refund_amount
+    ? Number(payment.metadata.refund_amount)
+    : Number(payment.amount)
+  const amountDollars = (rawAmount / 100).toFixed(2)
+
   const payLabel = payment.display_id ? `PAY-${payment.display_id}` : customer_payment_id.slice(-8).toUpperCase()
   const refLabel = (payment.reference && payment.reference.length <= 20)
     ? payment.reference
@@ -66,7 +115,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     return res.json({ success: true, dry_run: true })
   }
 
-  // 4. Enqueue CheckAdd to bridge
+  // 5. Enqueue CheckAdd to bridge
   let enqueueRes: any
   try {
     enqueueRes = await bridgeFetch("POST", "/api/sync/enqueue", {
@@ -75,13 +124,13 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       data: {
         AccountRef:     { ListID: bank.list_id },
         PayeeEntityRef: { ListID: customerListId },
-        TxnDate:        new Date().toISOString().split("T")[0],
         RefNumber:      refLabel,
+        TxnDate:        new Date().toISOString().split("T")[0],
         Memo:           `POS Refund — ${refLabel}`,
         ExpenseLineAdd: [{
-          AccountRef: { FullName: "Accounts Receivable" },
-          Amount:     amountDollars,
-          Memo:       `Refund for ${refLabel}`,
+          AccountRef:  { FullName: "Accounts Receivable" },
+          Amount:      amountDollars,
+          Memo:        `Refund for ${refLabel}`,
           CustomerRef: { ListID: customerListId },
         }],
       },
@@ -94,7 +143,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     return res.status(500).json({ error: "Bridge did not return operation_id" })
   }
 
-  // 5. Write pipeline row as submitted (consolidator will confirm/fail)
+  // 6. Write pipeline row as submitted
   const writeCheckRowId = await writePipelineRow({
     referenceId:     customer_payment_id,
     referenceType:   "customer_payment",
@@ -102,25 +151,58 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     status:          "submitted",
     bridgeOpId:      enqueueRes.operation_id,
     medusaRefNumber: medusaRef,
+    payload:         { bankAccountId: qb_bank_account_id },
   })
 
-  // 5b. If this is a credit memo refund, queue a refund_payment row (waiting)
-  //     Consolidator will activate it after write_check confirms, applying
-  //     the check TxnID against the credit memo TxnID via ReceivePaymentAdd.
-  const isCreditMemoRefund = payment.reference && String(payment.reference).startsWith("CM-")
-  if (isCreditMemoRefund) {
-    await writePipelineRow({
-      referenceId:     customer_payment_id,
-      referenceType:   "customer_payment",
-      step:            "refund_payment",
-      status:          "waiting",
-      dependsOn:       writeCheckRowId,
-      medusaRefNumber: medusaRef,
-      payload:         { customerListId, creditMemoRef: payment.reference },
-    })
+  // 6b. ALL refunds need a refund_payment (ReceivePaymentAdd) to close the open AR
+  //     from the Write Check against the original QB credit:
+  //     - CM refunds: credit = Credit Memo TxnID
+  //     - Direct payment refunds: credit = original ReceivePayment TxnID (qb_txn_id)
+  const isCreditMemoRefund = payment.type === "credit_memo" ||
+    (isLegacyRefund && String(payment.reference ?? "").startsWith("CM-"))
+
+  const originalPaymentTxnId = isNewStyleRefund
+    ? (payment.metadata?.qb_txn_id ?? null)
+    : null  // legacy refunds: consolidator will look up original payment
+
+  await writePipelineRow({
+    referenceId:     customer_payment_id,
+    referenceType:   "customer_payment",
+    step:            "refund_payment",
+    status:          "waiting",
+    dependsOn:       writeCheckRowId,
+    medusaRefNumber: medusaRef,
+    payload:         isCreditMemoRefund
+      ? { customerListId, creditMemoRef: payment.reference, type: "credit_memo" }
+      : { customerListId, originalPaymentTxnId, type: "direct_payment" },
+  })
+
+  // 7. Update original ReceivePayment memo in QB to append "(Refunded)"
+  //    Best-effort: skip silently if TxnID or EditSequence not available
+  if (!isCreditMemoRefund && originalPaymentTxnId) {
+    try {
+      const editSeq = await getCachedEditSequence("payment", originalPaymentTxnId)
+      if (editSeq) {
+        const origMemo = payment.metadata?.qb_memo as string | undefined
+        const newMemo = origMemo
+          ? `${origMemo} (Refunded)`
+          : `${payLabel} (Refunded)`
+        await bridgeFetch("POST", "/api/sync/enqueue", {
+          type: "receive-payment",
+          action: "mod",
+          data: {
+            TxnID:        originalPaymentTxnId,
+            EditSequence: editSeq,
+            memo:         newMemo,
+          },
+        })
+      }
+    } catch {
+      // Non-critical — proceed without updating memo
+    }
   }
 
-  // 6. Mark CustomerPayment.qb as processing so it doesn't re-appear before consolidator runs
+  // 8. Mark as processing
   await financeService.updateCustomerPayments(
     { id: customer_payment_id },
     { qb: { status: "processing", operation_id: enqueueRes.operation_id } }

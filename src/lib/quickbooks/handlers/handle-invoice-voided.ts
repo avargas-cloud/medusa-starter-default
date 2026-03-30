@@ -1,9 +1,11 @@
 import { voidInvoiceInQb, voidSalesReceiptInQb } from "../qb-bridge-client"
 import { QbSyncLogger } from "../qb-sync-logger"
+import { writePipelineRow } from "../qb-pipeline"
 import { LOG_PREFIX } from "./utils"
 import { getDbPool } from "../../../api/utils/db-pool"
+import { FINANCE_MODULE } from "../../../modules/finance"
 
-export async function handleInvoiceVoided(data: any, orderModule: any, logger: any) {
+export async function handleInvoiceVoided(data: any, orderModule: any, logger: any, _container?: any) {
     const { order_id, invoice_id, fulfillment_id } = data
     logger.info(`${LOG_PREFIX} ── pos.invoice.voided → Order ${order_id} | POS Invoice ${invoice_id} ──`)
 
@@ -49,7 +51,7 @@ export async function handleInvoiceVoided(data: any, orderModule: any, logger: a
     let logId: string | undefined
     try {
         logId = await QbSyncLogger.start({
-            operation: isSalesReceipt ? "void_sales_receipt" as any : "void_invoice",
+            operation: isSalesReceipt ? "void_sales_receipt" : "void_invoice",
             orderId: order_id,
             orderDisplayId: order.display_id,
             eventType: "pos.invoice.voided",
@@ -75,46 +77,109 @@ export async function handleInvoiceVoided(data: any, orderModule: any, logger: a
         ? await voidSalesReceiptInQb(invoiceTxnId, (msg) => logger.info(msg))
         : await voidInvoiceInQb(invoiceTxnId, (msg) => logger.info(msg))
     
-    if (logId) {
-        if (!result.success) {
-            logger.error(`${LOG_PREFIX} ⚠️ Failed to void ${documentTypeName.toLowerCase()}: ${result.error}`)
-            await QbSyncLogger.fail(logId, `${documentTypeName} void failed: ${result.error}`)
-            try {
-                await orderModule.updateOrders(order_id, {
-                    metadata: { ...(order.metadata || {}), qb_sync_status: "error" }
-                })
-            } catch (mErr) {}
-        } else {
-            logger.info(`${LOG_PREFIX} ✅ ${documentTypeName} void queued (op: ${result.data?.operationId})`)
-            await QbSyncLogger.complete(logId, {
-                qbTxnId: invoiceTxnId,
-                qbRefNumber: invoiceRef,
-                qbOperationId: result.data?.operationId,
-                message: `${documentTypeName} ${invoiceRef ?? invoiceTxnId} voided in QB`,
+    const pipelineStep = isSalesReceipt ? "void_sales_receipt" : "void_invoice"
+
+    if (!result.success) {
+        logger.error(`${LOG_PREFIX} ⚠️ Failed to void ${documentTypeName.toLowerCase()}: ${result.error}`)
+        if (logId) await QbSyncLogger.fail(logId, `${documentTypeName} void failed: ${result.error}`)
+        try {
+            await writePipelineRow({
+                orderId:         order_id,
+                referenceId:     invoice_id ?? null,
+                referenceType:   "pos_invoice",
+                step:            pipelineStep,
+                status:          "failed",
+                qbTxnId:         invoiceTxnId,
+                qbRefNumber:     invoiceRef ?? null,
+                medusaRefNumber: invoice_id ?? null,
+                error:           result.error ?? `${documentTypeName} void failed`,
             })
-            // Wait, note that a void operation in the queue might need polling, but voiding usually returns true quickly or queues it.
-            // Let's optimisticly set voided or rely on the webhook. The manual sync only cares if it's explicitly 'error' to retry.
-            try {
-                await orderModule.updateOrders(order_id, {
-                    metadata: { ...(order.metadata || {}), qb_sync_status: "voided" }
-                })
-            } catch (mErr) {}
-        }
+        } catch (pErr: any) { logger.warn(`${LOG_PREFIX} Could not write pipeline row: ${pErr.message}`) }
+        try {
+            await orderModule.updateOrders(order_id, {
+                metadata: { ...(order.metadata || {}), qb_sync_status: "error" }
+            })
+        } catch (mErr) {}
     } else {
-        if (!result.success) {
-            logger.error(`${LOG_PREFIX} ⚠️ Failed to void ${documentTypeName.toLowerCase()}: ${result.error}`)
-            try {
-                await orderModule.updateOrders(order_id, {
-                    metadata: { ...(order.metadata || {}), qb_sync_status: "error" }
-                })
-            } catch (mErr) {}
-        } else {
-            logger.info(`${LOG_PREFIX} ✅ ${documentTypeName} void queued (op: ${result.data?.operationId})`)
-            try {
-                await orderModule.updateOrders(order_id, {
-                    metadata: { ...(order.metadata || {}), qb_sync_status: "voided" }
-                })
-            } catch (mErr) {}
+        logger.info(`${LOG_PREFIX} ✅ ${documentTypeName} void queued (op: ${result.data?.operationId})`)
+        if (logId) await QbSyncLogger.complete(logId, {
+            qbTxnId: invoiceTxnId,
+            qbRefNumber: invoiceRef,
+            qbOperationId: result.data?.operationId,
+            message: `${documentTypeName} ${invoiceRef ?? invoiceTxnId} voided in QB`,
+        })
+        try {
+            await writePipelineRow({
+                orderId:         order_id,
+                referenceId:     invoice_id ?? null,
+                referenceType:   "pos_invoice",
+                step:            pipelineStep,
+                status:          "submitted",
+                bridgeOpId:      result.data?.operationId ?? null,
+                qbTxnId:         invoiceTxnId,
+                qbRefNumber:     invoiceRef ?? null,
+                medusaRefNumber: invoice_id ?? null,
+            })
+        } catch (pErr: any) { logger.warn(`${LOG_PREFIX} Could not write pipeline row: ${pErr.message}`) }
+        try {
+            await orderModule.updateOrders(order_id, {
+                metadata: { ...(order.metadata || {}), qb_sync_status: "voided" }
+            })
+        } catch (mErr) {}
+
+        if (isSalesReceipt) {
+            await voidSRPaymentIfExists({ invoice_id, logger, _container })
         }
+    }
+}
+
+/**
+ * Finds the customer_payment linked to a Sales Receipt invoice (via qb_source='sales_receipt')
+ * and marks it voided. Safe to call even if no SR payment exists.
+ */
+async function voidSRPaymentIfExists({ invoice_id, logger, _container }: {
+    invoice_id: string | undefined
+    logger: any
+    _container: any
+}) {
+    if (!invoice_id || !_container) return
+    try {
+        const financeService = _container.resolve(FINANCE_MODULE) as any
+        const pool = getDbPool()
+
+        // Find the payment linked to this invoice via payment applications
+        const res = await pool.query(
+            `SELECT cp.id, cp.status, cp.metadata, cp.qb
+             FROM customer_payment cp
+             JOIN payment_application pa ON pa.payment_id = cp.id
+             WHERE pa.invoice_id = $1
+               AND (cp.metadata->>'qb_source' = 'sales_receipt'
+                    OR cp.metadata->>'is_sales_receipt_payment' = 'true')
+               AND cp.status != 'voided'
+             LIMIT 1`,
+            [invoice_id]
+        )
+
+        if (!res.rows[0]) {
+            logger.info(`${LOG_PREFIX} No SR payment found for invoice ${invoice_id} to void`)
+            return
+        }
+
+        const payment = res.rows[0]
+        await financeService.updateCustomerPayments({
+            id: payment.id,
+            status: 'voided',
+            metadata: {
+                ...(payment.metadata || {}),
+                qb_sync_status: 'voided',
+            },
+            qb: {
+                ...(payment.qb || {}),
+                status: 'voided',
+            },
+        })
+        logger.info(`${LOG_PREFIX} ✅ SR Payment ${payment.id} voided alongside Sales Receipt ${invoice_id}`)
+    } catch (err: any) {
+        logger.warn(`${LOG_PREFIX} ⚠️ Could not void SR payment for invoice ${invoice_id}: ${err.message}`)
     }
 }

@@ -305,7 +305,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                         return res.status(400).json({ error: "Cannot void: Invoice is not in QuickBooks." })
                     }
                     const { handleInvoiceVoided } = require("../../../../lib/quickbooks/handlers/handle-invoice-voided")
-                    await handleInvoiceVoided({ order_id: invoice.order_id, invoice_id: id }, orderModule, logger)
+                    await handleInvoiceVoided({ order_id: invoice.order_id, invoice_id: id }, orderModule, logger, req.scope)
                     return res.json({ success: true, message: "Invoice void logic executed" })
                 }
                 
@@ -489,9 +489,47 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             }
 
             case "credit_memo": {
-                const creditMemoService = req.scope.resolve('creditMemoModuleService') as any
+                const creditMemoService = req.scope.resolve('credit_memos') as any
                 const creditMemo = await creditMemoService.retrievePosCreditMemo(id, { relations: ["items"] })
                 if (!creditMemo) return res.status(404).json({ error: "Credit Memo not found" })
+
+                // Smart void retry: if CM is voided and has a QB TxnID, re-send void to QB (background)
+                if (creditMemo.status === 'voided' || action === 'void') {
+                    if (!creditMemo.qb_txn_id) {
+                        return res.status(400).json({ error: "Cannot void in QB: Credit Memo was never synced to QuickBooks." })
+                    }
+                    logger.info(`${LOG_PREFIX} Retrying QB void for Credit Memo ${creditMemo.credit_memo_number} (TxnID: ${creditMemo.qb_txn_id})`)
+                    ;(async () => {
+                        try {
+                            const { voidCreditMemoInQb } = require('../../../../lib/quickbooks/client/credit-memos')
+                            const { writePipelineRow } = require('../../../../lib/quickbooks/qb-pipeline')
+                            const result = await voidCreditMemoInQb(
+                                creditMemo.qb_txn_id,
+                                creditMemo.qb_edit_sequence,
+                                (msg: string) => logger.info(msg)
+                            )
+                            if (result.success) {
+                                await writePipelineRow({
+                                    referenceId:     id,
+                                    referenceType:   "credit_memo",
+                                    step:            "void_credit_memo",
+                                    status:          "submitted",
+                                    bridgeOpId:      result.data?.operationId || null,
+                                    qbTxnId:         creditMemo.qb_txn_id,
+                                    qbRefNumber:     creditMemo.qb_ref_number ?? creditMemo.credit_memo_number ?? null,
+                                    medusaRefNumber: creditMemo.credit_memo_number ?? null,
+                                })
+                                logger.info(`${LOG_PREFIX} ✅ QB void retry succeeded for ${creditMemo.credit_memo_number}`)
+                            } else {
+                                logger.error(`${LOG_PREFIX} ❌ QB void retry failed: ${result.error}`)
+                            }
+                        } catch (bgErr: any) {
+                            logger.error(`${LOG_PREFIX} QB void retry error: ${bgErr.message}`)
+                        }
+                    })()
+                    return res.json({ success: true, message: "Credit Memo void queued to QuickBooks" })
+                }
+
                 if (creditMemo.status !== 'completed') return res.status(400).json({ error: "Only completed credit memos can be synced to QuickBooks." })
 
                 const cmTxnId = creditMemo.metadata?.qb_txn_id as string | undefined

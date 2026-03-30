@@ -14,6 +14,7 @@ export const GET = async (
       "list_id",
       "type",
       "is_active",
+      "is_default",
       "created_at",
       "updated_at"
     ],

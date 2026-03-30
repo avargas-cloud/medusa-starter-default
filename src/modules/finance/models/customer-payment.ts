@@ -23,6 +23,8 @@ import { PaymentApplication } from './payment-application'
  *   - partially_applied  → some amount applied, remainder still available
  *   - applied            → fully consumed (or web: immediately applied to its order)
  *   - voided             → cancelled before being used
+ *   - refunded           → full amount returned to customer
+ *   - partial_refunded   → partial amount returned, remainder consumed
  */
 const CustomerPayment = model.define('customer_payment', {
     id:                  model.id({ prefix: 'cpay' }).primaryKey(),
@@ -34,7 +36,7 @@ const CustomerPayment = model.define('customer_payment', {
     currency:            model.text().default('usd'),
     method:              model.enum(['cash', 'check', 'card', 'ach', 'zelle', 'credit_memo', 'stripe', 'authorize_net', 'other']).default('other'),
     reference:           model.text().nullable(),        // check #, last4, Stripe charge ID, etc.
-    status:              model.enum(['available', 'partially_applied', 'applied', 'voided']).default('available'),
+    status:              model.enum(['available', 'partially_applied', 'applied', 'voided', 'refunded', 'partial_refunded']).default('available'),
     // Web-only: reference to native Medusa payment (deduplication key + audit trail)
     medusa_payment_id:     model.text().nullable(),        // payment.id from Medusa payment module
     medusa_refund_id:      model.text().nullable(),        // payment_refund.id if this is a refund mirror

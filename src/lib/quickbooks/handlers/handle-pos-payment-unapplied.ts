@@ -34,6 +34,13 @@ export async function handlePosPaymentUnapplied({ event, container }: Subscriber
         return
     }
 
+    // SALES RECEIPT GUARD: payments embedded in a QB Sales Receipt cannot be unapplied —
+    // the SR transaction owns the payment and it's not a standalone ReceivePayment.
+    if (payment.metadata?.qb_source === 'sales_receipt') {
+        logger.info(`${LOG_PREFIX} ⏭️ Skipping unapply: payment ${payment_id} was captured in a Sales Receipt — apply/unapply not supported in QB for SR payments`)
+        return
+    }
+
     const paymentTxnId = payment.metadata?.qb_txn_id as string
     if (!paymentTxnId) {
         logger.warn(`${LOG_PREFIX} Payment ${payment_id} has no qb_txn_id. Cannot unapply it in QuickBooks.`)
