@@ -79,9 +79,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         RefNumber:      refLabel,
         Memo:           `POS Refund — ${refLabel}`,
         ExpenseLineAdd: [{
-          AccountRef:  { FullName: "Accounts Receivable" },
-          Amount:      amountDollars,
-          Memo:        `Refund for ${refLabel}`,
+          AccountRef: { FullName: "Accounts Receivable" },
+          Amount:     amountDollars,
+          Memo:       `Refund for ${refLabel}`,
           CustomerRef: { ListID: customerListId },
         }],
       },
