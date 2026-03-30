@@ -1,12 +1,21 @@
 import { ContainerRegistrationKeys } from "@medusajs/utils"
 import { processOrderInQb, buildQbItems, buildShippingQbItem, buildQbOrderDiscountLines } from "../order-flow-core"
-import { buildSaleOrderPatch, getEstimateTxnId, getSoTxnId, getSoOperationId } from "../qb-metadata-types"
+import { getEstimateTxnId, getSoTxnId, getSoOperationId } from "../qb-metadata-types"
 import { LOG_PREFIX, getQbConfig, isPosOrder, processingOrders } from "./utils"
 import { writePipelineRow, cacheEditSequence } from "../qb-pipeline"
+import { getDbPool } from "../../../api/utils/db-pool"
+
+async function mergeOrderMetadata(orderId: string, patch: Record<string, unknown>): Promise<void> {
+    const pool = getDbPool()
+    await pool.query(
+        `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || $1::jsonb WHERE id = $2`,
+        [JSON.stringify(patch), orderId]
+    )
+}
 
 export async function handleOrderPlaced(
     data: any,
-    orderModule: any,
+    _orderModule: any,
     customerModule: any,
     _container: any,
     logger: any,
@@ -149,9 +158,7 @@ export async function handleOrderPlaced(
 
         // Inject pre-flight metadata so UI shows "CREATING..."
         try {
-            await orderModule.updateOrders(orderId, {
-                metadata: { ...(order.metadata || {}), qb_sync_status: "creating" }
-            })
+            await mergeOrderMetadata(orderId, { qb_sync_status: "creating" })
         } catch (mErr) {
             logger.warn(`${LOG_PREFIX} Could not set creating status: ${mErr}`)
         }
@@ -191,9 +198,7 @@ export async function handleOrderPlaced(
         if (result.error) {
             logger.error(`${LOG_PREFIX} ❌ processOrderInQb error: ${result.error}`)
             try {
-                await orderModule.updateOrders(orderId, {
-                    metadata: { ...(order.metadata || {}), qb_sync_status: "error" }
-                })
+                await mergeOrderMetadata(orderId, { qb_sync_status: "error" })
             } catch (mErr) {}
             return
         }
@@ -201,15 +206,20 @@ export async function handleOrderPlaced(
         if (result.soTxnId || result.operationId) {
             try {
                 const isAsync = !!result.operationId && !result.soTxnId
-                const patch = buildSaleOrderPatch(order.metadata || {}, {
-                    txnId:        result.soTxnId || null,
-                    refNumber:    result.soRefNumber || null,
-                    operationId:  result.operationId || null,
-                    editSequence: result.editSequence || null,
-                    customerId:   result.customerId || null,
-                    syncStatus:   isAsync ? "pending" : "synced",
-                })
-                await orderModule.updateOrders(orderId, { metadata: patch })
+                const now = new Date().toISOString()
+                const patch: Record<string, unknown> = {
+                    qb_sales_order: {
+                        txn_id:        result.soTxnId ?? "",
+                        ref_number:    result.soRefNumber ?? result.soTxnId ?? "",
+                        operation_id:  result.operationId ?? null,
+                        edit_sequence: result.editSequence ?? null,
+                        synced_at:     now,
+                    },
+                    qb_sync_status: isAsync ? "pending" : "synced",
+                    qb_synced_at:   now,
+                    ...(result.customerId ? { qb_list_id: result.customerId } : {}),
+                }
+                await mergeOrderMetadata(orderId, patch)
                 logger.info(`${LOG_PREFIX} ✅ Saved SO metadata — TxnID=${result.soTxnId}, Ref=${result.soRefNumber}, EditSeq=${result.editSequence ?? "none"}, OpID=${result.operationId}`)
 
                 // Cache EditSequence for future Mod ops
@@ -241,9 +251,7 @@ export async function handleOrderPlaced(
         } else {
             logger.warn(`${LOG_PREFIX} ⚠️ No soTxnId or operationId returned — QB document may not have been created`)
             try {
-                await orderModule.updateOrders(orderId, {
-                    metadata: { ...(order.metadata || {}), qb_sync_status: "error" }
-                })
+                await mergeOrderMetadata(orderId, { qb_sync_status: "error" })
             } catch (mErr) {}
 
             // Record failure in pipeline
