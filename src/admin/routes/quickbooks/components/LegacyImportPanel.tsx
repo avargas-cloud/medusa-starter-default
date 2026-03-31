@@ -1,5 +1,5 @@
 import { Container, Heading, Text, Button, toast } from "@medusajs/ui"
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect } from "react"
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -13,16 +13,22 @@ interface LegacySoRecord {
     status: string
 }
 
-interface PaymentPreviewRecord {
-    txn_id: string
-    ref_number: string
+interface StagedPaymentRecord {
+    id: number
+    qb_txn_id: string
+    qb_ref_number: string
+    qb_customer_list_id: string
     qb_customer_name: string
     medusa_customer_id: string | null
     medusa_customer_email: string | null
     amount_cents: number
-    date: string
+    txn_date: string | null
     method: string
-    already_imported: boolean
+    year: number
+    status: "pending" | "applied" | "no_match"
+    applied_payment_id: string | null
+    fetched_at: string
+    applied_at: string | null
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -40,268 +46,366 @@ const fmtDate = (d: string | null) => {
     catch { return d }
 }
 
+// ── Known open SO ref numbers (from QB report 2026-03-31) ────────────────────
+const KNOWN_SO_REFS = [
+    "3682", "4620", "4910", "5126", "5695", "5731", "5891", "5923", "5956",
+    "6006", "6020", "6025", "6058", "6059", "6061", "6062", "6068", "6082",
+    "6088", "6118", "6131", "6151", "6198", "6205", "6224", "6238", "6239",
+]
+
+type RowStatus = "pending" | "loading" | "done" | "error"
+
+interface SoRow {
+    refNumber: string
+    status: RowStatus
+    txnId?: string
+    customer?: string
+    date?: string
+    amount?: number
+    error?: string
+}
+
 // ── Tab: Sales Orders ─────────────────────────────────────────────────────────
 
 function SalesOrdersTab() {
-    const [loading, setLoading] = useState(false)
-    const [records, setRecords] = useState<LegacySoRecord[]>([])
-    const [total, setTotal] = useState(0)
-    const [fetched, setFetched] = useState(false)
+    const [rows, setRows] = useState<SoRow[]>(() =>
+        KNOWN_SO_REFS.map(ref => ({ refNumber: ref, status: "pending" as RowStatus }))
+    )
 
-    const loadExisting = useCallback(async () => {
-        try {
-            const r = await fetch("/admin/quickbooks/import/sales-orders", { credentials: "include" })
-            if (!r.ok) return
-            const data = await r.json()
-            setRecords(data.records ?? [])
-            setTotal(data.total ?? 0)
-            setFetched(true)
-        } catch (_) { /* table may not exist yet */ }
+    // On mount, load existing DB records and mark them as done
+    useEffect(() => {
+        fetch("/admin/quickbooks/import/sales-orders", { credentials: "include" })
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+                if (!data?.records?.length) return
+                const byRef = new Map<string, LegacySoRecord>(
+                    data.records.map((r: LegacySoRecord) => [r.qb_ref_number, r])
+                )
+                setRows(prev => prev.map(row => {
+                    const existing = byRef.get(row.refNumber)
+                    if (!existing) return row
+                    return {
+                        ...row,
+                        status: "done",
+                        txnId: existing.qb_txn_id,
+                        customer: existing.qb_customer_name,
+                        date: existing.txn_date ?? undefined,
+                        amount: parseFloat(String(existing.amount)) || 0,
+                    }
+                }))
+            })
+            .catch(() => {})
     }, [])
 
-    useEffect(() => { loadExisting() }, [loadExisting])
-
-    const handleImport = async () => {
-        setLoading(true)
+    const handleSubmit = async (refNumber: string) => {
+        setRows(prev => prev.map(r => r.refNumber === refNumber ? { ...r, status: "loading" } : r))
         try {
-            const r = await fetch("/admin/quickbooks/import/sales-orders", {
+            const res = await fetch("/admin/quickbooks/import/sales-orders", {
                 method: "POST",
                 credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ refNumber }),
             })
-            const data = await r.json()
-            if (!r.ok || !data.success) {
-                toast.error("Import failed", { description: data.error || "Unknown error" })
+            const data = await res.json()
+            if (!res.ok || !data.success) {
+                setRows(prev => prev.map(r => r.refNumber === refNumber
+                    ? { ...r, status: "error", error: data.error || "Unknown error" } : r))
+                toast.error(`SO #${refNumber} failed`, { description: data.error })
                 return
             }
-            setRecords(data.records ?? [])
-            setTotal(data.total ?? 0)
-            setFetched(true)
-            toast.success("Sales Orders imported", {
-                description: `${data.total} open SO${data.total !== 1 ? "s" : ""} loaded from QuickBooks`,
-            })
+            setRows(prev => prev.map(r => r.refNumber === refNumber ? {
+                ...r,
+                status: "done",
+                txnId: data.record.txnId,
+                customer: data.record.customer,
+                date: data.record.date,
+                amount: data.record.amount,
+            } : r))
         } catch (err: any) {
-            toast.error("Import error", { description: err.message })
-        } finally {
-            setLoading(false)
+            setRows(prev => prev.map(r => r.refNumber === refNumber
+                ? { ...r, status: "error", error: err.message } : r))
+            toast.error(`SO #${refNumber} error`, { description: err.message })
         }
     }
+
+    const doneCount = rows.filter(r => r.status === "done").length
 
     return (
         <div>
             <div className="flex items-center justify-between mb-3">
                 <Text className="text-xs text-ui-fg-subtle">
-                    Loads open (non-closed) Sales Orders from QB as reference data. No orders are created automatically — you create them manually using the TxnID and Ref# shown here.
+                    Reference data only — no orders are created automatically. Click Submit on each row to fetch from QB. TxnID and customer info will fill in once fetched.
                 </Text>
-                <Button
-                    variant="secondary"
-                    size="small"
-                    onClick={handleImport}
-                    isLoading={loading}
-                    disabled={loading}
-                    className="ml-4 shrink-0"
-                >
-                    {loading ? "Querying QB..." : "Import from QuickBooks"}
-                </Button>
+                <span className="text-xs text-ui-fg-muted ml-4 shrink-0">{doneCount}/{rows.length} fetched</span>
             </div>
-
-            {fetched && total === 0 && (
-                <Text className="text-xs text-ui-fg-muted italic">
-                    No open Sales Orders on record — run import to load from QuickBooks.
-                </Text>
-            )}
-
-            {records.length > 0 && (
-                <div className="overflow-x-auto mt-1">
-                    <table className="w-full text-xs border-collapse">
-                        <thead>
-                            <tr className="bg-ui-bg-subtle">
-                                <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">SO#</th>
-                                <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Customer</th>
-                                <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Date</th>
-                                <th className="text-right px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Amount</th>
-                                <th className="text-right px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Balance</th>
-                                <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Status</th>
+            <div className="overflow-x-auto">
+                <table className="w-full text-xs border-collapse">
+                    <thead>
+                        <tr className="bg-ui-bg-subtle">
+                            <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">SO#</th>
+                            <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Customer</th>
+                            <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">TxnID</th>
+                            <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Date</th>
+                            <th className="text-right px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Amount</th>
+                            <th className="px-2 py-1.5 border-b border-ui-border-base"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows.map((row) => (
+                            <tr key={row.refNumber} className="border-b border-ui-border-base hover:bg-ui-bg-subtle">
+                                <td className="px-2 py-1.5 font-mono font-medium text-ui-fg-base">{row.refNumber}</td>
+                                <td className="px-2 py-1.5 text-ui-fg-base">{row.customer || <span className="text-ui-fg-muted italic">—</span>}</td>
+                                <td className="px-2 py-1.5 font-mono text-xs text-ui-fg-subtle select-all">{row.txnId || <span className="text-ui-fg-muted">—</span>}</td>
+                                <td className="px-2 py-1.5 text-ui-fg-subtle">{row.date ? fmtDate(row.date) : <span className="text-ui-fg-muted">—</span>}</td>
+                                <td className="px-2 py-1.5 text-right text-ui-fg-base">{row.amount != null ? fmt(row.amount) : <span className="text-ui-fg-muted">—</span>}</td>
+                                <td className="px-2 py-1.5 text-right">
+                                    {row.status === "done" ? (
+                                        <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-green-50 text-green-700 border border-green-200">✓ done</span>
+                                    ) : row.status === "error" ? (
+                                        <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-red-50 text-red-700 border border-red-200" title={row.error}>error</span>
+                                    ) : (
+                                        <Button
+                                            variant="secondary"
+                                            size="small"
+                                            onClick={() => handleSubmit(row.refNumber)}
+                                            isLoading={row.status === "loading"}
+                                            disabled={row.status === "loading"}
+                                        >
+                                            {row.status === "loading" ? "..." : "Submit"}
+                                        </Button>
+                                    )}
+                                </td>
                             </tr>
-                        </thead>
-                        <tbody>
-                            {records.map((so) => (
-                                <tr key={so.qb_txn_id} className="border-b border-ui-border-base hover:bg-ui-bg-subtle">
-                                    <td className="px-2 py-1.5 font-mono text-ui-fg-base">{so.qb_ref_number || "—"}</td>
-                                    <td className="px-2 py-1.5 text-ui-fg-base">{so.qb_customer_name || "—"}</td>
-                                    <td className="px-2 py-1.5 text-ui-fg-subtle">{fmtDate(so.txn_date)}</td>
-                                    <td className="px-2 py-1.5 text-right text-ui-fg-base">{fmt(so.amount)}</td>
-                                    <td className="px-2 py-1.5 text-right font-medium text-orange-600">{fmt(so.balance_remaining)}</td>
-                                    <td className="px-2 py-1.5">
-                                        <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-orange-50 text-orange-700 border border-orange-200">
-                                            {so.status}
-                                        </span>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            )}
+                        ))}
+                    </tbody>
+                </table>
+            </div>
         </div>
     )
 }
 
 // ── Tab: Unapplied Payments ───────────────────────────────────────────────────
 
-function PaymentsTab() {
-    const [previewLoading, setPreviewLoading] = useState(false)
-    const [confirmLoading, setConfirmLoading] = useState(false)
-    const [preview, setPreview] = useState<PaymentPreviewRecord[] | null>(null)
-    const [previewStats, setPreviewStats] = useState<{ matched: number; unmatched: number; already: number } | null>(null)
+const PAYMENTS_PAGE_SIZE = 20
+const CURRENT_YEAR = new Date().getFullYear()
 
-    const handlePreview = async () => {
-        setPreviewLoading(true)
-        setPreview(null)
-        setPreviewStats(null)
+function PaymentsTab() {
+    const [syncLoading, setSyncLoading] = useState(false)
+    const [records, setRecords] = useState<StagedPaymentRecord[]>([])
+    const [loadingDb, setLoadingDb] = useState(false)
+    const [applyingId, setApplyingId] = useState<string | null>(null)
+    const [page, setPage] = useState(0)
+    const [selectedYear, setSelectedYear] = useState<number>(CURRENT_YEAR)
+    const [availableYears, setAvailableYears] = useState<number[]>(
+        [CURRENT_YEAR - 2, CURRENT_YEAR - 1, CURRENT_YEAR]
+    )
+
+    const loadFromDb = async (year: number) => {
+        setLoadingDb(true)
         try {
-            const r = await fetch("/admin/quickbooks/import/payments", { credentials: "include" })
+            const r = await fetch(`/admin/quickbooks/import/payments?year=${year}`, { credentials: "include" })
             const data = await r.json()
-            if (!r.ok || !data.success) {
-                toast.error("Preview failed", { description: data.error || "Unknown error" })
-                return
-            }
-            setPreview(data.records ?? [])
-            setPreviewStats({ matched: data.matched, unmatched: data.unmatched, already: data.already_imported })
-        } catch (err: any) {
-            toast.error("Preview error", { description: err.message })
+            if (!r.ok || !data.success) throw new Error(data.error || "Failed to load")
+            setRecords(data.records ?? [])
+            setPage(0)
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : "Unknown error"
+            toast.error("Load error", { description: msg })
         } finally {
-            setPreviewLoading(false)
+            setLoadingDb(false)
         }
     }
 
-    const handleConfirm = async () => {
-        setConfirmLoading(true)
+    useEffect(() => { loadFromDb(selectedYear) }, [selectedYear])
+
+    const selectYear = (year: number) => {
+        setSelectedYear(year)
+        setPage(0)
+    }
+
+    const addEarlierYear = () => {
+        const earliest = Math.min(...availableYears)
+        setAvailableYears(prev => [earliest - 1, ...prev])
+    }
+
+    const handleSync = async () => {
+        setSyncLoading(true)
         try {
             const r = await fetch("/admin/quickbooks/import/payments", {
                 method: "POST",
                 credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "sync", year: selectedYear }),
             })
             const data = await r.json()
-            if (!r.ok || !data.success) {
-                toast.error("Import failed", { description: data.error || "Unknown error" })
-                return
-            }
-            const msg = [
-                `${data.imported} payment${data.imported !== 1 ? "s" : ""} imported`,
-                data.skipped > 0 ? `${data.skipped} skipped (no Medusa match)` : null,
-            ].filter(Boolean).join(" — ")
-
-            if (data.errors?.length > 0) {
-                toast.warning("Partial import", { description: msg + ". Check console." })
-                console.warn("[QB Import Payments] Errors:", data.errors)
-            } else {
-                toast.success("Payments imported", { description: msg })
-            }
-            // Refresh preview to show updated already_imported state
-            setPreview(null)
-            setPreviewStats(null)
-        } catch (err: any) {
-            toast.error("Import error", { description: err.message })
+            if (!r.ok || !data.success) throw new Error(data.error || "Sync failed")
+            setRecords(data.records ?? [])
+            setPage(0)
+            toast.success(`Synced ${selectedYear}`, {
+                description: `${data.pending} pending · ${data.applied} applied · ${data.no_match} no match`,
+            })
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : "Unknown error"
+            toast.error("Sync error", { description: msg })
         } finally {
-            setConfirmLoading(false)
+            setSyncLoading(false)
         }
     }
 
-    const toImportCount = preview?.filter(p => p.medusa_customer_id && !p.already_imported).length ?? 0
+    const handleApply = async (rec: StagedPaymentRecord) => {
+        setApplyingId(rec.qb_txn_id)
+        try {
+            const r = await fetch("/admin/quickbooks/import/payments", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "apply", txn_id: rec.qb_txn_id, year: selectedYear }),
+            })
+            const data = await r.json()
+            if (!r.ok || !data.success) throw new Error(data.error || "Apply failed")
+            toast.success("Payment applied", { description: `${rec.qb_customer_name} — ${fmtCents(rec.amount_cents)}` })
+            setRecords(prev => prev.map(p =>
+                p.qb_txn_id === rec.qb_txn_id
+                    ? { ...p, status: "applied", applied_payment_id: data.payment_id, applied_at: new Date().toISOString() }
+                    : p
+            ))
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : "Unknown error"
+            toast.error("Apply error", { description: msg })
+        } finally {
+            setApplyingId(null)
+        }
+    }
+
+    const pending = records.filter(r => r.status === "pending").length
+    const applied = records.filter(r => r.status === "applied").length
+    const noMatch = records.filter(r => r.status === "no_match").length
+    const totalPages = Math.ceil(records.length / PAYMENTS_PAGE_SIZE)
+    const pageRecords = records.slice(page * PAYMENTS_PAGE_SIZE, (page + 1) * PAYMENTS_PAGE_SIZE)
+    const busy = syncLoading || loadingDb || applyingId !== null
 
     return (
         <div>
-            <div className="flex items-center justify-between mb-3">
-                <Text className="text-xs text-ui-fg-subtle">
-                    Fetches unapplied payments from QB and shows a preview before creating any records. Only payments matched to a Medusa customer (via QB customer ID) can be imported.
-                </Text>
-                <div className="flex items-center gap-2 ml-4 shrink-0">
-                    {preview !== null && toImportCount > 0 && (
-                        <Button
-                            variant="primary"
-                            size="small"
-                            onClick={handleConfirm}
-                            isLoading={confirmLoading}
-                            disabled={confirmLoading || previewLoading}
-                        >
-                            {confirmLoading ? "Importing..." : `Confirm Import (${toImportCount})`}
-                        </Button>
-                    )}
-                    <Button
-                        variant="secondary"
-                        size="small"
-                        onClick={handlePreview}
-                        isLoading={previewLoading}
-                        disabled={previewLoading || confirmLoading}
+            {/* Year selector */}
+            <div className="flex items-center gap-1 mb-3">
+                <Text className="text-xs text-ui-fg-subtle mr-2">Year:</Text>
+                {availableYears.map(y => (
+                    <button
+                        key={y}
+                        onClick={() => selectYear(y)}
+                        className={`px-2.5 py-1 text-xs font-medium rounded border transition-colors ${
+                            selectedYear === y
+                                ? "bg-ui-bg-interactive text-ui-fg-on-color border-ui-bg-interactive"
+                                : "bg-ui-bg-base text-ui-fg-subtle border-ui-border-base hover:bg-ui-bg-subtle"
+                        }`}
+                        disabled={busy}
                     >
-                        {previewLoading ? "Querying QB..." : preview !== null ? "Refresh Preview" : "Preview Payments"}
-                    </Button>
-                </div>
+                        {y}
+                    </button>
+                ))}
+                <button
+                    onClick={addEarlierYear}
+                    className="px-2 py-1 text-xs font-medium rounded border border-ui-border-base bg-ui-bg-base text-ui-fg-muted hover:bg-ui-bg-subtle transition-colors"
+                    disabled={busy}
+                    title="Add earlier year"
+                >
+                    +
+                </button>
             </div>
 
-            {preview === null && !previewLoading && (
-                <Text className="text-xs text-ui-fg-muted italic">
-                    Click "Preview Payments" to fetch unapplied payments from QuickBooks. Nothing will be created until you confirm.
-                </Text>
-            )}
+            {/* Header bar */}
+            <div className="flex items-center justify-between mb-3">
+                <div className="flex gap-4">
+                    {records.length > 0 && (
+                        <>
+                            {pending > 0 && <span className="text-xs text-amber-700 font-medium">⏳ {pending} pending</span>}
+                            {applied > 0 && <span className="text-xs text-green-700 font-medium">✓ {applied} applied</span>}
+                            {noMatch > 0 && <span className="text-xs text-ui-fg-muted">⊘ {noMatch} no match</span>}
+                        </>
+                    )}
+                    {records.length === 0 && !loadingDb && (
+                        <Text className="text-xs text-ui-fg-muted italic">No staging records for {selectedYear}. Click "Sync from QB" to fetch.</Text>
+                    )}
+                </div>
+                <Button
+                    variant="secondary"
+                    size="small"
+                    onClick={handleSync}
+                    isLoading={syncLoading}
+                    disabled={busy}
+                >
+                    {syncLoading ? "Querying QB..." : "Sync from QB"}
+                </Button>
+            </div>
 
-            {preview !== null && previewStats !== null && (
-                <>
-                    <div className="flex gap-4 mb-2">
-                        <span className="text-xs text-green-700 font-medium">✓ {previewStats.matched} will be imported</span>
-                        {previewStats.unmatched > 0 && (
-                            <span className="text-xs text-ui-fg-muted">⊘ {previewStats.unmatched} unmatched (no Medusa customer)</span>
-                        )}
-                        {previewStats.already > 0 && (
-                            <span className="text-xs text-ui-fg-muted">↩ {previewStats.already} already imported</span>
-                        )}
-                    </div>
-
-                    {preview.length === 0 ? (
-                        <Text className="text-xs text-ui-fg-muted italic">No unapplied payments found in QuickBooks.</Text>
-                    ) : (
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-xs border-collapse">
-                                <thead>
-                                    <tr className="bg-ui-bg-subtle">
-                                        <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Customer (QB)</th>
-                                        <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Medusa Match</th>
-                                        <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Ref#</th>
-                                        <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Date</th>
-                                        <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Method</th>
-                                        <th className="text-right px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Amount</th>
-                                        <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Status</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {preview.map((p) => (
-                                        <tr key={p.txn_id} className="border-b border-ui-border-base hover:bg-ui-bg-subtle">
-                                            <td className="px-2 py-1.5 text-ui-fg-base">{p.qb_customer_name}</td>
-                                            <td className="px-2 py-1.5">
-                                                {p.medusa_customer_id
-                                                    ? <span className="text-green-700">{p.medusa_customer_email || p.medusa_customer_id}</span>
-                                                    : <span className="text-ui-fg-muted">No match</span>
-                                                }
-                                            </td>
-                                            <td className="px-2 py-1.5 font-mono text-ui-fg-subtle">{p.ref_number || "—"}</td>
-                                            <td className="px-2 py-1.5 text-ui-fg-subtle">{fmtDate(p.date)}</td>
-                                            <td className="px-2 py-1.5 text-ui-fg-subtle capitalize">{p.method}</td>
-                                            <td className="px-2 py-1.5 text-right font-medium text-ui-fg-base">{fmtCents(p.amount_cents)}</td>
-                                            <td className="px-2 py-1.5">
-                                                {p.already_imported
-                                                    ? <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-ui-bg-subtle text-ui-fg-muted border border-ui-border-base">Already imported</span>
-                                                    : p.medusa_customer_id
-                                                        ? <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-green-50 text-green-700 border border-green-200">Will import</span>
-                                                        : <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-ui-bg-subtle text-ui-fg-muted border border-ui-border-base">Will skip</span>
-                                                }
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+            {records.length > 0 && (
+                <div className="overflow-x-auto">
+                    <table className="w-full text-xs border-collapse">
+                        <thead>
+                            <tr className="bg-ui-bg-subtle">
+                                <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Customer (QB)</th>
+                                <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Medusa Match</th>
+                                <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">TxnID</th>
+                                <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Ref#</th>
+                                <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Date</th>
+                                <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Method</th>
+                                <th className="text-right px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Amount</th>
+                                <th className="text-left px-2 py-1.5 text-ui-fg-subtle font-medium border-b border-ui-border-base">Status</th>
+                                <th className="px-2 py-1.5 border-b border-ui-border-base"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {pageRecords.map((p) => (
+                                <tr key={p.qb_txn_id} className="border-b border-ui-border-base hover:bg-ui-bg-subtle">
+                                    <td className="px-2 py-1.5 text-ui-fg-base">{p.qb_customer_name}</td>
+                                    <td className="px-2 py-1.5">
+                                        {p.medusa_customer_id
+                                            ? <span className="text-green-700">{p.medusa_customer_email || p.medusa_customer_id}</span>
+                                            : <span className="text-ui-fg-muted">No match</span>
+                                        }
+                                    </td>
+                                    <td className="px-2 py-1.5 font-mono text-ui-fg-subtle">{p.qb_txn_id || "—"}</td>
+                                    <td className="px-2 py-1.5 font-mono text-ui-fg-subtle">{p.qb_ref_number || "—"}</td>
+                                    <td className="px-2 py-1.5 text-ui-fg-subtle">{fmtDate(p.txn_date)}</td>
+                                    <td className="px-2 py-1.5 text-ui-fg-subtle capitalize">{p.method}</td>
+                                    <td className="px-2 py-1.5 text-right font-medium text-ui-fg-base">{fmtCents(p.amount_cents)}</td>
+                                    <td className="px-2 py-1.5">
+                                        {p.status === "applied"
+                                            ? <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-green-50 text-green-700 border border-green-200">Applied</span>
+                                            : p.status === "no_match"
+                                                ? <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-ui-bg-subtle text-ui-fg-muted border border-ui-border-base">No match</span>
+                                                : <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-amber-50 text-amber-700 border border-amber-200">Pending</span>
+                                        }
+                                    </td>
+                                    <td className="px-2 py-1.5">
+                                        {p.status === "pending" && p.medusa_customer_id && (
+                                            <Button
+                                                variant="primary"
+                                                size="small"
+                                                onClick={() => handleApply(p)}
+                                                isLoading={applyingId === p.qb_txn_id}
+                                                disabled={busy}
+                                            >
+                                                Apply
+                                            </Button>
+                                        )}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    {totalPages > 1 && (
+                        <div className="flex items-center justify-between mt-2 px-1">
+                            <Text className="text-xs text-ui-fg-muted">
+                                Page {page + 1} of {totalPages} ({records.length} total)
+                            </Text>
+                            <div className="flex gap-2">
+                                <Button variant="secondary" size="small" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}>← Prev</Button>
+                                <Button variant="secondary" size="small" onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}>Next →</Button>
+                            </div>
                         </div>
                     )}
-                </>
+                </div>
             )}
         </div>
     )
