@@ -216,7 +216,7 @@ hooks.orderCreated(
                                     await writePipelineRow({ orderId: order_id, referenceId: cpayId, step: "payment", status: "failed", error: qbResult.error })
                                 } else if (!qbResult.skipped) {
                                     console.log(`[finance-hook] ✅ QB payment synced — txnId: ${qbResult.txnId}`)
-                                    await writePipelineRow({ orderId: order_id, referenceId: cpayId, step: "payment", status: "completed" })
+                                    await writePipelineRow({ orderId: order_id, referenceId: cpayId, step: "payment", status: "confirmed" })
                                 }
                             } catch (qbErr: any) {
                                 console.error(`[finance-hook] ❌ QB sync error: ${qbErr.message}`)
