@@ -163,11 +163,25 @@ export async function handleOrderPlaced(
             logger.warn(`${LOG_PREFIX} Could not set creating status: ${mErr}`)
         }
 
+        // Re-read document_number fresh from DB — the document-number subscriber may have
+        // written it after our initial order fetch (concurrent event handlers).
+        // Do this BEFORE writing the pipeline row so medusaRefNumber is also correct.
+        const orderPrefix = isPosOrder(order) ? "POS Order" : "Web Order"
+        let freshDocNum: string | undefined
+        try {
+            const pool = getDbPool()
+            const { rows } = await pool.query(
+                `SELECT metadata->>'document_number' AS document_number FROM "order" WHERE id = $1`,
+                [orderId]
+            )
+            freshDocNum = rows[0]?.document_number as string | undefined
+        } catch {
+            freshDocNum = order.metadata?.document_number as string | undefined
+        }
+        const soFriendlyRef = freshDocNum || (order.display_id ? `S${order.display_id}` : null)
+        const soMemo = `${orderPrefix} ${freshDocNum || order.display_id || orderId}`
+
         // Write "pending" pipeline row immediately so it appears in the UI before polling starts.
-        // Include medusaRefNumber so the cron path (which may not have a prior "waiting" row
-        // with the ref already set) also shows the Medusa reference in the pipeline UI.
-        const soFriendlyRef = (order.metadata?.document_number as string | undefined)
-            || (order.display_id ? `S${order.display_id}` : null)
         try {
             await writePipelineRow({
                 orderId,
@@ -177,22 +191,6 @@ export async function handleOrderPlaced(
             })
         } catch (pErr: any) {
             logger.warn(`${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${pErr.message}`)
-        }
-
-        // Re-read document_number fresh from DB — the document-number subscriber may have
-        // written it after our initial order fetch (concurrent event handlers).
-        const orderPrefix = isPosOrder(order) ? "POS Order" : "Web Order"
-        let soMemo: string
-        try {
-            const pool = getDbPool()
-            const { rows } = await pool.query(
-                `SELECT metadata->>'document_number' AS document_number FROM "order" WHERE id = $1`,
-                [orderId]
-            )
-            const docNum = rows[0]?.document_number as string | undefined
-            soMemo = `${orderPrefix} ${docNum || order.display_id || orderId}`
-        } catch {
-            soMemo = `${orderPrefix} ${order.metadata?.document_number || order.display_id || orderId}`
         }
 
         const result = await processOrderInQb(orderWithCustomer, customerModule, {

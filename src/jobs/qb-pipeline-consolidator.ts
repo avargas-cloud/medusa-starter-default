@@ -68,6 +68,7 @@ export default async function qbPipelineConsolidator(
                     op.result?.TxnID     ||
                     op.listId            ||
                     op.result?.ListID    ||
+                    msgs?.CheckAddRs?.CheckRet?.TxnID                   ||
                     msgs?.ReceivePaymentAddRs?.ReceivePaymentRet?.TxnID ||
                     msgs?.ReceivePaymentModRs?.ReceivePaymentRet?.TxnID ||
                     msgs?.CreditMemoAddRs?.CreditMemoRet?.TxnID         ||
@@ -75,6 +76,7 @@ export default async function qbPipelineConsolidator(
                 const refNumber =
                     op.refNumber ||
                     op.result?.RefNumber ||
+                    msgs?.CheckAddRs?.CheckRet?.RefNumber                   ||
                     msgs?.ReceivePaymentAddRs?.ReceivePaymentRet?.RefNumber ||
                     msgs?.ReceivePaymentModRs?.ReceivePaymentRet?.RefNumber ||
                     msgs?.CreditMemoAddRs?.CreditMemoRet?.RefNumber         ||

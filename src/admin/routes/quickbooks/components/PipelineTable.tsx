@@ -170,7 +170,7 @@ function PipelineRow({ row, onRetry, retrying }: {
                         <span className="font-mono text-xs text-violet-600 font-semibold">{qbRef}</span>
                     ) : (row.step === "payment" || row.step === "apply_payment") && medusaRef ? (
                         <span className="font-mono text-xs text-ui-fg-base font-semibold">{medusaRef}</span>
-                    ) : row.status === "skipped" ? (
+                    ) : row.status === "skipped" || row.step === "refund_payment" ? (
                         <span className="text-ui-fg-muted">—</span>
                     ) : (
                         <span className="text-ui-fg-muted text-[10px]">pending…</span>
