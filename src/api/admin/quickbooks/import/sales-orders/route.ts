@@ -26,9 +26,7 @@ export async function POST(
             `<?qbxml version="10.0"?>`,
             `<QBXML><QBXMLMsgsRq onError="stopOnError">`,
             `<SalesOrderQueryRq requestID="1">`,
-            `<IsManuallyClosed>false</IsManuallyClosed>`,
             `<MaxReturned>500</MaxReturned>`,
-            `<IncludeLineItems>false</IncludeLineItems>`,
             `</SalesOrderQueryRq>`,
             `</QBXMLMsgsRq></QBXML>`,
         ].join("")
@@ -73,9 +71,17 @@ export async function POST(
             return
         }
 
-        const soList: any[] = Array.isArray(soRetRaw) ? soRetRaw : [soRetRaw]
+        // Filter out manually closed SOs client-side (IsManuallyClosed is not a valid QBXML query filter)
+        const allSos: any[] = Array.isArray(soRetRaw) ? soRetRaw : [soRetRaw]
+        // Keep only SOs from 2021 onwards — pre-2021 are legacy junk with no active balance
+        // (BalanceRemaining is unreliable in QB QBXML response for SO headers without line items)
+        const soList = allSos.filter(so => {
+            if (so.IsManuallyClosed === "true") return false
+            const txnDate: string = so.TxnDate || ""
+            return txnDate >= "2021-01-01"
+        })
 
-        // ── Step 4: Upsert into qb_legacy_so ─────────────────────────────────
+        // ── Step 4: Upsert active SOs, delete any that no longer exist in QB ──
         const records: Array<{ txnId: string; refNumber: string; customer: string; date: string; amount: number; balance: number }> = []
 
         for (const so of soList) {
@@ -107,7 +113,19 @@ export async function POST(
             records.push({ txnId, refNumber, customer: customerName, date: txnDate, amount, balance })
         }
 
-        res.json({ success: true, total: records.length, records })
+        // ── Step 5: Remove DB records no longer in QB (closed/fully invoiced) ─
+        let removed = 0
+        if (records.length > 0) {
+            const activeTxnIds = records.map(r => r.txnId)
+            const placeholders = activeTxnIds.map((_, i) => `$${i + 1}`).join(", ")
+            const del = await client.query(
+                `DELETE FROM qb_legacy_so WHERE qb_txn_id NOT IN (${placeholders})`,
+                activeTxnIds
+            )
+            removed = del.rowCount ?? 0
+        }
+
+        res.json({ success: true, total: records.length, removed, records })
 
     } catch (error: any) {
         console.error("[QB Import SOs] Error:", error)
