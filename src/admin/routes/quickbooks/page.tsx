@@ -8,6 +8,7 @@ import { SyncCard } from "./components/SyncCard"
 import { AuditModal } from "./components/AuditModal"
 import { ActivityLog } from "./components/ActivityLog"
 import { PipelineTable } from "./components/PipelineTable"
+import { LegacyImportPanel } from "./components/LegacyImportPanel"
 
 // ─── Interval options ─────────────────────────────────────────────────────────
 const INVENTORY_INTERVALS = [
@@ -402,6 +403,9 @@ const QuickBooksPage = () => {
                     </div>
                 }
             />
+
+            {/* Legacy QB Data Import */}
+            <LegacyImportPanel />
 
             {/* Activity Log */}
             <ActivityLog />
