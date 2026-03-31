@@ -2,6 +2,8 @@ import { completeCartWorkflow } from "@medusajs/medusa/core-flows"
 import { StepResponse } from "@medusajs/framework/workflows-sdk"
 import { Modules } from "@medusajs/utils"
 import { FINANCE_MODULE } from "../../modules/finance"
+import { processPaymentCaptureInQb, ensureCustomerInQb } from "../../lib/quickbooks/order-flow-core"
+import { writePipelineRow } from "../../lib/quickbooks/qb-pipeline"
 // Workaround for Medusa's exported types missing the internal hooks:
 const hooks = completeCartWorkflow.hooks as any
 
@@ -92,7 +94,7 @@ hooks.orderCreated(
             console.warn(`[maintain-cart-prices] ⚠️ Could not emit order.placed: ${emitErr.message}`)
         }
 
-        // ── Finance AR Ledger ────────────────────────────────────────────────────
+        // ── Finance AR Ledger + QB Sync ──────────────────────────────────────────
         // Mirror web payments into the Finance ledger synchronously here, since
         // the Redis event bus does not reliably deliver payment.captured to subscribers.
         // Safety: this hook only runs when the order was successfully created (payment passed).
@@ -109,6 +111,7 @@ hooks.orderCreated(
                     entity: "order",
                     fields: [
                         "id",
+                        "display_id",
                         "customer_id",
                         "metadata",
                         "payment_collections.payments.id",
@@ -131,8 +134,27 @@ hooks.orderCreated(
                     console.warn(`[finance-hook] No payments found for order ${order_id}`)
                 } else {
                     const financeService = container.resolve(FINANCE_MODULE)
+                    const customerModule = container.resolve(Modules.CUSTOMER)
+
+                    // Get customer QB ID (for QB sync)
+                    let qbCustomerId: string | null = null
+                    try {
+                        const customer = await customerModule.retrieveCustomer(order.customer_id as string, { select: ["id", "metadata", "first_name", "last_name", "email", "phone"] as any })
+                        qbCustomerId = (customer as any).metadata?.qb_list_id ?? null
+                        if (!qbCustomerId) {
+                            const custResult = await ensureCustomerInQb(customer as any, customerModule as any, (msg: string) => console.log(msg))
+                            qbCustomerId = custResult?.qbCustomerId ?? null
+                        }
+                    } catch (custErr: any) {
+                        console.warn(`[finance-hook] Could not get QB customer ID: ${custErr.message}`)
+                    }
 
                     for (const payment of payments) {
+                        // Medusa v2 stores payment.amount in dollars (e.g. 69.8275)
+                        // Finance ledger stores in cents to match POS convention
+                        const amountCents = Math.round(Number(payment.amount) * 100)
+                        const amountDollars = amountCents / 100
+
                         // Idempotency check
                         const existing = await financeService.listCustomerPayments({ medusa_payment_id: payment.id })
                         if (existing && existing.length > 0) {
@@ -140,9 +162,9 @@ hooks.orderCreated(
                             continue
                         }
 
-                        await financeService.createCustomerPayments({
+                        const cpay = await financeService.createCustomerPayments({
                             customer_id: order.customer_id as string,
-                            amount: Number(payment.amount),
+                            amount: amountCents,
                             method: 'card',
                             reference: payment.provider_id || null,
                             received_at: payment.captured_at ? new Date(payment.captured_at as string) : new Date(),
@@ -155,13 +177,60 @@ hooks.orderCreated(
                             locked_order_id: order_id,
                         })
 
-                        console.log(`[finance-hook] ✅ Created finance ledger entry: payment ${payment.id} → customer ${order.customer_id}, order ${order_id}`)
+                        const cpayId = Array.isArray(cpay) ? cpay[0]?.id : (cpay as any)?.id
+                        console.log(`[finance-hook] ✅ Finance ledger entry created: $${amountDollars} (${amountCents}¢) — payment ${payment.id} → customer ${order.customer_id}`)
+
+                        // ── QB Sync ──────────────────────────────────────────────
+                        if (qbCustomerId && cpayId) {
+                            try {
+                                await writePipelineRow({
+                                    orderId: order_id,
+                                    referenceId: cpayId,
+                                    referenceType: "customer_payment",
+                                    step: "payment",
+                                    status: "pending",
+                                    medusaRefNumber: order.metadata?.document_number as string || undefined,
+                                })
+
+                                const qbResult = await processPaymentCaptureInQb({
+                                    orderId: order_id,
+                                    orderDisplayId: orderWithPayments?.display_id,
+                                    amount: amountDollars,
+                                    paymentMethod: "Credit Card",
+                                    qbCustomerId,
+                                    memo: `Web Order ${order.metadata?.document_number || order_id}`,
+                                    onSubmitted: async (operationId) => {
+                                        await writePipelineRow({
+                                            orderId: order_id,
+                                            referenceId: cpayId,
+                                            referenceType: "customer_payment",
+                                            step: "payment",
+                                            status: "submitted",
+                                            bridgeOpId: operationId,
+                                        })
+                                    },
+                                })
+
+                                if (qbResult.error) {
+                                    console.error(`[finance-hook] ❌ QB sync failed: ${qbResult.error}`)
+                                    await writePipelineRow({ orderId: order_id, referenceId: cpayId, step: "payment", status: "failed", error: qbResult.error })
+                                } else if (!qbResult.skipped) {
+                                    console.log(`[finance-hook] ✅ QB payment synced — txnId: ${qbResult.txnId}`)
+                                    await writePipelineRow({ orderId: order_id, referenceId: cpayId, step: "payment", status: "completed" })
+                                }
+                            } catch (qbErr: any) {
+                                console.error(`[finance-hook] ❌ QB sync error: ${qbErr.message}`)
+                            }
+                        } else {
+                            console.warn(`[finance-hook] ⚠️ QB sync skipped — no qbCustomerId for customer ${order.customer_id}`)
+                        }
+                        // ─────────────────────────────────────────────────────────
                     }
                 }
             }
         } catch (financeErr: any) {
             // Non-fatal: log but don't fail the order creation
-            console.error(`[finance-hook] ❌ Error creating finance ledger entry for ${order_id}:`, financeErr.message)
+            console.error(`[finance-hook] ❌ Error in finance/QB sync for ${order_id}:`, financeErr.message)
         }
         // ────────────────────────────────────────────────────────────────────────
 
