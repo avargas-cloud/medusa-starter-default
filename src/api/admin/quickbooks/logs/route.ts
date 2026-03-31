@@ -43,11 +43,11 @@ export async function GET(
         const values: any[] = []
         let p = 1
 
-        // Category filter: order ops vs batch syncs
-        if (category === 'order') {
-            conditions.push(`operation IN ('sales_order','estimate','payment','invoice','cancel','customer_transfer')`)
-        } else if (category === 'sync') {
-            conditions.push(`operation IN ('inventory_sync','price_sync','customer_sync')`)
+        // Activity Log only shows background sync operations.
+        // Order/payment events are tracked in the QB Operations Pipeline instead.
+        // The 'sync' category param is kept for backwards compat but is now the default.
+        if (category !== 'all') {
+            conditions.push(`operation IN ('inventory_sync','price_sync','customer_sync','pos_sync')`)
         }
 
         if (status) {

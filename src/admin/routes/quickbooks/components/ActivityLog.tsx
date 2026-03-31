@@ -5,7 +5,6 @@ import { ArrowPath } from "@medusajs/icons"
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type LogStatus = "processing" | "completed" | "failed" | "skipped"
-type LogCategory = "all" | "order" | "sync"
 
 interface ChangedItem {
     sku: string
@@ -305,18 +304,16 @@ export const ActivityLog = ({ autoRefresh = false }: ActivityLogProps) => {
     const [total, setTotal] = useState(0)
     const [loading, setLoading] = useState(false)
     const [page, setPage] = useState(0)
-    const [category, setCategory] = useState<LogCategory>("all")
     const [status, setStatus] = useState<string>("all")
     const LIMIT = 12
 
-    const fetchLogs = useCallback(async (pg = page, cat = category, st = status) => {
+    const fetchLogs = useCallback(async (pg = page, st = status) => {
         setLoading(true)
         try {
             const params = new URLSearchParams({
                 limit: String(LIMIT),
                 offset: String(pg * LIMIT),
             })
-            if (cat !== 'all') params.set('category', cat)
             if (st !== 'all') params.set('status', st)
 
             const res = await fetch(`/admin/quickbooks/logs?${params}`, { credentials: 'include' })
@@ -326,7 +323,7 @@ export const ActivityLog = ({ autoRefresh = false }: ActivityLogProps) => {
             setTotal(data.pagination.total)
         } catch { /* non-blocking */ }
         finally { setLoading(false) }
-    }, [page, category, status])
+    }, [page, status])
 
     useEffect(() => { fetchLogs() }, [fetchLogs])
 
@@ -337,8 +334,7 @@ export const ActivityLog = ({ autoRefresh = false }: ActivityLogProps) => {
         return () => clearInterval(interval)
     }, [autoRefresh, fetchLogs])
 
-    const handleCategory = (val: string) => { setCategory(val as LogCategory); setPage(0); fetchLogs(0, val as LogCategory, status) }
-    const handleStatus = (val: string) => { setStatus(val); setPage(0); fetchLogs(0, category, val) }
+    const handleStatus = (val: string) => { setStatus(val); setPage(0); fetchLogs(0, val) }
 
     const totalPages = Math.ceil(total / LIMIT)
 
@@ -350,11 +346,11 @@ export const ActivityLog = ({ autoRefresh = false }: ActivityLogProps) => {
                     <div>
                         <Heading level="h3" className="text-sm font-medium">📋 Activity Log</Heading>
                         <Text className="text-xs text-ui-fg-subtle mt-0.5">
-                            All QuickBooks operations — order events and background syncs
+                            Background sync operations — Inventory, Price, Customer &amp; POS sync
                         </Text>
                     </div>
                     <div className="flex items-center gap-2">
-                        <ClearLogButton onDone={() => { setPage(0); fetchLogs(0, category, status) }} />
+                        <ClearLogButton onDone={() => { setPage(0); fetchLogs(0, status) }} />
                         <Button
                             variant="secondary"
                             size="small"
@@ -367,17 +363,7 @@ export const ActivityLog = ({ autoRefresh = false }: ActivityLogProps) => {
                 </div>
 
                 {/* Filters */}
-                <div className="flex gap-2">
-                    <div className="w-36">
-                        <Select value={category} onValueChange={handleCategory}>
-                            <Select.Trigger><Select.Value /></Select.Trigger>
-                            <Select.Content>
-                                <Select.Item value="all">All Types</Select.Item>
-                                <Select.Item value="order">Order Events</Select.Item>
-                                <Select.Item value="sync">Batch Syncs</Select.Item>
-                            </Select.Content>
-                        </Select>
-                    </div>
+                <div className="flex gap-2 items-center">
                     <div className="w-36">
                         <Select value={status} onValueChange={handleStatus}>
                             <Select.Trigger><Select.Value /></Select.Trigger>
@@ -390,7 +376,7 @@ export const ActivityLog = ({ autoRefresh = false }: ActivityLogProps) => {
                             </Select.Content>
                         </Select>
                     </div>
-                    <Text className="text-xs text-ui-fg-muted self-center ml-auto">
+                    <Text className="text-xs text-ui-fg-muted ml-auto">
                         {total} total entries
                     </Text>
                 </div>
@@ -416,7 +402,7 @@ export const ActivityLog = ({ autoRefresh = false }: ActivityLogProps) => {
                     <div className="flex items-center justify-between pt-1">
                         <Button
                             variant="secondary" size="small"
-                            onClick={() => setPage(p => p - 1)}
+                            onClick={() => { const p = page - 1; setPage(p); fetchLogs(p, status) }}
                             disabled={page === 0 || loading}
                         >← Prev</Button>
                         <Text className="text-xs text-ui-fg-muted">
@@ -424,7 +410,7 @@ export const ActivityLog = ({ autoRefresh = false }: ActivityLogProps) => {
                         </Text>
                         <Button
                             variant="secondary" size="small"
-                            onClick={() => setPage(p => p + 1)}
+                            onClick={() => { const p = page + 1; setPage(p); fetchLogs(p, status) }}
                             disabled={page >= totalPages - 1 || loading}
                         >Next →</Button>
                     </div>
