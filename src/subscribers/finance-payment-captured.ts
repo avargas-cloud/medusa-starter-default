@@ -1,4 +1,5 @@
 import { SubscriberArgs, type SubscriberConfig } from "@medusajs/framework"
+import { Modules } from "@medusajs/utils"
 import { FINANCE_MODULE } from "../modules/finance"
 
 /**
@@ -31,23 +32,26 @@ export default async function financePaymentCapturedHandler({
   }
 
   const query = container.resolve("query")
+  const paymentModule = container.resolve(Modules.PAYMENT)
   const financeService = container.resolve(FINANCE_MODULE)
 
-  // 1. Fetch the payment details
-  const { data: payments } = await query.graph({
-    entity: "payment",
-    fields: ["id", "amount", "captured_at", "provider_id", "payment_collection_id"],
-    filters: { id: paymentId },
-  })
-
-  const payment = payments?.[0]
-  if (!payment) {
-    console.error(`[financePaymentCapturedHandler] Payment ${paymentId} not found`)
+  // 1. Fetch payment via the Payment module (more reliable than query.graph for payment entity)
+  let payment: any
+  try {
+    payment = await paymentModule.retrievePayment(paymentId, {
+      select: ["id", "amount", "captured_at", "provider_id", "payment_collection_id"],
+    })
+  } catch (err: any) {
+    console.error(`[financePaymentCapturedHandler] Payment ${paymentId} not found: ${err.message}`)
     return
   }
 
-  // 2. Find the order that owns this payment (via payment_collection).
-  // Use payment_collection_id from the payment to traverse up to the order.
+  if (!payment?.payment_collection_id) {
+    console.warn(`[financePaymentCapturedHandler] Payment ${paymentId} has no payment_collection_id. Skipping.`)
+    return
+  }
+
+  // 2. Find the order via payment_collection_id
   const { data: orders } = await query.graph({
     entity: "order",
     fields: ["id", "customer_id"],
