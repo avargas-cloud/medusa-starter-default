@@ -210,8 +210,8 @@ class AuthorizeNetPaymentService extends AbstractPaymentProvider<AuthnetOptions>
                 createTransactionRequest: {
                     merchantAuthentication: this.merchantAuth,
                     transactionRequest: {
-                        // Crucial: we do NOT capture here. Only auth.
-                        transactionType: "authOnlyTransaction",
+                        // AUTH_CAPTURE: capture immediately at checkout — no separate capture step needed.
+                        transactionType: "authCaptureTransaction",
                         amount: amountDollars,
                         payment: {
                             opaqueData: {
@@ -264,7 +264,7 @@ class AuthorizeNetPaymentService extends AbstractPaymentProvider<AuthnetOptions>
                 }
             }
 
-            console.log(`[AuthorizeNet] ✅ Auth success transId=${txId} amount=$${amountDollars}`)
+            console.log(`[AuthorizeNet] ✅ Auth+Capture success transId=${txId} amount=$${amountDollars}`)
 
             return {
                 data: {
@@ -272,6 +272,7 @@ class AuthorizeNetPaymentService extends AbstractPaymentProvider<AuthnetOptions>
                     status: "authorized",
                     authnet_transaction_id: txId,
                     authnet_auth_code: response.transactionResponse?.authCode,
+                    authnet_pre_captured: true, // Funds already captured — capturePayment must skip the API call
                 },
                 status: "authorized" as any,
             }
@@ -314,6 +315,18 @@ class AuthorizeNetPaymentService extends AbstractPaymentProvider<AuthnetOptions>
         // --- TEST MODE: no real hold was created, just mark as captured ---
         if (txId === "0" || sessionData?.authnet_test_mode || sessionData?.authnet_sandbox_captured) {
             console.log(`[AuthorizeNet] 🧪 TEST MODE: No real transaction to capture (transId=${txId}). Marking as captured.`);
+            return {
+                data: {
+                    ...sessionData,
+                    status: "captured",
+                },
+            };
+        }
+        // ------------------------------------------------
+
+        // --- AUTH_CAPTURE: funds were already captured during authorizePayment, skip API call ---
+        if (sessionData?.authnet_pre_captured) {
+            console.log(`[AuthorizeNet] ✅ Payment ${txId} was already captured at checkout (authCaptureTransaction). Skipping API call.`);
             return {
                 data: {
                     ...sessionData,
