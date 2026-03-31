@@ -44,7 +44,9 @@ export default async function orderNotifications({ event, container }: Subscribe
     const fulfillmentService = container.resolve(Modules.FULFILLMENT)
     const query = container.resolve(ContainerRegistrationKeys.QUERY)
 
-    if (eventName === "order.fulfillment_created") {
+    if (eventName === "order.placed") {
+      await handleOrderPlaced(payload, sgMail, fromEmail, orderService, logger)
+    } else if (eventName === "order.fulfillment_created") {
       await handleFulfillmentCreated(payload, sgMail, fromEmail, orderService, fulfillmentService, query, logger, container)
     } else if (eventName === "shipment.created") {
       await handleShipmentCreated(payload, sgMail, fromEmail, orderService, fulfillmentService, query, logger)
@@ -58,6 +60,41 @@ export default async function orderNotifications({ event, container }: Subscribe
 }
 
 // ─── Event Handlers ──────────────────────────────────────────────────────────
+
+async function handleOrderPlaced(
+  payload: any, sgMail: any, fromEmail: string,
+  orderService: any, logger: any
+) {
+  const orderId = payload.id
+  const order = await orderService.retrieveOrder(orderId, {
+    select: ["id", "display_id", "email", "metadata", "currency_code", "total", "subtotal", "shipping_total", "tax_total", "*items", "*items.detail"],
+    relations: ["items", "items.tax_lines", "shipping_address"],
+  })
+
+  // Skip POS orders — they don't need web confirmation emails
+  if (order.metadata?.pos_created === true) {
+    logger.info(`📧 [OrderNotifications] Skipping order.placed email for POS Order #${order.display_id}`)
+    return
+  }
+
+  const customerEmail = order.email
+  if (!customerEmail) {
+    logger.warn(`📧 [OrderNotifications] Order ${orderId} has no email, skipping confirmation`)
+    return
+  }
+
+  logger.info(`📧 Sending order confirmation email to ${customerEmail} for order #${order.display_id}`)
+
+  const orderNumber = order.metadata?.document_number || `#${order.display_id}`
+
+  await sgMail.default.send({
+    to: customerEmail,
+    from: { email: fromEmail, name: COMPANY_NAME },
+    subject: `Order Confirmation ${orderNumber} – ${COMPANY_NAME}`,
+    html: buildOrderConfirmationEmail(order),
+  })
+  logger.info(`✅ [OrderNotifications] Order confirmation sent to ${customerEmail}`)
+}
 
 async function handleFulfillmentCreated(
   payload: any, sgMail: any, fromEmail: string,
@@ -332,6 +369,71 @@ function sectionLabel(text: string): string {
 
 // ─── Email Templates ─────────────────────────────────────────────────────────
 
+function buildOrderConfirmationEmail(order: any): string {
+  const items = order.items || []
+  const currency = order.currency_code || "USD"
+  const address = order.shipping_address || {}
+
+  const addressHTML = address.address_1
+    ? `<table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#fafafa;border-radius:10px;border:1px solid #e5e7eb;margin-bottom:24px;">
+        <tr><td style="padding:18px 22px;">
+          <div style="color:#6b7280;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">Shipping To</div>
+          <div style="color:#111827;font-size:14px;font-weight:500;">${address.first_name || ""} ${address.last_name || ""}</div>
+          <div style="color:#6b7280;font-size:14px;">${address.address_1}${address.address_2 ? `, ${address.address_2}` : ""}</div>
+          <div style="color:#6b7280;font-size:14px;">${address.city || ""}, ${address.province || ""} ${address.postal_code || ""}</div>
+        </td></tr>
+      </table>`
+    : ""
+
+  return wrap(`
+    <!-- Icon -->
+    <div style="text-align:center;margin-bottom:20px;">
+      <div style="display:inline-block;width:64px;height:64px;background:#ecfdf5;border-radius:50%;line-height:64px;font-size:30px;">✅</div>
+    </div>
+
+    <h1 style="color:#111827;font-size:22px;font-weight:700;text-align:center;margin:0 0 6px;">Order Confirmed!</h1>
+    <p style="color:#6b7280;font-size:15px;text-align:center;margin:0 0 4px;line-height:1.5;">
+      Thank you for your order. We've received <strong style="color:#111827;">Order ${order.metadata?.document_number || `#${order.display_id}`}</strong> and will begin processing it shortly.
+    </p>
+    <p style="color:#9ca3af;font-size:13px;text-align:center;margin:0 0 28px;">You'll receive an email when your order ships.</p>
+
+    ${progressBar([
+      { label: "Ordered", done: true, active: true },
+      { label: "Preparing", done: false },
+      { label: "Shipped", done: false },
+      { label: "Delivered", done: false },
+    ])}
+
+    ${addressHTML}
+
+    ${sectionLabel("Order Summary")}
+    <table cellpadding="0" cellspacing="0" border="0" width="100%">
+      ${itemsTable(items, currency)}
+    </table>
+
+    <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:16px;padding-top:16px;border-top:2px solid #f3f4f6;">
+      ${order.subtotal ? `<tr>
+        <td style="color:#6b7280;font-size:14px;padding:4px 0;">Subtotal</td>
+        <td style="text-align:right;color:#374151;font-size:14px;">${fmt(order.subtotal, currency)}</td>
+      </tr>` : ""}
+      ${order.shipping_total ? `<tr>
+        <td style="color:#6b7280;font-size:14px;padding:4px 0;">Shipping</td>
+        <td style="text-align:right;color:#374151;font-size:14px;">${fmt(order.shipping_total, currency)}</td>
+      </tr>` : ""}
+      ${order.tax_total ? `<tr>
+        <td style="color:#6b7280;font-size:14px;padding:4px 0;">Tax</td>
+        <td style="text-align:right;color:#374151;font-size:14px;">${fmt(order.tax_total, currency)}</td>
+      </tr>` : ""}
+      <tr>
+        <td style="color:#111827;font-size:16px;font-weight:700;padding:12px 0 0;">Total</td>
+        <td style="text-align:right;color:#111827;font-size:16px;font-weight:700;padding:12px 0 0;">${fmt(order.total || 0, currency)}</td>
+      </tr>
+    </table>
+
+    ${ctaButton("View Order Details", `${STOREFRONT_URL}/account/orders`)}
+  `)
+}
+
 function buildReadyForPickupEmail(order: any, fulfillment: any, locationAddress?: any): string {
   const items = order.items || []
   const currency = order.currency_code || "USD"
@@ -550,6 +652,7 @@ function buildDeliveredEmail(order: any, isPickup: boolean): string {
 // ─── Subscriber Configuration ────────────────────────────────────────────────
 export const config: SubscriberConfig = {
   event: [
+    "order.placed",
     "order.fulfillment_created",
     "shipment.created",
     "delivery.created",
