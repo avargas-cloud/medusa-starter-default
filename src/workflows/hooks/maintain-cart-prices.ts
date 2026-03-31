@@ -1,6 +1,7 @@
 import { completeCartWorkflow } from "@medusajs/medusa/core-flows"
 import { StepResponse } from "@medusajs/framework/workflows-sdk"
 import { Modules } from "@medusajs/utils"
+import { FINANCE_MODULE } from "../../modules/finance"
 // Workaround for Medusa's exported types missing the internal hooks:
 const hooks = completeCartWorkflow.hooks as any
 
@@ -19,6 +20,8 @@ hooks.orderCreated(
             entity: "order",
             fields: [
                 "id",
+                "customer_id",
+                "metadata",
                 "total",
                 "subtotal",
                 "tax_total",
@@ -88,6 +91,79 @@ hooks.orderCreated(
         } catch (emitErr: any) {
             console.warn(`[maintain-cart-prices] ⚠️ Could not emit order.placed: ${emitErr.message}`)
         }
+
+        // ── Finance AR Ledger ────────────────────────────────────────────────────
+        // Mirror web payments into the Finance ledger synchronously here, since
+        // the Redis event bus does not reliably deliver payment.captured to subscribers.
+        // Safety: this hook only runs when the order was successfully created (payment passed).
+        // Declined payments abort the workflow before orderCreated fires.
+        try {
+            // Skip POS orders — their payments are handled via pos.payment.created
+            if (order.metadata?.pos_created === true) {
+                console.log(`[finance-hook] Skipping POS order ${order_id}`)
+            } else if (!order.customer_id) {
+                console.log(`[finance-hook] Guest checkout (no customer_id) — skipping AR ledger for ${order_id}`)
+            } else {
+                // Fetch order with payment data
+                const { data: ordersWithPayments } = await query.graph({
+                    entity: "order",
+                    fields: [
+                        "id",
+                        "customer_id",
+                        "metadata",
+                        "payment_collections.payments.id",
+                        "payment_collections.payments.amount",
+                        "payment_collections.payments.provider_id",
+                        "payment_collections.payments.captured_at",
+                    ],
+                    filters: { id: order_id },
+                })
+
+                const orderWithPayments = ordersWithPayments?.[0]
+                const payments: Array<any> = []
+                for (const pc of orderWithPayments?.payment_collections ?? []) {
+                    for (const p of pc?.payments ?? []) {
+                        if (p?.id) payments.push(p)
+                    }
+                }
+
+                if (payments.length === 0) {
+                    console.warn(`[finance-hook] No payments found for order ${order_id}`)
+                } else {
+                    const financeService = container.resolve(FINANCE_MODULE)
+
+                    for (const payment of payments) {
+                        // Idempotency check
+                        const existing = await financeService.listCustomerPayments({ medusa_payment_id: payment.id })
+                        if (existing && existing.length > 0) {
+                            console.log(`[finance-hook] Payment ${payment.id} already in ledger — skipping`)
+                            continue
+                        }
+
+                        await financeService.createCustomerPayments({
+                            customer_id: order.customer_id as string,
+                            amount: Number(payment.amount),
+                            method: 'card',
+                            reference: payment.provider_id || null,
+                            received_at: payment.captured_at ? new Date(payment.captured_at as string) : new Date(),
+                            created_by: 'system',
+                            source: 'web',
+                            type: 'payment',
+                            status: 'available',
+                            medusa_payment_id: payment.id,
+                            medusa_payment_synced: true,
+                            locked_order_id: order_id,
+                        })
+
+                        console.log(`[finance-hook] ✅ Created finance ledger entry: payment ${payment.id} → customer ${order.customer_id}, order ${order_id}`)
+                    }
+                }
+            }
+        } catch (financeErr: any) {
+            // Non-fatal: log but don't fail the order creation
+            console.error(`[finance-hook] ❌ Error creating finance ledger entry for ${order_id}:`, financeErr.message)
+        }
+        // ────────────────────────────────────────────────────────────────────────
 
         return new StepResponse(null)
     }
