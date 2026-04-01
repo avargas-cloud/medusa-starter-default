@@ -27,12 +27,30 @@ function posCorsMiddleware(req: MedusaRequest, res: MedusaResponse, next: Medusa
     next()
 }
 
+// Open CORS for /pub/* — these are genuinely public endpoints (no auth, no publishable key).
+// Any origin may call them (branding data, etc.).
+function pubCorsMiddleware(_req: MedusaRequest, res: MedusaResponse, next: MedusaNextFunction) {
+    res.setHeader("Access-Control-Allow-Origin", "*")
+    res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS")
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+    if (_req.method === "OPTIONS") {
+        res.status(204).end()
+        return
+    }
+    next()
+}
+
 export default defineMiddlewares({
   routes: [
     // CORS for POS-specific routes (no Medusa auth gating — validated in-route)
     {
       matcher: "/pos/*",
       middlewares: [posCorsMiddleware],
+    },
+    // Open CORS for public endpoints (no publishable key required)
+    {
+      matcher: "/pub/*",
+      middlewares: [pubCorsMiddleware],
     },
     {
       matcher: "/store/product-categories/:id",
