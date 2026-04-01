@@ -385,6 +385,31 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         logger.warn(`[post-edit-sync] Failed to sync allocations: ${e.message}`)
     }
 
+    // ── Meilisearch Inventory Sync (incremental — only affected variants) ───────
+    setImmediate(async () => {
+        try {
+            const { data: itemsData } = await query.graph({
+                entity: "order",
+                fields: ["items.variant_id"],
+                filters: { id }
+            })
+            const variantIds: string[] = [...new Set(
+                (itemsData?.[0]?.items ?? [])
+                    .map((item: any) => item.variant_id)
+                    .filter(Boolean)
+            )]
+            if (variantIds.length > 0) {
+                const { updateInventoryIncrementalWorkflow } = require("../../../../../workflows/update-inventory-incremental")
+                for (const variantId of variantIds) {
+                    await updateInventoryIncrementalWorkflow(req.scope).run({ input: { variantId } })
+                }
+                logger.info(`[post-edit-sync] ✅ Meilisearch inventory synced for ${variantIds.length} variant(s)`)
+            }
+        } catch (meiliErr: any) {
+            logger.warn(`[post-edit-sync] Meilisearch incremental sync failed (non-fatal): ${meiliErr.message}`)
+        }
+    })
+
     // ── Update QuickBooks Sales Order (Sync Edits) ───────────────────────────
     try {
         const qbEnabled = process.env.QB_ORDER_FLOW_ENABLED === "true"
