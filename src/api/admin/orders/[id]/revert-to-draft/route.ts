@@ -20,7 +20,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
 
         // Validate that there are no invoices generated for this order yet to safely revert it
-        const invoiceCheck = await pgConnection.raw(`SELECT count(*) as count FROM fin_invoice WHERE order_id = ? AND status != 'voided'`, [order.id])
+        const invoiceCheck = await pgConnection.raw(`SELECT count(*) as count FROM pos_invoice WHERE order_id = ? AND status != 'voided'`, [order.id])
         if (parseInt(invoiceCheck.rows[0].count, 10) > 0) {
             return res.status(400).json({ error: "Cannot revert an order that has generated invoices" })
         }
@@ -31,7 +31,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const docNumber = meta.document_number as string || ""
         
         if (docNumber.startsWith('S')) {
-            const numericPart = parseInt(docNumber.replace(/\\D/g, ''), 10)
+            const numericPart = parseInt(docNumber.replace(/\D/g, ''), 10)
             if (!isNaN(numericPart)) {
                 // Check current sequence value
                 const seqRes = await pgConnection.raw(`SELECT last_value FROM custom_order_seq`)
