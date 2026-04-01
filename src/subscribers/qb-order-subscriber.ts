@@ -46,9 +46,26 @@ export default async function qbOrderSubscriber({
             case "order.placed":
                 await handleOrderPlaced(data, orderModule, customerModule, container, logger)
                 break
-            case "order.payment_captured":
+            case "order.payment_captured": {
+                // Web orders: handled synchronously by the maintain-cart-prices hook
+                // (which fires as part of completeCartWorkflow and is more reliable than the event bus).
+                // Only process here for POS orders that go through manual payment capture.
+                const paymentOrderId = data.id || data.order_id
+                if (paymentOrderId) {
+                    const paymentQuery = container.resolve("query")
+                    const { data: [paymentOrder] } = await paymentQuery.graph({
+                        entity: "order",
+                        fields: ["metadata", "sales_channel_id"],
+                        filters: { id: paymentOrderId }
+                    })
+                    if (!isPosOrder(paymentOrder)) {
+                        logger.info(`[QB-ORDER] ⏭️ Skipping order.payment_captured for web order ${paymentOrderId} — handled by maintain-cart-prices hook.`)
+                        break
+                    }
+                }
                 await handlePaymentCaptured(data, orderModule, customerModule, logger)
                 break
+            }
             case "order.fulfillment_created": {
                 // Determine if this order is from the POS
                 const orderIdStr = data.order_id || data.id

@@ -4,6 +4,7 @@ import { Modules } from "@medusajs/utils"
 import { FINANCE_MODULE } from "../../modules/finance"
 import { processPaymentCaptureInQb, ensureCustomerInQb } from "../../lib/quickbooks/order-flow-core"
 import { writePipelineRow } from "../../lib/quickbooks/qb-pipeline"
+import { getDbPool } from "../../api/utils/db-pool"
 // Workaround for Medusa's exported types missing the internal hooks:
 const hooks = completeCartWorkflow.hooks as any
 
@@ -135,7 +136,7 @@ hooks.orderCreated(
                 } else {
                     const financeService = container.resolve(FINANCE_MODULE)
                     const customerModule = container.resolve(Modules.CUSTOMER)
-                    const pgConnection = container.resolve("__pg_connection__") as any
+                    const pool = getDbPool()
 
                     // Get customer QB ID (for QB sync)
                     let qbCustomerId: string | null = null
@@ -166,12 +167,24 @@ hooks.orderCreated(
                         // Sequential display_id — same sequence used by POS payments
                         let displayId: number | null = null
                         try {
-                            const seqRes = await pgConnection.raw(`SELECT nextval('custom_payment_seq') AS seq`)
-                            const raw = seqRes.rows?.[0]?.seq ?? seqRes.rows?.[0]?.SEQ
-                            if (raw) displayId = Number(raw)
+                            const seqRes = await pool.query(`SELECT nextval('custom_payment_seq') AS seq`)
+                            const raw = seqRes.rows?.[0]?.seq
+                            if (raw != null) displayId = Number(raw)
                         } catch (seqErr: any) {
                             console.warn(`[finance-hook] Could not get payment sequence: ${seqErr.message}`)
                         }
+
+                        // Sequential transaction_number — same sequence used by POS transactions
+                        let transactionNumber: number | null = null
+                        try {
+                            const txnSeqRes = await pool.query(`SELECT nextval('pos_transaction_seq') AS seq`)
+                            const rawTxn = txnSeqRes.rows?.[0]?.seq
+                            if (rawTxn != null) transactionNumber = Number(rawTxn)
+                        } catch (txnSeqErr: any) {
+                            console.warn(`[finance-hook] Could not get transaction sequence: ${txnSeqErr.message}`)
+                        }
+
+                        const transactionId = `TXN-${Math.random().toString(36).substring(2, 8).toUpperCase()}`
 
                         const cpay = await financeService.createCustomerPayments({
                             customer_id: order.customer_id as string,
@@ -191,6 +204,10 @@ hooks.orderCreated(
                                 order_id: order_id,
                                 order_display_id: orderWithPayments?.display_id,
                                 qb_sync_status: qbCustomerId ? 'creating' : 'no',
+                                transaction_id: transactionId,
+                                transaction_type: 'web_checkout',
+                                deposit_type: 'WEB_ORDER',
+                                ...(transactionNumber !== null ? { transaction_number: transactionNumber } : {}),
                             },
                         })
 
@@ -218,7 +235,6 @@ hooks.orderCreated(
                                         orderId: _qbOrderId,
                                         orderDisplayId: _qbDisplayId,
                                         amount: amountDollars,
-                                        paymentMethod: "Credit Card",
                                         qbCustomerId: _qbCustomerId,
                                         memo: _qbMemo,
                                         onSubmitted: async (operationId) => {
@@ -249,6 +265,7 @@ hooks.orderCreated(
                                     })
                                     .catch((err: any) => {
                                         console.error(`[finance-hook] ❌ QB async error: ${err.message}`)
+                                        writePipelineRow({ orderId: _qbOrderId, referenceId: _qbCpayId, step: "payment", status: "failed", error: err.message }).catch(() => {})
                                         financeService.updateCustomerPayments([{ id: _qbCpayId, metadata: { qb_sync_status: 'error' } }]).catch(() => {})
                                     })
                             })

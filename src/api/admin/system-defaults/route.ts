@@ -51,6 +51,27 @@ const DEFAULT_VALUES = [
     },
 ]
 
+// ── Payment Methods seed ──────────────────────────────────────────────────────
+// Each entry: value = internal key, metadata = { display, icon, ledger_method, qb_method }
+const PAYMENT_METHODS_SEED = [
+    { value: "cash",             sort_order: 1,  metadata: { display: "Cash",             icon: "💵", ledger_method: "cash",       qb_method: "Cash"             } },
+    { value: "visa",             sort_order: 2,  metadata: { display: "Visa",             icon: "💳", ledger_method: "card",       qb_method: "Visa"             } },
+    { value: "mastercard",       sort_order: 3,  metadata: { display: "Mastercard",       icon: "💳", ledger_method: "card",       qb_method: "MasterCard"       } },
+    { value: "discover",         sort_order: 4,  metadata: { display: "Discover",         icon: "💳", ledger_method: "card",       qb_method: "Discover"         } },
+    { value: "amex",             sort_order: 5,  metadata: { display: "American Express", icon: "💳", ledger_method: "card",       qb_method: "American Express" } },
+    { value: "capital_one",      sort_order: 6,  metadata: { display: "Capital One",      icon: "💳", ledger_method: "card",       qb_method: "Capital One"      } },
+    { value: "debit_card",       sort_order: 7,  metadata: { display: "Debit Card",       icon: "🏧", ledger_method: "card",       qb_method: "Debit Card"       } },
+    { value: "check",            sort_order: 8,  metadata: { display: "Check",            icon: "📝", ledger_method: "check",      qb_method: "Check"            } },
+    { value: "checking_account", sort_order: 9,  metadata: { display: "Checking Account", icon: "🏦", ledger_method: "ach",        qb_method: "Check"            } },
+    { value: "money_order",      sort_order: 10, metadata: { display: "Money Order",      icon: "📮", ledger_method: "check",      qb_method: "Check"            } },
+    { value: "paypal",           sort_order: 11, metadata: { display: "PayPal",           icon: "🅿️", ledger_method: "other",      qb_method: null               } },
+    { value: "zelle",            sort_order: 12, metadata: { display: "Zelle",            icon: "⚡", ledger_method: "zelle",      qb_method: "Zelle"            } },
+    { value: "e_check",          sort_order: 13, metadata: { display: "E-Check",          icon: "📧", ledger_method: "ach",        qb_method: "EFT"              } },
+    { value: "transfer",         sort_order: 14, metadata: { display: "Transfer",         icon: "🔄", ledger_method: "ach",        qb_method: "EFT"              } },
+    { value: "wire_transfer",    sort_order: 15, metadata: { display: "Wire Transfer",    icon: "🏦", ledger_method: "ach",        qb_method: "Wire Transfer"    } },
+    { value: "credit_memo",      sort_order: 16, metadata: { display: "Credit Memo",      icon: "🏷️", ledger_method: "credit_memo", qb_method: null              } },
+]
+
 // ── Ensure table + seed ────────────────────────────────────────────────────────
 
 export async function ensureTable(client: Client) {
@@ -71,6 +92,12 @@ export async function ensureTable(client: Client) {
     await client.query(`
         ALTER TABLE system_defaults
         ADD COLUMN IF NOT EXISTS data_scope TEXT NOT NULL DEFAULT 'Document Data'
+    `)
+
+    // Migration: add metadata column if it doesn't exist yet
+    await client.query(`
+        ALTER TABLE system_defaults
+        ADD COLUMN IF NOT EXISTS metadata JSONB NULL
     `)
 
     // Migration: consolidate old Customer Defaults / Order Defaults contexts
@@ -194,6 +221,20 @@ export async function ensureTable(client: Client) {
             values
         )
     }
+
+    // Seed payment methods (idempotent — ON CONFLICT skips existing rows so user edits are preserved)
+    try {
+        for (const pm of PAYMENT_METHODS_SEED) {
+            await client.query(
+                `INSERT INTO system_defaults (context, field_name, value, sort_order, data_scope, metadata)
+                 VALUES ('Payment Methods', 'Payment Method', $1, $2, 'pos', $3)
+                 ON CONFLICT (context, field_name, value) DO NOTHING`,
+                [pm.value, pm.sort_order, JSON.stringify(pm.metadata)]
+            )
+        }
+    } catch (e) {
+        // ignore seed errors — non-fatal
+    }
 }
 
 
@@ -222,7 +263,7 @@ export async function GET(_req: MedusaRequest, res: MedusaResponse): Promise<voi
  * Creates a new system default value
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
-    const { context, field_name, value, sort_order = 0 } = req.body as any
+    const { context, field_name, value, sort_order = 0, data_scope, metadata } = req.body as any
     if (!context || !field_name || !value) {
         res.status(400).json({ error: "context, field_name, and value are required" })
         return
@@ -232,9 +273,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         await client.connect()
         await ensureTable(client)
         const { rows } = await client.query(
-            `INSERT INTO system_defaults (context, field_name, value, sort_order)
-             VALUES ($1, $2, $3, $4) RETURNING *`,
-            [context, field_name, value, sort_order]
+            `INSERT INTO system_defaults (context, field_name, value, sort_order, data_scope, metadata)
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+            [context, field_name, value, sort_order, data_scope ?? "orders", metadata != null ? JSON.stringify(metadata) : null]
         )
         res.status(201).json({ default: rows[0] })
     } catch (e: any) {

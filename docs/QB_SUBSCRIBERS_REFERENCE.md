@@ -46,13 +46,15 @@ backend/src/subscribers/
 
 ### Eventos que maneja
 
-| Evento Medusa | Handler | Acción QB |
-|---|---|---|
-| `order.placed` | `handleOrderPlaced` | Crea Sales Order (o convierte Estimate→SO) |
-| `order.payment_captured` | `handlePaymentCaptured` | Receive Payment (crédito sin aplicar) |
-| `order.fulfillment_created` | `handleFulfillmentCreated` | Crea Invoice + aplica pago |
-| `order.canceled` | `handleOrderCanceled` | Cierra Sales Order + Voidea Invoice |
-| `order.customer_transferred` | `handleCustomerTransferred` | Reasigna documentos QB al nuevo customer |
+| Evento Medusa | Handler | Acción QB | Scope |
+|---|---|---|---|
+| `order.placed` | `handleOrderPlaced` | Crea Sales Order (o convierte Estimate→SO) | Web + POS |
+| `order.payment_captured` | `handlePaymentCaptured` | Receive Payment (crédito sin aplicar) | **POS only** — web skipped (hook handles it) |
+| `order.fulfillment_created` | `handleFulfillmentCreated` | Crea Invoice + aplica pago | Web only (POS usa direct exec) |
+| `order.canceled` | `handleOrderCanceled` | Cierra Sales Order + Voidea Invoice | Web + POS |
+| `order.customer_transferred` | `handleCustomerTransferred` | Reasigna documentos QB al nuevo customer | Web + POS |
+| `pos.invoice.created` | `handleFulfillmentCreated` | Crea Invoice POS directamente | POS only |
+| `pos.invoice.voided` | `handleInvoiceVoided` | Voidea Invoice POS | POS only |
 
 ### Config del subscriber
 
@@ -164,16 +166,25 @@ unit_price: Math.round((item.item?.unit_price ?? item.unit_price ?? 0) * 100)
 
 **Trigger:** `order.payment_captured`
 
+> **⚠️ Web orders are skipped here.** Web checkout payments go through the `maintain-cart-prices.ts` hook (synchronous, fires during `completeCartWorkflow`) which is more reliable than the Redis event bus. This handler only processes POS orders with manual payment captures.
+
 **Flujo:**
 ```
-1. Fetch order (metadata: qb_sales_order_txn_id)
-2. If no SO → skip (payment without SO = manual flow)
-3. processPaymentCaptureInQb() → QB ReceivePayment (unapplied credit)
-4. Guarda qb_payment_txn_id + qb_payment_ref en metadata
+1. Fetch order metadata + sales_channel_id
+2. If NOT a POS order (isPosOrder() returns false) → skip
+   (Web payments handled by maintain-cart-prices hook)
+3. If no QB customer ID → skip
+4. writePipelineRow(pending) → upfront pipeline row
+5. processPaymentCaptureInQb() → QB ReceivePayment (unapplied credit)
+6. writePipelineRow(submitted/confirmed/failed)
+7. Auto-apply payment to latest QB Invoice (if invoice exists)
+8. Guarda qb_payment_txn_id + qb_payment_ref en order metadata
 ```
 
 **Metadata que lee:** `qb_sales_order_txn_id`, `qb_list_id`
 **Metadata que escribe:** `qb_payment_txn_id`, `qb_payment_ref`
+
+> **Nota sobre `paymentMethod` (Abril 2026):** `QbReceivePaymentPayload.paymentMethod` es ahora **opcional**. No se hardcodea "Credit Card" ni ningún valor por defecto. El método correcto debe derivarse de `system_defaults → Payment Methods → metadata.qb_method` según el tipo de pago del cliente. Si se omite, QB Desktop aplica el pago sin asignar método.
 
 ---
 
@@ -665,3 +676,6 @@ Ver detalles completos en `DRAFT_ORDER_ADVANCED_UI.md` → sección 14 → "Nigh
 | **Discount Amount vacío en QB** | Manual route pasaba discount_total en dólares (4.45) directo a `buildQbOrderDiscountLines` que esperaba cents → dividía 4.45/100=0.044 | Route ahora multiplica ×100 antes de llamar la función | ✅ Fixed |
 | **Shipping incluido en descuento** | Shipping se agregaba antes des las líneas Subtotal+Discount → QB lo sumaba en el Subtotal | Shipping ahora siempre va como ÚLTIMA línea (después de Subtotal y Discount) | ✅ Fixed |
 | Sales Receipt sin SO existente causa error | Handler intenta crear SR pero no valida si SO ya existe | Sales Receipt Qualification Guard ahora verifica SO + Estimate existentes | ✅ Fixed Mar 2026 |
+| **Web payment display_id null (1TMAG/7TX69)** | Hook usaba `pgConnection.raw()` que fallaba silenciosamente en contexto de workflow; `display_id` quedaba null y el POS mostraba fallback de últimos 5 chars del cpay_ ID | `maintain-cart-prices.ts` ahora usa `getDbPool().query()` (mismo patrón que ruta POS) | ✅ Fixed Apr 2026 |
+| **Filas duplicadas en QB pipeline para pagos web** | Tanto el hook `maintain-cart-prices.ts` como el subscriber `handlePaymentCaptured` procesaban el pago web → dos `ReceivePayment` en QB + dos filas en pipeline | `qb-order-subscriber.ts` ahora detecta órdenes web via `isPosOrder()` y hace skip; el hook es la única fuente de verdad para pagos web | ✅ Fixed Apr 2026 |
+| **Payment stuck in pending 30 min** | Cuando `processPaymentCaptureInQb` lanzaba excepción en el `setImmediate` del hook, el `.catch()` solo actualizaba `customer_payment.metadata` pero NO escribía "failed" al pipeline → fila quedaba "pending" 30 min hasta auto-timeout | Añadido `writePipelineRow("failed")` al `.catch()` del hook | ✅ Fixed Apr 2026 |

@@ -43,7 +43,7 @@ Cuando el modal opera contra un Invoice, dibuja un Layout Split-Screen masivo:
 ### Columna Izquierda (New Payment Method)
 - **Recorte Automático (Capping):** La caja de monto (`$`) vigila permanentemente los créditos que elijas. Si la deuda es $500, y eliges usar $100 de crédito viejo, la caja de monto de tarjeta **se limita matemáticamente a $400**.
 - **Presets de Porcentaje:** Botones rápidos de "25%", "50%", "Full" que calculan automáticamente sobre la porción descubierta de la deuda.
-- **Métodos nativos:** Cash, Visa, Amex, ACH, Zelle, Check, etc.
+- **Métodos dinámicos (Abril 2026):** La grilla de métodos se carga desde `system_defaults` vía el hook `usePaymentMethods`. Si el admin agrega o elimina métodos en el panel "System Defaults → Payment Methods", los cambios se reflejan automáticamente en todos los modales de pago sin deploy. Fallback: lista estática completa si la API no responde.
 - Referencias (`1234` last digits, check number, etc).
 
 ### Columna Derecha (Store Credit Selection)
@@ -117,6 +117,13 @@ if (requiredNewMoney > 0) {
    }
 }
 ```
+
+## Known Issues Resueltos en Abril 2026
+
+- **display_id con letras (1TMAG, 7TX69):** `maintain-cart-prices.ts` usaba Knex `.raw()` para la secuencia PostgreSQL, que fallaba silenciosamente en hooks. Corregido a `getDbPool().query('SELECT nextval(...)')`.
+- **Filas duplicadas en pipeline QB:** Tanto el hook como el subscriber `order.payment_captured` procesaban órdenes web. Corregido con guardia `isPosOrder()` en el subscriber.
+- **Pagos web atascados en "pending" 30 min:** El `.catch()` del QB fire-and-forget no escribía `status: "failed"` al pipeline. Corregido para garantizar estado final en todos los paths.
+- **QB Error 3140 (paymentMethod inválido):** El hook enviaba `"Credit Card"` hardcodeado. `paymentMethod` es ahora opcional en `QbReceivePaymentPayload`; el valor correcto viene de `system_defaults.metadata.qb_method`.
 
 ## Known Issues Resueltos en Marzo 20
 - **Fuga Contable de Efectivo:** El usuario ya no puede escribir manualmente más dinero en efectivo del que debe la factura, logrando que los contadores no tengan que revertir desbarajustes manuales en el Checkout.

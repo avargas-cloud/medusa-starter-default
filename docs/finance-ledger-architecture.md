@@ -59,13 +59,17 @@ Es el "Baucher" o ticket que documenta cuando y cuánto dinero de la Billetera (
 4. El sistema lee que el pago venía dirigido a una factura en particular, e inmediatamente se auto-consume creando una `PaymentApplication` que vincula ese recién nacido pago contra el `inv_001` por la suma de `50000` centavos.
 5. El estatus del `CustomerPayment` salta instantáneamente de `available` a `applied` cerrado, porque se asimiló completo.
 
-### Caso 2: Cliente compra $71.42 dólares por el Sitio Web en Shopify/Authorize.net.
-1. La orden Web se aprueba en Medusa. 
-2. Se dispara nuestro Suscriptor silente `finance-payment-captured.ts`.
-3. El Suscriptor detecta el evento de AuthNet, averigua que el customer era John Doe.
-4. **Crea un** `CustomerPayment` por `7142` centavos con fuente `web`. **IMPORTANTE:** Este pago se guarda con un campo especial llamado `locked_order_id`, amarrándolo permanentemente a la Orden Web que lo originó.
-5. Como es Web y no hay factura vinculada inicialmente, el pago se queda en estatus de **`available`** en la billetera.
-6. **Regla Estricta:** Si el usuario del POS intenta utilizar el saldo disponible (`available credit`) para pagar una factura equis (`inv_999`), el sistema **filtra y bloquea** este pago de $71.42. El pago web *solo* puede consumirse si la factura de destino pertenece a su misma orden de origen.
+### Caso 2: Cliente compra $71.42 dólares por el Sitio Web / Authorize.net.
+1. La orden Web se aprueba en Medusa (`completeCartWorkflow` completa exitosamente).
+2. Se dispara el hook `orderCreated` en `maintain-cart-prices.ts` (síncrono — garantizado, no depende del bus de Redis).
+3. El hook obtiene el pago de Medusa (`payment.amount` en **dólares**, e.g. `71.4275`), convierte a centavos: `Math.round(71.4275 * 100) = 7143`.
+4. Consulta la secuencia PostgreSQL `custom_payment_seq` para asignar un `display_id` secuencial (ej: `2065`), el mismo que usan los pagos POS.
+5. **Crea un** `CustomerPayment` por `7143` centavos con fuente `web`, `display_id=2065`. **IMPORTANTE:** Este pago se guarda con `locked_order_id`, amarrándolo permanentemente a la Orden Web que lo originó.
+6. Como es Web y no hay factura vinculada inicialmente, el pago se queda en estatus de **`available`** en la billetera.
+7. El hook encola (fire-and-forget vía `setImmediate`) la sincronización a QuickBooks: crea un `ReceivePayment` en QB como crédito sin aplicar, registra el resultado en `qb_order_pipeline`.
+8. **Regla Estricta:** Si el usuario del POS intenta utilizar el saldo disponible (`available credit`) para pagar una factura equis (`inv_999`), el sistema **filtra y bloquea** este pago de $71.42. El pago web *solo* puede consumirse si la factura de destino pertenece a su misma orden de origen.
+
+> **Nota técnica:** El subscriber `order.payment_captured` (`qb-order-subscriber.ts`) omite automáticamente las órdenes web. El hook `maintain-cart-prices.ts` es la única fuente de verdad para pagos web — garantiza que el ledger y QB estén sincronizados sin depender del bus de eventos Redis.
 
 ### Caso 3: Cliente usa "Store Credit" (Crédito manual o a favor) para abonar a una Factura desde la Orden.
 1. Hay pagos pasados manuales en estatus `available`. Cliente tiene $100 a su favor.
@@ -91,11 +95,93 @@ La vista del POS que calcula "¿Cuánto debe hoy fulano?" (`/admin/finance/custo
 
 ---
 
-## 6. Scripts y Herramientas Administrativas
+## 6. Métodos de Pago — Fuente de Verdad (System Defaults)
+
+A partir de Abril 2026, la lista de métodos de pago disponibles en el POS ya **no es hardcodeada** en los componentes. Vive en la tabla `system_defaults` bajo `context = "Payment Methods"` y `field_name = "Payment Method"`.
+
+### Estructura de cada método
+
+| Campo | Descripción | Ejemplo |
+|---|---|---|
+| `value` | Clave interna (slug) | `visa` |
+| `metadata.display` | Nombre visible en UI | `Visa` |
+| `metadata.icon` | Emoji | `💳` |
+| `metadata.ledger_method` | Enum del Finance Ledger | `card` |
+| `metadata.qb_method` | Nombre en QB Desktop | `Visa` |
+| `sort_order` | Orden de aparición | `2` |
+
+### 16 métodos semilla
+
+| Key | Display | Ledger | QB |
+|---|---|---|---|
+| cash | Cash | cash | Cash |
+| visa | Visa | card | Visa |
+| mastercard | Mastercard | card | MasterCard |
+| discover | Discover | card | Discover |
+| amex | American Express | card | American Express |
+| capital_one | Capital One | card | Capital One |
+| debit_card | Debit Card | card | Debit Card |
+| check | Check | check | Check |
+| checking_account | Checking Account | ach | Check |
+| money_order | Money Order | check | Check |
+| paypal | PayPal | other | *(none)* |
+| zelle | Zelle | zelle | Zelle |
+| e_check | E-Check | ach | EFT |
+| transfer | Transfer | ach | EFT |
+| wire_transfer | Wire Transfer | ach | Wire Transfer |
+| credit_memo | Credit Memo | credit_memo | *(none)* |
+
+### Cómo los consume el POS
+
+El hook `hooks/usePaymentMethods.ts` hace un fetch a `/admin/system-defaults` y transforma la respuesta al shape `{ id, label, icon, ledger_method, qb_method }`. Tiene:
+- **Fallback hardcodeado** — si la API no responde, usa la lista estática completa.
+- **Cache de módulo** — un solo fetch por sesión de navegador (no se repite entre componentes).
+
+Todos los modales de pago consumen este hook:
+- `CapturePaymentModal.tsx`
+- `CaptureDepositModal.tsx`
+- `ChangePaymentMethodModal.tsx`
+- `complete-order/PaymentSection.tsx`
+- `transactions/new/page.tsx`
+
+Para agregar o modificar métodos: **System Defaults → Payment Methods** en el admin de Medusa.
+
+---
+
+## 7. Correcciones al Flujo de Pagos Web (Abril 2026)
+
+### Problema 1: display_id con letras (1TMAG, 7TX69)
+
+**Causa:** `maintain-cart-prices.ts` usaba `container.resolve("__pg_connection__")` con `.raw()` (Knex) para obtener la secuencia `custom_payment_seq`, que fallaba silenciosamente en el contexto de workflow hooks.
+
+**Solución:** Se migró a `getDbPool().query('SELECT nextval(...)')` — el mismo patrón probado que usan las rutas POS.
+
+### Problema 2: Filas duplicadas en `qb_order_pipeline`
+
+**Causa:** Tanto el hook `maintain-cart-prices.ts` como el subscriber `order.payment_captured` procesaban órdenes web.
+
+**Solución:** Se agregó un guardia `isPosOrder()` en el subscriber para saltar órdenes web. El hook es la única fuente de verdad para pagos web.
+
+### Problema 3: Pagos web atascados en "pending" 30 min
+
+**Causa:** El bloque `.catch()` del `setImmediate` de QB solo actualizaba metadata pero **nunca** escribía `status: "failed"` en el pipeline, dejando la fila en pending hasta que el cron de reintentos corría.
+
+**Solución:** Se añadió `writePipelineRow({ status: "failed" })` en el catch, garantizando que el pipeline siempre termina en un estado final.
+
+### Problema 4: QB Error 3140 (paymentMethod inválido)
+
+**Causa:** El hook enviaba `paymentMethod: "Credit Card"` hardcodeado a QB, pero QB Desktop no tiene ese método en la lista de la empresa.
+
+**Solución:** `paymentMethod` ahora es opcional en `QbReceivePaymentPayload`. El hook no envía ningún método por defecto — el correcto se obtiene de system-defaults según el tipo de tarjeta.
+
+---
+
+## 9. Scripts y Herramientas Administrativas
 
 A continuación los archivos críticos al hacer mantenimiento de este sistema:
 
-- `src/subscribers/finance-payment-captured.ts` : Transfiere las compras web al Ledger. Posee la multiplicación `* 100` crítica para pasar los reportes de Dólares Reales (Medusa Native API) hacia Centavos Universales (Finance DB).
+- `src/workflows/hooks/maintain-cart-prices.ts` : **Fuente principal de pagos web al Ledger.** Se ejecuta sincrónicamente como hook de `completeCartWorkflow.orderCreated`. Hace la conversión `Math.round(payment.amount * 100)` (dólares Medusa → centavos Finance) y asigna `display_id` secuencial vía `custom_payment_seq`. También encola el QB ReceivePayment (fire-and-forget).
+- `src/api/admin/finance/payments/route.ts` : Crea pagos POS manualmente. Usa el mismo `custom_payment_seq` para `display_id`. Referencia canónica del patrón de secuencia.
 - `src/api/admin/finance/customers/[id]/balance/route.ts`: Formula matemática principal para cuadrar la deuda, explicada arriba.
 - `.../invoices/route.ts` & `.../invoices/[id]/payments/route.ts`: Donde ocurren las "Operaciones Atómicas"; es decir, si se crea un invoice con un deposito anticipado, ambos se amarran simultáneamente o ambos fallan (Rollback) por seguridad pericial. 
 - `/convert-cents.ts` (Opcional): Usable en terminal via `npx medusa exec ... ` para sanear pagos de transiciones antiguas que pasaron en coma flotante por error antes de unificar toda la unidad contable a centavos base entera.

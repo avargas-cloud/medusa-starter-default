@@ -78,7 +78,7 @@ export interface QbConvertEstimatePayload {
 export interface QbReceivePaymentPayload {
     customerId: string
     amount: number | string
-    paymentMethod: string
+    paymentMethod?: string
     memo?: string
     refNumber?: string
     autoApply?: boolean

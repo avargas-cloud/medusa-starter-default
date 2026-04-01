@@ -114,7 +114,7 @@ If `amount` omitted → voids full available balance. Partial refund creates a n
 
 ### Web Checkout
 
-Subscriber `finance-payment-captured` fires on `payment.captured` → creates `CustomerPayment` (source: `web`, status: `applied`, locked to the order).
+The `orderCreated` hook in `maintain-cart-prices.ts` fires synchronously during `completeCartWorkflow` → creates `CustomerPayment` (source: `web`, status: `available`, locked to the order via `locked_order_id`). The `order.payment_captured` subscriber skips web orders entirely.
 
 ---
 
@@ -125,6 +125,22 @@ Subscriber `finance-payment-captured` fires on `payment.captured` → creates `C
 | `/payments` | List of all payments — search, filter by status, sort |
 | `/payments/:id` | Detail: balance summary, credit statement, apply/refund actions |
 | `/capture-payment` | Redirect → `/payments` |
+
+### Payment Methods — System Defaults
+
+As of April 2026, the list of payment methods shown in all payment modals is **no longer hardcoded**. It is fetched from system-defaults at runtime by the shared hook `hooks/usePaymentMethods.ts`.
+
+- **Source:** `GET /admin/system-defaults` → `context = "Payment Methods"`
+- **Hook:** `hooks/usePaymentMethods.ts` — returns `{ id, label, icon, ledger_method, qb_method }[]`
+- **Fallback:** If the API fails, the full hardcoded list is used automatically
+- **Cache:** Module-level — one fetch per browser session
+- **Admin UI:** System Defaults → Payment Methods section (add/edit/delete methods)
+
+Components that use the hook:
+- `CapturePaymentModal.tsx`, `CaptureDepositModal.tsx`
+- `ChangePaymentMethodModal.tsx` (also derives `ledger_method` from hook)
+- `complete-order/PaymentSection.tsx`
+- `transactions/new/page.tsx`
 
 ### Key Components (`components/pos/payments/`)
 

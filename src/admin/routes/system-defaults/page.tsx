@@ -16,6 +16,13 @@ type DocScopeKey = typeof ALL_DOC_SCOPES[number]["key"]  // "customers" | "order
 
 type DataScope = string  // comma-separated DocScopeKeys, e.g. "customers,orders"
 
+interface PaymentMethodMeta {
+    display: string
+    icon: string
+    ledger_method: string
+    qb_method: string | null
+}
+
 interface SystemDefault {
     id: string
     context: string
@@ -25,6 +32,7 @@ interface SystemDefault {
     sort_order: number
     created_at: string
     updated_at: string
+    metadata?: PaymentMethodMeta | null
 }
 
 const KNOWN_CONTEXTS = ["Document Defaults", "Templates Footer", "Metadata Options"]
@@ -61,6 +69,105 @@ const CONTEXT_COLORS: Record<string, "blue" | "green" | "orange" | "purple" | "g
     "Document Defaults": "blue",
     "Templates Footer":  "purple",
     "Metadata Options":  "orange",
+}
+
+// ── Payment Method Modal ───────────────────────────────────────────────────────
+const LEDGER_METHODS = [
+    { value: "cash",        label: "Cash"        },
+    { value: "card",        label: "Card"        },
+    { value: "check",       label: "Check"       },
+    { value: "ach",         label: "ACH / EFT"   },
+    { value: "zelle",       label: "Zelle"       },
+    { value: "other",       label: "Other"       },
+    { value: "credit_memo", label: "Credit Memo" },
+]
+
+function PaymentMethodModal({
+    item,
+    onClose,
+    onSave,
+}: {
+    item: Partial<SystemDefault> | null
+    onClose: () => void
+    onSave: (data: { value: string; metadata: PaymentMethodMeta }) => Promise<void>
+}) {
+    const meta = item?.metadata ?? {} as Partial<PaymentMethodMeta>
+    const [display, setDisplay] = useState(meta.display ?? "")
+    const [icon, setIcon] = useState(meta.icon ?? "")
+    const [keyVal, setKeyVal] = useState(item?.value ?? "")
+    const [ledger, setLedger] = useState(meta.ledger_method ?? "cash")
+    const [qbMethod, setQbMethod] = useState(meta.qb_method ?? "")
+    const [saving, setSaving] = useState(false)
+    const isEdit = !!item?.id
+
+    const handleSave = async () => {
+        if (!display.trim() || !keyVal.trim() || !ledger) {
+            toast.error("Display name, key, and ledger method are required")
+            return
+        }
+        setSaving(true)
+        try {
+            await onSave({
+                value: keyVal.trim().toLowerCase().replace(/\s+/g, "_"),
+                metadata: { display: display.trim(), icon: icon.trim(), ledger_method: ledger, qb_method: qbMethod.trim() || null },
+            })
+            onClose()
+        } catch {
+            toast.error("Failed to save payment method")
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="bg-ui-bg-base border border-ui-border-base rounded-xl shadow-2xl w-[460px] flex flex-col overflow-hidden">
+                <div className="px-6 py-4 border-b border-ui-border-base flex items-center justify-between">
+                    <Heading level="h2">{isEdit ? "Edit Payment Method" : "New Payment Method"}</Heading>
+                    <button onClick={onClose} className="text-ui-fg-muted hover:text-ui-fg-base text-xl leading-none">×</button>
+                </div>
+                <div className="px-6 py-5 space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <Label className="mb-1 block text-sm">Display Name <span className="text-ui-fg-error">*</span></Label>
+                            <Input placeholder="e.g. Visa" value={display} onChange={e => setDisplay(e.target.value)} autoFocus />
+                        </div>
+                        <div>
+                            <Label className="mb-1 block text-sm">Icon (emoji)</Label>
+                            <Input placeholder="e.g. 💳" value={icon} onChange={e => setIcon(e.target.value)} className="text-xl" />
+                        </div>
+                    </div>
+                    <div>
+                        <Label className="mb-1 block text-sm">Internal Key <span className="text-ui-fg-error">*</span></Label>
+                        <Input
+                            placeholder="e.g. visa"
+                            value={keyVal}
+                            onChange={e => setKeyVal(e.target.value)}
+                            disabled={isEdit}
+                            className={isEdit ? "opacity-60" : ""}
+                        />
+                        <Text className="text-xs text-ui-fg-muted mt-1">Unique slug. Cannot change after creation.</Text>
+                    </div>
+                    <div>
+                        <Label className="mb-1 block text-sm">Ledger Method <span className="text-ui-fg-error">*</span></Label>
+                        <select value={ledger} onChange={e => setLedger(e.target.value)} className="w-full border border-ui-border-base rounded-md px-3 py-2 text-sm bg-ui-bg-field text-ui-fg-base">
+                            {LEDGER_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                        </select>
+                        <Text className="text-xs text-ui-fg-muted mt-1">Maps to the Finance ledger payment category.</Text>
+                    </div>
+                    <div>
+                        <Label className="mb-1 block text-sm">QB Desktop Method</Label>
+                        <Input placeholder="e.g. Visa (leave blank if not synced to QB)" value={qbMethod} onChange={e => setQbMethod(e.target.value)} />
+                        <Text className="text-xs text-ui-fg-muted mt-1">Exact name in QuickBooks Desktop payment methods list.</Text>
+                    </div>
+                </div>
+                <div className="px-6 py-4 border-t border-ui-border-base flex justify-end gap-2">
+                    <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
+                    <Button onClick={handleSave} isLoading={saving}>Save Method</Button>
+                </div>
+            </div>
+        </div>
+    )
 }
 
 // ── Modal ──────────────────────────────────────────────────────────────────────
@@ -568,6 +675,7 @@ const SystemDefaultsPage = () => {
     const [defaults, setDefaults] = useState<SystemDefault[]>([])
     const [loading, setLoading] = useState(true)
     const [modal, setModal] = useState<Partial<SystemDefault> | null | false>(false)
+    const [pmModal, setPmModal] = useState<Partial<SystemDefault> | null | false>(false)
     const [scopeModal, setScopeModal] = useState<{ fieldName: string; items: SystemDefault[] } | null>(null)
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
     const [syncingUsers, setSyncingUsers] = useState(false)
@@ -721,6 +829,35 @@ const SystemDefaultsPage = () => {
         toast.success("Order saved")
     }, [defaults])
 
+    const handleSavePm = useCallback(async (data: { value: string; metadata: PaymentMethodMeta }) => {
+        if (pmModal && (pmModal as SystemDefault).id) {
+            const r = await fetch(`/admin/system-defaults/${(pmModal as SystemDefault).id}`, {
+                method: "PATCH", credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ metadata: data.metadata }),
+            })
+            if (!r.ok) throw new Error()
+            toast.success("Payment method updated")
+        } else {
+            const nextOrder = defaults.filter(d => d.context === "Payment Methods").length + 1
+            const r = await fetch("/admin/system-defaults", {
+                method: "POST", credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    context: "Payment Methods",
+                    field_name: "Payment Method",
+                    value: data.value,
+                    sort_order: nextOrder,
+                    data_scope: "pos",
+                    metadata: data.metadata,
+                }),
+            })
+            if (!r.ok) throw new Error()
+            toast.success("Payment method created")
+        }
+        await load(true)
+    }, [pmModal, defaults, load])
+
     // Grouping: Context -> Field -> Values
     const contextGroups: Record<string, Record<string, SystemDefault[]>> = {}
 
@@ -838,8 +975,71 @@ const SystemDefaultsPage = () => {
                         </Container>
                     </div>
 
+                    {/* Payment Methods Section */}
+                    <div className="space-y-4 pt-6">
+                        <div className="flex items-center justify-between border-b border-ui-border-base pb-2">
+                            <div className="flex items-center gap-2">
+                                <Heading level="h2" className="text-lg">Payment Methods</Heading>
+                                <Badge color="green">{contextGroups["Payment Methods"]?.["Payment Method"]?.length ?? 0} methods</Badge>
+                            </div>
+                            <Button variant="secondary" size="small" onClick={() => setPmModal({})}>+ Add Method</Button>
+                        </div>
+                        <Container className="p-0 overflow-hidden">
+                            <div className="overflow-x-auto w-full">
+                                <table className="w-full text-left text-sm whitespace-nowrap">
+                                    <thead className="bg-ui-bg-subtle border-b border-ui-border-base text-xs text-ui-fg-muted uppercase">
+                                        <tr>
+                                            <th className="px-4 py-3 font-medium text-center w-12">Icon</th>
+                                            <th className="px-4 py-3 font-medium">Display Name</th>
+                                            <th className="px-4 py-3 font-medium">Key</th>
+                                            <th className="px-4 py-3 font-medium">Ledger Method</th>
+                                            <th className="px-4 py-3 font-medium">QB Desktop</th>
+                                            <th className="px-4 py-3 font-medium w-24"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-ui-border-base">
+                                        {[...(contextGroups["Payment Methods"]?.["Payment Method"] ?? [])].sort((a, b) => a.sort_order - b.sort_order).map(item => {
+                                            const meta = item.metadata
+                                            return (
+                                                <tr key={item.id} className="hover:bg-ui-bg-base-hover group">
+                                                    <td className="px-4 py-3 text-xl text-center">{meta?.icon ?? "–"}</td>
+                                                    <td className="px-4 py-3 font-medium text-ui-fg-base">{meta?.display ?? item.value}</td>
+                                                    <td className="px-4 py-3 font-mono text-xs text-ui-fg-muted">{item.value}</td>
+                                                    <td className="px-4 py-3">
+                                                        <Badge color="blue" className="text-xs">{meta?.ledger_method ?? "–"}</Badge>
+                                                    </td>
+                                                    <td className="px-4 py-3 text-xs text-ui-fg-muted">{meta?.qb_method ?? <span className="italic text-ui-fg-subtle">None</span>}</td>
+                                                    <td className="px-4 py-3">
+                                                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                            <Button variant="transparent" size="small" onClick={() => setPmModal(item)} className="h-6 px-2 text-xs">Edit</Button>
+                                                            {deleteConfirm === item.id ? (
+                                                                <>
+                                                                    <Button variant="danger" size="small" onClick={() => handleDelete(item.id)} className="h-6 px-2 text-xs">Yes</Button>
+                                                                    <Button variant="transparent" size="small" onClick={() => setDeleteConfirm(null)} className="h-6 px-2 text-xs">No</Button>
+                                                                </>
+                                                            ) : (
+                                                                <Button variant="transparent" size="small" onClick={() => setDeleteConfirm(item.id)} className="h-6 px-2 text-xs text-ui-fg-muted hover:text-ui-error">Del</Button>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            )
+                                        })}
+                                        {!(contextGroups["Payment Methods"]?.["Payment Method"]?.length) && (
+                                            <tr>
+                                                <td colSpan={6} className="px-4 py-8 text-center text-ui-fg-muted italic text-sm">
+                                                    No payment methods configured. Click "+ Add Method" or reload to seed defaults.
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </Container>
+                    </div>
+
                     {/* Standard Context Groups */}
-                    {contextOrder.filter(c => c !== "Global" && contextGroups[c] && Object.keys(contextGroups[c]).length > 0).map(contextName => (
+                    {contextOrder.filter(c => c !== "Global" && c !== "Payment Methods" && contextGroups[c] && Object.keys(contextGroups[c]).length > 0).map(contextName => (
                         <div key={contextName} className="space-y-4 pt-6">
                             <div className="flex items-center gap-2 border-b border-ui-border-base pb-2">
                                 <Heading level="h2" className="text-lg">{contextName}</Heading>
@@ -934,6 +1134,15 @@ const SystemDefaultsPage = () => {
                 <ManualUserModal
                     onClose={() => setManualUserModal(false)}
                     onSave={handleAddManualUser}
+                />
+            )}
+
+            {/* Payment Method Modal */}
+            {pmModal !== false && (
+                <PaymentMethodModal
+                    item={pmModal}
+                    onClose={() => setPmModal(false)}
+                    onSave={handleSavePm}
                 />
             )}
         </div>

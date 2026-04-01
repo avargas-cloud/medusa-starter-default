@@ -585,7 +585,7 @@ export async function processPaymentCaptureInQb(capture: {
     orderId: string
     orderDisplayId?: number
     amount: number        // in cents (Medusa v2)
-    paymentMethod: string
+    paymentMethod?: string
     qbCustomerId: string
     refNumber?: string
     memo?: string
