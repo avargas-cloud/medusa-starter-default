@@ -41,9 +41,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     // It is the absolute latest! We can safely recover the sequence gap
                     await pgConnection.raw(`SELECT setval('custom_order_seq', ?, false)`, [numericPart])
                     console.log(`[revert-to-draft] Recovered sequence custom_order_seq back to ${numericPart}`)
-                } else if (numericPart < lastValue) {
-                    return res.status(400).json({ error: `Cannot revert Order ${docNumber} since newer Sales Orders have already been sequentially generated.` })
                 }
+                // If numericPart < lastValue, newer orders exist — skip sequence recovery but still allow revert
             }
         }
 
