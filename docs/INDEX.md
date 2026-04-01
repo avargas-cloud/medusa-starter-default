@@ -9,7 +9,7 @@
 
 # Backend Documentation Index
 
-> **Last Updated:** March 2026 | **Total Docs:** 75+
+> **Last Updated:** March 31, 2026 | **Total Docs:** 76+
 
 ---
 
@@ -50,7 +50,7 @@
 | [ADMIN_PANEL_PRODUCT_ATTRIBUTES_MODAL_UX_AND_SAVE_LOGIC.md](ADMIN_PANEL_PRODUCT_ATTRIBUTES_MODAL_UX_AND_SAVE_LOGIC.md) | Modal UX & save logic for editing attribute values on a product |
 | [ADMIN_PANEL_CATEGORY_DETAIL_FILTERS_WIDGET.md](ADMIN_PANEL_CATEGORY_DETAIL_FILTERS_WIDGET.md) | Widget on category detail: filter config editor (active/available filters) |
 | [ADMIN_SETUP_CUSTOMER_PRICING.md](ADMIN_SETUP_CUSTOMER_PRICING.md) | How to set up Wholesale vs. Retail price lists in the Admin Panel |
-| [QUICKBOOKS_ADMIN_DASHBOARD.md](QUICKBOOKS_ADMIN_DASHBOARD.md) | Custom dashboard page: QuickBooks sync status & manual trigger controls |
+| [QUICKBOOKS_ADMIN_DASHBOARD.md](QUICKBOOKS_ADMIN_DASHBOARD.md) | Custom dashboard page: QuickBooks sync status, manual trigger controls, **Legacy QB Data Import** (Open SO + Unapplied Payments) |
 
 ---
 

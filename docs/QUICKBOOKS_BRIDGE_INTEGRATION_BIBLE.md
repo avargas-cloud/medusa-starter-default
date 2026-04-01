@@ -482,5 +482,77 @@ Todos los descuentos de órdenes se representan en QB con **dos líneas especial
 
 ---
 
+## 🕰️ Legacy QB Data Import (Marzo 2026)
+
+El Bridge soporta **direct queries** para importar datos históricos sin sincronización automática. Esto es especialmente útil para traer Open Sales Orders y Unapplied Payments sin escribir registros persistentes en el QB Sync Log.
+
+### Arquitectura
+
+**Direct Query Approach:**
+- No usa colas de eventos ni sincronización automática
+- Query directa al Bridge: `GET /api/sales-orders?refNumber=5731` o `GET /api/receive-payments?year=2026`
+- El Bridge responde con datos brutos de QB
+- El backend Medusa decide qué hacer (guardar en staging, aplicar, etc.)
+
+**Ventajas:**
+- No contamina el Activity Log con imports masivos
+- Permite filtrado por año (para Unapplied Payments)
+- 100% reversible: datos quedan en tabla staging, no en registros de orden
+
+### Endpoints del Bridge (Nuevos en Marzo 2026)
+
+| Método | Endpoint | Parámetros | Descripción |
+|--------|----------|-----------|-------------|
+| GET | `/api/sales-orders` | `refNumber=5731` | Query una SO específica por RefNumber |
+| GET | `/api/receive-payments` | `fromYear=2026&toYear=2026` | Query ReceivePayments para año(s) específico(s) |
+
+**Response (Sales Order):**
+```json
+{
+  "refNumber": "5731",
+  "txnId": "...",
+  "customerName": "...",
+  "customerListId": "...",
+  "txnDate": "2026-03-15",
+  "amount": 1234.56,
+  "balanceRemaining": 0
+}
+```
+
+**Response (Receive Payments):**
+```json
+[
+  {
+    "refNumber": "DEP-001",
+    "txnId": "...",
+    "customerName": "...",
+    "customerListId": "...",
+    "txnDate": "2026-03-15",
+    "amount": 500.00,
+    "method": "Check"
+  },
+  ...
+]
+```
+
+### Flujo en el Backend (Medusa)
+
+1. Admin hace clic en "Sync from QB" o "Submit" en Legacy Import panel
+2. Backend llama al Bridge: `GET /api/sales-orders?refNumber=5731`
+3. Bridge responde con datos brutos
+4. Backend **no** crea Order/Invoice inmediatamente
+5. Backend **guarda en tabla staging** (`qb_legacy_so` o `qb_legacy_payment`)
+6. Admin puede revisar, filtrar, aplicar manualmente
+7. Solo cuando admin hace clic "Apply", se crea `customer_payment` en Medusa
+
+### Seguridad y Límites
+
+- Queries limitadas a **refNumber específico** (no wildcard dumps)
+- Filtrado por **año exacto** para Unapplied Payments (previene data dumps masivos)
+- Staging tables tienen **UNIQUE constraints** en qb_txn_id (evita dupes)
+- No hay persistencia automática; todo pasa por staging layer
+
+---
+
 **Desarrollado por:** Equipo de Integración Medusa-QB.
-**Última Actualización:** 17 de Marzo, 2026. (v3.0 — Estrategia universal de descuentos, fix Error 3060/3170, shipping al final)
+**Última Actualización:** 31 de Marzo, 2026. (v3.1 — Legacy QB Data Import con staging tables y direct queries)

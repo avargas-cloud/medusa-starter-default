@@ -180,47 +180,53 @@ hooks.orderCreated(
                         const cpayId = Array.isArray(cpay) ? cpay[0]?.id : (cpay as any)?.id
                         console.log(`[finance-hook] ✅ Finance ledger entry created: $${amountDollars} (${amountCents}¢) — payment ${payment.id} → customer ${order.customer_id}`)
 
-                        // ── QB Sync ──────────────────────────────────────────────
+                        // ── QB Sync (fire-and-forget — must NOT block checkout) ───────
                         if (qbCustomerId && cpayId) {
-                            try {
-                                await writePipelineRow({
-                                    orderId: order_id,
-                                    referenceId: cpayId,
+                            const _qbOrderId = order_id
+                            const _qbCpayId = cpayId
+                            const _qbCustomerId = qbCustomerId
+                            const _qbDisplayId = orderWithPayments?.display_id
+                            const _qbMemo = `Web Order ${order.metadata?.document_number || order_id}`
+                            const _qbRefNum = order.metadata?.document_number as string || undefined
+                            setImmediate(() => {
+                                writePipelineRow({
+                                    orderId: _qbOrderId,
+                                    referenceId: _qbCpayId,
                                     referenceType: "customer_payment",
                                     step: "payment",
                                     status: "pending",
-                                    medusaRefNumber: order.metadata?.document_number as string || undefined,
+                                    medusaRefNumber: _qbRefNum,
                                 })
-
-                                const qbResult = await processPaymentCaptureInQb({
-                                    orderId: order_id,
-                                    orderDisplayId: orderWithPayments?.display_id,
-                                    amount: amountDollars,
-                                    paymentMethod: "Credit Card",
-                                    qbCustomerId,
-                                    memo: `Web Order ${order.metadata?.document_number || order_id}`,
-                                    onSubmitted: async (operationId) => {
-                                        await writePipelineRow({
-                                            orderId: order_id,
-                                            referenceId: cpayId,
-                                            referenceType: "customer_payment",
-                                            step: "payment",
-                                            status: "submitted",
-                                            bridgeOpId: operationId,
-                                        })
-                                    },
-                                })
-
-                                if (qbResult.error) {
-                                    console.error(`[finance-hook] ❌ QB sync failed: ${qbResult.error}`)
-                                    await writePipelineRow({ orderId: order_id, referenceId: cpayId, step: "payment", status: "failed", error: qbResult.error })
-                                } else if (!qbResult.skipped) {
-                                    console.log(`[finance-hook] ✅ QB payment synced — txnId: ${qbResult.txnId}`)
-                                    await writePipelineRow({ orderId: order_id, referenceId: cpayId, step: "payment", status: "confirmed" })
-                                }
-                            } catch (qbErr: any) {
-                                console.error(`[finance-hook] ❌ QB sync error: ${qbErr.message}`)
-                            }
+                                    .then(() => processPaymentCaptureInQb({
+                                        orderId: _qbOrderId,
+                                        orderDisplayId: _qbDisplayId,
+                                        amount: amountDollars,
+                                        paymentMethod: "Credit Card",
+                                        qbCustomerId: _qbCustomerId,
+                                        memo: _qbMemo,
+                                        onSubmitted: async (operationId) => {
+                                            await writePipelineRow({
+                                                orderId: _qbOrderId,
+                                                referenceId: _qbCpayId,
+                                                referenceType: "customer_payment",
+                                                step: "payment",
+                                                status: "submitted",
+                                                bridgeOpId: operationId,
+                                            })
+                                        },
+                                    }))
+                                    .then(async (qbResult) => {
+                                        if (qbResult.error) {
+                                            console.error(`[finance-hook] ❌ QB sync failed: ${qbResult.error}`)
+                                            await writePipelineRow({ orderId: _qbOrderId, referenceId: _qbCpayId, step: "payment", status: "failed", error: qbResult.error })
+                                        } else if (!qbResult.skipped) {
+                                            console.log(`[finance-hook] ✅ QB payment synced — txnId: ${qbResult.txnId}`)
+                                            await writePipelineRow({ orderId: _qbOrderId, referenceId: _qbCpayId, step: "payment", status: "confirmed" })
+                                        }
+                                    })
+                                    .catch((err: any) => console.error(`[finance-hook] ❌ QB async error: ${err.message}`))
+                            })
+                            console.log(`[finance-hook] 🚀 QB sync queued (fire-and-forget) for payment ${payment.id}`)
                         } else {
                             console.warn(`[finance-hook] ⚠️ QB sync skipped — no qbCustomerId for customer ${order.customer_id}`)
                         }
