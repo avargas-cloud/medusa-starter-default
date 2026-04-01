@@ -135,6 +135,7 @@ hooks.orderCreated(
                 } else {
                     const financeService = container.resolve(FINANCE_MODULE)
                     const customerModule = container.resolve(Modules.CUSTOMER)
+                    const pgConnection = container.resolve("__pg_connection__") as any
 
                     // Get customer QB ID (for QB sync)
                     let qbCustomerId: string | null = null
@@ -162,8 +163,19 @@ hooks.orderCreated(
                             continue
                         }
 
+                        // Sequential display_id — same sequence used by POS payments
+                        let displayId: number | null = null
+                        try {
+                            const seqRes = await pgConnection.raw(`SELECT nextval('custom_payment_seq') AS seq`)
+                            const raw = seqRes.rows?.[0]?.seq ?? seqRes.rows?.[0]?.SEQ
+                            if (raw) displayId = Number(raw)
+                        } catch (seqErr: any) {
+                            console.warn(`[finance-hook] Could not get payment sequence: ${seqErr.message}`)
+                        }
+
                         const cpay = await financeService.createCustomerPayments({
                             customer_id: order.customer_id as string,
+                            display_id: displayId,
                             amount: amountCents,
                             method: 'card',
                             reference: payment.provider_id || null,
@@ -175,10 +187,15 @@ hooks.orderCreated(
                             medusa_payment_id: payment.id,
                             medusa_payment_synced: true,
                             locked_order_id: order_id,
+                            metadata: {
+                                order_id: order_id,
+                                order_display_id: orderWithPayments?.display_id,
+                                qb_sync_status: qbCustomerId ? 'creating' : 'no',
+                            },
                         })
 
                         const cpayId = Array.isArray(cpay) ? cpay[0]?.id : (cpay as any)?.id
-                        console.log(`[finance-hook] ✅ Finance ledger entry created: $${amountDollars} (${amountCents}¢) — payment ${payment.id} → customer ${order.customer_id}`)
+                        console.log(`[finance-hook] ✅ Finance ledger entry created: $${amountDollars} (${amountCents}¢) — display_id: ${displayId} — payment ${payment.id} → customer ${order.customer_id}`)
 
                         // ── QB Sync (fire-and-forget — must NOT block checkout) ───────
                         if (qbCustomerId && cpayId) {
@@ -218,13 +235,22 @@ hooks.orderCreated(
                                     .then(async (qbResult) => {
                                         if (qbResult.error) {
                                             console.error(`[finance-hook] ❌ QB sync failed: ${qbResult.error}`)
-                                            await writePipelineRow({ orderId: _qbOrderId, referenceId: _qbCpayId, step: "payment", status: "failed", error: qbResult.error })
+                                            await Promise.all([
+                                                writePipelineRow({ orderId: _qbOrderId, referenceId: _qbCpayId, step: "payment", status: "failed", error: qbResult.error }),
+                                                financeService.updateCustomerPayments([{ id: _qbCpayId, metadata: { qb_sync_status: 'error' } }]).catch(() => {}),
+                                            ])
                                         } else if (!qbResult.skipped) {
                                             console.log(`[finance-hook] ✅ QB payment synced — txnId: ${qbResult.txnId}`)
-                                            await writePipelineRow({ orderId: _qbOrderId, referenceId: _qbCpayId, step: "payment", status: "confirmed" })
+                                            await Promise.all([
+                                                writePipelineRow({ orderId: _qbOrderId, referenceId: _qbCpayId, step: "payment", status: "confirmed" }),
+                                                financeService.updateCustomerPayments([{ id: _qbCpayId, metadata: { qb_sync_status: 'synced', qb_txn_id: qbResult.txnId } }]).catch(() => {}),
+                                            ])
                                         }
                                     })
-                                    .catch((err: any) => console.error(`[finance-hook] ❌ QB async error: ${err.message}`))
+                                    .catch((err: any) => {
+                                        console.error(`[finance-hook] ❌ QB async error: ${err.message}`)
+                                        financeService.updateCustomerPayments([{ id: _qbCpayId, metadata: { qb_sync_status: 'error' } }]).catch(() => {})
+                                    })
                             })
                             console.log(`[finance-hook] 🚀 QB sync queued (fire-and-forget) for payment ${payment.id}`)
                         } else {
