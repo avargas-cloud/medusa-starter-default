@@ -115,6 +115,7 @@ export const config: SubscriberConfig = {
         "order.canceled",
         "pos.invoice.created",
         "pos.invoice.voided",
+        "order.customer_transferred",
     ],
     context: {
         subscriberId: "qb-order-subscriber",

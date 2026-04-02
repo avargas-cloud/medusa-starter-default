@@ -16,6 +16,14 @@ import postgres from "postgres"
  *  5. Move new provider_identity → existing auth_identity (via SQL UPDATE)
  *  6. Delete temp auth_identity
  *
+ * WHY SQL SURGERY (intentional, do not "simplify"):
+ * authModule.updateProvider() has a Medusa v2 bug where it creates a second
+ * provider_identity instead of updating the existing one, leaving zombie records
+ * that cause login failures. This 6-step approach is the only reliable way to
+ * update a hashed password without creating duplicates. Steps 87-93 also clean
+ * up any zombies left by previous failed attempts.
+ * TODO(medusa-upgrade): re-evaluate when updateProvider() is fixed upstream.
+ *
  * Body: { email: string, token: string, password: string }
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
