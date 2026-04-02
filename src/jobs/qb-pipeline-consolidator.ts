@@ -27,6 +27,7 @@ export default async function qbPipelineConsolidator(
         id: string
         order_id: string | null
         reference_id: string | null
+        reference_type: string | null
         step: string
         bridge_op_id: string
         retry_count: number
@@ -34,7 +35,7 @@ export default async function qbPipelineConsolidator(
 
     try {
         const { rows } = await pool.query(`
-            SELECT id, order_id, reference_id, step, bridge_op_id, retry_count
+            SELECT id, order_id, reference_id, reference_type, step, bridge_op_id, retry_count
             FROM qb_order_pipeline
             WHERE status = 'submitted'
               AND bridge_op_id IS NOT NULL
@@ -274,7 +275,58 @@ export default async function qbPipelineConsolidator(
                     }
                 }
 
-                if (txnId && row.order_id) {
+                // transfer_customer confirmed → write new editSequence to order metadata
+                if (row.step === "transfer_customer" && row.order_id) {
+                    try {
+                        if (editSeq) {
+                            const orderModule = container.resolve(Modules.ORDER)
+                            const { rows: metaRows } = await pool.query(
+                                `SELECT metadata FROM "order" WHERE id = $1`,
+                                [row.order_id]
+                            )
+                            const existingMeta = metaRows[0]?.metadata || {}
+
+                            // Determine which document type this row covers based on referenceType
+                            const refType = (row as any).reference_type as string | null
+                            let patch = existingMeta
+                            if (refType === "sales_order") {
+                                const existing = existingMeta.qb_sales_order || {}
+                                patch = {
+                                    ...existingMeta,
+                                    qb_sales_order: { ...existing, edit_sequence: editSeq },
+                                    // Legacy flat field kept in sync
+                                    qb_sales_order_edit_sequence: editSeq,
+                                }
+                            } else if (refType === "invoice") {
+                                // Update edit_sequence on the last entry of the qb_invoices array
+                                const invoices = Array.isArray(existingMeta.qb_invoices)
+                                    ? existingMeta.qb_invoices
+                                    : []
+                                if (invoices.length > 0) {
+                                    const updated = [...invoices]
+                                    updated[updated.length - 1] = {
+                                        ...updated[updated.length - 1],
+                                        edit_sequence: editSeq,
+                                    }
+                                    patch = {
+                                        ...existingMeta,
+                                        qb_invoices: updated,
+                                        qb_invoice_edit_sequence: editSeq,
+                                    }
+                                }
+                            }
+
+                            await orderModule.updateOrders(row.order_id, { metadata: patch })
+                            logger.info(`${LOG_PREFIX} ✅ transfer_customer confirmed — updated editSeq for ${refType} on order ${row.order_id}`)
+                        } else {
+                            logger.info(`${LOG_PREFIX} ℹ️ transfer_customer confirmed but no editSeq in response — metadata unchanged`)
+                        }
+                    } catch (tcErr: any) {
+                        logger.warn(`${LOG_PREFIX} ⚠️ Could not update order metadata after transfer_customer: ${tcErr.message}`)
+                    }
+                }
+
+                if (txnId && row.order_id && row.step !== "transfer_customer") {
                     try {
                         const orderModule = container.resolve(Modules.ORDER)
                         const { rows: metaRows } = await pool.query(

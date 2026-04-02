@@ -16,6 +16,7 @@ export type PipelineStep =
     | "void_credit_memo"
     | "void_check"
     | "payment_method_change"
+    | "transfer_customer"
 
 export type PipelineStatus =
     | "pending"
