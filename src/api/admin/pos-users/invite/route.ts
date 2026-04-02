@@ -82,23 +82,28 @@ export async function POST(
         let emailSent = false
 
         if (apiKey) {
-            sgMail.setApiKey(apiKey)
-            await sgMail.send({
-                to: email,
-                from,
-                subject: "You've been invited to EcoPowerTech POS",
-                html: buildActivationEmail(first_name || 'there', activateUrl),
-            })
-            logger?.info?.(`[POS-INVITE] ✅ Email sent to ${email}`)
-            emailSent = true
+            try {
+                sgMail.setApiKey(apiKey)
+                await sgMail.send({
+                    to: email,
+                    from,
+                    subject: "You've been invited to EcoPowerTech POS",
+                    html: buildActivationEmail(first_name || 'there', activateUrl),
+                })
+                logger?.info?.(`[POS-INVITE] ✅ Email sent to ${email}`)
+                emailSent = true
+            } catch (emailErr: any) {
+                // Email failure is non-fatal — invite is still created, admin can share the link
+                logger?.warn?.(`[POS-INVITE] ⚠️ SendGrid failed (${emailErr?.message}). Returning activate_url.`)
+            }
         } else {
             logger?.warn?.('[POS-INVITE] No SENDGRID_API_KEY — email skipped')
         }
 
-        // Only expose activate_url in dev mode (no SendGrid) so admin can share manually
         return res.status(201).json({
             success: true,
-            ...(emailSent ? {} : { activate_url: activateUrl }),
+            // Always return activate_url if email wasn't sent (dev mode OR SendGrid error)
+            ...(!emailSent ? { activate_url: activateUrl } : {}),
         })
 
     } catch (err: any) {
