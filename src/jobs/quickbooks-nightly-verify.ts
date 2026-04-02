@@ -342,7 +342,7 @@ export default async function qbNightlyVerifyHandler(_container: MedusaContainer
         const html = buildEmailHtml(results, confirmed, failed, pending, expired, reportDate)
 
         try {
-            const { sendMail } = await import("../utils/mailer")
+            const { sendMail } = await import("../utils/mailer.js")
             await sendMail({ to: REPORT_EMAIL, subject, html })
             console.log(`${TAG} ✅ Report emailed to ${REPORT_EMAIL}`)
         } catch (emailErr: any) {

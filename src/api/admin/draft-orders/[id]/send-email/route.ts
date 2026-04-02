@@ -565,7 +565,23 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   const customerName = params.customerName
   const fmt = (n: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: (order.currency_code ?? "USD").toUpperCase() }).format(n)
 
-  // Clean email body (no invoice HTML inline)
+  // Build email body — split at signature line to inject payment card in between
+  const esc = (s: string) => s.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\[Customer Name\]/gi, customerName)
+
+  let bodySection: string
+  if (emailBody) {
+    const [mainText, sigText] = splitBodyAndSignature(String(emailBody))
+    const payCard = (paymentLinkUrl && paymentAmount)
+      ? buildPaymentCard(paymentLinkUrl, fmt(Number(paymentAmount)))
+      : ""
+    bodySection = `<div style="white-space:pre-wrap;line-height:1.55;">${esc(mainText)}</div>
+${payCard}
+${sigText ? `<div style="white-space:pre-wrap;line-height:1.55;margin-top:16px;">${esc(sigText)}</div>` : ""}`
+  } else {
+    bodySection = `<p style="margin:0 0 4px;">Dear ${customerName},</p>
+     <p style="margin:0 0 16px;color:#555;">Thank you for your interest. Please find your ${docType.toLowerCase()} attached as a PDF.</p>`
+  }
+
   const emailBodyHtml = `
 <!DOCTYPE html>
 <html lang="en">
@@ -577,7 +593,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   h2{font-size:18px;margin:0 0 8px;}
   .box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:16px 20px;margin:20px 0;font-size:13px;line-height:1.7;}
   .total{font-weight:700;font-size:15px;}
-  .btn{display:inline-block;margin-top:20px;padding:10px 22px;background:#0f172a;color:#fff;text-decoration:none;border-radius:5px;font-size:13px;font-weight:600;}
   .footer{margin-top:32px;font-size:11px;color:#9ca3af;border-top:1px solid #e5e7eb;padding-top:12px;}
 </style></head>
 <body>
@@ -588,12 +603,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   </div>
 
   <h2>Your ${docType} is Ready</h2>
-  ${emailBody ? 
-    `<div style="white-space:pre-wrap;margin-bottom:16px;line-height:1.5;">${emailBody.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\[Customer Name\]/gi, customerName)}</div>` 
-    : 
-    `<p style="margin:0 0 4px;">Dear ${customerName},</p>
-     <p style="margin:0 0 16px;color:#555;">Thank you for your interest. Please find your ${docType.toLowerCase()} attached as a PDF.</p>`
-  }
+  ${bodySection}
 
   <div class="box">
     <div><b>${docType} #:</b> ${estNum}</div>
@@ -634,8 +644,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     finalHtml += `<p style="color:#dc2626;font-size:11px;margin-top:12px;">Note: PDF could not be generated. Please contact us for the document.</p>`
   }
 
+  const fromEmail = senderEmail ?? process.env.RESEND_FROM ?? "estimates@ecopowertech.com"
   await sendMail({
     to: toEmails,
+    from: fromEmail,
     subject: emailSubject,
     html: finalHtml,
     ...(ccEmails.length > 0 ? { cc: ccEmails } : {}),
