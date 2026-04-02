@@ -165,8 +165,8 @@ Admin POS → /users → "+ New POS User" → ingresa email + nombre
                 → Crea registro en pos_user si no existe (o re-usa el existente)
                 → Firma JWT de invitación (48h):
                   { email, pos_user_id, type: "pos_invite", first_name, last_name }
-                → SendGrid: email con link https://pos.ecopowertech.com/activate?token=<JWT>
-                → Si no hay SENDGRID_API_KEY: retorna { activate_url } en desarrollo
+                → Resend: email con link https://pos.ecopowertech.com/activate?token=<JWT>
+                → Si no hay RESEND_API_KEY: retorna { activate_url } en desarrollo
 ```
 
 **Reenvío**: Si el email ya existe en pos_users, se reenvía la invitación con nuevo token de 48h.
@@ -232,7 +232,7 @@ POST /store/users/pos-reset-password  { email }  [PÚBLICO]
    → Siempre retorna 200 (no revela si el user existe)
 
 2. jwt.sign({ email, type: "pos_reset" }, JWT_SECRET, { expiresIn: '1h' })
-3. SendGrid: email con link ${POS_URL}/reset-password?token=<JWT>&email=<email>
+3. Resend: email con link ${POS_URL}/reset-password?token=<JWT>&email=<email>
 
 POST /store/users/pos-reset-confirm  { token, password }  [PÚBLICO]
 → jwt.verify(token, JWT_SECRET) verifica tipo y expiración
@@ -303,8 +303,8 @@ const PUBLIC_PATHS = ['/login', '/reset-password', '/activate']
 |----------|---------|
 | `JWT_SECRET` | Firma tokens de invite (48h) y reset (1h) — debe ser idéntico en backend |
 | `POS_URL` | URL base del POS para links en emails (ej: `https://pos.ecopowertech.com`) |
-| `SENDGRID_API_KEY` | Envío de emails de invitación y reset |
-| `SENDGRID_FROM` | Email remitente verificado en SendGrid |
+| `RESEND_API_KEY` | Envío de emails de invitación y reset |
+| `RESEND_FROM` | Email remitente verificado en Resend |
 | `DATABASE_URL` | Para SQL directo en activación y reset |
 | `NEXT_PUBLIC_MEDUSA_URL` | URL del backend Medusa (POS) |
 | `MEDUSA_BACKEND_URL` | URL interna del backend para server-side routes del POS |

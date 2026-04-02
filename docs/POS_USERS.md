@@ -50,8 +50,8 @@ const PosUser = model.define('pos_user', {
    POST /admin/pos-users/invite  { email, first_name, last_name }
    → Crea/actualiza registro en pos_users
    → Firma JWT invite (48h): { email, pos_user_id, first_name, last_name, type: "pos_invite" }
-   → Envía email via SendGrid con link: {POS_URL}/activate?token=JWT
-   → Si no hay SENDGRID_API_KEY, devuelve activate_url en el response (dev mode)
+   → Envía email via Resend con link: {POS_URL}/activate?token=JWT
+   → Si no hay RESEND_API_KEY, devuelve activate_url en el response (dev mode)
 
 2. Staff recibe email → click link → /activate
    → Ingresa contraseña nueva x2
@@ -139,8 +139,8 @@ POST /store/users/pos-activate   // público, no requiere auth
 |----------|-----------|
 | `POS_URL` | URL base del POS (para el link de activación) |
 | `JWT_SECRET` | Firma del JWT invite (48h expiry) |
-| `SENDGRID_API_KEY` | Para envío de email — si no está, el link se devuelve en el response |
-| `SENDGRID_FROM` | From address (default: `noreply@ecopowertech.com`) |
+| `RESEND_API_KEY` | Para envío de email — si no está, el link se devuelve en el response |
+| `RESEND_FROM` | From address (default: `noreply@ecopowertech.com`) |
 
 ---
 

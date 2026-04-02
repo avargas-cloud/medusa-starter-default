@@ -109,7 +109,7 @@ El backend sincroniza con **QuickBooks Desktop** via un bridge externo en `qb.ep
 | Meilisearch | `MEILISEARCH_HOST`, `MEILISEARCH_API_KEY` | Search |
 | MinIO | `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_BUCKET` | Storage |
 | Authorize.Net | `AUTHORIZENET_API_LOGIN_ID`, `AUTHORIZENET_TRANSACTION_KEY` | Pagos |
-| SendGrid | `SENDGRID_API_KEY` | Emails transaccionales |
+| Resend | `RESEND_API_KEY`, `RESEND_FROM` | Emails transaccionales |
 | UPS | `UPS_CLIENT_ID`, `UPS_CLIENT_SECRET` | Shipping rates |
 | QB Bridge | `QB_BRIDGE_URL`, `QB_API_KEY` | QuickBooks sync |
 | Google OAuth | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Auth social (customers) |

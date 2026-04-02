@@ -150,7 +150,7 @@ Cada fila captura: `medusa_ref_number`, `qb_ref_number`, `qb_txn_id`, historial 
 | `POS_URL` | URL del POS (para links de email) |
 | `QB_BRIDGE_URL` | URL del QB Bridge |
 | `QB_API_KEY` | Auth del bridge |
-| `SENDGRID_API_KEY` | Email notifications |
+| `RESEND_API_KEY` | Email notifications |
 | `JWT_SECRET` | Secret para JWT de reset e invite |
 
 ### POS Frontend (`store-pos/.env`)

@@ -106,7 +106,7 @@ Los valores de `sales_reps` son objetos JSON de filas con `field_name = 'Sales R
 | Save | `POST /admin/draft-orders` (new) o `POST /admin/draft-orders/:id` (update) → luego QB sync | Siempre disponible |
 | Duplicate | Clona en `posStore.startDuplicate()` → navega a `/estimates/new` | Requiere ≥1 ítem |
 | Confirm Order | `POST /admin/draft-orders/:id/convert-force` → luego `POST /admin/quickbooks/order` | No reversible |
-| Email | Envía estimate via SendGrid | Requiere save previo |
+| Email | Envía estimate via Resend | Requiere save previo |
 | Print | Redirige al template render | Siempre disponible |
 | Discard | Resetea local state | Solo en `/estimates/new` |
 
@@ -153,7 +153,7 @@ Los precios se pre-fetchean desde MeiliSearch al seleccionar un ítem y se almac
 | `DELETE` | `/admin/draft-orders/:id/remove-shipping/:methodId` | Remover shipping |
 | `GET` | `/admin/draft-orders/:id/compute-tax` | Calcular y persistir impuesto |
 | `GET` | `/admin/draft-orders/:id/variant-prices` | Precios Default + Wholesale por variante |
-| `POST` | `/admin/draft-orders/:id/send-email` | Enviar estimate via SendGrid |
+| `POST` | `/admin/draft-orders/:id/send-email` | Enviar estimate via Resend |
 | `POST` | `/admin/draft-orders/:id/set-bl-link` | Vincular con proyecto Backlighting |
 | `GET` | `/admin/draft-orders/sync-pos` | Sync masivo de draft orders al POS |
 | `GET` | `/admin/estimate-options` | Opciones dinámicas de dropdowns |
@@ -221,7 +221,7 @@ DELETE /admin/note-presets/:id
 | API | `backend/src/api/admin/draft-orders/[id]/delete-item-force/route.ts` | Hard delete ítem |
 | API | `backend/src/api/admin/draft-orders/[id]/compute-tax/route.ts` | Tax computation + persist |
 | API | `backend/src/api/admin/draft-orders/[id]/variant-prices/route.ts` | Dual pricing |
-| API | `backend/src/api/admin/draft-orders/[id]/send-email/route.ts` | Email via SendGrid |
+| API | `backend/src/api/admin/draft-orders/[id]/send-email/route.ts` | Email via Resend |
 | API | `backend/src/api/admin/draft-orders/[id]/set-bl-link/route.ts` | Vincular proyecto BL |
 | API | `backend/src/api/admin/draft-orders/sync-pos/route.ts` | Sync POS estimates |
 | API | `backend/src/api/admin/estimate-options/route.ts` | Opciones dinámicas de dropdowns |

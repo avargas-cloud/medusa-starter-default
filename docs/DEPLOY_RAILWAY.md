@@ -75,11 +75,11 @@ AUTHORIZENET_TRANSACTION_KEY=<transaction-key>
 AUTHORIZENET_ENVIRONMENT=production    # o "sandbox" para testing
 ```
 
-### Email (SendGrid)
+### Email (Resend)
 
 ```bash
-SENDGRID_API_KEY=<api-key>
-SENDGRID_FROM=noreply@ecopowertech.com
+RESEND_API_KEY=<api-key>
+RESEND_FROM=noreply@ecopowertech.com
 ```
 
 ### UPS Shipping

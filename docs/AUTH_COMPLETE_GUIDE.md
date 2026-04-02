@@ -119,7 +119,7 @@ Luego decide qué caso ejecutar:
 3. Auto-asigna a grupo "Retail" si existe
 4. authModule.updateAuthIdentities({ app_metadata: { customer_id } })
 5. generateJwtToken({ actor_id: customer.id, actor_type: "customer" })
-6. SendGrid: email de bienvenida (no-blocking, ignora errores)
+6. Resend: email de bienvenida (no-blocking, ignora errores)
 
 Response: 201 { success: true, customer, token }
 ```
@@ -151,7 +151,7 @@ Legacy = importado desde QuickBooks (exists en DB, `has_account = false`, `metad
 2. SQL UPDATE customer SET metadata = { legacy_customer, temporary_password,
    activation_token, activation_expires: +24h }
    (usa SQL directo porque customerModule.updateCustomers() se cuelga en legacy customers)
-3. SendGrid: email de activación con link:
+3. Resend: email de activación con link:
    ${STOREFRONT_URL}/activate-account?token=<activation_token>
 
 Response: 200 { success: true, needs_activation: true, message: "..." }
@@ -193,7 +193,7 @@ Internamente:
 2. Si no existe o has_account = false → return 200 silencioso
 3. crypto.randomBytes(32).toString('hex') → reset_token (1h expiry)
 4. customerModule.updateCustomers → guarda reset_token + reset_expires en metadata
-5. SendGrid: email con link ${STOREFRONT_URL}/reset-password?token=<token>
+5. Resend: email con link ${STOREFRONT_URL}/reset-password?token=<token>
 
 Response siempre: 200 { success: true, message: "If this email exists..." }
 ```
@@ -321,8 +321,8 @@ Medusa los trata como entidades distintas en tablas distintas. Comparten email p
 | `DATABASE_URL` | Conexión PostgreSQL (para SQL directo en auth tables) |
 | `JWT_SECRET` | Firma JWT — debe ser idéntico en backend y POS |
 | `COOKIE_SECRET` | Cookie signing |
-| `SENDGRID_API_KEY` | Envío de emails de activación y reset |
-| `SENDGRID_FROM` | Email remitente verificado en SendGrid |
+| `RESEND_API_KEY` | Envío de emails de activación y reset |
+| `RESEND_FROM` | Email remitente verificado en Resend |
 | `STOREFRONT_URL` | URL base del storefront para links en emails |
 | `GOOGLE_CLIENT_ID` | OAuth Google (si configurado, activa el provider google) |
 | `GOOGLE_CLIENT_SECRET` | OAuth Google |

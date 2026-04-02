@@ -25,7 +25,7 @@ Admin Panel (Medusa) — /draft-orders-advanced/:id
     ├── Store Pickup / Shipping
     ├── Drag-to-reorder con sort_order persistente
     ├── Estimate PDF (Puppeteer + Chrome)
-    ├── Email via SendGrid (PDF adjunto)
+    ├── Email via Resend (PDF adjunto)
     ├── QB Sync: Estimate → Sales Order
     └── Note Presets: presets por grupo para el campo de notas
 
@@ -45,7 +45,7 @@ POS (store-pos) — /estimates/:id
 | Store Pickup auto-rellena dirección de tienda | ✅ |
 | Estimate PDF (Puppeteer) | ✅ |
 | Print in Store (iframe oculto) | ✅ |
-| Email via SendGrid (PDF adjunto) | ✅ |
+| Email via Resend (PDF adjunto) | ✅ |
 | Per-field Customer Defaults (botones azules) | ✅ |
 | Activity Timeline con Email Sent atribuido | ✅ |
 | Auto-status Created → Sent al enviar email | ✅ |
@@ -81,7 +81,7 @@ Los endpoints "force" bypasean las validaciones de Medusa para ediciones directa
 | `GET` | `/admin/draft-orders/:id/compute-tax` | Calcular impuesto + persistir en metadata |
 | `GET` | `/admin/draft-orders/:id/variant-prices` | Precios Default + Wholesale por variante |
 | `POST` | `/admin/draft-orders/:id/convert-force` | Convertir draft → order con backorder fallback |
-| `POST` | `/admin/draft-orders/:id/send-email` | Enviar estimate via SendGrid + adjunto PDF |
+| `POST` | `/admin/draft-orders/:id/send-email` | Enviar estimate via Resend + adjunto PDF |
 | `POST` | `/admin/draft-orders/:id/set-bl-link` | Vincular con proyecto Backlighting |
 | `GET` | `/admin/draft-orders/sync-pos` | Sync masivo de draft orders POS |
 
@@ -231,7 +231,7 @@ Para órdenes sin `computed_total` (legacy): fallback a `order.total` (ahora cor
 | API | `backend/src/api/admin/draft-orders/[id]/delete-item-force/route.ts` | Hard delete |
 | API | `backend/src/api/admin/draft-orders/[id]/compute-tax/route.ts` | Tax + persist computed_total |
 | API | `backend/src/api/admin/draft-orders/[id]/variant-prices/route.ts` | Dual pricing |
-| API | `backend/src/api/admin/draft-orders/[id]/send-email/route.ts` | Email via SendGrid |
+| API | `backend/src/api/admin/draft-orders/[id]/send-email/route.ts` | Email via Resend |
 | API | `backend/src/api/admin/draft-orders/[id]/convert-force/route.ts` | Convert con backorder |
 | API | `backend/src/api/admin/draft-orders/[id]/set-bl-link/route.ts` | Vincular BL |
 | API | `backend/src/api/admin/draft-orders/sync-pos/route.ts` | Sync masivo |
