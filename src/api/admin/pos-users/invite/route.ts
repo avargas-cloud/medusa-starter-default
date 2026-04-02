@@ -41,10 +41,12 @@ export async function POST(
             logger?.info?.(`[POS-INVITE] Re-inviting existing user ${email}`)
             // Update name if provided
             if (first_name || last_name) {
-                posUser = await posUserService.updatePosUsers(
-                    { id: existing.id },
-                    { first_name: first_name ?? existing.first_name, last_name: last_name ?? existing.last_name }
-                )
+                const [updated] = await posUserService.updatePosUsers([{
+                    id: existing.id,
+                    first_name: first_name ?? existing.first_name,
+                    last_name: last_name ?? existing.last_name,
+                }])
+                posUser = updated
             } else {
                 posUser = existing
             }
