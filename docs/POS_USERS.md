@@ -1,115 +1,73 @@
-# POS_USERS — Gestión de Usuarios del POS
-
-| Campo | Detalle |
-|-------|---------|
-| **Módulo** | Users |
-| **Ruta POS** | `/users` |
-| **Estado** | ✅ Implementado |
-| **Última revisión** | 2026-03-07 |
+# POS Users — Gestión de Usuarios del POS
+> **Tipo**: Technical Reference
+> **Repo**: backend
+> **Última verificación**: 2026-04-02
+> **Estado**: ✅ Current
 
 ---
 
-## Descripción
+## ¿Qué es y por qué existe?
 
-El módulo Users permite a los **administradores** gestionar las cuentas de acceso al POS.
+El módulo Users permite a los administradores gestionar cuentas de acceso al POS. Los POS Staff son Medusa admin users (`user` actor) con un registro en la tabla whitelist `pos_users`. El flag `isPosStaff` en el frontend diferencia staff de admins completos.
 
-Los **POS Staff** son Medusa admin users con acceso solo al POS — el flag `isPosStaff` en el frontend los diferencia de los admins completos. Ver `POS_AUTH.md` para el detalle del sistema de autenticación.
-
----
-
-## Control de Acceso
-
-| Tipo | `isPosStaff` | Tab "Users" | Acceso `/users` URL directa |
-|------|-------------|------------|---------------------------|
-| Admin (a.vargas, etc.) | `false` | ✅ Visible | ✅ Permitido |
-| POS Staff (staff@...) | `true` | ❌ Oculto | ❌ → redirect `/dashboard` |
+**Importante:** `pos_user` NO es un actor de autenticación separado. El login del POS autentica contra `/auth/user/emailpass` (admin actor) y luego verifica que ese user esté en la tabla `pos_users`.
 
 ---
 
-## Secciones de la Página `/users`
+## Arquitectura
 
-### Medusa Admins
-- Lista todos los usuarios en `/admin/users` (Medusa built-in)
-- Acciones: ✏️ Editar nombre, 🗑️ Eliminar
+```
+Tabla: pos_users (módulo custom backend/src/modules/pos-user/)
+    └── Campos: id, email, first_name, last_name, created_at
 
-### POS Staff
-- Lista registros del custom `pos_user` module via `/admin/pos-users`
-- Campo `activated` indica si el staff completó el proceso de activación
-- Acciones:
-  - **Pending**: ⋯ dropdown → Resend Invite
-  - **Activated**: ✏️ Pencil directo → Editar nombre + 🗑️ Eliminar
+Medusa Admin Users (tabla nativa: user)
+    └── Metadata: { is_pos_staff: true }  ← seteado al activar
+
+Control de acceso (POS frontend):
+    └── isPosStaff = authStore.user.metadata.is_pos_staff === true
+         ├── true  → visible: Dashboard, Estimates, Orders, Capture Payment, Customers, Vendors, Inventory
+         └── false → visible: todo lo anterior + tab Users
+```
+
+### Modelo de Datos (`pos_user`)
+
+```typescript
+// backend/src/modules/pos-user/models/pos-user.ts
+const PosUser = model.define('pos_user', {
+    id:         model.id().primaryKey(),
+    email:      model.text(),
+    first_name: model.text().nullable(),
+    last_name:  model.text().nullable(),
+})
+```
 
 ---
 
 ## Flujo Completo: Agregar POS Staff
 
 ```
-1. Admin → "+ New POS User" → ingresa email + nombre
-   POST /admin/pos-users  { email, first_name, last_name }
-   → Crea registro en pos_user module (estado: pendiente)
-
-2. Sistema envía automáticamente email de invitación:
+1. Admin → "+ New POS User" → email + nombre
    POST /admin/pos-users/invite  { email, first_name, last_name }
-   → JWT invite (48h): { email, pos_user_id, first_name, last_name, type: "pos_invite" }
-   → Email con link: /activate?token=JWT
+   → Crea/actualiza registro en pos_users
+   → Firma JWT invite (48h): { email, pos_user_id, first_name, last_name, type: "pos_invite" }
+   → Envía email via SendGrid con link: {POS_URL}/activate?token=JWT
+   → Si no hay SENDGRID_API_KEY, devuelve activate_url en el response (dev mode)
 
-3. Staff recibe email → click link → /activate
+2. Staff recibe email → click link → /activate
    → Ingresa contraseña nueva x2
    POST /store/users/pos-activate  { token, password }
    → Crea Medusa admin user con metadata: { is_pos_staff: true }
    → Estado: Activo ✅
 
-4. Staff puede hacer login en el POS
-   → Ve solo Dashboard, Estimates, Orders, Capture Payment, Customers, Vendors, Inventory
-   → NO ve el tab "Users"
+3. Staff hace login en el POS via /auth/user/emailpass
+   → Ve solo tabs de staff (sin Users)
 ```
 
----
-
-## Reenvío de Invitación
-
-Si el staff no activó su cuenta o necesita resetear contraseña:
-
-```
-Admin → row del staff → ⋯ → "Resend Invite"
-→ POST /admin/pos-users/invite (mismo endpoint)
-→ Nuevo JWT de 48h → nuevo email enviado
-
-Staff → click nuevo link → /activate → nueva contraseña
-→ El sistema borra la identity anterior y crea una nueva limpia
-```
-
----
-
-## Edición de POS Staff
-
-```
-Admin → row del staff (activado) → ✏️ pencil
-→ Modal "Edit POS User": first_name, last_name (email no editable)
-→ PATCH /admin/pos-users/:id  { first_name, last_name }
-→ Actualiza el registro en pos_user module
-```
-
-> **Nota:** La edición actualiza el registro en `pos_user` (custom module). El Medusa admin user asociado mantiene los datos originales del momento de activación.
-
----
-
-## Eliminación de POS Staff
-
-```
-Admin → 🗑️ trash icon → confirmación
-→ DELETE /admin/pos-users/:id
-→ Elimina el registro pos_user
-
-⚠️ El Medusa admin user (auth) NO se elimina automáticamente.
-   Para revocación de acceso completa, también eliminar desde /admin/users.
-```
+> **Nota sobre el flujo antiguo:** Existe también `POST /admin/pos-users` (crea registro sin enviar email) que requiere un `auth_identity_id` pre-existente. El flujo recomendado es `/invite` que maneja todo automáticamente.
 
 ---
 
 ## Estado "Activated" / "Pending"
-
-El campo `activated` se determina en tiempo real al cargar la página:
 
 ```typescript
 // GET /admin/pos-users — backend logic:
@@ -118,37 +76,102 @@ const activatedEmails = new Set(medusaUsers.map(u => u.email))
 
 pos_users.map(u => ({
     ...u,
-    activated: activatedEmails.has(u.email)  // true si completó /activate
+    activated: activatedEmails.has(u.email)
 }))
 ```
 
-Si `activated === false` → badge "Pending" + menú ⋯ (Resend Invite)
-Si `activated === true` → fecha de creación + icono ✏️ (Edit)
+| Estado | Comportamiento UI |
+|--------|------------------|
+| `activated: false` | Badge "Pending" + menú `⋯` con Resend Invite |
+| `activated: true` | Fecha de creación + ícono ✏️ (Edit) |
 
 ---
 
-## API Endpoints
+## Control de Acceso
+
+| Tipo | `isPosStaff` | Tab "Users" | Acceso `/users` URL directa |
+|------|-------------|------------|---------------------------|
+| Admin (a.vargas, etc.) | `false` | Visible | Permitido |
+| POS Staff (staff@...) | `true` | Oculto | Redirect `/dashboard` |
+
+---
+
+## API / Interfaces
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
 | `GET` | `/admin/pos-users` | Lista staff + `activated` flag |
-| `POST` | `/admin/pos-users` | Crear registro pos_user |
+| `POST` | `/admin/pos-users` | Crear registro pos_user (requiere auth_identity_id previo) |
+| `POST` | `/admin/pos-users/invite` | Crear registro + enviar email de invitación |
 | `PATCH` | `/admin/pos-users/:id` | Editar first_name / last_name |
-| `DELETE` | `/admin/pos-users/:id` | Eliminar registro |
-| `POST` | `/admin/pos-users/invite` | Enviar/reenviar email de invitación |
+| `DELETE` | `/admin/pos-users/:id` | Eliminar registro de pos_users |
+| `POST` | `/store/users/pos-activate` | Activación (público — no requiere auth) |
+| `POST` | `/store/users/pos-reset-password` | Request reset de contraseña |
+| `POST` | `/store/users/pos-reset-confirm` | Confirm reset (SQL surgery) |
+
+### Payload: Invite
+
+```typescript
+POST /admin/pos-users/invite
+{
+    email: string,
+    first_name?: string,
+    last_name?: string
+}
+→ { success: true }                          // si SENDGRID_API_KEY está configurado
+→ { success: true, activate_url: string }    // si NO hay SendGrid (dev mode)
+```
+
+### Payload: Activate
+
+```typescript
+POST /store/users/pos-activate   // público, no requiere auth
+{
+    token: string,   // JWT firmado con JWT_SECRET
+    password: string
+}
+→ { success: true }
+```
+
+### Variables de Entorno
+
+| Variable | Propósito |
+|----------|-----------|
+| `POS_URL` | URL base del POS (para el link de activación) |
+| `JWT_SECRET` | Firma del JWT invite (48h expiry) |
+| `SENDGRID_API_KEY` | Para envío de email — si no está, el link se devuelve en el response |
+| `SENDGRID_FROM` | From address (default: `noreply@ecopowertech.com`) |
+
+---
+
+## Reglas Críticas
+
+- `DELETE /admin/pos-users/:id` elimina solo el registro en `pos_users`. El Medusa admin user (auth) NO se elimina automáticamente. Para revocación completa: también eliminar desde `/admin/users`.
+- La edición (`PATCH /admin/pos-users/:id`) actualiza solo `pos_user`. El Medusa user mantiene los datos del momento de activación.
+- El reenvío de invitación usa `/invite` — puede re-invitar a un email existente (actualiza nombre si se provee).
+- `pos-reset-confirm` usa SQL surgery directamente en la BD en lugar de `authModule.updateProvider()`, que crea identities zombie (bug de Medusa v2).
 
 ---
 
 ## Archivos Clave
 
-| Archivo | Descripción |
-|---------|-------------|
-| `backend/src/api/admin/pos-users/route.ts` | GET + POST |
-| `backend/src/api/admin/pos-users/[id]/route.ts` | PATCH + DELETE |
-| `backend/src/api/admin/pos-users/invite/route.ts` | POST invite |
-| `backend/src/api/store/users/pos-activate/route.ts` | Activación (público) |
-| `ecopowertech-store-pos/app/(pos)/users/page.tsx` | UI principal |
-| `ecopowertech-store-pos/app/(pos)/users/UserModal.tsx` | Modal crear/editar |
-| `ecopowertech-store-pos/app/(pos)/users/PosRowMenu.tsx` | Menú acciones por fila |
-| `ecopowertech-store-pos/app/(auth)/activate/page.tsx` | Página activación |
-| `ecopowertech-store-pos/store/authStore.ts` | `isPosStaff` state |
+| Tipo | Ruta Completa | Propósito |
+|------|---------------|-----------|
+| Módulo | `backend/src/modules/pos-user/service.ts` | CRUD de la tabla whitelist |
+| Módulo | `backend/src/modules/pos-user/models/pos-user.ts` | Modelo de datos |
+| API | `backend/src/api/admin/pos-users/route.ts` | GET + POST |
+| API | `backend/src/api/admin/pos-users/[id]/route.ts` | PATCH + DELETE |
+| API | `backend/src/api/admin/pos-users/invite/route.ts` | POST invite (recomendado) |
+| API | `backend/src/api/store/users/pos-activate/route.ts` | Activación (público) |
+| API | `backend/src/api/store/users/pos-reset-password/route.ts` | Request reset |
+| API | `backend/src/api/store/users/pos-reset-confirm/route.ts` | Confirm reset (SQL surgery) |
+| Util | `backend/src/utils/email-templates.ts` | `buildActivationEmail()` |
+
+---
+
+## Historial de Decisiones
+
+- **`pos_user` como tabla whitelist** (2026-03-07): En lugar de un actor de auth separado, se usa una tabla de emails autorizados verificada en el login. Más simple, usa el sistema de auth nativo de Medusa.
+- **SQL surgery en reset-confirm** (2026-03): `authModule.updateProvider()` crea una segunda identity en lugar de actualizar la existente. El SQL directo actualiza el `provider_identity` correcto.
+- **JWT 48h para invite**: Suficiente tiempo para que el staff active su cuenta. Incluye `pos_user_id` para que `/activate` pueda vincular la identity sin llamadas adicionales.
+- **Re-invite idempotente**: Si el staff ya existe en `pos_users`, `/invite` lo actualiza sin crear duplicado. Útil cuando el link expiró.

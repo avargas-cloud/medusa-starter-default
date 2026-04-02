@@ -1,16 +1,26 @@
-# POS_DASHBOARD — Panel Principal
-
-| Campo | Detalle |
-|-------|---------|
-| **Módulo** | Dashboard |
-| **Ruta POS** | `/dashboard` |
-| **Última revisión** | 2026-03-06 |
+# POS Dashboard — Panel Principal
+> **Tipo**: Technical Reference
+> **Repo**: backend
+> **Última verificación**: 2026-04-02
+> **Estado**: ✅ Current
 
 ---
 
-## Descripción
+## ¿Qué es y por qué existe?
 
-El Dashboard es la pantalla de inicio del POS después del login. Muestra un resumen del día y acceso rápido a las funciones principales.
+El Dashboard es la pantalla de inicio del POS después del login. Muestra un resumen del período seleccionado y acceso rápido a las funciones principales.
+
+---
+
+## Arquitectura
+
+```
+/dashboard (POS)
+    ├── Quick Actions → links de navegación
+    ├── Métricas del día → GET /admin/orders (filtrado client-side)
+    └── Top Products → GET /admin/dashboard/top-products?from=ISO&to=ISO
+                       (SQL aggregation en PostgreSQL — directo a BD)
+```
 
 ---
 
@@ -18,22 +28,22 @@ El Dashboard es la pantalla de inicio del POS después del login. Muestra un res
 
 | Botón | Destino | Descripción |
 |-------|---------|-------------|
-| **New Sale** | `/orders/new` | Iniciar venta rápida (Sales Receipt) |
-| **New Estimate** | `/estimates/new` | Crear cotización para cliente |
-| **Receive Payment** | `/capture-payment` | Recibir pago de cliente B2B |
-| **Customers** | `/customers` | Buscar y gestionar clientes |
-| **Inventory** | `/inventory` | Consultar niveles de stock |
+| New Sale | `/orders/new` | Iniciar venta rápida (Sales Receipt) |
+| New Estimate | `/estimates/new` | Crear cotización para cliente |
+| Receive Payment | `/capture-payment` | Recibir pago de cliente B2B |
+| Customers | `/customers` | Buscar y gestionar clientes |
+| Inventory | `/inventory` | Consultar niveles de stock |
 
 ---
 
-## Métricas del Día
+## Métricas
 
 | Métrica | Fuente | Descripción |
 |---------|--------|-------------|
-| Total Vendido Hoy | Medusa orders | Suma de órdenes completadas del día |
+| Total Vendido Hoy | Medusa orders | Suma de órdenes completadas del período |
 | Órdenes Abiertas | Medusa orders | Órdenes `payment_status: not_paid` activas |
 | Clientes Nuevos | Medusa customers | Creados en las últimas 24h |
-| Balance de Crédito Total | credit_ledger | Suma de créditos pendientes de todos los clientes |
+| Top Products | `GET /admin/dashboard/top-products` | Productos más vendidos (SQL aggregation) |
 
 ---
 
@@ -42,30 +52,50 @@ El Dashboard es la pantalla de inicio del POS después del login. Muestra un res
 ```
 Sidebar / Top Nav:
 │
-├── 📊 Dashboard
-├── 🧾 Estimates
-├── 📦 Orders
-├── 💳 Capture Payment
-├── 👤 Customers
-├── 📋 Inventory
-├── 🏭 Vendors
-├── 👥 Users          (solo visible para pos_admin)
-└── 🚪 Sign Out
+├── Dashboard
+├── Estimates
+├── Orders
+├── Invoices
+├── Capture Payment
+├── Customers
+├── Inventory
+├── Vendors
+├── Accounting     (Payments, Transactions)
+├── Templates
+├── Users          (solo visible si isPosStaff === false)
+└── Sign Out
 ```
 
 ---
 
-## Actividad Reciente
+## API / Interfaces
 
-- Últimas 10 órdenes del día (link a `/orders/[id]`)
-- Últimas 5 estimaciones modificadas (link a `/estimates/[id]`)
-- Alertas de bajo stock (productos con stock < threshold)
+### `GET /admin/dashboard/top-products`
+
+```
+Query params: from (ISO 8601), to (ISO 8601)
+Respuesta: top-selling products aggregated en PostgreSQL
+
+Ejemplo:
+GET /admin/dashboard/top-products?from=2026-04-01T00:00:00Z&to=2026-04-02T00:00:00Z
+```
+
+El endpoint ejecuta SQL directo en PostgreSQL para performance — reemplaza el enfoque anterior de fetchear todas las órdenes y agregar en el frontend.
 
 ---
 
-## Known Issues / Pendientes
+## Archivos Clave
+
+| Tipo | Ruta Completa | Propósito |
+|------|---------------|-----------|
+| API | `backend/src/api/admin/dashboard/top-products/route.ts` | SQL aggregation de top products |
+
+---
+
+## Troubleshooting
 
 | Issue | Fix |
 |-------|-----|
-| Métricas de "hoy" no están en tiempo real | Refetch cada 60s o usar SWR con revalidation |
-| Alertas de bajo stock no implementadas | Requiere query de inventory_levels con umbral configurable |
+| Métricas no se actualizan | Refetch manual o recargar la página (no hay auto-refresh en tiempo real) |
+| Top Products vacío | Verificar que los params `from` y `to` son ISO 8601 válidos |
+| Alertas de bajo stock no visibles | Funcionalidad pendiente — requiere query de `inventory_levels` con umbral configurable |
