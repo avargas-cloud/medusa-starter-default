@@ -17,9 +17,10 @@ export async function POST(
     res: MedusaResponse
 ): Promise<void> {
     const { id } = req.params as { id: string }
-    const { backlighting_project_id, backlighting_seq_id } = req.body as {
+    const { backlighting_project_id, backlighting_seq_id, linked_by } = req.body as {
         backlighting_project_id: string
         backlighting_seq_id?: string | null
+        linked_by?: string | null
     }
 
     console.log(`[set-bl-link] REQUEST order=${id} bl_project=${backlighting_project_id ?? "(missing)"} seq=${backlighting_seq_id ?? "null"}`)
@@ -52,6 +53,8 @@ export async function POST(
             ...currentMetadata,
             backlighting_project_id,
             backlighting_seq_id: backlighting_seq_id ?? null,
+            backlighting_linked_at: new Date().toISOString(),
+            backlighting_linked_by: linked_by ?? null,
         }
 
         await orderModule.updateOrders([{ id, metadata: updatedMetadata }])
