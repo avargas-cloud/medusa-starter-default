@@ -404,6 +404,7 @@ export function PipelineTable() {
     const [loading, setLoading] = useState(false)
     const [statusFilter, setStatusFilter] = useState<string>("all")
     const [stepFilter, setStepFilter]     = useState<string>("all")
+    const [sortBy, setSortBy]             = useState<"created_at" | "updated_at">("created_at")
     const [retryingId, setRetryingId]     = useState<string | null>(null)
     const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -411,8 +412,9 @@ export function PipelineTable() {
         if (!silent) setLoading(true)
         try {
             const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(pg * PAGE_SIZE) })
-            if (statusFilter !== "all") params.set("status", statusFilter)
-            if (stepFilter   !== "all") params.set("step",   stepFilter)
+            if (statusFilter !== "all") params.set("status",  statusFilter)
+            if (stepFilter   !== "all") params.set("step",    stepFilter)
+            params.set("sort_by", sortBy)
 
             const res = await fetch(`/admin/quickbooks/pipeline?${params}`, { credentials: "include" })
             if (!res.ok) return
@@ -423,7 +425,7 @@ export function PipelineTable() {
         } catch { /* non-blocking */ } finally {
             if (!silent) setLoading(false)
         }
-    }, [statusFilter, stepFilter, page])
+    }, [statusFilter, stepFilter, sortBy, page])
 
     // Initial load + filter changes
     useEffect(() => { fetchPipeline() }, [fetchPipeline])
@@ -541,6 +543,14 @@ export function PipelineTable() {
                         <option value="credit_memo">Credit Memo</option>
                         <option value="write_check">Write Check</option>
                         <option value="refund_payment">Refund Payment</option>
+                    </select>
+                    <select
+                        value={sortBy}
+                        onChange={e => setSortBy(e.target.value as "created_at" | "updated_at")}
+                        className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base"
+                    >
+                        <option value="created_at">Sort: Created At</option>
+                        <option value="updated_at">Sort: Updated At</option>
                     </select>
                     <span className="text-xs text-ui-fg-muted ml-auto">
                         {total} total operation{total !== 1 ? "s" : ""}

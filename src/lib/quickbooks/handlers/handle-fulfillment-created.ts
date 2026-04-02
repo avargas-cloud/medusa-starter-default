@@ -137,7 +137,7 @@ export async function handleFulfillmentCreated(
     const linkedTxnId = qbSoTxnId || (!isPartial ? qbEstimateTxnId : undefined)
 
     const pool = getDbPool()
-    let memo = order.metadata?.pos_notes ? `POS Note: ${order.metadata.pos_notes}` : undefined
+    let memo: string | undefined
     let invoiceShippingAmount: number | undefined;
     let invRefNumber: string | undefined;
 
@@ -156,7 +156,7 @@ export async function handleFulfillmentCreated(
             const seq = row.qb_ref_number || row.invoice_number
             if (seq) {
                 invRefNumber = String(seq)
-                memo = memo ? `${memo} | Invoice ${seq}` : `Invoice ${seq}`
+                memo = `POS Invoice ${seq}`
             }
             if (row.shipping !== undefined && row.shipping !== null) {
                 // pos_invoice.shipping is stored in cents — convert to dollars for QB

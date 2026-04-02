@@ -35,6 +35,7 @@ export async function GET(
         const status = req.query.status       as string | undefined
         const step   = req.query.step         as string | undefined
         const refId  = req.query.reference_id as string | undefined
+        const sortBy = req.query.sort_by === "updated_at" ? "updated_at" : "created_at"
 
         // Auto-timeout: submitted rows older than 10 min with no bridge_op_id → failed
         await client.query(`
@@ -121,7 +122,7 @@ export async function GET(
                 AND pay_dep.reference_id = p.reference_id
                 AND pay_dep.step = 'payment'
             ${where}
-            ORDER BY COALESCE(p.updated_at, p.created_at) DESC
+            ORDER BY ${sortBy === "updated_at" ? "COALESCE(p.updated_at, p.created_at)" : "p.created_at"} DESC
             LIMIT $${p} OFFSET $${p + 1}
         `, [...values, limit, offset])
 

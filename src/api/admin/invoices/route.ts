@@ -238,7 +238,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 amount: body.amount_paid,
                 method: mapPosMethodToDbEnum(body.payment_method),
                 reference: 'Deposit',
-                notes: body.notes || 'Initial invoice payment via Complete Order',
+                notes: 'Initial invoice payment via Complete Order',
                 received_at: paymentDate,
                 created_by: body.created_by || null,
                 source: 'pos',

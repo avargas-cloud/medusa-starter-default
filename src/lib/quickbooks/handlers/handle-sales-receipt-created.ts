@@ -108,7 +108,7 @@ export async function handleSalesReceiptCreated(
     }
 
     const pool = getDbPool()
-    let memo = order.metadata?.pos_notes ? `POS Note: ${order.metadata.pos_notes}` : undefined
+    let memo: string | undefined
     let invoiceShippingAmount: number | undefined;
     let srRefNumber: string | undefined;
 
@@ -128,10 +128,8 @@ export async function handleSalesReceiptCreated(
             if (seq) {
                 srRefNumber = String(seq)
             }
-            // Memo: always reference the Medusa invoice number so it can be traced back
             if (row.invoice_number) {
-                const invLabel = `Medusa Invoice ${row.invoice_number}`
-                memo = memo ? `${memo} | ${invLabel}` : invLabel
+                memo = `POS Invoice ${row.invoice_number}`
             }
             if (row.shipping !== undefined && row.shipping !== null) {
                 // pos_invoice.shipping is stored in cents — convert to dollars for QB

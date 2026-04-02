@@ -39,19 +39,26 @@ export function BridgeStatus() {
         return () => clearInterval(id)
     }, [fetchStats])
 
+    const postAction = async (action: string) => {
+        await fetch("/admin/quickbooks/bridge", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action }),
+        })
+        await fetchStats(true)
+    }
+
     const handleResetBusy = async () => {
         setClearing(true)
-        try {
-            await fetch("/admin/quickbooks/bridge", {
-                method: "POST",
-                credentials: "include",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ action: "reset-busy" }),
-            })
-            await fetchStats(true)
-        } catch { /* non-blocking */ } finally {
-            setClearing(false)
-        }
+        try { await postAction("reset-busy") } catch { /* non-blocking */ } finally { setClearing(false) }
+    }
+
+    const [purging, setPurging] = useState(false)
+    const handlePurge = async () => {
+        if (!confirm("Wipe ALL bridge queue history (completed + failed)? This cannot be undone.")) return
+        setPurging(true)
+        try { await postAction("purge") } catch { /* non-blocking */ } finally { setPurging(false) }
     }
 
     const busyUntilLabel = stats?.qbBusyUntil
@@ -76,6 +83,9 @@ export function BridgeStatus() {
                             Live queue state from the QB Web Connector bridge
                         </Text>
                     </div>
+                    <Button variant="secondary" size="small" onClick={handlePurge} isLoading={purging}>
+                        Purge History
+                    </Button>
                     <Button variant="secondary" size="small" onClick={() => fetchStats()} isLoading={loading}>
                         <ArrowPath className="mr-1" /> Refresh
                     </Button>

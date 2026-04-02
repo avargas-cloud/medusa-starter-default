@@ -28,5 +28,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         return
     }
 
+    if (action === "purge") {
+        try {
+            const result = await bridgeFetch("POST", "/api/sync/queue/purge")
+            res.json({ success: true, ...result })
+        } catch (err: any) {
+            res.status(502).json({ success: false, error: err.message })
+        }
+        return
+    }
+
     res.status(400).json({ success: false, error: `Unknown action: ${action}` })
 }
