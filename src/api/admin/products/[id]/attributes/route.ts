@@ -15,8 +15,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     }
 
     try {
-        // Use RAW SQL to avoid query.graph caching issues
-        // This ensures we get the LATEST data immediately after workflow completes
+        // Use RAW SQL — Medusa v2 does not expose the product↔attribute_value link table
+        // via remoteQuery/query.graph (framework limitation). Knex is the only reliable way.
+        // TODO(medusa-upgrade): revisit if @medusajs/product exposes this relation in a future version.
         const links = await knex("product_product_productattributes_attribute_value")
             .select("attribute_value_id")
             .where("product_id", id)

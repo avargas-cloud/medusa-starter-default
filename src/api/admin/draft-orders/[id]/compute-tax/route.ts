@@ -271,6 +271,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
         console.log(`[compute-tax] Discount-aware tax: $${amount} @ ${rate}% | subtotal=$${itemsSubtotal} discount=$${discountTotal} taxable=$${discountedSubtotalCents/100} (mode: ${effectiveMode})`)
 
         // ── Save computed totals to metadata (fire-and-forget) ─────────────────
+        // NOTE: order.total from Medusa is not reliable without the tax-discount-aware patch applied.
+        // metadata.computed_total is the canonical total used by POS and QB sync.
+        // TODO(medusa-upgrade): remove computed_total once order.total is trustworthy post-patch.
         const computedTotal = (discountedSubtotalCents + shippingSubtotalCents) / 100 + amount
         saveOrderMeta(req, id, {
             computed_tax_amount: amount,

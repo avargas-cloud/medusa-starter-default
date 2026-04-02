@@ -16,7 +16,7 @@
 | Document | Description |
 |---|---|
 | [AUTH_COMPLETE_GUIDE.md](AUTH_COMPLETE_GUIDE.md) | **Master guide** — 3 actors (customer/user/pos_user), dual identity, registration, login, password reset, Google OAuth flow |
-| [AUTH_GOOGLE_OAUTH.md](AUTH_GOOGLE_OAUTH.md) | Google OAuth — Cloud Console setup, Medusa config, dedup subscriber. **Currently disabled** (`googleClientId` commented out in medusa-config.ts) |
+| [AUTH_GOOGLE_OAUTH.md](AUTH_GOOGLE_OAUTH.md) | Google OAuth — Cloud Console setup, Medusa config, dedup subscriber. **Activo en producción** (`@medusajs/auth-google` carga condicionalmente con `GOOGLE_CLIENT_ID`) |
 | [AUTH_POS_STAFF.md](AUTH_POS_STAFF.md) | POS staff auth — uses `user` actor, `pos_users` whitelist table, why `pos_user` is NOT a real auth actor |
 
 ---
@@ -65,7 +65,6 @@
 | Document | Description |
 |---|---|
 | [STORAGE_MINIO.md](STORAGE_MINIO.md) | MinIO S3-compatible storage — `smart-storage` module (active), bucket policies, Railway persistence, folder routing |
-| [SMART_STORAGE_VS_FILE_MINIO_FLAT.md](SMART_STORAGE_VS_FILE_MINIO_FLAT.md) | Two MinIO providers compared — `smart-storage` (active) vs `file-minio-flat` (NOT registered, do not use) |
 
 ---
 

@@ -2,7 +2,7 @@
 > **Tipo**: Technical Reference
 > **Repo**: backend
 > **Última verificación**: 2026-04-02
-> **Estado**: ⚠️ Partial — Plugin legacy comentado; provider nativo activo condicionalmente
+> **Estado**: ✅ Activo — Provider nativo `@medusajs/auth-google` activo en producción (Railway tiene `GOOGLE_CLIENT_ID`); plugin legacy v1 comentado permanentemente
 
 Consolida: GOOGLE_OAUTH_COMPLETE_GUIDE + GOOGLE_OAUTH_QUICK_REFERENCE + GOOGLE_OAUTH_SETUP
 
