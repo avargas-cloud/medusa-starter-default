@@ -8,6 +8,7 @@ import { SyncCard } from "./components/SyncCard"
 import { AuditModal } from "./components/AuditModal"
 import { ActivityLog } from "./components/ActivityLog"
 import { PipelineTable } from "./components/PipelineTable"
+import { BridgeStatus } from "./components/BridgeStatus"
 import { LegacyImportPanel } from "./components/LegacyImportPanel"
 
 // ─── Interval options ─────────────────────────────────────────────────────────
@@ -409,6 +410,9 @@ const QuickBooksPage = () => {
 
             {/* Activity Log */}
             <ActivityLog />
+
+            {/* QB Bridge Status — live queue stats + busy clear */}
+            <BridgeStatus />
 
             {/* QB Operations Pipeline — real-time queue */}
             <PipelineTable />
