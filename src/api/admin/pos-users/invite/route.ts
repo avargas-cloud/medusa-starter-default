@@ -8,8 +8,8 @@
  */
 
 import type { AuthenticatedMedusaRequest, MedusaResponse } from '@medusajs/framework/http'
-import sgMail from '@sendgrid/mail'
 import jwt from 'jsonwebtoken'
+import { sendMail } from '../../../../utils/mailer'
 import { POS_USER_MODULE } from '../../../../modules/pos-user'
 import { buildActivationEmail } from '../../../../utils/email-templates'
 
@@ -76,28 +76,23 @@ export async function POST(
         const activateUrl = `${POS_URL}/activate?token=${encodeURIComponent(inviteToken)}`
         logger?.info?.(`[POS-INVITE] Activate URL for ${email}: ${activateUrl}`)
 
-        // ── Send via SendGrid ──────────────────────────────────────────────────
-        const apiKey = process.env.SENDGRID_API_KEY
-        const from = process.env.SENDGRID_FROM || 'noreply@ecopowertech.com'
+        // ── Send via mailer ────────────────────────────────────────────────────
         let emailSent = false
 
-        if (apiKey) {
-            try {
-                sgMail.setApiKey(apiKey)
-                await sgMail.send({
-                    to: email,
-                    from,
-                    subject: "You've been invited to EcoPowerTech POS",
-                    html: buildActivationEmail(first_name || 'there', activateUrl),
-                })
+        try {
+            emailSent = await sendMail({
+                to: email,
+                subject: "You've been invited to EcoPowerTech POS",
+                html: buildActivationEmail(first_name || 'there', activateUrl),
+            })
+            if (emailSent) {
                 logger?.info?.(`[POS-INVITE] ✅ Email sent to ${email}`)
-                emailSent = true
-            } catch (emailErr: any) {
-                // Email failure is non-fatal — invite is still created, admin can share the link
-                logger?.warn?.(`[POS-INVITE] ⚠️ SendGrid failed (${emailErr?.message}). Returning activate_url.`)
+            } else {
+                logger?.warn?.('[POS-INVITE] No RESEND_API_KEY — email skipped')
             }
-        } else {
-            logger?.warn?.('[POS-INVITE] No SENDGRID_API_KEY — email skipped')
+        } catch (emailErr: any) {
+            // Email failure is non-fatal — invite is still created, admin can share the link
+            logger?.warn?.(`[POS-INVITE] ⚠️ mailer failed (${emailErr?.message}). Returning activate_url.`)
         }
 
         return res.status(201).json({

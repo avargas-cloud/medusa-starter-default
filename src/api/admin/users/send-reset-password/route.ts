@@ -11,8 +11,8 @@
 
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Modules } from "@medusajs/utils"
-import sgMail from "@sendgrid/mail"
 import { buildPasswordResetEmail } from "../../../../utils/email-templates"
+import { sendMail } from "../../../../utils/mailer"
 
 const ADMIN_URL = process.env.MEDUSA_BACKEND_URL || "https://medusa-starter-default-production-b69e.up.railway.app"
 
@@ -43,21 +43,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         // 2. Build reset link
         const resetUrl = `${ADMIN_URL}/app/reset-password?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`
 
-        // 3. Send email via SendGrid
-        const apiKey = process.env.SENDGRID_API_KEY
-        const from = process.env.SENDGRID_FROM || "noreply@ecopowertech.com"
-
-        if (!apiKey) {
-            req.scope.resolve("logger")?.error?.("[ResetPW] SENDGRID_API_KEY not set")
-            return res.status(500).json({ error: "Email not configured" })
-        }
-
-        sgMail.setApiKey(apiKey)
+        // 3. Send email via mailer
         const html = buildPasswordResetEmail("", resetUrl)
 
-        await sgMail.send({
+        await sendMail({
             to: email,
-            from,
             subject: "Reset your EcoPowerTech password",
             html,
         })

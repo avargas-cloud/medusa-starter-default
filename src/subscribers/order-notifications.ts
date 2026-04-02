@@ -1,5 +1,6 @@
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
 import { Modules, ContainerRegistrationKeys } from "@medusajs/utils"
+import { sendMail } from "../utils/mailer"
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 const LOGO_URL =
@@ -29,29 +30,18 @@ export default async function orderNotifications({ event, container }: Subscribe
   }
 
   try {
-    const sgMail = await import("@sendgrid/mail")
-    const apiKey = process.env.SENDGRID_API_KEY
-    const fromEmail = process.env.SENDGRID_FROM || "noreply@ecopowertech.com"
-
-    if (!apiKey) {
-      logger.warn("📧 [OrderNotifications] SENDGRID_API_KEY not configured, skipping email")
-      return
-    }
-
-    sgMail.default.setApiKey(apiKey)
-
     const orderService = container.resolve(Modules.ORDER)
     const fulfillmentService = container.resolve(Modules.FULFILLMENT)
     const query = container.resolve(ContainerRegistrationKeys.QUERY)
 
     if (eventName === "order.placed") {
-      await handleOrderPlaced(payload, sgMail, fromEmail, orderService, logger)
+      await handleOrderPlaced(payload, orderService, logger)
     } else if (eventName === "order.fulfillment_created") {
-      await handleFulfillmentCreated(payload, sgMail, fromEmail, orderService, fulfillmentService, query, logger, container)
+      await handleFulfillmentCreated(payload, orderService, fulfillmentService, query, logger, container)
     } else if (eventName === "shipment.created") {
-      await handleShipmentCreated(payload, sgMail, fromEmail, orderService, fulfillmentService, query, logger)
+      await handleShipmentCreated(payload, orderService, fulfillmentService, query, logger)
     } else if (eventName === "delivery.created") {
-      await handleDeliveryCreated(payload, sgMail, fromEmail, orderService, fulfillmentService, query, logger)
+      await handleDeliveryCreated(payload, orderService, fulfillmentService, query, logger)
     }
   } catch (err: any) {
     logger.error(`📧 [OrderNotifications] Failed to send email for ${eventName}: ${err.message}`)
@@ -62,7 +52,7 @@ export default async function orderNotifications({ event, container }: Subscribe
 // ─── Event Handlers ──────────────────────────────────────────────────────────
 
 async function handleOrderPlaced(
-  payload: any, sgMail: any, fromEmail: string,
+  payload: any,
   orderService: any, logger: any
 ) {
   const orderId = payload.id
@@ -87,9 +77,8 @@ async function handleOrderPlaced(
 
   const orderNumber = order.metadata?.document_number || `#${order.display_id}`
 
-  await sgMail.default.send({
+  await sendMail({
     to: customerEmail,
-    from: { email: fromEmail, name: COMPANY_NAME },
     subject: `Order Confirmation ${orderNumber} – ${COMPANY_NAME}`,
     html: buildOrderConfirmationEmail(order),
   })
@@ -97,7 +86,7 @@ async function handleOrderPlaced(
 }
 
 async function handleFulfillmentCreated(
-  payload: any, sgMail: any, fromEmail: string,
+  payload: any,
   orderService: any, fulfillmentService: any, _query: any, logger: any, container: any
 ) {
   const { order_id, fulfillment_id } = payload
@@ -146,16 +135,14 @@ async function handleFulfillmentCreated(
   logger.info(`📧 Sending ${isPickup ? "ready for pickup" : "fulfillment created"} email to ${customerEmail}`)
 
   if (isPickup) {
-    await sgMail.default.send({
+    await sendMail({
       to: customerEmail,
-      from: { email: fromEmail, name: COMPANY_NAME },
       subject: `Your Order #${order.display_id} is Ready for Pickup`,
       html: buildReadyForPickupEmail(order, fulfillment, locationAddress),
     })
   } else {
-    await sgMail.default.send({
+    await sendMail({
       to: customerEmail,
-      from: { email: fromEmail, name: COMPANY_NAME },
       subject: `Your Order #${order.display_id} is Being Prepared`,
       html: buildFulfillmentCreatedEmail(order),
     })
@@ -164,7 +151,7 @@ async function handleFulfillmentCreated(
 }
 
 async function handleShipmentCreated(
-  payload: any, sgMail: any, fromEmail: string,
+  payload: any,
   orderService: any, fulfillmentService: any, query: any, logger: any
 ) {
   const fulfillmentId = payload.id || payload.fulfillment_id
@@ -199,9 +186,8 @@ async function handleShipmentCreated(
   const trackingNumbers = fulfillment.labels?.map((l: any) => l.tracking_number).filter(Boolean) || []
   const trackingUrls = fulfillment.labels?.map((l: any) => l.tracking_url).filter(Boolean) || []
 
-  await sgMail.default.send({
+  await sendMail({
     to: order.email,
-    from: { email: fromEmail, name: COMPANY_NAME },
     subject: `Your Order #${order.display_id} Has Been Shipped`,
     html: buildShippedEmail(order, trackingNumbers, trackingUrls),
   })
@@ -209,7 +195,7 @@ async function handleShipmentCreated(
 }
 
 async function handleDeliveryCreated(
-  payload: any, sgMail: any, fromEmail: string,
+  payload: any,
   orderService: any, fulfillmentService: any, query: any, logger: any
 ) {
   const fulfillmentId = payload.id || payload.fulfillment_id
@@ -241,9 +227,8 @@ async function handleDeliveryCreated(
     return
   }
 
-  await sgMail.default.send({
+  await sendMail({
     to: order.email,
-    from: { email: fromEmail, name: COMPANY_NAME },
     subject: isPickup
       ? `Your Order #${order.display_id} Has Been Picked Up`
       : `Your Order #${order.display_id} Has Been Delivered`,

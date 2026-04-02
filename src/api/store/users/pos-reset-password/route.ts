@@ -1,6 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import sgMail from "@sendgrid/mail"
 import jwt from "jsonwebtoken"
+import { sendMail } from "../../../../utils/mailer"
 import postgres from "postgres"
 import { buildPasswordResetEmail } from "../../../../utils/email-templates"
 
@@ -57,21 +57,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const resetUrl = `${POS_URL}/reset-password?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`
         logger?.info?.(`[POS-RESET] Token generated for ${email}`)
 
-        // ── Send via SendGrid ──────────────────────────────────────────────────
-        const apiKey = process.env.SENDGRID_API_KEY
-        const from = process.env.SENDGRID_FROM || "noreply@ecopowertech.com"
-
-        if (!apiKey) {
-            logger?.error?.("[POS-RESET] SENDGRID_API_KEY not set")
-            return res.status(200).json({ success: true })
-        }
-
-        sgMail.setApiKey(apiKey)
+        // ── Send via mailer ────────────────────────────────────────────────────
         const html = buildPasswordResetEmail("", resetUrl)
 
-        await sgMail.send({
+        await sendMail({
             to: email,
-            from,
             subject: "Reset your EcoPowerTech POS password",
             html,
         })

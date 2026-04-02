@@ -342,14 +342,8 @@ export default async function qbNightlyVerifyHandler(_container: MedusaContainer
         const html = buildEmailHtml(results, confirmed, failed, pending, expired, reportDate)
 
         try {
-            const sgMail = await import("@sendgrid/mail")
-            sgMail.default.setApiKey(process.env.SENDGRID_API_KEY!)
-            await sgMail.default.send({
-                to: REPORT_EMAIL,
-                from: process.env.SENDGRID_FROM || "noreply@ecopowertech.com",
-                subject,
-                html,
-            })
+            const { sendMail } = await import("../utils/mailer")
+            await sendMail({ to: REPORT_EMAIL, subject, html })
             console.log(`${TAG} ✅ Report emailed to ${REPORT_EMAIL}`)
         } catch (emailErr: any) {
             console.error(`${TAG} ❌ Failed to send email: ${emailErr.message}`)

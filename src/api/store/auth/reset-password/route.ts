@@ -2,6 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Modules } from "@medusajs/utils"
 import crypto from "crypto"
 import { buildPasswordResetEmail } from "../../../../utils/email-templates"
+import { sendMail } from "../../../../utils/mailer"
 
 export const POST = async (
     req: MedusaRequest,
@@ -77,40 +78,21 @@ export const POST = async (
         console.log('✅ Token saved to database')
 
         // Send reset email
-        console.log('🔍 Step 5: Sending email via SendGrid...')
+        console.log('🔍 Step 5: Sending email via mailer...')
         try {
-            const sgMail = await import("@sendgrid/mail")
-            console.log('   SendGrid module loaded')
-
-            const apiKey = process.env.SENDGRID_API_KEY!
-            console.log('   API Key length:', apiKey?.length)
-            console.log('   API Key preview:', apiKey?.substring(0, 20) + '...')
-
-            sgMail.default.setApiKey(apiKey)
-            console.log('   API Key set')
-
             const resetLink = `${process.env.STOREFRONT_URL || 'http://localhost:3000'}/reset-password?token=${resetToken}`
             console.log('   Reset link:', resetLink)
 
-            const emailContent = {
+            await sendMail({
                 to: email,
-                from: process.env.SENDGRID_FROM || "noreply@ecopowertech.com",
                 subject: "Reset Your Password – EcoPowerTech",
-                text: `Hi ${customer.first_name || 'there'},\n\nClick the link below to reset your password:\n\n${resetLink}\n\nThis link will expire in 1 hour.\n\nIf you didn't request this, please ignore this email.\n\nEcoPowerTech Team`,
                 html: buildPasswordResetEmail(customer.first_name || '', resetLink),
-            }
-
-            console.log('   Sending email to:', emailContent.to)
-            console.log('   From:', emailContent.from)
-
-            await sgMail.default.send(emailContent)
+            })
             console.log('✅ ✅ ✅ Password reset email sent successfully!')
 
         } catch (emailError: any) {
-            console.error('❌ ❌ ❌ SENDGRID ERROR:')
-            console.error('   Error code:', emailError.code)
+            console.error('❌ ❌ ❌ MAILER ERROR:')
             console.error('   Error message:', emailError.message)
-            console.error('   Response body:', JSON.stringify(emailError.response?.body, null, 2))
             console.error('   Full error:', emailError)
             // Don't fail the request if email fails
         }

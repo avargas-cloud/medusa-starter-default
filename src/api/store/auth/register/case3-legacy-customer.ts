@@ -1,6 +1,7 @@
 import { Modules as _Modules } from "@medusajs/utils"
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { buildActivationEmail } from "../../../../utils/email-templates"
+import { sendMail } from "../../../../utils/mailer"
 
 /**
  * CASE 3: Legacy Customer Activation
@@ -14,21 +15,8 @@ export async function handleLegacyCustomerActivation(
 ) {
     console.log('🎯 Legacy customer - sending activation email')
 
-    // Send activation email via SendGrid
+    // Send activation email via mailer
     try {
-        const sgMail = await import("@sendgrid/mail")
-
-        const apiKey = process.env.SENDGRID_API_KEY!
-        const fromEmail = process.env.SENDGRID_FROM || 'noreply@ecopowertech.com'
-
-        console.log('🔍 SendGrid Debug:')
-        console.log('   API Key length:', apiKey?.length)
-        console.log('   API Key preview:', apiKey?.substring(0, 20) + '...')
-        console.log('   From email:', fromEmail)
-        console.log('   To email:', existingCustomer.email)
-
-        sgMail.default.setApiKey(apiKey)
-
         // Generate activation token
         const activationToken = Buffer.from(`${existingCustomer.id}:${Date.now()}`).toString('base64')
         const activationLink = `${process.env.STOREFRONT_URL || 'http://localhost:3000'}/activate-account?token=${activationToken}`
@@ -52,9 +40,8 @@ export async function handleLegacyCustomerActivation(
 
         console.log('📧 Sending email...')
 
-        await sgMail.default.send({
+        await sendMail({
             to: existingCustomer.email,
-            from: process.env.SENDGRID_FROM || 'noreply@ecopowertech.com',
             subject: 'Activate Your Account – EcoPowerTech',
             html: buildActivationEmail(existingCustomer.first_name || '', activationLink),
         })

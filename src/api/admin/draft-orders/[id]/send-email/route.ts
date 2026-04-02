@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
 import puppeteer from "puppeteer-core"
+import { sendMail } from "../../../../../utils/mailer"
 
 // ── PDF generator using system Chrome ────────────────────────────────────────
 async function generateEstimatePdf(html: string): Promise<Buffer> {
@@ -492,19 +493,45 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
   res.status(200).send(html)
 }
 
+// ── Payment link helpers ──────────────────────────────────────────────────────
+
+const SIGNATURE_RE = /^(warm regards|best regards|best,|sincerely,?|kind regards|thank you,?|regards,?|thanks,?)/im
+
+function splitBodyAndSignature(text: string): [string, string] {
+  const lines = text.split(/\r?\n/)
+  const idx = lines.findIndex(l => SIGNATURE_RE.test(l.trim()))
+  if (idx === -1) return [text, ""]
+  return [lines.slice(0, idx).join("\n"), lines.slice(idx).join("\n")]
+}
+
+function buildPaymentCard(paymentUrl: string, amountDisplay: string): string {
+  return `
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;margin:20px 0;">
+  <tr><td style="padding:20px 24px;">
+    <p style="margin:0 0 2px;color:#7c3aed;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;">Payment Request</p>
+    <p style="margin:0 0 16px;color:#111827;font-size:28px;font-weight:800;line-height:1;">${amountDisplay}</p>
+    <table cellpadding="0" cellspacing="0" style="margin-bottom:14px;">
+      <tr><td style="background:#7c3aed;border-radius:7px;">
+        <a href="${paymentUrl}" style="display:block;padding:12px 32px;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;white-space:nowrap;">Pay Now</a>
+      </td></tr>
+    </table>
+    <p style="margin:0;color:#9ca3af;font-size:11px;">Link expires in 7&nbsp;days · Secure payment powered by BAMS / iPOS Pays</p>
+    <p style="margin:4px 0 0;color:#9ca3af;font-size:10px;word-break:break-all;"><a href="${paymentUrl}" style="color:#7c3aed;">${paymentUrl}</a></p>
+  </td></tr>
+</table>`
+}
+
 // ── POST — generate PDF and send as attachment ─────────────────────────────────
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
   const { id } = req.params as { id: string }
-  const { to: toOverride, cc: ccOverride, subject: subjectOverride, templateId, docId, displayId: displayIdOverride, emailBody, documentType, posState } = (req.body ?? {}) as any
+  const { to: toOverride, cc: ccOverride, subject: subjectOverride, templateId, docId, displayId: displayIdOverride, emailBody, documentType, posState, paymentLinkUrl, paymentAmount, senderEmail } = (req.body ?? {}) as any
   const order = await fetchOrderWithPreview(req, id)
   if (!order) return void res.status(404).json({ message: "Order not found" })
   const { customer, total } = buildTotals(order)
   const customerEmail = toOverride ?? customer?.email ?? order.email
   if (!customerEmail) return void res.status(400).json({ message: "No customer email found" })
 
-  const apiKey = process.env.SENDGRID_API_KEY
-  const fromEmail = process.env.SENDGRID_FROM_EMAIL ?? process.env.SENDGRID_FROM ?? "estimates@ecopowertech.com"
-  if (!apiKey) return void res.status(200).json({ success: false, preview_only: true, message: "SENDGRID_API_KEY not set." })
+  if (!process.env.RESEND_API_KEY) return void res.status(200).json({ success: false, preview_only: true, message: "RESEND_API_KEY not set." })
 
   const params = buildParams(order, "email")
   const docType = documentType ?? "Estimate"
@@ -586,9 +613,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
 </body>
 </html>`
 
-  const sgMail = await import("@sendgrid/mail")
-  sgMail.default.setApiKey(apiKey)
-
   const toEmails = customerEmail.split(',').map((e: string) => e.trim()).filter(Boolean)
   let ccEmails: string[] = []
   if (ccOverride) {
@@ -596,29 +620,27 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     ccEmails = rawCc.split(',').map((e: string) => e.trim()).filter(e => e && !toEmails.includes(e))
   }
 
-  const msg: any = {
-    to: toEmails,
-    from: { email: fromEmail, name: "EcoPowerTech" },
-    subject: emailSubject,
-    html: emailBodyHtml,
-  }
-  if (ccEmails.length > 0) {
-    msg.cc = ccEmails
-  }
+  let finalHtml = emailBodyHtml
+  let attachments: Array<{ filename: string; content: string; type?: string }> | undefined
 
   if (pdfBuffer) {
-    msg.attachments = [{
+    attachments = [{
       content: pdfBuffer.toString("base64"),
       filename: `${estNum}.pdf`,
       type: "application/pdf",
-      disposition: "attachment",
     }]
   } else {
     // Fallback: attach HTML version as a note if PDF failed
-    msg.html += `<p style="color:#dc2626;font-size:11px;margin-top:12px;">Note: PDF could not be generated. Please contact us for the document.</p>`
+    finalHtml += `<p style="color:#dc2626;font-size:11px;margin-top:12px;">Note: PDF could not be generated. Please contact us for the document.</p>`
   }
 
-  await sgMail.default.send(msg)
+  await sendMail({
+    to: toEmails,
+    subject: emailSubject,
+    html: finalHtml,
+    ...(ccEmails.length > 0 ? { cc: ccEmails } : {}),
+    ...(attachments ? { attachments } : {}),
+  })
 
   // Update estimate metadata via REST PATCH (reliable — same path the UI uses)
   try {

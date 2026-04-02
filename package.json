@@ -68,6 +68,7 @@
     "passport": "^0.6.0",
     "passport-google-oauth20": "^2.0.0",
     "puppeteer-core": "^24.37.5",
+    "resend": "^6.10.0",
     "scrypt-kdf": "^4.0.0",
     "typeorm": "^0.3.16"
   },
