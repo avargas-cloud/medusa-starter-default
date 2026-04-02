@@ -1,6 +1,6 @@
 /**
  * Send all email template previews to a.vargas@ecopowertech.com
- * 
+ *
  * Usage: node -e "require('./src/scripts/tests/preview-all-emails.js')"
  *   or:  npx ts-node src/scripts/tests/preview-all-emails.ts
  */
@@ -16,6 +16,7 @@ import {
   emailFootnote,
   sectionLabel,
 } from "../../utils/email-templates"
+import { sendMail } from "../../../utils/mailer"
 
 // We also need the order notification templates — import them inline
 // since they're not exported from the subscriber. We'll rebuild them here.
@@ -23,18 +24,11 @@ import {
 const RECIPIENT = "a.vargas@ecopowertech.com"
 
 async function main() {
-  const sgMail = await import("@sendgrid/mail")
-  const apiKey = process.env.SENDGRID_API_KEY
-  const fromEmail = process.env.SENDGRID_FROM || "noreply@ecopowertech.com"
-
-  if (!apiKey) {
-    console.error("❌ SENDGRID_API_KEY not set")
+  if (!process.env.RESEND_API_KEY) {
+    console.error("❌ RESEND_API_KEY not set")
     process.exit(1)
   }
 
-  sgMail.default.setApiKey(apiKey)
-
-  const from = { email: fromEmail, name: "EcoPowerTech" }
   const emails: Array<{ subject: string; html: string; delay?: number }> = []
 
   // ── 1. Welcome Email ──
@@ -240,9 +234,8 @@ async function main() {
   for (let i = 0; i < emails.length; i++) {
     const e = emails[i]!
     try {
-      await sgMail.default.send({
+      await sendMail({
         to: RECIPIENT,
-        from,
         subject: e.subject,
         html: e.html,
       })
@@ -250,7 +243,6 @@ async function main() {
     } catch (err: any) {
       console.error(`  ❌ ${i + 1}/${emails.length} — ${e.subject}`)
       console.error(`     Error: ${err.message}`)
-      if (err.response?.body) console.error(`     SendGrid response:`, JSON.stringify(err.response.body, null, 2))
     }
 
     // Small delay to avoid rate limiting

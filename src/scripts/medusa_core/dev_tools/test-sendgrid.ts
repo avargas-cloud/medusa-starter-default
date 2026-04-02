@@ -1,28 +1,28 @@
 import { loadEnv } from "@medusajs/utils"
+import { sendMail } from "../../../utils/mailer"
 
 loadEnv('development', process.cwd())
 
-async function testSendGrid() {
-    console.log('🔍 Testing SendGrid...')
-    console.log('API Key:', process.env.SENDGRID_API_KEY?.substring(0, 20) + '...')
-    console.log('From:', process.env.SENDGRID_FROM)
-
-    const sgMail = await import("@sendgrid/mail")
-    sgMail.default.setApiKey(process.env.SENDGRID_API_KEY!)
+async function testResend() {
+    console.log('🔍 Testing Resend...')
+    console.log('API Key:', process.env.RESEND_API_KEY?.substring(0, 20) + '...')
+    console.log('From:', process.env.RESEND_FROM)
 
     try {
-        await sgMail.default.send({
+        const sent = await sendMail({
             to: 'a.vargas@ecopowertech.com',
-            from: process.env.SENDGRID_FROM || 'noreply@ecopowertech.com',
             subject: 'Test Email from Medusa',
-            html: '<h2>This is a test</h2><p>If you receive this, SendGrid is working!</p>'
+            html: '<h2>This is a test</h2><p>If you receive this, Resend is working!</p>'
         })
 
-        console.log('✅ Email sent successfully!')
+        if (sent) {
+            console.log('✅ Email sent successfully!')
+        } else {
+            console.log('⚠️  RESEND_API_KEY not set — email skipped')
+        }
     } catch (error: any) {
         console.error('❌ Error:', error.message)
-        console.error('Response:', error.response?.body)
     }
 }
 
-testSendGrid()
+testResend()
