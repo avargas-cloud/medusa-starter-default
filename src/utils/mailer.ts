@@ -32,7 +32,7 @@ export async function sendMail(options: MailOptions): Promise<boolean> {
     const resend = new Resend(apiKey)
     const from = options.from ?? process.env.RESEND_FROM ?? process.env.SENDGRID_FROM ?? 'noreply@ecopowertech.com'
 
-    await resend.emails.send({
+    const { data, error } = await resend.emails.send({
         from,
         to: options.to,
         replyTo: options.replyTo,
@@ -45,5 +45,11 @@ export async function sendMail(options: MailOptions): Promise<boolean> {
         })),
     })
 
+    if (error) {
+        console.error("[mailer] Resend API Error:", error)
+        throw new Error(`Resend Error: ${error.message}`)
+    }
+
+    console.log(`[mailer] Sent successfully. ID: ${data?.id}`)
     return true
 }

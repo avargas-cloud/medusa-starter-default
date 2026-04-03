@@ -499,25 +499,36 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
 
 function buildPaymentCard(paymentUrl: string, amountDisplay: string, baseDisplay?: string, feeDisplay?: string): string {
   const breakdownHtml = baseDisplay && feeDisplay ? `
-    <div style="font-size:12px;color:#4b5563;margin-bottom:8px;line-height:1.4;">
-      <div style="display:flex;justify-content:space-between;"><span>Order Balance:</span> <span>${baseDisplay}</span></div>
-      <div style="display:flex;justify-content:space-between;"><span>3% Convenience Fee:</span> <span>${feeDisplay}</span></div>
-    </div>
-  ` : `<p style="margin:4px 0 8px;color:#9ca3af;font-size:11px;">* Includes 3% Credit Card Convenience Fee</p>`
+    <table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;color:#475569;margin-bottom:12px;line-height:1.5;">
+      <tr>
+        <td style="padding-bottom:8px;border-bottom:1px solid #e2e8f0;text-align:left;">Total Due:</td>
+        <td style="padding-bottom:8px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:600;color:#0f172a;">${baseDisplay}</td>
+      </tr>
+      <tr>
+        <td style="padding-top:8px;text-align:left;">Card Processing Fee (3%):</td>
+        <td style="padding-top:8px;text-align:right;font-weight:600;color:#0f172a;">${feeDisplay}</td>
+      </tr>
+    </table>
+  ` : `<p style="margin:4px 0 12px;color:#64748b;font-size:13px;">* Includes 3% credit card processing fee</p>`
 
   return `
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;margin:20px 0;">
-  <tr><td style="padding:20px 24px;">
-    <p style="margin:0 0 8px;color:#7c3aed;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;">Payment Request</p>
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;margin:24px 0;border-collapse:separate;box-shadow:0 4px 6px -1px rgba(0,0,0,0.02),0 2px 4px -1px rgba(0,0,0,0.02);">
+  <tr><td style="padding:32px;">
+    <h3 style="margin:0 0 16px;color:#0f172a;font-size:18px;font-weight:700;letter-spacing:-0.02em;">Payment Request</h3>
     ${breakdownHtml}
-    <p style="margin:0 0 16px;color:#111827;font-size:28px;font-weight:800;line-height:1;">${amountDisplay}</p>
-    <table cellpadding="0" cellspacing="0" style="margin-bottom:14px;">
-      <tr><td style="background:#7c3aed;border-radius:7px;">
-        <a href="${paymentUrl}" style="display:block;padding:12px 32px;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;white-space:nowrap;">Pay Now</a>
+    <div style="background:#f8fafc;border-radius:8px;border:1px solid #f1f5f9;padding:24px;margin:20px 0;text-align:center;">
+      <p style="margin:0 0 4px;color:#64748b;font-size:13px;font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Total to pay</p>
+      <p style="margin:0;color:#1d3b8e;font-size:36px;font-weight:800;line-height:1;letter-spacing:-0.03em;">${amountDisplay}</p>
+    </div>
+    <table cellpadding="0" cellspacing="0" width="100%" style="margin:28px 0 20px;">
+      <tr><td style="text-align:center;">
+        <a href="${paymentUrl}" style="display:inline-block;background:#1d3b8e;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:16px 48px;border-radius:8px;letter-spacing:0.01em;">Pay Securely Online</a>
       </td></tr>
     </table>
-    <p style="margin:0;color:#9ca3af;font-size:11px;">Link expires in 7&nbsp;days · Secure payment powered by BAMS / iPOS Pays</p>
-    <p style="margin:4px 0 0;color:#9ca3af;font-size:10px;word-break:break-all;"><a href="${paymentUrl}" style="color:#7c3aed;">${paymentUrl}</a></p>
+    <div style="text-align:center;">
+      <p style="margin:0 0 8px;color:#94a3b8;font-size:12px;">Link expires in 7 days · Processed by BAMS / iPOS Pays</p>
+      <a href="${paymentUrl}" style="color:#1d3b8e;font-size:11px;text-decoration:underline;word-break:break-all;">${paymentUrl}</a>
+    </div>
   </td></tr>
 </table>`
 }
@@ -578,9 +589,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
 
   // Block 1: Greeting + intro text
   const bodyHtml = emailBody
-    ? `<div style="white-space:pre-wrap;line-height:1.6;font-size:14px;margin-bottom:4px;">${esc(String(emailBody))}</div>`
-    : `<p style="margin:0 0 6px;font-size:14px;">Dear ${customerName},</p>
-       <p style="margin:0;color:#555;font-size:14px;">Thank you for your business. Please find your ${docType.toLowerCase()} attached as a PDF.</p>`
+    ? `<div style="white-space:pre-wrap;line-height:1.6;font-size:15px;color:#334155;margin-bottom:8px;">${esc(String(emailBody))}</div>`
+    : `<p style="margin:0 0 12px;font-size:15px;color:#0f172a;">Dear ${customerName},</p>
+       <p style="margin:0;color:#475569;font-size:15px;line-height:1.6;">Thank you for your business. Please find your ${docType.toLowerCase()} attached as a PDF.</p>`
 
   // Block 2: Payment card (only if link was generated)
   const payCard = (paymentLinkUrl && paymentAmount)
@@ -594,31 +605,33 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
 
   // Block 3: Signature (from frontend field, or auto-generated fallback)
   const sigHtml = emailSignature
-    ? `<div style="white-space:pre-wrap;line-height:1.65;font-size:13px;color:#374151;margin-top:4px;">${esc(String(emailSignature))}</div>`
-    : `<p style="color:#555;font-size:13px;margin:0 0 4px;">If you have any questions, please don't hesitate to reach out.</p>
-       <p style="color:#374151;font-size:13px;margin:0;white-space:pre-wrap;">Warm regards,\nEcoPowerTech Team\n2760 W 84th St, Unit 4, Hialeah, FL 33016\nPhone: (305) 851-7028 · info@ecopowertech.com</p>`
+    ? `<div style="white-space:pre-wrap;line-height:1.65;font-size:14px;color:#475569;margin-top:8px;">${esc(String(emailSignature))}</div>`
+    : `<p style="color:#64748b;font-size:14px;margin:0 0 8px;">If you have any questions, please don't hesitate to reach out.</p>
+       <p style="color:#334155;font-size:14px;margin:0;white-space:pre-wrap;">Warm regards,\n<strong>EcoPowerTech Team</strong>\n2760 W 84th St, Unit 4, Hialeah, FL 33016\nPhone: (305) 851-7028 · info@ecopowertech.com</p>`
 
   const emailBodyHtml = `
 <!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><style>
-  body{font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111;background:#fff;margin:0;padding:0;}
-  .wrap{max-width:560px;margin:32px auto;padding:0 16px;}
-  .logo{display:flex;align-items:center;gap:8px;margin-bottom:20px;}
-  .logo span{font-size:16px;font-weight:800;letter-spacing:1px;color:#0f172a;}
-  h2{font-size:18px;font-weight:700;margin:0 0 12px;}
-  .box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:16px 20px;margin:20px 0;font-size:13px;line-height:1.7;}
-  .total{font-weight:700;font-size:15px;}
-  .sig{margin-top:24px;}
-  .footer{margin-top:32px;font-size:11px;color:#9ca3af;border-top:1px solid #e5e7eb;padding-top:12px;}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:15px;color:#334155;background:#f8fafc;margin:0;padding:40px 0;}
+  .wrap{max-width:600px;margin:0 auto;background:#ffffff;border-radius:12px;padding:48px 40px;box-shadow:0 10px 15px -3px rgba(0,0,0,0.04),0 4px 6px -2px rgba(0,0,0,0.02);border:1px solid #e2e8f0;}
+  .logo{display:flex;align-items:center;gap:12px;margin-bottom:36px;}
+  .logo span{font-size:18px;font-weight:800;letter-spacing:1px;color:#0f172a;}
+  h2{font-size:22px;font-weight:700;color:#0f172a;margin:0 0 24px;letter-spacing:-0.02em;}
+  .box{background:#f1f5f9;border-left:4px solid #1d3b8e;border-radius:0 8px 8px 0;padding:24px;margin:28px 0;font-size:14px;line-height:1.8;color:#334155;}
+  .box b{color:#0f172a;font-weight:600;display:inline-block;width:95px;}
+  .total{font-weight:700;font-size:17px;color:#0f172a;margin-top:16px;padding-top:16px;border-top:1px solid #cbd5e1;}
+  .sig{margin-top:40px;}
+  .footer{margin-top:48px;font-size:12px;line-height:1.6;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:24px;text-align:center;}
 </style></head>
 <body>
+<div style="background:#f8fafc;padding:40px 0;">
 <div class="wrap">
 
   <!-- LOGO -->
   <div class="logo">
-    <img src="https://bucket-production-2e09.up.railway.app/medusa-media/ecopowertech-logo.png" alt="" style="height:32px;" />
-    <span>ECOPOWERTECH</span>
+    <img src="https://bucket-production-2e09.up.railway.app/medusa-media/ecopowertech-logo.png" alt="" style="height:36px;vertical-align:middle;" />
+    <span style="display:inline-block;vertical-align:middle;margin-left:12px;font-size:18px;font-weight:800;letter-spacing:1px;color:#0f172a;">ECOPOWERTECH</span>
   </div>
 
   <!-- TITLE -->
@@ -633,7 +646,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     <div><b>Date:</b> ${params.estimateDate}</div>
     ${params.leadTime ? `<div><b>Lead Time:</b> ${params.leadTime}</div>` : ""}
     ${params.orderType ? `<div><b>Order Type:</b> ${params.orderType}</div>` : ""}
-    <div class="total" style="margin-top:8px;padding-top:8px;border-top:1px solid #e2e8f0;">Total: ${fmt(total)}</div>
+    <div class="total" style="margin-top:12px;padding-top:12px;border-top:1px solid #cbd5e1;">Total: ${fmt(total)}</div>
   </div>
 
   <!-- PAYMENT LINK (only when selected in modal) -->
@@ -648,6 +661,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     Phone: (305) 851-7028 &nbsp;·&nbsp; <a href="mailto:info@ecopowertech.com" style="color:#6b7280;">info@ecopowertech.com</a> &nbsp;·&nbsp; www.ecopowertech.com
   </div>
 
+</div>
 </div>
 </body>
 </html>`
@@ -720,6 +734,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
           estimate_sent_at: new Date().toISOString(),
           estimate_sent_to: customerEmail,
           estimate_sent_by: senderName,
+          ...(paymentLinkUrl ? { payment_link_count: Number(curMeta.payment_link_count || 1) + 1 } : {}),
           order_status: newStatus,
         },
       }),

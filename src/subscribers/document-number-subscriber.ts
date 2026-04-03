@@ -39,7 +39,7 @@ export default async function documentNumberSubscriber({
 
             // Use atomic JSON merge to avoid race condition with other subscribers
             await pgConnection.raw(
-                `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || $1::jsonb WHERE id = $2`,
+                `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || ?::jsonb WHERE id = ?`,
                 [JSON.stringify({ document_number: documentNumber }), order.id]
             )
         } 
@@ -66,7 +66,7 @@ export default async function documentNumberSubscriber({
             const patch: Record<string, string> = { document_number: documentNumber }
             if (oldEstimateNumber) patch.original_estimate_number = oldEstimateNumber
             await pgConnection.raw(
-                `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || $1::jsonb WHERE id = $2`,
+                `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || ?::jsonb WHERE id = ?`,
                 [JSON.stringify(patch), order.id]
             )
         }
