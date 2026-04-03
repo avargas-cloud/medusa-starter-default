@@ -6,6 +6,12 @@ import { sendMail } from "../../../../../utils/mailer"
 // Unlike @sparticuz/chromium (compiled for AWS Lambda), this binary is compiled specifically
 // for the current platform and includes all necessary shared libraries.
 async function launchBrowser() {
+  // nixpacks installs playwright chromium to /app/.playwright-browsers during build.
+  // PLAYWRIGHT_BROWSERS_PATH is set as a build variable but may not carry to runtime env,
+  // so we ensure it here so executablePath() resolves to the correct build-time location.
+  if (!process.env.PLAYWRIGHT_BROWSERS_PATH) {
+    process.env.PLAYWRIGHT_BROWSERS_PATH = "/app/.playwright-browsers"
+  }
   const execPath = process.env.CHROME_EXECUTABLE_PATH ?? playwrightChromium.executablePath()
   console.log(`[chrome] Launching: ${execPath}`)
   return playwrightChromium.launch({
