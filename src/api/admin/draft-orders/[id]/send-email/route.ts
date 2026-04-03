@@ -4,35 +4,33 @@ import { join } from "path"
 import { chromium as playwrightChromium } from "playwright-core"
 import { sendMail } from "../../../../../utils/mailer"
 
-// aptPkgs in nixpacks.toml persist to the Railway runtime container (unlike build-phase artifacts).
-// We install `chromium` via aptPkgs → available at /usr/bin/chromium in production.
-// Playwright cache is checked as fallback for local development.
-function resolveChromiumPath(): string {
-  if (process.env.CHROME_EXECUTABLE_PATH) return process.env.CHROME_EXECUTABLE_PATH
-
-  // 1. Apt-installed chromium — Railway production (from aptPkgs in nixpacks.toml)
-  for (const p of ["/usr/bin/chromium", "/usr/bin/chromium-browser"]) {
-    if (existsSync(p)) return p
+// ── Browser launcher ──────────────────────────────────────────────────────────
+// Production (Railway): set BROWSERLESS_URL=http://chromium.railway.internal:3000
+//   → connects to a dedicated Browserless Docker service via CDP (no local Chromium needed)
+// Local dev: falls back to playwright's installed Chromium (~/.cache/ms-playwright)
+async function launchBrowser() {
+  if (process.env.BROWSERLESS_URL) {
+    // Browserless exposes /json/version — connectOverCDP uses that to get the WS debugger URL
+    const baseUrl = process.env.BROWSERLESS_URL
+    console.log(`[chrome] Connecting to Browserless: ${baseUrl}`)
+    return playwrightChromium.connectOverCDP(baseUrl)
   }
 
-  // 2. Playwright cache — local development
+  // Local dev fallback: find playwright's installed Chromium
   const homeCache = process.env.HOME ? join(process.env.HOME, ".cache/ms-playwright") : null
+  let execPath = process.env.CHROME_EXECUTABLE_PATH ?? ""
   for (const root of [homeCache, "/root/.cache/ms-playwright"].filter(Boolean) as string[]) {
-    if (!existsSync(root)) continue
+    if (execPath || !existsSync(root)) continue
     for (const entry of readdirSync(root).filter(e => e.startsWith("chromium"))) {
       for (const variant of ["chrome-headless-shell-linux64/chrome-headless-shell", "chrome-linux64/chrome"]) {
         const candidate = join(root, entry, variant)
-        if (existsSync(candidate)) return candidate
+        if (existsSync(candidate)) { execPath = candidate; break }
       }
+      if (execPath) break
     }
   }
-
-  return playwrightChromium.executablePath()
-}
-
-async function launchBrowser() {
-  const execPath = resolveChromiumPath()
-  console.log(`[chrome] Launching: ${execPath}`)
+  if (!execPath) execPath = playwrightChromium.executablePath()
+  console.log(`[chrome] Launching local: ${execPath}`)
   return playwrightChromium.launch({
     executablePath: execPath,
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-zygote"],
@@ -40,12 +38,11 @@ async function launchBrowser() {
   })
 }
 
-// ── PDF generator using bundled Chromium ─────────────────────────────────
+// ── PDF generator from inline HTML ───────────────────────────────────────────
 async function generateEstimatePdf(html: string): Promise<Buffer> {
   const browser = await launchBrowser()
   try {
     const page = await browser.newPage()
-    // Playwright uses "networkidle" (not "networkidle0" like puppeteer)
     await page.setContent(html, { waitUntil: "networkidle" })
     const pdfBuffer = await page.pdf({
       format: "Letter",
