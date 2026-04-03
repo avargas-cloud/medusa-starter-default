@@ -495,7 +495,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
 
 // ── Payment link helpers ──────────────────────────────────────────────────────
 
-const SIGNATURE_RE = /^(warm regards|best regards|best,|sincerely,?|kind regards|thank you,?|regards,?|thanks,?)/im
+const SIGNATURE_RE = /^(warm regards|best regards|best,|sincerely,?|kind regards|thank you,?|regards,?|thanks,?)\s*$/im
 
 function splitBodyAndSignature(text: string): [string, string] {
   const lines = text.split(/\r?\n/)
