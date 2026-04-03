@@ -10,15 +10,19 @@ import { sendMail } from "../../../../../utils/mailer"
 function resolveChromiumPath(): string {
   if (process.env.CHROME_EXECUTABLE_PATH) return process.env.CHROME_EXECUTABLE_PATH
 
-  // /app/.playwright-browsers    — nixpacks build phase install (Railway)
-  // /root/.cache/ms-playwright   — playwright default when running as root (Railway runtime)
-  // $HOME/.cache/ms-playwright   — playwright default for current user (local dev)
+  // Build ordered list of paths to scan:
+  // 1. PLAYWRIGHT_BROWSERS_PATH env var (if set as Railway service var)
+  // 2. /app/.medusa/server/.playwright-browsers — installed post-build inside medusa server (Railway, persists in runtime layer)
+  // 3. $HOME/.cache/ms-playwright — playwright default for current user (local dev)
+  // 4. /root/.cache/ms-playwright — playwright default when running as root
+  const playwrightEnvPath = process.env.PLAYWRIGHT_BROWSERS_PATH ?? null
   const homeCache = process.env.HOME ? join(process.env.HOME, ".cache/ms-playwright") : null
   const searchRoots = [
-    "/app/.playwright-browsers",
+    playwrightEnvPath,
+    "/app/.medusa/server/.playwright-browsers",
+    homeCache,
     "/root/.cache/ms-playwright",
-    ...(homeCache ? [homeCache] : []),
-  ]
+  ].filter(Boolean) as string[]
 
   // All known binary locations across playwright versions:
   // - full chromium:      chromium-XXXX/chrome-linux64/chrome
