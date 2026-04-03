@@ -208,13 +208,25 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             if (process.env.QB_ORDER_FLOW_ENABLED === "true") {
                 try {
                     const { writePipelineRow } = require("../../../../../lib/quickbooks/qb-pipeline")
+                    const { getDbPool } = require("../../../../../api/utils/db-pool")
+                    // Skip the estimate waiting row — it's superseded by the Sales Order
+                    const pool = getDbPool()
+                    await pool.query(
+                        `UPDATE qb_order_pipeline
+                         SET status = 'skipped',
+                             error  = 'Converted to Sales Order — Estimate not needed'
+                         WHERE order_id = $1
+                           AND step     = 'estimate'
+                           AND status IN ('waiting', 'pending')`,
+                        [id]
+                    )
                     await writePipelineRow({
                         orderId: id,
                         step: "sales_order",
                         status: "waiting",
                         medusaRefNumber: documentNumber,
                     })
-                    console.log(`[convert-force] ✅ Wrote SO waiting pipeline row for ${documentNumber}`)
+                    console.log(`[convert-force] ✅ Skipped estimate row and wrote SO waiting pipeline row for ${documentNumber}`)
                 } catch (pErr: any) {
                     console.warn(`[convert-force] ⚠️ Could not write SO pipeline row: ${pErr.message}`)
                 }

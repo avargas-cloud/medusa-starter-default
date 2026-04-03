@@ -21,6 +21,8 @@ cmds = ["echo '--- INSTALL (yarn) ---'", "yarn install --frozen-lockfile"]
 cmds = [
   "echo '--- PATCH (workspace) ---'",
   "npx patch-package",
+  "echo '--- PLAYWRIGHT: install Chromium to /app/.playwright-browsers ---'",
+  "PLAYWRIGHT_BROWSERS_PATH=/app/.playwright-browsers npx playwright install chromium",
   "echo '--- BUILD (medusa) ---'",
   "yarn build",
   "echo '--- RE-PATCH (.medusa/server) ---'",

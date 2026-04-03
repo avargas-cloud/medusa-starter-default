@@ -1,12 +1,55 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
+import { existsSync, readdirSync } from "fs"
+import { join } from "path"
 import { chromium as playwrightChromium } from "playwright-core"
 import { sendMail } from "../../../../../utils/mailer"
 
-// Playwright Chromium is installed at startup via railway.json startCommand:
-//   npx playwright install chromium && npx medusa start
-// This guarantees the binary exists at the default ms-playwright cache path.
+// Playwright 1.47+ installs "Chrome Headless Shell" (chromium_headless_shell-XXXX) by default
+// when you run `playwright install chromium`. The binary name and path differ from full Chromium.
+// We scan both variants so this works regardless of playwright version or install mode.
+function resolveChromiumPath(): string {
+  if (process.env.CHROME_EXECUTABLE_PATH) return process.env.CHROME_EXECUTABLE_PATH
+
+  // /app/.playwright-browsers    — nixpacks build phase install (Railway)
+  // /root/.cache/ms-playwright   — playwright default when running as root (Railway runtime)
+  // $HOME/.cache/ms-playwright   — playwright default for current user (local dev)
+  const homeCache = process.env.HOME ? join(process.env.HOME, ".cache/ms-playwright") : null
+  const searchRoots = [
+    "/app/.playwright-browsers",
+    "/root/.cache/ms-playwright",
+    ...(homeCache ? [homeCache] : []),
+  ]
+
+  // All known binary locations across playwright versions:
+  // - full chromium:      chromium-XXXX/chrome-linux64/chrome
+  // - headless shell:     chromium_headless_shell-XXXX/chrome-headless-shell-linux64/chrome-headless-shell
+  const binaryVariants = [
+    "chrome-headless-shell-linux64/chrome-headless-shell",
+    "chrome-linux64/chrome",
+    "chrome-headless-shell-linux/chrome-headless-shell",
+    "chrome-linux/chrome",
+  ]
+
+  for (const root of searchRoots) {
+    if (!existsSync(root)) continue
+    // Match both "chromium-XXXX" and "chromium_headless_shell-XXXX"
+    const entries = readdirSync(root).filter(e => e.startsWith("chromium"))
+    for (const entry of entries) {
+      for (const variant of binaryVariants) {
+        const candidate = join(root, entry, variant)
+        if (existsSync(candidate)) {
+          console.log(`[chrome] Found binary at: ${candidate}`)
+          return candidate
+        }
+      }
+    }
+  }
+
+  return playwrightChromium.executablePath()
+}
+
 async function launchBrowser() {
-  const execPath = process.env.CHROME_EXECUTABLE_PATH ?? playwrightChromium.executablePath()
+  const execPath = resolveChromiumPath()
   console.log(`[chrome] Launching: ${execPath}`)
   return playwrightChromium.launch({
     executablePath: execPath,

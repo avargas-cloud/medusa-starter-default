@@ -209,13 +209,13 @@ function PipelineRow({ row, onRetry, retrying }: {
                                 )}
                             </span>
                         ) : null}
-                        {row.step === "sales_order" && row.status === "waiting" && !row.depends_on_step ? (
+                        {(row.step === "sales_order" || row.step === "estimate") && row.status === "waiting" && !row.depends_on_step ? (
                             <span className="flex items-center gap-1">
                                 <span className="text-[10px]">🕐</span>
                                 <span className="text-ui-fg-muted text-[11px] italic">1 Hour Window</span>
                             </span>
                         ) : null}
-                        {!row.depends_on_step && !(row.step === "apply_payment" && row.payment_dep_ref) && !(row.step === "sales_order" && row.status === "waiting") && (
+                        {!row.depends_on_step && !(row.step === "apply_payment" && row.payment_dep_ref) && !((row.step === "sales_order" || row.step === "estimate") && row.status === "waiting") && (
                             <span className="text-ui-fg-muted">—</span>
                         )}
                     </span>

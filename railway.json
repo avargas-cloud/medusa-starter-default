@@ -2,7 +2,6 @@
     "build": {},
     "deploy": {
         "healthcheckPath": "/health",
-        "healthcheckTimeout": 600,
-        "startCommand": "npx playwright install chromium && npx medusa start"
+        "healthcheckTimeout": 600
     }
 }
