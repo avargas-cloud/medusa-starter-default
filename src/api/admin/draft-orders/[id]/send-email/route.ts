@@ -573,7 +573,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
       const forwardedBase = forwardedHost ? `${forwardedProto}://${forwardedHost}` : null
       const reqOrigin = (req.headers["origin"] as string) || (req.headers["referer"] as string)
       const originBase = reqOrigin ? new URL(reqOrigin).origin : null
-      const POS_URL = process.env.POS_URL ?? process.env.POS_FRONTEND_URL ?? process.env.NEXT_PUBLIC_POS_URL ?? forwardedBase ?? originBase ?? "http://localhost:3001"
+      const POS_URL = process.env.POS_URL ?? forwardedBase ?? originBase ?? "http://localhost:3001"
       const params = new URLSearchParams({ docId, auto: "0" })
       if (displayId) params.set("displayId", String(displayId))
       const printUrl = `${POS_URL}/print/${templateId}?${params}`

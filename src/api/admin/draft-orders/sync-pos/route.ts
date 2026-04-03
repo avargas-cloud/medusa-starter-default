@@ -1,7 +1,9 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
+import { ContainerRegistrationKeys } from "@medusajs/utils"
 import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline"
 
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
+    const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)
     const logger = req.scope.resolve("logger")
     const base = `http://localhost:${process.env.PORT ?? 9000}`
     const authHeaders: Record<string, string> = {
@@ -108,10 +110,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
 
         } else if (action === "update") {
             // 0. Handle Pos Transfer
-            // Fetch the old order to see if customer changed
-            const currentOrder = await localFetch(`/admin/draft-orders/${resolvedId}?fields=customer_id,+items.*`, { method: "GET" })
-                .catch(() => null)
-            const draftOrderModel = currentOrder?.draft_order ?? currentOrder?.order
+            // Fetch the old order natively to ensure metadata isn't stripped by API projections
+            let draftOrderModel: any = null
+            try {
+                const { data } = await query.graph({
+                    entity: "order",
+                    fields: ["id", "customer_id", "metadata", "display_id", "items.*", "cart.*"],
+                    filters: { id: resolvedId }
+                })
+                draftOrderModel = data?.[0]
+            } catch (e: any) {
+                logger.warn(`Failed to fetch draft order natively: ${e.message}`)
+            }
 
             if (customer_id && draftOrderModel?.customer_id && customer_id !== draftOrderModel.customer_id) {
                 await localFetch(`/admin/pos-transfer`, {
@@ -221,6 +231,74 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                     await localFetch("/admin/pos-discount", {
                         method: "DELETE", body: JSON.stringify({ order_id: resolvedId, promotion_code: savedPromoCode })
                     }).catch(e => logger.warn(`Remove promotion failed: ${e.message}`))
+                }
+            }
+
+            // 5b. QuickBooks Pipeline hooks for Draft Orders (Estimates)
+            logger.info(`[sync-pos] QB Flow Enabled: ${process.env.QB_ORDER_FLOW_ENABLED}, DraftOrder ID: ${resolvedId}`)
+            if (process.env.QB_ORDER_FLOW_ENABLED === "true") {
+                const qbTxnId = draftOrderModel?.metadata?.qb_txn_id
+                logger.info(`[sync-pos] qbTxnId found: ${qbTxnId}`)
+                if (qbTxnId) {
+                    try {
+                        const { updateEstimateInQb } = require("../../../../lib/quickbooks/client/estimates")
+                        
+                        await localFetch(`/admin/draft-orders/${resolvedId}`, {
+                            method: "POST",
+                            body: JSON.stringify({ metadata: { ...(draftOrderModel?.metadata || {}), qb_sync_status: "pending" } })
+                        }).catch(() => {})
+
+                        const medusaRef = draftOrderModel?.display_id ? `E${draftOrderModel.display_id}` : null
+                        const qbRef = draftOrderModel?.metadata?.qb_ref_number ?? null
+
+                        await writePipelineRow({
+                            orderId: resolvedId,
+                            step: "estimate",
+                            status: "pending",
+                            qbTxnId,
+                            qbRefNumber: qbRef,
+                            medusaRefNumber: medusaRef
+                        }).catch((e: any) => logger.warn(`[sync-pos] Could not write pending pipeline row: ${e.message}`))
+
+                        // Fire and forget QB Sync
+                        ;(async () => {
+                            try {
+                                const { data: [fullOrder] } = await query.graph({
+                                    entity: "order",
+                                    fields: ["*", "items.*", "items.variant.*", "customer.*", "shipping_methods.*", "tax_lines.*"],
+                                    filters: { id: resolvedId }
+                                })
+                                if (!fullOrder) return
+
+                                const result = await updateEstimateInQb(fullOrder as any)
+                                if (result.success) {
+                                    await writePipelineRow({
+                                        orderId: resolvedId,
+                                        step: "estimate",
+                                        status: "submitted",
+                                        bridgeOpId: result.data?.operationId || null,
+                                        qbTxnId,
+                                        qbRefNumber: qbRef,
+                                        medusaRefNumber: medusaRef
+                                    })
+                                } else {
+                                    await writePipelineRow({
+                                        orderId: resolvedId,
+                                        step: "estimate",
+                                        status: "failed",
+                                        qbTxnId,
+                                        qbRefNumber: qbRef,
+                                        medusaRefNumber: medusaRef,
+                                        error: result.error
+                                    })
+                                }
+                            } catch (e: any) {
+                                logger.error(`[sync-pos] Async estimate QB update failed: ${e.message}`)
+                            }
+                        })()
+                    } catch (qbErr: any) {
+                        logger.error(`[sync-pos] Failed to queue QB sync for modified estimate: ${qbErr.message}`)
+                    }
                 }
             }
         }
