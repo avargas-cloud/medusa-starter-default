@@ -410,7 +410,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         }
     })
 
-    // ── Update QuickBooks Sales Order (Sync Edits) ───────────────────────────
+    // ── Update QuickBooks Sales Order / Estimate (Sync Edits) ───────────────────
     try {
         const qbEnabled = process.env.QB_ORDER_FLOW_ENABLED === "true"
         const skipQb = (req.body as any).skip_qb === true
@@ -418,7 +418,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             const { data: qbOrderData } = await query.graph({
                 entity: "order",
                 fields: [
-                    "id", "version", "metadata", "items.*", "items.variant.*", "items.variant.metadata"
+                    "id", "display_id", "version", "metadata", "items.*", "items.variant.*", "items.variant.metadata"
                 ],
                 filters: { id }
             })
@@ -428,28 +428,84 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             }
             
             // Dynamic import because of path nesting
-            const { getSoTxnId } = require("../../../../../lib/quickbooks/qb-metadata-types")
-            const { updateSalesOrderInQb } = require("../../../../../lib/quickbooks/qb-bridge-client")
+            const { getSoTxnId, getEstimateTxnId } = require("../../../../../lib/quickbooks/qb-metadata-types")
+            const { updateSalesOrderInQb } = require("../../../../../lib/quickbooks/client/sales-orders")
+            const { updateEstimateInQb } = require("../../../../../lib/quickbooks/client/estimates")
             const { buildQbItems } = require("../../../../../lib/quickbooks/order-flow-core")
+            const { writePipelineRow } = require("../../../../../lib/quickbooks/qb-pipeline")
+            const { getDbPool } = require("../../../../utils/db-pool")
             
-            const txnId = getSoTxnId(qbOrder?.metadata)
+            const soTxnId = getSoTxnId(qbOrder?.metadata)
+            const estimateTxnId = getEstimateTxnId(qbOrder?.metadata)
             
-            if (txnId && qbOrder?.items && qbOrder.items.length > 0) {
-                logger.info(`[post-edit-sync] QB integration: Pushing Sales Order modifications to txnId=${txnId}...`)
+            if ((soTxnId || estimateTxnId) && qbOrder?.items && qbOrder.items.length > 0) {
+                const isEstimateOnly = estimateTxnId && !soTxnId;
+                const txnId = soTxnId || estimateTxnId;
+                const docTypeStr = isEstimateOnly ? "Estimate" : "Sales Order";
+                const pipelineStep = isEstimateOnly ? "estimate" : "sales_order";
+                
+                logger.info(`[post-edit-sync] QB integration: Pushing ${docTypeStr} modifications to txnId=${txnId}...`)
                 const modItems = buildQbItems(qbOrder.items, qbOrder.metadata)
                 
-                // Run async fire-and-forget so POS UI doesn't hang waiting for Web Connector
-                updateSalesOrderInQb({
+                // Inject pre-flight metadata so UI shows "PENDING"
+                const friendlyRef = (qbOrder.metadata?.document_number as string) || (qbOrder.display_id ? (isEstimateOnly ? `E${qbOrder.display_id}` : `S${qbOrder.display_id}`) : null)
+
+                try {
+                    const pool = getDbPool();
+                    await pool.query(
+                        `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || $1::jsonb WHERE id = $2`,
+                        [JSON.stringify({ qb_sync_status: "pending" }), id]
+                    )
+                } catch (mErr) {
+                    logger.warn(`[post-edit-sync] Could not set pending status: ${mErr}`)
+                }
+
+                // Write "pending" pipeline row immediately
+                try {
+                    await writePipelineRow({
+                        orderId: id,
+                        step: pipelineStep,
+                        status: "pending",
+                        medusaRefNumber: friendlyRef
+                    })
+                } catch (pErr: any) {
+                    logger.warn(`[post-edit-sync] ⚠️ Could not write pre-flight pipeline row: ${pErr.message}`)
+                }
+
+                // Fire and forget
+                const updateFn = isEstimateOnly ? updateEstimateInQb : updateSalesOrderInQb;
+                updateFn({
                     txnId,
                     items: modItems
-                }).then((qbRes: any) => {
+                }).then(async (qbRes: any) => {
                     if (qbRes.success) {
-                        logger.info(`[post-edit-sync] ✅ Async QB Sales Order queue successful! opId=${qbRes.data?.operationId}`)
+                        logger.info(`[post-edit-sync] ✅ Async QB ${docTypeStr} queue successful! opId=${qbRes.data?.operationId}`)
+                        try {
+                            await writePipelineRow({ 
+                                orderId: id, 
+                                step: pipelineStep, 
+                                status: "submitted", 
+                                bridgeOpId: qbRes.data?.operationId,
+                                qbTxnId: txnId
+                            })
+                        } catch(e:any) {
+                            logger.warn(`[post-edit-sync] Could not update pipeline row on success: ${e.message}`);
+                        }
                     } else {
-                        logger.error(`[post-edit-sync] ❌ Async QB SO Mod failed: ${qbRes.error}`)
+                        logger.error(`[post-edit-sync] ❌ Async QB ${docTypeStr} Mod failed: ${qbRes.error}`)
+                        try {
+                            const pool = getDbPool();
+                            await pool.query(`UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status": "error"}'::jsonb WHERE id = $1`, [id])
+                            await writePipelineRow({ orderId: id, step: pipelineStep, status: "failed", error: qbRes.error, qbTxnId: txnId })
+                        } catch(e) {}
                     }
-                }).catch((e: any) => {
-                    logger.error(`[post-edit-sync] ❌ Async QB SO Mod Exception: ${e.message}`)
+                }).catch(async (e: any) => {
+                    logger.error(`[post-edit-sync] ❌ Async QB ${docTypeStr} Mod Exception: ${e.message}`)
+                    try {
+                         const pool = getDbPool();
+                         await pool.query(`UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status": "error"}'::jsonb WHERE id = $1`, [id])
+                         await writePipelineRow({ orderId: id, step: pipelineStep, status: "failed", error: e.message, qbTxnId: txnId })
+                    } catch(err) {}
                 })
                 
                 results.qb_sync = "queued_async"
@@ -459,7 +515,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             results.qb_sync = "skipped_clean"
         }
     } catch (e: any) {
-        logger.warn(`[post-edit-sync] QuickBooks SO mod sync non-fatal err: ${e.message}`)
+        logger.warn(`[post-edit-sync] QuickBooks document mod sync non-fatal err: ${e.message}`)
     }
 
     res.status(200).json({ success: true, ...results })

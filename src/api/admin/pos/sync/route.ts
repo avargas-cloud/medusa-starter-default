@@ -41,13 +41,31 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     if (!getEstimateTxnId(order.metadata || {})) {
                         return res.status(400).json({ error: "Cannot close: Estimate is not in QuickBooks." })
                     }
+                    const pipelineStep = "close_estimate";
                     try {
                         await orderModule.updateOrders(id, { metadata: { ...(order.metadata || {}), qb_sync_status: "voiding" } })
+                        const { writePipelineRow } = require('../../../../lib/quickbooks/qb-pipeline')
+                        await writePipelineRow({
+                            orderId: id,
+                            step: pipelineStep,
+                            status: "pending",
+                            qbTxnId: getEstimateTxnId(order.metadata || {}),
+                        })
                     } catch (e) {}
                     // QuickBooks doesn't natively support "VoidEstimate", but we can mark it inactive/sync status voided.
                     const { closeEstimateInQb } = require('../../../../lib/quickbooks/qb-bridge-client')
                     if (closeEstimateInQb) {
-                        await closeEstimateInQb(getEstimateTxnId(order.metadata || {}), (m: string) => logger.info(m))
+                        const qbTxnId = getEstimateTxnId(order.metadata || {});
+                        closeEstimateInQb(qbTxnId, (m: string) => logger.info(m)).then(async (res: any) => {
+                            try {
+                                const { writePipelineRow } = require('../../../../lib/quickbooks/qb-pipeline')
+                                if (res?.success) {
+                                    await writePipelineRow({ orderId: id, step: pipelineStep, status: "submitted", bridgeOpId: res.data?.operationId, qbTxnId })
+                                } else {
+                                    await writePipelineRow({ orderId: id, step: pipelineStep, status: "failed", error: res?.error, qbTxnId })
+                                }
+                            } catch(e) {}
+                        })
                     }
                     try {
                         const refreshed = await orderModule.retrieveOrder(id)
@@ -503,6 +521,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                         try {
                             const { voidCreditMemoInQb } = require('../../../../lib/quickbooks/client/credit-memos')
                             const { writePipelineRow } = require('../../../../lib/quickbooks/qb-pipeline')
+                            
+                            try {
+                                const qb_ref_number = creditMemo.metadata?.qb_ref_number || creditMemo.credit_memo_number || null;
+                                await writePipelineRow({
+                                    referenceId:     id,
+                                    referenceType:   "credit_memo",
+                                    step:            "void_credit_memo",
+                                    status:          "pending",
+                                    qbTxnId:         creditMemo.qb_txn_id,
+                                    qbRefNumber:     qb_ref_number,
+                                    medusaRefNumber: creditMemo.credit_memo_number || null,
+                                })
+                            } catch (pErr: any) {
+                                logger.warn(`${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${pErr.message}`)
+                            }
+
                             const result = await voidCreditMemoInQb(
                                 creditMemo.qb_txn_id,
                                 creditMemo.qb_edit_sequence,

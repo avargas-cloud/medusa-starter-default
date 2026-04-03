@@ -72,12 +72,27 @@ export async function handleInvoiceVoided(data: any, orderModule: any, logger: a
         logger.warn(`${LOG_PREFIX} Could not set voiding status: ${mErr}`)
     }
 
+    const pipelineStep = isSalesReceipt ? "void_sales_receipt" : "void_invoice"
+
+    try {
+        await writePipelineRow({
+            orderId: order_id,
+            referenceId: invoice_id ?? null,
+            referenceType: "pos_invoice",
+            step: pipelineStep,
+            status: "pending",
+            qbTxnId: invoiceTxnId,
+            qbRefNumber: invoiceRef ?? null,
+            medusaRefNumber: invoice_id ?? null
+        })
+    } catch (pErr: any) {
+        logger.warn(`${LOG_PREFIX} Could not write pre-flight pipeline row: ${pErr.message}`)
+    }
+
     // Dynamically choose correct Bridge method
     const result = isSalesReceipt 
         ? await voidSalesReceiptInQb(invoiceTxnId, (msg) => logger.info(msg))
         : await voidInvoiceInQb(invoiceTxnId, (msg) => logger.info(msg))
-    
-    const pipelineStep = isSalesReceipt ? "void_sales_receipt" : "void_invoice"
 
     if (!result.success) {
         logger.error(`${LOG_PREFIX} ⚠️ Failed to void ${documentTypeName.toLowerCase()}: ${result.error}`)

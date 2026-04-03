@@ -59,6 +59,17 @@ export async function handleOrderCanceled(
 
     if (invoiceTxnId) {
         logger.info(`${LOG_PREFIX} Voiding QB Invoice ${invoiceTxnId}...`)
+        try {
+            await writePipelineRow({
+                orderId:         orderId,
+                step:            "void_invoice",
+                status:          "pending",
+                qbTxnId:         invoiceTxnId,
+                qbRefNumber:     invoiceRef ?? null,
+                medusaRefNumber: invoiceRef ?? null,
+            })
+        } catch (pErr: any) { logger.warn(`${LOG_PREFIX} Could not write pre-flight pipeline row: ${pErr.message}`) }
+        
         const result = await voidInvoiceInQb(invoiceTxnId, (msg) => logger.info(msg))
         if (!result.success) {
             logger.error(`${LOG_PREFIX} ⚠️ Failed to void invoice: ${result.error}`)
@@ -93,6 +104,17 @@ export async function handleOrderCanceled(
 
     if (soTxnId) {
         logger.info(`${LOG_PREFIX} Closing QB SO ${soTxnId}...`)
+        try {
+            await writePipelineRow({
+                orderId:         orderId,
+                step:            "void_sales_order",
+                status:          "pending",
+                qbTxnId:         soTxnId,
+                qbRefNumber:     soRef ?? null,
+                medusaRefNumber: soRef ?? null,
+            })
+        } catch (pErr: any) { logger.warn(`${LOG_PREFIX} Could not write pre-flight pipeline row: ${pErr.message}`) }
+        
         const result = await closeSalesOrderInQb(soTxnId, (msg: string) => logger.info(msg))
         if (!result.success) {
             logger.error(`${LOG_PREFIX} ⚠️ Failed to close SO: ${result.error}`)
