@@ -4,29 +4,20 @@ NODE_OPTIONS = "--max-old-space-size=4096"
 
 [phases.setup]
 nixPkgs = ["nodejs-20_x", "yarn", "python3", "gnumake", "gcc", "g++", "cairo", "pango", "glib"]
-# Playwright Chromium runtime dependencies
-aptPkgs = ["libnss3", "libnspr4", "libatk1.0-0", "libatk-bridge2.0-0", "libcups2", "libdrm2", "libxkbcommon0", "libxcomposite1", "libxdamage1", "libxrandr2", "libgbm1", "libasound2", "libx11-6", "libxcb1", "libxext6", "libxfixes3", "fonts-liberation", "ca-certificates"]
+# Chromium via apt — aptPkgs persist to the runtime container (unlike build-phase artifacts).
+# This is the confirmed working approach for headless Chrome on Railway + nixpacks.
+aptPkgs = ["chromium", "libnss3", "libnspr4", "libatk1.0-0", "libatk-bridge2.0-0", "libcups2", "libdrm2", "libxkbcommon0", "libxcomposite1", "libxdamage1", "libxrandr2", "libgbm1", "libasound2", "libx11-6", "libxcb1", "libxext6", "libxfixes3", "fonts-liberation", "ca-certificates"]
 
 
 [phases.install]
 cmds = ["echo '--- INSTALL (yarn) ---'", "yarn install --frozen-lockfile"]
 
 [phases.build]
-# Step 1: Apply patches to the build workspace (affects medusa build compilation)
-# Step 2: medusa build → generates .medusa/server/ with FRESH npm install (un-patched!)
-# Step 3: Copy patches/ into .medusa/server/ and re-apply them there
-# Step 4: Inject postinstall hook into .medusa/server/package.json so future npm installs re-patch
-# NOTE: Playwright Chromium is installed at STARTUP (railway.json startCommand), not here,
-# because nixpacks build artifacts don't always persist to the runtime container.
 cmds = [
   "echo '--- PATCH (workspace) ---'",
   "npx patch-package",
   "echo '--- BUILD (medusa) ---'",
   "yarn build",
   "echo '--- RE-PATCH (.medusa/server) ---'",
-  "node scripts/post-build.js",
-  "echo '--- PLAYWRIGHT: install Chromium inside medusa server (persists in runtime layer) ---'",
-  "PLAYWRIGHT_BROWSERS_PATH=/app/.medusa/server/.playwright-browsers npx playwright install chromium",
-  "echo '--- PLAYWRIGHT: verify install ---'",
-  "ls /app/.medusa/server/.playwright-browsers/ || echo '[warn] playwright dir missing'"
+  "node scripts/post-build.js"
 ]

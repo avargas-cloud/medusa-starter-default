@@ -4,47 +4,25 @@ import { join } from "path"
 import { chromium as playwrightChromium } from "playwright-core"
 import { sendMail } from "../../../../../utils/mailer"
 
-// Playwright 1.47+ installs "Chrome Headless Shell" (chromium_headless_shell-XXXX) by default
-// when you run `playwright install chromium`. The binary name and path differ from full Chromium.
-// We scan both variants so this works regardless of playwright version or install mode.
+// aptPkgs in nixpacks.toml persist to the Railway runtime container (unlike build-phase artifacts).
+// We install `chromium` via aptPkgs → available at /usr/bin/chromium in production.
+// Playwright cache is checked as fallback for local development.
 function resolveChromiumPath(): string {
   if (process.env.CHROME_EXECUTABLE_PATH) return process.env.CHROME_EXECUTABLE_PATH
 
-  // Build ordered list of paths to scan:
-  // 1. PLAYWRIGHT_BROWSERS_PATH env var (if set as Railway service var)
-  // 2. /app/.medusa/server/.playwright-browsers — installed post-build inside medusa server (Railway, persists in runtime layer)
-  // 3. $HOME/.cache/ms-playwright — playwright default for current user (local dev)
-  // 4. /root/.cache/ms-playwright — playwright default when running as root
-  const playwrightEnvPath = process.env.PLAYWRIGHT_BROWSERS_PATH ?? null
+  // 1. Apt-installed chromium — Railway production (from aptPkgs in nixpacks.toml)
+  for (const p of ["/usr/bin/chromium", "/usr/bin/chromium-browser"]) {
+    if (existsSync(p)) return p
+  }
+
+  // 2. Playwright cache — local development
   const homeCache = process.env.HOME ? join(process.env.HOME, ".cache/ms-playwright") : null
-  const searchRoots = [
-    playwrightEnvPath,
-    "/app/.medusa/server/.playwright-browsers",
-    homeCache,
-    "/root/.cache/ms-playwright",
-  ].filter(Boolean) as string[]
-
-  // All known binary locations across playwright versions:
-  // - full chromium:      chromium-XXXX/chrome-linux64/chrome
-  // - headless shell:     chromium_headless_shell-XXXX/chrome-headless-shell-linux64/chrome-headless-shell
-  const binaryVariants = [
-    "chrome-headless-shell-linux64/chrome-headless-shell",
-    "chrome-linux64/chrome",
-    "chrome-headless-shell-linux/chrome-headless-shell",
-    "chrome-linux/chrome",
-  ]
-
-  for (const root of searchRoots) {
+  for (const root of [homeCache, "/root/.cache/ms-playwright"].filter(Boolean) as string[]) {
     if (!existsSync(root)) continue
-    // Match both "chromium-XXXX" and "chromium_headless_shell-XXXX"
-    const entries = readdirSync(root).filter(e => e.startsWith("chromium"))
-    for (const entry of entries) {
-      for (const variant of binaryVariants) {
+    for (const entry of readdirSync(root).filter(e => e.startsWith("chromium"))) {
+      for (const variant of ["chrome-headless-shell-linux64/chrome-headless-shell", "chrome-linux64/chrome"]) {
         const candidate = join(root, entry, variant)
-        if (existsSync(candidate)) {
-          console.log(`[chrome] Found binary at: ${candidate}`)
-          return candidate
-        }
+        if (existsSync(candidate)) return candidate
       }
     }
   }
