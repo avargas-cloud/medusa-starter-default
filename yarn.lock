@@ -6342,6 +6342,14 @@
     color "^5.0.2"
     text-hex "1.0.x"
 
+"@sparticuz/chromium@^143.0.4":
+  version "143.0.4"
+  resolved "https://registry.yarnpkg.com/@sparticuz/chromium/-/chromium-143.0.4.tgz#90e22a54a37531197fc8449f72c6f641895cf168"
+  integrity sha512-/6I7uQTRhRDD2/gGPQ1Gkf+Dqk0RYDACPJDZfSzz0OWk4JmUTonNHPXbrn6UIklOHlnDLf8xAAzkOZKB/cJpLA==
+  dependencies:
+    follow-redirects "^1.15.11"
+    tar-fs "^3.1.1"
+
 "@sqltools/formatter@^1.2.5":
   version "1.2.5"
   resolved "https://registry.yarnpkg.com/@sqltools/formatter/-/formatter-1.2.5.tgz#3abc203c79b8c3e90fd6c156a0c62d5403520e12"

@@ -1,44 +1,24 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
 import puppeteer from "puppeteer-core"
 import { sendMail } from "../../../../../utils/mailer"
-import { existsSync } from "fs"
-import { execSync } from "child_process"
 
-// ── Chrome path resolver — works on local (google-chrome) and Railway nix (chromium) ──
-function findChromePath(): string {
-  if (process.env.CHROME_EXECUTABLE_PATH) return process.env.CHROME_EXECUTABLE_PATH
-  const candidates = [
-    "/usr/bin/google-chrome",
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/snap/bin/chromium",
-    "/run/current-system/sw/bin/chromium",
-  ]
-  for (const p of candidates) {
-    try { if (existsSync(p)) return p } catch {}
-  }
-  // Try `which` to find chromium installed by nix on Railway
-  for (const cmd of ["chromium", "google-chrome", "chromium-browser"]) {
-    try {
-      const found = execSync(`which ${cmd}`, { timeout: 3000 }).toString().trim()
-      if (found) { console.log(`[chrome] Found via which: ${found}`); return found }
-    } catch {}
-  }
-  console.warn("[chrome] No browser found — PDF generation will fail")
-  return "/usr/bin/google-chrome"
-}
-
-const PUPPETEER_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
-  "--disable-gpu", "--disable-extensions", "--single-process"]
-
-// ── PDF generator using system Chrome ────────────────────────────────────────
-async function generateEstimatePdf(html: string): Promise<Buffer> {
-  const browser = await puppeteer.launch({
-    executablePath: findChromePath(),
-    args: PUPPETEER_ARGS,
+// ── Shared browser launcher — uses @sparticuz/chromium bundled binary ─────────────
+async function launchBrowser() {
+  // Dynamic import to avoid CJS/ESM conflict with @sparticuz/chromium (ESM-only package)
+  const { default: Chromium } = await import("@sparticuz/chromium")
+  Chromium.setGraphicsMode = false  // disable WebGL/GPU for headless
+  const execPath = process.env.CHROME_EXECUTABLE_PATH ?? await Chromium.executablePath()
+  console.log(`[chrome] Launching: ${execPath}`)
+  return puppeteer.launch({
+    executablePath: execPath,
+    args: [...Chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
     headless: true,
   })
+}
+
+// ── PDF generator using bundled Chromium ─────────────────────────────────
+async function generateEstimatePdf(html: string): Promise<Buffer> {
+  const browser = await launchBrowser()
   try {
     const page = await browser.newPage()
     await page.setContent(html, { waitUntil: "networkidle0" })
@@ -55,11 +35,7 @@ async function generateEstimatePdf(html: string): Promise<Buffer> {
 
 // ── PDF from a live URL (frontend custom template) ────────────────────────────
 async function generatePdfFromUrl(url: string, posState?: string, tokenRaw?: string): Promise<Buffer> {
-  const browser = await puppeteer.launch({
-    executablePath: findChromePath(),
-    args: PUPPETEER_ARGS,
-    headless: true,
-  })
+  const browser = await launchBrowser()
   try {
     const page = await browser.newPage()
     
