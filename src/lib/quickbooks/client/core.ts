@@ -74,6 +74,8 @@ export async function pollOperationResult(
                     msgs.ReceivePaymentAddRs?.ReceivePaymentRet?.EditSequence ||
                     msgs.CreditMemoAddRs?.CreditMemoRet?.EditSequence ||
                     msgs.CheckAddRs?.CheckRet?.EditSequence ||
+                    msgs.ItemInventoryAddRs?.ItemInventoryRet?.EditSequence ||
+                    msgs.ItemInventoryModRs?.ItemInventoryRet?.EditSequence ||
                     // ── Mod responses ──────────────────────────────────────────
                     msgs.EstimateModRs?.EstimateRet?.EditSequence ||
                     msgs.SalesOrderModRs?.SalesOrderRet?.EditSequence ||
