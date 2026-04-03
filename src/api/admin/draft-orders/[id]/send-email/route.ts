@@ -1,31 +1,53 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
+import { existsSync } from "fs"
 import puppeteer from "puppeteer-core"
 import { sendMail } from "../../../../../utils/mailer"
 
-// ── Shared browser launcher — uses @sparticuz/chromium bundled binary ─────────────
+// Chromium paths checked in order; the nix store path covers Railway/nixpacks.
+// @sparticuz/chromium is kept as last-resort for Lambda/serverless only.
+const SYSTEM_CHROME_CANDIDATES = [
+  "/nix/var/nix/profiles/default/bin/chromium",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/google-chrome",
+]
+
+const BASE_ARGS = [
+  "--no-sandbox",
+  "--disable-setuid-sandbox",
+  "--disable-dev-shm-usage",
+  "--disable-gpu",
+  "--no-first-run",
+  "--no-zygote",
+]
+
 async function launchBrowser() {
-  const { default: Chromium } = await import("@sparticuz/chromium")
-  Chromium.setGraphicsMode = false
-  let execPath = process.env.CHROME_EXECUTABLE_PATH
+  // 1. Explicit env override
+  let execPath = process.env.CHROME_EXECUTABLE_PATH ?? ""
+  let useServerlessArgs = false
+
+  // 2. Known system / nix paths (no PATH dependency — works in Railway runtime)
   if (!execPath) {
-    try {
-      const { execSync } = await import("child_process")
-      execPath = execSync("which chromium", { encoding: "utf8" }).trim()
-    } catch {
-      try {
-        const { execSync } = await import("child_process")
-        execPath = execSync("which chromium-browser", { encoding: "utf8" }).trim()
-      } catch {
-        execPath = await Chromium.executablePath()
-      }
-    }
+    execPath = SYSTEM_CHROME_CANDIDATES.find(p => existsSync(p)) ?? ""
   }
+
+  // 3. @sparticuz/chromium bundled binary (serverless / Lambda fallback)
+  if (!execPath) {
+    const { default: Chromium } = await import("@sparticuz/chromium")
+    Chromium.setGraphicsMode = false
+    execPath = await Chromium.executablePath()
+    useServerlessArgs = true
+  }
+
+  let args = BASE_ARGS
+  if (useServerlessArgs) {
+    const { default: Chromium } = await import("@sparticuz/chromium")
+    args = [...Chromium.args, ...BASE_ARGS]
+  }
+
   console.log(`[chrome] Launching: ${execPath}`)
-  return puppeteer.launch({
-    executablePath: execPath,
-    args: [...Chromium.args, "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--no-zygote"],
-    headless: true,
-  })
+  return puppeteer.launch({ executablePath: execPath, args, headless: true })
 }
 
 // ── PDF generator using bundled Chromium ─────────────────────────────────
