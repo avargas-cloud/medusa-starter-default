@@ -8,9 +8,17 @@ async function launchBrowser() {
   Chromium.setGraphicsMode = false
   let execPath = process.env.CHROME_EXECUTABLE_PATH
   if (!execPath) {
-    const fs = await import("fs")
-    if (fs.existsSync("/usr/bin/chromium")) execPath = "/usr/bin/chromium"
-    else execPath = await Chromium.executablePath()
+    try {
+      const { execSync } = await import("child_process")
+      execPath = execSync("which chromium", { encoding: "utf8" }).trim()
+    } catch {
+      try {
+        const { execSync } = await import("child_process")
+        execPath = execSync("which chromium-browser", { encoding: "utf8" }).trim()
+      } catch {
+        execPath = await Chromium.executablePath()
+      }
+    }
   }
   console.log(`[chrome] Launching: ${execPath}`)
   return puppeteer.launch({
