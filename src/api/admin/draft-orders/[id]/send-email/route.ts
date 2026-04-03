@@ -1,15 +1,42 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
 import puppeteer from "puppeteer-core"
 import { sendMail } from "../../../../../utils/mailer"
+import { existsSync } from "fs"
+import { execSync } from "child_process"
+
+// ── Chrome path resolver — works on local (google-chrome) and Railway nix (chromium) ──
+function findChromePath(): string {
+  if (process.env.CHROME_EXECUTABLE_PATH) return process.env.CHROME_EXECUTABLE_PATH
+  const candidates = [
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/snap/bin/chromium",
+    "/run/current-system/sw/bin/chromium",
+  ]
+  for (const p of candidates) {
+    try { if (existsSync(p)) return p } catch {}
+  }
+  // Try `which` to find chromium installed by nix on Railway
+  for (const cmd of ["chromium", "google-chrome", "chromium-browser"]) {
+    try {
+      const found = execSync(`which ${cmd}`, { timeout: 3000 }).toString().trim()
+      if (found) { console.log(`[chrome] Found via which: ${found}`); return found }
+    } catch {}
+  }
+  console.warn("[chrome] No browser found — PDF generation will fail")
+  return "/usr/bin/google-chrome"
+}
+
+const PUPPETEER_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
+  "--disable-gpu", "--disable-extensions", "--single-process"]
 
 // ── PDF generator using system Chrome ────────────────────────────────────────
 async function generateEstimatePdf(html: string): Promise<Buffer> {
-  const CHROME_PATH =
-    process.env.CHROME_EXECUTABLE_PATH ??
-    "/usr/bin/google-chrome"
   const browser = await puppeteer.launch({
-    executablePath: CHROME_PATH,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    executablePath: findChromePath(),
+    args: PUPPETEER_ARGS,
     headless: true,
   })
   try {
@@ -28,12 +55,9 @@ async function generateEstimatePdf(html: string): Promise<Buffer> {
 
 // ── PDF from a live URL (frontend custom template) ────────────────────────────
 async function generatePdfFromUrl(url: string, posState?: string, tokenRaw?: string): Promise<Buffer> {
-  const CHROME_PATH =
-    process.env.CHROME_EXECUTABLE_PATH ??
-    "/usr/bin/google-chrome"
   const browser = await puppeteer.launch({
-    executablePath: CHROME_PATH,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    executablePath: findChromePath(),
+    args: PUPPETEER_ARGS,
     headless: true,
   })
   try {
@@ -495,14 +519,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
 
 // ── Payment link helpers ──────────────────────────────────────────────────────
 
-const SIGNATURE_RE = /^(warm regards|best regards|best,|sincerely,?|kind regards|thank you,?|regards,?|thanks,?)\s*$/im
 
-function splitBodyAndSignature(text: string): [string, string] {
-  const lines = text.split(/\r?\n/)
-  const idx = lines.findIndex(l => SIGNATURE_RE.test(l.trim()))
-  if (idx === -1) return [text, ""]
-  return [lines.slice(0, idx).join("\n"), lines.slice(idx).join("\n")]
-}
 
 function buildPaymentCard(paymentUrl: string, amountDisplay: string, baseDisplay?: string, feeDisplay?: string): string {
   const breakdownHtml = baseDisplay && feeDisplay ? `
@@ -532,7 +549,7 @@ function buildPaymentCard(paymentUrl: string, amountDisplay: string, baseDisplay
 // ── POST — generate PDF and send as attachment ─────────────────────────────────
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
   const { id } = req.params as { id: string }
-  const { to: toOverride, cc: ccOverride, subject: subjectOverride, templateId, docId, displayId: displayIdOverride, emailBody, documentType, posState, paymentLinkUrl, paymentAmount, paymentBaseAmount, senderEmail } = (req.body ?? {}) as any
+  const { to: toOverride, cc: ccOverride, subject: subjectOverride, templateId, docId, displayId: displayIdOverride, emailBody, emailSignature, documentType, posState, paymentLinkUrl, paymentAmount, paymentBaseAmount, senderEmail } = (req.body ?? {}) as any
   const order = await fetchOrderWithPreview(req, id)
   if (!order) return void res.status(404).json({ message: "Order not found" })
   const { customer, total } = buildTotals(order)
@@ -580,29 +597,30 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   const customerName = params.customerName
   const fmt = (n: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: (order.currency_code ?? "USD").toUpperCase() }).format(n)
 
-  // Build email body — split at signature line to inject payment card in between
+  // ── Fixed block order (no signature detection needed — frontend sends body + signature separately) ──
   const esc = (s: string) => s.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\[Customer Name\]/gi, customerName)
 
+  // Block 1: Greeting + intro text
+  const bodyHtml = emailBody
+    ? `<div style="white-space:pre-wrap;line-height:1.6;font-size:14px;margin-bottom:4px;">${esc(String(emailBody))}</div>`
+    : `<p style="margin:0 0 6px;font-size:14px;">Dear ${customerName},</p>
+       <p style="margin:0;color:#555;font-size:14px;">Thank you for your business. Please find your ${docType.toLowerCase()} attached as a PDF.</p>`
+
+  // Block 2: Payment card (only if link was generated)
   const payCard = (paymentLinkUrl && paymentAmount)
     ? buildPaymentCard(
-        paymentLinkUrl, 
-        fmt(Number(paymentAmount)), 
-        paymentBaseAmount ? fmt(Number(paymentBaseAmount)) : undefined, 
+        paymentLinkUrl,
+        fmt(Number(paymentAmount)),
+        paymentBaseAmount ? fmt(Number(paymentBaseAmount)) : undefined,
         paymentBaseAmount ? fmt(Number(paymentAmount) - Number(paymentBaseAmount)) : undefined
       )
     : ""
 
-  let bodySection: string
-  if (emailBody) {
-    const [mainText, sigText] = splitBodyAndSignature(String(emailBody))
-    bodySection = `<div style="white-space:pre-wrap;line-height:1.55;">${esc(mainText)}</div>
-${payCard}
-${sigText ? `<div style="white-space:pre-wrap;line-height:1.55;margin-top:16px;">${esc(sigText)}</div>` : ""}`
-  } else {
-    bodySection = `<p style="margin:0 0 4px;">Dear ${customerName},</p>
-     <p style="margin:0 0 16px;color:#555;">Thank you for your interest. Please find your ${docType.toLowerCase()} attached as a PDF.</p>
-${payCard}`
-  }
+  // Block 3: Signature (from frontend field, or auto-generated fallback)
+  const sigHtml = emailSignature
+    ? `<div style="white-space:pre-wrap;line-height:1.65;font-size:13px;color:#374151;margin-top:4px;">${esc(String(emailSignature))}</div>`
+    : `<p style="color:#555;font-size:13px;margin:0 0 4px;">If you have any questions, please don't hesitate to reach out.</p>
+       <p style="color:#374151;font-size:13px;margin:0;white-space:pre-wrap;">Warm regards,\nEcoPowerTech Team\n2760 W 84th St, Unit 4, Hialeah, FL 33016\nPhone: (305) 851-7028 · info@ecopowertech.com</p>`
 
   const emailBodyHtml = `
 <!DOCTYPE html>
@@ -610,23 +628,30 @@ ${payCard}`
 <head><meta charset="UTF-8"><style>
   body{font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111;background:#fff;margin:0;padding:0;}
   .wrap{max-width:560px;margin:32px auto;padding:0 16px;}
-  .logo{display:flex;align-items:center;gap:8px;margin-bottom:24px;}
+  .logo{display:flex;align-items:center;gap:8px;margin-bottom:20px;}
   .logo span{font-size:16px;font-weight:800;letter-spacing:1px;color:#0f172a;}
-  h2{font-size:18px;margin:0 0 8px;}
+  h2{font-size:18px;font-weight:700;margin:0 0 12px;}
   .box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:16px 20px;margin:20px 0;font-size:13px;line-height:1.7;}
   .total{font-weight:700;font-size:15px;}
+  .sig{margin-top:24px;}
   .footer{margin-top:32px;font-size:11px;color:#9ca3af;border-top:1px solid #e5e7eb;padding-top:12px;}
 </style></head>
 <body>
 <div class="wrap">
+
+  <!-- LOGO -->
   <div class="logo">
     <img src="https://bucket-production-2e09.up.railway.app/medusa-media/ecopowertech-logo.png" alt="" style="height:32px;" />
     <span>ECOPOWERTECH</span>
   </div>
 
+  <!-- TITLE -->
   <h2>Your ${docType} is Ready</h2>
-  ${bodySection}
 
+  <!-- BODY (greeting + intro) -->
+  ${bodyHtml}
+
+  <!-- ESTIMATE INFORMATION -->
   <div class="box">
     <div><b>${docType} #:</b> ${estNum}</div>
     <div><b>Date:</b> ${params.estimateDate}</div>
@@ -635,12 +660,18 @@ ${payCard}`
     <div class="total" style="margin-top:8px;padding-top:8px;border-top:1px solid #e2e8f0;">Total: ${fmt(total)}</div>
   </div>
 
-  <p style="color:#555;font-size:13px;">If you have any questions, please don't hesitate to reach out.</p>
+  <!-- PAYMENT LINK (only when selected in modal) -->
+  ${payCard}
 
+  <!-- SIGNATURE -->
+  <div class="sig">${sigHtml}</div>
+
+  <!-- FOOTER -->
   <div class="footer">
     Ecopowertech Inc. &nbsp;·&nbsp; 2760 W 84th St, Unit 4, Hialeah, FL 33016<br>
-    Phone: (305) 851-7028 &nbsp;·&nbsp; info@ecopowertech.com &nbsp;·&nbsp; www.ecopowertech.com
+    Phone: (305) 851-7028 &nbsp;·&nbsp; <a href="mailto:info@ecopowertech.com" style="color:#6b7280;">info@ecopowertech.com</a> &nbsp;·&nbsp; www.ecopowertech.com
   </div>
+
 </div>
 </body>
 </html>`
