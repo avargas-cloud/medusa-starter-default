@@ -147,6 +147,8 @@ export const syncInventoryToMeiliStep = createStep(
                     salesDescription: (variant?.metadata as any)?.sales_description
                         || (product?.metadata as any)?.sales_description
                         || null,
+                    cost: (variant?.metadata as any)?.qb_purchase_cost || null,
+                    vendorName: (variant?.metadata as any)?.qb_vendor_name || null,
                     options: mappedOptions,
                     category_handles: Array.from(allCategoryHandles),
                     status: product?.status || 'draft',
@@ -175,6 +177,8 @@ export const syncInventoryToMeiliStep = createStep(
                     salesDescription: (variant?.metadata as any)?.sales_description
                         || (product?.metadata as any)?.sales_description
                         || null,
+                    cost: (variant?.metadata as any)?.qb_purchase_cost || null,
+                    vendorName: (variant?.metadata as any)?.qb_vendor_name || null,
                     options: mappedOptions,
                     category_handles: Array.from(allCategoryHandles),
                     status: product?.status || "draft",
