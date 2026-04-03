@@ -37,12 +37,14 @@ export default async function run({ container }: { container: MedusaContainer })
         const cost = parseFloat(qbItem.PurchaseCost || "0")
         const vendorId = qbItem.PrefVendorRef?.ListID || null
         const vendorName = qbItem.PrefVendorRef?.FullName || null
+        const mpn = qbItem.ManufacturerPartNumber || null
 
         const m = variant.metadata || {}
         if (
             m.qb_purchase_cost === cost &&
             m.qb_vendor_id === vendorId &&
-            m.qb_vendor_name === vendorName
+            m.qb_vendor_name === vendorName &&
+            m.mpn === mpn
         ) {
             unchangedCount++
             continue
@@ -51,6 +53,7 @@ export default async function run({ container }: { container: MedusaContainer })
         m.qb_purchase_cost = cost
         m.qb_vendor_id = vendorId
         m.qb_vendor_name = vendorName
+        m.mpn = mpn
 
         updates.push({ id: variant.id, metadata: m })
     }
