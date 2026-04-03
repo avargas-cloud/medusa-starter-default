@@ -436,10 +436,10 @@ async function fetchOrderWithPreview(req: MedusaRequest, id: string) {
   return {
     ...raw,
     items: mergedItems.filter((i: any) => i.quantity > 0),
-    subtotal: preview?.subtotal != null ? preview.subtotal / 100 : raw.subtotal ?? 0,
-    shipping_total: preview?.shipping_total != null ? preview.shipping_total / 100 : raw.shipping_total ?? 0,
-    discount_total: preview?.discount_total != null ? preview.discount_total / 100 : raw.discount_total ?? 0,
-    tax_total: preview?.tax_total != null ? preview.tax_total / 100 : raw.tax_total ?? 0,
+    subtotal: preview?.subtotal != null ? preview.subtotal / 100 : (raw.subtotal ?? 0) / 100,
+    shipping_total: preview?.shipping_total != null ? preview.shipping_total / 100 : (raw.shipping_total ?? 0) / 100,
+    discount_total: preview?.discount_total != null ? preview.discount_total / 100 : (raw.discount_total ?? 0) / 100,
+    tax_total: preview?.tax_total != null ? preview.tax_total / 100 : (raw.tax_total ?? 0) / 100,
     _systemDefaults: sysDefaults,
   }
 }
@@ -453,7 +453,7 @@ function buildTotals(order: any) {
   // by multiplying with (1 + tax_rate) for its own "effective savings" display metric.
   // item.adjustments[].amount is the actual pre-tax deduction stored in DB.
   const discountTotal: number = (order.items ?? []).reduce((s: number, i: any) => {
-    return s + (i.adjustments ?? []).reduce((a: number, adj: any) => a + (Number(adj.amount) || 0), 0)
+    return s + (i.adjustments ?? []).reduce((a: number, adj: any) => a + (Number(adj.amount) || 0) / 100, 0)
   }, 0) || (order.discount_total ?? 0)
   const total: number = subtotal + shippingTotal - discountTotal + taxAmount
   const customer = order.customer
@@ -504,11 +504,19 @@ function splitBodyAndSignature(text: string): [string, string] {
   return [lines.slice(0, idx).join("\n"), lines.slice(idx).join("\n")]
 }
 
-function buildPaymentCard(paymentUrl: string, amountDisplay: string): string {
+function buildPaymentCard(paymentUrl: string, amountDisplay: string, baseDisplay?: string, feeDisplay?: string): string {
+  const breakdownHtml = baseDisplay && feeDisplay ? `
+    <div style="font-size:12px;color:#4b5563;margin-bottom:8px;line-height:1.4;">
+      <div style="display:flex;justify-content:space-between;"><span>Order Balance:</span> <span>${baseDisplay}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>3% Convenience Fee:</span> <span>${feeDisplay}</span></div>
+    </div>
+  ` : `<p style="margin:4px 0 8px;color:#9ca3af;font-size:11px;">* Includes 3% Credit Card Convenience Fee</p>`
+
   return `
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;margin:20px 0;">
   <tr><td style="padding:20px 24px;">
-    <p style="margin:0 0 2px;color:#7c3aed;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;">Payment Request</p>
+    <p style="margin:0 0 8px;color:#7c3aed;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;">Payment Request</p>
+    ${breakdownHtml}
     <p style="margin:0 0 16px;color:#111827;font-size:28px;font-weight:800;line-height:1;">${amountDisplay}</p>
     <table cellpadding="0" cellspacing="0" style="margin-bottom:14px;">
       <tr><td style="background:#7c3aed;border-radius:7px;">
@@ -524,7 +532,7 @@ function buildPaymentCard(paymentUrl: string, amountDisplay: string): string {
 // ── POST — generate PDF and send as attachment ─────────────────────────────────
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
   const { id } = req.params as { id: string }
-  const { to: toOverride, cc: ccOverride, subject: subjectOverride, templateId, docId, displayId: displayIdOverride, emailBody, documentType, posState, paymentLinkUrl, paymentAmount, senderEmail } = (req.body ?? {}) as any
+  const { to: toOverride, cc: ccOverride, subject: subjectOverride, templateId, docId, displayId: displayIdOverride, emailBody, documentType, posState, paymentLinkUrl, paymentAmount, paymentBaseAmount, senderEmail } = (req.body ?? {}) as any
   const order = await fetchOrderWithPreview(req, id)
   if (!order) return void res.status(404).json({ message: "Order not found" })
   const { customer, total } = buildTotals(order)
@@ -572,7 +580,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   if (emailBody) {
     const [mainText, sigText] = splitBodyAndSignature(String(emailBody))
     const payCard = (paymentLinkUrl && paymentAmount)
-      ? buildPaymentCard(paymentLinkUrl, fmt(Number(paymentAmount)))
+      ? buildPaymentCard(
+          paymentLinkUrl, 
+          fmt(Number(paymentAmount)), 
+          paymentBaseAmount ? fmt(Number(paymentBaseAmount)) : undefined, 
+          paymentBaseAmount ? fmt(Number(paymentAmount) - Number(paymentBaseAmount)) : undefined
+        )
       : ""
     bodySection = `<div style="white-space:pre-wrap;line-height:1.55;">${esc(mainText)}</div>
 ${payCard}
