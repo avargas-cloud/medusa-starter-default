@@ -4,10 +4,14 @@ import { sendMail } from "../../../../../utils/mailer"
 
 // ── Shared browser launcher — uses @sparticuz/chromium bundled binary ─────────────
 async function launchBrowser() {
-  // Dynamic import to avoid CJS/ESM conflict with @sparticuz/chromium (ESM-only package)
   const { default: Chromium } = await import("@sparticuz/chromium")
-  Chromium.setGraphicsMode = false  // disable WebGL/GPU for headless
-  const execPath = process.env.CHROME_EXECUTABLE_PATH ?? await Chromium.executablePath()
+  Chromium.setGraphicsMode = false
+  let execPath = process.env.CHROME_EXECUTABLE_PATH
+  if (!execPath) {
+    const fs = await import("fs")
+    if (fs.existsSync("/usr/bin/chromium")) execPath = "/usr/bin/chromium"
+    else execPath = await Chromium.executablePath()
+  }
   console.log(`[chrome] Launching: ${execPath}`)
   return puppeteer.launch({
     executablePath: execPath,
