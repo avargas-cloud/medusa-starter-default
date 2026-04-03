@@ -1,53 +1,18 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
-import { existsSync } from "fs"
-import puppeteer from "puppeteer-core"
+import { chromium as playwrightChromium } from "playwright-core"
 import { sendMail } from "../../../../../utils/mailer"
 
-// Chromium paths checked in order; the nix store path covers Railway/nixpacks.
-// @sparticuz/chromium is kept as last-resort for Lambda/serverless only.
-const SYSTEM_CHROME_CANDIDATES = [
-  "/nix/var/nix/profiles/default/bin/chromium",
-  "/usr/bin/chromium",
-  "/usr/bin/chromium-browser",
-  "/usr/bin/google-chrome-stable",
-  "/usr/bin/google-chrome",
-]
-
-const BASE_ARGS = [
-  "--no-sandbox",
-  "--disable-setuid-sandbox",
-  "--disable-dev-shm-usage",
-  "--disable-gpu",
-  "--no-first-run",
-  "--no-zygote",
-]
-
+// Launch Playwright's own Chromium (downloaded during build via `npx playwright install chromium`).
+// Unlike @sparticuz/chromium (compiled for AWS Lambda), this binary is compiled specifically
+// for the current platform and includes all necessary shared libraries.
 async function launchBrowser() {
-  // 1. Explicit env override
-  let execPath = process.env.CHROME_EXECUTABLE_PATH ?? ""
-  let useServerlessArgs = false
-
-  // 2. Known system / nix paths (no PATH dependency — works in Railway runtime)
-  if (!execPath) {
-    execPath = SYSTEM_CHROME_CANDIDATES.find(p => existsSync(p)) ?? ""
-  }
-
-  // 3. @sparticuz/chromium bundled binary (serverless / Lambda fallback)
-  if (!execPath) {
-    const { default: Chromium } = await import("@sparticuz/chromium")
-    Chromium.setGraphicsMode = false
-    execPath = await Chromium.executablePath()
-    useServerlessArgs = true
-  }
-
-  let args = BASE_ARGS
-  if (useServerlessArgs) {
-    const { default: Chromium } = await import("@sparticuz/chromium")
-    args = [...Chromium.args, ...BASE_ARGS]
-  }
-
+  const execPath = process.env.CHROME_EXECUTABLE_PATH ?? playwrightChromium.executablePath()
   console.log(`[chrome] Launching: ${execPath}`)
-  return puppeteer.launch({ executablePath: execPath, args, headless: true })
+  return playwrightChromium.launch({
+    executablePath: execPath,
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-zygote"],
+    headless: true,
+  })
 }
 
 // ── PDF generator using bundled Chromium ─────────────────────────────────
@@ -55,7 +20,8 @@ async function generateEstimatePdf(html: string): Promise<Buffer> {
   const browser = await launchBrowser()
   try {
     const page = await browser.newPage()
-    await page.setContent(html, { waitUntil: "networkidle0" })
+    // Playwright uses "networkidle" (not "networkidle0" like puppeteer)
+    await page.setContent(html, { waitUntil: "networkidle" })
     const pdfBuffer = await page.pdf({
       format: "Letter",
       margin: { top: "12mm", bottom: "12mm", left: "14mm", right: "14mm" },
@@ -72,23 +38,27 @@ async function generatePdfFromUrl(url: string, posState?: string, tokenRaw?: str
   const browser = await launchBrowser()
   try {
     const page = await browser.newPage()
-    
+
     if (posState || tokenRaw) {
       const originUrl = new URL(url).origin
-      // Wait slightly to establish origin before injecting localStorage
+      // Establish origin before injecting localStorage
       await page.goto(originUrl, { waitUntil: "domcontentloaded" })
-      await page.evaluate((state, tokenStr) => {
-        if (state) localStorage.setItem("pos-documents", state)
-        if (tokenStr) {
-          const t = tokenStr.replace('Bearer ', '')
-          const authState = { state: { token: t }, version: 0 }
-          localStorage.setItem("pos-auth", JSON.stringify(authState))
-        }
-      }, posState, tokenRaw)
+      // Playwright evaluate passes args as a single serializable argument
+      await page.evaluate(
+        ([state, tokenStr]: [string | undefined, string | undefined]) => {
+          if (state) localStorage.setItem("pos-documents", state)
+          if (tokenStr) {
+            const t = tokenStr.replace("Bearer ", "")
+            const authState = { state: { token: t }, version: 0 }
+            localStorage.setItem("pos-auth", JSON.stringify(authState))
+          }
+        },
+        [posState, tokenRaw] as [string | undefined, string | undefined]
+      )
     }
 
     // Wait for the page to fully render the print template
-    await page.goto(url, { waitUntil: "networkidle0", timeout: 30000 })
+    await page.goto(url, { waitUntil: "networkidle", timeout: 30000 })
     const pdfBuffer = await page.pdf({
       format: "Letter",
       printBackground: true,
