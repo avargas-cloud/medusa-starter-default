@@ -1,38 +1,12 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
-import { existsSync, readdirSync } from "fs"
-import { join } from "path"
 import { chromium as playwrightChromium } from "playwright-core"
 import { sendMail } from "../../../../../utils/mailer"
 
-// Locate the playwright chromium binary by scanning the filesystem.
-// We can't rely on PLAYWRIGHT_BROWSERS_PATH at runtime (Railway doesn't carry nixpacks
-// build-time variables to the running container), so we scan known install locations directly.
-function resolveChromiumPath(): string {
-  if (process.env.CHROME_EXECUTABLE_PATH) return process.env.CHROME_EXECUTABLE_PATH
-
-  const searchRoots = [
-    "/app/.playwright-browsers",   // nixpacks build install (PLAYWRIGHT_BROWSERS_PATH during build)
-    "/root/.cache/ms-playwright",  // playwright default cache (fallback)
-  ]
-  const binaryVariants = ["chrome-linux64/chrome", "chrome-linux/chrome"]
-
-  for (const root of searchRoots) {
-    if (!existsSync(root)) continue
-    const entries = readdirSync(root).filter(e => e.startsWith("chromium-"))
-    for (const entry of entries) {
-      for (const variant of binaryVariants) {
-        const candidate = join(root, entry, variant)
-        if (existsSync(candidate)) return candidate
-      }
-    }
-  }
-
-  // Last resort: let playwright compute the path (will fail if not installed, but gives clear error)
-  return playwrightChromium.executablePath()
-}
-
+// Playwright Chromium is installed at startup via railway.json startCommand:
+//   npx playwright install chromium && npx medusa start
+// This guarantees the binary exists at the default ms-playwright cache path.
 async function launchBrowser() {
-  const execPath = resolveChromiumPath()
+  const execPath = process.env.CHROME_EXECUTABLE_PATH ?? playwrightChromium.executablePath()
   console.log(`[chrome] Launching: ${execPath}`)
   return playwrightChromium.launch({
     executablePath: execPath,

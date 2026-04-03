@@ -1,12 +1,10 @@
 [variables]
 NIXPACKS_NODE_VERSION = "20"
 NODE_OPTIONS = "--max-old-space-size=4096"
-# Playwright downloads its own Chromium to this path during build
-PLAYWRIGHT_BROWSERS_PATH = "/app/.playwright-browsers"
 
 [phases.setup]
 nixPkgs = ["nodejs-20_x", "yarn", "python3", "gnumake", "gcc", "g++", "cairo", "pango", "glib"]
-# Playwright chromium dependencies (Debian packages, available via nixpacks apt support)
+# Playwright Chromium runtime dependencies
 aptPkgs = ["libnss3", "libnspr4", "libatk1.0-0", "libatk-bridge2.0-0", "libcups2", "libdrm2", "libxkbcommon0", "libxcomposite1", "libxdamage1", "libxrandr2", "libgbm1", "libasound2", "libx11-6", "libxcb1", "libxext6", "libxfixes3", "fonts-liberation", "ca-certificates"]
 
 
@@ -15,15 +13,14 @@ cmds = ["echo '--- INSTALL (yarn) ---'", "yarn install --frozen-lockfile"]
 
 [phases.build]
 # Step 1: Apply patches to the build workspace (affects medusa build compilation)
-# Step 2: Install Playwright's Chromium binary (compiled for this platform, all deps bundled)
-# Step 3: medusa build → generates .medusa/server/ with FRESH npm install (un-patched!)
-# Step 4: Copy patches/ into .medusa/server/ and re-apply them there
-# Step 5: Inject postinstall hook into .medusa/server/package.json so future npm installs re-patch
+# Step 2: medusa build → generates .medusa/server/ with FRESH npm install (un-patched!)
+# Step 3: Copy patches/ into .medusa/server/ and re-apply them there
+# Step 4: Inject postinstall hook into .medusa/server/package.json so future npm installs re-patch
+# NOTE: Playwright Chromium is installed at STARTUP (railway.json startCommand), not here,
+# because nixpacks build artifacts don't always persist to the runtime container.
 cmds = [
   "echo '--- PATCH (workspace) ---'",
   "npx patch-package",
-  "echo '--- PLAYWRIGHT: installing Chromium ---'",
-  "npx playwright install chromium",
   "echo '--- BUILD (medusa) ---'",
   "yarn build",
   "echo '--- RE-PATCH (.medusa/server) ---'",
