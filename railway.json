@@ -1,7 +1,7 @@
 {
     "build": {},
     "deploy": {
-        "startCommand": "PLAYWRIGHT_BROWSERS_PATH=/app/.medusa/server/.playwright-browsers npx playwright install chromium --quiet && yarn deploy",
+        "startCommand": "PLAYWRIGHT_BROWSERS_PATH=/app/.medusa/server/.playwright-browsers npx playwright install chromium && yarn deploy",
         "healthcheckPath": "/health",
         "healthcheckTimeout": 600
     }
