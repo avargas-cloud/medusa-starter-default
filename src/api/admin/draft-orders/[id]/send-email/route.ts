@@ -11,7 +11,7 @@ async function launchBrowser() {
   console.log(`[chrome] Launching: ${execPath}`)
   return puppeteer.launch({
     executablePath: execPath,
-    args: [...Chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
+    args: [...Chromium.args, "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--no-zygote"],
     headless: true,
   })
 }
