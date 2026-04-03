@@ -551,25 +551,30 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   let pdfBuffer: Buffer | null = null
   try {
     if (templateId && docId) {
-      // Use the frontend custom template: render the print page via Puppeteer
+      // Resolve POS base URL: env var takes priority, then x-forwarded-host, then origin/referer headers
+      const forwardedHost = req.headers["x-forwarded-host"] as string | undefined
+      const forwardedProto = (req.headers["x-forwarded-proto"] as string | undefined) ?? "http"
+      const forwardedBase = forwardedHost ? `${forwardedProto}://${forwardedHost}` : null
       const reqOrigin = (req.headers["origin"] as string) || (req.headers["referer"] as string)
       const originBase = reqOrigin ? new URL(reqOrigin).origin : null
-      const POS_URL = process.env.POS_URL ?? process.env.POS_FRONTEND_URL ?? process.env.NEXT_PUBLIC_POS_URL ?? originBase ?? "http://localhost:3001"
+      const POS_URL = process.env.POS_URL ?? process.env.POS_FRONTEND_URL ?? process.env.NEXT_PUBLIC_POS_URL ?? forwardedBase ?? originBase ?? "http://localhost:3001"
       const params = new URLSearchParams({ docId, auto: "0" })
       if (displayId) params.set("displayId", String(displayId))
       const printUrl = `${POS_URL}/print/${templateId}?${params}`
-      console.log(`[send-email] Using frontend template PDF: ${printUrl}`)
+      console.log(`[send-email] PDF via frontend template: ${printUrl}`)
       const authHeader = req.headers["authorization"] ?? req.headers["cookie"]?.split(';').find(c => c.trim().startsWith('pos-auth-token='))?.split('=')[1]
       let token = authHeader
       if (token && !token.startsWith('Bearer ')) token = `Bearer ${token}`
       pdfBuffer = await generatePdfFromUrl(printUrl, posState, token)
+      console.log(`[send-email] PDF generated successfully (${pdfBuffer.length} bytes)`)
     } else {
       // Fallback: use the backend-generated HTML template
       const pdfHtml = buildEstimateHtml(params)
       pdfBuffer = await generateEstimatePdf(pdfHtml)
+      console.log(`[send-email] Backend HTML PDF generated (${pdfBuffer.length} bytes)`)
     }
   } catch (err) {
-    console.error("[send-email] PDF generation failed, falling back to HTML email:", err)
+    console.error("[send-email] PDF generation FAILED — email will be sent without attachment:", err)
   }
 
   const customerName = params.customerName
@@ -661,7 +666,12 @@ ${payCard}`
     finalHtml += `<p style="color:#dc2626;font-size:11px;margin-top:12px;">Note: PDF could not be generated. Please contact us for the document.</p>`
   }
 
-  const fromEmail = senderEmail ?? process.env.RESEND_FROM ?? "estimates@ecopowertech.com"
+  // Always display as "EcoPowerTech" in the From field, regardless of which
+  // salesperson is sending. Use senderEmail as the actual sending address only
+  // if it matches a verified Resend domain; otherwise fall back to the env default.
+  const senderAddr = senderEmail ?? process.env.RESEND_FROM ?? "estimates@ecopowertech.com"
+  const fromEmail = `EcoPowerTech <${senderAddr}>`
+  console.log(`[send-email] Sending from: ${fromEmail} → to: ${toEmails.join(', ')} | pdf: ${!!attachments}`)
   await sendMail({
     to: toEmails,
     from: fromEmail,
