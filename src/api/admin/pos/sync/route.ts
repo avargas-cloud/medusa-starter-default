@@ -42,6 +42,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                         return res.status(400).json({ error: "Cannot close: Estimate is not in QuickBooks." })
                     }
                     const pipelineStep = "close_estimate";
+                    const estimateMedusaRef = (order.metadata as any)?.document_number ?? null
                     try {
                         await orderModule.updateOrders(id, { metadata: { ...(order.metadata || {}), qb_sync_status: "voiding" } })
                         const { writePipelineRow } = require('../../../../lib/quickbooks/qb-pipeline')
@@ -50,6 +51,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                             step: pipelineStep,
                             status: "pending",
                             qbTxnId: getEstimateTxnId(order.metadata || {}),
+                            medusaRefNumber: estimateMedusaRef,
                         })
                     } catch (e) {}
                     // QuickBooks doesn't natively support "VoidEstimate", but we can mark it inactive/sync status voided.
@@ -60,9 +62,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                             try {
                                 const { writePipelineRow } = require('../../../../lib/quickbooks/qb-pipeline')
                                 if (res?.success) {
-                                    await writePipelineRow({ orderId: id, step: pipelineStep, status: "submitted", bridgeOpId: res.data?.operationId, qbTxnId })
+                                    await writePipelineRow({ orderId: id, step: pipelineStep, status: "submitted", bridgeOpId: res.data?.operationId, qbTxnId, medusaRefNumber: estimateMedusaRef })
                                 } else {
-                                    await writePipelineRow({ orderId: id, step: pipelineStep, status: "failed", error: res?.error, qbTxnId })
+                                    await writePipelineRow({ orderId: id, step: pipelineStep, status: "failed", error: res?.error, qbTxnId, medusaRefNumber: estimateMedusaRef })
                                 }
                             } catch(e) {}
                         })

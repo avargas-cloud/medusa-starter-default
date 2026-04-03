@@ -83,7 +83,7 @@ export async function handleInvoiceVoided(data: any, orderModule: any, logger: a
             status: "pending",
             qbTxnId: invoiceTxnId,
             qbRefNumber: invoiceRef ?? null,
-            medusaRefNumber: invoice_id ?? null
+            medusaRefNumber: invoiceRef ?? invoice_id ?? null
         })
     } catch (pErr: any) {
         logger.warn(`${LOG_PREFIX} Could not write pre-flight pipeline row: ${pErr.message}`)
@@ -106,7 +106,7 @@ export async function handleInvoiceVoided(data: any, orderModule: any, logger: a
                 status:          "failed",
                 qbTxnId:         invoiceTxnId,
                 qbRefNumber:     invoiceRef ?? null,
-                medusaRefNumber: invoice_id ?? null,
+                medusaRefNumber: invoiceRef ?? invoice_id ?? null,
                 error:           result.error ?? `${documentTypeName} void failed`,
             })
         } catch (pErr: any) { logger.warn(`${LOG_PREFIX} Could not write pipeline row: ${pErr.message}`) }
@@ -133,7 +133,7 @@ export async function handleInvoiceVoided(data: any, orderModule: any, logger: a
                 bridgeOpId:      result.data?.operationId ?? null,
                 qbTxnId:         invoiceTxnId,
                 qbRefNumber:     invoiceRef ?? null,
-                medusaRefNumber: invoice_id ?? null,
+                medusaRefNumber: invoiceRef ?? invoice_id ?? null,
             })
         } catch (pErr: any) { logger.warn(`${LOG_PREFIX} Could not write pipeline row: ${pErr.message}`) }
         try {
