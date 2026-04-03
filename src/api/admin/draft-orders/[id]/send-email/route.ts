@@ -445,7 +445,7 @@ async function fetchOrderWithPreview(req: MedusaRequest, id: string) {
 }
 
 function buildTotals(order: any) {
-  const subtotal: number = (order.items ?? []).reduce((s: number, i: any) => s + (i.unit_price ?? 0) * (i.quantity ?? 1), 0)
+  const subtotal: number = order.subtotal ?? (order.items ?? []).reduce((s: number, i: any) => s + (i.unit_price ?? 0) * (i.quantity ?? 1), 0)
   const taxAmount: number = order.metadata?.computed_tax_amount ?? order.tax_total ?? 0
   const taxRate: number = order.metadata?.computed_tax_rate ?? 0
   const shippingTotal: number = order.shipping_total ?? 0
@@ -455,7 +455,7 @@ function buildTotals(order: any) {
   const discountTotal: number = (order.items ?? []).reduce((s: number, i: any) => {
     return s + (i.adjustments ?? []).reduce((a: number, adj: any) => a + (Number(adj.amount) || 0) / 100, 0)
   }, 0) || (order.discount_total ?? 0)
-  const total: number = subtotal + shippingTotal - discountTotal + taxAmount
+  const total: number = order.total ?? (subtotal + shippingTotal - discountTotal + taxAmount)
   const customer = order.customer
   const customerName = customer
     ? `${customer.first_name ?? ""} ${customer.last_name ?? ""}`.trim() || customer.email
@@ -552,7 +552,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   try {
     if (templateId && docId) {
       // Use the frontend custom template: render the print page via Puppeteer
-      const POS_URL = process.env.POS_FRONTEND_URL ?? process.env.NEXT_PUBLIC_POS_URL ?? "http://localhost:3001"
+      const reqOrigin = (req.headers["origin"] as string) || (req.headers["referer"] as string)
+      const originBase = reqOrigin ? new URL(reqOrigin).origin : null
+      const POS_URL = process.env.POS_URL ?? process.env.POS_FRONTEND_URL ?? process.env.NEXT_PUBLIC_POS_URL ?? originBase ?? "http://localhost:3001"
       const params = new URLSearchParams({ docId, auto: "0" })
       if (displayId) params.set("displayId", String(displayId))
       const printUrl = `${POS_URL}/print/${templateId}?${params}`
@@ -576,23 +578,25 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   // Build email body — split at signature line to inject payment card in between
   const esc = (s: string) => s.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\[Customer Name\]/gi, customerName)
 
+  const payCard = (paymentLinkUrl && paymentAmount)
+    ? buildPaymentCard(
+        paymentLinkUrl, 
+        fmt(Number(paymentAmount)), 
+        paymentBaseAmount ? fmt(Number(paymentBaseAmount)) : undefined, 
+        paymentBaseAmount ? fmt(Number(paymentAmount) - Number(paymentBaseAmount)) : undefined
+      )
+    : ""
+
   let bodySection: string
   if (emailBody) {
     const [mainText, sigText] = splitBodyAndSignature(String(emailBody))
-    const payCard = (paymentLinkUrl && paymentAmount)
-      ? buildPaymentCard(
-          paymentLinkUrl, 
-          fmt(Number(paymentAmount)), 
-          paymentBaseAmount ? fmt(Number(paymentBaseAmount)) : undefined, 
-          paymentBaseAmount ? fmt(Number(paymentAmount) - Number(paymentBaseAmount)) : undefined
-        )
-      : ""
     bodySection = `<div style="white-space:pre-wrap;line-height:1.55;">${esc(mainText)}</div>
 ${payCard}
 ${sigText ? `<div style="white-space:pre-wrap;line-height:1.55;margin-top:16px;">${esc(sigText)}</div>` : ""}`
   } else {
     bodySection = `<p style="margin:0 0 4px;">Dear ${customerName},</p>
-     <p style="margin:0 0 16px;color:#555;">Thank you for your interest. Please find your ${docType.toLowerCase()} attached as a PDF.</p>`
+     <p style="margin:0 0 16px;color:#555;">Thank you for your interest. Please find your ${docType.toLowerCase()} attached as a PDF.</p>
+${payCard}`
   }
 
   const emailBodyHtml = `
