@@ -66,6 +66,7 @@ export const createPosProductWorkflow = createWorkflow(
                 PurchaseDesc: input.salesDescription,
                 SalesPrice: 0.00, // POS doesn't set selling price yet, edit later
                 PurchaseCost: input.cost,
+                PrefVendorRef: input.vendor ? { FullName: input.vendor } : undefined,
                 ManufacturerPartNumber: input.mpn || undefined,
             }
         })

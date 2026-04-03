@@ -78,6 +78,7 @@ export const updatePosProductWorkflow = createWorkflow(
                 PurchaseDesc: input.salesDescription,
                 SalesPrice: 0.00, // Safe default or skip updating price if not provided
                 PurchaseCost: input.cost,
+                PrefVendorRef: input.vendor ? { FullName: input.vendor } : undefined,
                 ManufacturerPartNumber: input.mpn || undefined,
             }
         })
