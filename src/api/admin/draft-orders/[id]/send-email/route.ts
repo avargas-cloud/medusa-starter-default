@@ -9,11 +9,15 @@ import { sendMail } from "../../../../../utils/mailer"
 //   → connects to a dedicated Browserless Docker service via CDP (no local Chromium needed)
 // Local dev: falls back to playwright's installed Chromium (~/.cache/ms-playwright)
 async function launchBrowser() {
-  if (process.env.BROWSERLESS_URL) {
-    // Browserless exposes /json/version — connectOverCDP uses that to get the WS debugger URL
-    const baseUrl = process.env.BROWSERLESS_URL
-    console.log(`[chrome] Connecting to Browserless: ${baseUrl}`)
-    return playwrightChromium.connectOverCDP(baseUrl)
+  // On Railway, connect to the Browserless sidecar service via private networking.
+  // RAILWAY_ENVIRONMENT is auto-injected by Railway in all containers — no extra env vars needed.
+  // Override with BROWSERLESS_URL if you need to point to a different instance.
+  const browserlessUrl = process.env.BROWSERLESS_URL ??
+    (process.env.RAILWAY_ENVIRONMENT ? "http://browserless.railway.internal:3000" : null)
+
+  if (browserlessUrl) {
+    console.log(`[chrome] Connecting to Browserless: ${browserlessUrl}`)
+    return playwrightChromium.connectOverCDP(browserlessUrl)
   }
 
   // Local dev fallback: find playwright's installed Chromium
