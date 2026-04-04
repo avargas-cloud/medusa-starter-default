@@ -5,15 +5,18 @@ import { chromium as playwrightChromium } from "playwright-core"
 import { sendMail } from "../../../../../utils/mailer"
 
 // ── Browser launcher ──────────────────────────────────────────────────────────
-// Production (Railway): set BROWSERLESS_URL=http://chromium.railway.internal:3000
-//   → connects to a dedicated Browserless Docker service via CDP (no local Chromium needed)
+// Production (Railway): connects to Browserless sidecar via ws://browserless.railway.internal:8080
+//   Uses ws:// directly — http:// triggers a /json/version lookup that returns 0.0.0.0 as the host.
 // Local dev: falls back to playwright's installed Chromium (~/.cache/ms-playwright)
 async function launchBrowser() {
   // On Railway, connect to the Browserless sidecar service via private networking.
   // RAILWAY_ENVIRONMENT is auto-injected by Railway in all containers — no extra env vars needed.
   // Override with BROWSERLESS_URL if you need to point to a different instance.
+  // Use ws:// directly so Playwright skips the /json/version HTTP lookup.
+  // That lookup returns a WebSocket URL with host=0.0.0.0 (the container's bind address),
+  // which is unreachable from other containers.
   const browserlessUrl = process.env.BROWSERLESS_URL ??
-    (process.env.RAILWAY_ENVIRONMENT ? "http://browserless.railway.internal:8080" : null)
+    (process.env.RAILWAY_ENVIRONMENT ? "ws://browserless.railway.internal:8080" : null)
 
   if (browserlessUrl) {
     console.log(`[chrome] Connecting to Browserless: ${browserlessUrl}`)
