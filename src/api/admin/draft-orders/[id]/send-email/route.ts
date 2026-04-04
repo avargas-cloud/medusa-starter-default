@@ -86,8 +86,11 @@ async function generatePdfFromUrl(url: string, posState?: string, tokenRaw?: str
       )
     }
 
-    // Wait for the page to fully render the print template
+    // Navigate; networkidle alone isn't enough — React state settles after network is quiet.
     await page.goto(url, { waitUntil: "networkidle", timeout: 30000 })
+    // Wait for the React component to signal it has finished rendering
+    // (PrintPageInner sets data-pdf-ready on body when doc + template are both loaded).
+    await page.waitForSelector('[data-pdf-ready]', { timeout: 20000 })
     const pdfBuffer = await page.pdf({
       format: "Letter",
       printBackground: true,
