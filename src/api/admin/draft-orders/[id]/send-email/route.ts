@@ -13,7 +13,7 @@ async function launchBrowser() {
   // RAILWAY_ENVIRONMENT is auto-injected by Railway in all containers — no extra env vars needed.
   // Override with BROWSERLESS_URL if you need to point to a different instance.
   const browserlessUrl = process.env.BROWSERLESS_URL ??
-    (process.env.RAILWAY_ENVIRONMENT ? "http://browserless.railway.internal:3000" : null)
+    (process.env.RAILWAY_ENVIRONMENT ? "http://browserless.railway.internal:8080" : null)
 
   if (browserlessUrl) {
     console.log(`[chrome] Connecting to Browserless: ${browserlessUrl}`)
