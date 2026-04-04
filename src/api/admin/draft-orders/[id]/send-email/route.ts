@@ -1,8 +1,29 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
 import { existsSync, readdirSync } from "fs"
 import { join } from "path"
+import { Client as PgClient } from "pg"
 import { chromium as playwrightChromium } from "playwright-core"
 import { sendMail } from "../../../../../utils/mailer"
+
+// ── Template prefetch (avoids headless browser needing an authenticated API call) ──
+async function fetchTemplateForPdf(templateId: string): Promise<Record<string, unknown> | null> {
+  const db = new PgClient({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_URL?.includes("railway") || process.env.NODE_ENV === "production"
+      ? { rejectUnauthorized: false }
+      : false,
+  })
+  try {
+    await db.connect()
+    const result = await db.query("SELECT * FROM pos_document_template WHERE id = $1", [templateId])
+    return (result.rows[0] as Record<string, unknown>) ?? null
+  } catch (err) {
+    console.error("[send-email] Failed to prefetch template:", err)
+    return null
+  } finally {
+    await db.end()
+  }
+}
 
 // ── Browser launcher ──────────────────────────────────────────────────────────
 // Production (Railway): connects to Browserless sidecar via ws://browserless.railway.internal:8080
@@ -63,28 +84,27 @@ async function generateEstimatePdf(html: string): Promise<Buffer> {
 }
 
 // ── PDF from a live URL (frontend custom template) ────────────────────────────
-async function generatePdfFromUrl(url: string, posState?: string, tokenRaw?: string): Promise<Buffer> {
+async function generatePdfFromUrl(
+  url: string,
+  posState?: string,
+  templateData?: Record<string, unknown> | null
+): Promise<Buffer> {
   const browser = await launchBrowser()
   try {
     const page = await browser.newPage()
 
-    if (posState || tokenRaw) {
-      const originUrl = new URL(url).origin
-      // Establish origin before injecting localStorage
-      await page.goto(originUrl, { waitUntil: "domcontentloaded" })
-      // Playwright evaluate passes args as a single serializable argument
-      await page.evaluate(
-        ([state, tokenStr]: [string | undefined, string | undefined]) => {
-          if (state) localStorage.setItem("pos-documents", state)
-          if (tokenStr) {
-            const t = tokenStr.replace("Bearer ", "")
-            const authState = { state: { token: t }, version: 0 }
-            localStorage.setItem("pos-auth", JSON.stringify(authState))
-          }
-        },
-        [posState, tokenRaw] as [string | undefined, string | undefined]
-      )
-    }
+    // Always inject localStorage — we need at least posState and the pre-fetched template.
+    // The print page reads pdf-template-injection as a fallback when there's no auth token
+    // in memory (the authStore intentionally excludes token from localStorage persistence).
+    const originUrl = new URL(url).origin
+    await page.goto(originUrl, { waitUntil: "domcontentloaded" })
+    await page.evaluate(
+      ([state, tmpl]: [string | undefined, string | null]) => {
+        if (state) localStorage.setItem("pos-documents", state)
+        if (tmpl) localStorage.setItem("pdf-template-injection", tmpl)
+      },
+      [posState, templateData ? JSON.stringify(templateData) : null] as [string | undefined, string | null]
+    )
 
     // Navigate; networkidle alone isn't enough — React state settles after network is quiet.
     await page.goto(url, { waitUntil: "networkidle", timeout: 30000 })
@@ -602,10 +622,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
       if (displayId) params.set("displayId", String(displayId))
       const printUrl = `${POS_URL}/print/${templateId}?${params}`
       console.log(`[send-email] PDF via frontend template: ${printUrl}`)
-      const authHeader = req.headers["authorization"] ?? req.headers["cookie"]?.split(';').find(c => c.trim().startsWith('pos-auth-token='))?.split('=')[1]
-      let token = authHeader
-      if (token && !token.startsWith('Bearer ')) token = `Bearer ${token}`
-      pdfBuffer = await generatePdfFromUrl(printUrl, posState, token)
+      // Pre-fetch template from DB so the headless browser doesn't need auth to load it.
+      // (authStore intentionally never persists token to localStorage, so the browser
+      //  can't call the authenticated template API — we inject the data directly instead.)
+      const templateData = await fetchTemplateForPdf(templateId)
+      if (!templateData) console.warn(`[send-email] Template ${templateId} not found — print page may hang`)
+      pdfBuffer = await generatePdfFromUrl(printUrl, posState, templateData)
       console.log(`[send-email] PDF generated successfully (${pdfBuffer.length} bytes)`)
     } else {
       // Fallback: use the backend-generated HTML template
