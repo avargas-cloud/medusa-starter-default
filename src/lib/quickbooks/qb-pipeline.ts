@@ -17,6 +17,8 @@ export type PipelineStep =
     | "void_check"
     | "payment_method_change"
     | "transfer_customer"
+    | "so_close"
+    | "so_reopen"
 
 export type PipelineStatus =
     | "pending"
@@ -314,6 +316,71 @@ export async function getCachedEditSequence(
         [entityType, qbId]
     )
     return rows[0]?.edit_seq ?? null
+}
+
+/**
+ * Returns all in-flight (pending/submitted/waiting) pipeline rows for the given order
+ * matching the provided steps. Used to detect races between creation and void operations.
+ */
+export async function findInFlightQbRows(
+    orderId: string,
+    steps: PipelineStep[]
+): Promise<Array<{ id: string; step: PipelineStep }>> {
+    if (steps.length === 0) return []
+    const pool = getDbPool()
+    const placeholders = steps.map((_, i) => `$${i + 2}`).join(", ")
+    const { rows } = await pool.query(
+        `SELECT id, step FROM qb_order_pipeline
+         WHERE order_id = $1
+           AND step IN (${placeholders})
+           AND status IN ('pending', 'submitted', 'waiting')
+         ORDER BY created_at DESC`,
+        [orderId, ...steps]
+    )
+    return rows.map((r) => ({ id: r.id as string, step: r.step as PipelineStep }))
+}
+
+/**
+ * Returns all in-flight (pending/submitted/waiting) pipeline rows matched by referenceId
+ * and referenceType. Used for credit memos and other reference-keyed documents.
+ */
+export async function findInFlightQbRowsByRef(
+    referenceId: string,
+    referenceType: string,
+    steps: PipelineStep[]
+): Promise<Array<{ id: string; step: PipelineStep }>> {
+    if (steps.length === 0) return []
+    const pool = getDbPool()
+    const placeholders = steps.map((_, i) => `$${i + 3}`).join(", ")
+    const { rows } = await pool.query(
+        `SELECT id, step FROM qb_order_pipeline
+         WHERE reference_id = $1
+           AND reference_type = $2
+           AND step IN (${placeholders})
+           AND status IN ('pending', 'submitted', 'waiting')
+         ORDER BY created_at DESC`,
+        [referenceId, referenceType, ...steps]
+    )
+    return rows.map((r) => ({ id: r.id as string, step: r.step as PipelineStep }))
+}
+
+/**
+ * Returns the id of the most recent in-flight (pending/submitted/waiting) so_close or
+ * so_reopen pipeline row for the given order, or null if none exists.
+ * Used by toggle-close to create dependency chains and prevent race conditions.
+ */
+export async function findLastInFlightSoToggleRow(orderId: string): Promise<string | null> {
+    const pool = getDbPool()
+    const { rows } = await pool.query(
+        `SELECT id FROM qb_order_pipeline
+         WHERE order_id = $1
+           AND step IN ('so_close', 'so_reopen')
+           AND status IN ('pending', 'submitted', 'waiting')
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [orderId]
+    )
+    return rows[0]?.id ?? null
 }
 
 /**

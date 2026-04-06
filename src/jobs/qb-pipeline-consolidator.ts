@@ -3,6 +3,9 @@ import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 import { bridgeFetch } from "../lib/quickbooks/client/core"
 import { getDbPool } from "../api/utils/db-pool"
 import { confirmPipelineRow, failPipelineRow, cacheEditSequence } from "../lib/quickbooks/qb-pipeline"
+import { closeSalesOrderInQb, reopenSalesOrderInQb } from "../lib/quickbooks/client/sales-orders"
+import { voidInvoiceInQb } from "../lib/quickbooks/client/invoices"
+import { voidCreditMemoInQb } from "../lib/quickbooks/client/credit-memos"
 import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types"
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]"
@@ -145,6 +148,44 @@ export default async function qbPipelineConsolidator(
                         }
                     } catch (cpErr: any) {
                         logger.warn(`${LOG_PREFIX} ⚠️ Could not propagate qb_txn_id to customer_payment: ${cpErr.message}`)
+                    }
+                }
+
+                // credit_memo confirmed → activate any waiting void_credit_memo rows
+                // (handles race where CM was voided before consolidator wrote qb_txn_id)
+                if (txnId && row.step === "credit_memo" && row.reference_id) {
+                    try {
+                        const { rows: waitingVoidCms } = await pool.query(
+                            `SELECT id FROM qb_order_pipeline
+                             WHERE depends_on = $1 AND status = 'waiting' AND step = 'void_credit_memo'`,
+                            [row.id]
+                        )
+                        for (const vcRow of waitingVoidCms) {
+                            try {
+                                const vcResult = await voidCreditMemoInQb(txnId, editSeq ?? null, (m) => logger.info(m))
+                                if (vcResult.success && vcResult.data?.operationId) {
+                                    await pool.query(
+                                        `UPDATE qb_order_pipeline
+                                         SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3, submitted_at = NOW()
+                                         WHERE id = $1`,
+                                        [vcRow.id, vcResult.data.operationId, txnId]
+                                    )
+                                    logger.info(`${LOG_PREFIX} ✅ Activated waiting void_credit_memo ${vcRow.id} → op ${vcResult.data.operationId}`)
+                                } else {
+                                    await pool.query(
+                                        `UPDATE qb_order_pipeline
+                                         SET status = 'failed', error = $2, qb_txn_id = $3, failed_at = NOW()
+                                         WHERE id = $1`,
+                                        [vcRow.id, vcResult.error ?? "QB CM void failed", txnId]
+                                    )
+                                    logger.warn(`${LOG_PREFIX} ⚠️ Failed to activate void_credit_memo ${vcRow.id}: ${vcResult.error}`)
+                                }
+                            } catch (vcErr: any) {
+                                logger.warn(`${LOG_PREFIX} ⚠️ Error activating void_credit_memo ${vcRow.id}: ${vcErr.message}`)
+                            }
+                        }
+                    } catch (vcListErr: any) {
+                        logger.warn(`${LOG_PREFIX} ⚠️ Error querying waiting void_credit_memo rows: ${vcListErr.message}`)
                     }
                 }
 
@@ -326,6 +367,100 @@ export default async function qbPipelineConsolidator(
                     }
                 }
 
+                // so_close / so_reopen confirmed → activate any waiting dependent rows
+                if (row.step === "so_close" || row.step === "so_reopen") {
+                    try {
+                        const { rows: waitingRows } = await pool.query(
+                            `SELECT id, step, order_id FROM qb_order_pipeline
+                             WHERE depends_on = $1 AND status = 'waiting'
+                               AND step IN ('so_close', 'so_reopen')`,
+                            [row.id]
+                        )
+                        for (const waitingRow of waitingRows) {
+                            try {
+                                const { rows: orderRows } = await pool.query(
+                                    `SELECT metadata FROM "order" WHERE id = $1`,
+                                    [waitingRow.order_id]
+                                )
+                                const wMeta = orderRows[0]?.metadata || {}
+                                const wSoTxnId: string | undefined =
+                                    (wMeta.qb_sales_order as any)?.txn_id ||
+                                    wMeta.qb_so_txn_id ||
+                                    wMeta.qb_sales_order_txn_id
+                                if (!wSoTxnId) {
+                                    logger.warn(`${LOG_PREFIX} No soTxnId for waiting ${waitingRow.step} ${waitingRow.id} — skipping`)
+                                    continue
+                                }
+                                const wResult = waitingRow.step === "so_close"
+                                    ? await closeSalesOrderInQb(wSoTxnId, (m) => logger.info(m))
+                                    : await reopenSalesOrderInQb(wSoTxnId, (m) => logger.info(m))
+                                if (wResult.success && wResult.data?.operationId) {
+                                    await pool.query(
+                                        `UPDATE qb_order_pipeline
+                                         SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW()
+                                         WHERE id = $1`,
+                                        [waitingRow.id, wResult.data.operationId]
+                                    )
+                                    logger.info(`${LOG_PREFIX} ✅ Activated waiting ${waitingRow.step} ${waitingRow.id} → op ${wResult.data.operationId}`)
+                                } else {
+                                    await pool.query(
+                                        `UPDATE qb_order_pipeline
+                                         SET status = 'failed', error = $2, failed_at = NOW()
+                                         WHERE id = $1`,
+                                        [waitingRow.id, wResult.error ?? "QB sync failed"]
+                                    )
+                                    logger.warn(`${LOG_PREFIX} ⚠️ Failed to activate ${waitingRow.step} ${waitingRow.id}: ${wResult.error}`)
+                                }
+                            } catch (wErr: any) {
+                                logger.warn(`${LOG_PREFIX} ⚠️ Error activating waiting ${waitingRow.step} ${waitingRow.id}: ${wErr.message}`)
+                            }
+                        }
+                    } catch (soDepErr: any) {
+                        logger.warn(`${LOG_PREFIX} ⚠️ Error querying waiting so_close/so_reopen rows: ${soDepErr.message}`)
+                    }
+                }
+
+                // sales_order/estimate confirmed with txnId → activate waiting void rows
+                // This handles the race where order.canceled fires before the SO is confirmed
+                if (txnId && (row.step === "sales_order" || row.step === "estimate")) {
+                    try {
+                        const { rows: waitingVoids } = await pool.query(
+                            `SELECT id, step FROM qb_order_pipeline
+                             WHERE depends_on = $1 AND status = 'waiting'
+                               AND step IN ('void_sales_order', 'void_invoice')`,
+                            [row.id]
+                        )
+                        for (const voidRow of waitingVoids) {
+                            try {
+                                const vResult = voidRow.step === "void_invoice"
+                                    ? await voidInvoiceInQb(txnId, (m) => logger.info(m))
+                                    : await closeSalesOrderInQb(txnId, (m) => logger.info(m))
+                                if (vResult.success && vResult.data?.operationId) {
+                                    await pool.query(
+                                        `UPDATE qb_order_pipeline
+                                         SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3, submitted_at = NOW()
+                                         WHERE id = $1`,
+                                        [voidRow.id, vResult.data.operationId, txnId]
+                                    )
+                                    logger.info(`${LOG_PREFIX} ✅ Activated waiting ${voidRow.step} ${voidRow.id} → op ${vResult.data.operationId}`)
+                                } else {
+                                    await pool.query(
+                                        `UPDATE qb_order_pipeline
+                                         SET status = 'failed', error = $2, qb_txn_id = $3, failed_at = NOW()
+                                         WHERE id = $1`,
+                                        [voidRow.id, vResult.error ?? "QB void failed", txnId]
+                                    )
+                                    logger.warn(`${LOG_PREFIX} ⚠️ Failed to activate ${voidRow.step} ${voidRow.id}: ${vResult.error}`)
+                                }
+                            } catch (vErr: any) {
+                                logger.warn(`${LOG_PREFIX} ⚠️ Error activating waiting ${voidRow.step} ${voidRow.id}: ${vErr.message}`)
+                            }
+                        }
+                    } catch (voidDepErr: any) {
+                        logger.warn(`${LOG_PREFIX} ⚠️ Error querying waiting void rows: ${voidDepErr.message}`)
+                    }
+                }
+
                 if (txnId && row.order_id && row.step !== "transfer_customer") {
                     try {
                         const orderModule = container.resolve(Modules.ORDER)
@@ -379,6 +514,59 @@ export default async function qbPipelineConsolidator(
                 const errMsg = op.error || "QB operation failed (no details)"
                 await failPipelineRow(row.id, errMsg)
                 logger.warn(`${LOG_PREFIX} ❌ Failed row ${row.id} (${row.step}): ${errMsg}`)
+
+                // so_close/so_reopen failed → cascade-fail any waiting dependent rows
+                if (row.step === "so_close" || row.step === "so_reopen") {
+                    try {
+                        const { rowCount } = await pool.query(
+                            `UPDATE qb_order_pipeline
+                             SET status = 'failed', error = $2, failed_at = NOW()
+                             WHERE depends_on = $1 AND status = 'waiting'
+                               AND step IN ('so_close', 'so_reopen')`,
+                            [row.id, `Dependency ${row.id} (${row.step}) failed`]
+                        )
+                        if (rowCount && rowCount > 0) {
+                            logger.warn(`${LOG_PREFIX} ⚠️ Cascade-failed ${rowCount} waiting row(s) dependent on ${row.id}`)
+                        }
+                    } catch (cascErr: any) {
+                        logger.warn(`${LOG_PREFIX} ⚠️ Error cascade-failing dependents: ${cascErr.message}`)
+                    }
+                }
+
+                // credit_memo failed → skip waiting void_credit_memo rows (nothing was created)
+                if (row.step === "credit_memo" && row.reference_id) {
+                    try {
+                        const { rowCount: vcSkipCount } = await pool.query(
+                            `UPDATE qb_order_pipeline
+                             SET status = 'skipped', error = $2
+                             WHERE depends_on = $1 AND status = 'waiting' AND step = 'void_credit_memo'`,
+                            [row.id, `Skipped — parent credit_memo never reached QB`]
+                        )
+                        if (vcSkipCount && vcSkipCount > 0) {
+                            logger.info(`${LOG_PREFIX} ℹ️ Skipped ${vcSkipCount} waiting void_credit_memo row(s) — parent failed`)
+                        }
+                    } catch (vcsfErr: any) {
+                        logger.warn(`${LOG_PREFIX} ⚠️ Error skipping void_credit_memo rows: ${vcsfErr.message}`)
+                    }
+                }
+
+                // sales_order/estimate failed → skip any waiting void rows (nothing was created in QB)
+                if (row.step === "sales_order" || row.step === "estimate") {
+                    try {
+                        const { rowCount: skipCount } = await pool.query(
+                            `UPDATE qb_order_pipeline
+                             SET status = 'skipped', error = $2
+                             WHERE depends_on = $1 AND status = 'waiting'
+                               AND step IN ('void_sales_order', 'void_invoice')`,
+                            [row.id, `Skipped — parent ${row.step} never reached QB`]
+                        )
+                        if (skipCount && skipCount > 0) {
+                            logger.info(`${LOG_PREFIX} ℹ️ Skipped ${skipCount} waiting void row(s) — parent ${row.step} failed`)
+                        }
+                    } catch (svErr: any) {
+                        logger.warn(`${LOG_PREFIX} ⚠️ Error skipping void rows after parent failure: ${svErr.message}`)
+                    }
+                }
 
             } else {
                 // Still pending/processing on bridge side — nothing to do yet
@@ -481,6 +669,64 @@ export default async function qbPipelineConsolidator(
         }
     } catch (recoveryErr: any) {
         logger.warn(`${LOG_PREFIX} ⚠️ Recovery pass error: ${recoveryErr.message}`)
+    }
+
+    // ── Recovery pass: orphaned waiting so_close/so_reopen ─────────────────────
+    // Handles cases where the server restarted mid-confirmation of the parent row.
+    try {
+        const { rows: orphanSoRows } = await pool.query(`
+            SELECT child.id, child.step, child.order_id
+            FROM qb_order_pipeline child
+            JOIN qb_order_pipeline parent ON parent.id = child.depends_on
+            WHERE child.step   IN ('so_close', 'so_reopen')
+              AND child.status  = 'waiting'
+              AND parent.step  IN ('so_close', 'so_reopen')
+              AND parent.status = 'confirmed'
+        `)
+
+        if (orphanSoRows.length > 0) {
+            logger.info(`${LOG_PREFIX} 🔄 Recovery: found ${orphanSoRows.length} orphaned so_close/so_reopen row(s)`)
+        }
+
+        for (const soRow of orphanSoRows) {
+            try {
+                const { rows: orderRows } = await pool.query(
+                    `SELECT metadata FROM "order" WHERE id = $1`,
+                    [soRow.order_id]
+                )
+                const soMeta = orderRows[0]?.metadata || {}
+                const soTxnId: string | undefined =
+                    (soMeta.qb_sales_order as any)?.txn_id ||
+                    soMeta.qb_so_txn_id ||
+                    soMeta.qb_sales_order_txn_id
+                if (!soTxnId) {
+                    logger.warn(`${LOG_PREFIX} ⚠️ Recovery: no soTxnId for ${soRow.step} ${soRow.id} — skipping`)
+                    continue
+                }
+                const soResult = soRow.step === "so_close"
+                    ? await closeSalesOrderInQb(soTxnId, (m) => logger.info(m))
+                    : await reopenSalesOrderInQb(soTxnId, (m) => logger.info(m))
+                if (soResult.success && soResult.data?.operationId) {
+                    await pool.query(
+                        `UPDATE qb_order_pipeline
+                         SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW()
+                         WHERE id = $1`,
+                        [soRow.id, soResult.data.operationId]
+                    )
+                    logger.info(`${LOG_PREFIX} ✅ Recovery: ${soRow.step} ${soRow.id} activated → op ${soResult.data.operationId}`)
+                } else {
+                    await pool.query(
+                        `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW() WHERE id = $1`,
+                        [soRow.id, soResult.error ?? "QB sync failed (recovery)"]
+                    )
+                    logger.warn(`${LOG_PREFIX} ⚠️ Recovery: failed to activate ${soRow.step} ${soRow.id}: ${soResult.error}`)
+                }
+            } catch (soRecErr: any) {
+                logger.warn(`${LOG_PREFIX} ⚠️ Recovery: error activating ${soRow.step} ${soRow.id}: ${soRecErr.message}`)
+            }
+        }
+    } catch (soRecoveryErr: any) {
+        logger.warn(`${LOG_PREFIX} ⚠️ SO recovery pass error: ${soRecoveryErr.message}`)
     }
 }
 

@@ -36,11 +36,15 @@ export async function handleInvoiceVoided(data: any, orderModule: any, logger: a
     const { txn_id: invoiceTxnId, ref_number: invoiceRef } = targetInv
 
     let isSalesReceipt = false
+    let friendlyInvoiceId: string | undefined
     try {
         const pool = getDbPool()
-        const res = await pool.query(`SELECT metadata FROM pos_invoice WHERE id = $1`, [invoice_id])
-        if (res.rows[0]?.metadata?.is_sales_receipt) {
-            isSalesReceipt = true
+        const res = await pool.query(`SELECT invoice_number, metadata FROM pos_invoice WHERE id = $1`, [invoice_id])
+        if (res.rows[0]) {
+            friendlyInvoiceId = res.rows[0].invoice_number
+            if (res.rows[0].metadata?.is_sales_receipt) {
+                isSalesReceipt = true
+            }
         }
     } catch (e: any) {
         isSalesReceipt = invoiceRef?.startsWith('SR-') || false
@@ -83,7 +87,7 @@ export async function handleInvoiceVoided(data: any, orderModule: any, logger: a
             status: "pending",
             qbTxnId: invoiceTxnId,
             qbRefNumber: invoiceRef ?? null,
-            medusaRefNumber: invoiceRef ?? invoice_id ?? null
+            medusaRefNumber: friendlyInvoiceId ?? invoiceRef ?? invoice_id ?? null
         })
     } catch (pErr: any) {
         logger.warn(`${LOG_PREFIX} Could not write pre-flight pipeline row: ${pErr.message}`)
@@ -106,7 +110,7 @@ export async function handleInvoiceVoided(data: any, orderModule: any, logger: a
                 status:          "failed",
                 qbTxnId:         invoiceTxnId,
                 qbRefNumber:     invoiceRef ?? null,
-                medusaRefNumber: invoiceRef ?? invoice_id ?? null,
+                medusaRefNumber: friendlyInvoiceId ?? invoiceRef ?? invoice_id ?? null,
                 error:           result.error ?? `${documentTypeName} void failed`,
             })
         } catch (pErr: any) { logger.warn(`${LOG_PREFIX} Could not write pipeline row: ${pErr.message}`) }
@@ -133,7 +137,7 @@ export async function handleInvoiceVoided(data: any, orderModule: any, logger: a
                 bridgeOpId:      result.data?.operationId ?? null,
                 qbTxnId:         invoiceTxnId,
                 qbRefNumber:     invoiceRef ?? null,
-                medusaRefNumber: invoiceRef ?? invoice_id ?? null,
+                medusaRefNumber: friendlyInvoiceId ?? invoiceRef ?? invoice_id ?? null,
             })
         } catch (pErr: any) { logger.warn(`${LOG_PREFIX} Could not write pipeline row: ${pErr.message}`) }
         try {

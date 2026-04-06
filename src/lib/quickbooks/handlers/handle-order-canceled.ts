@@ -1,6 +1,6 @@
 import { closeSalesOrderInQb, voidInvoiceInQb } from "../qb-bridge-client"
 import { QbSyncLogger } from "../qb-sync-logger"
-import { writePipelineRow } from "../qb-pipeline"
+import { writePipelineRow, findInFlightQbRows } from "../qb-pipeline"
 import { getSoTxnId, getSoRef, getLatestInvoiceTxnId, getLatestInvoiceRef } from "../qb-metadata-types"
 import { LOG_PREFIX } from "./utils"
 
@@ -27,8 +27,37 @@ export async function handleOrderCanceled(
     const invoiceTxnId = getLatestInvoiceTxnId(meta)
     const invoiceRef = getLatestInvoiceRef(meta)
 
+    // Medusa-side reference for the order (e.g. "S10184")
+    const soMedusaRef = (meta.document_number as string | undefined) ?? (order.display_id ? `S${order.display_id}` : null)
+
     if (!soTxnId && !invoiceTxnId) {
-        logger.info(`${LOG_PREFIX} Order ${orderId} has no QB documents — nothing to cancel`)
+        // No QB metadata yet — but the SO/Invoice creation may be in-flight (submitted to bridge,
+        // awaiting consolidator confirmation). If so, create waiting void rows chained on those
+        // rows so the void executes as soon as creation is confirmed.
+        let chainedCount = 0
+        try {
+            const inFlight = await findInFlightQbRows(orderId, ["sales_order", "estimate", "invoice", "sales_receipt"])
+            for (const inFlightRow of inFlight) {
+                const voidStep = (inFlightRow.step === "invoice" || inFlightRow.step === "sales_receipt")
+                    ? "void_invoice" as const
+                    : "void_sales_order" as const
+                await writePipelineRow({
+                    orderId,
+                    step: voidStep,
+                    status: "waiting",
+                    dependsOn: inFlightRow.id,
+                    medusaRefNumber: soMedusaRef,
+                })
+                logger.info(`${LOG_PREFIX} ⏳ Chained ${voidStep} (waiting) on in-flight ${inFlightRow.step} row ${inFlightRow.id}`)
+                chainedCount++
+            }
+        } catch (chainErr: any) {
+            logger.warn(`${LOG_PREFIX} ⚠️ Could not check in-flight rows: ${chainErr.message}`)
+        }
+
+        if (chainedCount === 0) {
+            logger.info(`${LOG_PREFIX} Order ${orderId} has no QB documents and no in-flight rows — nothing to cancel`)
+        }
         return
     }
 
@@ -57,8 +86,7 @@ export async function handleOrderCanceled(
     let soOpId: string | undefined
     let errorMsg: string | undefined
 
-    // Medusa-side reference for the order (e.g. "S10184") — distinct from the QB-assigned soRef
-    const soMedusaRef = (meta.document_number as string | undefined) ?? (order.display_id ? `S${order.display_id}` : soRef ?? null)
+    // soMedusaRef declared above (before the early-exit block)
 
     if (invoiceTxnId) {
         logger.info(`${LOG_PREFIX} Voiding QB Invoice ${invoiceTxnId}...`)

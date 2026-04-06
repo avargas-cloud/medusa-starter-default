@@ -80,7 +80,7 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
     // 2. Fetch the Invoice metadata to get the qb_txn_id
     let { data: [invoice] } = await query.graph({
         entity: "pos_invoice",
-        fields: ["id", "metadata"],
+        fields: ["id", "invoice_number", "metadata"],
         filters: { id: invoice_id }
     })
 
@@ -90,6 +90,7 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
     }
 
     let invoiceTxnId = invoice.metadata?.qb_txn_id as string | undefined
+    let invoiceNumber = (invoice as any).invoice_number as string | undefined
 
     // 3. Polling for up to 100 seconds if the Invoice hasn't finished syncing yet (10 attempts of 10 seconds)
     if (!invoiceTxnId) {
@@ -98,11 +99,12 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
             await new Promise(res => setTimeout(res, 10000))
             const { data: [refreshedInvoice] } = await query.graph({
                 entity: "pos_invoice",
-                fields: ["metadata"],
+                fields: ["invoice_number", "metadata"],
                 filters: { id: invoice_id }
             })
             invoiceTxnId = refreshedInvoice?.metadata?.qb_txn_id as string | undefined
             const currentInvStatus = refreshedInvoice?.metadata?.qb_sync_status
+            if (refreshedInvoice?.invoice_number) invoiceNumber = refreshedInvoice.invoice_number as string
 
             if (invoiceTxnId) {
                 logger.info(`${LOG_PREFIX} ⏳ Found invoiceTxnId: ${invoiceTxnId} on attempt ${i + 1}`)
@@ -170,12 +172,20 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
     }
     logger.info(`${LOG_PREFIX} 🔑 EditSequence resolved for TxnID=${paymentTxnId}`)
 
+    // Build updated memo: replace the original "for Order X" with "for Invoice Y"
+    // so the QB payment reflects its final use instead of the original deposit context.
+    const payDisplayId = (payment as any).display_id
+    const updatedMemo = invoiceNumber
+        ? (payDisplayId ? `Payment ${payDisplayId} for Invoice ${invoiceNumber}` : `Payment for Invoice ${invoiceNumber}`)
+        : undefined
+
     const applyResult = await applyPaymentToInvoiceInQb({
         customerId: customerQbId,
         invoiceId: invoiceTxnId,
         amount: amount_applied / 100,
         creditTxnId: paymentTxnId,
         editSequence,
+        memo: updatedMemo,
     })
 
     if (!applyResult.success) {

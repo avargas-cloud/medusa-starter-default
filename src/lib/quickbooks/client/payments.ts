@@ -38,6 +38,7 @@ export async function applyPaymentToInvoiceInQb(payload: {
     invoiceId: string
     creditTxnId: string
     editSequence: string
+    memo?: string
 }): Promise<QbBridgeResult<QbAsyncResult>> {
     if (DRY_RUN) {
         console.log(`[QB DRY RUN] Would apply payment ${payload.creditTxnId} to invoice ${payload.invoiceId}`)
@@ -50,6 +51,7 @@ export async function applyPaymentToInvoiceInQb(payload: {
             invoiceId: payload.invoiceId,
             amount: payload.amount,
             editSequence: payload.editSequence,
+            ...(payload.memo !== undefined ? { memo: payload.memo } : {}),
         })
         const operationId = data?.operationId
         if (!operationId) throw new Error("Bridge did not return an operationId for apply-payment")

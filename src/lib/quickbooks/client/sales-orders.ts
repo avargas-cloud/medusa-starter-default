@@ -171,3 +171,48 @@ export async function closeSalesOrderInQb(
         return { success: false, error: err.message }
     }
 }
+
+/**
+ * Reopens a manually-closed Sales Order in QuickBooks (IsManuallyClosed = false).
+ * Fetches EditSequence dynamically from QB before modifying.
+ */
+export async function reopenSalesOrderInQb(
+    soTxnId: string,
+    log: (msg: string) => void = console.log
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        log(`[QB DRY RUN] Would reopen Sales Order ${soTxnId}`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN", txnId: soTxnId } }
+    }
+
+    try {
+        log(`[QB] Querying Sales Order ${soTxnId} to get EditSequence for reopening...`)
+        const queryResp = await bridgeFetch("GET", `/api/sales-orders/${soTxnId}`)
+        const queryOpId = queryResp?.operationId
+        if (!queryOpId) throw new Error("Bridge did not return operationId for SO query")
+
+        const rawResult = await pollRawOperationResult(queryOpId, log)
+
+        const soRet =
+            rawResult?.QBXML?.QBXMLMsgsRs?.SalesOrderQueryRs?.SalesOrderRet ??
+            rawResult?.QBXMLMsgsRs?.SalesOrderQueryRs?.SalesOrderRet ??
+            rawResult?.SalesOrderRet ??
+            rawResult?.SalesOrderQueryRs?.SalesOrderRet
+
+        if (!soRet?.EditSequence) {
+            throw new Error(`Could not extract EditSequence from SO query. Raw: ${JSON.stringify(rawResult).slice(0, 200)}`)
+        }
+
+        const editSequence = soRet.EditSequence as string
+        log(`[QB] EditSequence obtained: ${editSequence}. Reopening SO...`)
+
+        const data = await bridgeFetch("PATCH", `/api/sales-orders/${soTxnId}/reopen`, { EditSequence: editSequence })
+        const operationId = data?.operationId
+        if (!operationId) throw new Error("Bridge did not return operationId for Sales Order reopen")
+
+        log(`[QB] Sales Order ${soTxnId} reopen queued (op: ${operationId})`)
+        return { success: true, data: { operationId, txnId: soTxnId } }
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}

@@ -4,7 +4,7 @@ import CreditMemoModuleService from "../../../../../../modules/credit_memos/serv
 import { Modules } from "@medusajs/utils"
 import { FINANCE_MODULE } from "../../../../../../modules/finance"
 import { voidCreditMemoInQb } from "../../../../../../lib/quickbooks/client"
-import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline"
+import { writePipelineRow, findInFlightQbRowsByRef } from "../../../../../../lib/quickbooks/qb-pipeline"
 
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
     const logger = req.scope.resolve("logger")
@@ -100,6 +100,28 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         }
 
         // 3. Void in QuickBooks (if CM was synced)
+        // If the credit_memo pipeline row is still in-flight (submitted to bridge but
+        // qb_txn_id not written to pos_credit_memo yet), chain a waiting void that the
+        // consolidator will activate once the CM creation is confirmed.
+        if (wasCompleted && !creditMemo.qb_txn_id) {
+            try {
+                const inFlight = await findInFlightQbRowsByRef(id, "credit_memo", ["credit_memo"])
+                for (const inFlightRow of inFlight) {
+                    await writePipelineRow({
+                        referenceId:     id,
+                        referenceType:   "credit_memo",
+                        step:            "void_credit_memo",
+                        status:          "waiting",
+                        dependsOn:       inFlightRow.id,
+                        medusaRefNumber: creditMemo.credit_memo_number ?? null,
+                    })
+                    logger.info(`[void CM] ⏳ Chained void_credit_memo (waiting) on in-flight row ${inFlightRow.id}`)
+                }
+            } catch (chainErr: any) {
+                logger.warn(`[void CM] Could not check in-flight pipeline rows: ${chainErr.message}`)
+            }
+        }
+
         if (wasCompleted && creditMemo.qb_txn_id) {
             try {
                 const result = await voidCreditMemoInQb(
