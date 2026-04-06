@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto"
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos"
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service"
@@ -52,23 +53,30 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                     const variant = data[0]
                     if (variant && variant.inventory_items && variant.inventory_items.length > 0) {
                         const invItemId = variant.inventory_items[0]?.inventory?.id
-                        
+
                         // Fetch current level
                         if (invItemId) {
                             const levels = await inventoryService.listInventoryLevels({
                                 inventory_item_id: invItemId,
                                 location_id: locationId
                             })
-                            
+
                             if (levels && levels.length > 0) {
-                                const newQty = (levels[0]?.stocked_quantity || 0) + item.quantity
-                                await inventoryService.updateInventoryLevels({
-                                    id: levels[0]?.id as string,
-                                    inventory_item_id: invItemId,
-                                    location_id: locationId,
-                                    stocked_quantity: newQty
-                                } as any)
-                                logger.info(`Restocked inventory for variant ${item.variant_id}: +${item.quantity}`)
+                                // Only restock non-damaged units
+                                const damagedQty = item.damaged_qty || 0
+                                const restockQty = item.quantity - damagedQty
+                                if (restockQty > 0) {
+                                    const newQty = (levels[0]?.stocked_quantity || 0) + restockQty
+                                    await inventoryService.updateInventoryLevels({
+                                        id: levels[0]?.id as string,
+                                        inventory_item_id: invItemId,
+                                        location_id: locationId,
+                                        stocked_quantity: newQty
+                                    } as any)
+                                    logger.info(`Restocked inventory for variant ${item.variant_id}: +${restockQty} (${damagedQty} damaged, not restocked)`)
+                                } else {
+                                    logger.info(`Skipped restock for variant ${item.variant_id}: all ${item.quantity} units are damaged`)
+                                }
                             }
                         }
                     }
@@ -77,6 +85,34 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 }
             }
         }
+
+        // -- DAMAGED ITEMS TRACKING BEGIN --
+        // Insert a row in pos_damaged_item for every item that has damaged_qty > 0.
+        // These units were NOT restocked to inventory.
+        try {
+            const pgConnection = req.scope.resolve("__pg_connection__") as any
+            const damagedRows = creditMemo.items
+                .filter((item: any) => (item.damaged_qty || 0) > 0)
+                .map((item: any) => ({
+                    id:            randomUUID(),
+                    credit_memo_id: id,
+                    order_id:      (creditMemo as any).order_id || null,
+                    variant_id:    item.variant_id || null,
+                    sku:           item.sku || null,
+                    title:         item.title || null,
+                    quantity:      item.damaged_qty,
+                    unit_price:    item.unit_price || 0,
+                    created_at:    new Date(),
+                }))
+
+            if (damagedRows.length > 0) {
+                await pgConnection('pos_damaged_item').insert(damagedRows)
+                logger.info(`[credit_memos complete] Logged ${damagedRows.length} damaged item record(s)`)
+            }
+        } catch (dmgErr: any) {
+            logger.warn(`[credit_memos complete] Could not log damaged items (non-fatal): ${dmgErr.message}`)
+        }
+        // -- DAMAGED ITEMS TRACKING END --
 
         // -- QUICKBOOKS SYNC BEGIN --
         let qbOperationId = null

@@ -89,6 +89,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 description: item.salesDescription || item.title,
                 thumbnail: item.thumbnail || (item.variantId ? thumbnailMap[item.variantId] : null) || null,
                 quantity: item.quantity,
+                damaged_qty: item.damagedQty ?? 0,
                 unit_price: Math.round((item.effectiveUnitPrice || item.unitPrice) * 100),
                 line_total: Math.round((item.effectiveUnitPrice || item.unitPrice) * 100 * item.quantity)
             }))
@@ -99,8 +100,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             const nextCmNum = seqRes.rows[0].seq || seqRes.rows[0].SEQ
             const cmNumber = `CM-${nextCmNum}`
 
-            // 1. Create wrapper
-            const created = await creditMemoService.createPosCreditMemoes({
+            // @ts-ignore - Medusa DML types it as Memoes but runtime is Memos
+            const created = await (creditMemoService as any).createPosCreditMemos({
                 credit_memo_number: cmNumber,
                 order_id: payload.order_id || null,
                 invoice_id: payload.invoice_id || null,
@@ -124,7 +125,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         } else {
             // UPDATE EXISTING
             
-            await creditMemoService.updatePosCreditMemoes({
+            // @ts-ignore
+            await (creditMemoService as any).updatePosCreditMemos({
                 id: resolvedId,
                 customer_id: payload.customer_id || null,
                 notes: payload.notes || null,
