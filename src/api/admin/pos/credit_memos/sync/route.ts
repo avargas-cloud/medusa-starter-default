@@ -95,7 +95,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
 
         if (action === "create" || id === "new" || !id || id.startsWith('new:')) {
             const pgConnection = req.scope.resolve("__pg_connection__") as any
-            const seqRes = await pgConnection.raw(`SELECT nextval('custom_invoice_seq') AS seq`)
+            const seqRes = await pgConnection.raw(`SELECT nextval('custom_credit_memo_seq') AS seq`)
             const nextCmNum = seqRes.rows[0].seq || seqRes.rows[0].SEQ
             const cmNumber = `CM-${nextCmNum}`
 

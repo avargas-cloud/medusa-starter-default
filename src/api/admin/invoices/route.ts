@@ -330,7 +330,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     referenceType: "pos_invoice",
                     step: "sales_receipt",
                     status: "waiting",
-                    medusaRefNumber: `INV-${nextInvNum}`,
+                    medusaRefNumber: `INV-${invoice_number}`,
                 })
             } else {
                 // ── Invoice flow ──────────────────────────────────────────────
@@ -341,7 +341,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     referenceType: "pos_invoice",
                     step: "invoice",
                     status: "waiting",
-                    medusaRefNumber: `INV-${nextInvNum}`,
+                    medusaRefNumber: `INV-${invoice_number}`,
                 })
 
                 // 2. Payment row — waiting (only for non-credit new payments)

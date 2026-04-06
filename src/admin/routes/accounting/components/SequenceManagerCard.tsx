@@ -6,6 +6,7 @@ type SequencesData = {
     custom_estimate_seq: number | null
     custom_order_seq: number | null
     custom_medusa_invoice_seq: number | null
+    custom_credit_memo_seq: number | null
     custom_invoice_seq: number | null
     custom_sales_receipt_seq: number | null
     custom_payment_seq: number | null
@@ -15,6 +16,7 @@ const SEQUENCE_LABELS: Record<keyof SequencesData, string> = {
     custom_estimate_seq: "QB Estimates",
     custom_order_seq: "Sales Orders",
     custom_medusa_invoice_seq: "Medusa Invoices",
+    custom_credit_memo_seq: "Returns (Credit Memos)",
     custom_invoice_seq: "QB Invoices & Credit Memos",
     custom_sales_receipt_seq: "QB Sales Receipts",
     custom_payment_seq: "Payments"

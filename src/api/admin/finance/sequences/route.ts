@@ -4,6 +4,7 @@ const VALID_SEQUENCES = [
     "custom_estimate_seq",
     "custom_order_seq",
     "custom_medusa_invoice_seq",
+    "custom_credit_memo_seq",
     "custom_invoice_seq",
     "custom_sales_receipt_seq",
     "custom_payment_seq"
