@@ -92,10 +92,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const isFullyApplied = (totalApplied + Number(amount_applied)) >= Number(payment.amount)
         const newPaymentStatus = isFullyApplied ? 'applied' : 'partially_applied'
 
-        await financeService.updateCustomerPayments(
-            { id: paymentId },
-            { status: newPaymentStatus }
-        )
+        await financeService.updateCustomerPayments({ id: paymentId, status: newPaymentStatus })
 
         // 5. Create the corresponding InvoicePayment in the Invoice module
         await invoiceService.createInvoicePayments({
@@ -129,10 +126,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 invoice_total:  getNum(invoice.total),
             })
             if (medusaPaymentId) {
-                await financeService.updateCustomerPayments(
-                    { id: paymentId },
-                    { medusa_payment_synced: true }
-                ).catch(() => {}) // non-fatal
+                await financeService.updateCustomerPayments({ id: paymentId, medusa_payment_synced: true }).catch(() => {}) // non-fatal
             }
         }
 

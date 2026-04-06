@@ -75,6 +75,13 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
             return
         }
 
+        // $0 ANCHOR GUARD: credit-only transactions create a $0 anchor payment as a transaction
+        // envelope for the UI. There is nothing to record in QB for a $0 payment.
+        if (Number(payment.amount) === 0) {
+            logger.info(`${LOG_PREFIX} ⏭️ Skipping: payment ${paymentId} has amount=0 (credit-only transaction anchor — no QB entry needed)`)
+            return
+        }
+
         const orderId = payment.metadata?.order_id
         const orderDisplayId = payment.metadata?.order_display_id
 

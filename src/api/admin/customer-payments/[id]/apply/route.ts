@@ -62,7 +62,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const newApplied = alreadyApplied + amount
         const newAvailable = Math.max(0, Number(payment.amount) - newApplied)
         const newStatus = newAvailable <= 0 ? 'applied' : 'partially_applied'
-        await financeService.updateCustomerPayments({ id }, { status: newStatus })
+        await financeService.updateCustomerPayments({ id, status: newStatus })
 
         const updated = await financeService.retrieveCustomerPayment(id, { relations: ['applications'] })
         return res.json({ payment: updated })
