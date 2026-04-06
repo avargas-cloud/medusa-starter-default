@@ -28,15 +28,16 @@ export async function receivePaymentInQb(
 }
 
 /**
- * Applies an existing unapplied ReceivePayment credit to an invoice via ReceivePaymentMod.
+ * Applies an existing unapplied ReceivePayment to an invoice via ReceivePaymentMod.
  * Uses POST /api/payments/{creditTxnId}/apply — modifies the existing QB payment in-place
- * rather than creating a new one. This is the counterpart to /unapply.
+ * rather than creating a new one. Requires EditSequence to avoid creating a duplicate record.
  */
 export async function applyPaymentToInvoiceInQb(payload: {
     customerId: string
     amount: number | string
     invoiceId: string
     creditTxnId: string
+    editSequence: string
 }): Promise<QbBridgeResult<QbAsyncResult>> {
     if (DRY_RUN) {
         console.log(`[QB DRY RUN] Would apply payment ${payload.creditTxnId} to invoice ${payload.invoiceId}`)
@@ -48,6 +49,7 @@ export async function applyPaymentToInvoiceInQb(payload: {
             customerId: payload.customerId,
             invoiceId: payload.invoiceId,
             amount: payload.amount,
+            editSequence: payload.editSequence,
         })
         const operationId = data?.operationId
         if (!operationId) throw new Error("Bridge did not return an operationId for apply-payment")

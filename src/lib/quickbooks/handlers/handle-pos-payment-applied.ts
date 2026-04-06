@@ -2,7 +2,7 @@ import { SubscriberArgs } from "@medusajs/framework"
 import { ContainerRegistrationKeys } from "@medusajs/utils"
 import { FINANCE_MODULE } from "../../../modules/finance"
 import { applyPaymentToInvoiceInQb, pollOperationResult } from "../qb-bridge-client"
-import { writePipelineRow } from "../qb-pipeline"
+import { writePipelineRow, getCachedEditSequence } from "../qb-pipeline"
 
 const LOG_PREFIX = "[QB-POS-PAYMENT-APPLIED]"
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
@@ -136,7 +136,7 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
 
     // 5. Fire the Bridge Request to Apply Payment to Invoice!
     logger.info(`${LOG_PREFIX} 🎯 Applying Payment (TxnID: ${paymentTxnId}, Amount: $${(amount_applied / 100).toFixed(2)}) -> Invoice (TxnID: ${invoiceTxnId}) in QB...`)
-    
+
     // Fetch the customer based on the order to get QB List ID if needed
     // (applyPaymentToInvoiceInQb needs customerId)
     const { data: [customer] } = await query.graph({
@@ -144,7 +144,7 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
         fields: ["id", "metadata"],
         filters: { id: payment.customer_id }
     })
-    
+
     const customerQbId = customer?.metadata?.qb_list_id as string | undefined
 
     if (!customerQbId) {
@@ -152,11 +152,30 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
         return
     }
 
+    // Get the EditSequence from cache (saved when the payment was created in QB).
+    // Without this, the bridge would create a new duplicate payment record instead of
+    // modifying the existing one.
+    const editSequence = await getCachedEditSequence("payment", paymentTxnId).catch(() => null)
+    if (!editSequence) {
+        logger.error(`${LOG_PREFIX} ❌ No EditSequence found in cache for payment TxnID=${paymentTxnId}. Cannot apply via ReceivePaymentMod.`)
+        try {
+            await writePipelineRow({
+                orderId: order_id, referenceId: payment_id, referenceType: "customer_payment",
+                step: "apply_payment", status: "failed",
+                medusaRefNumber: medusaPayRef,
+                error: "EditSequence not cached — payment was created before caching was introduced, or cache expired",
+            })
+        } catch {}
+        return
+    }
+    logger.info(`${LOG_PREFIX} 🔑 EditSequence resolved for TxnID=${paymentTxnId}`)
+
     const applyResult = await applyPaymentToInvoiceInQb({
         customerId: customerQbId,
         invoiceId: invoiceTxnId,
         amount: amount_applied / 100,
-        creditTxnId: paymentTxnId
+        creditTxnId: paymentTxnId,
+        editSequence,
     })
 
     if (!applyResult.success) {

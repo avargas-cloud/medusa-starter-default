@@ -80,6 +80,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             }
         }
 
+        const qbFlowEnabled = process.env.QB_ORDER_FLOW_ENABLED === "true"
+
         const payment = await financeService.createCustomerPayments({
             customer_id,
             display_id: nextPayNum,
@@ -95,6 +97,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 ...(metadata || {}),
                 pos_payment_method: m, // exact original method for QB
                 ...(transactionNumber !== null ? { transaction_number: transactionNumber } : {}),
+                // Show spinner immediately in the UI — the QB handler will update to 'synced'/'error'
+                ...(qbFlowEnabled ? { qb_sync_status: 'pending' } : {}),
             },
             status: 'available' // A new manual payment is always available until applied
         })

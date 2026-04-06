@@ -52,6 +52,7 @@ import {
 import { isQbIntegrationEnabled } from "./qb-integration-guard"
 import { QbSyncLogger } from "./qb-sync-logger"
 import { getEstimateTxnId } from "./qb-metadata-types"
+import { getCachedEditSequence } from "./qb-pipeline"
 import { createSalesReceiptInQb } from "./client/sales-receipts"
 
 const ORDER_FLOW_ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
@@ -750,12 +751,20 @@ export async function processInvoiceInQb(invoice: {
     if (invTxnId && invoice.qbPaymentTxnId && invoice.paymentAmount) {
         console.log(`${prefix} Applying payment ${invoice.qbPaymentTxnId} to invoice ${invTxnId}...`)
 
-        const applyResult = await applyPaymentToInvoiceInQb({
-            customerId: invoice.qbCustomerId,
-            amount: invoice.paymentAmount,
-            invoiceId: invTxnId,
-            creditTxnId: invoice.qbPaymentTxnId,
-        })
+        const cachedEditSeq = await getCachedEditSequence("payment", invoice.qbPaymentTxnId).catch(() => null)
+        if (!cachedEditSeq) {
+            console.warn(`[QB] ⚠️ No EditSequence in cache for payment ${invoice.qbPaymentTxnId}. Skipping apply to avoid duplicate QB record.`)
+        }
+
+        const applyResult = cachedEditSeq
+            ? await applyPaymentToInvoiceInQb({
+                customerId: invoice.qbCustomerId,
+                amount: invoice.paymentAmount,
+                invoiceId: invTxnId,
+                creditTxnId: invoice.qbPaymentTxnId,
+                editSequence: cachedEditSeq,
+            })
+            : { success: false, error: "EditSequence not cached" }
 
         if (!applyResult.success) {
             console.error(`[QB] ⚠️ Failed to apply payment to invoice (non-blocking): ${applyResult.error}`)

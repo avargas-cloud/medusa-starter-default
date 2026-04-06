@@ -21,6 +21,7 @@ const PaymentApplication = model.define('payment_application', {
     id:             model.id({ prefix: 'papp' }).primaryKey(),
     payment:        model.belongsTo(() => CustomerPayment, { mappedBy: 'applications' }),
     invoice_id:     model.text().nullable(),        // null for web orders (no PosInvoice)
+    invoice_number: model.text().nullable(),        // human-readable POS invoice number e.g. "30033" — written at apply time
     order_id:       model.text(),                  // always set — the Medusa order
     amount_applied: model.bigNumber(),             // in cents
     applied_at:     model.dateTime(),

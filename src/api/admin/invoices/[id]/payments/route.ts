@@ -11,6 +11,9 @@ import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
 import { INVOICE_MODULE } from '../../../../../modules/invoices'
 import { FINANCE_MODULE } from '../../../../../modules/finance'
 import { registerMedusaPayment } from '../../register-medusa-payment'
+import { handlePosPaymentCreated } from '../../../../../lib/quickbooks/handlers/handle-pos-payment-created'
+import { handlePosPaymentApplied } from '../../../../../lib/quickbooks/handlers/handle-pos-payment-applied'
+import { writePipelineRow } from '../../../../../lib/quickbooks/qb-pipeline'
 
 function getNum(val: any): number {
     if (val === null || val === undefined) return 0;
@@ -79,6 +82,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const seqPgRes = await pgConnection.raw(`SELECT nextval('custom_payment_seq') AS seq`).catch(() => ({ rows: [{ seq: null }] }))
         const nextPayNum = seqPgRes.rows[0]?.seq || seqPgRes.rows[0]?.SEQ ? Number(seqPgRes.rows[0].seq || seqPgRes.rows[0].SEQ) : null
 
+        const qbFlowEnabled = process.env.QB_ORDER_FLOW_ENABLED === "true"
+
         // 2. Create the CustomerPayment (The core AR ledger entry)
         const customerPayment = await financeService.createCustomerPayments({
             customer_id,
@@ -93,12 +98,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             type: 'payment',
             status: 'applied', // Immediately applied to this invoice
             medusa_payment_synced: false, // will be updated after Medusa sync
+            metadata: {
+                deposit_type: 'INVOICE',
+                order_id: invoice.order_id,
+                pos_payment_method: payment_method,
+                invoices_affected:          [id],
+                invoices_affected_friendly: [`IN-${(invoice as any).invoice_number || id}`],
+                // Show spinner immediately — QB handler will update to 'synced'/'error'
+                ...(qbFlowEnabled ? { qb_sync_status: 'pending' } : {}),
+            },
         })
 
         // 3. Create the PaymentApplication linking the payment to the invoice
         await financeService.createPaymentApplications({
             payment_id: customerPayment.id,
             invoice_id: id,
+            invoice_number: String((invoice as any).invoice_number || ''),
             order_id: invoice.order_id,
             amount_applied: amount,
             applied_at: paymentDate,
@@ -143,6 +158,47 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
 
         const updated = await invoiceService.retrievePosInvoice(id)
+
+        // 7. QB Sync — direct exec (mirrors invoices/route.ts pattern; subscriber removed for pos.payment.created)
+        if (qbFlowEnabled) {
+            const applicationForEmit = {
+                payment_id: customerPayment.id,
+                invoice_id: id,
+                order_id: invoice.order_id,
+                amount_applied: amount,
+            }
+            try {
+                await writePipelineRow({
+                    orderId: invoice.order_id,
+                    referenceId: customerPayment.id,
+                    referenceType: "customer_payment",
+                    step: "payment",
+                    status: "waiting",
+                    medusaRefNumber: nextPayNum ? `PAY-${nextPayNum}` : null,
+                })
+            } catch (rowErr: any) {
+                console.warn(`[invoices/:id/payments] Could not write pipeline row: ${rowErr.message}`)
+            }
+
+            setTimeout(async () => {
+                try {
+                    await handlePosPaymentCreated({
+                        event: { name: "pos.payment.created", data: { id: customerPayment.id } },
+                        container: req.scope as any,
+                        pluginOptions: {},
+                    })
+                    await new Promise(r => setTimeout(r, 250))
+                    await handlePosPaymentApplied({
+                        event: { name: "pos.payment.applied", data: applicationForEmit },
+                        container: req.scope as any,
+                        pluginOptions: {},
+                    })
+                } catch (execErr: any) {
+                    console.error(`[invoices/:id/payments] Direct exec QB sync failed: ${execErr.message}`)
+                }
+            }, 100)
+        }
+
         return res.json({ invoice: updated, payments: allPayments, customer_payment: customerPayment })
     } catch (err: any) {
         return res.status(500).json({ error: err.message })

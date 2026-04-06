@@ -81,6 +81,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const application = await financeService.createPaymentApplications({
             payment_id: paymentId,
             invoice_id: invoice_id,
+            invoice_number: String((invoice as any).invoice_number || ''),
             order_id: invoice.order_id,
             amount_applied,
             applied_at: new Date(),
@@ -90,13 +91,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         // 4. Update the CustomerPayment status
         const isFullyApplied = (totalApplied + Number(amount_applied)) >= Number(payment.amount)
         const newPaymentStatus = isFullyApplied ? 'applied' : 'partially_applied'
-        
-        if (payment.status !== newPaymentStatus) {
-            await financeService.updateCustomerPayments({
-                id: paymentId,
-                status: newPaymentStatus
-            })
-        }
+
+        await financeService.updateCustomerPayments(
+            { id: paymentId },
+            { status: newPaymentStatus }
+        )
 
         // 5. Create the corresponding InvoicePayment in the Invoice module
         await invoiceService.createInvoicePayments({

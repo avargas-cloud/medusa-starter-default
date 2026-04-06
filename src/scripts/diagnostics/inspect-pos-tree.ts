@@ -1,5 +1,53 @@
 import { MedusaContainer } from "@medusajs/medusa"
 
+// ─── POS Total Engine ──────────────────────────────────────────────────────────
+// Mirrors frontend computeTotals() in store/posStore.ts exactly.
+// Key difference vs Medusa native: tax rounds on the AGGREGATE taxable base
+// (Math.round), not per-line. This avoids $0.01 rounding discrepancies.
+function posComputeTotals(order: any): { subtotal: number; discount: number; shipping: number; tax: number; total: number } {
+  const items = (order.items || []) as any[]
+
+  // Determine tax mode from Medusa tax_lines (rate 0 = exempt)
+  const taxRate = items.some((i: any) => (i.tax_lines?.[0]?.rate ?? 0) > 0) ? 0.07 : 0
+
+  let originalSubtotalCents = 0
+  let afterLineDiscountsCents = 0
+
+  for (const item of items) {
+    const unitCents = Math.round(Number(item.unit_price || 0) * 100)
+    const qty = item.quantity || 1
+    const baseCents = unitCents * qty
+    originalSubtotalCents += baseCents
+
+    // Adjustments = per-item discounts (promotions, etc.)
+    const adjCents = (item.adjustments || []).reduce((s: number, a: any) => s + Math.round(Number(a.amount || 0) * 100), 0)
+    afterLineDiscountsCents += baseCents - adjCents
+  }
+
+  // Order-level discount_total from Medusa (already in dollars from query.graph)
+  const orderDiscountCents = Math.round(Number(order.discount_total || 0) * 100)
+  const taxableAmountCents = Math.max(0, afterLineDiscountsCents - orderDiscountCents)
+
+  // POS formula: round tax on aggregate (NOT per-line), matching Math.round behavior
+  const taxCents = Math.round(taxableAmountCents * taxRate)
+
+  const shippingCents = (order.shipping_methods || []).reduce(
+    (s: number, sm: any) => s + Math.round(Number(sm.amount || 0) * 100),
+    0
+  )
+
+  const totalCents = taxableAmountCents + shippingCents + taxCents
+
+  return {
+    subtotal:  originalSubtotalCents / 100,
+    discount:  orderDiscountCents / 100,
+    shipping:  shippingCents / 100,
+    tax:       taxCents / 100,
+    total:     totalCents / 100,
+  }
+}
+
+
 export default async function inspectPosTree({ container }: { container: MedusaContainer }) {
   const query = container.resolve("query") as any
   const inventoryModule = container.resolve("inventory", { allowUnregistered: true }) as any
@@ -102,13 +150,16 @@ export default async function inspectPosTree({ container }: { container: MedusaC
       }
     }
 
+    // Use POS totals engine (not Medusa native) to avoid $0.01 rounding on half-cent tax values.
+    const pos = posComputeTotals(order)
+
     console.log("=========================================")
     console.log(`📦 ORDER (${order.id}) | # ${order.display_id}`)
     console.log(`   Status: ${String(order.status || 'UNKNOWN').toUpperCase()} | Fulfillment: ${String(order.fulfillment_status || 'UNKNOWN').toUpperCase()} | Payment: ${String(order.payment_status || 'UNKNOWN').toUpperCase()}`)
-    console.log(`   Subtotal: $${Number(order.subtotal || 0).toFixed(2)}`)
+    console.log(`   Subtotal: $${pos.subtotal.toFixed(2)}`)
     
-    if (order.discount_total > 0) {
-      console.log(`   Discounts: -$${Number(order.discount_total || 0).toFixed(2)}`)
+    if (pos.discount > 0) {
+      console.log(`   Discounts: -$${pos.discount.toFixed(2)}`)
     }
 
     if (order.shipping_methods?.length) {
@@ -119,8 +170,8 @@ export default async function inspectPosTree({ container }: { container: MedusaC
       console.log(`   Shipping: None`)
     }
 
-    console.log(`   Taxes: $${Number(order.tax_total || 0).toFixed(2)}`)
-    console.log(`   GRAND TOTAL: $${Number(order.total || 0).toFixed(2)}`)
+    console.log(`   Taxes: $${pos.tax.toFixed(2)}  (Medusa native: $${Number(order.tax_total || 0).toFixed(2)}${pos.tax !== Number(order.tax_total || 0) ? ' ⚠️ rounding diff' : ''})`)
+    console.log(`   GRAND TOTAL: $${pos.total.toFixed(2)}  ← POS authoritative`)
     console.log("")
 
     console.log("   📝 ITEMS:")
@@ -216,26 +267,27 @@ export default async function inspectPosTree({ container }: { container: MedusaC
 
     console.log("\n=========================================")
     console.log("📊 VALIDATION SUMMARY")
-    console.log(`Order Total:      $${Number(order.total || 0).toFixed(2)}`)
-    console.log(`Invoiced Total:   $${invoiceSum.toFixed(2)}`)
-    console.log(`Payments Applied: $${appliedSum.toFixed(2)}`)
-    console.log(`Credits Issued:   -$${cmSum.toFixed(2)}`)
+    console.log(`Order Total (POS):    $${pos.total.toFixed(2)}  ← used for all comparisons`)
+    console.log(`Order Total (Medusa): $${Number(order.total || 0).toFixed(2)}  (native — may differ by $0.01 on half-cent tax)`)
+    console.log(`Invoiced Total:       $${invoiceSum.toFixed(2)}`)
+    console.log(`Payments Applied:     $${appliedSum.toFixed(2)}`)
+    console.log(`Credits Issued:       -$${cmSum.toFixed(2)}`)
     
-    // Quick Math Checks
-    const diffInv = Math.abs(Number(order.total || 0) - invoiceSum)
-    if (diffInv < 0.05 && invoices?.length > 0) {
+    // Quick Math Checks — always compare against POS total
+    const diffInv = Math.abs(pos.total - invoiceSum)
+    if (diffInv < 0.015 && invoices?.length > 0) {
       console.log("✅ Order fully invoiced matching total.")
     } else if (invoices?.length === 0) {
       console.log("⏳ Order not yet invoiced.")
     } else {
-      console.log("⚠️ Invoice total mismatch vs Order total.")
+      console.log(`⚠️ Invoice total mismatch vs Order total ($${diffInv.toFixed(2)} off).`)
     }
 
-    const diffPay = Math.abs(Number(order.total || 0) - appliedSum)
-    if (diffPay < 0.05) {
+    const diffPay = Math.abs(pos.total - appliedSum)
+    if (diffPay < 0.015) {
       console.log("✅ Payments fully applied matching total.")
     } else {
-      console.log(`⏳ Payment balance mismatch: $${(Number(order.total || 0) - appliedSum).toFixed(2)} remaining.`)
+      console.log(`⏳ Payment balance mismatch: $${(pos.total - appliedSum).toFixed(2)} remaining.`)
     }
 
     console.log("=========================================\n")

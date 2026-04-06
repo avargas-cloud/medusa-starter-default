@@ -1,7 +1,11 @@
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
-import { handlePosPaymentCreated } from "../lib/quickbooks/handlers/handle-pos-payment-created"
-import { handlePosPaymentApplied } from "../lib/quickbooks/handlers/handle-pos-payment-applied"
 import { handlePosPaymentUnapplied } from "../lib/quickbooks/handlers/handle-pos-payment-unapplied"
+
+// ⚠️ ARCHITECTURE NOTE:
+// pos.payment.created  → handled DIRECTLY in /api/admin/finance/payments/route.ts  (setTimeout)
+// pos.payment.applied  → handled DIRECTLY in /api/admin/invoices/route.ts           (setTimeout)
+// Both were moved out of BullMQ to prevent the outbox from silently dropping events.
+// Do NOT re-add those events here — it causes duplicate QB payments.
 
 export default async function qbPaymentSubscriber({
     event: { name, data },
@@ -18,12 +22,6 @@ export default async function qbPaymentSubscriber({
     try {
         logger.info(`[QB-PAYMENT] 📥 Dispatching event: ${name} with data: ${JSON.stringify(data)}`)
         switch (name) {
-            case "pos.payment.created":
-                await handlePosPaymentCreated({ event: { name, data }, container } as SubscriberArgs<any>)
-                break
-            case "pos.payment.applied":
-                await handlePosPaymentApplied({ event: { name, data }, container } as SubscriberArgs<any>)
-                break
             case "pos.payment.unapplied":
                 await handlePosPaymentUnapplied({ event: { name, data }, container } as SubscriberArgs<any>)
                 break
@@ -38,8 +36,8 @@ export default async function qbPaymentSubscriber({
 
 export const config: SubscriberConfig = {
     event: [
-        "pos.payment.created",
-        "pos.payment.applied",
+        // pos.payment.created  ← direct exec in finance/payments/route.ts
+        // pos.payment.applied  ← direct exec in invoices/route.ts
         "pos.payment.unapplied",
     ],
     context: {

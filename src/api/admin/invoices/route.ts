@@ -202,6 +202,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                         const application = await financeService.createPaymentApplications({
                             payment_id: p.id,
                             invoice_id: (invoice as any).id,
+                            invoice_number: String(invoice_number || body.order_display_id || ''),
                             order_id: body.order_id,
                             amount_applied: applyAmount,
                             applied_at: paymentDate,
@@ -250,15 +251,17 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     order_id: body.order_id,
                     order_display_id: body.order_display_id,
                     pos_payment_method: body.payment_method,
-                    invoices_affected: [(invoice as any).id],
-                    invoices_affected_friendly: [String(invoice_number || body.order_display_id)],
+                    invoices_affected:          [(invoice as any).id],
+                    invoices_affected_friendly: [`IN-${invoice_number || body.order_display_id}`],
                     order_document_number: body.order_document_number ?? null,
                     ...(body.is_sales_receipt 
                         ? { 
                             qb_txn_id: "SYNCED_VIA_RECEIPT", 
-                            is_sales_receipt_payment: true // Prevents UI unapply/refund
+                            is_sales_receipt_payment: true
                           } 
-                        : {})
+                        : {
+                            ...(process.env.QB_ORDER_FLOW_ENABLED === "true" ? { qb_sync_status: 'pending' } : {})
+                          })
                 }
             })
 
@@ -282,6 +285,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             const application = await financeService.createPaymentApplications({
                 payment_id: customerPayment.id,
                 invoice_id: (invoice as any).id,
+                invoice_number: String(invoice_number || body.order_display_id || ''),
                 order_id: body.order_id,
                 amount_applied: body.amount_paid,
                 applied_at: paymentDate,

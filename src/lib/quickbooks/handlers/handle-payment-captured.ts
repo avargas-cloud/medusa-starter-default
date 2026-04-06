@@ -110,13 +110,14 @@ export async function handlePaymentCaptured(
 
         const latestInvoiceTxnId = getLatestInvoiceTxnId(order.metadata)
         
-        if (result.txnId && latestInvoiceTxnId) {
+        if (result.txnId && latestInvoiceTxnId && result.editSequence) {
             logger.info(`${LOG_PREFIX} Auto-applying new payment ${result.txnId} to latest Invoice ${latestInvoiceTxnId}...`)
             const applyResult = await applyPaymentToInvoiceInQb({
                 customerId: qbCustomerId,
                 amount: amount,
                 invoiceId: latestInvoiceTxnId,
                 creditTxnId: result.txnId,
+                editSequence: result.editSequence,
             })
             if (!applyResult.success) {
                 logger.warn(`${LOG_PREFIX} ⚠️ Failed to apply payment to invoice: ${applyResult.error}`)
