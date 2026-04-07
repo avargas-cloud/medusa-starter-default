@@ -42,9 +42,15 @@ export async function handleOrderCanceled(
             const inFlight = await findInFlightQbRows(orderId, ["sales_order", "estimate", "invoice", "sales_receipt"])
             for (const inFlightRow of inFlight) {
                 if (inFlightRow.status === "waiting") {
-                    // Document never reached QB — skip the row, no void needed
+                    // Document never reached QB — skip the row, no void needed.
+                    // Also stamp qb_sync_status=voided so the POS QB SYNCED badge shows VOIDED.
                     await skipPipelineRowById(inFlightRow.id, `Order canceled before ${inFlightRow.step} reached QuickBooks`)
-                    logger.info(`${LOG_PREFIX} ⏭ Skipped waiting ${inFlightRow.step} row ${inFlightRow.id} — document never reached QB`)
+                    try {
+                        await orderModule.updateOrders(orderId, {
+                            metadata: { ...(order.metadata || {}), qb_sync_status: "voided", voided_at: new Date().toISOString() },
+                        })
+                    } catch { /* non-critical */ }
+                    logger.info(`${LOG_PREFIX} ⏭ Skipped waiting ${inFlightRow.step} row ${inFlightRow.id} — stamped qb_sync_status=voided`)
                     skippedCount++
                 } else {
                     // pending/submitted — document is on its way to QB, chain a void after confirmation
