@@ -57,6 +57,18 @@ export async function handleOrderPlaced(
         order = fetchedOrder
         logger.info(`${LOG_PREFIX} Order fetched via Query: #${order.display_id}, items=${order.items?.length ?? 0}, shipping_methods=${order.shipping_methods?.length ?? 0}, sales_channel_id=${order.sales_channel_id ?? "none"}`)
 
+        if (order.metadata?.qb_skip === true || order.metadata?.qb_skip === 'true') {
+            logger.info(`${LOG_PREFIX} ⏭️ qb_skip=true — QB sync skipped (manual entry)`)
+            const docNum = (order.metadata?.document_number as string | undefined)
+                || (order.display_id ? `S${order.display_id}` : null)
+            try {
+                await writePipelineRow({ orderId, step: "sales_order", status: "manual", medusaRefNumber: docNum })
+            } catch (pErr: any) {
+                logger.warn(`${LOG_PREFIX} ⚠️ Could not write manual pipeline row: ${pErr.message}`)
+            }
+            return
+        }
+
         if (!isCron && isPosOrder(order)) {
             logger.info(`${LOG_PREFIX} ⏭️ POS order (channel: ${order.sales_channel_id}) — Sales Order creation delayed by 1 hour (handled by cron), skipping immediate sync`)
             const soFriendlyRef = (order.metadata?.document_number as string | undefined)

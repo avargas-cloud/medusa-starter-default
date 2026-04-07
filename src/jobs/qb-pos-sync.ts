@@ -41,7 +41,7 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
         const orderModule = container.resolve(Modules.ORDER)
         const customerModule = container.resolve(Modules.CUSTOMER)
 
-        // 1. Fetch eligible POS Orders (between 1h and 24h old)
+        // 1. Fetch eligible POS Orders (between 1h and 24h old, not marked qb_skip)
         const ordersQuery = `
             SELECT id, metadata
             FROM "order"
@@ -50,6 +50,7 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
               AND canceled_at IS NULL
               AND created_at <= NOW() - INTERVAL '1 hour'
               AND created_at >= NOW() - INTERVAL '24 hours'
+              AND (metadata->>'qb_skip' IS NULL OR metadata->>'qb_skip' != 'true')
         `
         const { rows: orderRows } = await client.query(ordersQuery, [POS_CHANNEL_ID])
 

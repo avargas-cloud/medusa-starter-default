@@ -112,9 +112,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         const amount: number =
             parseFloat(doc.Subtotal || doc.TotalAmount || doc.Amount || doc.TxnAmount || '0') || 0
 
+        const editSequence: string = doc.EditSequence || ''
+
         res.json({
             success: true,
             txnId,
+            editSequence: editSequence || null,
             refNumber: ref,
             docType,
             customerName: customerName || null,

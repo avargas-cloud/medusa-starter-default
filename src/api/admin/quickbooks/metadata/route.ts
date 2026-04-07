@@ -93,21 +93,23 @@ async function resolveId(client: InstanceType<typeof Client>, type: PosDocType, 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function extractQbFields(meta: Record<string, unknown> | null | undefined, type: PosDocType) {
-    if (!meta) return { qb_txn_id: null, qb_ref_number: null, qb_sync_status: null }
+    if (!meta) return { qb_txn_id: null, qb_ref_number: null, qb_sync_status: null, qb_edit_sequence: null }
 
     if (type === 'estimate') {
         const est = meta.qb_estimate
         if (est && typeof est === 'object' && !Array.isArray(est)) {
             return {
-                qb_txn_id:      (est as any).txn_id      ?? null,
-                qb_ref_number:  (est as any).ref_number   ?? null,
-                qb_sync_status: (meta.qb_sync_status as string) ?? null,
+                qb_txn_id:       (est as any).txn_id        ?? null,
+                qb_ref_number:   (est as any).ref_number     ?? null,
+                qb_sync_status:  (meta.qb_sync_status as string) ?? null,
+                qb_edit_sequence:(est as any).edit_sequence  ?? null,
             }
         }
         return {
-            qb_txn_id:      (meta.qb_estimate_txn_id as string) ?? null,
-            qb_ref_number:  (meta.qb_estimate_ref as string) ?? null,
-            qb_sync_status: (meta.qb_sync_status as string) ?? null,
+            qb_txn_id:       (meta.qb_estimate_txn_id as string) ?? null,
+            qb_ref_number:   (meta.qb_estimate_ref as string)    ?? null,
+            qb_sync_status:  (meta.qb_sync_status as string)     ?? null,
+            qb_edit_sequence: null,
         }
     }
 
@@ -115,39 +117,42 @@ function extractQbFields(meta: Record<string, unknown> | null | undefined, type:
         const so = meta.qb_sales_order
         if (so && typeof so === 'object' && !Array.isArray(so)) {
             return {
-                qb_txn_id:      (so as any).txn_id      ?? null,
-                qb_ref_number:  (so as any).ref_number   ?? null,
-                qb_sync_status: (meta.qb_sync_status as string) ?? null,
+                qb_txn_id:       (so as any).txn_id        ?? null,
+                qb_ref_number:   (so as any).ref_number     ?? null,
+                qb_sync_status:  (meta.qb_sync_status as string) ?? null,
+                qb_edit_sequence:(so as any).edit_sequence  ?? null,
             }
         }
         return {
-            qb_txn_id:      (meta.qb_sales_order_txn_id as string) ?? null,
-            qb_ref_number:  (meta.qb_sales_order_ref as string) ?? null,
-            qb_sync_status: (meta.qb_sync_status as string) ?? null,
+            qb_txn_id:       (meta.qb_sales_order_txn_id as string) ?? null,
+            qb_ref_number:   (meta.qb_sales_order_ref as string)    ?? null,
+            qb_sync_status:  (meta.qb_sync_status as string)        ?? null,
+            qb_edit_sequence: null,
         }
     }
 
     // invoice: flat fields in metadata
     if (type === 'invoice') {
         return {
-            qb_txn_id:      (meta.qb_invoice_txn_id as string) ?? (meta.qb_txn_id as string) ?? null,
-            qb_ref_number:  (meta.qb_ref_number as string) ?? null,
-            qb_sync_status: (meta.qb_sync_status as string) ?? null,
+            qb_txn_id:       (meta.qb_invoice_txn_id as string) ?? (meta.qb_txn_id as string) ?? null,
+            qb_ref_number:   (meta.qb_ref_number as string)     ?? null,
+            qb_sync_status:  (meta.qb_sync_status as string)    ?? null,
+            qb_edit_sequence:(meta.qb_edit_sequence as string)  ?? null,
         }
     }
 
-    // return: flat fields built from direct columns (qb_txn_id, ref = credit_memo_number)
+    // return: built from direct columns (qb_txn_id, qb_edit_sequence)
     // payment: flat fields in metadata
-    // Both use the same flat shape
     if (type === 'return' || type === 'payment') {
         return {
-            qb_txn_id:      (meta.qb_txn_id as string) ?? null,
-            qb_ref_number:  (meta.qb_ref_number as string) ?? null,
-            qb_sync_status: (meta.qb_sync_status as string) ?? null,
+            qb_txn_id:       (meta.qb_txn_id as string)       ?? null,
+            qb_ref_number:   (meta.qb_ref_number as string)   ?? null,
+            qb_sync_status:  (meta.qb_sync_status as string)  ?? null,
+            qb_edit_sequence:(meta.qb_edit_sequence as string) ?? null,
         }
     }
 
-    return { qb_txn_id: null, qb_ref_number: null, qb_sync_status: null }
+    return { qb_txn_id: null, qb_ref_number: null, qb_sync_status: null, qb_edit_sequence: null }
 }
 
 // ─── GET ─────────────────────────────────────────────────────────────────────
@@ -232,14 +237,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
             }
             const cm = rows[0]
             entity_metadata = {
-                qb_txn_id:      cm.qb_txn_id      ?? null,
-                qb_ref_number:  cm.credit_memo_number ?? null,   // ref = cm number
-                qb_sync_status: null,
+                qb_txn_id:        cm.qb_txn_id           ?? null,
+                qb_ref_number:    cm.credit_memo_number   ?? null,
+                qb_sync_status:   null,
+                qb_edit_sequence: cm.qb_edit_sequence     ?? null,
             }
             display_info = {
                 credit_memo_number: cm.credit_memo_number ?? null,
                 order_id:           cm.order_id ?? null,
-                qb_edit_sequence:   cm.qb_edit_sequence ?? null,
             }
         }
 
@@ -261,7 +266,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
         }
 
         // ── Extract QB fields ─────────────────────────────────────────────────
-        let qbFields: { qb_txn_id: string | null; qb_ref_number: string | null; qb_sync_status: string | null }
+        let qbFields: { qb_txn_id: string | null; qb_ref_number: string | null; qb_sync_status: string | null; qb_edit_sequence: string | null }
 
         // For returns, metadata was built from direct columns above
         qbFields = extractQbFields(entity_metadata, type as PosDocType)
@@ -319,12 +324,14 @@ export async function PUT(req: MedusaRequest, res: MedusaResponse): Promise<void
         qb_txn_id,
         qb_ref_number,
         qb_sync_status,
+        qb_edit_sequence,
     } = (req.body ?? {}) as {
-        type?:           string
-        id?:             string
-        qb_txn_id?:      string | null
-        qb_ref_number?:  string | null
-        qb_sync_status?: string | null
+        type?:              string
+        id?:                string
+        qb_txn_id?:         string | null
+        qb_ref_number?:     string | null
+        qb_sync_status?:    string | null
+        qb_edit_sequence?:  string | null
     }
 
     if (!type || !VALID_TYPES.includes(type as PosDocType)) {
@@ -368,8 +375,9 @@ export async function PUT(req: MedusaRequest, res: MedusaResponse): Promise<void
 
                 existingMeta.qb_estimate = {
                     ...existingEst,
-                    ...(qb_txn_id     !== undefined ? { txn_id:     qb_txn_id     } : {}),
-                    ...(qb_ref_number !== undefined ? { ref_number: qb_ref_number } : {}),
+                    ...(qb_txn_id        !== undefined ? { txn_id:        qb_txn_id        } : {}),
+                    ...(qb_ref_number    !== undefined ? { ref_number:    qb_ref_number    } : {}),
+                    ...(qb_edit_sequence !== undefined ? { edit_sequence: qb_edit_sequence } : {}),
                     synced_at: now,
                 }
             } else {
@@ -379,8 +387,9 @@ export async function PUT(req: MedusaRequest, res: MedusaResponse): Promise<void
 
                 existingMeta.qb_sales_order = {
                     ...existingSo,
-                    ...(qb_txn_id     !== undefined ? { txn_id:     qb_txn_id     } : {}),
-                    ...(qb_ref_number !== undefined ? { ref_number: qb_ref_number } : {}),
+                    ...(qb_txn_id        !== undefined ? { txn_id:        qb_txn_id        } : {}),
+                    ...(qb_ref_number    !== undefined ? { ref_number:    qb_ref_number    } : {}),
+                    ...(qb_edit_sequence !== undefined ? { edit_sequence: qb_edit_sequence } : {}),
                     synced_at: now,
                 }
             }
@@ -404,9 +413,10 @@ export async function PUT(req: MedusaRequest, res: MedusaResponse): Promise<void
 
             const existingMeta: Record<string, unknown> = { ...((invoice as any).metadata ?? {}) }
 
-            if (qb_txn_id     !== undefined) existingMeta.qb_invoice_txn_id = qb_txn_id
-            if (qb_ref_number !== undefined) existingMeta.qb_ref_number      = qb_ref_number
-            if (qb_sync_status !== undefined) existingMeta.qb_sync_status    = qb_sync_status
+            if (qb_txn_id        !== undefined) existingMeta.qb_invoice_txn_id = qb_txn_id
+            if (qb_ref_number    !== undefined) existingMeta.qb_ref_number     = qb_ref_number
+            if (qb_sync_status   !== undefined) existingMeta.qb_sync_status    = qb_sync_status
+            if (qb_edit_sequence !== undefined) existingMeta.qb_edit_sequence  = qb_edit_sequence
 
             await invoiceService.updatePosInvoices({ id: internalId, metadata: existingMeta })
         }
@@ -421,11 +431,11 @@ export async function PUT(req: MedusaRequest, res: MedusaResponse): Promise<void
                 updates.push(`qb_txn_id = $${values.length + 1}`)
                 values.push(qb_txn_id)
             }
-
-            if (!updates.length) {
-                res.status(400).json({ error: 'No updatable fields for credit memo (only qb_txn_id is supported)' })
-                return
+            if (qb_edit_sequence !== undefined) {
+                updates.push(`qb_edit_sequence = $${values.length + 1}`)
+                values.push(qb_edit_sequence)
             }
+
 
             const { rowCount } = await client.query(
                 `UPDATE pos_credit_memo SET ${updates.join(', ')} WHERE id = $1`,
@@ -448,9 +458,10 @@ export async function PUT(req: MedusaRequest, res: MedusaResponse): Promise<void
 
             const existingMeta: Record<string, unknown> = { ...((payment as any).metadata ?? {}) }
 
-            if (qb_txn_id      !== undefined) existingMeta.qb_txn_id      = qb_txn_id
-            if (qb_ref_number  !== undefined) existingMeta.qb_ref_number  = qb_ref_number
-            if (qb_sync_status !== undefined) existingMeta.qb_sync_status = qb_sync_status
+            if (qb_txn_id        !== undefined) existingMeta.qb_txn_id        = qb_txn_id
+            if (qb_ref_number    !== undefined) existingMeta.qb_ref_number    = qb_ref_number
+            if (qb_sync_status   !== undefined) existingMeta.qb_sync_status   = qb_sync_status
+            if (qb_edit_sequence !== undefined) existingMeta.qb_edit_sequence = qb_edit_sequence
 
             await financeService.updateCustomerPayments({ id: internalId, metadata: existingMeta })
         }
@@ -487,7 +498,7 @@ export async function PUT(req: MedusaRequest, res: MedusaResponse): Promise<void
 
         res.json({
             success: true,
-            updated: { type, id, qb_txn_id, qb_ref_number, qb_sync_status, note: AUDIT_NOTE },
+            updated: { type, id, qb_txn_id, qb_ref_number, qb_sync_status, qb_edit_sequence, note: AUDIT_NOTE },
         })
 
     } catch (error: unknown) {

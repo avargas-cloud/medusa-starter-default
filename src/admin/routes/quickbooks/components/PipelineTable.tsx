@@ -4,7 +4,7 @@ import { ArrowPath } from "@medusajs/icons"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type PipelineStatus = "pending" | "submitted" | "confirmed" | "failed" | "skipped" | "waiting"
+type PipelineStatus = "pending" | "submitted" | "confirmed" | "failed" | "skipped" | "waiting" | "manual"
 
 interface PipelineRow {
     seq: number
@@ -86,6 +86,7 @@ function StatusBadge({ status }: { status: PipelineStatus }) {
         failed:    { color: "red",     label: "Failed"      },
         skipped:   { color: "grey",    label: "Skipped"     },
         waiting:   { color: "blue",    label: "Waiting"     },
+        manual:    { color: "grey",    label: "Manual"      },
     }
     const s = map[status] ?? { color: "grey" as BadgeColor, label: status }
     return <Badge color={s.color} size="xsmall">{s.label}</Badge>
@@ -220,6 +221,11 @@ function PipelineRow({ row, onRetry, retrying }: {
                                 <span className="text-[10px]">🕐</span>
                                 <span className="text-ui-fg-muted text-[11px] italic">1 Hour Window</span>
                             </span>
+                        ) : row.status === "manual" ? (
+                            <span className="flex items-center gap-1">
+                                <span className="text-[10px]">✋</span>
+                                <span className="text-ui-fg-muted text-[11px] italic">Manual Entry</span>
+                            </span>
                         ) : null}
                         {!row.depends_on_step && !(row.step === "apply_payment" && row.payment_dep_ref) && !((row.step === "sales_order" || row.step === "estimate") && row.status === "waiting") && (
                             <span className="text-ui-fg-muted">—</span>
@@ -286,6 +292,9 @@ function PipelineRow({ row, onRetry, retrying }: {
                             >
                                 {retrying ? "…" : "Retry"}
                             </button>
+                        )}
+                        {row.status === "manual" && (
+                            <span className="text-[10px] text-ui-fg-muted italic">Use QB Tools</span>
                         )}
                     </div>
                 </td>

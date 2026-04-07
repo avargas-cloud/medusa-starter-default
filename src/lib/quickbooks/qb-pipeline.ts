@@ -28,6 +28,7 @@ export type PipelineStatus =
     | "failed"
     | "skipped"
     | "waiting"     // POS 1-hour delay window — cron will process when time arrives
+    | "manual"      // qb_skip=true — order intentionally excluded from QB auto-sync
 
 export interface WritePipelineRowInput {
     orderId?: string | null

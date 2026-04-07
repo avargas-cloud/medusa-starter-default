@@ -2,10 +2,12 @@ import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
 import { FINANCE_MODULE } from '../../../../modules/finance'
 import { writePipelineRow } from '../../../../lib/quickbooks/qb-pipeline'
 import { handlePosPaymentCreated } from '../../../../lib/quickbooks/handlers/handle-pos-payment-created'
+import { Client } from 'pg'
 
 /**
  * GET /admin/finance/payments
  * Lists customer payments. Supports filtering by customer_id and status.
+ * Applications are enriched with invoice_number from pos_invoice.
  */
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const financeService = req.scope.resolve(FINANCE_MODULE)
@@ -20,7 +22,45 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
             order: { received_at: 'DESC' },
             relations: ['applications']
         })
-        return res.json({ payments })
+
+        // Collect all invoice_ids from applications that don't have invoice_number
+        const invoiceIds = new Set<string>()
+        for (const pay of payments) {
+            for (const app of (pay.applications ?? [])) {
+                if (app.invoice_id && !app.invoice_number) {
+                    invoiceIds.add(app.invoice_id)
+                }
+            }
+        }
+
+        // Bulk-lookup invoice numbers from pos_invoice
+        const invoiceNumberMap: Record<string, string> = {}
+        if (invoiceIds.size > 0) {
+            const client = new Client({ connectionString: process.env.DATABASE_URL })
+            try {
+                await client.connect()
+                const result = await client.query<{ id: string; invoice_number: string }>(
+                    `SELECT id, invoice_number FROM pos_invoice WHERE id = ANY($1)`,
+                    [Array.from(invoiceIds)]
+                )
+                for (const row of result.rows) {
+                    invoiceNumberMap[row.id] = row.invoice_number
+                }
+            } finally {
+                await client.end()
+            }
+        }
+
+        // Enrich applications with invoice_number
+        const enriched = payments.map((pay: any) => ({
+            ...pay,
+            applications: (pay.applications ?? []).map((app: any) => ({
+                ...app,
+                invoice_number: app.invoice_number || (app.invoice_id ? invoiceNumberMap[app.invoice_id] : null) || null,
+            })),
+        }))
+
+        return res.json({ payments: enriched })
     } catch (err: any) {
         return res.status(500).json({ error: err.message })
     }
