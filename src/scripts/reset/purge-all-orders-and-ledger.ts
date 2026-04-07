@@ -23,14 +23,21 @@ async function main() {
         await client.query(`DELETE FROM invoice_payment`)
         await client.query(`DELETE FROM customer_payment`)
 
-        // ── Step 2: POS Invoices ─────────────────────────────────────────────
-        console.log("2. Deleting POS Invoices (invoice_tracking, pos_invoice_item, pos_invoice)")
+        // ── Step 2: Credit Memos (Returns) ──────────────────────────────────
+        console.log("2. Deleting Credit Memos (order_credit_line, credit_line, pos_credit_memo_item, pos_credit_memo)")
+        await client.query(`DELETE FROM order_credit_line`)
+        await client.query(`DELETE FROM credit_line`)
+        await client.query(`DELETE FROM pos_credit_memo_item`)
+        await client.query(`DELETE FROM pos_credit_memo`)
+
+        // ── Step 3: POS Invoices ─────────────────────────────────────────────
+        console.log("3. Deleting POS Invoices (invoice_tracking, pos_invoice_item, pos_invoice)")
         await client.query(`DELETE FROM invoice_tracking`)
         await client.query(`DELETE FROM pos_invoice_item`)
         await client.query(`DELETE FROM pos_invoice`)
 
-        // ── Step 3: Fulfillments ─────────────────────────────────────────────
-        console.log("3. Deleting Fulfillments (fulfillment_label, fulfillment_item, order_fulfillment, fulfillment)")
+        // ── Step 4: Fulfillments ─────────────────────────────────────────────
+        console.log("4. Deleting Fulfillments (fulfillment_label, fulfillment_item, order_fulfillment, fulfillment)")
         await client.query("SAVEPOINT pre_fulfillments")
         try {
             await client.query(`DELETE FROM fulfillment_label`)

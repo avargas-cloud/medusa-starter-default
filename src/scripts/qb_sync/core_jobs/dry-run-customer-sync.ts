@@ -124,7 +124,11 @@ export default async function dryRunCustomerSync({ container }: ExecArgs) {
 
     for (const qb of qbCustomers) {
         const hasRealEmail = qb.Email?.trim() && qb.Email.includes("@")
-        const dummyEmailAddress = `customer-${qb.ListID}@ecopowertech.com`
+        const slug = `${qb.FirstName || ''} ${qb.LastName || qb.Name || ''}`
+            .trim().toLowerCase()
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .replace(/[^a-z0-9\s]/g, "").trim().replace(/\s+/g, ".") || "customer"
+        const dummyEmailAddress = `${slug}@noemail.ecopowertech.com`
         const foundById = existingQbIds.has(qb.ListID)
         const foundByEmail = hasRealEmail
             ? existingEmails.has(qb.Email.toLowerCase().trim())
@@ -152,7 +156,11 @@ export default async function dryRunCustomerSync({ container }: ExecArgs) {
     if (wouldImport.length > 0) {
         logger.info(`📋 Sample (first 20 that would be imported):`)
         for (const qb of wouldImport.slice(0, 20)) {
-            const email = qb.Email?.trim() || `[dummy] customer-${qb.ListID}@ecopowertech.com`
+            const email = qb.Email?.trim() || `[dummy] ${
+                (`${qb.FirstName || ''} ${qb.LastName || qb.Name || ''}`.trim().toLowerCase()
+                    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+                    .replace(/[^a-z0-9\s]/g, "").trim().replace(/\s+/g, ".") || "customer")
+            }@noemail.ecopowertech.com`
             logger.info(`   - ${qb.Name} | ${email} | ${qb.PriceLevelRef?.FullName || "no price level"}`)
         }
         if (wouldImport.length > 20) logger.info(`   ... and ${wouldImport.length - 20} more`)

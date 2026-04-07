@@ -1,5 +1,5 @@
 import { ExecArgs } from "@medusajs/framework/types"
-import { syncCustomersCore } from "../../lib/quickbooks/sync-customers-core"
+import { syncCustomersCore } from "../../../lib/quickbooks/sync-customers-core"
 
 /**
  * Runs the real customer sync directly from the command line.

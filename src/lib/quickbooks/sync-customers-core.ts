@@ -2,6 +2,7 @@ import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 import { ICustomerModuleService } from "@medusajs/types"
 import { isQbIntegrationEnabled } from "./qb-integration-guard"
 import postgres from "postgres"
+import { randomUUID } from "crypto"
 
 // Config — from env vars
 const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com"
@@ -148,6 +149,13 @@ export async function syncCustomersCore(
         )
         const existingQbIds = new Set(qbIdToMedusa.keys())
 
+        // Map email → medusa_id (for customers without qb_list_id yet)
+        const emailToMedusaId = new Map<string, string>(
+            medusaCustomers
+                .filter((c: any) => !c.metadata?.qb_list_id && c.email)
+                .map((c: any) => [c.email.toLowerCase(), c.id])
+        )
+
         logger.info(`📊 Found ${existingQbIds.size} customers already in Medusa`)
 
         // Pre-load customer group IDs (once, before the loop)
@@ -215,7 +223,14 @@ export async function syncCustomersCore(
                 let isDummyEmail = false
 
                 if (!email || !email.includes('@')) {
-                    email = `customer-${qb.ListID}@ecopowertech.com`
+                    const slug = `${qb.FirstName || ''} ${qb.LastName || qb.Name || ''}`
+                        .trim()
+                        .toLowerCase()
+                        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+                        .replace(/[^a-z0-9\s]/g, "")
+                        .trim()
+                        .replace(/\s+/g, ".") || "customer"
+                    email = `${slug}@noemail.ecopowertech.com`
                     isDummyEmail = true
                 }
 
@@ -228,32 +243,45 @@ export async function syncCustomersCore(
                 const priceLevel = (qbPriceLevel.includes('wholesale') || qbPriceLevel.includes('distributor')) ? "Wholesale" : "Retail"
                 const customerType = qb.CustomerTypeRef?.FullName || qb.CustomerType || ''
 
-                const newCustomer = await customerModule.createCustomers({
-                    email,
-                    first_name: firstName,
-                    last_name: lastName,
-                    company_name: qb.CompanyName || null,
-                    phone: qb.Phone || null,
-                    has_account: false,
-                    metadata: {
-                        legacy_customer: true,          // <- Marks as QB-imported, triggers Case 3 registration
-                        qb_list_id: qb.ListID,
-                        qb_display_name: qb.Name,
-                        qb_customer_type: customerType,
-                        qb_price_level: priceLevel,
-                        email_is_placeholder: isDummyEmail,
-                        qb_original_email: isDummyEmail ? qb.Email || '' : email
-                    }
-                }) as any
+                const qbMeta = {
+                    legacy_customer: true,
+                    qb_list_id: qb.ListID,
+                    qb_display_name: qb.Name,
+                    qb_customer_type: customerType,
+                    qb_price_level: priceLevel,
+                    email_is_placeholder: isDummyEmail,
+                    qb_original_email: isDummyEmail ? qb.Email || '' : email
+                }
+
+                // If customer already exists by email (registered via web), link QB metadata instead of creating duplicate
+                const existingId = emailToMedusaId.get(email.toLowerCase())
+                let customerId: string
+
+                if (existingId) {
+                    await customerModule.updateCustomers(existingId, { metadata: qbMeta })
+                    customerId = existingId
+                    log(`   🔗 Linked QB data to existing customer: ${email}`)
+                } else {
+                    const newCustomer = await customerModule.createCustomers({
+                        email,
+                        first_name: firstName,
+                        last_name: lastName,
+                        company_name: qb.CompanyName || null,
+                        phone: qb.Phone || null,
+                        has_account: false,
+                        metadata: qbMeta
+                    }) as any
+                    customerId = newCustomer.id
+                }
 
                 // Assign to correct Medusa customer group
                 const targetGroupId = priceLevel === 'Wholesale' ? wholesaleGroupId : retailGroupId
-                if (targetGroupId && newCustomer?.id) {
+                if (targetGroupId && customerId) {
                     try {
                         const sql = postgres(process.env.DATABASE_URL!)
                         await sql`
-                            INSERT INTO customer_group_customer (customer_id, customer_group_id)
-                            VALUES (${newCustomer.id}, ${targetGroupId})
+                            INSERT INTO customer_group_customer (id, customer_id, customer_group_id)
+                            VALUES (${randomUUID()}, ${customerId}, ${targetGroupId})
                             ON CONFLICT DO NOTHING
                         `
                         await sql.end()
@@ -269,8 +297,13 @@ export async function syncCustomersCore(
                 }
 
             } catch (err: any) {
-                warn(`   ❌ Failed to import ${qb.Email}: ${err.message}`)
-                stats.errors++
+                if (err.message?.includes('already exists')) {
+                    // QB duplicate — same email under a different ListID, already synced. Skip silently.
+                    stats.alreadyInMedusa++
+                } else {
+                    warn(`   ❌ Failed to import ${qb.Email}: ${err.message}`)
+                    stats.errors++
+                }
             }
         }
 
