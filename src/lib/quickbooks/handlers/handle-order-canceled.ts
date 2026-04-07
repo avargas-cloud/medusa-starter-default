@@ -1,8 +1,9 @@
 import { closeSalesOrderInQb, voidInvoiceInQb } from "../qb-bridge-client"
 import { QbSyncLogger } from "../qb-sync-logger"
-import { writePipelineRow, findInFlightQbRows } from "../qb-pipeline"
+import { writePipelineRow, findInFlightQbRows, skipPipelineRowById } from "../qb-pipeline"
 import { getSoTxnId, getSoRef, getLatestInvoiceTxnId, getLatestInvoiceRef } from "../qb-metadata-types"
 import { LOG_PREFIX } from "./utils"
+import { getDbPool } from "../../../api/utils/db-pool"
 
 export async function handleOrderCanceled(
     data: any,
@@ -31,31 +32,41 @@ export async function handleOrderCanceled(
     const soMedusaRef = (meta.document_number as string | undefined) ?? (order.display_id ? `S${order.display_id}` : null)
 
     if (!soTxnId && !invoiceTxnId) {
-        // No QB metadata yet — but the SO/Invoice creation may be in-flight (submitted to bridge,
-        // awaiting consolidator confirmation). If so, create waiting void rows chained on those
-        // rows so the void executes as soon as creation is confirmed.
+        // No QB metadata yet — but the SO/Invoice/Estimate creation may be in-flight.
+        // Strategy:
+        //   - "waiting" rows haven't reached QB yet → skip them immediately (nothing to void)
+        //   - "pending"/"submitted" rows are on their way to QB → chain a void to fire after confirmation
         let chainedCount = 0
+        let skippedCount = 0
         try {
             const inFlight = await findInFlightQbRows(orderId, ["sales_order", "estimate", "invoice", "sales_receipt"])
             for (const inFlightRow of inFlight) {
-                const voidStep = (inFlightRow.step === "invoice" || inFlightRow.step === "sales_receipt")
-                    ? "void_invoice" as const
-                    : "void_sales_order" as const
-                await writePipelineRow({
-                    orderId,
-                    step: voidStep,
-                    status: "waiting",
-                    dependsOn: inFlightRow.id,
-                    medusaRefNumber: soMedusaRef,
-                })
-                logger.info(`${LOG_PREFIX} ⏳ Chained ${voidStep} (waiting) on in-flight ${inFlightRow.step} row ${inFlightRow.id}`)
-                chainedCount++
+                if (inFlightRow.status === "waiting") {
+                    // Document never reached QB — skip the row, no void needed
+                    await skipPipelineRowById(inFlightRow.id, `Order canceled before ${inFlightRow.step} reached QuickBooks`)
+                    logger.info(`${LOG_PREFIX} ⏭ Skipped waiting ${inFlightRow.step} row ${inFlightRow.id} — document never reached QB`)
+                    skippedCount++
+                } else {
+                    // pending/submitted — document is on its way to QB, chain a void after confirmation
+                    const voidStep = (inFlightRow.step === "invoice" || inFlightRow.step === "sales_receipt")
+                        ? "void_invoice" as const
+                        : "void_sales_order" as const
+                    await writePipelineRow({
+                        orderId,
+                        step: voidStep,
+                        status: "waiting",
+                        dependsOn: inFlightRow.id,
+                        medusaRefNumber: soMedusaRef,
+                    })
+                    logger.info(`${LOG_PREFIX} ⏳ Chained ${voidStep} (waiting) on in-flight ${inFlightRow.step} row ${inFlightRow.id}`)
+                    chainedCount++
+                }
             }
         } catch (chainErr: any) {
             logger.warn(`${LOG_PREFIX} ⚠️ Could not check in-flight rows: ${chainErr.message}`)
         }
 
-        if (chainedCount === 0) {
+        if (chainedCount === 0 && skippedCount === 0) {
             logger.info(`${LOG_PREFIX} Order ${orderId} has no QB documents and no in-flight rows — nothing to cancel`)
         }
         return
@@ -89,6 +100,29 @@ export async function handleOrderCanceled(
     // soMedusaRef declared above (before the early-exit block)
 
     if (invoiceTxnId) {
+        // Guard: if there's already a voided Sales Receipt pos_invoice for this order,
+        // handleInvoiceVoided (triggered by pos.invoice.voided) is handling the QB void
+        // correctly as void_sales_receipt. Skip here to avoid a duplicate void_invoice.
+        let skipInvoiceVoid = false
+        try {
+            const pool = getDbPool()
+            const { rows } = await pool.query(
+                `SELECT id FROM pos_invoice
+                 WHERE order_id = $1
+                   AND status = 'voided'
+                   AND metadata @> '{"is_sales_receipt": true}'
+                 LIMIT 1`,
+                [orderId]
+            )
+            if (rows.length > 0) {
+                logger.info(`${LOG_PREFIX} Order ${orderId} has a voided Sales Receipt — QB void handled by handleInvoiceVoided, skipping void_invoice here`)
+                skipInvoiceVoid = true
+            }
+        } catch (checkErr: any) {
+            logger.warn(`${LOG_PREFIX} ⚠️ Could not check SR invoice status: ${checkErr.message}`)
+        }
+
+        if (!skipInvoiceVoid) {
         logger.info(`${LOG_PREFIX} Voiding QB Invoice ${invoiceTxnId}...`)
         try {
             await writePipelineRow({
@@ -131,6 +165,7 @@ export async function handleOrderCanceled(
                 })
             } catch (pErr: any) { logger.warn(`${LOG_PREFIX} Could not write pipeline row: ${pErr.message}`) }
         }
+        } // end if (!skipInvoiceVoid)
     }
 
     if (soTxnId) {

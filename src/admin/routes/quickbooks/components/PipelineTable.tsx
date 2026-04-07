@@ -7,6 +7,7 @@ import { ArrowPath } from "@medusajs/icons"
 type PipelineStatus = "pending" | "submitted" | "confirmed" | "failed" | "skipped" | "waiting"
 
 interface PipelineRow {
+    seq: number
     id: string
     order_id: string | null
     reference_id: string | null
@@ -136,6 +137,11 @@ function PipelineRow({ row, onRetry, retrying }: {
                     row.status === "waiting"   ? "bg-purple-50/5"  : ""
                 }`}
             >
+                {/* Seq ID */}
+                <td className="px-3 py-2 whitespace-nowrap">
+                    <span className="font-mono text-[11px] text-ui-fg-muted">#{row.seq}</span>
+                </td>
+
                 {/* Step */}
                 <td className="px-3 py-2 whitespace-nowrap">
                     <span className="flex items-center gap-1.5">
@@ -288,7 +294,7 @@ function PipelineRow({ row, onRetry, retrying }: {
             {/* Error expansion row */}
             {expanded && row.error && (
                 <tr className="bg-red-50/5 border-b border-ui-border-base">
-                    <td colSpan={10} className="px-4 py-2">
+                    <td colSpan={11} className="px-4 py-2">
                         <pre className="text-[10px] text-red-400 whitespace-pre-wrap break-all font-mono">
                             {row.error}
                         </pre>
@@ -570,6 +576,7 @@ export function PipelineTable() {
                         <table className="w-full text-xs">
                             <thead className="bg-ui-bg-subtle border-b border-ui-border-base">
                                 <tr>
+                                    <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle w-10">#</th>
                                     <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Step</th>
                                     <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Order</th>
                                     <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Medusa Ref</th>

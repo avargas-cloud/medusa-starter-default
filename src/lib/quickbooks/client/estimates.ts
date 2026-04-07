@@ -126,9 +126,11 @@ export async function convertEstimateToSalesOrder(
 
 /**
  * Deactivates an Estimate in QuickBooks (sets IsActive = false).
+ * If `editSequence` is provided (from cache), skips the GET round-trip to QB.
  */
 export async function deactivateEstimateInQb(
     estimateTxnId: string,
+    editSequence?: string,
     log: (msg: string) => void = console.log
 ): Promise<QbBridgeResult<QbAsyncResult>> {
     if (DRY_RUN) {
@@ -137,28 +139,32 @@ export async function deactivateEstimateInQb(
     }
 
     try {
-        log(`[QB] Querying Estimate ${estimateTxnId} to get EditSequence for deactivation...`)
-        const queryResp = await bridgeFetch("GET", `/api/estimates/${estimateTxnId}`)
-        const queryOpId = queryResp?.operationId
-        if (!queryOpId) throw new Error("Bridge did not return operationId for Estimate query")
+        let resolvedEditSequence = editSequence
 
-        const rawResult = await pollRawOperationResult(queryOpId)
+        if (!resolvedEditSequence) {
+            log(`[QB] Querying Estimate ${estimateTxnId} to get EditSequence for deactivation...`)
+            const queryResp = await bridgeFetch("GET", `/api/estimates/${estimateTxnId}`)
+            const queryOpId = queryResp?.operationId
+            if (!queryOpId) throw new Error("Bridge did not return operationId for Estimate query")
 
-        const estRet =
-            rawResult?.QBXML?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
-            rawResult?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
-            rawResult?.EstimateRet ??
-            rawResult?.EstimateQueryRs?.EstimateRet
+            const rawResult = await pollRawOperationResult(queryOpId)
 
-        if (!estRet?.EditSequence) {
-            throw new Error(`Could not extract EditSequence from Estimate query. Raw: ${JSON.stringify(rawResult).slice(0, 200)}`)
+            const estRet =
+                rawResult?.QBXML?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+                rawResult?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+                rawResult?.EstimateRet ??
+                rawResult?.EstimateQueryRs?.EstimateRet
+
+            if (!estRet?.EditSequence) {
+                throw new Error(`Could not extract EditSequence from Estimate query. Raw: ${JSON.stringify(rawResult).slice(0, 200)}`)
+            }
+            resolvedEditSequence = estRet.EditSequence as string
         }
 
-        const editSequence = estRet.EditSequence as string
-        log(`[QB] EditSequence obtained: ${editSequence}. Deactivating Estimate...`)
+        log(`[QB] EditSequence: ${resolvedEditSequence}. Deactivating Estimate ${estimateTxnId}...`)
 
         const modResp = await bridgeFetch("PUT", `/api/estimates/${estimateTxnId}`, {
-            EditSequence: editSequence,
+            EditSequence: resolvedEditSequence,
             IsActive: false,
         })
 

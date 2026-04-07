@@ -52,7 +52,7 @@ import {
 import { isQbIntegrationEnabled } from "./qb-integration-guard"
 import { QbSyncLogger } from "./qb-sync-logger"
 import { getEstimateTxnId } from "./qb-metadata-types"
-import { getCachedEditSequence } from "./qb-pipeline"
+import { getCachedEditSequence, writePipelineRow } from "./qb-pipeline"
 import { createSalesReceiptInQb } from "./client/sales-receipts"
 
 const ORDER_FLOW_ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
@@ -1080,31 +1080,80 @@ export async function processDeactivateEstimateInQb(draft: {
     draftOrderId: string
     estimateTxnId: string    // existing qb_estimate_txn_id from order metadata
     estimateRef?: string     // human-readable reference (for logging)
+    medusaRefNumber?: string // display ref for pipeline UI (e.g. "E1271")
 }): Promise<{ enabled: boolean; operationId?: string; txnId?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
 
     const prefix = DRY_RUN ? "[QB DRY RUN]" : "[QB]"
-    console.log(`${prefix} Deactivating Estimate ${draft.estimateTxnId} (Ref: ${draft.estimateRef || "?"}) for deleted draft order ${draft.draftOrderId}...`)
+    console.log(`${prefix} Deactivating Estimate ${draft.estimateTxnId} (Ref: ${draft.estimateRef || "?"}) for draft order ${draft.draftOrderId}...`)
 
     const logId = await QbSyncLogger.start({
         operation: "estimate",
         draftOrderId: draft.draftOrderId,
-        eventType: "draft_order.deleted",
+        eventType: "draft_order.voided",
         triggeredBy: "manual",
-        message: `Deactivating Estimate ${draft.estimateRef || draft.estimateTxnId} — draft order deleted`,
+        message: `Voiding Estimate ${draft.estimateRef || draft.estimateTxnId} — draft order canceled`,
     })
 
-    const result = await deactivateEstimateInQb(draft.estimateTxnId)
+    // Pre-flight pipeline row: pending
+    try {
+        await writePipelineRow({
+            orderId:         draft.draftOrderId,
+            step:            "void_estimate",
+            status:          "pending",
+            qbTxnId:         draft.estimateTxnId,
+            qbRefNumber:     draft.estimateRef ?? null,
+            medusaRefNumber: draft.medusaRefNumber ?? draft.estimateRef ?? null,
+        })
+    } catch (pErr: any) {
+        console.warn(`${prefix} ⚠️ Could not write pre-flight pipeline row: ${pErr.message}`)
+    }
+
+    // Use cached EditSequence if available — skips a round-trip GET to QB
+    const cachedEditSeq = await getCachedEditSequence("estimate", draft.estimateTxnId).catch(() => null)
+    if (cachedEditSeq) {
+        console.log(`${prefix} Using cached EditSequence for estimate ${draft.estimateTxnId}`)
+    }
+
+    const result = await deactivateEstimateInQb(draft.estimateTxnId, cachedEditSeq ?? undefined)
 
     if (!result.success) {
         console.error(`[QB] ❌ Failed to deactivate Estimate: ${result.error}`)
         await QbSyncLogger.fail(logId, result.error || "Estimate deactivation failed")
+        try {
+            await writePipelineRow({
+                orderId:         draft.draftOrderId,
+                step:            "void_estimate",
+                status:          "failed",
+                qbTxnId:         draft.estimateTxnId,
+                qbRefNumber:     draft.estimateRef ?? null,
+                medusaRefNumber: draft.medusaRefNumber ?? draft.estimateRef ?? null,
+                error:           result.error ?? "Estimate deactivation failed",
+            })
+        } catch (pErr: any) {
+            console.warn(`${prefix} ⚠️ Could not write failed pipeline row: ${pErr.message}`)
+        }
         return { enabled: true, error: result.error }
     }
 
     const asyncData = result.data!
     console.log(`${prefix} ✅ Estimate deactivation queued. OperationID: ${asyncData.operationId}`)
+
+    // Submitted pipeline row
+    try {
+        await writePipelineRow({
+            orderId:         draft.draftOrderId,
+            step:            "void_estimate",
+            status:          "submitted",
+            bridgeOpId:      asyncData.operationId ?? null,
+            qbTxnId:         draft.estimateTxnId,
+            qbRefNumber:     draft.estimateRef ?? null,
+            medusaRefNumber: draft.medusaRefNumber ?? draft.estimateRef ?? null,
+        })
+    } catch (pErr: any) {
+        console.warn(`${prefix} ⚠️ Could not write submitted pipeline row: ${pErr.message}`)
+    }
 
     let txnId = asyncData.txnId || draft.estimateTxnId
 
@@ -1118,6 +1167,17 @@ export async function processDeactivateEstimateInQb(draft: {
                 // Real QB error (e.g. error 3175 — record open/locked in QB Desktop)
                 console.error(`${prefix} ❌ Estimate deactivation failed: ${pollErr.message}`)
                 await QbSyncLogger.fail(logId, pollErr.message)
+                try {
+                    await writePipelineRow({
+                        orderId:         draft.draftOrderId,
+                        step:            "void_estimate",
+                        status:          "failed",
+                        qbTxnId:         draft.estimateTxnId,
+                        qbRefNumber:     draft.estimateRef ?? null,
+                        medusaRefNumber: draft.medusaRefNumber ?? draft.estimateRef ?? null,
+                        error:           pollErr.message,
+                    })
+                } catch { /* non-critical */ }
                 return { enabled: true, error: pollErr.message }
             }
             // Polling timeout — deactivation was queued but QB hasn't responded yet (non-fatal)

@@ -10,6 +10,7 @@ export type PipelineStep =
     | "credit_memo"
     | "write_check"
     | "refund_payment"
+    | "void_estimate"
     | "void_invoice"
     | "void_sales_receipt"
     | "void_sales_order"
@@ -325,19 +326,36 @@ export async function getCachedEditSequence(
 export async function findInFlightQbRows(
     orderId: string,
     steps: PipelineStep[]
-): Promise<Array<{ id: string; step: PipelineStep }>> {
+): Promise<Array<{ id: string; step: PipelineStep; status: PipelineStatus }>> {
     if (steps.length === 0) return []
     const pool = getDbPool()
     const placeholders = steps.map((_, i) => `$${i + 2}`).join(", ")
     const { rows } = await pool.query(
-        `SELECT id, step FROM qb_order_pipeline
+        `SELECT id, step, status FROM qb_order_pipeline
          WHERE order_id = $1
            AND step IN (${placeholders})
            AND status IN ('pending', 'submitted', 'waiting')
          ORDER BY created_at DESC`,
         [orderId, ...steps]
     )
-    return rows.map((r) => ({ id: r.id as string, step: r.step as PipelineStep }))
+    return rows.map((r) => ({ id: r.id as string, step: r.step as PipelineStep, status: r.status as PipelineStatus }))
+}
+
+/**
+ * Marks a pipeline row as skipped by its UUID.
+ * Use this to cancel a "waiting" or "pending" row that should never reach QB
+ * (e.g. an estimate that was voided before the 1-hour cron window fired).
+ */
+export async function skipPipelineRowById(rowId: string, reason: string): Promise<void> {
+    const pool = getDbPool()
+    await pool.query(
+        `UPDATE qb_order_pipeline
+         SET status = 'skipped',
+             error  = $2
+         WHERE id = $1
+           AND status IN ('waiting', 'pending')`,
+        [rowId, reason]
+    )
 }
 
 /**

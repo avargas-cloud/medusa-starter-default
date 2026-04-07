@@ -85,6 +85,7 @@ export async function GET(
 
         const { rows } = await client.query(`
             SELECT
+                p.seq,
                 p.id,
                 p.order_id,
                 p.reference_id,

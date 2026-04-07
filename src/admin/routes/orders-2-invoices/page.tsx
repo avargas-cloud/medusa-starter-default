@@ -83,6 +83,7 @@ interface QbMeta {
     ref: string | null
     synced: boolean
     customerDisplay?: string
+    displayId?: number
 }
 
 function extractQbMeta(meta: Record<string, unknown> | null | undefined): QbMeta {
@@ -292,7 +293,7 @@ const InvoicesPage = () => {
             const orderIds = [...new Set(invList.map(i => i.order_id))]
             if (orderIds.length > 0) {
                 const idsParam = orderIds.map(id => `id[]=${id}`).join("&")
-                const or = await fetch(`/admin/orders?${idsParam}&fields=id,metadata,*customer&limit=100`, { credentials: "include" })
+                const or = await fetch(`/admin/orders?${idsParam}&fields=id,display_id,metadata,*customer&limit=100`, { credentials: "include" })
                 if (or.ok) {
                     const oj = await or.json()
                     const map: Record<string, QbMeta> = {}
@@ -315,7 +316,7 @@ const InvoicesPage = () => {
                             }
                         }
                         
-                        map[o.id] = { ...meta, customerDisplay }
+                        map[o.id] = { ...meta, customerDisplay, displayId: o.display_id }
                     }
                     setOrderMeta(map)
                 }
@@ -432,7 +433,7 @@ const InvoicesPage = () => {
                                         </Text>
                                         {/* Order # */}
                                         <Text size="small" className="text-ui-fg-subtle truncate font-mono" title={inv.order_id}>
-                                            ...{inv.order_id.slice(-8)}
+                                            {qb.displayId ? `#${qb.displayId}` : `...${inv.order_id.slice(-8)}`}
                                         </Text>
                                         <Text size="small" className="text-ui-fg-subtle">{fmtDate(inv.issued_at ?? inv.created_at)}</Text>
                                         <Text size="small" className={qb.customerDisplay ? "text-ui-fg-base truncate" : "text-ui-fg-subtle truncate font-mono text-xs"} title={qb.customerDisplay ?? inv.customer_id}>
