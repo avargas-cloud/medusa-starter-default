@@ -267,7 +267,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                             try {
                                 const { data: [fullOrder] } = await query.graph({
                                     entity: "order",
-                                    fields: ["*", "items.*", "items.variant.*", "items.variant.metadata", "customer.*", "shipping_methods.*", "tax_lines.*"],
+                                    fields: ["*", "items.*", "items.variant.*", "items.variant.metadata", "customer.*", "shipping_methods.*"],
                                     filters: { id: resolvedId }
                                 })
                                 if (!fullOrder) return
