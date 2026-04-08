@@ -288,9 +288,9 @@ ${printCss}
 <body>
 
 <!-- ═══ HEADER ═══════════════════════════════════════════════════════════ -->
-<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:8px;">
+<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:8px;table-layout:fixed;">
   <tr>
-    <td style="vertical-align:middle;width:36%;">
+    <td style="vertical-align:middle;width:36%;overflow:hidden;">
       <table cellpadding="0" cellspacing="0"><tr>
         <td style="vertical-align:middle;padding-right:7px;">
           <img src="${LOGO_DATA_URI}" alt="EcoPowerTech" style="height:36px;width:auto;" />
