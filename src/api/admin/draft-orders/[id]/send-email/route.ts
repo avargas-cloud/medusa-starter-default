@@ -93,6 +93,12 @@ async function generatePdfFromUrl(
   try {
     const page = await browser.newPage()
 
+    // Match viewport to Letter paper at 96 dpi (215.9 mm × 279.4 mm).
+    // Without this, Playwright's 1280 px default viewport causes the headless
+    // engine to scale down the 816 px doc-page, shifting absolutely-positioned
+    // blocks and breaking the template layout in the generated PDF.
+    await page.setViewportSize({ width: 816, height: 1056 })
+
     // Always inject localStorage — we need at least posState and the pre-fetched template.
     // The print page reads pdf-template-injection as a fallback when there's no auth token
     // in memory (the authStore intentionally excludes token from localStorage persistence).
@@ -114,6 +120,7 @@ async function generatePdfFromUrl(
     const pdfBuffer = await page.pdf({
       format: "Letter",
       printBackground: true,
+      scale: 1,
     })
     return Buffer.from(pdfBuffer)
   } finally {
