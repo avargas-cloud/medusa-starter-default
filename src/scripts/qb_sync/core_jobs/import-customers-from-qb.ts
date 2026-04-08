@@ -174,6 +174,13 @@ export default async function importCustomersFromQB({ container }: ExecArgs) {
                 )
 
                 if (!isDryRun) {
+                    // Skip if a customer with this email already exists in Medusa
+                    const existing = await customerModule.listCustomers({ email: [customerEmail] })
+                    if (existing.length > 0) {
+                        logger.info(`  ⏭️  Skipping ${customerEmail} — already exists in Medusa (id: ${existing[0].id})`)
+                        continue
+                    }
+
                     // Create customer
                     const customer = await customerModule.createCustomers({
                         email: customerEmail,  // Use generated or real email
