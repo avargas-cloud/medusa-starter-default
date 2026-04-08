@@ -71,58 +71,45 @@ export async function POST(
             return
         }
 
-        // ── 4. Deactivate QB Estimate — non-fatal ─────────────────────────────
-        let qbDeactivated = false
-        let qbSkipped     = false
-        let qbError: string | undefined
+        // ── 4. Respond immediately — QB deactivation runs fire-and-forget ────
+        const hasQbEstimate = !!estimateTxnId
 
-        if (estimateTxnId) {
+        res.json({
+            success:      true,
+            orderId,
+            qbDeactivated: false,
+            qbSkipped:    !hasQbEstimate,
+            message:      hasQbEstimate
+                ? "Estimate voided — QB deactivation running in background"
+                : "Estimate voided (no QB estimate linked)",
+        })
 
+        // ── 5. Deactivate QB Estimate asynchronously (non-blocking) ──────────
+        if (hasQbEstimate) {
             const docNumber = (order.metadata?.document_number as string | undefined)
                 ?? (order.display_id ? `E${order.display_id}` : undefined)
 
-            const result = await processDeactivateEstimateInQb({
+            processDeactivateEstimateInQb({
                 draftOrderId:    orderId,
-                estimateTxnId,
+                estimateTxnId:   estimateTxnId!,
                 estimateRef:     estimateRef ?? undefined,
                 medusaRefNumber: docNumber,
-            })
+            }).then((result) => {
+                const qbDeactivated = result.enabled && !result.error
+                const qbError       = result.error
 
-            if (!result.enabled) {
-                qbSkipped = true
-            } else if (result.error) {
-                qbError = result.error
-            } else {
-                qbDeactivated = true
-            }
-
-            // Stamp final qb_sync_status
-            try {
-                await orderModule.updateOrders(orderId, {
+                orderModule.updateOrders(orderId, {
                     metadata: {
                         ...(order.metadata || {}),
                         order_status:   "Voided",
                         qb_sync_status: qbDeactivated ? "voided" : (qbError ? "error" : "voided"),
                         voided_at:      new Date().toISOString(),
                     },
-                })
-            } catch { /* non-critical */ }
-        } else {
-            qbSkipped = true
+                }).catch(() => { /* non-critical */ })
+            }).catch((err: unknown) => {
+                console.error("[VoidEstimate] QB deactivation background error:", err)
+            })
         }
-
-        res.json({
-            success: true,
-            orderId,
-            qbDeactivated,
-            qbSkipped,
-            ...(qbError ? { qbError } : {}),
-            message: qbDeactivated
-                ? `Estimate voided and deactivated in QuickBooks (Ref: ${estimateRef ?? estimateTxnId})`
-                : qbSkipped
-                    ? "Estimate voided (no QB estimate linked)"
-                    : `Estimate voided — QB deactivation failed: ${qbError}`,
-        })
 
     } catch (err: any) {
         console.error("[VoidEstimate] Unexpected error:", err)

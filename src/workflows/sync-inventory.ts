@@ -24,9 +24,10 @@ export const syncInventoryToMeiliStep = createStep(
             const priceListIds = allPriceLists.map((pl: any) => pl.id)
 
             if (priceListIds.length > 0) {
-                const priceListPrices = await pricingService.listPrices({
-                    price_list_id: priceListIds,
-                })
+                const priceListPrices = await pricingService.listPrices(
+                    { price_list_id: priceListIds },
+                    { take: 100000 }
+                )
                 for (const p of priceListPrices) {
                     if (!p.price_set_id || !p.price_list_id || p.currency_code !== "usd") continue
                     if (!pricesByPriceSet.has(p.price_set_id)) {

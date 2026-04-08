@@ -72,7 +72,8 @@
     "puppeteer-core": "^24.37.5",
     "resend": "^6.10.0",
     "scrypt-kdf": "^4.0.0",
-    "typeorm": "^0.3.16"
+    "typeorm": "^0.3.16",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@medusajs/test-utils": "^2.13.0",
