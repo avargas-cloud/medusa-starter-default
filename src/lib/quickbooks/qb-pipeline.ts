@@ -173,7 +173,33 @@ export async function writePipelineRow(input: WritePipelineRowInput): Promise<st
         if (updated.length > 0) return updated[0].id as string
     }
 
-    // Fallback: INSERT a new row (no existing pending row, or this is a pending pre-flight)
+    // Final guard: if ANY row exists for this order+step (any status), reset it to pending instead
+    // of inserting. This catches edge cases where the status-based checks above missed the row
+    // (e.g. race conditions, unexpected status transitions, or status values not covered above).
+    if (input.status === "pending" && (input.orderId || input.referenceId) && input.step) {
+        const { rows: anyExisting } = await pool.query(
+            `UPDATE qb_order_pipeline
+             SET status            = 'pending',
+                 updated_at        = NOW(),
+                 error             = NULL,
+                 failed_at         = NULL,
+                 submitted_at      = NULL,
+                 bridge_op_id      = NULL,
+                 qb_result         = NULL,
+                 medusa_ref_number = COALESCE($3, medusa_ref_number),
+                 retry_count       = CASE WHEN status = 'failed' THEN retry_count + 1 ELSE retry_count END
+             WHERE step = $2
+               AND (
+                 ($1::text IS NOT NULL AND order_id = $1::text AND ($4::text IS NULL OR reference_id = $4::text))
+                 OR ($1::text IS NULL AND $4::text IS NOT NULL AND reference_id = $4::text)
+               )
+             RETURNING id`,
+            [input.orderId ?? null, input.step, input.medusaRefNumber ?? null, input.referenceId ?? null]
+        )
+        if (anyExisting.length > 0) return anyExisting[0].id as string
+    }
+
+    // Fallback: INSERT a new row (no existing row found for this order+step)
     const { rows } = await pool.query(
         `INSERT INTO qb_order_pipeline
             (order_id, reference_id, reference_type, step, status, depends_on,
@@ -292,39 +318,75 @@ export async function findSubmittedRowByOpId(bridgeOpId: string): Promise<{
 }
 
 /**
- * Saves an EditSequence to the cache (upsert).
+ * Saves an EditSequence (and optionally TxnLineIDs) to the cache (upsert).
+ * lineIds: productId → TxnLineID mapping for line-level update operations.
  * Call this after every QB response that contains an EditSequence.
  */
 export async function cacheEditSequence(
     entityType: string,
     qbId: string,
-    editSeq: string
+    editSeq: string,
+    lineIds?: Record<string, string> | null
 ): Promise<void> {
     if (!qbId || !editSeq) return
     const pool = getDbPool()
     await pool.query(
-        `INSERT INTO qb_edit_sequence_cache (entity_type, qb_id, edit_seq, cached_at)
-         VALUES ($1, $2, $3, NOW())
+        `INSERT INTO qb_edit_sequence_cache (entity_type, qb_id, edit_seq, line_ids, cached_at)
+         VALUES ($1, $2, $3, $4, NOW())
          ON CONFLICT (entity_type, qb_id) DO UPDATE
              SET edit_seq  = EXCLUDED.edit_seq,
+                 line_ids  = COALESCE(EXCLUDED.line_ids, qb_edit_sequence_cache.line_ids),
                  cached_at = NOW()`,
-        [entityType, qbId, editSeq]
+        [entityType, qbId, editSeq, lineIds ? JSON.stringify(lineIds) : null]
     )
 }
 
 /**
- * Retrieves a cached EditSequence, or null if not cached.
+ * Retrieves a cached EditSequence and optional TxnLineIDs map, or null if not cached.
  */
 export async function getCachedEditSequence(
     entityType: string,
     qbId: string
-): Promise<string | null> {
+): Promise<{ editSeq: string; lineIds: Record<string, string> | null } | null> {
     const pool = getDbPool()
     const { rows } = await pool.query(
-        `SELECT edit_seq FROM qb_edit_sequence_cache WHERE entity_type = $1 AND qb_id = $2`,
+        `SELECT edit_seq, line_ids FROM qb_edit_sequence_cache WHERE entity_type = $1 AND qb_id = $2`,
         [entityType, qbId]
     )
-    return rows[0]?.edit_seq ?? null
+    if (!rows[0]) return null
+    return {
+        editSeq: rows[0].edit_seq as string,
+        lineIds: (rows[0].line_ids as Record<string, string> | null) ?? null,
+    }
+}
+
+/**
+ * Polls a pipeline row until it leaves the 'submitted' state (i.e. reaches confirmed/failed/skipped).
+ * Used by QB lock callbacks to ensure save2 only starts after save1 is confirmed,
+ * so it can pick up the freshly-cached EditSequence and skip the GET round-trip.
+ *
+ * Returns 'confirmed', 'failed', 'skipped', or 'timeout' if maxWaitMs is exceeded.
+ */
+export async function pollUntilQbConfirmed(
+    rowId: string,
+    maxWaitMs = 5 * 60 * 1000, // 5 minutes default
+    intervalMs = 3000
+): Promise<"confirmed" | "failed" | "skipped" | "timeout"> {
+    const pool = getDbPool()
+    const deadline = Date.now() + maxWaitMs
+    while (Date.now() < deadline) {
+        const { rows } = await pool.query(
+            `SELECT status FROM qb_order_pipeline WHERE id = $1`,
+            [rowId]
+        )
+        const status = rows[0]?.status as string | undefined
+        if (status === "confirmed") return "confirmed"
+        if (status === "failed")    return "failed"
+        if (status === "skipped")   return "skipped"
+        // still 'submitted' or 'pending' — wait and retry
+        await new Promise(r => setTimeout(r, intervalMs))
+    }
+    return "timeout"
 }
 
 /**

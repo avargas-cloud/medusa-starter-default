@@ -1,5 +1,6 @@
 import { DRY_RUN, bridgeFetch, pollRawOperationResult } from "./core"
 import { QbCreateEstimatePayload, QbUpdateEstimatePayload, QbConvertEstimatePayload, QbBridgeResult, QbAsyncResult } from "./types"
+import { getCachedEditSequence, cacheEditSequence } from "../qb-pipeline"
 
 /**
  * Creates an Estimate in QuickBooks (async — used for Draft Orders).
@@ -39,34 +40,49 @@ export async function updateEstimateInQb(
     }
 
     try {
-        console.log(`[QB] Querying estimate ${payload.txnId} to get EditSequence...`)
-        const queryResp = await bridgeFetch("GET", `/api/estimates/${payload.txnId}`)
-        const queryOpId = queryResp?.operationId
-        if (!queryOpId) throw new Error("Bridge did not return operationId for estimate query")
+        let editSequence: string
+        let qbLinesByProductId: Record<string, string> = {}
 
-        const rawResult = await pollRawOperationResult(queryOpId)
+        // Try the EditSequence + TxnLineID cache first (populated by consolidator after confirmation).
+        // This avoids a round-trip GET to the QB bridge for the common case (single or sequential saves).
+        const cached = await getCachedEditSequence("estimate", payload.txnId)
+        if (cached?.editSeq && cached?.lineIds) {
+            console.log(`[QB] ✅ Cache hit for estimate ${payload.txnId} — skipping GET round-trip`)
+            editSequence = cached.editSeq
+            qbLinesByProductId = cached.lineIds
+        } else {
+            // Cache miss (first edit, or lineIds not yet cached) → fetch from QB bridge
+            console.log(`[QB] Cache miss for estimate ${payload.txnId} — querying QB for EditSequence + lines`)
+            const queryResp = await bridgeFetch("GET", `/api/estimates/${payload.txnId}`)
+            const queryOpId = queryResp?.operationId
+            if (!queryOpId) throw new Error("Bridge did not return operationId for estimate query")
 
-        const estRet =
-            rawResult?.QBXML?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
-            rawResult?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
-            rawResult?.EstimateRet ??
-            rawResult?.EstimateQueryRs?.EstimateRet
+            const rawResult = await pollRawOperationResult(queryOpId)
 
-        if (!estRet?.EditSequence) {
-            throw new Error(`Could not extract EditSequence from estimate query result. Raw: ${JSON.stringify(rawResult).slice(0, 200)}`)
-        }
+            const estRet =
+                rawResult?.QBXML?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+                rawResult?.QBXMLMsgsRs?.EstimateQueryRs?.EstimateRet ??
+                rawResult?.EstimateRet ??
+                rawResult?.EstimateQueryRs?.EstimateRet
 
-        const editSequence = estRet.EditSequence as string
-        const existingLines = estRet.EstimateLineRet
-        const linesArr: any[] = Array.isArray(existingLines)
-            ? existingLines
-            : (existingLines ? [existingLines] : [])
+            if (!estRet?.EditSequence) {
+                throw new Error(`Could not extract EditSequence from estimate query result. Raw: ${JSON.stringify(rawResult).slice(0, 200)}`)
+            }
 
-        const qbLinesByProductId: Record<string, string> = {}
-        for (const line of linesArr) {
-            const productId = line?.ItemRef?.ListID
-            const txnLineId = line?.TxnLineID
-            if (productId && txnLineId) qbLinesByProductId[productId] = txnLineId
+            editSequence = estRet.EditSequence as string
+            const existingLines = estRet.EstimateLineRet
+            const linesArr: any[] = Array.isArray(existingLines)
+                ? existingLines
+                : (existingLines ? [existingLines] : [])
+
+            for (const line of linesArr) {
+                const productId = line?.ItemRef?.ListID
+                const txnLineId = line?.TxnLineID
+                if (productId && txnLineId) qbLinesByProductId[productId] = txnLineId
+            }
+
+            // Warm the cache with what we just fetched so the next mod can skip the GET
+            cacheEditSequence("estimate", payload.txnId, editSequence, qbLinesByProductId).catch(() => {})
         }
 
         const modItems = payload.items.map(item => {

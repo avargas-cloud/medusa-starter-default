@@ -94,14 +94,38 @@ export default async function qbPipelineConsolidator(
                     op.editSequence ||
                     op.result?.EditSequence ||
                     op.result?.QBXML?.QBXMLMsgsRs?.EstimateAddRs?.EstimateRet?.EditSequence ||
+                    op.result?.QBXML?.QBXMLMsgsRs?.EstimateModRs?.EstimateRet?.EditSequence ||
                     op.result?.QBXML?.QBXMLMsgsRs?.SalesOrderAddRs?.SalesOrderRet?.EditSequence ||
+                    op.result?.QBXML?.QBXMLMsgsRs?.SalesOrderModRs?.SalesOrderRet?.EditSequence ||
                     op.result?.QBXML?.QBXMLMsgsRs?.InvoiceAddRs?.InvoiceRet?.EditSequence ||
                     msgs?.CreditMemoAddRs?.CreditMemoRet?.EditSequence ||
                     null
 
-                // Cache EditSequence so update/mod ops can skip the GET round-trip
+                // Extract TxnLineID map (productId → TxnLineID) from confirmed QB response.
+                // This allows subsequent mod ops to skip the GET round-trip entirely.
+                const extractLineIds = (lineRet: unknown): Record<string, string> | null => {
+                    if (!lineRet) return null
+                    const arr: unknown[] = Array.isArray(lineRet) ? lineRet : [lineRet]
+                    const map: Record<string, string> = {}
+                    for (const line of arr) {
+                        const l = line as Record<string, unknown>
+                        const pid = (l?.ItemRef as Record<string, unknown>)?.ListID as string | undefined
+                        const tid = l?.TxnLineID as string | undefined
+                        if (pid && tid) map[pid] = tid
+                    }
+                    return Object.keys(map).length > 0 ? map : null
+                }
+
+                const lineIds: Record<string, string> | null =
+                    extractLineIds(op.result?.QBXML?.QBXMLMsgsRs?.EstimateAddRs?.EstimateRet?.EstimateLineRet) ??
+                    extractLineIds(op.result?.QBXML?.QBXMLMsgsRs?.EstimateModRs?.EstimateRet?.EstimateLineRet) ??
+                    extractLineIds(op.result?.QBXML?.QBXMLMsgsRs?.SalesOrderAddRs?.SalesOrderRet?.SalesOrderLineRet) ??
+                    extractLineIds(op.result?.QBXML?.QBXMLMsgsRs?.SalesOrderModRs?.SalesOrderRet?.SalesOrderLineRet) ??
+                    null
+
+                // Cache EditSequence (+ TxnLineIDs when available) so next mod can skip the GET round-trip
                 if (editSeq && txnId) {
-                    await cacheEditSequence(row.step, txnId, editSeq)
+                    await cacheEditSequence(row.step, txnId, editSeq, lineIds ?? undefined)
                 }
 
                 // Write TxnID + EditSequence back to order metadata so POS reflects confirmed

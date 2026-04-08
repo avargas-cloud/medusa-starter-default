@@ -1,5 +1,6 @@
 import { DRY_RUN, bridgeFetch, pollRawOperationResult } from "./core"
 import { QbCreateSalesOrderPayload, QbUpdateSalesOrderPayload, QbBridgeResult, QbAsyncResult } from "./types"
+import { getCachedEditSequence, cacheEditSequence } from "../qb-pipeline"
 
 /**
  * Creates a Sales Order in QuickBooks (async).
@@ -29,7 +30,14 @@ export async function createSalesOrderInQb(
 
 export async function getSalesOrderDetailsFromQb(txnId: string): Promise<{ success: boolean, editSequence?: string, linesByProductId?: Record<string, string>, rawLines?: any[], error?: string }> {
     try {
-        console.log(`[QB] Querying Sales Order ${txnId} to get details...`)
+        // Try cache first (populated by consolidator after confirmation)
+        const cached = await getCachedEditSequence("sales_order", txnId)
+        if (cached?.editSeq && cached?.lineIds) {
+            console.log(`[QB] ✅ Cache hit for Sales Order ${txnId} — skipping GET round-trip`)
+            return { success: true, editSequence: cached.editSeq, linesByProductId: cached.lineIds, rawLines: [] }
+        }
+
+        console.log(`[QB] Cache miss for Sales Order ${txnId} — querying QB for details...`)
         const queryResp = await bridgeFetch("GET", `/api/sales-orders/${txnId}`)
         const queryOpId = queryResp?.operationId
         if (!queryOpId) throw new Error("Bridge did not return operationId for SO query")
@@ -59,6 +67,9 @@ export async function getSalesOrderDetailsFromQb(txnId: string): Promise<{ succe
             const txnLineId = line?.TxnLineID
             if (productId && txnLineId) qbLinesByProductId[productId] = txnLineId
         }
+
+        // Warm the cache so next mod can skip the GET
+        cacheEditSequence("sales_order", txnId, editSequence, qbLinesByProductId).catch(() => {})
 
         console.log(`[QB] Details obtained. ${linesArr.length} existing SO lines. First line: ${JSON.stringify(linesArr[0])}`)
         return { success: true, editSequence, linesByProductId: qbLinesByProductId, rawLines: linesArr }

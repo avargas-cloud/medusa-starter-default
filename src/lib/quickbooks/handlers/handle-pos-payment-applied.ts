@@ -157,7 +157,7 @@ export async function handlePosPaymentApplied({ event, container }: SubscriberAr
     // Get the EditSequence from cache (saved when the payment was created in QB).
     // Without this, the bridge would create a new duplicate payment record instead of
     // modifying the existing one.
-    const editSequence = await getCachedEditSequence("payment", paymentTxnId).catch(() => null)
+    const editSequence = (await getCachedEditSequence("payment", paymentTxnId).catch(() => null))?.editSeq ?? null
     if (!editSequence) {
         logger.error(`${LOG_PREFIX} ❌ No EditSequence found in cache for payment TxnID=${paymentTxnId}. Cannot apply via ReceivePaymentMod.`)
         try {

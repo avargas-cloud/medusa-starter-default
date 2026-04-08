@@ -751,7 +751,8 @@ export async function processInvoiceInQb(invoice: {
     if (invTxnId && invoice.qbPaymentTxnId && invoice.paymentAmount) {
         console.log(`${prefix} Applying payment ${invoice.qbPaymentTxnId} to invoice ${invTxnId}...`)
 
-        const cachedEditSeq = await getCachedEditSequence("payment", invoice.qbPaymentTxnId).catch(() => null)
+        const cachedEditSeqEntry = await getCachedEditSequence("payment", invoice.qbPaymentTxnId).catch(() => null)
+        const cachedEditSeq = cachedEditSeqEntry?.editSeq ?? null
         if (!cachedEditSeq) {
             console.warn(`[QB] ⚠️ No EditSequence in cache for payment ${invoice.qbPaymentTxnId}. Skipping apply to avoid duplicate QB record.`)
         }
@@ -1111,7 +1112,8 @@ export async function processDeactivateEstimateInQb(draft: {
     }
 
     // Use cached EditSequence if available — skips a round-trip GET to QB
-    const cachedEditSeq = await getCachedEditSequence("estimate", draft.estimateTxnId).catch(() => null)
+    const cachedEditSeqEntry = await getCachedEditSequence("estimate", draft.estimateTxnId).catch(() => null)
+    const cachedEditSeq = cachedEditSeqEntry?.editSeq ?? null
     if (cachedEditSeq) {
         console.log(`${prefix} Using cached EditSequence for estimate ${draft.estimateTxnId}`)
     }

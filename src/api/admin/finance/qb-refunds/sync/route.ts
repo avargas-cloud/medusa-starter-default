@@ -181,7 +181,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   //    Best-effort: skip silently if TxnID or EditSequence not available
   if (!isCreditMemoRefund && originalPaymentTxnId) {
     try {
-      const editSeq = await getCachedEditSequence("payment", originalPaymentTxnId)
+      const editSeq = (await getCachedEditSequence("payment", originalPaymentTxnId))?.editSeq ?? null
       if (editSeq) {
         const origMemo = payment.metadata?.qb_memo as string | undefined
         const newMemo = origMemo
