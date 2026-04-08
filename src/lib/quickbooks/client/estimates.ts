@@ -85,19 +85,28 @@ export async function updateEstimateInQb(
             cacheEditSequence("estimate", payload.txnId, editSequence, qbLinesByProductId).catch(() => {})
         }
 
-        const modItems = payload.items.map(item => {
-            const pid = item.productId
-            const txnLineId = pid ? qbLinesByProductId[pid] : undefined
-            return {
-                ...(txnLineId ? { TxnLineID: txnLineId } : {}),
-                ...(pid ? { productId: pid } : {}),
-                ...(item.productName ? { productName: item.productName } : {}),
-                quantity: item.quantity,
-                price: item.price,
-                amount: item.amount,
-                desc: item.desc,
-            }
-        })
+        const modItems = payload.items
+            .map(item => {
+                const pid = item.productId
+                const txnLineId = pid ? qbLinesByProductId[pid] : undefined
+                return {
+                    ...(txnLineId ? { TxnLineID: txnLineId } : {}),
+                    ...(pid ? { productId: pid } : {}),
+                    ...(item.productName ? { productName: item.productName } : {}),
+                    quantity: item.quantity,
+                    price: item.price,
+                    amount: item.amount,
+                    desc: item.desc,
+                }
+            })
+            // QB Error 3290: TxnLineIDs must be sent in ascending order (the sequence they exist
+            // in QB). Items without a TxnLineID (new lines) go last so QB appends them.
+            .sort((a, b) => {
+                if (a.TxnLineID && b.TxnLineID) return a.TxnLineID < b.TxnLineID ? -1 : 1
+                if (a.TxnLineID) return -1  // existing line → before new
+                if (b.TxnLineID) return 1   // new line → after existing
+                return 0
+            })
 
         const modResp = await bridgeFetch("PUT", `/api/estimates/${payload.txnId}`, {
             EditSequence: editSequence,

@@ -102,20 +102,29 @@ export async function updateSalesOrderInQb(
         const editSequence = details.editSequence
         const qbLinesByProductId = details.linesByProductId || {}
 
-        const modItems = payload.items.map(item => {
-            const pid = item.productId
-            const txnLineId = pid ? qbLinesByProductId[pid] : undefined
-            return {
-                ...(txnLineId ? { TxnLineID: txnLineId } : {}),
-                ...(pid ? { productId: pid } : {}),
-                ...(item.productName ? { productName: item.productName } : {}),
-                quantity: item.quantity,
-                price: item.price,
-                amount: item.amount,
-                desc: item.desc,
-                noSite: item.noSite,
-            }
-        })
+        const modItems = payload.items
+            .map(item => {
+                const pid = item.productId
+                const txnLineId = pid ? qbLinesByProductId[pid] : undefined
+                return {
+                    ...(txnLineId ? { TxnLineID: txnLineId } : {}),
+                    ...(pid ? { productId: pid } : {}),
+                    ...(item.productName ? { productName: item.productName } : {}),
+                    quantity: item.quantity,
+                    price: item.price,
+                    amount: item.amount,
+                    desc: item.desc,
+                    noSite: item.noSite,
+                }
+            })
+            // QB Error 3290: TxnLineIDs must be sent in ascending order (same sequence as in QB).
+            // Items without TxnLineID (new lines) go last so QB appends them.
+            .sort((a, b) => {
+                if (a.TxnLineID && b.TxnLineID) return a.TxnLineID < b.TxnLineID ? -1 : 1
+                if (a.TxnLineID) return -1
+                if (b.TxnLineID) return 1
+                return 0
+            })
 
         const modResp = await bridgeFetch("PUT", `/api/sales-orders/${payload.txnId}`, {
             EditSequence: editSequence,
