@@ -92,6 +92,7 @@ export async function writePipelineRow(input: WritePipelineRowInput): Promise<st
         const { rows: fromWaiting } = await pool.query(
             `UPDATE qb_order_pipeline
              SET status            = 'pending',
+                 updated_at        = NOW(),
                  medusa_ref_number = COALESCE($3, medusa_ref_number),
                  qb_ref_number     = COALESCE($4, qb_ref_number)
              WHERE step = $2 AND status IN ('waiting', 'pending')
@@ -104,11 +105,14 @@ export async function writePipelineRow(input: WritePipelineRowInput): Promise<st
         )
         if (fromWaiting.length > 0) return fromWaiting[0].id as string
 
-        // Re-activation: if confirmed/failed/skipped, reset to pending (MOD/VOID/retry scenario).
+        // Re-activation: if confirmed/failed/skipped/submitted, reset to pending (MOD/VOID/retry scenario).
+        // 'submitted' is included to prevent duplicate INSERTs when the user saves an estimate that
+        // is already in-flight (submitted but not yet confirmed by the bridge).
         // Preserves qb_txn_id (needed for Mod operations). Increments retry_count on failed.
         const { rows: reactivated } = await pool.query(
             `UPDATE qb_order_pipeline
              SET status            = 'pending',
+                 updated_at        = NOW(),
                  error             = NULL,
                  failed_at         = NULL,
                  submitted_at      = NULL,
@@ -116,7 +120,7 @@ export async function writePipelineRow(input: WritePipelineRowInput): Promise<st
                  qb_result         = NULL,
                  medusa_ref_number = COALESCE($3, medusa_ref_number),
                  retry_count       = CASE WHEN status = 'failed' THEN retry_count + 1 ELSE retry_count END
-             WHERE step = $2 AND status IN ('confirmed', 'failed', 'skipped')
+             WHERE step = $2 AND status IN ('submitted', 'confirmed', 'failed', 'skipped')
                AND (
                  ($1::text IS NOT NULL AND order_id = $1::text AND ($4::text IS NULL OR reference_id = $4::text))
                  OR ($1::text IS NULL AND $4::text IS NOT NULL AND reference_id = $4::text)
@@ -139,6 +143,7 @@ export async function writePipelineRow(input: WritePipelineRowInput): Promise<st
         const { rows: updated } = await pool.query(
             `UPDATE qb_order_pipeline
              SET status            = $3,
+                 updated_at        = NOW(),
                  bridge_op_id      = COALESCE($4, bridge_op_id),
                  qb_txn_id         = COALESCE($5, qb_txn_id),
                  qb_ref_number     = COALESCE($6, qb_ref_number),
@@ -231,12 +236,13 @@ export async function confirmPipelineRow(
     const pool = getDbPool()
     await pool.query(
         `UPDATE qb_order_pipeline
-         SET status       = 'confirmed',
-             confirmed_at = NOW(),
-             qb_txn_id    = COALESCE($2, qb_txn_id),
+         SET status        = 'confirmed',
+             updated_at    = NOW(),
+             confirmed_at  = NOW(),
+             qb_txn_id     = COALESCE($2, qb_txn_id),
              qb_ref_number = COALESCE($3, qb_ref_number),
-             qb_result    = COALESCE($4::jsonb, qb_result),
-             error        = NULL
+             qb_result     = COALESCE($4::jsonb, qb_result),
+             error         = NULL
          WHERE id = $1`,
         [rowId, qbTxnId, qbRefNumber, qbResult ? JSON.stringify(qbResult) : null]
     )
@@ -249,9 +255,10 @@ export async function failPipelineRow(rowId: string, error: string): Promise<voi
     const pool = getDbPool()
     await pool.query(
         `UPDATE qb_order_pipeline
-         SET status    = 'failed',
-             failed_at = NOW(),
-             error     = $2
+         SET status     = 'failed',
+             updated_at = NOW(),
+             failed_at  = NOW(),
+             error      = $2
          WHERE id = $1`,
         [rowId, error]
     )

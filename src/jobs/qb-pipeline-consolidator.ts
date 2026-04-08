@@ -735,9 +735,10 @@ export default async function qbPipelineConsolidator(
     try {
         const { rows: timedOutRows, rowCount } = await pool.query(`
             UPDATE qb_order_pipeline
-            SET    status    = 'failed',
-                   error     = 'Timed out in pending state (>20 min) — no response from QB bridge',
-                   failed_at = NOW()
+            SET    status     = 'failed',
+                   updated_at = NOW(),
+                   error      = 'Timed out in pending state (>20 min) — no response from QB bridge',
+                   failed_at  = NOW()
             WHERE  status = 'pending'
               AND  COALESCE(updated_at, created_at) < NOW() - INTERVAL '20 minutes'
             RETURNING id, step, order_id
