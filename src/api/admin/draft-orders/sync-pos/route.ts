@@ -1,6 +1,8 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
 import { ContainerRegistrationKeys } from "@medusajs/utils"
 import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline"
+import { getEstimateTxnId, getEstimateRef } from "../../../../lib/quickbooks/qb-metadata-types"
+import { buildQbItems, type MedusaOrderForQb } from "../../../../lib/quickbooks/order-flow-core"
 
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
     const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)
@@ -237,19 +239,19 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             // 5b. QuickBooks Pipeline hooks for Draft Orders (Estimates)
             logger.info(`[sync-pos] QB Flow Enabled: ${process.env.QB_ORDER_FLOW_ENABLED}, DraftOrder ID: ${resolvedId}`)
             if (process.env.QB_ORDER_FLOW_ENABLED === "true") {
-                const qbTxnId = draftOrderModel?.metadata?.qb_txn_id
+                const qbTxnId = getEstimateTxnId(draftOrderModel?.metadata)
                 logger.info(`[sync-pos] qbTxnId found: ${qbTxnId}`)
                 if (qbTxnId) {
                     try {
                         const { updateEstimateInQb } = require("../../../../lib/quickbooks/client/estimates")
-                        
+
                         await localFetch(`/admin/draft-orders/${resolvedId}`, {
                             method: "POST",
                             body: JSON.stringify({ metadata: { ...(draftOrderModel?.metadata || {}), qb_sync_status: "pending" } })
                         }).catch(() => {})
 
                         const medusaRef = draftOrderModel?.display_id ? `E${draftOrderModel.display_id}` : null
-                        const qbRef = draftOrderModel?.metadata?.qb_ref_number ?? null
+                        const qbRef = getEstimateRef(draftOrderModel?.metadata) ?? null
 
                         await writePipelineRow({
                             orderId: resolvedId,
@@ -265,12 +267,17 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                             try {
                                 const { data: [fullOrder] } = await query.graph({
                                     entity: "order",
-                                    fields: ["*", "items.*", "items.variant.*", "customer.*", "shipping_methods.*", "tax_lines.*"],
+                                    fields: ["*", "items.*", "items.variant.*", "items.variant.metadata", "customer.*", "shipping_methods.*", "tax_lines.*"],
                                     filters: { id: resolvedId }
                                 })
                                 if (!fullOrder) return
 
-                                const result = await updateEstimateInQb(fullOrder as any)
+                                const typedOrder = fullOrder as unknown as MedusaOrderForQb
+                                const qbItems = buildQbItems(typedOrder.items || [], typedOrder.metadata)
+                                const memo = fullOrder.metadata?.document_number as string
+                                    || (fullOrder.display_id ? `E${fullOrder.display_id}` : qbTxnId)
+
+                                const result = await updateEstimateInQb({ txnId: qbTxnId, items: qbItems, memo })
                                 if (result.success) {
                                     await writePipelineRow({
                                         orderId: resolvedId,

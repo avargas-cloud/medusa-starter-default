@@ -318,6 +318,12 @@ module.exports = defineConfig({
             id: "store-pickup",
             options: {},
           },
+          // Uber Shipping - Fixed price, POS only
+          {
+            resolve: "./src/modules/uber-shipping",
+            id: "uber-shipping",
+            options: {},
+          },
           // Ground Shipping - Conditional Pricing
           {
             resolve: "./src/modules/ground-shipping",
