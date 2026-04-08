@@ -247,7 +247,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
 
                         await localFetch(`/admin/draft-orders/${resolvedId}`, {
                             method: "POST",
-                            body: JSON.stringify({ metadata: { ...(draftOrderModel?.metadata || {}), qb_sync_status: "pending" } })
+                            body: JSON.stringify({ metadata: { qb_sync_status: "pending" } })
                         }).catch(() => {})
 
                         const medusaRef = draftOrderModel?.display_id ? `E${draftOrderModel.display_id}` : null
