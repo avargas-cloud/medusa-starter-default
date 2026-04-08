@@ -129,6 +129,7 @@
 | [SHIPPING_GUIDE.md](SHIPPING_GUIDE.md) | All 6 providers — UPS Ground/NDA/2DA/3DS + flat-rate ground + store pickup; `ups-rate-cache.ts` singleton; box-packing algorithm |
 | [UPS_SHIPPING_SYSTEM.md](UPS_SHIPPING_SYSTEM.md) | UPS deep-dive — `ups-rate-cache.ts` singleton (30s in-process cache, deduplication), box-packing long-items handling |
 | [SHIPPING_SETTINGS_MODULE.md](SHIPPING_SETTINGS_MODULE.md) | `shipping-settings-module` — free-shipping threshold, regular price, long-item price, override UPS ground flag |
+| [UBER_DIRECT_SHIPPING.md](UBER_DIRECT_SHIPPING.md) | Uber Direct provider (POS-only, fixed-price) — provider activo ✅, integración API de quotes pendiente 🔲; plan completo de implementación |
 
 ---
 
