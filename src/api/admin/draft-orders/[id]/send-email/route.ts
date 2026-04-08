@@ -6,19 +6,47 @@ import { chromium as playwrightChromium } from "playwright-core"
 import { sendMail } from "../../../../../utils/mailer"
 
 // ── Template prefetch (avoids headless browser needing an authenticated API call) ──
-async function fetchTemplateForPdf(templateId: string): Promise<Record<string, unknown> | null> {
+async function dbConnect() {
   const db = new PgClient({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.DATABASE_URL?.includes("railway") || process.env.NODE_ENV === "production"
       ? { rejectUnauthorized: false }
       : false,
   })
+  await db.connect()
+  return db
+}
+
+async function fetchTemplateForPdf(templateId: string): Promise<Record<string, unknown> | null> {
+  const db = await dbConnect()
   try {
-    await db.connect()
     const result = await db.query("SELECT * FROM pos_document_template WHERE id = $1", [templateId])
     return (result.rows[0] as Record<string, unknown>) ?? null
   } catch (err) {
     console.error("[send-email] Failed to prefetch template:", err)
+    return null
+  } finally {
+    await db.end()
+  }
+}
+
+// Returns the default template id for a given doc type (used when the frontend didn't provide one)
+async function fetchDefaultTemplateId(docType: string): Promise<string | null> {
+  const db = await dbConnect()
+  try {
+    const result = await db.query(
+      "SELECT id FROM pos_document_template WHERE doc_type = $1 AND is_default = true LIMIT 1",
+      [docType]
+    )
+    if (result.rows[0]) return (result.rows[0] as { id: string }).id
+    // No default flagged — take the first one
+    const fallback = await db.query(
+      "SELECT id FROM pos_document_template WHERE doc_type = $1 LIMIT 1",
+      [docType]
+    )
+    return (fallback.rows[0] as { id: string } | undefined)?.id ?? null
+  } catch (err) {
+    console.error("[send-email] Failed to fetch default template:", err)
     return null
   } finally {
     await db.end()
@@ -614,10 +642,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   const estNum = `E${String(displayId).padStart(8, "0")}`
   const emailSubject = subjectOverride ?? `${docType} ${estNum} from EcoPowerTech`
 
-  // Generate PDF — prefer frontend template (Puppeteer on print page URL), fallback to backend HTML
+  // Generate PDF — always prefer frontend template; only fall back to backend HTML if no template exists.
+  // If the frontend didn't send templateId (e.g. templates hadn't loaded yet), look up the default.
+  const resolvedTemplateId: string | null =
+    templateId ?? await fetchDefaultTemplateId(docType.toLowerCase())
+
   let pdfBuffer: Buffer | null = null
   try {
-    if (templateId && docId) {
+    if (resolvedTemplateId && docId) {
       // Resolve POS base URL: env var takes priority, then x-forwarded-host, then origin/referer headers
       const forwardedHost = req.headers["x-forwarded-host"] as string | undefined
       const forwardedProto = (req.headers["x-forwarded-proto"] as string | undefined) ?? "http"
@@ -627,13 +659,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
       const POS_URL = process.env.POS_URL ?? forwardedBase ?? originBase ?? "http://localhost:3001"
       const params = new URLSearchParams({ docId, auto: "0" })
       if (displayId) params.set("displayId", String(displayId))
-      const printUrl = `${POS_URL}/print/${templateId}?${params}`
+      const printUrl = `${POS_URL}/print/${resolvedTemplateId}?${params}`
       console.log(`[send-email] PDF via frontend template: ${printUrl}`)
       // Pre-fetch template from DB so the headless browser doesn't need auth to load it.
       // (authStore intentionally never persists token to localStorage, so the browser
       //  can't call the authenticated template API — we inject the data directly instead.)
-      const templateData = await fetchTemplateForPdf(templateId)
-      if (!templateData) console.warn(`[send-email] Template ${templateId} not found — print page may hang`)
+      const templateData = await fetchTemplateForPdf(resolvedTemplateId)
+      if (!templateData) console.warn(`[send-email] Template ${resolvedTemplateId} not found — print page may hang`)
       pdfBuffer = await generatePdfFromUrl(printUrl, posState, templateData)
       console.log(`[send-email] PDF generated successfully (${pdfBuffer.length} bytes)`)
     } else {
