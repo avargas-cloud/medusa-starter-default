@@ -728,6 +728,28 @@ export default async function qbPipelineConsolidator(
     } catch (soRecoveryErr: any) {
         logger.warn(`${LOG_PREFIX} ⚠️ SO recovery pass error: ${soRecoveryErr.message}`)
     }
+
+    // ── Timeout pass: pending rows stuck for >20 minutes → failed ──────────────
+    // Covers cases where the async QB call threw before ever reaching 'submitted'
+    // (e.g. bad query.graph fields, network error, bridge down).
+    try {
+        const { rows: timedOutRows, rowCount } = await pool.query(`
+            UPDATE qb_order_pipeline
+            SET    status    = 'failed',
+                   error     = 'Timed out in pending state (>20 min) — no response from QB bridge',
+                   failed_at = NOW()
+            WHERE  status = 'pending'
+              AND  COALESCE(updated_at, created_at) < NOW() - INTERVAL '20 minutes'
+            RETURNING id, step, order_id
+        `)
+        if (rowCount && rowCount > 0) {
+            for (const r of timedOutRows) {
+                logger.warn(`${LOG_PREFIX} ⏱️ Timed-out pending row → failed: id=${r.id} step=${r.step} order=${r.order_id}`)
+            }
+        }
+    } catch (timeoutErr: any) {
+        logger.warn(`${LOG_PREFIX} ⚠️ Timeout pass error: ${timeoutErr.message}`)
+    }
 }
 
 export const config = {
