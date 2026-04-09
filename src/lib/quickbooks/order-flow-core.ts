@@ -431,7 +431,7 @@ export function buildShippingQbItem(shippingMethods: any[], shippingItemIdOverri
 export async function processOrderInQb(
     order: MedusaOrderForQb,
     customerModule: any,
-    options?: { prebuiltItems?: QbOrderItem[]; salesTaxCode?: string; memo?: string; onSubmitted?: (operationId: string) => Promise<void> }
+    options?: { prebuiltItems?: QbOrderItem[]; salesTaxCode?: string; memo?: string; salesRep?: string; onSubmitted?: (operationId: string) => Promise<void> }
 ): Promise<OrderFlowResult> {
     const guard = await runGuards()
     if (!guard.pass) return guard.result!
@@ -509,6 +509,7 @@ export async function processOrderInQb(
                 items: soItems,
                 taxExempt,
                 salesTaxCode: options?.salesTaxCode,
+                salesRep: options?.salesRep,
                 memo: options?.memo || `Order ${order.metadata?.document_number || order.display_id || order.id}`,
             })
         }
@@ -682,6 +683,7 @@ export async function processInvoiceInQb(invoice: {
     paymentAmount?: number
     prebuiltItems?: QbOrderItem[] // Used if no qbSoTxnId
     salesTaxCode?: string         // Used if no qbSoTxnId
+    salesRep?: string
     refNumber?: string            // Custom Invoice Number
     memo?: string
     onSubmitted?: (operationId: string) => Promise<void>  // Persist bridge_op_id before polling
@@ -709,6 +711,7 @@ export async function processInvoiceInQb(invoice: {
         LinkToTxnID: invoice.qbSoTxnId,
         items: invoice.prebuiltItems,
         salesTaxCode: invoice.salesTaxCode,
+        salesRep: invoice.salesRep,
         memo: invoice.memo || `Invoice ${invoice.orderDisplayId || invoice.orderId}`,
     })
 
@@ -822,6 +825,7 @@ export async function processSalesReceiptInQb(receipt: {
     prebuiltItems?: QbOrderItem[]
     onSubmitted?: (operationId: string) => Promise<void>  // Persist bridge_op_id before polling
     salesTaxCode?: string
+    salesRep?: string
     refNumber?: string
     memo?: string
 }): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; editSequence?: string; error?: string; skipped?: boolean; skipReason?: string }> {
@@ -847,6 +851,7 @@ export async function processSalesReceiptInQb(receipt: {
         date: getDateString(),
         items: receipt.prebuiltItems || [],
         salesTaxCode: receipt.salesTaxCode,
+        salesRep: receipt.salesRep,
         paymentMethod: mapPaymentMethodToQb(receipt.paymentMethod),
         memo: receipt.memo || `Sales Receipt for Order ${receipt.orderDisplayId || receipt.orderId}`,
     })
@@ -913,6 +918,7 @@ export async function processEstimateInQb(draft: {
     date?: string
     taxExempt?: boolean
     salesTaxCode?: string
+    salesRep?: string
     onSubmitted?: (operationId: string) => Promise<void>
 }): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; editSequence?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
@@ -942,6 +948,7 @@ export async function processEstimateInQb(draft: {
         memo: draft.memo || `E${draft.draftOrderId}`,
         ...(draft.taxExempt === true ? { taxExempt: true } : {}),
         ...(draft.salesTaxCode ? { salesTaxCode: draft.salesTaxCode } : {}),
+        ...(draft.salesRep ? { salesRep: draft.salesRep } : {}),
     })
 
     if (!estResult.success) {

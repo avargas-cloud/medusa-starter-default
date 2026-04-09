@@ -225,6 +225,7 @@ export async function handleSalesReceiptCreated(
         paymentMethod: data.payment_method,
         prebuiltItems,
         salesTaxCode,
+        salesRep: order.metadata?.sales_rep as string | undefined,
         refNumber: srRefNumber,
         memo,
         onSubmitted: async (operationId) => {

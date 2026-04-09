@@ -209,6 +209,7 @@ export async function handleOrderPlaced(
             prebuiltItems: qbItems,
             salesTaxCode,
             memo: soMemo,
+            salesRep: order.metadata?.sales_rep as string | undefined,
             onSubmitted: async (operationId) => {
                 await writePipelineRow({ orderId: orderWithCustomer.id, step: "sales_order", status: "submitted", bridgeOpId: operationId })
             },

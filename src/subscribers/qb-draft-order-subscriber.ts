@@ -202,6 +202,7 @@ export async function handleDraftOrderCreated(data: any, container: any, logger:
         qbCustomerId: custResult.qbCustomerId!,
         items: qbItems,
         memo: draftOrder.metadata?.document_number as string || `E${draftOrder.display_id}`,
+        salesRep: draftOrder.metadata?.sales_rep as string | undefined,
         onSubmitted: async (operationId) => {
             await writePipelineRow({ orderId: draftOrderId, step: "estimate", status: "submitted", bridgeOpId: operationId })
         },

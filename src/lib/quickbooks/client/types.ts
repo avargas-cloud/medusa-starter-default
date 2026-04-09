@@ -53,6 +53,7 @@ export interface QbCreateSalesOrderPayload {
     refNumber?: string
     taxExempt?: boolean
     salesTaxCode?: string
+    salesRep?: string
 }
 
 export interface QbUpdateSalesOrderPayload {
@@ -63,6 +64,7 @@ export interface QbUpdateSalesOrderPayload {
     memo?: string
     salesTaxCode?: string
     taxExempt?: boolean
+    salesRep?: string
 }
 
 export interface QbConvertEstimatePayload {
@@ -97,6 +99,7 @@ export interface QbCreateInvoicePayload {
     items?: QbOrderItem[]
     taxExempt?: boolean
     salesTaxCode?: string
+    salesRep?: string
 }
 
 export interface QbCreateCreditMemoPayload {
@@ -119,6 +122,7 @@ export interface QbCreateEstimatePayload {
     refNumber?: string
     taxExempt?: boolean
     salesTaxCode?: string
+    salesRep?: string
 }
 
 export interface QbUpdateEstimatePayload {

@@ -17,6 +17,7 @@ export async function createInvoiceInQb(
         const body = {
             ...payload,
             templateRef: payload.templateRef || "Invoice Ecopowertech",
+            salesRepRef: payload.salesRep,
         }
         const data = await bridgeFetch("POST", "/api/invoices", body)
         const operationId = data?.operationId

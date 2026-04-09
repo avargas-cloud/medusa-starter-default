@@ -288,6 +288,7 @@ export async function handleFulfillmentCreated(
         paymentAmount: getFloat(fulfillmentAmount),
         prebuiltItems,
         salesTaxCode,
+        salesRep: order.metadata?.sales_rep as string | undefined,
         memo,
         refNumber: invRefNumber,
         onSubmitted: async (operationId) => {
