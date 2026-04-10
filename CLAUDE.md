@@ -14,6 +14,26 @@ Toda la documentación debajo de esta línea es **exclusiva para desarrollo dent
 
 ---
 
+## 🗺️ graphify — Knowledge Graph (OBLIGATORIO)
+
+El workspace tiene un grafo de conocimiento en `../graphify-out/` que cubre todos los proyectos incluyendo backend.
+
+**ANTES de hacer Grep/Glob/Read exploratorio, consulta el grafo:**
+
+| Necesitas | Acción |
+|-----------|--------|
+| ¿Dónde está implementado X? | `../graphify-out/wiki/index.md` → artículo relevante |
+| ¿Qué archivos tocan feature Y? | `../graphify-out/graph.json` → campo `source_file` |
+| ¿Cómo se conectan A y B? | `../graphify-out/GRAPH_REPORT.md` → "Surprising Connections" o "Communities" |
+| Arquitectura general | `../graphify-out/GRAPH_REPORT.md` completo |
+
+**Flujo correcto:**
+1. Nueva sesión → leer `../graphify-out/GRAPH_REPORT.md`
+2. Pregunta específica → navegar `../graphify-out/wiki/index.md`
+3. **Solo si el grafo no tiene la info** → usar Grep/Glob/Read en archivos fuente
+
+---
+
 ## 🛠️ Stack & Herramientas
 - **Medusa v2.13** (Node.js, TypeScript) — Framework headless node e-commerce.
 - **PostgreSQL** — Relacional principal.
