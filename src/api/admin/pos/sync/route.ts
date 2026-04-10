@@ -10,6 +10,7 @@ import { FINANCE_MODULE } from "../../../../modules/finance"
 import { INVOICE_MODULE } from "../../../../modules/invoices"
 import { getEstimateTxnId, getSoTxnId } from "../../../../lib/quickbooks/qb-metadata-types"
 import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep"
+import { withQbSerialized } from "../../../../lib/quickbooks/qb-serializer"
 
 const LOG_PREFIX = "[POST /admin/pos/sync]"
 
@@ -77,50 +78,55 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     return res.json({ success: true, message: "Estimate close logic executed" })
                 }
 
-                const estimateTxnId = getEstimateTxnId(order.metadata || {})
-                const syncStatus    = order.metadata?.qb_sync_status as string | undefined
-                const inFlight      = syncStatus && ['creating', 'editing', 'pending'].includes(syncStatus)
+                // Serialized: CREATE and EDIT share the same lock so rapid saves
+                // don't race (e.g. CREATE followed by EDIT before CREATE confirms).
+                // Inside the lock we re-read metadata to pick up any txnId the
+                // previous operation may have written.
+                withQbSerialized(`estimate:${id}`, { orderId: id, steps: ["estimate"] }, async () => {
+                    try {
+                        // Re-read metadata inside the lock — a prior queued CREATE
+                        // may have written the qbTxnId since we last checked.
+                        const { data: [freshOrder] } = await query.graph({
+                            entity: "order",
+                            fields: [
+                                "id", "metadata", "tax_total", "subtotal", "discount_total",
+                                "items.*", "items.variant.*", "items.variant.metadata",
+                            ],
+                            filters: { id }
+                        })
+                        if (!freshOrder) return
 
-                // If Estimate already exists → Mod in the background, return immediately
-                if (estimateTxnId) {
-                    ;(async () => {
-                        try {
+                        const freshTxnId = getEstimateTxnId(freshOrder.metadata || {})
+
+                        if (freshTxnId) {
+                            // ── EDIT path ──
                             const { buildQbItems, buildQbOrderDiscountLines } = require("../../../../lib/quickbooks/order-flow-core")
                             const { updateEstimateInQb } = require("../../../../lib/quickbooks/client/estimates")
                             const { cacheEditSequence } = require("../../../../lib/quickbooks/qb-pipeline")
 
-                            const { data: [fullOrder] } = await query.graph({
-                                entity: "order",
-                                fields: [
-                                    "id", "metadata", "tax_total", "subtotal", "discount_total",
-                                    "items.*", "items.variant.*", "items.variant.metadata",
-                                ],
-                                filters: { id }
-                            })
-
-                            if (!fullOrder) throw new Error(`Order ${id} not found`)
-
-                            const activeItems = (fullOrder.items || [])
+                            const activeItems = (freshOrder.items || [])
                                 .filter((item: any) => (item.quantity ?? 0) > 0)
                                 .map((item: any) => ({ ...item, unit_price: Number(item.unit_price || 0), subtotal: undefined }))
 
-                            const qbItems = buildQbItems(activeItems, fullOrder.metadata)
+                            const qbItems = buildQbItems(activeItems, freshOrder.metadata)
 
-                            const discountTotal = Number(fullOrder.discount_total || 0)
+                            const discountTotal = Number(freshOrder.discount_total || 0)
                             if (discountTotal > 0) {
-                                const subtotal = Number(fullOrder.subtotal || 0)
+                                const subtotal = Number(freshOrder.subtotal || 0)
                                 const pct = subtotal > 0 ? (discountTotal / subtotal) * 100 : null
                                 buildQbOrderDiscountLines(discountTotal, pct).forEach((l: any) => qbItems.push(l))
                             }
 
-                            const hasTax = fullOrder.tax_total && fullOrder.tax_total > 0
+                            const hasTax = freshOrder.tax_total && freshOrder.tax_total > 0
+                            const salesRep = parseSalesRepInitials(freshOrder.metadata?.sales_rep)
 
-                            logger.info(`${LOG_PREFIX} Estimate already exists (${estimateTxnId}) — running EstimateMod with ${qbItems.length} items`)
+                            logger.info(`${LOG_PREFIX} Estimate already exists (${freshTxnId}) — running EstimateMod with ${qbItems.length} items`)
 
                             const modResult = await updateEstimateInQb({
-                                txnId: estimateTxnId,
+                                txnId: freshTxnId,
                                 items: qbItems,
                                 ...(hasTax ? {} : { taxExempt: true }),
+                                ...(salesRep ? { salesRep } : {}),
                             })
 
                             if (!modResult.success) {
@@ -132,7 +138,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                                 const { pollOperationResult } = require("../../../../lib/quickbooks/client/core")
                                 const pollResult = await pollOperationResult(modResult.data.operationId)
                                 if (pollResult.editSequence) {
-                                    await cacheEditSequence("estimate", estimateTxnId, pollResult.editSequence)
+                                    await cacheEditSequence("estimate", freshTxnId, pollResult.editSequence)
                                     const refreshed = await orderModule.retrieveOrder(id)
                                     await orderModule.updateOrders(id, {
                                         metadata: {
@@ -146,21 +152,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                                     logger.info(`${LOG_PREFIX} ✅ Estimate Mod confirmed — EditSeq=${pollResult.editSequence}`)
                                 }
                             }
-                        } catch (bgErr: any) {
-                            logger.error(`${LOG_PREFIX} Background Estimate Mod error: ${bgErr.message}`)
+                        } else {
+                            // ── CREATE path ──
+                            logger.info(`${LOG_PREFIX} No estimate in QB yet — dispatching CREATE`)
+                            await handleDraftOrderCreated({ id }, req.scope, logger, true)
                         }
-                    })()
+                    } catch (bgErr: any) {
+                        logger.error(`${LOG_PREFIX} Background Estimate sync error: ${bgErr.message}`)
+                    }
+                }, { logger })
 
-                    return res.json({ success: true, message: "Estimate update queued" })
-                }
-
-                if (inFlight) {
-                    return res.status(400).json({ error: `Cannot sync: Estimate is already in progress (status: ${syncStatus}).` })
-                }
-
-                // Fire-and-forget — pass isCron=true to bypass the POS "delay 1h" guard
-                handleDraftOrderCreated({ id }, req.scope, logger, true)
-                    .catch((err: any) => logger.error(`${LOG_PREFIX} Background estimate sync error: ${err.message}`))
                 return res.json({ success: true, message: "Estimate sync queued" })
             }
 
@@ -189,60 +190,71 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     return res.json({ success: true, message: "Order close logic executed" })
                 }
 
-                const soTxnId      = getSoTxnId(order.metadata || {})
-                const soSyncStatus = order.metadata?.qb_sync_status as string | undefined
-                // Only block on SO-specific in-progress states — "synced"/"child_synced" belongs to the Estimate, not SO
-                const soInFlight   = soSyncStatus && ['creating', 'editing', 'pending'].includes(soSyncStatus)
+                // Safety Lock: Check if fully or partially invoiced (fast-fail before lock).
+                if (!getSoTxnId(order.metadata || {})) {
+                    const { data: invoices } = await query.graph({
+                        entity: "pos_invoice",
+                        fields: ["id"],
+                        filters: { order_id: id }
+                    })
+                    if (invoices && invoices.length > 0) {
+                        return res.status(400).json({ error: "Cannot manual-sync Order: Products are already invoiced. Use Invoice manual sync instead to preserve accounting links." })
+                    }
+                }
 
-                // If SO already exists → Mod (update) in the background, return immediately
-                if (soTxnId) {
-                    ;(async () => {
-                        try {
+                // Serialized: CREATE and EDIT share the same lock.
+                withQbSerialized(`order:${id}`, { orderId: id, steps: ["sales_order"] }, async () => {
+                    try {
+                        // Re-read metadata inside the lock — a prior queued CREATE
+                        // may have written the soTxnId since we last checked.
+                        const { data: [freshOrder] } = await query.graph({
+                            entity: "order",
+                            fields: [
+                                "id", "metadata", "tax_total", "subtotal", "discount_total",
+                                "customer_id", "customer.*", "customer.metadata",
+                                "items.*", "items.variant.*", "items.variant.metadata",
+                                "shipping_methods.*",
+                            ],
+                            filters: { id }
+                        })
+                        if (!freshOrder) return
+
+                        const freshSoTxnId = getSoTxnId(freshOrder.metadata || {})
+
+                        if (freshSoTxnId) {
+                            // ── EDIT path ──
                             const { buildQbItems, buildShippingQbItem, buildQbOrderDiscountLines } = require("../../../../lib/quickbooks/order-flow-core")
                             const { updateSalesOrderInQb } = require("../../../../lib/quickbooks/client/sales-orders")
                             const { getQbConfig } = require("../../../../lib/quickbooks/handlers/utils")
                             const { cacheEditSequence } = require("../../../../lib/quickbooks/qb-pipeline")
                             const { pollOperationResult } = require("../../../../lib/quickbooks/client/core")
 
-                            const { data: [fullOrder] } = await query.graph({
-                                entity: "order",
-                                fields: [
-                                    "id", "metadata", "tax_total", "subtotal", "discount_total",
-                                    "customer_id", "customer.*", "customer.metadata",
-                                    "items.*", "items.variant.*", "items.variant.metadata",
-                                    "shipping_methods.*",
-                                ],
-                                filters: { id }
-                            })
-
-                            if (!fullOrder) throw new Error(`Order ${id} not found`)
-
                             const qbConfig = await getQbConfig()
-                            const activeItems = (fullOrder.items || [])
+                            const activeItems = (freshOrder.items || [])
                                 .filter((item: any) => (item.quantity ?? 0) > 0)
                                 .map((item: any) => ({ ...item, unit_price: Number(item.unit_price || 0), subtotal: undefined }))
 
-                            const qbItems = buildQbItems(activeItems, fullOrder.metadata)
+                            const qbItems = buildQbItems(activeItems, freshOrder.metadata)
 
-                            const discountTotal = Number(fullOrder.discount_total || 0)
+                            const discountTotal = Number(freshOrder.discount_total || 0)
                             if (discountTotal > 0) {
-                                const subtotal = Number(fullOrder.subtotal || 0)
+                                const subtotal = Number(freshOrder.subtotal || 0)
                                 const pct = subtotal > 0 ? (discountTotal / subtotal) * 100 : null
                                 buildQbOrderDiscountLines(discountTotal, pct).forEach((l: any) => qbItems.push(l))
                             }
 
-                            const shippingItem = buildShippingQbItem(fullOrder.shipping_methods || [], qbConfig.shippingItemId)
+                            const shippingItem = buildShippingQbItem(freshOrder.shipping_methods || [], qbConfig.shippingItemId)
                             if (shippingItem) qbItems.push(shippingItem)
 
-                            const hasTax = fullOrder.tax_total && fullOrder.tax_total > 0
+                            const hasTax = freshOrder.tax_total && freshOrder.tax_total > 0
                             const salesTaxCode = hasTax ? qbConfig.defaultSalesTaxCode : undefined
-                            const qbListId = (fullOrder.customer as any)?.metadata?.qb_list_id || fullOrder.metadata?.qb_list_id
+                            const qbListId = (freshOrder.customer as any)?.metadata?.qb_list_id || freshOrder.metadata?.qb_list_id
+                            const salesRep = parseSalesRepInitials(freshOrder.metadata?.sales_rep)
 
-                            logger.info(`${LOG_PREFIX} SO already exists (${soTxnId}) — running SalesOrderMod with ${qbItems.length} items`)
+                            logger.info(`${LOG_PREFIX} SO already exists (${freshSoTxnId}) — running SalesOrderMod with ${qbItems.length} items`)
 
-                            const salesRep = parseSalesRepInitials(fullOrder.metadata?.sales_rep)
                             const modResult = await updateSalesOrderInQb({
-                                txnId: soTxnId,
+                                txnId: freshSoTxnId,
                                 ...(qbListId ? { customerId: qbListId } : {}),
                                 items: qbItems,
                                 ...(salesTaxCode ? { salesTaxCode } : { taxExempt: true }),
@@ -257,7 +269,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                             if (modResult.data?.operationId) {
                                 const pollResult = await pollOperationResult(modResult.data.operationId)
                                 if (pollResult.editSequence) {
-                                    await cacheEditSequence("sales_order", soTxnId, pollResult.editSequence)
+                                    await cacheEditSequence("sales_order", freshSoTxnId, pollResult.editSequence)
                                     const refreshed = await orderModule.retrieveOrder(id)
                                     await orderModule.updateOrders(id, {
                                         metadata: {
@@ -271,50 +283,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                                     logger.info(`${LOG_PREFIX} ✅ SO Mod confirmed — EditSeq=${pollResult.editSequence}`)
                                 }
                             }
-                        } catch (bgErr: any) {
-                            logger.error(`${LOG_PREFIX} Background SO Mod error: ${bgErr.message}`)
+                        } else {
+                            // ── CREATE path ──
+                            logger.info(`${LOG_PREFIX} No SO in QB yet — dispatching CREATE`)
+                            await handleOrderPlaced({ id }, orderModule, customerModule, req.scope, logger, true)
                         }
-                    })()
-
-                    return res.json({ success: true, message: "Sales Order update queued" })
-                }
-
-                // If metadata says in-flight, verify there is actually an active pipeline row.
-                // If not, the status is stale (server restarted mid-operation) — allow retry.
-                if (soInFlight) {
-                    const { getDbPool } = require("../../../utils/db-pool")
-                    const pool = getDbPool()
-                    const { rows: activeRows } = await pool.query(
-                        `SELECT id FROM qb_order_pipeline
-                         WHERE order_id = $1 AND step = 'sales_order' AND status IN ('pending','submitted')
-                         LIMIT 1`,
-                        [id]
-                    )
-                    if (activeRows.length > 0) {
-                        return res.status(400).json({ error: `Cannot sync: Sales Order is already in progress (status: ${soSyncStatus}).` })
+                    } catch (bgErr: any) {
+                        logger.error(`${LOG_PREFIX} Background SO sync error: ${bgErr.message}`)
                     }
-                    // Stale state — clear it and allow retry
-                    logger.warn(`${LOG_PREFIX} ⚠️ Stale qb_sync_status="${soSyncStatus}" with no active pipeline row — clearing and retrying`)
-                    try {
-                        await orderModule.updateOrders(id, { metadata: { ...(order.metadata || {}), qb_sync_status: null } })
-                    } catch (e) {}
-                }
+                }, { logger })
 
-                // Safety Lock: Check if fully or partially invoiced.
-                // In POS, if "pos_invoice" exists for this order, we block the SO manual sync
-                const { data: invoices } = await query.graph({
-                    entity: "pos_invoice",
-                    fields: ["id"],
-                    filters: { order_id: id }
-                })
-
-                if (invoices && invoices.length > 0) {
-                    return res.status(400).json({ error: "Cannot manual-sync Order: Products are already invoiced. Use Invoice manual sync instead to preserve accounting links." })
-                }
-
-                // isCron=true bypasses the POS 1-hour delay guard (manual sync = explicit override)
-                handleOrderPlaced({ id }, orderModule, customerModule, req.scope, logger, true)
-                    .catch((err: any) => logger.error(`${LOG_PREFIX} Background order sync error: ${err.message}`))
                 return res.json({ success: true, message: "Sales Order sync queued" })
             }
 
@@ -332,78 +310,107 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     return res.json({ success: true, message: "Invoice void logic executed" })
                 }
                 
-                const invTxnId = invoice.metadata?.qb_txn_id || invoice.metadata?.qb_ref_number
-                    || invoice.metadata?.qb_invoice_txn_id || invoice.metadata?.qb_sales_receipt_txn_id
-                if (invTxnId) {
-                    // Already in QB → fetch + cache EditSequence in background
-                    ;(async () => {
-                        try {
-                            const { bridgeFetch, pollRawOperationResult } = require("../../../../lib/quickbooks/client/core")
-                            const { cacheEditSequence } = require("../../../../lib/quickbooks/qb-pipeline")
-                            const isSR = !!(invoice.metadata?.qb_sales_receipt_txn_id
-                                || invoice.metadata?.is_sales_receipt === true
-                                || invoice.metadata?.is_sales_receipt === "true")
-                            const endpoint = isSR ? "sales-receipts" : "invoices"
-                            const entityType = isSR ? "sales_receipt" : "invoice"
-                            const resp = await bridgeFetch("GET", `/api/${endpoint}/${invTxnId}`)
-                            if (!resp?.operationId) return
-                            const raw = await pollRawOperationResult(resp.operationId)
-                            const editSeq =
-                                raw?.QBXML?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet?.EditSequence ||
-                                raw?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet?.EditSequence ||
-                                raw?.InvoiceRet?.EditSequence ||
-                                raw?.QBXML?.QBXMLMsgsRs?.SalesReceiptQueryRs?.SalesReceiptRet?.EditSequence ||
-                                raw?.QBXMLMsgsRs?.SalesReceiptQueryRs?.SalesReceiptRet?.EditSequence ||
-                                raw?.SalesReceiptRet?.EditSequence
-                            if (editSeq) {
-                                await cacheEditSequence(entityType, invTxnId, String(editSeq))
-                                logger.info(`${LOG_PREFIX} ✅ Cached EditSeq for ${entityType} ${invTxnId}: ${editSeq}`)
+                // Serialized: CREATE and EDIT share the same lock per order.
+                withQbSerialized(`invoice:${invoice.order_id}`, { orderId: invoice.order_id, steps: ["invoice", "sales_receipt"] }, async () => {
+                    try {
+                        // Re-read invoice metadata inside the lock — a prior CREATE
+                        // may have written the txnId since we entered the queue.
+                        const freshInvoice = await invoiceService.retrievePosInvoice(id)
+                        if (!freshInvoice) return
+
+                        const freshTxnId = freshInvoice.metadata?.qb_txn_id
+                            || freshInvoice.metadata?.qb_ref_number
+                            || freshInvoice.metadata?.qb_invoice_txn_id
+                            || freshInvoice.metadata?.qb_sales_receipt_txn_id
+
+                        if (freshTxnId) {
+                            // ── EDIT path ── update salesRep (+ cache EditSequence)
+                            const isSR = !!(freshInvoice.metadata?.qb_sales_receipt_txn_id
+                                || freshInvoice.metadata?.is_sales_receipt === true
+                                || freshInvoice.metadata?.is_sales_receipt === "true")
+
+                            const { data: [parentOrder] } = await query.graph({
+                                entity: "order",
+                                fields: ["metadata"],
+                                filters: { id: invoice.order_id }
+                            })
+                            const salesRep = parseSalesRepInitials(parentOrder?.metadata?.sales_rep)
+
+                            if (salesRep) {
+                                if (isSR) {
+                                    const { updateSalesReceiptInQb } = require("../../../../lib/quickbooks/client/sales-receipts")
+                                    const modResult = await updateSalesReceiptInQb({ txnId: freshTxnId, salesRep })
+                                    if (!modResult.success) {
+                                        logger.error(`${LOG_PREFIX} ❌ Sales Receipt Mod failed: ${modResult.error}`)
+                                        return
+                                    }
+                                    logger.info(`${LOG_PREFIX} ✅ Sales Receipt ${freshTxnId} salesRep update queued (op: ${modResult.data?.operationId})`)
+                                } else {
+                                    const { updateInvoiceInQb } = require("../../../../lib/quickbooks/client/invoices")
+                                    const modResult = await updateInvoiceInQb({ txnId: freshTxnId, salesRep })
+                                    if (!modResult.success) {
+                                        logger.error(`${LOG_PREFIX} ❌ Invoice Mod failed: ${modResult.error}`)
+                                        return
+                                    }
+                                    logger.info(`${LOG_PREFIX} ✅ Invoice ${freshTxnId} salesRep update queued (op: ${modResult.data?.operationId})`)
+                                }
+                            } else {
+                                // No salesRep to update — just cache EditSequence
+                                const { bridgeFetch, pollRawOperationResult } = require("../../../../lib/quickbooks/client/core")
+                                const { cacheEditSequence } = require("../../../../lib/quickbooks/qb-pipeline")
+                                const endpoint = isSR ? "sales-receipts" : "invoices"
+                                const entityType = isSR ? "sales_receipt" : "invoice"
+                                const resp = await bridgeFetch("GET", `/api/${endpoint}/${freshTxnId}`)
+                                if (!resp?.operationId) return
+                                const raw = await pollRawOperationResult(resp.operationId)
+                                const editSeq =
+                                    raw?.QBXML?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet?.EditSequence ||
+                                    raw?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet?.EditSequence ||
+                                    raw?.InvoiceRet?.EditSequence ||
+                                    raw?.QBXML?.QBXMLMsgsRs?.SalesReceiptQueryRs?.SalesReceiptRet?.EditSequence ||
+                                    raw?.QBXMLMsgsRs?.SalesReceiptQueryRs?.SalesReceiptRet?.EditSequence ||
+                                    raw?.SalesReceiptRet?.EditSequence
+                                if (editSeq) {
+                                    await cacheEditSequence(entityType, freshTxnId, String(editSeq))
+                                    logger.info(`${LOG_PREFIX} ✅ Cached EditSeq for ${entityType} ${freshTxnId}: ${editSeq}`)
+                                }
                             }
-                        } catch (bgErr: any) {
-                            logger.warn(`${LOG_PREFIX} ⚠️ Could not refresh invoice EditSeq: ${bgErr.message}`)
+                        } else {
+                            // ── CREATE path ── Intelligent routing: Invoice vs Sales Receipt
+                            const { data: [parentOrder] } = await query.graph({
+                                entity: "order",
+                                fields: ["metadata", "customer_id", "status"],
+                                filters: { id: invoice.order_id }
+                            })
+
+                            const soTxnId = getSoTxnId(parentOrder?.metadata || {})
+
+                            if (soTxnId) {
+                                logger.info(`${LOG_PREFIX} Intelligent Sync -> Has Sales Order -> Dispatching InvoiceAdd`)
+                                await handleFulfillmentCreated(
+                                    { order_id: invoice.order_id, fulfillment_id: invoice.fulfillment_id, invoice_id: id },
+                                    orderModule,
+                                    customerModule,
+                                    req.scope,
+                                    logger
+                                )
+                            } else {
+                                logger.info(`${LOG_PREFIX} Intelligent Sync -> No Sales Order -> Dispatching SalesReceiptAdd`)
+                                await handleSalesReceiptCreated(
+                                    { order_id: invoice.order_id, fulfillment_id: invoice.fulfillment_id, invoice_id: id },
+                                    orderModule,
+                                    customerModule,
+                                    req.scope,
+                                    logger
+                                )
+                            }
                         }
-                    })()
-                    return res.json({ success: true, message: "Invoice already in QuickBooks — EditSequence refresh queued" })
-                }
+                    } catch (bgErr: any) {
+                        logger.error(`${LOG_PREFIX} Background Invoice/SR sync error: ${bgErr.message}`)
+                    }
+                }, { logger })
 
-                const { data: [order] } = await query.graph({
-                    entity: "order",
-                    fields: ["metadata", "customer_id", "status"],
-                    filters: { id: invoice.order_id }
-                })
-
-                // Block if order is already mid-sync (creating/pending) — prevents duplicate invoice
-                const orderSyncStatus = order?.metadata?.qb_sync_status as string | undefined
-                if (orderSyncStatus === "creating") {
-                    return res.status(400).json({ error: "Cannot sync: Order sync is still in progress. Wait for it to complete." })
-                }
-
-                const soTxnId = getSoTxnId(order?.metadata || {})
-                
-                // INTELLIGENT ROUTING
-                if (soTxnId) {
-                    // Scenario 1: Order -> Invoice (LinkToTxn)
-                    logger.info(`${LOG_PREFIX} Intelligent Sync -> Has Sales Order -> Dispatching InvoiceAdd`)
-                    handleFulfillmentCreated(
-                        { order_id: invoice.order_id, fulfillment_id: invoice.fulfillment_id, invoice_id: id },
-                        orderModule,
-                        customerModule,
-                        req.scope,
-                        logger
-                    ).catch((err: any) => logger.error(`${LOG_PREFIX} Background invoice sync error: ${err.message}`))
-                    return res.json({ success: true, message: "InvoiceAdd queued" })
-                } else {
-                    // Scenario 2: Direct POS Sale
-                    logger.info(`${LOG_PREFIX} Intelligent Sync -> No Sales Order -> Dispatching SalesReceiptAdd`)
-                    handleSalesReceiptCreated(
-                        { order_id: invoice.order_id, fulfillment_id: invoice.fulfillment_id, invoice_id: id },
-                        orderModule,
-                        customerModule,
-                        req.scope,
-                        logger
-                    ).catch((err: any) => logger.error(`${LOG_PREFIX} Background sales receipt sync error: ${err.message}`))
-                    return res.json({ success: true, message: "SalesReceiptAdd queued" })
-                }
+                return res.json({ success: true, message: "Invoice sync queued" })
             }
 
             case "payment": {

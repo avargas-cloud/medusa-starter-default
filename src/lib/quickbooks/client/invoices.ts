@@ -1,5 +1,6 @@
 import { DRY_RUN, bridgeFetch, pollRawOperationResult, pollOperationResult } from "./core"
-import { QbCreateInvoicePayload, QbBridgeResult, QbAsyncResult } from "./types"
+import { getCachedEditSequence, cacheEditSequence } from "../qb-pipeline"
+import { QbCreateInvoicePayload, QbUpdateInvoicePayload, QbBridgeResult, QbAsyncResult } from "./types"
 
 /**
  * Creates an Invoice in QuickBooks (async).
@@ -23,6 +24,61 @@ export async function createInvoiceInQb(
         const operationId = data?.operationId
         if (!operationId) throw new Error("Bridge did not return an operationId for Invoice")
         return { success: true, data: { operationId } }
+    } catch (err: any) {
+        return { success: false, error: err.message }
+    }
+}
+
+/**
+ * Updates an existing Invoice in QuickBooks (salesRep only for now).
+ * Fetches EditSequence from cache or QB, then sends InvoiceMod.
+ */
+export async function updateInvoiceInQb(
+    payload: QbUpdateInvoicePayload
+): Promise<QbBridgeResult<QbAsyncResult>> {
+    if (DRY_RUN) {
+        console.log(`[QB DRY RUN] Would update Invoice ${payload.txnId}`)
+        return { success: true, dryRun: true, data: { operationId: "DRY_RUN", txnId: payload.txnId } }
+    }
+
+    try {
+        let editSequence: string
+
+        const cached = await getCachedEditSequence("invoice", payload.txnId)
+        if (cached?.editSeq) {
+            console.log(`[QB] ✅ Cache hit for invoice ${payload.txnId} — skipping GET round-trip`)
+            editSequence = cached.editSeq
+        } else {
+            console.log(`[QB] Cache miss for invoice ${payload.txnId} — querying QB for EditSequence`)
+            const queryResp = await bridgeFetch("GET", `/api/invoices/${payload.txnId}`)
+            const queryOpId = queryResp?.operationId
+            if (!queryOpId) throw new Error("Bridge did not return operationId for invoice query")
+
+            const rawResult = await pollRawOperationResult(queryOpId)
+            const invRet =
+                rawResult?.QBXML?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet ??
+                rawResult?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet ??
+                rawResult?.InvoiceRet ??
+                rawResult?.InvoiceQueryRs?.InvoiceRet
+
+            if (!invRet?.EditSequence) {
+                throw new Error(`Could not extract EditSequence from invoice query result`)
+            }
+            editSequence = invRet.EditSequence as string
+            cacheEditSequence("invoice", payload.txnId, editSequence).catch(() => {})
+        }
+
+        const modResp = await bridgeFetch("PUT", `/api/invoices/${payload.txnId}`, {
+            EditSequence: editSequence,
+            ...(payload.salesRep ? { salesRepRef: payload.salesRep } : {}),
+        })
+
+        const operationId = modResp?.operationId
+        if (!operationId) throw new Error("Bridge did not return operationId for invoice update (mod)")
+
+        console.log(`[QB] ✅ Invoice update queued. OperationID: ${operationId}`)
+        return { success: true, data: { operationId, txnId: payload.txnId } }
+
     } catch (err: any) {
         return { success: false, error: err.message }
     }

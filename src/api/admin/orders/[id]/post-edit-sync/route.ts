@@ -2,6 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
 import { ContainerRegistrationKeys } from "@medusajs/utils"
 import { getDbPool } from "../../../../utils/db-pool"
 import { parseSalesRepInitials } from "../../../../../lib/quickbooks/parse-sales-rep"
+import { withQbSerialized } from "../../../../../lib/quickbooks/qb-serializer"
 
 
 /**
@@ -473,44 +474,47 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                     logger.warn(`[post-edit-sync] ⚠️ Could not write pre-flight pipeline row: ${pErr.message}`)
                 }
 
-                // Fire and forget
+                // Serialized per order — prevents EditSequence conflicts on rapid saves
                 const salesRep = parseSalesRepInitials(qbOrder?.metadata?.sales_rep)
                 const updateFn = isEstimateOnly ? updateEstimateInQb : updateSalesOrderInQb;
-                updateFn({
-                    txnId,
-                    items: modItems,
-                    ...(salesRep ? { salesRep } : {}),
-                }).then(async (qbRes: any) => {
-                    if (qbRes.success) {
-                        logger.info(`[post-edit-sync] ✅ Async QB ${docTypeStr} queue successful! opId=${qbRes.data?.operationId}`)
-                        try {
-                            await writePipelineRow({ 
-                                orderId: id, 
-                                step: pipelineStep, 
-                                status: "submitted", 
-                                bridgeOpId: qbRes.data?.operationId,
-                                qbTxnId: txnId
-                            })
-                        } catch(e:any) {
-                            logger.warn(`[post-edit-sync] Could not update pipeline row on success: ${e.message}`);
-                        }
-                    } else {
-                        logger.error(`[post-edit-sync] ❌ Async QB ${docTypeStr} Mod failed: ${qbRes.error}`)
-                        try {
-                            const pool = getDbPool();
-                            await pool.query(`UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status": "error"}'::jsonb WHERE id = $1`, [id])
-                            await writePipelineRow({ orderId: id, step: pipelineStep, status: "failed", error: qbRes.error, qbTxnId: txnId })
-                        } catch(e) {}
-                    }
-                }).catch(async (e: any) => {
-                    logger.error(`[post-edit-sync] ❌ Async QB ${docTypeStr} Mod Exception: ${e.message}`)
+                withQbSerialized(`${pipelineStep}:${id}`, { orderId: id, steps: [pipelineStep] }, async () => {
                     try {
-                         const pool = getDbPool();
-                         await pool.query(`UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status": "error"}'::jsonb WHERE id = $1`, [id])
-                         await writePipelineRow({ orderId: id, step: pipelineStep, status: "failed", error: e.message, qbTxnId: txnId })
-                    } catch(err) {}
-                })
-                
+                        const qbRes = await updateFn({
+                            txnId,
+                            items: modItems,
+                            ...(salesRep ? { salesRep } : {}),
+                        })
+                        if (qbRes.success) {
+                            logger.info(`[post-edit-sync] ✅ Async QB ${docTypeStr} queue successful! opId=${qbRes.data?.operationId}`)
+                            try {
+                                await writePipelineRow({
+                                    orderId: id,
+                                    step: pipelineStep,
+                                    status: "submitted",
+                                    bridgeOpId: qbRes.data?.operationId,
+                                    qbTxnId: txnId
+                                })
+                            } catch (e: any) {
+                                logger.warn(`[post-edit-sync] Could not update pipeline row on success: ${e.message}`)
+                            }
+                        } else {
+                            logger.error(`[post-edit-sync] ❌ Async QB ${docTypeStr} Mod failed: ${qbRes.error}`)
+                            try {
+                                const pool = getDbPool()
+                                await pool.query(`UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status": "error"}'::jsonb WHERE id = $1`, [id])
+                                await writePipelineRow({ orderId: id, step: pipelineStep, status: "failed", error: qbRes.error, qbTxnId: txnId })
+                            } catch (e) {}
+                        }
+                    } catch (e: any) {
+                        logger.error(`[post-edit-sync] ❌ Async QB ${docTypeStr} Mod Exception: ${e.message}`)
+                        try {
+                            const pool = getDbPool()
+                            await pool.query(`UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status": "error"}'::jsonb WHERE id = $1`, [id])
+                            await writePipelineRow({ orderId: id, step: pipelineStep, status: "failed", error: e.message, qbTxnId: txnId })
+                        } catch (err) {}
+                    }
+                }, { logger })
+
                 results.qb_sync = "queued_async"
             }
         } else if (skipQb) {

@@ -2,7 +2,7 @@ import type { MedusaContainer } from "@medusajs/framework/types"
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
 import { bridgeFetch } from "../lib/quickbooks/client/core"
 import { getDbPool } from "../api/utils/db-pool"
-import { confirmPipelineRow, failPipelineRow, cacheEditSequence } from "../lib/quickbooks/qb-pipeline"
+import { confirmPipelineRow, failPipelineRow, cacheEditSequence, invalidateEditSequenceCache } from "../lib/quickbooks/qb-pipeline"
 import { closeSalesOrderInQb, reopenSalesOrderInQb } from "../lib/quickbooks/client/sales-orders"
 import { voidInvoiceInQb } from "../lib/quickbooks/client/invoices"
 import { voidCreditMemoInQb } from "../lib/quickbooks/client/credit-memos"
@@ -774,6 +774,45 @@ export default async function qbPipelineConsolidator(
         }
     } catch (timeoutErr: any) {
         logger.warn(`${LOG_PREFIX} ⚠️ Timeout pass error: ${timeoutErr.message}`)
+    }
+
+    // ── Stale row cleanup ──────────────────────────────────────────────────────
+    // Mark rows that have been stuck in 'submitted' for >30 min as failed
+    // and invalidate their EditSequence cache so stale sequences aren't reused.
+    try {
+        const { rows: staleSubmitted } = await pool.query(
+            `UPDATE qb_order_pipeline
+             SET status = 'failed', error = 'Stale: no bridge confirmation after 30 minutes', updated_at = NOW(), failed_at = NOW()
+             WHERE status = 'submitted' AND updated_at < NOW() - INTERVAL '30 minutes'
+             RETURNING id, step, qb_txn_id`,
+        )
+        for (const row of staleSubmitted) {
+            logger.warn(`${LOG_PREFIX} ⏱️ Marked stale submitted row ${row.id} (step=${row.step}) as failed`)
+            if (row.qb_txn_id) {
+                // step names align directly with entity type names used in the cache
+                await invalidateEditSequenceCache(row.step as string, row.qb_txn_id as string).catch(() => {})
+            }
+        }
+    } catch (staleSubmittedErr: unknown) {
+        const msg = staleSubmittedErr instanceof Error ? staleSubmittedErr.message : String(staleSubmittedErr)
+        logger.warn(`${LOG_PREFIX} ⚠️ Stale submitted cleanup error: ${msg}`)
+    }
+
+    // Mark rows that have been stuck in 'pending' for >20 min as failed
+    // (complements the existing timeout pass — this version logs each row individually)
+    try {
+        const { rows: stalePending } = await pool.query(
+            `UPDATE qb_order_pipeline
+             SET status = 'failed', error = 'Stale: never submitted within 20 minutes', updated_at = NOW(), failed_at = NOW()
+             WHERE status = 'pending' AND updated_at < NOW() - INTERVAL '20 minutes'
+             RETURNING id, step`,
+        )
+        for (const row of stalePending) {
+            logger.warn(`${LOG_PREFIX} ⏱️ Marked stale pending row ${row.id} (step=${row.step}) as failed`)
+        }
+    } catch (stalePendingErr: unknown) {
+        const msg = stalePendingErr instanceof Error ? stalePendingErr.message : String(stalePendingErr)
+        logger.warn(`${LOG_PREFIX} ⚠️ Stale pending cleanup error: ${msg}`)
     }
 }
 

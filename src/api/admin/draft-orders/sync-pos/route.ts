@@ -4,7 +4,7 @@ import { writePipelineRow, pollUntilQbConfirmed } from "../../../../lib/quickboo
 import { getEstimateTxnId, getEstimateRef } from "../../../../lib/quickbooks/qb-metadata-types"
 import { buildQbItems, type MedusaOrderForQb } from "../../../../lib/quickbooks/order-flow-core"
 import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep"
-import { withQbLock } from "../../../../lib/quickbooks/qb-locks"
+import { withQbSerialized } from "../../../../lib/quickbooks/qb-serializer"
 
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
     const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)
@@ -268,7 +268,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                         // If save 2 arrives while save 1 is in-flight, save 2 waits until
                         // save 1 is CONFIRMED by the consolidator — so its fresh EditSequence
                         // is in the cache and save 2 can skip the QB GET round-trip entirely.
-                        withQbLock(resolvedId, async () => {
+                        withQbSerialized(`estimate:${resolvedId}`, { orderId: resolvedId, steps: ["estimate"] }, async () => {
                             const { data: [fullOrder] } = await query.graph({
                                 entity: "order",
                                 fields: ["*", "items.*", "items.variant.*", "items.variant.metadata", "customer.*", "shipping_methods.*"],
@@ -311,7 +311,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                                     error: result.error
                                 })
                             }
-                        })
+                        }, { logger })
                     } catch (qbErr: any) {
                         logger.error(`[sync-pos] Failed to queue QB sync for modified estimate: ${qbErr.message}`)
                     }

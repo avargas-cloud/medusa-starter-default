@@ -365,24 +365,38 @@ export async function getCachedEditSequence(
  * Used by QB lock callbacks to ensure save2 only starts after save1 is confirmed,
  * so it can pick up the freshly-cached EditSequence and skip the GET round-trip.
  *
- * Returns 'confirmed', 'failed', 'skipped', or 'timeout' if maxWaitMs is exceeded.
+ * Returns 'confirmed', 'failed', 'skipped', 'timeout', or 'stale' if the row has been
+ * stuck in 'submitted' (>15 min) or 'pending' (>10 min) based on updated_at.
  */
 export async function pollUntilQbConfirmed(
     rowId: string,
     maxWaitMs = 5 * 60 * 1000, // 5 minutes default
     intervalMs = 3000
-): Promise<"confirmed" | "failed" | "skipped" | "timeout"> {
+): Promise<"confirmed" | "failed" | "skipped" | "timeout" | "stale"> {
     const pool = getDbPool()
     const deadline = Date.now() + maxWaitMs
     while (Date.now() < deadline) {
         const { rows } = await pool.query(
-            `SELECT status FROM qb_order_pipeline WHERE id = $1`,
+            `SELECT status, updated_at FROM qb_order_pipeline WHERE id = $1`,
             [rowId]
         )
-        const status = rows[0]?.status as string | undefined
+        const row = rows[0] as { status: string; updated_at: string } | undefined
+        const status = row?.status
         if (status === "confirmed") return "confirmed"
         if (status === "failed")    return "failed"
         if (status === "skipped")   return "skipped"
+
+        // Stale detection: if the row has been stuck too long, don't wait forever
+        if (row?.updated_at) {
+            const updatedAt = new Date(row.updated_at).getTime()
+            const ageMs = Date.now() - updatedAt
+            const isStaleSubmitted = status === "submitted" && ageMs > 15 * 60 * 1000
+            const isStalePending   = status === "pending"   && ageMs > 10 * 60 * 1000
+            if (isStaleSubmitted || isStalePending) {
+                return "stale"
+            }
+        }
+
         // still 'submitted' or 'pending' — wait and retry
         await new Promise(r => setTimeout(r, intervalMs))
     }
@@ -483,4 +497,40 @@ export async function invalidateEditSequence(
         `DELETE FROM qb_edit_sequence_cache WHERE entity_type = $1 AND qb_id = $2`,
         [entityType, qbId]
     )
+}
+
+/**
+ * Invalidates a cached EditSequence by entity type and QB transaction ID.
+ * Used by stale row cleanup to prevent stale sequences from being used in
+ * subsequent Mod operations after a row is marked failed due to inactivity.
+ */
+export async function invalidateEditSequenceCache(
+    entityType: string,
+    txnId: string
+): Promise<void> {
+    const pool = getDbPool()
+    await pool.query(
+        `DELETE FROM qb_edit_sequence_cache WHERE entity_type = $1 AND qb_id = $2`,
+        [entityType, txnId]
+    )
+}
+
+/**
+ * Find the most recent in-flight pipeline row for a given document.
+ * Returns the row if one exists with status IN ('pending', 'submitted'), or null.
+ */
+export async function findLatestInFlightRow(
+    orderId: string,
+    steps: string[]
+): Promise<{ id: string; status: string; created_at: string; updated_at: string } | null> {
+    const pool = getDbPool()
+    const { rows } = await pool.query(
+        `SELECT id, status, created_at, updated_at
+         FROM qb_order_pipeline
+         WHERE order_id = $1 AND step = ANY($2) AND status IN ('pending', 'submitted')
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [orderId, steps]
+    )
+    return rows[0] ?? null
 }
