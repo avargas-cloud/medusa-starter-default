@@ -517,7 +517,10 @@ export async function invalidateEditSequenceCache(
 
 /**
  * Find the most recent in-flight pipeline row for a given document.
- * Returns the row if one exists with status IN ('pending', 'submitted'), or null.
+ * Returns the row if one exists with status 'submitted', or 'pending' with a
+ * bridge_op_id (already dispatched). Pre-flight 'pending' rows without a
+ * bridge_op_id are excluded — they haven't been sent to the bridge yet and
+ * waiting on them would deadlock (the caller IS the one that will submit them).
  */
 export async function findLatestInFlightRow(
     orderId: string,
@@ -527,7 +530,8 @@ export async function findLatestInFlightRow(
     const { rows } = await pool.query(
         `SELECT id, status, created_at, updated_at
          FROM qb_order_pipeline
-         WHERE order_id = $1 AND step = ANY($2) AND status IN ('pending', 'submitted')
+         WHERE order_id = $1 AND step = ANY($2)
+           AND (status = 'submitted' OR (status = 'pending' AND bridge_op_id IS NOT NULL))
          ORDER BY created_at DESC
          LIMIT 1`,
         [orderId, steps]
