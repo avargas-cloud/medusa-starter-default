@@ -538,9 +538,11 @@ export default async function qbPipelineConsolidator(
             } else if (op.status === "failed") {
                 const errMsg = op.error || "QB operation failed (no details)"
                 await failPipelineRow(row.id, errMsg)
-                // Invalidate cached EditSequence so the next attempt fetches fresh from QB
-                // (covers Error 3200 "EditSequence out-of-date" and any other Mod failure)
-                if (row.qb_txn_id) {
+                // Invalidate cached EditSequence — but only when the error implies
+                // the cached value is wrong. Error 3175 ("transaction locked") means
+                // QB never touched the document, so the cache is still valid.
+                const isLockedError = errMsg.includes("3175") || errMsg.includes("could not be locked")
+                if (row.qb_txn_id && !isLockedError) {
                     await invalidateEditSequenceCache(row.step as string, row.qb_txn_id as string).catch(() => {})
                 }
                 logger.warn(`${LOG_PREFIX} ❌ Failed row ${row.id} (${row.step}): ${errMsg}`)
