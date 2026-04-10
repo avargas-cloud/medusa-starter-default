@@ -132,6 +132,7 @@ export interface QbUpdateEstimatePayload {
     taxExempt?: boolean
     salesTaxCode?: string
     isActive?: boolean
+    salesRep?: string
 }
 
 export interface QbCreateSalesReceiptPayload {

@@ -239,11 +239,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
                             logger.info(`${LOG_PREFIX} SO already exists (${soTxnId}) — running SalesOrderMod with ${qbItems.length} items`)
 
+                            const salesRep = fullOrder.metadata?.sales_rep as string | undefined
                             const modResult = await updateSalesOrderInQb({
                                 txnId: soTxnId,
                                 ...(qbListId ? { customerId: qbListId } : {}),
                                 items: qbItems,
                                 ...(salesTaxCode ? { salesTaxCode } : { taxExempt: true }),
+                                ...(salesRep ? { salesRep } : {}),
                             })
 
                             if (!modResult.success) {

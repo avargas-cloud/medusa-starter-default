@@ -138,6 +138,7 @@ export async function POST(
         }
 
         // ─── RE-SYNC PATH (force=true + existing SO) — use SalesOrderMod ─────────
+        const salesRep = order.metadata?.sales_rep as string | undefined
         if (force && existingSoTxnId) {
             console.log(`[QB] Re-sync: updating existing Sales Order ${existingSoTxnId} via MOD`)
 
@@ -147,6 +148,7 @@ export async function POST(
                 items: qbItems,
                 memo: `Medusa Order #${(order as any).display_id || orderId}`,
                 salesTaxCode: qbConfig.defaultSalesTaxCode,
+                ...(salesRep ? { salesRep } : {}),
             })
 
             if (!modResult.success) {

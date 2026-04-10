@@ -135,6 +135,7 @@ export async function updateSalesOrderInQb(
             memo: payload.memo,
             ...(payload.taxExempt === true ? { taxExempt: true } : {}),
             ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
+            ...(payload.salesRep ? { salesRepRef: payload.salesRep } : {}),
         })
 
         const operationId = modResp?.operationId

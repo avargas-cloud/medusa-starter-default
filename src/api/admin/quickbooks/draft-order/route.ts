@@ -174,6 +174,7 @@ export async function POST(
         const isResync = !!(req.body as any).force && !!existingEstimateTxnId
         const isCancelled = (order.metadata?.order_status ?? order.metadata?.estimate_status) === "Cancelled" || (order.metadata?.order_status ?? order.metadata?.estimate_status) === "cancelled"
         const memo = `Draft Order #${(order as any).display_id || orderId} - ${customer.first_name || ""} ${customer.last_name || ""}`.trim()
+        const salesRep = order.metadata?.sales_rep as string | undefined
 
         // ── Tax state: mirror Medusa's tax decision in QB ─────────────────────
         // Source of truth = draft order's tax_total (NOT customer defaults).
@@ -196,6 +197,7 @@ export async function POST(
                 memo,
                 taxExempt,
                 salesTaxCode,
+                ...(salesRep ? { salesRep } : {}),
                 ...(isCancelled ? { isActive: true } : {}),
             })
         } else {
@@ -207,6 +209,7 @@ export async function POST(
                 memo,
                 taxExempt,
                 salesTaxCode,
+                ...(salesRep ? { salesRep } : {}),
             })
         }
 

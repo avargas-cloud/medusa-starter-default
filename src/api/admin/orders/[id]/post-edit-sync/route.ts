@@ -473,10 +473,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 }
 
                 // Fire and forget
+                const salesRep = qbOrder?.metadata?.sales_rep as string | undefined
                 const updateFn = isEstimateOnly ? updateEstimateInQb : updateSalesOrderInQb;
                 updateFn({
                     txnId,
-                    items: modItems
+                    items: modItems,
+                    ...(salesRep ? { salesRep } : {}),
                 }).then(async (qbRes: any) => {
                     if (qbRes.success) {
                         logger.info(`[post-edit-sync] ✅ Async QB ${docTypeStr} queue successful! opId=${qbRes.data?.operationId}`)

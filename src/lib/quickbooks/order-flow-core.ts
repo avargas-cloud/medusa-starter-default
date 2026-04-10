@@ -1012,6 +1012,7 @@ export async function processUpdateEstimateInQb(draft: {
     memo?: string
     taxExempt?: boolean    // true if Medusa order has no tax (tax_total === 0)
     salesTaxCode?: string  // QB sales tax code name — overrides customer default
+    salesRep?: string      // QB sales rep initials (e.g. "AVP", "AG")
 }): Promise<{ enabled: boolean; operationId?: string; txnId?: string; refNumber?: string; error?: string; skipped?: boolean; skipReason?: string }> {
     const guard = await runGuards()
     if (!guard.pass) return { enabled: false, skipped: true }
@@ -1038,6 +1039,7 @@ export async function processUpdateEstimateInQb(draft: {
         memo: draft.memo,
         ...(draft.taxExempt === true ? { taxExempt: true } : {}),
         ...(draft.salesTaxCode ? { salesTaxCode: draft.salesTaxCode } : {}),
+        ...(draft.salesRep ? { salesRep: draft.salesRep } : {}),
     })
 
     if (!estResult.success) {

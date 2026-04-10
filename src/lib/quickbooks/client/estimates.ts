@@ -116,6 +116,7 @@ export async function updateEstimateInQb(
             ...(payload.isActive !== undefined ? { IsActive: payload.isActive } : {}),
             ...(payload.taxExempt === true ? { taxExempt: true } : {}),
             ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
+            ...(payload.salesRep ? { salesRepRef: payload.salesRep } : {}),
         })
 
         const operationId = modResp?.operationId
