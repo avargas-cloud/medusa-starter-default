@@ -28,6 +28,7 @@ import {
 } from "../lib/quickbooks/order-flow-core"
 import { writePipelineRow, cacheEditSequence } from "../lib/quickbooks/qb-pipeline"
 import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types"
+import { parseSalesRepInitials } from "../lib/quickbooks/parse-sales-rep"
 
 const LOG_PREFIX = "[QB-DRAFT]"
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
@@ -202,7 +203,7 @@ export async function handleDraftOrderCreated(data: any, container: any, logger:
         qbCustomerId: custResult.qbCustomerId!,
         items: qbItems,
         memo: draftOrder.metadata?.document_number as string || `E${draftOrder.display_id}`,
-        salesRep: draftOrder.metadata?.sales_rep as string | undefined,
+        salesRep: parseSalesRepInitials(draftOrder.metadata?.sales_rep),
         onSubmitted: async (operationId) => {
             await writePipelineRow({ orderId: draftOrderId, step: "estimate", status: "submitted", bridgeOpId: operationId })
         },

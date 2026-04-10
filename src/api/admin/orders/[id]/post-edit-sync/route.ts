@@ -1,6 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
 import { ContainerRegistrationKeys } from "@medusajs/utils"
 import { getDbPool } from "../../../../utils/db-pool"
+import { parseSalesRepInitials } from "../../../../../lib/quickbooks/parse-sales-rep"
 
 
 /**
@@ -473,7 +474,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 }
 
                 // Fire and forget
-                const salesRep = qbOrder?.metadata?.sales_rep as string | undefined
+                const salesRep = parseSalesRepInitials(qbOrder?.metadata?.sales_rep)
                 const updateFn = isEstimateOnly ? updateEstimateInQb : updateSalesOrderInQb;
                 updateFn({
                     txnId,

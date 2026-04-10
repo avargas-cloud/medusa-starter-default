@@ -3,6 +3,7 @@ import { processOrderInQb, buildQbItems, buildShippingQbItem, buildQbOrderDiscou
 import { getEstimateTxnId, getSoTxnId, getSoOperationId } from "../qb-metadata-types"
 import { LOG_PREFIX, getQbConfig, isPosOrder, processingOrders } from "./utils"
 import { writePipelineRow, cacheEditSequence } from "../qb-pipeline"
+import { parseSalesRepInitials } from "../parse-sales-rep"
 import { getDbPool } from "../../../api/utils/db-pool"
 
 async function mergeOrderMetadata(orderId: string, patch: Record<string, unknown>): Promise<void> {
@@ -209,7 +210,7 @@ export async function handleOrderPlaced(
             prebuiltItems: qbItems,
             salesTaxCode,
             memo: soMemo,
-            salesRep: order.metadata?.sales_rep as string | undefined,
+            salesRep: parseSalesRepInitials(order.metadata?.sales_rep),
             onSubmitted: async (operationId) => {
                 await writePipelineRow({ orderId: orderWithCustomer.id, step: "sales_order", status: "submitted", bridgeOpId: operationId })
             },

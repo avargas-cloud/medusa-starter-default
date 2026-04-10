@@ -9,6 +9,7 @@ import { handlePosPaymentApplied } from "../../../../lib/quickbooks/handlers/han
 import { FINANCE_MODULE } from "../../../../modules/finance"
 import { INVOICE_MODULE } from "../../../../modules/invoices"
 import { getEstimateTxnId, getSoTxnId } from "../../../../lib/quickbooks/qb-metadata-types"
+import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep"
 
 const LOG_PREFIX = "[POST /admin/pos/sync]"
 
@@ -239,7 +240,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
                             logger.info(`${LOG_PREFIX} SO already exists (${soTxnId}) — running SalesOrderMod with ${qbItems.length} items`)
 
-                            const salesRep = fullOrder.metadata?.sales_rep as string | undefined
+                            const salesRep = parseSalesRepInitials(fullOrder.metadata?.sales_rep)
                             const modResult = await updateSalesOrderInQb({
                                 txnId: soTxnId,
                                 ...(qbListId ? { customerId: qbListId } : {}),

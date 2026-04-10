@@ -6,6 +6,7 @@ import { getSoTxnId, getEstimateTxnId } from "../qb-metadata-types"
 import { LOG_PREFIX, getQbConfig, getFloat } from "./utils"
 import { writePipelineRow, cacheEditSequence, skipSalesOrderPipelineRow } from "../qb-pipeline"
 import { handleFulfillmentCreated } from "./handle-fulfillment-created"
+import { parseSalesRepInitials } from "../parse-sales-rep"
 
 export async function handleSalesReceiptCreated(
     data: any,
@@ -225,7 +226,7 @@ export async function handleSalesReceiptCreated(
         paymentMethod: data.payment_method,
         prebuiltItems,
         salesTaxCode,
-        salesRep: order.metadata?.sales_rep as string | undefined,
+        salesRep: parseSalesRepInitials(order.metadata?.sales_rep),
         refNumber: srRefNumber,
         memo,
         onSubmitted: async (operationId) => {

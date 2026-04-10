@@ -12,6 +12,7 @@ import {
     pollOperationResult,
 } from "../../../../lib/quickbooks/qb-bridge-client"
 import { getQbConfig } from "../../../../lib/quickbooks/qb-config"
+import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep"
 import {
     buildSaleOrderPatch,
     getSoTxnId,
@@ -138,7 +139,7 @@ export async function POST(
         }
 
         // ─── RE-SYNC PATH (force=true + existing SO) — use SalesOrderMod ─────────
-        const salesRep = order.metadata?.sales_rep as string | undefined
+        const salesRep = parseSalesRepInitials(order.metadata?.sales_rep)
         if (force && existingSoTxnId) {
             console.log(`[QB] Re-sync: updating existing Sales Order ${existingSoTxnId} via MOD`)
 

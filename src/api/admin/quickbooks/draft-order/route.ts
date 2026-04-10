@@ -1,6 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
 import { Modules } from "@medusajs/utils"
 import { Client } from "pg"
+import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep"
 import {
     ensureCustomerInQb,
     buildQbItems,
@@ -174,7 +175,7 @@ export async function POST(
         const isResync = !!(req.body as any).force && !!existingEstimateTxnId
         const isCancelled = (order.metadata?.order_status ?? order.metadata?.estimate_status) === "Cancelled" || (order.metadata?.order_status ?? order.metadata?.estimate_status) === "cancelled"
         const memo = `Draft Order #${(order as any).display_id || orderId} - ${customer.first_name || ""} ${customer.last_name || ""}`.trim()
-        const salesRep = order.metadata?.sales_rep as string | undefined
+        const salesRep = parseSalesRepInitials(order.metadata?.sales_rep)
 
         // ── Tax state: mirror Medusa's tax decision in QB ─────────────────────
         // Source of truth = draft order's tax_total (NOT customer defaults).

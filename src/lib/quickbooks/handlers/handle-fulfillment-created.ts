@@ -4,6 +4,7 @@ import { processInvoiceInQb, buildQbItems, buildShippingQbItem, buildQbOrderDisc
 import { buildInvoicePatch, getEstimateTxnId, getSoTxnId, getLatestPaymentTxnId } from "../qb-metadata-types"
 import { LOG_PREFIX, getQbConfig, getFloat } from "./utils"
 import { handleOrderPlaced } from "./handle-order-placed"
+import { parseSalesRepInitials } from "../parse-sales-rep"
 import { writePipelineRow, cacheEditSequence, skipSalesOrderPipelineRow } from "../qb-pipeline"
 
 export async function handleFulfillmentCreated(
@@ -288,7 +289,7 @@ export async function handleFulfillmentCreated(
         paymentAmount: getFloat(fulfillmentAmount),
         prebuiltItems,
         salesTaxCode,
-        salesRep: order.metadata?.sales_rep as string | undefined,
+        salesRep: parseSalesRepInitials(order.metadata?.sales_rep),
         memo,
         refNumber: invRefNumber,
         onSubmitted: async (operationId) => {
