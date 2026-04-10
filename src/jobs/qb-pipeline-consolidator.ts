@@ -544,7 +544,11 @@ export default async function qbPipelineConsolidator(
                     try {
                         const { rowCount } = await pool.query(
                             `UPDATE qb_order_pipeline
-                             SET status = 'failed', error = $2, failed_at = NOW()
+                             SET status       = 'failed',
+                                 error        = $2,
+                                 failed_at    = NOW(),
+                                 confirmed_at = NULL,
+                                 updated_at   = NOW()
                              WHERE depends_on = $1 AND status = 'waiting'
                                AND step IN ('so_close', 'so_reopen')`,
                             [row.id, `Dependency ${row.id} (${row.step}) failed`]
@@ -562,7 +566,12 @@ export default async function qbPipelineConsolidator(
                     try {
                         const { rowCount: vcSkipCount } = await pool.query(
                             `UPDATE qb_order_pipeline
-                             SET status = 'skipped', error = $2
+                             SET status       = 'skipped',
+                                 error        = $2,
+                                 submitted_at = NULL,
+                                 confirmed_at = NULL,
+                                 failed_at    = NULL,
+                                 updated_at   = NOW()
                              WHERE depends_on = $1 AND status = 'waiting' AND step = 'void_credit_memo'`,
                             [row.id, `Skipped — parent credit_memo never reached QB`]
                         )
@@ -579,7 +588,12 @@ export default async function qbPipelineConsolidator(
                     try {
                         const { rowCount: skipCount } = await pool.query(
                             `UPDATE qb_order_pipeline
-                             SET status = 'skipped', error = $2
+                             SET status       = 'skipped',
+                                 error        = $2,
+                                 submitted_at = NULL,
+                                 confirmed_at = NULL,
+                                 failed_at    = NULL,
+                                 updated_at   = NOW()
                              WHERE depends_on = $1 AND status = 'waiting'
                                AND step IN ('void_sales_order', 'void_invoice')`,
                             [row.id, `Skipped — parent ${row.step} never reached QB`]
@@ -782,7 +796,7 @@ export default async function qbPipelineConsolidator(
     try {
         const { rows: staleSubmitted } = await pool.query(
             `UPDATE qb_order_pipeline
-             SET status = 'failed', error = 'Stale: no bridge confirmation after 30 minutes', updated_at = NOW(), failed_at = NOW()
+             SET status = 'failed', error = 'Stale: no bridge confirmation after 30 minutes', updated_at = NOW(), failed_at = NOW(), confirmed_at = NULL
              WHERE status = 'submitted' AND updated_at < NOW() - INTERVAL '30 minutes'
              RETURNING id, step, qb_txn_id`,
         )
@@ -803,7 +817,7 @@ export default async function qbPipelineConsolidator(
     try {
         const { rows: stalePending } = await pool.query(
             `UPDATE qb_order_pipeline
-             SET status = 'failed', error = 'Stale: never submitted within 20 minutes', updated_at = NOW(), failed_at = NOW()
+             SET status = 'failed', error = 'Stale: never submitted within 20 minutes', updated_at = NOW(), failed_at = NOW(), confirmed_at = NULL
              WHERE status = 'pending' AND updated_at < NOW() - INTERVAL '20 minutes'
              RETURNING id, step`,
         )

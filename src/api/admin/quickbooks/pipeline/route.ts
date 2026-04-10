@@ -40,9 +40,11 @@ export async function GET(
         // Auto-timeout: submitted rows older than 10 min with no bridge_op_id → failed
         await client.query(`
             UPDATE qb_order_pipeline
-            SET status    = 'failed',
-                failed_at = NOW(),
-                error     = 'Submission timed out — no bridge_op_id recorded'
+            SET status       = 'failed',
+                failed_at    = NOW(),
+                confirmed_at = NULL,
+                updated_at   = NOW(),
+                error        = 'Submission timed out — no bridge_op_id recorded'
             WHERE status = 'submitted'
               AND bridge_op_id IS NULL
               AND submitted_at < NOW() - INTERVAL '10 minutes'
@@ -51,9 +53,11 @@ export async function GET(
         // Auto-timeout: submitted rows with bridge_op_id older than 15 min (QBWC not responding) → failed
         await client.query(`
             UPDATE qb_order_pipeline
-            SET status    = 'failed',
-                failed_at = NOW(),
-                error     = 'QBWC did not respond within 15 minutes — QuickBooks Desktop may be offline or QBWC disconnected'
+            SET status       = 'failed',
+                failed_at    = NOW(),
+                confirmed_at = NULL,
+                updated_at   = NOW(),
+                error        = 'QBWC did not respond within 15 minutes — QuickBooks Desktop may be offline or QBWC disconnected'
             WHERE status = 'submitted'
               AND bridge_op_id IS NOT NULL
               AND submitted_at < NOW() - INTERVAL '15 minutes'
@@ -63,9 +67,11 @@ export async function GET(
         // Uses updated_at so reactivated rows (confirmed→pending) don't immediately time out
         await client.query(`
             UPDATE qb_order_pipeline
-            SET status    = 'failed',
-                failed_at = NOW(),
-                error     = 'Operation stuck in pending — handler did not re-submit within 30 minutes'
+            SET status       = 'failed',
+                failed_at    = NOW(),
+                confirmed_at = NULL,
+                updated_at   = NOW(),
+                error        = 'Operation stuck in pending — handler did not re-submit within 30 minutes'
             WHERE status = 'pending'
               AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '30 minutes'
         `)
@@ -189,14 +195,15 @@ export async function POST(
         //    Stuck-pending rows will auto-timeout to 'failed' via the GET auto-timeout logic.
         const { rows } = await client.query(
             `UPDATE qb_order_pipeline
-             SET status      = 'pending',
-                 error       = NULL,
-                 failed_at   = NULL,
+             SET status       = 'pending',
+                 error        = NULL,
+                 failed_at    = NULL,
+                 confirmed_at = NULL,
                  submitted_at = NULL,
                  bridge_op_id = NULL,
-                 qb_txn_id   = NULL,
+                 qb_txn_id    = NULL,
                  qb_ref_number = NULL,
-                 retry_count = retry_count + 1
+                 retry_count  = retry_count + 1
              WHERE id = $1 AND status IN ('failed', 'waiting')
              RETURNING id, step, order_id, reference_id, reference_type, retry_count, bridge_op_id`,
             [rowId]
@@ -353,7 +360,7 @@ export async function POST(
                                     [row.reference_id]
                                 )
                                 await retryPool.query(
-                                    `UPDATE qb_order_pipeline SET status = 'failed', error = $2 WHERE id = $1`,
+                                    `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), confirmed_at = NULL, updated_at = NOW() WHERE id = $1`,
                                     [row.id, "Retry: re-process from Accounting page — bank account selection required"]
                                 )
                                 logger.info(`${LOG_PREFIX} write_check reset → CustomerPayment ${row.reference_id} qb=null, ready for re-process from Accounting`)

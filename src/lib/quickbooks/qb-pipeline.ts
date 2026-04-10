@@ -115,6 +115,7 @@ export async function writePipelineRow(input: WritePipelineRowInput): Promise<st
                  updated_at        = NOW(),
                  error             = NULL,
                  failed_at         = NULL,
+                 confirmed_at      = NULL,
                  submitted_at      = NULL,
                  bridge_op_id      = NULL,
                  qb_result         = NULL,
@@ -281,10 +282,11 @@ export async function failPipelineRow(rowId: string, error: string): Promise<voi
     const pool = getDbPool()
     await pool.query(
         `UPDATE qb_order_pipeline
-         SET status     = 'failed',
-             updated_at = NOW(),
-             failed_at  = NOW(),
-             error      = $2
+         SET status       = 'failed',
+             updated_at   = NOW(),
+             failed_at    = NOW(),
+             confirmed_at = NULL,
+             error        = $2
          WHERE id = $1`,
         [rowId, error]
     )

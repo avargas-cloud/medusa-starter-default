@@ -27,6 +27,7 @@ interface PipelineRow {
     medusa_ref_number: string | null
     error: string | null
     created_at: string
+    updated_at: string | null
     submitted_at: string | null
     confirmed_at: string | null
     failed_at: string | null
@@ -259,7 +260,9 @@ function PipelineRow({ row, onRetry, retrying }: {
                 {/* Updated */}
                 <td className="px-3 py-2">
                     {(() => {
-                        const updated = row.confirmed_at ?? row.failed_at ?? row.submitted_at
+                        const updated = row.status === "failed" ? row.failed_at
+                            : row.status === "confirmed" ? row.confirmed_at
+                            : row.submitted_at ?? row.updated_at
                         if (!updated) return <span className="text-ui-fg-muted">—</span>
                         return (
                             <span className={

@@ -191,9 +191,9 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
             // Reset pipeline row to pending and increment retry count
             await client.query(
                 `UPDATE qb_order_pipeline
-                 SET status='pending', error=NULL, failed_at=NULL,
+                 SET status='pending', error=NULL, failed_at=NULL, confirmed_at=NULL,
                      submitted_at=NULL, bridge_op_id=NULL, qb_txn_id=NULL,
-                     retry_count=retry_count+1
+                     updated_at=NOW(), retry_count=retry_count+1
                  WHERE id=$1`,
                 [payRow.id]
             )
