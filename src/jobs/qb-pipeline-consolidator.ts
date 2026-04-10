@@ -34,11 +34,12 @@ export default async function qbPipelineConsolidator(
         step: string
         bridge_op_id: string
         retry_count: number
+        qb_txn_id: string | null
     }>
 
     try {
         const { rows } = await pool.query(`
-            SELECT id, order_id, reference_id, reference_type, step, bridge_op_id, retry_count
+            SELECT id, order_id, reference_id, reference_type, step, bridge_op_id, retry_count, qb_txn_id
             FROM qb_order_pipeline
             WHERE status = 'submitted'
               AND bridge_op_id IS NOT NULL
@@ -537,6 +538,11 @@ export default async function qbPipelineConsolidator(
             } else if (op.status === "failed") {
                 const errMsg = op.error || "QB operation failed (no details)"
                 await failPipelineRow(row.id, errMsg)
+                // Invalidate cached EditSequence so the next attempt fetches fresh from QB
+                // (covers Error 3200 "EditSequence out-of-date" and any other Mod failure)
+                if (row.qb_txn_id) {
+                    await invalidateEditSequenceCache(row.step as string, row.qb_txn_id as string).catch(() => {})
+                }
                 logger.warn(`${LOG_PREFIX} ❌ Failed row ${row.id} (${row.step}): ${errMsg}`)
 
                 // so_close/so_reopen failed → cascade-fail any waiting dependent rows

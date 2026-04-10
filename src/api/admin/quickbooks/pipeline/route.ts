@@ -38,7 +38,7 @@ export async function GET(
         const sortBy = req.query.sort_by === "updated_at" ? "updated_at" : "created_at"
 
         // Auto-timeout: submitted rows older than 10 min with no bridge_op_id → failed
-        await client.query(`
+        const { rows: timeout1 } = await client.query(`
             UPDATE qb_order_pipeline
             SET status       = 'failed',
                 failed_at    = NOW(),
@@ -48,10 +48,11 @@ export async function GET(
             WHERE status = 'submitted'
               AND bridge_op_id IS NULL
               AND submitted_at < NOW() - INTERVAL '10 minutes'
+            RETURNING step, qb_txn_id
         `)
 
         // Auto-timeout: submitted rows with bridge_op_id older than 15 min (QBWC not responding) → failed
-        await client.query(`
+        const { rows: timeout2 } = await client.query(`
             UPDATE qb_order_pipeline
             SET status       = 'failed',
                 failed_at    = NOW(),
@@ -61,11 +62,12 @@ export async function GET(
             WHERE status = 'submitted'
               AND bridge_op_id IS NOT NULL
               AND submitted_at < NOW() - INTERVAL '15 minutes'
+            RETURNING step, qb_txn_id
         `)
 
         // Auto-timeout: pending rows older than 30 min (handler never re-submitted) → failed
         // Uses updated_at so reactivated rows (confirmed→pending) don't immediately time out
-        await client.query(`
+        const { rows: timeout3 } = await client.query(`
             UPDATE qb_order_pipeline
             SET status       = 'failed',
                 failed_at    = NOW(),
@@ -74,7 +76,16 @@ export async function GET(
                 error        = 'Operation stuck in pending — handler did not re-submit within 30 minutes'
             WHERE status = 'pending'
               AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '30 minutes'
+            RETURNING step, qb_txn_id
         `)
+
+        // Invalidate cached EditSequence for all timed-out rows
+        const { invalidateEditSequenceCache } = require("../../../../lib/quickbooks/qb-pipeline")
+        for (const r of [...timeout1, ...timeout2, ...timeout3]) {
+            if (r.qb_txn_id) {
+                await invalidateEditSequenceCache(r.step, r.qb_txn_id).catch(() => {})
+            }
+        }
 
         const conditions: string[] = []
         const values: any[] = []
