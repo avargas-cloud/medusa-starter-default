@@ -3,6 +3,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils"
 import { writePipelineRow, pollUntilQbConfirmed } from "../../../../lib/quickbooks/qb-pipeline"
 import { getEstimateTxnId, getEstimateRef } from "../../../../lib/quickbooks/qb-metadata-types"
 import { buildQbItems, type MedusaOrderForQb } from "../../../../lib/quickbooks/order-flow-core"
+import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep"
 import { withQbLock } from "../../../../lib/quickbooks/qb-locks"
 
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
@@ -280,7 +281,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                             const memo = fullOrder.metadata?.document_number as string
                                 || (fullOrder.display_id ? `E${fullOrder.display_id}` : qbTxnId)
 
-                            const result = await updateEstimateInQb({ txnId: qbTxnId, items: qbItems, memo })
+                            const salesRep = parseSalesRepInitials(fullOrder.metadata?.sales_rep)
+                            const result = await updateEstimateInQb({ txnId: qbTxnId, items: qbItems, memo, salesRep })
                             if (result.success) {
                                 const rowId = await writePipelineRow({
                                     orderId: resolvedId,
