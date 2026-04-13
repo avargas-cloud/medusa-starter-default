@@ -7,20 +7,21 @@
 import type { AuthenticatedMedusaRequest, MedusaResponse } from '@medusajs/framework/http'
 import { POS_USER_MODULE } from '../../../../modules/pos-user'
 
-/** PATCH /admin/pos-users/:id — update first_name / last_name */
+/** PATCH /admin/pos-users/:id — update first_name / last_name / can_view_accounting */
 export async function PATCH(
-    req: AuthenticatedMedusaRequest<{ first_name?: string; last_name?: string }>,
+    req: AuthenticatedMedusaRequest<{ first_name?: string; last_name?: string; can_view_accounting?: boolean }>,
     res: MedusaResponse
 ) {
     const { id } = req.params
-    const { first_name, last_name } = req.body
+    const { first_name, last_name, can_view_accounting } = req.body
 
     const posUserService = req.scope.resolve(POS_USER_MODULE) as any
 
     const [updated] = await posUserService.updatePosUsers([{
         id,
-        first_name,
-        last_name,
+        ...(first_name !== undefined && { first_name }),
+        ...(last_name !== undefined && { last_name }),
+        ...(can_view_accounting !== undefined && { can_view_accounting }),
     }])
 
     res.status(200).json({ pos_user: updated })

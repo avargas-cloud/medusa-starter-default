@@ -12,6 +12,7 @@ const PosUser = model.define('pos_user', {
     email: model.text(),
     first_name: model.text().nullable(),
     last_name: model.text().nullable(),
+    can_view_accounting: model.boolean().default(false),
 })
 
 export default PosUser

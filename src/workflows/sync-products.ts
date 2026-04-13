@@ -7,63 +7,39 @@ export const syncProductsToMeiliStep = createStep(
         const { MeiliSearch } = await import("meilisearch")
         const query = container.resolve("query") as any
 
-        // Initialize MeiliSearch client
         const client = new MeiliSearch({
             host: process.env.MEILISEARCH_HOST!,
             apiKey: process.env.MEILISEARCH_API_KEY!,
         })
+        const index = client.index("products")
 
-        // Fetch all products with variants, categories, and full hierarchy in batches
-        let allProducts: any[] = []
-        let skip = 0
-        const take = 500
-        let hasMore = true
+        // 1. Load ALL products into RAM in a single query (no pagination loop)
+        const t0 = Date.now()
+        console.log("📥 [sync-products] Loading all products into RAM...")
+        const { data: allProducts } = await query.graph({
+            entity: "product",
+            fields: [
+                "id", "title", "handle", "description", "thumbnail",
+                "status", "material", "updated_at", "created_at",
+                "categories.handle",
+                "categories.parent_category.handle",
+                "categories.parent_category.parent_category.handle",
+                "variants.*",
+                "variants.options.*",
+                "variants.options.option.*",
+            ],
+            pagination: { skip: 0, take: 50000 }
+        })
+        console.log(`✅ [sync-products] Loaded ${allProducts.length} products in ${Date.now() - t0}ms`)
 
-        while (hasMore) {
-            const { data: batch } = await query.graph({
-                entity: "product",
-                fields: [
-                    "id",
-                    "title",
-                    "handle",
-                    "description",
-                    "thumbnail",
-                    "status",
-                    "material",
-                    "updated_at",
-                    "created_at",
-                    "categories.handle",
-                    "categories.parent_category.handle",
-                    "categories.parent_category.parent_category.handle", // Depth 3
-                    "variants.*",
-                    "variants.options.*",
-                    "variants.options.option.*",
-                ],
-                pagination: { skip, take }
-            })
-
-            if (batch.length === 0) {
-                hasMore = false
-                break
-            }
-
-            allProducts = allProducts.concat(batch)
-            skip += take
-        }
-
-        console.log(`🔍 [DEBUG] Fetched ${allProducts.length} full products for MeiliSearch sync`)
-
-        // Transform products for MeiliSearch
+        // 2. Transform ALL in RAM
         const meiliProducts = allProducts.map((product: any) => {
-            // Flatten all category handles (including parents)
             const allCategoryHandles = new Set<string>()
-
             product.categories?.forEach((c: any) => {
                 if (c.handle) allCategoryHandles.add(c.handle)
                 if (c.parent_category?.handle) allCategoryHandles.add(c.parent_category.handle)
                 if (c.parent_category?.parent_category?.handle) allCategoryHandles.add(c.parent_category.parent_category.handle)
             })
-
             return {
                 id: product.id,
                 title: product.title,
@@ -72,72 +48,50 @@ export const syncProductsToMeiliStep = createStep(
                 thumbnail: product.thumbnail || null,
                 status: product.status,
                 metadata_material: product.material || null,
-                category_handles: Array.from(allCategoryHandles), // ✅ Hierarchy support
+                category_handles: Array.from(allCategoryHandles),
                 variant_sku: product.variants?.map((v: any) => v.sku).filter(Boolean) || [],
                 created_at: new Date(product.created_at).getTime(),
-                updated_at: new Date(product.updated_at).getTime(), // Required for sync check
+                updated_at: new Date(product.updated_at).getTime(),
             }
         })
+        console.log(`🔄 [sync-products] Transformed ${meiliProducts.length} documents in RAM`)
 
-        // Sync to MeiliSearch
-        const index = client.index("products")
-
-        if (meiliProducts.length > 0) {
-            console.log("🔍 [DEBUG] First Meili Product Payload:", JSON.stringify(meiliProducts[0], null, 2))
-        } else {
-            console.warn("⚠️ [DEBUG] No products transformed!")
-        }
-
-        // CRITICAL: Delete all existing documents to avoid stale data
-        await index.deleteAllDocuments()
-
-        // CRITICAL: Update settings to allow filtering and sorting
+        // 3. Update settings
         await index.updateSettings({
             displayedAttributes: [
-                "id",
-                "title",
-                "handle",
-                "thumbnail",
-                "status",
-                "variant_sku",
-                "updated_at",
-                "created_at",
-                "metadata",
-                "description",
-                "category_handles"  // ← required for category filter to work
+                "id", "title", "handle", "thumbnail", "status",
+                "variant_sku", "updated_at", "created_at",
+                "metadata", "description", "category_handles"
             ],
-            filterableAttributes: [
-                "category_handles",
-                "status",
-                "id",
-                "variant_sku"
-            ],
-            sortableAttributes: [
-                "title",
-                "status",
-                "id",
-                "updated_at",
-                "created_at"
-            ],
-            searchableAttributes: [
-                "title",
-                "variant_sku",
-                "handle",
-                "description",
-                "metadata_material"
-            ]
+            filterableAttributes: ["category_handles", "status", "id", "variant_sku"],
+            sortableAttributes: ["title", "status", "id", "updated_at", "created_at"],
+            searchableAttributes: ["title", "variant_sku", "handle", "description", "metadata_material"]
         })
 
-        const result = await index.addDocuments(meiliProducts, { primaryKey: "id" })
+        // 4. Atomic clear — wait for completion before uploading (prevents race condition)
+        console.log("🗑️  [sync-products] Clearing index (waiting for completion)...")
+        const deleteTask = await index.deleteAllDocuments()
+        await (client as any).tasks.waitForTask(deleteTask.taskUid)
+        console.log("✅ [sync-products] Index cleared")
 
-        // BLOCKING: Wait for MeiliSearch to finish indexing before returning
-        // This ensures the frontend gets fresh results immediately after this call succeeds
-        await (client as any).tasks.waitForTask(result.taskUid)
+        // 5. Upload ALL chunks in parallel
+        const CHUNK = 1000
+        const chunks: (typeof meiliProducts)[] = []
+        for (let i = 0; i < meiliProducts.length; i += CHUNK) {
+            chunks.push(meiliProducts.slice(i, i + CHUNK))
+        }
+
+        console.log(`🚀 [sync-products] Uploading ${chunks.length} chunks in parallel...`)
+        const t1 = Date.now()
+        const uploadTasks = await Promise.all(
+            chunks.map(chunk => index.addDocuments(chunk, { primaryKey: "id" }))
+        )
+        await (client as any).tasks.waitForTasks(uploadTasks.map(t => t.taskUid))
+        console.log(`✅ [sync-products] Synced ${meiliProducts.length} products in ${Date.now() - t1}ms`)
 
         return new StepResponse({
             success: true,
             synced: meiliProducts.length,
-            taskUid: result.taskUid
         })
     }
 )
