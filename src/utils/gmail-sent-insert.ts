@@ -49,6 +49,7 @@ function buildMimeMessage(opts: GmailInsertOptions): Buffer {
         `MIME-Version: 1.0`,
     ]
 
+    const htmlBase64 = Buffer.from(opts.html, 'utf-8').toString('base64')
     let body: string
 
     if (hasAttachments) {
@@ -56,9 +57,9 @@ function buildMimeMessage(opts: GmailInsertOptions): Buffer {
         const parts: string[] = [
             `--${boundary}`,
             `Content-Type: text/html; charset="UTF-8"`,
-            `Content-Transfer-Encoding: quoted-printable`,
+            `Content-Transfer-Encoding: base64`,
             ``,
-            opts.html,
+            htmlBase64,
         ]
         for (const att of opts.attachments!) {
             const mime = att.type ?? 'application/octet-stream'
@@ -75,7 +76,8 @@ function buildMimeMessage(opts: GmailInsertOptions): Buffer {
         body = parts.join('\r\n')
     } else {
         headers.push(`Content-Type: text/html; charset="UTF-8"`)
-        body = opts.html
+        headers.push(`Content-Transfer-Encoding: base64`)
+        body = htmlBase64
     }
 
     return Buffer.from([...headers, '', body].join('\r\n'))
