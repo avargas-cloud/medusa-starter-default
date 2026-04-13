@@ -42,6 +42,13 @@ function pubCorsMiddleware(_req: MedusaRequest, res: MedusaResponse, next: Medus
 
 export default defineMiddlewares({
   routes: [
+    // Increase body parser limit for send-email routes — extra attachments arrive as base64
+    {
+      matcher: "/admin/draft-orders/:id/send-email",
+      method: "POST",
+      bodyParser: { sizeLimit: "50mb" },
+      middlewares: [],
+    },
     // CORS for POS-specific routes (no Medusa auth gating — validated in-route)
     {
       matcher: "/pos/*",
