@@ -5,6 +5,7 @@
  */
 
 import { Resend } from 'resend'
+import { insertIntoGmailSent } from './gmail-sent-insert'
 
 export interface MailOptions {
     to: string | string[]
@@ -51,5 +52,16 @@ export async function sendMail(options: MailOptions): Promise<boolean> {
     }
 
     console.log(`[mailer] Sent successfully. ID: ${data?.id}`)
+
+    // Insert a copy into the sender's Gmail Sent folder (non-blocking)
+    // so the sender sees the email in their Gmail without needing CC.
+    insertIntoGmailSent({
+        from,
+        to: options.to,
+        subject: options.subject,
+        html: options.html,
+        attachments: options.attachments,
+    }).catch(() => { /* already logged inside */ })
+
     return true
 }
