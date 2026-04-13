@@ -627,7 +627,7 @@ function buildPaymentCard(paymentUrl: string, amountDisplay: string, baseDisplay
 // ── POST — generate PDF and send as attachment ─────────────────────────────────
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
   const { id } = req.params as { id: string }
-  const { to: toOverride, cc: ccOverride, subject: subjectOverride, templateId, docId, displayId: displayIdOverride, emailBody, emailSignature, documentType, posState, paymentLinkUrl, paymentAmount, paymentBaseAmount, senderEmail } = (req.body ?? {}) as any
+  const { to: toOverride, cc: ccOverride, subject: subjectOverride, templateId, docId, displayId: displayIdOverride, emailBody, emailSignature, documentType, posState, paymentLinkUrl, paymentAmount, paymentBaseAmount, senderEmail, extraAttachments } = (req.body ?? {}) as any
   const order = await fetchOrderWithPreview(req, id)
   if (!order) return void res.status(404).json({ message: "Order not found" })
   const { customer, total } = buildTotals(order)
@@ -782,6 +782,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
   } else {
     // Fallback: attach HTML version as a note if PDF failed
     finalHtml += `<p style="color:#dc2626;font-size:11px;margin-top:12px;">Note: PDF could not be generated. Please contact us for the document.</p>`
+  }
+
+  // Append extra attachments from the frontend (ephemeral — only in transit, never persisted)
+  if (Array.isArray(extraAttachments) && extraAttachments.length > 0) {
+    if (!attachments) attachments = []
+    for (const a of extraAttachments as Array<{ filename: string; content: string; type?: string }>) {
+      if (a.filename && a.content) {
+        attachments.push({ filename: a.filename, content: a.content, type: a.type })
+      }
+    }
   }
 
   // Always display as "EcoPowerTech" in the From field, regardless of which
