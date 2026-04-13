@@ -345,7 +345,9 @@ export async function handleSalesReceiptCreated(
                 if (financeService) {
                     try {
                         // payment_id may be null for SR (invoice route intentionally omits it).
-                        // Fall back to looking up by order_id + is_sales_receipt_payment flag.
+                        // Fall back to looking up by is_sales_receipt_payment flag ONLY.
+                        // Never use a broad order_id fallback — it would incorrectly tag pre-existing
+                        // deposit payments (e.g. from BAMS payment link) as the Sales Receipt payment.
                         let srPayment: any = null
                         if (data.payment_id) {
                             srPayment = await financeService.retrieveCustomerPayment(data.payment_id)
@@ -354,7 +356,7 @@ export async function handleSalesReceiptCreated(
                                 metadata: { order_id: orderId },
                             }).catch(() => [])
                             srPayment = (payments as any[]).find(
-                                (p: any) => p.metadata?.is_sales_receipt_payment === true || p.metadata?.order_id === orderId
+                                (p: any) => p.metadata?.is_sales_receipt_payment === true
                             ) ?? null
                         }
 
