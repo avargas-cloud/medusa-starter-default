@@ -627,7 +627,7 @@ function buildPaymentCard(paymentUrl: string, amountDisplay: string, baseDisplay
 // ── POST — generate PDF and send as attachment ─────────────────────────────────
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
   const { id } = req.params as { id: string }
-  const { to: toOverride, cc: ccOverride, subject: subjectOverride, templateId, docId, displayId: displayIdOverride, emailBody, emailSignature, documentType, posState, paymentLinkUrl, paymentAmount, paymentBaseAmount, senderEmail, extraAttachments } = (req.body ?? {}) as any
+  const { to: toOverride, cc: ccOverride, subject: subjectOverride, templateId, docId, displayId: displayIdOverride, emailBody, emailSignature, documentType, posState, paymentLinkUrl, paymentAmount, paymentBaseAmount, extraAttachments } = (req.body ?? {}) as any
   const order = await fetchOrderWithPreview(req, id)
   if (!order) return void res.status(404).json({ message: "Order not found" })
   const { customer, total } = buildTotals(order)
