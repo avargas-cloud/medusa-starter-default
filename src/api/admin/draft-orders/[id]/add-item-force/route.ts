@@ -18,7 +18,7 @@ export async function POST(
     res: MedusaResponse
 ): Promise<void> {
     const { id } = req.params as { id: string }
-    const { variant_id, quantity = 1, unit_price, sort_order, line_discount, original_unit_price, price_list_id, price_list_label, custom_title, custom_description } = req.body as {
+    const { variant_id, quantity = 1, unit_price, sort_order, line_discount, original_unit_price, price_list_id, price_list_label, custom_title, custom_description, attached_image } = req.body as {
         variant_id: string
         quantity?: number
         unit_price?: number            // effective (post-discount) price in DOLLARS
@@ -29,6 +29,7 @@ export async function POST(
         price_list_label?: string | 'Default' // Rehydrating retail/wholesale tags
         custom_title?: string          // User-edited title for "Special Items"
         custom_description?: string    // User-edited description for "Special Items"
+        attached_image?: string | null // base64 JPEG — per-document temp image (does not modify product)
     }
 
     if (!variant_id) {
@@ -190,6 +191,7 @@ export async function POST(
                 ...(original_unit_price != null ? { original_unit_price } : {}),
                 ...(price_list_id ? { price_list_id } : {}),
                 ...(price_list_label ? { price_list_label } : {}),
+                ...(attached_image ? { attached_image } : {}),
             },
         }])
 

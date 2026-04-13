@@ -18,7 +18,7 @@ export async function POST(
     req: MedusaRequest,
     res: MedusaResponse
 ): Promise<void> {
-    const { line_item_id, quantity, unit_price, sort_order, line_discount, original_unit_price, price_list_id, price_list_label, custom_title, custom_description } = req.body as {
+    const { line_item_id, quantity, unit_price, sort_order, line_discount, original_unit_price, price_list_id, price_list_label, custom_title, custom_description, attached_image } = req.body as {
         line_item_id: string
         quantity?: number
         unit_price?: number            // effective (post-discount) price in DOLLARS
@@ -29,6 +29,7 @@ export async function POST(
         price_list_label?: string | 'Default' // Rehydrating retail/wholesale tags
         custom_title?: string          // User-edited title for "Special Items"
         custom_description?: string    // User-edited description for "Special Items"
+        attached_image?: string | null // base64 JPEG — per-document temp image (does not modify product)
     }
 
     if (!line_item_id) {
@@ -54,7 +55,7 @@ export async function POST(
 
         // Persist sort_order, line_discount, and original_unit_price in metadata.
         // Always merge with existing metadata to avoid overwriting sales_description or other keys.
-        const needsMetadataUpdate = sort_order !== undefined || line_discount !== undefined || original_unit_price !== undefined || price_list_id !== undefined || price_list_label !== undefined || custom_description !== undefined
+        const needsMetadataUpdate = sort_order !== undefined || line_discount !== undefined || original_unit_price !== undefined || price_list_id !== undefined || price_list_label !== undefined || custom_description !== undefined || attached_image !== undefined
         if (needsMetadataUpdate) {
             let existingMeta: Record<string, any> = {}
             if (typeof orderModule.retrieveOrderLineItem === "function") {
@@ -72,6 +73,7 @@ export async function POST(
                 ...(original_unit_price !== undefined ? { original_unit_price: original_unit_price ?? null } : {}),
                 ...(price_list_id !== undefined ? { price_list_id: price_list_id ?? null } : {}),
                 ...(price_list_label !== undefined ? { price_list_label: price_list_label ?? null } : {}),
+                ...(attached_image !== undefined ? { attached_image: attached_image ?? null } : {}),
             }
         }
         if (typeof orderModule.updateOrderLineItems === "function") {

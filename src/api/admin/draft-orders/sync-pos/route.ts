@@ -74,7 +74,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                         original_unit_price: item.lineDiscount ? item.unitPrice : null,
                         custom_title: item.title,
                         custom_description: item.salesDescription,
-                        sort_order: item.sortOrder
+                        sort_order: item.sortOrder,
+                        attached_image: item.attachedImage ?? null,
                     })
                 })
             }
@@ -166,7 +167,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                         item.priceListId !== (existing.metadata?.price_list_id ?? null) ||
                         item.priceListLabel !== (existing.metadata?.price_list_label ?? 'Default') ||
                         item.title !== existing.title ||
-                        item.salesDescription !== existing.metadata?.sales_description
+                        item.salesDescription !== existing.metadata?.sales_description ||
+                        (item.attachedImage ?? null) !== (existing.metadata?.attached_image ?? null)
 
                     if (changed) {
                         await localFetch(`/admin/draft-orders/${resolvedId}/update-item-force`, {
@@ -182,6 +184,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                                 price_list_label: item.priceListLabel,
                                 custom_title: item.title,
                                 custom_description: item.salesDescription,
+                                attached_image: item.attachedImage ?? null,
                             })
                         })
                         itemsChanged = true
@@ -200,6 +203,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                             price_list_label: item.priceListLabel,
                             custom_title: item.title,
                             custom_description: item.salesDescription,
+                            attached_image: item.attachedImage ?? null,
                         })
                     })
                     itemsChanged = true
