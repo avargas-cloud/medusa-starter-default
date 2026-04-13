@@ -794,20 +794,26 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     }
   }
 
-  // Always display as "EcoPowerTech" in the From field, regardless of which
-  // salesperson is sending. Use senderEmail as the actual sending address only
-  // if it matches a verified Resend domain; otherwise fall back to the env default.
-  const senderAddr = senderEmail ?? process.env.RESEND_FROM ?? "estimates@ecopowertech.com"
+  // Always send from the verified Resend domain address.
+  // Never use the agent's personal email as From — it may not be a verified Resend sender.
+  // senderEmail is stored only as metadata (sent_by), not used as the From address.
+  const senderAddr = process.env.RESEND_FROM ?? "estimates@ecopowertech.com"
   const fromEmail = `EcoPowerTech <${senderAddr}>`
   console.log(`[send-email] Sending from: ${fromEmail} → to: ${toEmails.join(', ')} | pdf: ${!!attachments}`)
-  await sendMail({
-    to: toEmails,
-    from: fromEmail,
-    subject: emailSubject,
-    html: finalHtml,
-    ...(ccEmails.length > 0 ? { cc: ccEmails } : {}),
-    ...(attachments ? { attachments } : {}),
-  })
+  try {
+    await sendMail({
+      to: toEmails,
+      from: fromEmail,
+      subject: emailSubject,
+      html: finalHtml,
+      ...(ccEmails.length > 0 ? { cc: ccEmails } : {}),
+      ...(attachments ? { attachments } : {}),
+    })
+  } catch (mailErr: unknown) {
+    const msg = mailErr instanceof Error ? mailErr.message : String(mailErr)
+    console.error("[send-email] sendMail failed:", msg)
+    return void res.status(500).json({ success: false, message: msg })
+  }
 
   // Update estimate metadata via REST PATCH (reliable — same path the UI uses)
   try {
