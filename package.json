@@ -6,8 +6,7 @@
   "license": "MIT",
   "engines": {
     "node": ">=20.0.0",
-    "npm": "DO NOT USE NPM - USE YARN INSTEAD",
-    "yarn": ">=1.22.0"
+    "npm": "DO NOT USE NPM - USE YARN INSTEAD"
   },
   "keywords": [
     "sqlite",
