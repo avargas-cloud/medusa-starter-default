@@ -13,20 +13,15 @@ export async function GET(
   const { skip = "0", take = "100" } = req.query as Record<string, string>;
 
   try {
-    // @ts-ignore - Medusa might type it as Memoes but runtime is Memos, or vice-versa
-    const methodName =
-      typeof creditMemoService.listAndCountPosCreditMemos === "function"
-        ? "listAndCountPosCreditMemos"
-        : "listAndCountPosCreditMemoes";
-
-    const [creditMemos, count] = await (creditMemoService as any)[methodName](
-      {},
-      {
-        skip: parseInt(skip),
-        take: parseInt(take),
-        relations: ["items"],
-      }
-    );
+    const [creditMemos, count] =
+      await creditMemoService.listAndCountPosCreditMemoes(
+        {},
+        {
+          skip: parseInt(skip),
+          take: parseInt(take),
+          relations: ["items"],
+        }
+      );
 
     res.status(200).json({ credit_memos: creditMemos, count });
   } catch (e: any) {
