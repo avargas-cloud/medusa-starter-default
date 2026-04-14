@@ -5,6 +5,7 @@ import { getEstimateTxnId, getEstimateRef } from "../../../../lib/quickbooks/qb-
 import { buildQbItems, type MedusaOrderForQb } from "../../../../lib/quickbooks/order-flow-core"
 import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep"
 import { withQbSerialized } from "../../../../lib/quickbooks/qb-serializer"
+import { getDbPool } from "../../../utils/db-pool"
 
 export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<void> {
     const query = req.scope.resolve(ContainerRegistrationKeys.QUERY)
@@ -323,7 +324,94 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
             }
         }
 
-        // 6. Compute Tax Always (Fire & Forget / Sequential is fine locally)
+        // 6. Cleanup stale versioned data — mirrors post-edit-sync for orders.
+        // Estimates don't use version history, so we purge old rows on every save
+        // to prevent unbounded growth of order_item, order_summary, adjustments, etc.
+        try {
+            const pool = getDbPool()
+
+            // a. Hard-delete soft-deleted adjustments
+            const adjDel = await pool.query(
+                `DELETE FROM order_line_item_adjustment
+                 WHERE deleted_at IS NOT NULL
+                   AND item_id IN (SELECT DISTINCT item_id FROM order_item WHERE order_id = $1)`,
+                [resolvedId]
+            )
+
+            // b. Deduplicate ACTIVE adjustments — keep only the most-recent row per (item, promo code).
+            //    This fixes accumulation caused by confirmDraftOrderEditWorkflow adding new rows
+            //    without removing the previous ones.
+            const adjDupDel = await pool.query(
+                `DELETE FROM order_line_item_adjustment
+                 WHERE deleted_at IS NULL
+                   AND item_id IN (SELECT DISTINCT item_id FROM order_item WHERE order_id = $1)
+                   AND id NOT IN (
+                       SELECT DISTINCT ON (item_id, code) id
+                       FROM order_line_item_adjustment
+                       WHERE deleted_at IS NULL
+                         AND item_id IN (SELECT DISTINCT item_id FROM order_item WHERE order_id = $2)
+                       ORDER BY item_id, code, created_at DESC
+                   )`,
+                [resolvedId, resolvedId]
+            )
+
+            // c. Remove adjustments for promo codes that are no longer the active promotion.
+            //    When a user switches from promo A → promo B, apply-existing adds promo B's
+            //    adjustments but never removes promo A's — this cleans them up.
+            const activePromoCode = promotion_code ?? null
+            let adjOldPromoDel: { rowCount: number | null } = { rowCount: 0 }
+            if (activePromoCode) {
+                adjOldPromoDel = await pool.query(
+                    `DELETE FROM order_line_item_adjustment
+                     WHERE deleted_at IS NULL
+                       AND code != $1
+                       AND item_id IN (SELECT DISTINCT item_id FROM order_item WHERE order_id = $2)`,
+                    [activePromoCode, resolvedId]
+                )
+            }
+
+            // d. Delete old order_item versions — keep only the latest version per item
+            const oiDel = await pool.query(
+                `DELETE FROM order_item
+                 WHERE order_id = $1
+                   AND (item_id, version) NOT IN (
+                       SELECT item_id, MAX(version) FROM order_item WHERE order_id = $2 GROUP BY item_id
+                   )`,
+                [resolvedId, resolvedId]
+            )
+
+            // e. Delete old order_change_action rows (keep only the latest order_change)
+            const ocaDel = await pool.query(
+                `DELETE FROM order_change_action
+                 WHERE order_change_id IN (
+                     SELECT id FROM order_change WHERE order_id = $1
+                     AND id != (SELECT id FROM order_change WHERE order_id = $2 ORDER BY created_at DESC LIMIT 1)
+                 )`,
+                [resolvedId, resolvedId]
+            )
+
+            // f. Delete old order_change rows (keep only latest)
+            const ocDel = await pool.query(
+                `DELETE FROM order_change WHERE order_id = $1
+                 AND id != (SELECT id FROM order_change WHERE order_id = $2 ORDER BY created_at DESC LIMIT 1)`,
+                [resolvedId, resolvedId]
+            )
+
+            // g. Delete old order_summary versions (keep only latest)
+            const osDel = await pool.query(
+                `DELETE FROM order_summary WHERE order_id = $1
+                 AND version != (SELECT MAX(version) FROM order_summary WHERE order_id = $2)`,
+                [resolvedId, resolvedId]
+            )
+
+            logger.info(
+                `[sync-pos] 🧹 Cleanup: adj_stale=${adjDel.rowCount ?? 0}, adj_dup=${adjDupDel.rowCount ?? 0}, adj_old_promo=${adjOldPromoDel.rowCount ?? 0}, order_item_old=${oiDel.rowCount ?? 0}, order_change_action=${ocaDel.rowCount ?? 0}, order_change=${ocDel.rowCount ?? 0}, order_summary=${osDel.rowCount ?? 0}`
+            )
+        } catch (cleanupErr: any) {
+            logger.warn(`[sync-pos] 🧹 Cleanup non-fatal: ${cleanupErr.message}`)
+        }
+
+        // 7. Compute Tax Always (Fire & Forget / Sequential is fine locally)
         await localFetch(`/admin/draft-orders/${resolvedId}/compute-tax`, { method: "GET" })
             .catch(() => {})
 
