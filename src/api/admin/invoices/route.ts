@@ -164,6 +164,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   let paymentIdToEmit: string | null = null;
   let nextPayNum: number | null = null;
   const applicationsToEmit: any[] = [];
+  // The QB Sales Receipt needs the exact card type (e.g. 'mastercard') to pick the
+  // correct Payment Method in QuickBooks. body.payment_method can be stale ('card',
+  // 'cash' default, etc.) when the Dejavoo terminal fires the auto-submit. For
+  // terminal-sourced payments we override this with the card type that Dejavoo
+  // actually reported, stored on the customer_payment metadata.
+  let resolvedPaymentMethod: string = body.payment_method;
 
   // Step 1: Create the invoice (no nested items — hasMany must be created separately)
   const initialStatus =
@@ -309,30 +315,45 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       // B-terminal. The CustomerPayment was already created by the terminal route.
       // Just link it to this invoice via a PaymentApplication — no new payment row.
       //
+      // We retrieve the terminal payment ONCE here so both SR and non-SR sub-branches
+      // can read its metadata. This is also the source of truth for the QB payment
+      // method: the Dejavoo terminal stores the actual detected card type (e.g.
+      // 'mastercard', 'visa') on customer_payment.metadata.pos_payment_method.
+      // body.payment_method can be stale ('cash' default) due to React setState
+      // timing on the POS auto-submit flow, which caused QB Sales Receipts to
+      // arrive with no Payment Method selected.
+      let termPay: any = null;
+      try {
+        termPay = await financeService.retrieveCustomerPayment(
+          body.terminal_payment_id
+        );
+        const termPosMethod = termPay?.metadata?.pos_payment_method as
+          | string
+          | undefined;
+        if (termPosMethod && termPosMethod !== body.payment_method) {
+          console.log(
+            `[invoice] Overriding payment_method '${body.payment_method}' → '${termPosMethod}' from terminal_payment metadata (source of truth)`
+          );
+          resolvedPaymentMethod = termPosMethod;
+        }
+      } catch (tpErr: any) {
+        console.warn(
+          `[invoice] Could not read terminal_payment metadata for ${body.terminal_payment_id}: ${tpErr.message}`
+        );
+      }
+
       // For sales receipts the QB handler embeds the payment internally (same as the
       // manual flow), so we must NOT set paymentIdToEmit — otherwise handlePosPaymentCreated
       // would fire a second time and create a duplicate QB entry.
       if (!body.is_sales_receipt) {
         paymentIdToEmit = body.terminal_payment_id;
-
-        // Look up the existing payment's display_id for QB pipeline ref
-        const termPayRes = await pgConnection
-          .raw(`SELECT display_id FROM customer_payment WHERE id = ?`, [
-            body.terminal_payment_id,
-          ])
-          .catch(() => ({ rows: [{ display_id: null }] }));
-        nextPayNum = termPayRes.rows[0]?.display_id
-          ? Number(termPayRes.rows[0].display_id)
-          : null;
+        nextPayNum = termPay?.display_id ? Number(termPay.display_id) : null;
       } else {
         // Sales Receipt: tag the terminal payment so it is treated as embedded.
         // This prevents handlePosPaymentCreated from ever creating a separate
         // ReceivePayment in QB for this payment, and gives the SR handler a way
         // to locate and txn-id the payment after the SR confirms.
         try {
-          const termPay = await financeService.retrieveCustomerPayment(
-            body.terminal_payment_id
-          );
           await financeService.updateCustomerPayments({
             id: body.terminal_payment_id,
             metadata: {
@@ -605,7 +626,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             invoice_id: (invoice as any).id,
             items: body.items,
             fulfillment_id: body.fulfillment_id,
-            payment_method: body.payment_method,
+            // Use resolvedPaymentMethod — when a Dejavoo terminal_payment_id is
+            // present, this is the detected card type (e.g. 'mastercard') read
+            // from the terminal payment's metadata, not the stale body field.
+            payment_method: resolvedPaymentMethod,
             payment_id: paymentIdToEmit,
           },
           orderModule,
