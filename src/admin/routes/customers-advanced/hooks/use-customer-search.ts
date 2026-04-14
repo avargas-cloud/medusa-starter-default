@@ -98,9 +98,9 @@ export const useCustomerSearch = ({
 
       return {
         hits: searchResults.hits as MeiliCustomer[],
-        // @ts-ignore - totalHits exists in newer MeiliSearch versions/configurations
         totalHits:
-          searchResults.totalHits || searchResults.estimatedTotalHits || 0,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (searchResults as any).totalHits || searchResults.estimatedTotalHits || 0,
         processingTime: searchResults.processingTimeMs,
       };
     },

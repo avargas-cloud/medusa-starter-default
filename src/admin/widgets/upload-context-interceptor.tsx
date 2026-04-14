@@ -37,11 +37,12 @@ const UploadContextInterceptor = () => {
     };
 
     XMLHttpRequest.prototype.send = function () {
-      // @ts-ignore
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const self = this as any;
       if (
-        this._urlTarget &&
-        typeof this._urlTarget === "string" &&
-        this._urlTarget.includes("/admin/uploads")
+        self._urlTarget &&
+        typeof self._urlTarget === "string" &&
+        self._urlTarget.includes("/admin/uploads")
       ) {
         const context = getContextFromPath();
         if (context) {

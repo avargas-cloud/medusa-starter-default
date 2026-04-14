@@ -120,13 +120,11 @@ function extractQbMeta(
       ? (invObj as any).ref_number
       : null) ??
     latestInv?.ref_number ??
-    null ??
     (meta.qb_invoice_ref as string | null) ??
     null;
   const txnId =
     (invObj && typeof invObj === "object" ? (invObj as any).txn_id : null) ??
     latestInv?.txn_id ??
-    null ??
     (meta.qb_invoice_txn_id as string | null) ??
     null;
   return { ref: ref ?? null, synced: !!(txnId || ref) };
