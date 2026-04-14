@@ -1,5 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { IOrderModuleService } from "@medusajs/types"
+import { Modules, PromotionType, PromotionStatus, ApplicationMethodType, ApplicationMethodTargetType } from "@medusajs/utils"
 import {
   createPromotionsWorkflow,
   addDraftOrderPromotionWorkflow,
@@ -42,35 +43,57 @@ export async function POST(
   }
 
   const orderModule = req.scope.resolve("order") as IOrderModuleService
+  const promotionModule = req.scope.resolve(Modules.PROMOTION) as any
   const logger = req.scope.resolve("logger")
 
   try {
     // 0. Fetch the order to get the currency code (required for fixed discounts)
     const order = await orderModule.retrieveOrder(order_id, { select: ["currency_code"] })
 
-    // 1. Create the new promotion first
-    const promoCode = `CUSTOM-DISC-${Date.now()}`
-    const promotionData: any = {
-      code: promoCode,
-      type: "standard",
-      status: "active",
-      is_automatic: false,
-      is_tax_inclusive: false,   // CRITICAL: apply % to pre-tax subtotal only (not subtotal+tax)
-      application_method: {
-        type: discount_type === "percent" ? "percentage" : "fixed",
-        target_type: "items",        // CRITICAL: "order" uses subtotal+tax as base (wrong); "items" uses unit_price×qty (pre-tax, correct)
-        is_tax_inclusive: false,     // Belt-and-suspenders: also set at application_method level
-        value: discount_value,
-        currency_code: discount_type === "fixed" ? order.currency_code : undefined
-      }
-    }
+    // 1. Find-or-create: use a deterministic code derived from type+value so the
+    //    same discount reuses one promotion record instead of creating a new one each time.
+    const valueInt = Math.round(discount_value * 100)
+    const promoCode = discount_type === "percent"
+      ? `CPOS-PCT-${valueInt}`
+      : `CPOS-FIXED-${valueInt}`
 
-    const { result: createdPromos } = await createPromotionsWorkflow(req.scope).run({
-      input: { promotionsData: [promotionData] }
-    })
-    const promotion = createdPromos[0]
-    if (!promotion) throw new Error("Failed to create promotion")
-    logger.info(`[POS Discount] Created promotion ${promoCode}`)
+    const [existingPromo] = await promotionModule.listPromotions(
+      { code: [promoCode] },
+      { select: ["id", "code", "status"] }
+    )
+
+    let promotion: { id: string; code: string }
+    if (existingPromo) {
+      // Reuse existing promotion — ensure it's active
+      if (existingPromo.status !== PromotionStatus.ACTIVE) {
+        await promotionModule.updatePromotions([{ id: existingPromo.id, status: PromotionStatus.ACTIVE }])
+      }
+      promotion = { id: existingPromo.id, code: existingPromo.code ?? promoCode }
+      logger.info(`[POS Discount] Reusing promotion ${promoCode} (${existingPromo.id})`)
+    } else {
+      // Create once — this code has never been seen before
+      const promotionData = {
+        code: promoCode,
+        type: PromotionType.STANDARD,
+        status: PromotionStatus.ACTIVE,
+        is_automatic: false,
+        is_tax_inclusive: false,   // CRITICAL: apply % to pre-tax subtotal only (not subtotal+tax)
+        application_method: {
+          type: discount_type === "percent" ? ApplicationMethodType.PERCENTAGE : ApplicationMethodType.FIXED,
+          target_type: ApplicationMethodTargetType.ITEMS, // CRITICAL: "order" uses subtotal+tax as base (wrong); "items" uses unit_price×qty (pre-tax, correct)
+          is_tax_inclusive: false, // Belt-and-suspenders: also set at application_method level
+          value: discount_value,
+          currency_code: discount_type === "fixed" ? order.currency_code : undefined
+        }
+      }
+      const { result: createdPromos } = await createPromotionsWorkflow(req.scope).run({
+        input: { promotionsData: [promotionData] }
+      })
+      const created = createdPromos[0]
+      if (!created) throw new Error("Failed to create promotion")
+      promotion = { id: created.id, code: created.code ?? promoCode }
+      logger.info(`[POS Discount] Created promotion ${promoCode}`)
+    }
 
     // 2. Cancel any existing open draft order edits
     try {

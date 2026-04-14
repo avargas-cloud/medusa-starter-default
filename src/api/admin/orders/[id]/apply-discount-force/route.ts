@@ -1,5 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
-import { Modules } from "@medusajs/utils"
+import { Modules, PromotionType, PromotionStatus, ApplicationMethodType, ApplicationMethodTargetType } from "@medusajs/utils"
 import {
     createPromotionsWorkflow,
     addDraftOrderPromotionWorkflow,
@@ -43,6 +43,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
     const logger = req.scope.resolve("logger")
     const orderModule = req.scope.resolve(Modules.ORDER) as any
     const paymentModule = req.scope.resolve(Modules.PAYMENT) as any
+    const promotionModule = req.scope.resolve(Modules.PROMOTION) as any
 
     try {
         // 1. Fetch order to get currency code and payment collections
@@ -77,32 +78,51 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
         let promotionId: string | null = null
 
         try {
-            // 3. Create a real Medusa promotion (same as pos-discount does for draft orders)
-            const promoCode = `POS-DISC-${Date.now()}`
-            const promotionData: any = {
-                code: promoCode,
-                type: "standard",
-                status: "active",
-                is_automatic: false,
-                is_tax_inclusive: false,
-                application_method: {
-                    type: discount_type === "percent" ? "percentage" : "fixed",
-                    target_type: "items",
-                    allocation: "across",
-                    is_tax_inclusive: false,
-                    value: discount_value,
-                    currency_code: discount_type === "fixed" ? (order.currency_code ?? "usd") : undefined,
+            // 3. Find-or-create: deterministic code from type+value to reuse existing promotions.
+            const valueInt = Math.round(discount_value * 100)
+            const promoCode = discount_type === "percent"
+                ? `CPOS-PCT-${valueInt}`
+                : `CPOS-FIXED-${valueInt}`
+
+            const [existingPromo] = await promotionModule.listPromotions(
+                { code: [promoCode] },
+                { select: ["id", "code", "status"] }
+            )
+
+            let promotion: { id: string; code: string }
+            if (existingPromo) {
+                if (existingPromo.status !== PromotionStatus.ACTIVE) {
+                    await promotionModule.updatePromotions([{ id: existingPromo.id, status: PromotionStatus.ACTIVE }])
                 }
+                promotion = { id: existingPromo.id, code: existingPromo.code ?? promoCode }
+                logger.info(`[apply-discount-force] Reusing promotion ${promoCode} (${existingPromo.id})`)
+            } else {
+                const promotionData = {
+                    code: promoCode,
+                    type: PromotionType.STANDARD,
+                    status: PromotionStatus.ACTIVE,
+                    is_automatic: false,
+                    is_tax_inclusive: false,
+                    application_method: {
+                        type: discount_type === "percent" ? ApplicationMethodType.PERCENTAGE : ApplicationMethodType.FIXED,
+                        target_type: ApplicationMethodTargetType.ITEMS,
+                        allocation: "across" as const,
+                        is_tax_inclusive: false,
+                        value: discount_value,
+                        currency_code: discount_type === "fixed" ? (order.currency_code ?? "usd") : undefined,
+                    }
+                }
+                const { result: createdPromos } = await createPromotionsWorkflow(req.scope).run({
+                    input: { promotionsData: [promotionData] }
+                })
+                const created = createdPromos[0]
+                if (!created) throw new Error("Failed to create promotion")
+                promotion = { id: created.id, code: created.code ?? promoCode }
+                logger.info(`[apply-discount-force] Created promotion ${promoCode}`)
             }
 
-            const { result: createdPromos } = await createPromotionsWorkflow(req.scope).run({
-                input: { promotionsData: [promotionData] }
-            })
-            const promotion = createdPromos[0]
-            if (!promotion) throw new Error("Failed to create promotion")
             promotionCode = promoCode
             promotionId = promotion.id
-            logger.info(`[apply-discount-force] Created promotion ${promoCode}`)
 
             // 4. Cancel any pending edits (clean slate)
             try {
