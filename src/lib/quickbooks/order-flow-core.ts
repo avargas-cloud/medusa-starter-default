@@ -1019,8 +1019,8 @@ export const QB_PAYMENT_METHOD_NAMES: Record<string, string> = {
   debit_card: "Debit Card",
   gift_card: "Gift Card",
   e_check: "E-Check",
+  zelle: "Zelle", // added to QB Desktop Payment Method List on 2026-04-14
   // Not in QB's list — map to closest equivalent or leave unmapped:
-  // zelle     → undefined (no entry in QB list; accounting will categorize manually)
   // stripe    → undefined (should never hit this path for POS sales anyway)
 };
 
