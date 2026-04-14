@@ -29,7 +29,7 @@ export async function createSalesOrderInQb(
     }
 }
 
-export async function getSalesOrderDetailsFromQb(txnId: string): Promise<{ success: boolean, editSequence?: string, linesByProductId?: Record<string, string>, rawLines?: any[], error?: string }> {
+export async function getSalesOrderDetailsFromQb(txnId: string): Promise<{ success: boolean, editSequence?: string, linesByProductId?: Record<string, string[]>, rawLines?: any[], error?: string }> {
     try {
         // Try cache first (populated by consolidator after confirmation)
         const cached = await getCachedEditSequence("sales_order", txnId)
@@ -62,11 +62,17 @@ export async function getSalesOrderDetailsFromQb(txnId: string): Promise<{ succe
             ? existingLines
             : (existingLines ? [existingLines] : [])
 
-        const qbLinesByProductId: Record<string, string> = {}
-        for (const line of linesArr) {
+        // Sort ascending by TxnLineID (numeric) so the queue matches QB line order.
+        // Duplicate products (same QB ListID) are supported via arrays.
+        const qbLinesByProductId: Record<string, string[]> = {}
+        const sortedLines = [...linesArr].sort((a, b) => Number(a?.TxnLineID ?? 0) - Number(b?.TxnLineID ?? 0))
+        for (const line of sortedLines) {
             const productId = line?.ItemRef?.ListID
             const txnLineId = line?.TxnLineID
-            if (productId && txnLineId) qbLinesByProductId[productId] = txnLineId
+            if (productId && txnLineId) {
+                if (!qbLinesByProductId[productId]) qbLinesByProductId[productId] = []
+                qbLinesByProductId[productId].push(txnLineId)
+            }
         }
 
         // Warm the cache so next mod can skip the GET
@@ -103,10 +109,16 @@ export async function updateSalesOrderInQb(
         const editSequence = details.editSequence
         const qbLinesByProductId = details.linesByProductId || {}
 
+        // Make a mutable copy of the queues so .shift() doesn't mutate the cached object.
+        const txnLineQueue: Record<string, string[]> = Object.fromEntries(
+            Object.entries(qbLinesByProductId).map(([k, v]) => [k, [...v]])
+        )
+
         const modItems = payload.items
             .map(item => {
                 const pid = item.productId
-                const txnLineId = pid ? qbLinesByProductId[pid] : undefined
+                // Pop the first available TxnLineID for this productId (supports duplicates).
+                const txnLineId = pid ? txnLineQueue[pid]?.shift() : undefined
                 return {
                     ...(txnLineId ? { TxnLineID: txnLineId } : {}),
                     ...(pid ? { productId: pid } : {}),
@@ -118,10 +130,10 @@ export async function updateSalesOrderInQb(
                     noSite: item.noSite,
                 }
             })
-            // QB Error 3290: TxnLineIDs must be sent in ascending order (same sequence as in QB).
+            // QB Error 3290: TxnLineIDs must be sent in ascending numeric order.
             // Items without TxnLineID (new lines) go last so QB appends them.
             .sort((a, b) => {
-                if (a.TxnLineID && b.TxnLineID) return a.TxnLineID < b.TxnLineID ? -1 : 1
+                if (a.TxnLineID && b.TxnLineID) return Number(a.TxnLineID) - Number(b.TxnLineID)
                 if (a.TxnLineID) return -1
                 if (b.TxnLineID) return 1
                 return 0

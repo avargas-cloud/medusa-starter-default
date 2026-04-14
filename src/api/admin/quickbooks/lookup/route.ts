@@ -1,7 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { bridgeFetch, POLL_INTERVAL_MS, MAX_POLL_ATTEMPTS } from "../../../../lib/quickbooks/client/core"
 
-type QbDocType = 'Estimate' | 'SalesOrder' | 'Invoice' | 'CreditMemo' | 'Check' | 'ReceivePayment'
+type QbDocType = 'Estimate' | 'SalesOrder' | 'Invoice' | 'SalesReceipt' | 'CreditMemo' | 'Check' | 'ReceivePayment'
 
 interface DocTypeConfig {
     queryElement: string
@@ -13,6 +13,7 @@ const DOC_TYPE_CONFIG: Record<QbDocType, DocTypeConfig> = {
     Estimate:       { queryElement: 'EstimateQueryRq',       retElement: 'EstimateRet',       rsElement: 'EstimateQueryRs' },
     SalesOrder:     { queryElement: 'SalesOrderQueryRq',     retElement: 'SalesOrderRet',     rsElement: 'SalesOrderQueryRs' },
     Invoice:        { queryElement: 'InvoiceQueryRq',        retElement: 'InvoiceRet',        rsElement: 'InvoiceQueryRs' },
+    SalesReceipt:   { queryElement: 'SalesReceiptQueryRq',   retElement: 'SalesReceiptRet',   rsElement: 'SalesReceiptQueryRs' },
     CreditMemo:     { queryElement: 'CreditMemoQueryRq',     retElement: 'CreditMemoRet',     rsElement: 'CreditMemoQueryRs' },
     Check:          { queryElement: 'CheckQueryRq',          retElement: 'CheckRet',          rsElement: 'CheckQueryRs' },
     ReceivePayment: { queryElement: 'ReceivePaymentQueryRq', retElement: 'ReceivePaymentRet', rsElement: 'ReceivePaymentQueryRs' },

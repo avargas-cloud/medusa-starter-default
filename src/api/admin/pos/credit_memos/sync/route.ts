@@ -108,6 +108,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 customer_id: payload.customer_id || null,
                 status: 'created',
                 notes: payload.notes || null,
+                sales_rep: payload.sales_rep ?? null,
                 shipping_option_id:   shipping?.optionId   || null,
                 shipping_option_name: shipping?.optionName || null,
                 ...dbTotals
@@ -130,6 +131,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
                 id: resolvedId,
                 customer_id: payload.customer_id || null,
                 notes: payload.notes || null,
+                sales_rep: payload.sales_rep ?? null,
                 shipping_option_id:   shipping?.optionId   || null,
                 shipping_option_name: shipping?.optionName || null,
                 ...dbTotals

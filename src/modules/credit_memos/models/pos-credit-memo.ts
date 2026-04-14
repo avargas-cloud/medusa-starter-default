@@ -17,6 +17,7 @@ const PosCreditMemo = model.define('pos_credit_memo', {
     shipping:           model.number().default(0),    // shipping refund
     total:              model.bigNumber().default(0), // final refund/credit total
     
+    sales_rep:            model.json().nullable(),   // { initials: "AVP", name: "Alejandro Vargas" }
     shipping_option_id:   model.text().nullable(),
     shipping_option_name: model.text().nullable(),
     qb_txn_id:            model.text().nullable(),   // QB TxnID after sync — needed for void

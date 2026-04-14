@@ -42,7 +42,7 @@ export async function updateEstimateInQb(
 
     try {
         let editSequence: string
-        let qbLinesByProductId: Record<string, string> = {}
+        let qbLinesByProductId: Record<string, string[]> = {}
 
         // Try the EditSequence + TxnLineID cache first (populated by consolidator after confirmation).
         // This avoids a round-trip GET to the QB bridge for the common case (single or sequential saves).
@@ -76,20 +76,32 @@ export async function updateEstimateInQb(
                 ? existingLines
                 : (existingLines ? [existingLines] : [])
 
-            for (const line of linesArr) {
+            // Sort ascending by TxnLineID (numeric) so the queue matches QB line order.
+            // Duplicate products (same QB ListID) are supported via arrays.
+            const sortedLines = [...linesArr].sort((a, b) => Number(a?.TxnLineID ?? 0) - Number(b?.TxnLineID ?? 0))
+            for (const line of sortedLines) {
                 const productId = line?.ItemRef?.ListID
                 const txnLineId = line?.TxnLineID
-                if (productId && txnLineId) qbLinesByProductId[productId] = txnLineId
+                if (productId && txnLineId) {
+                    if (!qbLinesByProductId[productId]) qbLinesByProductId[productId] = []
+                    qbLinesByProductId[productId].push(txnLineId)
+                }
             }
 
             // Warm the cache with what we just fetched so the next mod can skip the GET
             cacheEditSequence("estimate", payload.txnId, editSequence, qbLinesByProductId).catch(() => {})
         }
 
+        // Make a mutable copy of the queues so .shift() doesn't mutate the cached object.
+        const txnLineQueue: Record<string, string[]> = Object.fromEntries(
+            Object.entries(qbLinesByProductId).map(([k, v]) => [k, [...v]])
+        )
+
         const modItems = payload.items
             .map(item => {
                 const pid = item.productId
-                const txnLineId = pid ? qbLinesByProductId[pid] : undefined
+                // Pop the first available TxnLineID for this productId (supports duplicates).
+                const txnLineId = pid ? txnLineQueue[pid]?.shift() : undefined
                 return {
                     ...(txnLineId ? { TxnLineID: txnLineId } : {}),
                     ...(pid ? { productId: pid } : {}),
@@ -100,10 +112,10 @@ export async function updateEstimateInQb(
                     desc: item.desc,
                 }
             })
-            // QB Error 3290: TxnLineIDs must be sent in ascending order (the sequence they exist
-            // in QB). Items without a TxnLineID (new lines) go last so QB appends them.
+            // QB Error 3290: TxnLineIDs must be sent in ascending numeric order.
+            // Items without TxnLineID (new lines) go last so QB appends them.
             .sort((a, b) => {
-                if (a.TxnLineID && b.TxnLineID) return a.TxnLineID < b.TxnLineID ? -1 : 1
+                if (a.TxnLineID && b.TxnLineID) return Number(a.TxnLineID) - Number(b.TxnLineID)
                 if (a.TxnLineID) return -1  // existing line → before new
                 if (b.TxnLineID) return 1   // new line → after existing
                 return 0

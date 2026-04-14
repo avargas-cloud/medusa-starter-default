@@ -52,21 +52,21 @@ async function resolveId(client: InstanceType<typeof Client>, type: PosDocType, 
 
     if (type === 'invoice') {
         const { rows } = await client.query(
-            `SELECT id FROM pos_invoice WHERE invoice_number = $1 LIMIT 1`,
-            [id]
+            `SELECT id FROM pos_invoice WHERE id = $1 OR invoice_number = $2 LIMIT 1`,
+            [id, id]
         )
         return rows[0]?.id ?? null
     }
 
     if (type === 'return') {
-        // Accept: CM-20065, cm-20065, 20065 (auto-prefix CM-)
+        // Accept: CM-20065, cm-20065, 20065 (auto-prefix CM-), or direct internal UUID
         const upper = id.toUpperCase()
         const withCM = upper.startsWith('CM') ? upper : `CM-${upper}`
         const { rows } = await client.query(
             `SELECT id FROM pos_credit_memo
-             WHERE credit_memo_number ILIKE $1 OR credit_memo_number ILIKE $2
+             WHERE id = $1 OR credit_memo_number ILIKE $2 OR credit_memo_number ILIKE $3
              LIMIT 1`,
-            [upper, withCM]
+            [id, upper, withCM]
         )
         return rows[0]?.id ?? null
     }
@@ -93,23 +93,25 @@ async function resolveId(client: InstanceType<typeof Client>, type: PosDocType, 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function extractQbFields(meta: Record<string, unknown> | null | undefined, type: PosDocType) {
-    if (!meta) return { qb_txn_id: null, qb_ref_number: null, qb_sync_status: null, qb_edit_sequence: null }
+    if (!meta) return { qb_txn_id: null, qb_ref_number: null, qb_sync_status: null, qb_edit_sequence: null, qb_is_sales_receipt: null }
 
     if (type === 'estimate') {
         const est = meta.qb_estimate
         if (est && typeof est === 'object' && !Array.isArray(est)) {
             return {
-                qb_txn_id:       (est as any).txn_id        ?? null,
-                qb_ref_number:   (est as any).ref_number     ?? null,
-                qb_sync_status:  (meta.qb_sync_status as string) ?? null,
-                qb_edit_sequence:(est as any).edit_sequence  ?? null,
+                qb_txn_id:           (est as any).txn_id        ?? null,
+                qb_ref_number:       (est as any).ref_number     ?? null,
+                qb_sync_status:      (meta.qb_sync_status as string) ?? null,
+                qb_edit_sequence:    (est as any).edit_sequence  ?? null,
+                qb_is_sales_receipt: null,
             }
         }
         return {
-            qb_txn_id:       (meta.qb_estimate_txn_id as string) ?? null,
-            qb_ref_number:   (meta.qb_estimate_ref as string)    ?? null,
-            qb_sync_status:  (meta.qb_sync_status as string)     ?? null,
-            qb_edit_sequence: null,
+            qb_txn_id:           (meta.qb_estimate_txn_id as string) ?? null,
+            qb_ref_number:       (meta.qb_estimate_ref as string)    ?? null,
+            qb_sync_status:      (meta.qb_sync_status as string)     ?? null,
+            qb_edit_sequence:    null,
+            qb_is_sales_receipt: null,
         }
     }
 
@@ -117,27 +119,30 @@ function extractQbFields(meta: Record<string, unknown> | null | undefined, type:
         const so = meta.qb_sales_order
         if (so && typeof so === 'object' && !Array.isArray(so)) {
             return {
-                qb_txn_id:       (so as any).txn_id        ?? null,
-                qb_ref_number:   (so as any).ref_number     ?? null,
-                qb_sync_status:  (meta.qb_sync_status as string) ?? null,
-                qb_edit_sequence:(so as any).edit_sequence  ?? null,
+                qb_txn_id:           (so as any).txn_id        ?? null,
+                qb_ref_number:       (so as any).ref_number     ?? null,
+                qb_sync_status:      (meta.qb_sync_status as string) ?? null,
+                qb_edit_sequence:    (so as any).edit_sequence  ?? null,
+                qb_is_sales_receipt: null,
             }
         }
         return {
-            qb_txn_id:       (meta.qb_sales_order_txn_id as string) ?? null,
-            qb_ref_number:   (meta.qb_sales_order_ref as string)    ?? null,
-            qb_sync_status:  (meta.qb_sync_status as string)        ?? null,
-            qb_edit_sequence: null,
+            qb_txn_id:           (meta.qb_sales_order_txn_id as string) ?? null,
+            qb_ref_number:       (meta.qb_sales_order_ref as string)    ?? null,
+            qb_sync_status:      (meta.qb_sync_status as string)        ?? null,
+            qb_edit_sequence:    null,
+            qb_is_sales_receipt: null,
         }
     }
 
     // invoice: flat fields in metadata
     if (type === 'invoice') {
         return {
-            qb_txn_id:       (meta.qb_invoice_txn_id as string) ?? (meta.qb_txn_id as string) ?? null,
-            qb_ref_number:   (meta.qb_ref_number as string)     ?? null,
-            qb_sync_status:  (meta.qb_sync_status as string)    ?? null,
-            qb_edit_sequence:(meta.qb_edit_sequence as string)  ?? null,
+            qb_txn_id:           (meta.qb_invoice_txn_id as string) ?? (meta.qb_txn_id as string) ?? null,
+            qb_ref_number:       (meta.qb_ref_number as string)     ?? null,
+            qb_sync_status:      (meta.qb_sync_status as string)    ?? null,
+            qb_edit_sequence:    (meta.qb_edit_sequence as string)  ?? null,
+            qb_is_sales_receipt: (meta.qb_is_sales_receipt as boolean) ?? null,
         }
     }
 
@@ -145,14 +150,15 @@ function extractQbFields(meta: Record<string, unknown> | null | undefined, type:
     // payment: flat fields in metadata
     if (type === 'return' || type === 'payment') {
         return {
-            qb_txn_id:       (meta.qb_txn_id as string)       ?? null,
-            qb_ref_number:   (meta.qb_ref_number as string)   ?? null,
-            qb_sync_status:  (meta.qb_sync_status as string)  ?? null,
-            qb_edit_sequence:(meta.qb_edit_sequence as string) ?? null,
+            qb_txn_id:           (meta.qb_txn_id as string)       ?? null,
+            qb_ref_number:       (meta.qb_ref_number as string)   ?? null,
+            qb_sync_status:      (meta.qb_sync_status as string)  ?? null,
+            qb_edit_sequence:    (meta.qb_edit_sequence as string) ?? null,
+            qb_is_sales_receipt: null,
         }
     }
 
-    return { qb_txn_id: null, qb_ref_number: null, qb_sync_status: null, qb_edit_sequence: null }
+    return { qb_txn_id: null, qb_ref_number: null, qb_sync_status: null, qb_edit_sequence: null, qb_is_sales_receipt: null }
 }
 
 // ─── GET ─────────────────────────────────────────────────────────────────────
@@ -266,7 +272,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
         }
 
         // ── Extract QB fields ─────────────────────────────────────────────────
-        let qbFields: { qb_txn_id: string | null; qb_ref_number: string | null; qb_sync_status: string | null; qb_edit_sequence: string | null }
+        let qbFields: { qb_txn_id: string | null; qb_ref_number: string | null; qb_sync_status: string | null; qb_edit_sequence: string | null; qb_is_sales_receipt: boolean | null }
 
         // For returns, metadata was built from direct columns above
         qbFields = extractQbFields(entity_metadata, type as PosDocType)
@@ -325,13 +331,15 @@ export async function PUT(req: MedusaRequest, res: MedusaResponse): Promise<void
         qb_ref_number,
         qb_sync_status,
         qb_edit_sequence,
+        qb_is_sales_receipt,
     } = (req.body ?? {}) as {
-        type?:              string
-        id?:                string
-        qb_txn_id?:         string | null
-        qb_ref_number?:     string | null
-        qb_sync_status?:    string | null
-        qb_edit_sequence?:  string | null
+        type?:                string
+        id?:                  string
+        qb_txn_id?:           string | null
+        qb_ref_number?:       string | null
+        qb_sync_status?:      string | null
+        qb_edit_sequence?:    string | null
+        qb_is_sales_receipt?: boolean | null
     }
 
     if (!type || !VALID_TYPES.includes(type as PosDocType)) {
@@ -413,10 +421,11 @@ export async function PUT(req: MedusaRequest, res: MedusaResponse): Promise<void
 
             const existingMeta: Record<string, unknown> = { ...((invoice as any).metadata ?? {}) }
 
-            if (qb_txn_id        !== undefined) existingMeta.qb_invoice_txn_id = qb_txn_id
-            if (qb_ref_number    !== undefined) existingMeta.qb_ref_number     = qb_ref_number
-            if (qb_sync_status   !== undefined) existingMeta.qb_sync_status    = qb_sync_status
-            if (qb_edit_sequence !== undefined) existingMeta.qb_edit_sequence  = qb_edit_sequence
+            if (qb_txn_id           !== undefined) existingMeta.qb_invoice_txn_id  = qb_txn_id
+            if (qb_ref_number       !== undefined) existingMeta.qb_ref_number      = qb_ref_number
+            if (qb_sync_status      !== undefined) existingMeta.qb_sync_status     = qb_sync_status
+            if (qb_edit_sequence    !== undefined) existingMeta.qb_edit_sequence   = qb_edit_sequence
+            if (qb_is_sales_receipt !== undefined) existingMeta.qb_is_sales_receipt = qb_is_sales_receipt
 
             await invoiceService.updatePosInvoices({ id: internalId, metadata: existingMeta })
         }

@@ -321,14 +321,14 @@ export async function findSubmittedRowByOpId(bridgeOpId: string): Promise<{
 
 /**
  * Saves an EditSequence (and optionally TxnLineIDs) to the cache (upsert).
- * lineIds: productId → TxnLineID mapping for line-level update operations.
+ * lineIds: productId → [TxnLineID, ...] mapping. Arrays support duplicate products on the same doc.
  * Call this after every QB response that contains an EditSequence.
  */
 export async function cacheEditSequence(
     entityType: string,
     qbId: string,
     editSeq: string,
-    lineIds?: Record<string, string> | null
+    lineIds?: Record<string, string[]> | null
 ): Promise<void> {
     if (!qbId || !editSeq) return
     const pool = getDbPool()
@@ -345,21 +345,26 @@ export async function cacheEditSequence(
 
 /**
  * Retrieves a cached EditSequence and optional TxnLineIDs map, or null if not cached.
+ * Normalizes old cache format (Record<string, string>) to current format (Record<string, string[]>).
  */
 export async function getCachedEditSequence(
     entityType: string,
     qbId: string
-): Promise<{ editSeq: string; lineIds: Record<string, string> | null } | null> {
+): Promise<{ editSeq: string; lineIds: Record<string, string[]> | null } | null> {
     const pool = getDbPool()
     const { rows } = await pool.query(
         `SELECT edit_seq, line_ids FROM qb_edit_sequence_cache WHERE entity_type = $1 AND qb_id = $2`,
         [entityType, qbId]
     )
     if (!rows[0]) return null
-    return {
-        editSeq: rows[0].edit_seq as string,
-        lineIds: (rows[0].line_ids as Record<string, string> | null) ?? null,
-    }
+    const rawLineIds = rows[0].line_ids as Record<string, string | string[]> | null
+    // Normalize: old cache entries stored string values; new format uses string[].
+    const lineIds: Record<string, string[]> | null = rawLineIds
+        ? Object.fromEntries(
+            Object.entries(rawLineIds).map(([k, v]) => [k, Array.isArray(v) ? v : [v]])
+          )
+        : null
+    return { editSeq: rows[0].edit_seq as string, lineIds }
 }
 
 /**

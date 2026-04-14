@@ -102,22 +102,30 @@ export default async function qbPipelineConsolidator(
                     msgs?.CreditMemoAddRs?.CreditMemoRet?.EditSequence ||
                     null
 
-                // Extract TxnLineID map (productId → TxnLineID) from confirmed QB response.
-                // This allows subsequent mod ops to skip the GET round-trip entirely.
-                const extractLineIds = (lineRet: unknown): Record<string, string> | null => {
+                // Extract TxnLineID map (productId → [TxnLineID, ...]) from confirmed QB response.
+                // Arrays support duplicate products on the same document.
+                // Sorted by TxnLineID ascending so the queue matches QB line order.
+                const extractLineIds = (lineRet: unknown): Record<string, string[]> | null => {
                     if (!lineRet) return null
                     const arr: unknown[] = Array.isArray(lineRet) ? lineRet : [lineRet]
-                    const map: Record<string, string> = {}
-                    for (const line of arr) {
+                    const sorted = [...arr].sort((a, b) =>
+                        Number((a as Record<string, unknown>)?.TxnLineID ?? 0) -
+                        Number((b as Record<string, unknown>)?.TxnLineID ?? 0)
+                    )
+                    const map: Record<string, string[]> = {}
+                    for (const line of sorted) {
                         const l = line as Record<string, unknown>
                         const pid = (l?.ItemRef as Record<string, unknown>)?.ListID as string | undefined
                         const tid = l?.TxnLineID as string | undefined
-                        if (pid && tid) map[pid] = tid
+                        if (pid && tid) {
+                            if (!map[pid]) map[pid] = []
+                            map[pid].push(tid)
+                        }
                     }
                     return Object.keys(map).length > 0 ? map : null
                 }
 
-                const lineIds: Record<string, string> | null =
+                const lineIds: Record<string, string[]> | null =
                     extractLineIds(op.result?.QBXML?.QBXMLMsgsRs?.EstimateAddRs?.EstimateRet?.EstimateLineRet) ??
                     extractLineIds(op.result?.QBXML?.QBXMLMsgsRs?.EstimateModRs?.EstimateRet?.EstimateLineRet) ??
                     extractLineIds(op.result?.QBXML?.QBXMLMsgsRs?.SalesOrderAddRs?.SalesOrderRet?.SalesOrderLineRet) ??
