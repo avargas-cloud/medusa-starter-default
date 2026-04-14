@@ -106,6 +106,12 @@ export const EstimateInfoBlock = ({ orderId, customerId, initialInfo, onInfoChan
     const persist = useCallback(async (updated: EstimateInfo) => {
         setSaving(true)
         try {
+            // Build the sales_rep object so QB always reads initials from the object format
+            const repObj = reps.find(r => r.value === updated.rep)
+            const salesRepMeta = repObj
+                ? { initials: repObj.value, name: repObj.label }
+                : undefined
+
             const r = await fetch(`/admin/draft-orders/${orderId}`, {
                 method: "POST",
                 credentials: "include",
@@ -118,6 +124,7 @@ export const EstimateInfoBlock = ({ orderId, customerId, initialInfo, onInfoChan
                         estimate_payment_terms: updated.paymentTerms,
                         estimate_project: updated.project,
                         customer_po: updated.customerPO,
+                        ...(salesRepMeta ? { sales_rep: salesRepMeta } : {}),
                     },
                 }),
             })
@@ -125,7 +132,7 @@ export const EstimateInfoBlock = ({ orderId, customerId, initialInfo, onInfoChan
         } catch {
             toast.error("Failed to save estimate details")
         } finally { setSaving(false) }
-    }, [orderId])
+    }, [orderId, reps])
 
     // Save a single field to customer defaults
     const saveFieldDefault = useCallback(async (fieldKey: keyof EstimateInfo) => {

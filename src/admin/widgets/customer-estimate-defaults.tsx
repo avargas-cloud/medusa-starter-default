@@ -45,7 +45,7 @@ const CustomerEstimateWidget = ({ data }: DetailWidgetProps<HttpTypes.AdminCusto
                 setOptions(d)
                 if (d.sales_reps) {
                     setReps(d.sales_reps.map((u: any) => ({
-                        value: u.name,
+                        value: u.initials,
                         label: `${u.initials} - ${u.name}`
                     })))
                 }

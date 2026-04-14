@@ -104,6 +104,7 @@ export async function POST(
         }
 
         // Check if already synced — allow force re-sync via body.force=true
+        // Guard 1: metadata txnId
         const existingEstimateTxnId = getEstimateTxnId(order.metadata)
         const existingEstimateRef = getEstimateRef(order.metadata)
         if (existingEstimateTxnId && !(req.body as any).force) {
@@ -115,6 +116,31 @@ export async function POST(
                 message: `Already synced to QB Estimate #${existingEstimateRef || existingEstimateTxnId}`,
             })
             return
+        }
+        // Guard 2: pipeline table — catches cases where metadata wasn't saved but pipeline row was confirmed
+        if (!(req.body as any).force) {
+            try {
+                const { getDbPool } = require("../../../utils/db-pool")
+                const pool = getDbPool()
+                const { rows: pipelineRows } = await pool.query(
+                    `SELECT id, qb_txn_id, qb_ref_number FROM qb_order_pipeline
+                     WHERE order_id = $1 AND step = 'estimate' AND status IN ('submitted','confirmed')
+                     LIMIT 1`,
+                    [orderId]
+                )
+                if (pipelineRows.length > 0) {
+                    res.json({
+                        success: true,
+                        alreadySynced: true,
+                        qbEstimateTxnId: pipelineRows[0].qb_txn_id,
+                        qbEstimateRef: pipelineRows[0].qb_ref_number,
+                        message: `Already synced to QB Estimate #${pipelineRows[0].qb_ref_number || pipelineRows[0].qb_txn_id} (confirmed in pipeline)`,
+                    })
+                    return
+                }
+            } catch {
+                // Non-fatal — proceed with sync if pipeline check fails
+            }
         }
 
         // Get customer (cast needed: OrderDTO doesn't statically expose customer
