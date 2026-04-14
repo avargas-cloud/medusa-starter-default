@@ -33,6 +33,7 @@
  */
 
 import { buildQbCustomerName } from "./build-customer-name";
+import { createSalesReceiptInQb } from "./client/sales-receipts";
 import {
   checkBridgeHealth,
   createCustomerInQb,
@@ -50,10 +51,9 @@ import {
   QbOrderItem,
 } from "./qb-bridge-client";
 import { isQbIntegrationEnabled } from "./qb-integration-guard";
-import { QbSyncLogger } from "./qb-sync-logger";
 import { getEstimateTxnId } from "./qb-metadata-types";
 import { getCachedEditSequence, writePipelineRow } from "./qb-pipeline";
-import { createSalesReceiptInQb } from "./client/sales-receipts";
+import { QbSyncLogger } from "./qb-sync-logger";
 
 const ORDER_FLOW_ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";
 const DRY_RUN = process.env.QB_DRY_RUN === "true";
@@ -980,36 +980,45 @@ export async function processInvoiceInQb(invoice: {
 
 // ─── 3.5 Process Sales Receipt (Fully Paid POS Cash Sale) ──────────────────────
 
+/**
+ * Canonical POS → QB Payment Method name mapping.
+ *
+ * These values MUST match the `FullName` of entries in the Payment Method
+ * List in QuickBooks Desktop. A mismatch (e.g. "MasterCard" vs "Mastercard")
+ * causes QB to silently ignore the PaymentMethodRef and leave the field
+ * blank on the resulting Sales Receipt / ReceivePayment.
+ *
+ * Keep this in sync with `QB_PAYMENT_METHOD_NAMES` in
+ * /api/admin/customer-payments/[id]/route.ts.
+ */
+export const QB_PAYMENT_METHOD_NAMES: Record<string, string> = {
+  cash: "Cash",
+  visa: "Visa",
+  mastercard: "Mastercard",
+  discover: "Discover",
+  amex: "American Express",
+  capital_one: "Capital One",
+  debit_card: "Debit Card",
+  check: "Check",
+  money_order: "Check",
+  checking_account: "ACH / Bank Transfer",
+  e_check: "ACH / Bank Transfer",
+  transfer: "ACH / Bank Transfer",
+  ach: "ACH / Bank Transfer",
+  wire_transfer: "Wire Transfer",
+  zelle: "Zelle",
+  paypal: "Other",
+};
+
 function mapPaymentMethodToQb(method: string | undefined): string | undefined {
   if (!method) return undefined;
-  const m = method.toLowerCase().trim();
-  switch (m) {
-    case "cash":
-      return "Cash";
-    case "card":
-    case "credit card":
-      return "Credit Card";
-    case "visa":
-      return "Visa";
-    case "mastercard":
-      return "MasterCard";
-    case "zelle":
-      return "Zelle";
-    case "check":
-      return "Check";
-    case "ach":
-      return "EFT";
-    case "amex":
-    case "american express":
-      return "American Express";
-    case "discover":
-      return "Discover";
-    case "capital_one":
-    case "capital one":
-      return "Capital One";
-    default:
-      return method.charAt(0).toUpperCase() + method.slice(1);
-  }
+  const m = method.toLowerCase().trim().replace(/\s+/g, "_");
+  if (QB_PAYMENT_METHOD_NAMES[m]) return QB_PAYMENT_METHOD_NAMES[m];
+  // Generic aliases — should not be sent as a specific QB method
+  if (m === "card" || m === "credit_card" || m === "credit") return undefined;
+  // Unknown value — return undefined so QB leaves the field blank rather
+  // than sending a name QB Desktop has no entry for.
+  return undefined;
 }
 
 /**

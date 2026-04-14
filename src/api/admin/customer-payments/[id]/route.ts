@@ -4,9 +4,11 @@
  */
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
+
+import { QB_PAYMENT_METHOD_NAMES } from "../../../../lib/quickbooks/order-flow-core";
+import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../modules/invoices";
-import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const id = req.params.id!;
@@ -46,7 +48,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const invoiceIds = [
       ...new Set(applications.map((a: any) => a.invoice_id).filter(Boolean)),
     ];
-    let invoiceMap: Record<string, any> = {};
+    const invoiceMap: Record<string, any> = {};
     if (invoiceIds.length) {
       try {
         const invoices = await invoiceService.listPosInvoices({
@@ -102,24 +104,9 @@ const VALID_METHODS = [
   "other",
 ];
 
-// QB FullName for each pos_payment_method value (used in PaymentMethodRef)
-const QB_PAYMENT_METHOD_NAMES: Record<string, string> = {
-  cash: "Cash",
-  visa: "Visa",
-  mastercard: "Mastercard",
-  discover: "Discover",
-  amex: "American Express",
-  capital_one: "Capital One",
-  debit_card: "Debit Card",
-  check: "Check",
-  money_order: "Check",
-  checking_account: "ACH / Bank Transfer",
-  e_check: "ACH / Bank Transfer",
-  transfer: "ACH / Bank Transfer",
-  wire_transfer: "Wire Transfer",
-  zelle: "Zelle",
-  paypal: "Other",
-};
+// QB FullName map is imported from lib/quickbooks/order-flow-core — single
+// source of truth shared by this edit route and the Sales Receipt / Payment
+// creation flow. Keeps the PaymentMethodRef consistent across both code paths.
 
 export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
   const id = req.params.id!;
