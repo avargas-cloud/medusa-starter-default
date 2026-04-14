@@ -1,5 +1,5 @@
-import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { S3Client, ListObjectsV2Command } from "@aws-sdk/client-s3";
+import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   try {

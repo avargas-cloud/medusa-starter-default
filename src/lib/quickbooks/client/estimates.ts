@@ -1,3 +1,5 @@
+import { getCachedEditSequence, cacheEditSequence } from "../qb-pipeline";
+
 import { DRY_RUN, bridgeFetch, pollRawOperationResult } from "./core";
 import {
   QbCreateEstimatePayload,
@@ -6,7 +8,6 @@ import {
   QbBridgeResult,
   QbAsyncResult,
 } from "./types";
-import { getCachedEditSequence, cacheEditSequence } from "../qb-pipeline";
 
 /**
  * Creates an Estimate in QuickBooks (async — used for Draft Orders).

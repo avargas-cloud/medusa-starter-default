@@ -1,4 +1,3 @@
-import { AbstractFulfillmentProviderService } from "@medusajs/utils";
 import {
   CalculatedShippingOptionPrice,
   CalculateShippingOptionPriceDTO,
@@ -10,6 +9,7 @@ import {
   FulfillmentOrderDTO,
   ValidateFulfillmentDataContext,
 } from "@medusajs/types";
+import { AbstractFulfillmentProviderService } from "@medusajs/utils";
 
 class UberShippingService extends AbstractFulfillmentProviderService {
   static identifier = "uber-shipping";

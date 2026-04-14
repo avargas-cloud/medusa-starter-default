@@ -1,15 +1,15 @@
 import { Container, Toaster } from "@medusajs/ui";
-import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import "../../styles/scrollbar-fix.css";
 
 // Logic
+import { ProductPagination } from "./components/product-pagination";
+import { ProductSearchHeader } from "./components/product-search-header";
+import { ProductTable } from "./components/product-table";
 import { useProductPageState } from "./hooks/use-product-page-state";
 
 // Components
-import { ProductSearchHeader } from "./components/product-search-header";
-import { ProductTable } from "./components/product-table";
-import { ProductPagination } from "./components/product-pagination";
 
 /**
  * Advanced Product Search Page

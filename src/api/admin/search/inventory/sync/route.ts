@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
 import { syncInventoryWorkflow } from "../../../../../workflows/sync-inventory";
 
 /**

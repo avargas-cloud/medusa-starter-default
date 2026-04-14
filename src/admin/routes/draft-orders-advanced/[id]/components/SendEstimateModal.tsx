@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from "react";
-import { Text, Input, Label, toast } from "@medusajs/ui";
 import { ArrowUpTray } from "@medusajs/icons";
+import { Text, Input, Label, toast } from "@medusajs/ui";
+import { useState, useEffect, useRef } from "react";
 
 interface Props {
   open: boolean;

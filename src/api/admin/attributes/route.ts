@@ -1,7 +1,7 @@
-import { createAttributeKeyWorkflow } from "../../../workflows/product-attributes/create-attribute-key";
-
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+
 import { PRODUCT_ATTRIBUTES_MODULE } from "../../../modules/product-attributes";
+import { createAttributeKeyWorkflow } from "../../../workflows/product-attributes/create-attribute-key";
 export async function GET(
   req: MedusaRequest,
   res: MedusaResponse

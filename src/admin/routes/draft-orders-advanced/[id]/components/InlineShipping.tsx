@@ -1,3 +1,5 @@
+import { Trash } from "@medusajs/icons";
+import { Text, Button, Label, toast } from "@medusajs/ui";
 import {
   useState,
   useCallback,
@@ -5,10 +7,8 @@ import {
   forwardRef,
   useImperativeHandle,
 } from "react";
-import { Text, Button, Label } from "@medusajs/ui";
-import { Trash } from "@medusajs/icons";
+
 import { fmt } from "../helpers";
-import { toast } from "@medusajs/ui";
 
 interface Props {
   orderId: string;

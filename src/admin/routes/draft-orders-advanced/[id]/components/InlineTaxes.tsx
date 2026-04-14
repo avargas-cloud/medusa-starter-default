@@ -1,7 +1,7 @@
+import { Text, Badge, toast } from "@medusajs/ui";
 import { useState, useEffect, useCallback } from "react";
-import { Text, Badge } from "@medusajs/ui";
+
 import { fmt } from "../helpers";
-import { toast } from "@medusajs/ui";
 
 type TaxMode = "florida" | "exempt" | "auto";
 

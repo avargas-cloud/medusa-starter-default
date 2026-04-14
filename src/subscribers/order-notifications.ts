@@ -1,5 +1,6 @@
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
 import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
+
 import { sendMail } from "../utils/mailer";
 
 // ─── Configuration ──────────────────────────────────────────────────────────

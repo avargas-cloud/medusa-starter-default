@@ -1,14 +1,4 @@
 import {
-  Button,
-  FocusModal,
-  Heading,
-  Badge,
-  Text,
-  Checkbox,
-} from "@medusajs/ui";
-import { useState, useEffect } from "react";
-import { XMark } from "@medusajs/icons";
-import {
   DndContext,
   closestCenter,
   KeyboardSensor,
@@ -24,6 +14,16 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { XMark } from "@medusajs/icons";
+import {
+  Button,
+  FocusModal,
+  Heading,
+  Badge,
+  Text,
+  Checkbox,
+} from "@medusajs/ui";
+import { useState, useEffect } from "react";
 
 type Attribute = {
   id: string;

@@ -1,8 +1,10 @@
 import { randomUUID } from "crypto";
+
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { Modules } from "@medusajs/utils";
+
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
-import { Modules } from "@medusajs/utils";
 
 /**
  * PATCH /admin/pos/credit_memos/:id/damaged
@@ -50,12 +52,10 @@ export async function PATCH(
     }
 
     if (creditMemo.status !== "completed") {
-      res
-        .status(400)
-        .json({
-          success: false,
-          message: "Damaged qty can only be edited on completed credit memos",
-        });
+      res.status(400).json({
+        success: false,
+        message: "Damaged qty can only be edited on completed credit memos",
+      });
       return;
     }
 
@@ -162,12 +162,10 @@ export async function PATCH(
     logger.info(
       `[damaged update] CM ${id}: ${items.length} item(s) updated, ${damagedRows.length} damaged record(s) logged`
     );
-    res
-      .status(200)
-      .json({
-        success: true,
-        message: "Damaged quantities updated and inventory adjusted",
-      });
+    res.status(200).json({
+      success: true,
+      message: "Damaged quantities updated and inventory adjusted",
+    });
   } catch (e: any) {
     logger.error(`[damaged update] failed: ${e.message}`);
     res.status(500).json({ success: false, message: e.message });

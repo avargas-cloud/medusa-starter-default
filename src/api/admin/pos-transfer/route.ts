@@ -30,13 +30,11 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       },
     ]);
 
-    return res
-      .status(200)
-      .json({
-        success: true,
-        message: `Successfully transferred ownership to customer ${customer_id}`,
-        order: result[0],
-      });
+    return res.status(200).json({
+      success: true,
+      message: `Successfully transferred ownership to customer ${customer_id}`,
+      order: result[0],
+    });
   } catch (error: any) {
     console.error("[pos-transfer]", error);
     return res.status(500).json({ error: error.message });

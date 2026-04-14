@@ -1,5 +1,6 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@medusajs/ui";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+
 import { meiliClient } from "../../../lib/meili-client";
 import { CUSTOMERS_INDEX } from "../../../lib/meili-types";
 import type { MeiliCustomer } from "../../../lib/meili-types";

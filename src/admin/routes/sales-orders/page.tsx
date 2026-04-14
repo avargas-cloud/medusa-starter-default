@@ -1,10 +1,11 @@
 import { Container, Heading, Text, Button } from "@medusajs/ui";
-import { useOrdersList } from "./hooks/use-orders-list";
+
 import {
   OrdersTable,
   OrdersControls,
   OrdersFooter,
 } from "./components/orders-table";
+import { useOrdersList } from "./hooks/use-orders-list";
 
 // NOTE: Sidebar config moved to orders-1-sales/page.tsx for correct sidebar ordering
 

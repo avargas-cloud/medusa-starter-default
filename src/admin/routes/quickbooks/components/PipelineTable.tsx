@@ -1,3 +1,5 @@
+import { ArrowPath } from "@medusajs/icons";
+import { Container, Heading, Text, Button, Badge } from "@medusajs/ui";
 import {
   useEffect,
   useState,
@@ -5,8 +7,6 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import { Container, Heading, Text, Button, Badge } from "@medusajs/ui";
-import { ArrowPath } from "@medusajs/icons";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

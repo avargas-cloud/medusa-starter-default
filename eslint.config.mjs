@@ -69,5 +69,16 @@ export default [
             // Prettier Integration
             "prettier/prettier": "error"
         }
+    },
+    // Scripts are dev/diagnostic tools — relax strict typing rules
+    {
+        files: ["src/scripts/**/*.ts"],
+        rules: {
+            "@typescript-eslint/no-explicit-any": "off",
+            "@typescript-eslint/no-unused-vars": "off",
+            "@typescript-eslint/explicit-function-return-type": "off",
+            "@typescript-eslint/no-non-null-assertion": "off",
+            "no-console": "off",
+        }
     }
 ];

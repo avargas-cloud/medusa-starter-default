@@ -1,5 +1,5 @@
-import { findLatestInFlightRow, pollUntilQbConfirmed } from "./qb-pipeline";
 import { withQbLock } from "./qb-locks";
+import { findLatestInFlightRow, pollUntilQbConfirmed } from "./qb-pipeline";
 
 interface SerializerLookup {
   orderId: string;

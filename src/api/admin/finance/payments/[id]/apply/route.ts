@@ -1,10 +1,11 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
+import { handlePosPaymentApplied } from "../../../../../../lib/quickbooks/handlers/handle-pos-payment-applied";
+import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../../modules/invoices";
-import { registerMedusaPayment } from "../../../../invoices/register-medusa-payment";
-import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
-import { handlePosPaymentApplied } from "../../../../../../lib/quickbooks/handlers/handle-pos-payment-applied";
 import { getDbPool } from "../../../../../utils/db-pool";
+import { registerMedusaPayment } from "../../../../invoices/register-medusa-payment";
 
 function getNum(val: any): number {
   if (val === null || val === undefined) return 0;
@@ -55,12 +56,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     if (payment.source === "web") {
-      return res
-        .status(403)
-        .json({
-          error:
-            "Web checkout payments are automatically applied to their source orders and cannot be manually applied to invoices.",
-        });
+      return res.status(403).json({
+        error:
+          "Web checkout payments are automatically applied to their source orders and cannot be manually applied to invoices.",
+      });
     }
 
     // Calculate available balance

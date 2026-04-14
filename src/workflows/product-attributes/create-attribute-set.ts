@@ -1,8 +1,10 @@
 import {
   createWorkflow,
   WorkflowResponse,
+  createStep,
+  StepResponse,
 } from "@medusajs/framework/workflows-sdk";
-import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
+
 import { PRODUCT_ATTRIBUTES_MODULE } from "../../modules/product-attributes";
 
 // Helper function to convert title to kebab-case handle

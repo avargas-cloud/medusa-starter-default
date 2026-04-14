@@ -1,9 +1,9 @@
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import {
   Modules,
   generateJwtToken,
   ContainerRegistrationKeys,
 } from "@medusajs/utils";
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { z } from "zod";
 
 const LoginSchema = z.object({

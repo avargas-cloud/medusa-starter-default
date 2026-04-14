@@ -1,4 +1,5 @@
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
+
 import { handlePosPaymentUnapplied } from "../lib/quickbooks/handlers/handle-pos-payment-unapplied";
 
 // ⚠️ ARCHITECTURE NOTE:

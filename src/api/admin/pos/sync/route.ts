@@ -1,19 +1,20 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
-import { handleDraftOrderCreated } from "../../../../subscribers/qb-draft-order-subscriber";
-import { handleOrderPlaced } from "../../../../lib/quickbooks/handlers/handle-order-placed";
+
 import { handleFulfillmentCreated } from "../../../../lib/quickbooks/handlers/handle-fulfillment-created";
-import { handleSalesReceiptCreated } from "../../../../lib/quickbooks/handlers/handle-sales-receipt-created";
-import { handlePosPaymentCreated } from "../../../../lib/quickbooks/handlers/handle-pos-payment-created";
+import { handleOrderPlaced } from "../../../../lib/quickbooks/handlers/handle-order-placed";
 import { handlePosPaymentApplied } from "../../../../lib/quickbooks/handlers/handle-pos-payment-applied";
-import { FINANCE_MODULE } from "../../../../modules/finance";
-import { INVOICE_MODULE } from "../../../../modules/invoices";
+import { handlePosPaymentCreated } from "../../../../lib/quickbooks/handlers/handle-pos-payment-created";
+import { handleSalesReceiptCreated } from "../../../../lib/quickbooks/handlers/handle-sales-receipt-created";
+import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
 import {
   getEstimateTxnId,
   getSoTxnId,
 } from "../../../../lib/quickbooks/qb-metadata-types";
-import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
 import { withQbSerialized } from "../../../../lib/quickbooks/qb-serializer";
+import { FINANCE_MODULE } from "../../../../modules/finance";
+import { INVOICE_MODULE } from "../../../../modules/invoices";
+import { handleDraftOrderCreated } from "../../../../subscribers/qb-draft-order-subscriber";
 
 const LOG_PREFIX = "[POST /admin/pos/sync]";
 
@@ -315,12 +316,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             filters: { order_id: id },
           });
           if (invoices && invoices.length > 0) {
-            return res
-              .status(400)
-              .json({
-                error:
-                  "Cannot manual-sync Order: Products are already invoiced. Use Invoice manual sync instead to preserve accounting links.",
-              });
+            return res.status(400).json({
+              error:
+                "Cannot manual-sync Order: Products are already invoiced. Use Invoice manual sync instead to preserve accounting links.",
+            });
           }
         }
 
@@ -741,11 +740,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           });
         }
         if (payInFlight) {
-          return res
-            .status(400)
-            .json({
-              error: `Cannot sync: Payment is already in progress (status: ${paySyncStatus}).`,
-            });
+          return res.status(400).json({
+            error: `Cannot sync: Payment is already in progress (status: ${paySyncStatus}).`,
+          });
         }
 
         // Fire-and-forget — double sequence runs in background
@@ -874,12 +871,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         // Smart void retry: if CM is voided and has a QB TxnID, re-send void to QB (background)
         if (creditMemo.status === "voided" || action === "void") {
           if (!creditMemo.qb_txn_id) {
-            return res
-              .status(400)
-              .json({
-                error:
-                  "Cannot void in QB: Credit Memo was never synced to QuickBooks.",
-              });
+            return res.status(400).json({
+              error:
+                "Cannot void in QB: Credit Memo was never synced to QuickBooks.",
+            });
           }
           logger.info(
             `${LOG_PREFIX} Retrying QB void for Credit Memo ${creditMemo.credit_memo_number} (TxnID: ${creditMemo.qb_txn_id})`
@@ -953,11 +948,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
 
         if (creditMemo.status !== "completed")
-          return res
-            .status(400)
-            .json({
-              error: "Only completed credit memos can be synced to QuickBooks.",
-            });
+          return res.status(400).json({
+            error: "Only completed credit memos can be synced to QuickBooks.",
+          });
 
         const cmTxnId = creditMemo.metadata?.qb_txn_id as string | undefined;
         if (cmTxnId) {
@@ -1059,12 +1052,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         });
 
         if (!cmResult.success) {
-          return res
-            .status(500)
-            .json({
-              error:
-                cmResult.error || "Failed to create Credit Memo in QuickBooks",
-            });
+          return res.status(500).json({
+            error:
+              cmResult.error || "Failed to create Credit Memo in QuickBooks",
+          });
         }
 
         return res.json({

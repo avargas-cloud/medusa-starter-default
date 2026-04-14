@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { PencilSquare } from "@medusajs/icons";
 import {
   Container,
   Heading,
@@ -8,7 +8,7 @@ import {
   Badge,
   Prompt,
 } from "@medusajs/ui";
-import { PencilSquare } from "@medusajs/icons";
+import { useEffect, useState } from "react";
 
 type SequencesData = {
   custom_estimate_seq: number | null;

@@ -1,5 +1,5 @@
-import { SubscriberArgs, type SubscriberConfig } from "@medusajs/framework";
 import { capturePaymentWorkflow } from "@medusajs/core-flows";
+import { SubscriberArgs, type SubscriberConfig } from "@medusajs/framework";
 
 /**
  * Subscriber: order.placed (web orders only)

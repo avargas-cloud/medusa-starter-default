@@ -1,10 +1,11 @@
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import {
   Modules,
   generateJwtToken,
   ContainerRegistrationKeys,
 } from "@medusajs/utils";
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { z } from "zod";
+
 import { getSql } from "../../../../lib/db";
 
 const ActivateSchema = z.object({

@@ -1,6 +1,7 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { createReservationsWorkflow } from "@medusajs/core-flows";
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
+
 import { getDbPool } from "../../../../utils/db-pool";
 
 /**

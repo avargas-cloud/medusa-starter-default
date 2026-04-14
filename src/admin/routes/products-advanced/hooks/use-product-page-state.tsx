@@ -2,8 +2,8 @@ import { useState } from "react";
 // Type import removed as unused
 
 // Hooks
-import { useGlobalHijacker } from "./use-global-hijacker";
 import { useCategories } from "./use-categories";
+import { useGlobalHijacker } from "./use-global-hijacker";
 import { useProductSearch } from "./use-product-search";
 
 export const useProductPageState = () => {

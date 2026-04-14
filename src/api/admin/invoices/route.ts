@@ -5,22 +5,22 @@
  */
 
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { INVOICE_MODULE } from "../../../modules/invoices";
-import { FINANCE_MODULE } from "../../../modules/finance";
-import { registerMedusaPayment } from "./register-medusa-payment";
-import { Modules } from "@medusajs/utils";
-import { ContainerRegistrationKeys } from "@medusajs/utils";
+import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
 
 // Import the background syncing handlers directly to bypass Medusa outbox dropping events
 import { handleFulfillmentCreated } from "../../../lib/quickbooks/handlers/handle-fulfillment-created";
-import { handlePosPaymentCreated } from "../../../lib/quickbooks/handlers/handle-pos-payment-created";
 import { handlePosPaymentApplied } from "../../../lib/quickbooks/handlers/handle-pos-payment-applied";
+import { handlePosPaymentCreated } from "../../../lib/quickbooks/handlers/handle-pos-payment-created";
 import { handleSalesReceiptCreated } from "../../../lib/quickbooks/handlers/handle-sales-receipt-created";
 import {
   writePipelineRow,
   skipSalesOrderPipelineRow,
   skipPendingPaymentRows,
 } from "../../../lib/quickbooks/qb-pipeline";
+import { FINANCE_MODULE } from "../../../modules/finance";
+import { INVOICE_MODULE } from "../../../modules/invoices";
+
+import { registerMedusaPayment } from "./register-medusa-payment";
 // ── GET /admin/invoices?order_id=:id ─────────────────────────────────────────
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {

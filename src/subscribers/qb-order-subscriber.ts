@@ -18,12 +18,12 @@ import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
 
 // ─── Event Handlers ──────────────────────────────────────────────────────────
 
+import { handleCustomerTransferred } from "../lib/quickbooks/handlers/handle-customer-transferred";
+import { handleFulfillmentCreated } from "../lib/quickbooks/handlers/handle-fulfillment-created";
+import { handleInvoiceVoided } from "../lib/quickbooks/handlers/handle-invoice-voided";
+import { handleOrderCanceled } from "../lib/quickbooks/handlers/handle-order-canceled";
 import { handleOrderPlaced } from "../lib/quickbooks/handlers/handle-order-placed";
 import { handlePaymentCaptured } from "../lib/quickbooks/handlers/handle-payment-captured";
-import { handleFulfillmentCreated } from "../lib/quickbooks/handlers/handle-fulfillment-created";
-import { handleOrderCanceled } from "../lib/quickbooks/handlers/handle-order-canceled";
-import { handleInvoiceVoided } from "../lib/quickbooks/handlers/handle-invoice-voided";
-import { handleCustomerTransferred } from "../lib/quickbooks/handlers/handle-customer-transferred";
 import { isPosOrder } from "../lib/quickbooks/handlers/utils";
 
 export default async function qbOrderSubscriber({

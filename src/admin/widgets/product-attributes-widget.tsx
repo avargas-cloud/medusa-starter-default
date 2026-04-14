@@ -3,8 +3,9 @@ import { DetailWidgetProps, AdminProduct } from "@medusajs/framework/types";
 import { Container, Heading, Table, Badge, Text, Button } from "@medusajs/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { ManageAttributesModal } from "../components/manage-attributes-modal";
+
 import { sdk } from "../../lib/sdk";
+import { ManageAttributesModal } from "../components/manage-attributes-modal";
 
 // Helper to group flat attributes by Key
 const groupAttributesByKey = (

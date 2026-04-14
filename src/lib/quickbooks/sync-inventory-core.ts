@@ -1,7 +1,9 @@
-import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 import { IInventoryService, IStockLocationService } from "@medusajs/types";
-import { isQbIntegrationEnabled } from "./qb-integration-guard";
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
+
 import { syncInventoryWorkflow } from "../../workflows/sync-inventory";
+
+import { isQbIntegrationEnabled } from "./qb-integration-guard";
 
 // Config — URLs and keys from env vars
 const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";

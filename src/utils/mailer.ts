@@ -5,6 +5,7 @@
  */
 
 import { Resend } from "resend";
+
 import { insertIntoGmailSent } from "./gmail-sent-insert";
 
 export interface MailOptions {

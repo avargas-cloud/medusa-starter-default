@@ -1,13 +1,13 @@
 import { defineWidgetConfig } from "@medusajs/admin-sdk";
-import { Container, Heading, Badge, Text, Button } from "@medusajs/ui";
 import {
   DetailWidgetProps,
   AdminProductCategory,
 } from "@medusajs/framework/types";
-import { useEffect, useState } from "react";
 import { PencilSquare } from "@medusajs/icons";
+import { Container, Heading, Badge, Text, Button, toast } from "@medusajs/ui";
+import { useEffect, useState } from "react";
+
 import { ManageFiltersModal } from "../components/manage-filters-modal";
-import { toast } from "@medusajs/ui";
 
 type CategoryWithMetadata = AdminProductCategory & {
   metadata?: {

@@ -4,6 +4,7 @@
  */
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
+
 import { FINANCE_MODULE } from "../../../modules/finance";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -37,7 +38,7 @@ async function enrichWithCustomer(payments: any[], customerModule: any) {
   const customerIds = [
     ...new Set(payments.map((p) => p.customer_id).filter(Boolean)),
   ];
-  let customerMap: Record<string, any> = {};
+  const customerMap: Record<string, any> = {};
   try {
     const customers = await customerModule.listCustomers(
       { id: customerIds },

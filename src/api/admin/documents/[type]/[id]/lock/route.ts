@@ -17,8 +17,10 @@
  *  - Admin bypass: header X-Force-Unlock: true skips owner check
  */
 
-import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { randomUUID } from "crypto";
+
+import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
 import { getRedis } from "../../../../../../lib/redis-client";
 
 const LOCK_TTL = 60; // seconds
@@ -91,13 +93,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     if (sessionId && data.sessionId === sessionId) {
       // Same tab reconnecting (e.g. React StrictMode double-mount) — renew TTL
       await redis.expire(key, LOCK_TTL);
-      return res
-        .status(200)
-        .json({
-          locked: true,
-          token: data.token,
-          message: "Lock renewed (same session)",
-        });
+      return res.status(200).json({
+        locked: true,
+        token: data.token,
+        message: "Lock renewed (same session)",
+      });
     }
 
     // NEW LOGIC: Self-Hijacking with BroadcastChannel Validation
@@ -114,13 +114,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         lockedAt: new Date().toISOString(),
       });
       await redis.set(key, hijackedPayload, "EX", LOCK_TTL);
-      return res
-        .status(200)
-        .json({
-          locked: true,
-          token: lockToken,
-          message: "Lock hijacked by same user (zombie/refresh)",
-        });
+      return res.status(200).json({
+        locked: true,
+        token: lockToken,
+        message: "Lock hijacked by same user (zombie/refresh)",
+      });
     }
 
     // Different session (including completely different users) — 409 Conflict

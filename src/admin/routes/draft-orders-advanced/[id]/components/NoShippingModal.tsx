@@ -1,4 +1,5 @@
 import { Heading, Text } from "@medusajs/ui";
+
 import { InlineShippingHandle } from "./InlineShipping";
 
 interface Props {

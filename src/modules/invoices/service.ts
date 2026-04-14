@@ -5,10 +5,11 @@
  */
 
 import { MedusaService } from "@medusajs/utils";
+
+import { InvoicePayment } from "./models/invoice-payment";
+import InvoiceTracking from "./models/invoice-tracking";
 import PosInvoice from "./models/pos-invoice";
 import PosInvoiceItem from "./models/pos-invoice-item";
-import InvoiceTracking from "./models/invoice-tracking";
-import { InvoicePayment } from "./models/invoice-payment";
 
 class InvoiceModuleService extends MedusaService({
   PosInvoice,

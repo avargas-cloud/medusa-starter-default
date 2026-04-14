@@ -1,6 +1,6 @@
+import { StepResponse } from "@medusajs/framework/workflows-sdk";
 import { completeCartWorkflow } from "@medusajs/medusa/core-flows";
 import { MedusaError } from "@medusajs/utils";
-import { StepResponse } from "@medusajs/framework/workflows-sdk";
 
 // Workaround for Medusa's exported types missing the internal hooks:
 const hooks = completeCartWorkflow.hooks as any;

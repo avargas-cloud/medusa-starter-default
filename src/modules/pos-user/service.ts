@@ -4,6 +4,7 @@
  */
 
 import { MedusaService } from "@medusajs/utils";
+
 import PosUser from "./models/pos-user";
 
 class PosUserModuleService extends MedusaService({

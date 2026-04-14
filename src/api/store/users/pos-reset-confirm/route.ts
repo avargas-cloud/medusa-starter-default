@@ -58,11 +58,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       };
     } catch (jwtErr: any) {
       logger?.warn?.(`[POS-CONFIRM] JWT invalid: ${jwtErr.message}`);
-      return res
-        .status(400)
-        .json({
-          error: "Invalid or expired reset link. Please request a new one.",
-        });
+      return res.status(400).json({
+        error: "Invalid or expired reset link. Please request a new one.",
+      });
     }
 
     if (payload.type !== "pos_reset" || payload.email !== email) {

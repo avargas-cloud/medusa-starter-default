@@ -6,8 +6,9 @@
  */
 
 import { model } from "@medusajs/utils";
-import PosInvoiceItem from "./pos-invoice-item";
+
 import InvoiceTracking from "./invoice-tracking";
+import PosInvoiceItem from "./pos-invoice-item";
 
 const PosInvoice = model.define("pos_invoice", {
   id: model.id().primaryKey(),

@@ -5,8 +5,6 @@
  */
 import { defineRouteConfig } from "@medusajs/admin-sdk";
 import { DocumentText } from "@medusajs/icons";
-import { useState, useEffect, useMemo, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
 import {
   Container,
   Heading,
@@ -16,6 +14,8 @@ import {
   Input,
   Select,
 } from "@medusajs/ui";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 export const config = defineRouteConfig({

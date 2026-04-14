@@ -1,10 +1,11 @@
+import { getCachedEditSequence, cacheEditSequence } from "../qb-pipeline";
+
 import {
   DRY_RUN,
   bridgeFetch,
   pollRawOperationResult,
   pollOperationResult,
 } from "./core";
-import { getCachedEditSequence, cacheEditSequence } from "../qb-pipeline";
 import {
   QbCreateSalesReceiptPayload,
   QbUpdateSalesReceiptPayload,

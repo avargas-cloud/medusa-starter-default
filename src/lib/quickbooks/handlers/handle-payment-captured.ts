@@ -1,8 +1,9 @@
 import { processPaymentCaptureInQb } from "../order-flow-core";
-import { buildPaymentPatch, getLatestInvoiceTxnId } from "../qb-metadata-types";
 import { applyPaymentToInvoiceInQb } from "../qb-bridge-client";
-import { LOG_PREFIX, isPosOrder } from "./utils";
+import { buildPaymentPatch, getLatestInvoiceTxnId } from "../qb-metadata-types";
 import { writePipelineRow } from "../qb-pipeline";
+
+import { LOG_PREFIX, isPosOrder } from "./utils";
 
 export async function handlePaymentCaptured(
   data: any,

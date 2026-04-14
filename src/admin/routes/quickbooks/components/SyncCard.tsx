@@ -1,4 +1,3 @@
-import { type ReactNode } from "react";
 import {
   Container,
   Heading,
@@ -8,6 +7,7 @@ import {
   Button,
   Switch,
 } from "@medusajs/ui";
+import { type ReactNode } from "react";
 
 type SyncInterval = { value: string; label: string };
 

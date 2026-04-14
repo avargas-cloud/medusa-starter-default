@@ -1,4 +1,5 @@
 import { SubscriberArgs, type SubscriberConfig } from "@medusajs/framework";
+
 import { FINANCE_MODULE } from "../modules/finance";
 
 /**

@@ -1,4 +1,5 @@
 import { ContainerRegistrationKeys } from "@medusajs/utils";
+
 import { getDbPool } from "../../../api/utils/db-pool";
 import {
   processSalesReceiptInQb,
@@ -6,16 +7,20 @@ import {
   buildShippingQbItem,
   buildQbOrderDiscountLines,
 } from "../order-flow-core";
-import { buildInvoicePatch } from "../qb-metadata-types";
-import { getSoTxnId, getEstimateTxnId } from "../qb-metadata-types";
-import { LOG_PREFIX, getQbConfig, getFloat } from "./utils";
+import { parseSalesRepInitials } from "../parse-sales-rep";
+import {
+  buildInvoicePatch,
+  getSoTxnId,
+  getEstimateTxnId,
+} from "../qb-metadata-types";
 import {
   writePipelineRow,
   cacheEditSequence,
   skipSalesOrderPipelineRow,
 } from "../qb-pipeline";
+
 import { handleFulfillmentCreated } from "./handle-fulfillment-created";
-import { parseSalesRepInitials } from "../parse-sales-rep";
+import { LOG_PREFIX, getQbConfig, getFloat } from "./utils";
 
 export async function handleSalesReceiptCreated(
   data: any,

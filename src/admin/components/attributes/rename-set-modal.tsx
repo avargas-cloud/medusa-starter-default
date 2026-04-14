@@ -7,8 +7,8 @@ import {
   Heading,
   Text,
 } from "@medusajs/ui";
-import { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
 
 type RenameSetModalProps = {
   open: boolean;

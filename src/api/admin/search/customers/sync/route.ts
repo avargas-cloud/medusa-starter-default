@@ -1,5 +1,6 @@
-import { syncCustomersWorkflow } from "../../../../../workflows/sync-customers";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
+import { syncCustomersWorkflow } from "../../../../../workflows/sync-customers";
 
 /**
  * POST /admin/search/customers/sync

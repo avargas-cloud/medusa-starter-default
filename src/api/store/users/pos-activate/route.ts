@@ -33,11 +33,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     decoded = jwt.verify(token, JWT_SECRET) as typeof decoded;
   } catch (err: any) {
     if (err.name === "TokenExpiredError") {
-      return res
-        .status(400)
-        .json({
-          error: "Invite link has expired. Ask an admin to resend the invite.",
-        });
+      return res.status(400).json({
+        error: "Invite link has expired. Ask an admin to resend the invite.",
+      });
     }
     return res.status(400).json({ error: "Invalid invite link." });
   }

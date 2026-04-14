@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
 import { CREDIT_MEMO_MODULE } from "../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../modules/credit_memos/service";
 
@@ -51,11 +52,9 @@ export async function GET(
       }
     }
 
-    res
-      .status(200)
-      .json({
-        credit_memo: { ...creditMemo, invoice_number, order_display_id },
-      });
+    res.status(200).json({
+      credit_memo: { ...creditMemo, invoice_number, order_display_id },
+    });
   } catch (e: any) {
     logger.error(`[credit_memos GET] failed: ${e.message}`);
     res.status(500).json({ success: false, message: e.message });

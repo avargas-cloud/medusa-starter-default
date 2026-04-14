@@ -1,7 +1,8 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
+import { handlePosPaymentVoided } from "../../../../../../lib/quickbooks/handlers/handle-pos-payment-voided";
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../../modules/invoices";
-import { handlePosPaymentVoided } from "../../../../../../lib/quickbooks/handlers/handle-pos-payment-voided";
 
 /**
  * POST /admin/finance/payments/:id/void
@@ -42,11 +43,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     if (["refunded", "partial_refunded"].includes(payment.status)) {
-      return res
-        .status(400)
-        .json({
-          error: "Cannot void a payment that has already been refunded",
-        });
+      return res.status(400).json({
+        error: "Cannot void a payment that has already been refunded",
+      });
     }
 
     if ((payment as any).source === "web") {

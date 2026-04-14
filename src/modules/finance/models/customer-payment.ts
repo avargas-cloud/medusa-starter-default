@@ -1,4 +1,5 @@
 import { model } from "@medusajs/utils";
+
 import { PaymentApplication } from "./payment-application";
 
 /**

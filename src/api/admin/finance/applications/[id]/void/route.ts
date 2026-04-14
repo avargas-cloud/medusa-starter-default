@@ -1,5 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
+
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../../modules/invoices";
 
@@ -44,12 +45,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     // 2. We can only void POS source applications (web applications are immutable as they reflect external reality)
     if (application.payment.source === "web") {
-      return res
-        .status(403)
-        .json({
-          error:
-            "Cannot void web checkout applications via the finance module.",
-        });
+      return res.status(403).json({
+        error: "Cannot void web checkout applications via the finance module.",
+      });
     }
 
     // 3. Mark the application as voided

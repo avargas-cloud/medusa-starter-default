@@ -1,8 +1,9 @@
 import { defineWidgetConfig } from "@medusajs/admin-sdk";
-import { Container, Heading, Text, Button } from "@medusajs/ui";
 import { DetailWidgetProps } from "@medusajs/framework/types";
 import { ListTree } from "@medusajs/icons";
+import { Container, Heading, Text, Button } from "@medusajs/ui";
 import { useState } from "react";
+
 import { ManageSubcategorySortingModal } from "../components/manage-subcategory-sorting-modal";
 
 type CategoryData = {

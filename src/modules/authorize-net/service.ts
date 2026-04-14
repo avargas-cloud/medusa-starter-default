@@ -1,4 +1,5 @@
-import { AbstractPaymentProvider } from "@medusajs/utils";
+import https from "https";
+
 import {
   InitiatePaymentInput,
   InitiatePaymentOutput,
@@ -21,7 +22,7 @@ import {
   ProviderWebhookPayload,
   WebhookActionResult,
 } from "@medusajs/types";
-import https from "https";
+import { AbstractPaymentProvider } from "@medusajs/utils";
 
 // ─── Options ──────────────────────────────────────────────────────────────────
 
@@ -269,7 +270,7 @@ class AuthorizeNetPaymentService extends AbstractPaymentProvider<AuthnetOptions>
         throw new Error(errMsg);
       }
 
-      let txId = response.transactionResponse?.transId;
+      const txId = response.transactionResponse?.transId;
 
       // Test Mode edge-case: transId=0 means no real hold was created.
       // The auth DID succeed (Authorize.net accepted it), but there's no

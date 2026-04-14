@@ -1,4 +1,3 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import {
   cancelDraftOrderEditWorkflow,
   removeDraftOrderShippingMethodWorkflow,
@@ -6,6 +5,7 @@ import {
   addDraftOrderShippingMethodsWorkflow,
   confirmDraftOrderEditWorkflow,
 } from "@medusajs/core-flows";
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
 
 /**

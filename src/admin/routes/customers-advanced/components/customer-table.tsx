@@ -1,5 +1,6 @@
 import { Table, StatusBadge, Badge } from "@medusajs/ui";
 import { Link } from "react-router-dom";
+
 import type { MeiliCustomer } from "../../../lib/meili-types";
 
 interface CustomerTableProps {

@@ -1,6 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
 import { Client } from "pg";
+
 import {
   ensureCustomerInQb,
   buildQbItems,
@@ -179,11 +180,9 @@ export async function POST(
     });
 
     if (!result.success) {
-      res
-        .status(500)
-        .json({
-          error: result.error || "Failed to create Sales Receipt in QB",
-        });
+      res.status(500).json({
+        error: result.error || "Failed to create Sales Receipt in QB",
+      });
       return;
     }
 

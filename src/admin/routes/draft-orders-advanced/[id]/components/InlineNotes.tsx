@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from "react";
 import { Text, toast } from "@medusajs/ui";
+import { useState, useEffect, useRef } from "react";
 
 const PRESETS = [
   {

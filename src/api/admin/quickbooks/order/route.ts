@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
+
 import {
   ensureCustomerInQb,
   buildQbItems,
@@ -7,12 +8,12 @@ import {
   buildQbOrderDiscountLines,
   processOrderInQb,
 } from "../../../../lib/quickbooks/order-flow-core";
+import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
 import {
   updateSalesOrderInQb,
   pollOperationResult,
 } from "../../../../lib/quickbooks/qb-bridge-client";
 import { getQbConfig } from "../../../../lib/quickbooks/qb-config";
-import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
 import {
   buildSaleOrderPatch,
   getSoTxnId,
@@ -231,12 +232,10 @@ export async function POST(
     });
 
     if (!result.enabled) {
-      res
-        .status(503)
-        .json({
-          error:
-            "QuickBooks integration is disabled. Check QB_ORDER_FLOW_ENABLED env var.",
-        });
+      res.status(503).json({
+        error:
+          "QuickBooks integration is disabled. Check QB_ORDER_FLOW_ENABLED env var.",
+      });
       return;
     }
     if (result.skipped) {

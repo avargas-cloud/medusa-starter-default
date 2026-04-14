@@ -5,10 +5,11 @@
 
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
-import { getDbPool } from "../../../../utils/db-pool";
-import { INVOICE_MODULE } from "../../../../../modules/invoices";
+
 import { FINANCE_MODULE } from "../../../../../modules/finance";
+import { INVOICE_MODULE } from "../../../../../modules/invoices";
 import { recalculateOrderStatus } from "../../../../../utils/order-utils";
+import { getDbPool } from "../../../../utils/db-pool";
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const invoiceService = req.scope.resolve(INVOICE_MODULE);

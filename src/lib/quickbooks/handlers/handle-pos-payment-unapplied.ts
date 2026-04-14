@@ -1,8 +1,9 @@
 import { SubscriberArgs } from "@medusajs/framework";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
+
 import { FINANCE_MODULE } from "../../../modules/finance";
-import { unapplyPaymentFromInvoiceInQb } from "../qb-bridge-client";
 import { bridgeFetch, pollRawOperationResult } from "../client/core";
+import { unapplyPaymentFromInvoiceInQb } from "../qb-bridge-client";
 import { getLatestInvoiceTxnId } from "../qb-metadata-types";
 
 const LOG_PREFIX = "[QB-POS-PAYMENT-UNAPPLIED]";

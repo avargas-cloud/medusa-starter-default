@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+
 import { bulkMoveAttributesWorkflow } from "../../../../workflows/product-attributes/bulk-move-attributes";
 
 // POST - Bulk move attributes

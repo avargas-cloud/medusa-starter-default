@@ -1,10 +1,11 @@
-import { defineMiddlewares } from "@medusajs/medusa";
-import { addCategoryBreadcrumbs } from "./middlewares/add-category-breadcrumbs";
 import type {
   MedusaNextFunction,
   MedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+import { defineMiddlewares } from "@medusajs/medusa";
+
+import { addCategoryBreadcrumbs } from "./middlewares/add-category-breadcrumbs";
 
 // Inline CORS middleware for /pos/* routes.
 // Reads STORE_CORS env var — same origins as the storefront.

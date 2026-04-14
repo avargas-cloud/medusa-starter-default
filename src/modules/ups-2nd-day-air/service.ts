@@ -1,6 +1,7 @@
 import { AbstractFulfillmentProviderService } from "@medusajs/utils";
-import { getUPSRate } from "../ups-rate-cache";
+
 import { packItems } from "../box-packing";
+import { getUPSRate } from "../ups-rate-cache";
 
 // UPS Service Code: 02 = 2nd Day Air
 const SERVICE_CODE = "02";

@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
+
 import { checkCustomersCore } from "../../../../../lib/quickbooks/check-customers-core";
 
 /**

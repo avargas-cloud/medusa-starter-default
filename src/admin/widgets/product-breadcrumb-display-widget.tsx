@@ -1,8 +1,8 @@
 import { defineWidgetConfig } from "@medusajs/admin-sdk";
-import { Container } from "@medusajs/ui";
 import { DetailWidgetProps, AdminProduct } from "@medusajs/framework/types";
-import { Link } from "react-router-dom";
 import { ChevronRightMini } from "@medusajs/icons";
+import { Container } from "@medusajs/ui";
+import { Link } from "react-router-dom";
 
 /**
  * Product Breadcrumb Display Widget

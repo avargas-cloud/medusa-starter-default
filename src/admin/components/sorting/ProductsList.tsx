@@ -1,4 +1,3 @@
-import { Container, Heading, Text } from "@medusajs/ui";
 import {
   DndContext,
   closestCenter,
@@ -13,6 +12,8 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
+import { Container, Heading, Text } from "@medusajs/ui";
+
 import { SortableItem } from "./SortableItem";
 
 type Product = {

@@ -1,5 +1,5 @@
-import { AbstractFileProviderService } from "@medusajs/utils";
-import { FileTypes } from "@medusajs/framework/types";
+import { parse } from "path";
+
 import {
   S3Client,
   PutObjectCommand,
@@ -7,7 +7,8 @@ import {
   GetObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { parse } from "path";
+import { FileTypes } from "@medusajs/framework/types";
+import { AbstractFileProviderService } from "@medusajs/utils";
 
 interface S3FileOptions {
   accessKeyId: string;

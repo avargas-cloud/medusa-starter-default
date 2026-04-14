@@ -1,9 +1,11 @@
-import { Input, Label, Text, Select } from "@medusajs/ui";
 import { Trash, PencilSquare, Check, Plus, Minus } from "@medusajs/icons";
-import { Drawer } from "./Drawer";
-import { AddrFormFields } from "./AddrFormFields";
-import type { AddrForm, VariantResult } from "../types";
+import { Input, Label, Text, Select } from "@medusajs/ui";
 import { useState } from "react";
+
+import type { AddrForm, VariantResult } from "../types";
+
+import { AddrFormFields } from "./AddrFormFields";
+import { Drawer } from "./Drawer";
 
 // ─── EditItemsTable ───────────────────────────────────────────────────────────
 interface EditItemsTableProps {

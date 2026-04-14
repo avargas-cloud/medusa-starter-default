@@ -4,6 +4,7 @@
  * Modeled after draft-orders-table.tsx.
  */
 import { Text, Badge, Button, Input, Select } from "@medusajs/ui";
+
 import type { OrderListItem, SortKey } from "../hooks/use-orders-list";
 import { SORT_OPTIONS, PAGE_SIZE } from "../hooks/use-orders-list";
 
@@ -143,15 +144,15 @@ export const OrdersTable = ({
           ? order.metadata.qb_invoices
           : [];
         const qbRef = // New JSON shape (SO)
-        ((soObj && typeof soObj === "object"
-          ? (soObj as any).ref_number
-          : null) ??
-          // New JSON shape (latest invoice)
-          (invArr.length > 0 ? invArr[invArr.length - 1].ref_number : null) ??
-          // Old flat fields (backward compat)
-          order.metadata?.qb_sales_order_ref ??
-          order.metadata?.qb_invoice_ref ??
-          null) as string | null;
+          ((soObj && typeof soObj === "object"
+            ? (soObj as any).ref_number
+            : null) ??
+            // New JSON shape (latest invoice)
+            (invArr.length > 0 ? invArr[invArr.length - 1].ref_number : null) ??
+            // Old flat fields (backward compat)
+            order.metadata?.qb_sales_order_ref ??
+            order.metadata?.qb_invoice_ref ??
+            null) as string | null;
         // QB sync — true if qb_sales_order.txn_id or legacy qb_so_txn_id exists
         const soSynced = !!(
           (soObj && typeof soObj === "object" ? (soObj as any).txn_id : null) ??

@@ -1,20 +1,21 @@
 import type { MedusaContainer } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
-import { bridgeFetch } from "../lib/quickbooks/client/core";
+
 import { getDbPool } from "../api/utils/db-pool";
+import { bridgeFetch } from "../lib/quickbooks/client/core";
+import { voidCreditMemoInQb } from "../lib/quickbooks/client/credit-memos";
+import { voidInvoiceInQb } from "../lib/quickbooks/client/invoices";
+import {
+  closeSalesOrderInQb,
+  reopenSalesOrderInQb,
+} from "../lib/quickbooks/client/sales-orders";
+import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types";
 import {
   confirmPipelineRow,
   failPipelineRow,
   cacheEditSequence,
   invalidateEditSequenceCache,
 } from "../lib/quickbooks/qb-pipeline";
-import {
-  closeSalesOrderInQb,
-  reopenSalesOrderInQb,
-} from "../lib/quickbooks/client/sales-orders";
-import { voidInvoiceInQb } from "../lib/quickbooks/client/invoices";
-import { voidCreditMemoInQb } from "../lib/quickbooks/client/credit-memos";
-import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 

@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
 import { handleNewCustomerRegistration } from "./case1-new-customer";
 import { handleExistingCustomer } from "./case2-existing-customer";
 import { handleLegacyCustomerActivation } from "./case3-legacy-customer";

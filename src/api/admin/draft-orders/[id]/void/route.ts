@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
+
 import { processDeactivateEstimateInQb } from "../../../../../lib/quickbooks/order-flow-core";
 import {
   getEstimateTxnId,
@@ -41,12 +42,9 @@ export async function POST(
     }
 
     if (!order.is_draft_order) {
-      res
-        .status(422)
-        .json({
-          error:
-            "Only draft orders (estimates) can be voided from this endpoint",
-        });
+      res.status(422).json({
+        error: "Only draft orders (estimates) can be voided from this endpoint",
+      });
       return;
     }
 

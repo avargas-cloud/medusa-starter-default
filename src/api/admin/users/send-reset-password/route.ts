@@ -11,6 +11,7 @@
 
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
+
 import { buildPasswordResetEmail } from "../../../../utils/email-templates";
 import { sendMail } from "../../../../utils/mailer";
 

@@ -10,8 +10,9 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
-import { createPosUserWorkflow } from "../../../workflows/create-pos-user";
+
 import { POS_USER_MODULE } from "../../../modules/pos-user";
+import { createPosUserWorkflow } from "../../../workflows/create-pos-user";
 
 type CreatePosUserBody = {
   email: string;

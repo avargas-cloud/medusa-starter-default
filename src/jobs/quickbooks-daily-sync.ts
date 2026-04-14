@@ -1,9 +1,10 @@
 import { MedusaContainer } from "@medusajs/framework/types";
 import { Client } from "pg";
-import { syncPricesCore } from "../lib/quickbooks/sync-prices-core";
-import { syncCustomersCore } from "../lib/quickbooks/sync-customers-core";
+
 import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard";
 import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger";
+import { syncCustomersCore } from "../lib/quickbooks/sync-customers-core";
+import { syncPricesCore } from "../lib/quickbooks/sync-prices-core";
 
 /**
  * QuickBooks Daily Sync — runs every 30 minutes; executes at the configured hour.

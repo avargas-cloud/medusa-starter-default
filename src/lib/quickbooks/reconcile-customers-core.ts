@@ -1,5 +1,6 @@
 import { ICustomerModuleService } from "@medusajs/framework/types";
 import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
+
 import { isQbIntegrationEnabled } from "./qb-integration-guard";
 // using native fetch
 

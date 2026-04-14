@@ -1,11 +1,12 @@
 import { SubscriberArgs } from "@medusajs/framework";
 import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
+
 import { FINANCE_MODULE } from "../../../modules/finance";
+import { createCreditMemoInQb } from "../client";
 import {
   processPaymentCaptureInQb,
   ensureCustomerInQb,
 } from "../order-flow-core";
-import { createCreditMemoInQb } from "../client";
 import {
   writePipelineRow,
   cacheEditSequence,

@@ -1,5 +1,5 @@
-import { Heading, Button } from "@medusajs/ui";
 import { XMark } from "@medusajs/icons";
+import { Heading, Button } from "@medusajs/ui";
 import React from "react";
 
 interface DrawerProps {

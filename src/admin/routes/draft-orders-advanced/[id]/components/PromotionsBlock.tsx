@@ -1,9 +1,10 @@
-import { useState } from "react";
-import { Container, Heading, Badge, Text } from "@medusajs/ui";
 import { Trash } from "@medusajs/icons";
-import { InlinePromoInput } from "./InlinePromoInput";
+import { Container, Heading, Badge, Text, toast } from "@medusajs/ui";
+import { useState } from "react";
+
 import { fmt } from "../helpers";
-import { toast } from "@medusajs/ui";
+
+import { InlinePromoInput } from "./InlinePromoInput";
 
 interface Props {
   orderId: string;

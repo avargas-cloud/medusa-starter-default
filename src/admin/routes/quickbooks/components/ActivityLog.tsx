@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from "react";
-import { Container, Heading, Text, Button, Badge, Select } from "@medusajs/ui";
 import { ArrowPath } from "@medusajs/icons";
+import { Container, Heading, Text, Button, Badge, Select } from "@medusajs/ui";
+import { useEffect, useState, useCallback } from "react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

@@ -430,11 +430,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     if (!paymentCollection?.id) {
-      return res
-        .status(500)
-        .json({
-          error: "Could not obtain payment collection. Please try again.",
-        });
+      return res.status(500).json({
+        error: "Could not obtain payment collection. Please try again.",
+      });
     }
 
     // ── STEP 6: Create Authorize.net payment session ───────────────────────
@@ -458,7 +456,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     });
 
     const orderResultRef = (orderResult as any)?.order ?? orderResult;
-    let orderId = orderResultRef?.id ?? null;
+    const orderId = orderResultRef?.id ?? null;
     let displayId = orderResultRef?.display_id ?? null;
     const orderModule = req.scope.resolve("order") as any;
 

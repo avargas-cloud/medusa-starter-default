@@ -74,7 +74,7 @@ export default class PosTaxProvider implements ITaxProvider {
     }
 
     // 2. Normal Flow - Florida 7%
-    let taxLines: (ItemTaxLineDTO | ShippingTaxLineDTO)[] = itemLines.flatMap(
+    const taxLines: (ItemTaxLineDTO | ShippingTaxLineDTO)[] = itemLines.flatMap(
       (l) => {
         return {
           rate_id: PosTaxProvider.FLORIDA_TAX_RATE_ID,

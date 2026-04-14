@@ -4,6 +4,7 @@
  */
 
 import { Module } from "@medusajs/utils";
+
 import InvoiceModuleService from "./service";
 
 export const INVOICE_MODULE = "invoices";

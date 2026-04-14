@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
+
 import { getDbPool } from "../../../../utils/db-pool";
 
 /**

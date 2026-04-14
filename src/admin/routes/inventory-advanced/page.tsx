@@ -1,11 +1,12 @@
 import { Container, Toaster } from "@medusajs/ui";
-import { useInventorySearch } from "./hooks/use-inventory-search";
+import { useState } from "react";
+
+import { InventoryHeader } from "./components/inventory-header";
+import { InventoryPagination } from "./components/inventory-pagination";
+import { InventoryTable } from "./components/inventory-table";
 import { useCategories } from "./hooks/use-categories";
 import { useFeatureFlags } from "./hooks/use-feature-flags";
-import { InventoryHeader } from "./components/inventory-header";
-import { InventoryTable } from "./components/inventory-table";
-import { InventoryPagination } from "./components/inventory-pagination";
-import { useState } from "react";
+import { useInventorySearch } from "./hooks/use-inventory-search";
 
 /**
  * Advanced Inventory Page

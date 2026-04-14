@@ -1,5 +1,5 @@
-import { Container, Heading, Text, Button, DropdownMenu } from "@medusajs/ui";
 import { EllipsisHorizontal, PencilSquare, ArrowRight } from "@medusajs/icons";
+import { Container, Heading, Text, Button, DropdownMenu } from "@medusajs/ui";
 
 interface Props {
   customer: any;

@@ -9,6 +9,7 @@ import {
   toast,
 } from "@medusajs/ui";
 import { useState } from "react";
+
 import { sdk } from "../../lib/sdk";
 
 interface InventoryItem {

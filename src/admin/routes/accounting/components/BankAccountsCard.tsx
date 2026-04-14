@@ -1,3 +1,4 @@
+import { ArrowPath, Star } from "@medusajs/icons";
 import {
   Container,
   Heading,
@@ -8,7 +9,6 @@ import {
   toast,
 } from "@medusajs/ui";
 import { useState, useEffect } from "react";
-import { ArrowPath, Star } from "@medusajs/icons";
 
 export const BankAccountsCard = () => {
   const [accounts, setAccounts] = useState<any[]>([]);

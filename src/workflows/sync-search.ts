@@ -1,8 +1,9 @@
 import {
   createWorkflow,
   WorkflowResponse,
+  createStep,
+  StepResponse,
 } from "@medusajs/framework/workflows-sdk";
-import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 
 interface SyncSearchWorkflowInput {

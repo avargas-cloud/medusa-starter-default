@@ -1,6 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { Modules } from "@medusajs/utils";
 import { IProductModuleService } from "@medusajs/framework/types";
+import { Modules } from "@medusajs/utils";
+
 import { getProductMainCategoryBreadcrumbs } from "../../../../utils/breadcrumbs";
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {

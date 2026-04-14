@@ -1,6 +1,7 @@
 import { transferDocumentCustomer } from "../client/transfer";
-import { writePipelineRow } from "../qb-pipeline";
 import { getSoTxnId, getLatestInvoiceTxnId } from "../qb-metadata-types";
+import { writePipelineRow } from "../qb-pipeline";
+
 import { LOG_PREFIX, isPosOrder } from "./utils";
 
 /**

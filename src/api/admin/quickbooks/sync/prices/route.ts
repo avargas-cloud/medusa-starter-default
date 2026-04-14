@@ -1,13 +1,14 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { MedusaContainer } from "@medusajs/framework/types";
-import { syncPricesCore } from "../../../../../lib/quickbooks/sync-prices-core";
+import { Client } from "pg";
+
+import { QbSyncLogger } from "../../../../../lib/quickbooks/qb-sync-logger";
 import {
   createSyncJob,
   appendLog,
   finishJob,
 } from "../../../../../lib/quickbooks/sync-jobs";
-import { QbSyncLogger } from "../../../../../lib/quickbooks/qb-sync-logger";
-import { Client } from "pg";
+import { syncPricesCore } from "../../../../../lib/quickbooks/sync-prices-core";
 
 /**
  * POST /admin/quickbooks/sync/prices

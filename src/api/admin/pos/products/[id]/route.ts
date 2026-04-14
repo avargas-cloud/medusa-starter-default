@@ -1,10 +1,11 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
+
+import { pollOperationResult } from "../../../../../lib/quickbooks/client/core";
 import {
   updatePosProductWorkflow,
   UpdatePosProductInput,
 } from "../../../../../workflows/pos/update-pos-product";
-import { pollOperationResult } from "../../../../../lib/quickbooks/client/core";
 
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   const logger = req.scope.resolve("logger");
@@ -27,15 +28,13 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
     const variant = variants[0] as any;
     const qbId = variant.metadata?.quickbooks_id;
-    let qbEditSequence = variant.metadata?.qb_edit_sequence;
+    const qbEditSequence = variant.metadata?.qb_edit_sequence;
 
     if (!qbId) {
-      return res
-        .status(400)
-        .json({
-          error:
-            "This product is not linked to Quickbooks (Missing qb_id). Please create it properly first.",
-        });
+      return res.status(400).json({
+        error:
+          "This product is not linked to Quickbooks (Missing qb_id). Please create it properly first.",
+      });
     }
 
     // If for some reason we don't have the edit sequence but we have the qbId, we could theoretically fetch it here
@@ -61,11 +60,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
     if (errors && errors.length > 0) {
       logger.error(`Failed to update POS product: ${JSON.stringify(errors)}`);
-      return res
-        .status(400)
-        .json({
-          error: errors[0]?.error?.message || "Failed to update product",
-        });
+      return res.status(400).json({
+        error: errors[0]?.error?.message || "Failed to update product",
+      });
     }
 
     const qbOperationId = result?.qbOperationId;

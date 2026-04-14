@@ -1,12 +1,13 @@
 import { defineWidgetConfig } from "@medusajs/admin-sdk";
-import { Button, toast } from "@medusajs/ui";
 import { DetailWidgetProps, AdminProduct } from "@medusajs/framework/types";
 import { Photo } from "@medusajs/icons";
+import { Button, toast } from "@medusajs/ui";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { MediaLibraryModal } from "../components/MediaLibraryModal";
+
 import { BASE_URL } from "../../lib/sdk";
+import { MediaLibraryModal } from "../components/MediaLibraryModal";
 
 const ProductMediaLibraryWidget = ({
   data,

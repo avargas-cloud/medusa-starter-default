@@ -11,8 +11,9 @@
  *   mc ilm rule add --expiry-days 7 --prefix "pdf-shares/" myminio/medusa-media
  */
 
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+
 import {
   fetchTemplateForPdf,
   fetchDefaultTemplateId,

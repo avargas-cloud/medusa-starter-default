@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
 import { CREDIT_MEMO_MODULE } from "../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../modules/credit_memos/service";
 
@@ -33,13 +34,11 @@ export async function GET(
     const keys = Object.keys(creditMemoService || {}).filter((k) =>
       k.includes("list")
     );
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: e.message,
-        stack: e.stack,
-        availableMethods: keys,
-      });
+    res.status(500).json({
+      success: false,
+      message: e.message,
+      stack: e.stack,
+      availableMethods: keys,
+    });
   }
 }

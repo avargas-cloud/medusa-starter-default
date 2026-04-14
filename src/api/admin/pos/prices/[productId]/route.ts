@@ -175,14 +175,12 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       `[pos-prices] price_set ${price_set_id} now has ${priceCount} active price rows`
     );
 
-    return res
-      .status(200)
-      .json({
-        success: true,
-        variant_id,
-        price_set_id,
-        price_rows: priceCount,
-      });
+    return res.status(200).json({
+      success: true,
+      variant_id,
+      price_set_id,
+      price_rows: priceCount,
+    });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(`[pos-prices] Failed to update prices: ${msg}`);

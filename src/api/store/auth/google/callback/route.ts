@@ -1,6 +1,9 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
-import { generateJwtToken } from "@medusajs/utils";
+import {
+  Modules,
+  ContainerRegistrationKeys,
+  generateJwtToken,
+} from "@medusajs/utils";
 
 /**
  * Google OAuth Callback Handler (Gold Standard)

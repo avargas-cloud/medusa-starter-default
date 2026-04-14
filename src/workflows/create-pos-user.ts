@@ -14,6 +14,7 @@ import {
   transform,
 } from "@medusajs/framework/workflows-sdk";
 import { setAuthAppMetadataStep } from "@medusajs/medusa/core-flows";
+
 import { POS_USER_MODULE } from "../modules/pos-user";
 
 // ─── Types ───────────────────────────────────────────────────────────────────

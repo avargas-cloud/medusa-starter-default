@@ -12,6 +12,7 @@
 import { MedusaContainer } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 import { Client } from "pg";
+
 import { bridgeFetch } from "../lib/quickbooks/client/core";
 import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard";
 

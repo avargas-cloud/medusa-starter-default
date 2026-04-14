@@ -1,7 +1,8 @@
 import { defineWidgetConfig } from "@medusajs/admin-sdk";
-import { Container, Heading, Button, Text } from "@medusajs/ui";
 import { ListTree } from "@medusajs/icons";
+import { Container, Heading, Button, Text } from "@medusajs/ui";
 import { useState } from "react";
+
 import { ManageProductSortingModal } from "../components/manage-product-sorting-modal";
 
 interface CategorySortingWidgetProps {

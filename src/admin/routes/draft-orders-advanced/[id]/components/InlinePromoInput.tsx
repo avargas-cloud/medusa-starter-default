@@ -1,6 +1,5 @@
+import { Text, toast } from "@medusajs/ui";
 import { useState, useEffect, useRef } from "react";
-import { Text } from "@medusajs/ui";
-import { toast } from "@medusajs/ui";
 
 interface Promotion {
   id: string;

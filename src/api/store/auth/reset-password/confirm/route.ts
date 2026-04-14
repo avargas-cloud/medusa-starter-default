@@ -1,11 +1,13 @@
+import { scrypt, randomBytes, createHash, createHmac } from "crypto";
+
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import {
   Modules,
   ContainerRegistrationKeys,
   generateJwtToken,
 } from "@medusajs/utils";
+
 import { getSql } from "../../../../../lib/db";
-import { scrypt, randomBytes, createHash, createHmac } from "crypto";
 
 // Hash password using the exact 96-byte format that scrypt-kdf produces and verifies:
 // [0-5]   "scrypt"  (6 bytes)

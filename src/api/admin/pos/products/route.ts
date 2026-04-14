@@ -1,9 +1,10 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
+import { pollOperationResult } from "../../../../lib/quickbooks/client/core";
 import {
   createPosProductWorkflow,
   CreatePosProductInput,
 } from "../../../../workflows/pos/create-pos-product";
-import { pollOperationResult } from "../../../../lib/quickbooks/client/core";
 
 export const POST = async (
   req: MedusaRequest<CreatePosProductInput>,
@@ -19,11 +20,9 @@ export const POST = async (
 
     if (errors && errors.length > 0) {
       logger.error(`Failed to create POS product: ${JSON.stringify(errors)}`);
-      return res
-        .status(400)
-        .json({
-          error: errors[0]?.error?.message || "Failed to create product",
-        });
+      return res.status(400).json({
+        error: errors[0]?.error?.message || "Failed to create product",
+      });
     }
 
     const variantId = result?.product?.variants?.[0]?.id;

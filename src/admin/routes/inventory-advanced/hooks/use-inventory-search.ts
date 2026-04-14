@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+
 import type { MeiliInventoryItem } from "../../../lib/meili-types";
 
 const ITEMS_PER_PAGE = 20;

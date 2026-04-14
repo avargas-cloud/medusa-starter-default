@@ -1,4 +1,5 @@
 import { Module } from "@medusajs/utils";
+
 import ProductAttributesModuleService from "./service";
 
 export const PRODUCT_ATTRIBUTES_MODULE = "productAttributes";

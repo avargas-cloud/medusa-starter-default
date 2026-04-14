@@ -1,5 +1,10 @@
-import { useParams, useNavigate } from "react-router-dom";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  Trash,
+  ArrowLeftMini,
+  Plus,
+  PencilSquare,
+  Check,
+} from "@medusajs/icons";
 import {
   Container,
   Heading,
@@ -15,14 +20,9 @@ import {
   Select,
   Text as TextUI,
 } from "@medusajs/ui";
-import {
-  Trash,
-  ArrowLeftMini,
-  Plus,
-  PencilSquare,
-  Check,
-} from "@medusajs/icons";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, useEffect } from "react";
+import { useParams, useNavigate } from "react-router-dom";
 
 const AttributeDetailPage = () => {
   const { id } = useParams();

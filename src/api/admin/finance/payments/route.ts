@@ -1,8 +1,9 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { FINANCE_MODULE } from "../../../../modules/finance";
-import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
-import { handlePosPaymentCreated } from "../../../../lib/quickbooks/handlers/handle-pos-payment-created";
 import { Client } from "pg";
+
+import { handlePosPaymentCreated } from "../../../../lib/quickbooks/handlers/handle-pos-payment-created";
+import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
+import { FINANCE_MODULE } from "../../../../modules/finance";
 
 /**
  * GET /admin/finance/payments

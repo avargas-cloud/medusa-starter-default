@@ -1,5 +1,6 @@
-import { useState, useRef } from "react";
 import { toast } from "@medusajs/ui";
+import { useState, useRef } from "react";
+
 import { DraftOrderDetail, VariantResult } from "../types";
 
 interface Deps {
@@ -96,7 +97,7 @@ export const useOrderItems = ({ id, order, setOrder }: Deps) => {
           /* best-effort */
         }
 
-        let locationMap: Record<
+        const locationMap: Record<
           string,
           { locationName: string; available: number }[]
         > = {};

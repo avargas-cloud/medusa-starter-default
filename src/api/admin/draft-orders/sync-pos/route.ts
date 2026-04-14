@@ -1,18 +1,19 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
-import {
-  writePipelineRow,
-  pollUntilQbConfirmed,
-} from "../../../../lib/quickbooks/qb-pipeline";
-import {
-  getEstimateTxnId,
-  getEstimateRef,
-} from "../../../../lib/quickbooks/qb-metadata-types";
+
 import {
   buildQbItems,
   type MedusaOrderForQb,
 } from "../../../../lib/quickbooks/order-flow-core";
 import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
+import {
+  getEstimateTxnId,
+  getEstimateRef,
+} from "../../../../lib/quickbooks/qb-metadata-types";
+import {
+  writePipelineRow,
+  pollUntilQbConfirmed,
+} from "../../../../lib/quickbooks/qb-pipeline";
 import { withQbSerialized } from "../../../../lib/quickbooks/qb-serializer";
 import { getDbPool } from "../../../utils/db-pool";
 
@@ -560,14 +561,12 @@ export async function POST(
       method: "GET",
     }).catch(() => {});
 
-    res
-      .status(200)
-      .json({
-        success: true,
-        draft_order_id: resolvedId,
-        cart_id: cartId,
-        display_id: displayId,
-      });
+    res.status(200).json({
+      success: true,
+      draft_order_id: resolvedId,
+      cart_id: cartId,
+      display_id: displayId,
+    });
   } catch (e: any) {
     logger.error(`[sync-pos] Master sync failed: ${e.message}`);
     res.status(500).json({ success: false, message: e.message });

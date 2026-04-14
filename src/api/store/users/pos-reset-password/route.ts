@@ -1,8 +1,9 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import jwt from "jsonwebtoken";
-import { sendMail } from "../../../../utils/mailer";
 import postgres from "postgres";
+
 import { buildPasswordResetEmail } from "../../../../utils/email-templates";
+import { sendMail } from "../../../../utils/mailer";
 
 /**
  * POST /store/users/pos-reset-password

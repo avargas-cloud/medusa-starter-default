@@ -5,6 +5,7 @@
  */
 
 import { model } from "@medusajs/utils";
+
 import PosInvoice from "./pos-invoice";
 
 const PosInvoiceItem = model.define("pos_invoice_item", {

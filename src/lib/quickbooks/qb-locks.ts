@@ -39,3 +39,31 @@ export function withQbLock(
 
   return execution;
 }
+
+/**
+ * Generic typed variant of `withQbLock` that returns fn's value and surfaces
+ * errors. Used by merge-apply which needs the result and proper error handling.
+ */
+export function withQbLockResult<T>(
+  key: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const prev = locks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((r) => {
+    release = r;
+  });
+  locks.set(key, current);
+
+  const execution = prev
+    .catch(() => {
+      /* swallow prior errors */
+    })
+    .then(() => fn())
+    .finally(() => {
+      release();
+      if (locks.get(key) === current) locks.delete(key);
+    });
+
+  return execution;
+}

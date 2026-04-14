@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from "react";
-import { Text } from "@medusajs/ui";
 import { ChevronDownMini } from "@medusajs/icons";
+import { Text } from "@medusajs/ui";
+import { useState, useRef, useEffect } from "react";
 
 export interface PriceOption {
   label: string;

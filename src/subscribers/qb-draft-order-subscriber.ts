@@ -20,18 +20,19 @@
 
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
 import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
+
 import {
   ensureCustomerInQb,
   buildQbItems,
   buildQbOrderDiscountLines,
   processEstimateInQb,
 } from "../lib/quickbooks/order-flow-core";
+import { parseSalesRepInitials } from "../lib/quickbooks/parse-sales-rep";
+import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types";
 import {
   writePipelineRow,
   cacheEditSequence,
 } from "../lib/quickbooks/qb-pipeline";
-import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types";
-import { parseSalesRepInitials } from "../lib/quickbooks/parse-sales-rep";
 
 const LOG_PREFIX = "[QB-DRAFT]";
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";

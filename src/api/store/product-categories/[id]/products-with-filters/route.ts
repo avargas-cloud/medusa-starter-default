@@ -1,6 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { enrichProducts } from "../../../_shared/product-enrichment";
+
 import { getCacheManager } from "../../../../../lib/cache-manager";
+import { enrichProducts } from "../../../_shared/product-enrichment";
 
 /**
  * GET /store/categories/:id/products-with-filters

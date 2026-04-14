@@ -1,11 +1,12 @@
 import { Container, Heading, Text } from "@medusajs/ui";
+
 // Reuse the shared hook and components from sales-orders
-import { useOrdersList } from "../sales-orders/hooks/use-orders-list";
 import {
   OrdersTable,
   OrdersControls,
   OrdersFooter,
 } from "../sales-orders/components/orders-table";
+import { useOrdersList } from "../sales-orders/hooks/use-orders-list";
 
 // NOTE: Sidebar config moved to orders-2-invoices/page.tsx for correct sidebar ordering
 

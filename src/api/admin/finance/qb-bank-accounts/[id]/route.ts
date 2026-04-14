@@ -1,4 +1,5 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
 import { getDbPool } from "../../../../utils/db-pool";
 
 export const PATCH = async (req: MedusaRequest, res: MedusaResponse) => {

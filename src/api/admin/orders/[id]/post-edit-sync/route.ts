@@ -1,8 +1,9 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
-import { getDbPool } from "../../../../utils/db-pool";
+
 import { parseSalesRepInitials } from "../../../../../lib/quickbooks/parse-sales-rep";
 import { withQbSerialized } from "../../../../../lib/quickbooks/qb-serializer";
+import { getDbPool } from "../../../../utils/db-pool";
 
 /**
  * POST /admin/orders/:id/post-edit-sync

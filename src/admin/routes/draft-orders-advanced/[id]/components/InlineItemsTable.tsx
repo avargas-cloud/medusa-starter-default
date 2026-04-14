@@ -1,8 +1,10 @@
-import { useState, useRef, useEffect, useCallback } from "react";
-import { Text } from "@medusajs/ui";
 import { MagnifyingGlass, XMark, Plus, Minus, Trash } from "@medusajs/icons";
-import { PriceCombobox, PriceOption } from "./PriceCombobox";
+import { Text } from "@medusajs/ui";
+import { useState, useRef, useEffect, useCallback } from "react";
+
 import { fmt } from "../helpers";
+
+import { PriceCombobox, PriceOption } from "./PriceCombobox";
 
 interface VariantResult {
   id: string;

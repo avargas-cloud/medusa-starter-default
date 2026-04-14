@@ -1,5 +1,6 @@
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
+
 import { syncProductToMeiliSearchWorkflow } from "../workflows/sync-product-meilisearch";
 
 /**

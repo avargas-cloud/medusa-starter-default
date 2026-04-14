@@ -48,13 +48,11 @@ export async function POST(
       { headers: authHeaders }
     );
     if (!pcRes.ok) {
-      return void res
-        .status(200)
-        .json({
-          success: true,
-          skipped: true,
-          reason: "no payment collections",
-        });
+      return void res.status(200).json({
+        success: true,
+        skipped: true,
+        reason: "no payment collections",
+      });
     }
     const { payment_collections: collections = [] } = await pcRes.json();
 

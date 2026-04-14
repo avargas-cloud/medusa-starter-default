@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+
 import { PRODUCT_ATTRIBUTES_MODULE } from "../../../../modules/product-attributes";
 
 /**

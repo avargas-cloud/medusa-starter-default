@@ -4,6 +4,7 @@
  */
 
 import { Module } from "@medusajs/utils";
+
 import DocumentTemplateModuleService from "./service";
 
 export const DOCUMENT_TEMPLATE_MODULE = "document_templates";

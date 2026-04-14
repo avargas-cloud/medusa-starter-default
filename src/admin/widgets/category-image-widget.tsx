@@ -1,5 +1,10 @@
 import { defineWidgetConfig } from "@medusajs/admin-sdk";
 import {
+  DetailWidgetProps,
+  AdminProductCategory,
+} from "@medusajs/framework/types";
+import { Trash, Photo, CloudArrowUp, MagnifyingGlass } from "@medusajs/icons";
+import {
   Container,
   Heading,
   Button,
@@ -8,13 +13,9 @@ import {
   Drawer,
   Input,
 } from "@medusajs/ui";
-import {
-  DetailWidgetProps,
-  AdminProductCategory,
-} from "@medusajs/framework/types";
-import { Trash, Photo, CloudArrowUp, MagnifyingGlass } from "@medusajs/icons";
-import { useState, useRef, useEffect } from "react";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
+import { useState, useRef, useEffect } from "react";
+
 import { BASE_URL } from "../../lib/sdk";
 
 const MediaLibraryModal = ({

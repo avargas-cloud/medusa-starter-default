@@ -1,8 +1,9 @@
 // usePageDerived — page-level state and derived logic for the DraftOrderDetail page.
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { InlineShippingHandle } from "../components/InlineShipping";
+
 import type { EstimateInfo } from "../components/EstimateInfoBlock";
 import { getMissingEstimateFields } from "../components/EstimateInfoBlock";
+import type { InlineShippingHandle } from "../components/InlineShipping";
 import type { DraftOrderDetail } from "../types";
 
 interface Deps {

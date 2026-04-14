@@ -1,4 +1,5 @@
 import { model } from "@medusajs/utils";
+
 import { AttributeKey } from "./attribute-key";
 
 export const AttributeSet = model.define("attribute_set", {

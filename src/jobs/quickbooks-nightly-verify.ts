@@ -17,6 +17,7 @@
 
 import { MedusaContainer } from "@medusajs/framework/types";
 import { Client } from "pg";
+
 import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard";
 
 const TAG = "[QB-NIGHTLY-VERIFY]";

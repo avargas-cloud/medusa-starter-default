@@ -1,6 +1,6 @@
 import { defineWidgetConfig } from "@medusajs/admin-sdk";
-import { Container, Heading, Switch, Label, Text } from "@medusajs/ui";
 import { DetailWidgetProps, AdminProduct } from "@medusajs/framework/types";
+import { Container, Heading, Switch, Label, Text } from "@medusajs/ui";
 import { useState, useEffect } from "react";
 
 type ProductWithMetadata = AdminProduct & {

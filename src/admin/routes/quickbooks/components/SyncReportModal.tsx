@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { Button, Heading, Text, Badge } from "@medusajs/ui";
 import { XMark } from "@medusajs/icons";
+import { Button, Heading, Text, Badge } from "@medusajs/ui";
+import { useEffect, useRef, useState } from "react";
 
 interface SyncReportModalProps {
   jobId: string | null;

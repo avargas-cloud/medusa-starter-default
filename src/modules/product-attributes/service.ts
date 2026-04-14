@@ -1,7 +1,8 @@
 import { MedusaService } from "@medusajs/utils";
+
 import { AttributeKey } from "./models/attribute-key";
-import { AttributeValue } from "./models/attribute-value";
 import { AttributeSet } from "./models/attribute-set";
+import { AttributeValue } from "./models/attribute-value";
 
 class ProductAttributesModuleService extends MedusaService({
   AttributeKey,

@@ -1,4 +1,3 @@
-import { Table, Badge, DropdownMenu, IconButton, clx } from "@medusajs/ui";
 import {
   EllipsisHorizontal,
   PencilSquare,
@@ -7,10 +6,13 @@ import {
   TriangleUpMini,
   TriangleDownMini,
 } from "@medusajs/icons";
-import { MeiliInventoryItem } from "../../../lib/meili-types";
-import { useNavigate, Link } from "react-router-dom";
+import { Table, Badge, DropdownMenu, IconButton, clx } from "@medusajs/ui";
 import { useState } from "react";
+import { useNavigate, Link } from "react-router-dom";
+
+import { MeiliInventoryItem } from "../../../lib/meili-types";
 import type { PriceList } from "../hooks/use-feature-flags";
+
 import { InventoryStockModal } from "./inventory-stock-modal";
 
 interface InventoryTableProps {

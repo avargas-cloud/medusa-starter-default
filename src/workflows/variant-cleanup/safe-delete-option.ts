@@ -3,10 +3,11 @@ import {
   WorkflowResponse,
   transform,
 } from "@medusajs/framework/workflows-sdk";
+
 import { checkVariantSalesStep } from "./steps/check-variant-sales";
-import { findVariantsByOptionStep } from "./steps/find-variants-by-option";
-import { deleteVariantsStep } from "./steps/delete-variants";
 import { deleteOptionStep } from "./steps/delete-option";
+import { deleteVariantsStep } from "./steps/delete-variants";
+import { findVariantsByOptionStep } from "./steps/find-variants-by-option";
 
 type SafeDeleteOptionInput = {
   optionId: string;

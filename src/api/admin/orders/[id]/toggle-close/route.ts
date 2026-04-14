@@ -1,6 +1,7 @@
+import { createReservationsWorkflow } from "@medusajs/core-flows";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
-import { createReservationsWorkflow } from "@medusajs/core-flows";
+
 import {
   closeSalesOrderInQb,
   reopenSalesOrderInQb,

@@ -1,5 +1,6 @@
 import { SubscriberArgs } from "@medusajs/framework";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
+
 import { FINANCE_MODULE } from "../../../modules/finance";
 import { bridgeFetch } from "../client/core";
 import { writePipelineRow } from "../qb-pipeline";

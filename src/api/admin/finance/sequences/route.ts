@@ -55,11 +55,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
           .json({ error: `Invalid sequence identifier: ${seq}` });
       }
       if (typeof newValue !== "number" || newValue < 1) {
-        return res
-          .status(400)
-          .json({
-            error: `Invalid value for sequence ${seq}. Must be a positive integer.`,
-          });
+        return res.status(400).json({
+          error: `Invalid value for sequence ${seq}. Must be a positive integer.`,
+        });
       }
 
       // Update the sequence safely

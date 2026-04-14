@@ -1,8 +1,8 @@
 import { randomUUID } from "crypto";
+
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
-import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
 import { Modules } from "@medusajs/utils";
+
 import {
   createCreditMemoInQb,
   createCheckInQb,
@@ -12,8 +12,10 @@ import {
   buildQbOrderDiscountLines,
   buildShippingQbItem,
 } from "../../../../../../lib/quickbooks/order-flow-core";
-import { FINANCE_MODULE } from "../../../../../../modules/finance";
 import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
+import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
+import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
+import { FINANCE_MODULE } from "../../../../../../modules/finance";
 
 export async function POST(
   req: MedusaRequest,
@@ -506,12 +508,10 @@ export async function POST(
     }
     // -- AR LEDGER SYNC END --
 
-    res
-      .status(200)
-      .json({
-        success: true,
-        message: "Credit Memo completed and inventory restocked",
-      });
+    res.status(200).json({
+      success: true,
+      message: "Credit Memo completed and inventory restocked",
+    });
   } catch (e: any) {
     logger.error(`[credit_memos complete] failed: ${e.message}`);
     res.status(500).json({ success: false, message: e.message });

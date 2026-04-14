@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { useQueryClient, useMutation } from "@tanstack/react-query";
 import { Button, Input, Prompt, Select, toast } from "@medusajs/ui";
+import { useQueryClient, useMutation } from "@tanstack/react-query";
+import { useState } from "react";
 
 interface MoveAttributeModalProps {
   attributeId: string;

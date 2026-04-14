@@ -4,6 +4,7 @@ import {
   StepResponse,
   WorkflowResponse,
 } from "@medusajs/framework/workflows-sdk";
+
 import { PRODUCT_ATTRIBUTES_MODULE } from "../../modules/product-attributes";
 
 export type CreateAttributeKeyInput = {

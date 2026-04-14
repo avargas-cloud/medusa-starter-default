@@ -1,7 +1,7 @@
-import { XMark } from "@medusajs/icons";
-import { Text, Button, Badge } from "@medusajs/ui";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { XMark } from "@medusajs/icons";
+import { Text, Button, Badge } from "@medusajs/ui";
 
 interface SortableFilterItemProps {
   id: string;

@@ -1,7 +1,8 @@
-import { Drawer, Input, Button } from "@medusajs/ui";
 import { Photo, MagnifyingGlass } from "@medusajs/icons";
-import { useState } from "react";
+import { Drawer, Input, Button } from "@medusajs/ui";
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+
 import { BASE_URL } from "../../lib/sdk";
 
 interface MediaLibraryModalProps {

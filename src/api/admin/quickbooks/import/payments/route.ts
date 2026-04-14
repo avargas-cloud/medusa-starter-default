@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
+
 import {
   bridgeFetch,
   POLL_INTERVAL_MS,
@@ -308,12 +309,10 @@ export async function POST(
         return;
       }
       if (staged.status === "applied") {
-        res
-          .status(409)
-          .json({
-            error: "Payment already applied",
-            applied_payment_id: staged.applied_payment_id,
-          });
+        res.status(409).json({
+          error: "Payment already applied",
+          applied_payment_id: staged.applied_payment_id,
+        });
         return;
       }
       if (!staged.medusa_customer_id) {

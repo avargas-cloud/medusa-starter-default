@@ -8,6 +8,7 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+
 import { POS_USER_MODULE } from "../../../../modules/pos-user";
 
 /** PATCH /admin/pos-users/:id — update first_name / last_name / can_view_accounting */

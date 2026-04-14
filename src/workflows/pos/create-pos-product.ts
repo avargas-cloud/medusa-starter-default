@@ -3,6 +3,7 @@ import {
   WorkflowResponse,
 } from "@medusajs/framework/workflows-sdk";
 import { createProductsWorkflow } from "@medusajs/medusa/core-flows";
+
 import { sendToQbStep } from "../qb/send-to-qb-step";
 
 export type CreatePosProductInput = {

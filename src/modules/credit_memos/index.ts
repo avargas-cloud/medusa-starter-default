@@ -1,4 +1,5 @@
 import { Module } from "@medusajs/utils";
+
 import CreditMemoModuleService from "./service";
 
 export const CREDIT_MEMO_MODULE = "credit_memos";

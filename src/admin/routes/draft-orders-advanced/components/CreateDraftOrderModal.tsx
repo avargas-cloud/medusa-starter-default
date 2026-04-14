@@ -1,6 +1,5 @@
+import { Heading, Text, Button, Badge, toast } from "@medusajs/ui";
 import { useState, useEffect, useRef } from "react";
-import { Heading, Text, Button, Badge } from "@medusajs/ui";
-import { toast } from "@medusajs/ui";
 
 interface Address {
   id: string;

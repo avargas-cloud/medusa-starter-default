@@ -1,5 +1,6 @@
-import { Modules as _Modules } from "@medusajs/utils";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { Modules as _Modules } from "@medusajs/utils";
+
 import { buildActivationEmail } from "../../../../utils/email-templates";
 import { sendMail } from "../../../../utils/mailer";
 

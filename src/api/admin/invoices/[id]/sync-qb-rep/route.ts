@@ -1,7 +1,8 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
-import { INVOICE_MODULE } from "../../../../../modules/invoices";
+
 import { updateInvoiceInQb } from "../../../../../lib/quickbooks/client/invoices";
 import { updateSalesReceiptInQb } from "../../../../../lib/quickbooks/client/sales-receipts";
+import { INVOICE_MODULE } from "../../../../../modules/invoices";
 
 /**
  * POST /admin/invoices/:id/sync-qb-rep

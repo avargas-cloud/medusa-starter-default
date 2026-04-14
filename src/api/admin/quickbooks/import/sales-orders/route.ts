@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
+
 import {
   bridgeFetch,
   POLL_INTERVAL_MS,

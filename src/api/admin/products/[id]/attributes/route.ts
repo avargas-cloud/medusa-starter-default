@@ -1,7 +1,8 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { Modules } from "@medusajs/utils";
+
 import { updateProductAttributesWorkflow } from "../../../../../workflows/product-attributes/update-product-attributes";
 import { safeDeleteOptionWorkflow } from "../../../../../workflows/variant-cleanup";
-import { Modules } from "@medusajs/utils";
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const query = req.scope.resolve("query");

@@ -1,13 +1,14 @@
 import { defineRouteConfig } from "@medusajs/admin-sdk";
-import { Container, Heading, Button } from "@medusajs/ui";
 import { ListTree } from "@medusajs/icons";
+import { Container, Heading, Button } from "@medusajs/ui";
 import { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useSortingData } from "../../hooks/useSortingData";
-import { useCategorySorting } from "../../hooks/useCategorySorting";
+
 import { CategorySelector } from "../../components/sorting/CategorySelector";
-import { SubcategoriesList } from "../../components/sorting/SubcategoriesList";
 import { ProductsList } from "../../components/sorting/ProductsList";
+import { SubcategoriesList } from "../../components/sorting/SubcategoriesList";
+import { useCategorySorting } from "../../hooks/useCategorySorting";
+import { useSortingData } from "../../hooks/useSortingData";
 
 /**
  * Main Sorting Admin Page

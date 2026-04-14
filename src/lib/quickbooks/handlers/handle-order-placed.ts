@@ -1,19 +1,21 @@
 import { ContainerRegistrationKeys } from "@medusajs/utils";
+
+import { getDbPool } from "../../../api/utils/db-pool";
 import {
   processOrderInQb,
   buildQbItems,
   buildShippingQbItem,
   buildQbOrderDiscountLines,
 } from "../order-flow-core";
+import { parseSalesRepInitials } from "../parse-sales-rep";
 import {
   getEstimateTxnId,
   getSoTxnId,
   getSoOperationId,
 } from "../qb-metadata-types";
-import { LOG_PREFIX, getQbConfig, isPosOrder, processingOrders } from "./utils";
 import { writePipelineRow, cacheEditSequence } from "../qb-pipeline";
-import { parseSalesRepInitials } from "../parse-sales-rep";
-import { getDbPool } from "../../../api/utils/db-pool";
+
+import { LOG_PREFIX, getQbConfig, isPosOrder, processingOrders } from "./utils";
 
 async function mergeOrderMetadata(
   orderId: string,

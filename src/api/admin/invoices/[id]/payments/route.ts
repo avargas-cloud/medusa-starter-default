@@ -8,12 +8,13 @@
  */
 
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { INVOICE_MODULE } from "../../../../../modules/invoices";
-import { FINANCE_MODULE } from "../../../../../modules/finance";
-import { registerMedusaPayment } from "../../register-medusa-payment";
-import { handlePosPaymentCreated } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-created";
+
 import { handlePosPaymentApplied } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-applied";
+import { handlePosPaymentCreated } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-created";
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
+import { FINANCE_MODULE } from "../../../../../modules/finance";
+import { INVOICE_MODULE } from "../../../../../modules/invoices";
+import { registerMedusaPayment } from "../../register-medusa-payment";
 
 function getNum(val: any): number {
   if (val === null || val === undefined) return 0;
@@ -66,12 +67,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     return res.status(400).json({ error: "payment_method is required" });
   }
   if (!customer_id) {
-    return res
-      .status(400)
-      .json({
-        error:
-          "customer_id is required. All payments must be linked to a customer ledger.",
-      });
+    return res.status(400).json({
+      error:
+        "customer_id is required. All payments must be linked to a customer ledger.",
+    });
   }
 
   try {

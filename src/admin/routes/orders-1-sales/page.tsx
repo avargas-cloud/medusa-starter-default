@@ -1,13 +1,14 @@
 import { defineRouteConfig } from "@medusajs/admin-sdk";
 import { ShoppingCart } from "@medusajs/icons";
 import { Container, Heading, Text, Button } from "@medusajs/ui";
-import { useOrdersList } from "../sales-orders/hooks/use-orders-list";
+import { useNavigate } from "react-router-dom";
+
 import {
   OrdersTable,
   OrdersControls,
   OrdersFooter,
 } from "../sales-orders/components/orders-table";
-import { useNavigate } from "react-router-dom";
+import { useOrdersList } from "../sales-orders/hooks/use-orders-list";
 
 // ─── Sidebar config ───────────────────────────────────────────────────────────
 // orders-1-sales sorts after draft-orders-advanced (d) → "Sales Orders" appears 2nd

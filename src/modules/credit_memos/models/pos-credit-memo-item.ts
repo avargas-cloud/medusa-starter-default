@@ -1,4 +1,5 @@
 import { model } from "@medusajs/utils";
+
 import PosCreditMemo from "./pos-credit-memo";
 
 const PosCreditMemoItem = model.define("pos_credit_memo_item", {

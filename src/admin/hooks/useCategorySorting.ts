@@ -1,5 +1,5 @@
-import { useState } from "react";
 import { toast } from "@medusajs/ui";
+import { useState } from "react";
 
 interface SortingConfig {
   subcategory_order: string[];

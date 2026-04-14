@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+
 import { meiliClient, PRODUCTS_INDEX } from "../../../lib/meili-client";
 import type { MeiliProduct } from "../../../lib/meili-types";
 

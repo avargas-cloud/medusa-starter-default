@@ -1,4 +1,5 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
 import { PRODUCT_ATTRIBUTES_MODULE } from "../../../modules/product-attributes";
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {

@@ -5,6 +5,7 @@
  */
 
 import { model } from "@medusajs/utils";
+
 import PosInvoice from "./pos-invoice";
 
 const InvoiceTracking = model.define("invoice_tracking", {

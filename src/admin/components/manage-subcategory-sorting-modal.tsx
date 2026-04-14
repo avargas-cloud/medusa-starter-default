@@ -1,6 +1,3 @@
-import { useEffect, useState } from "react";
-import { Button, Heading, Text } from "@medusajs/ui";
-import { XMark } from "@medusajs/icons";
 import {
   DndContext,
   closestCenter,
@@ -15,8 +12,13 @@ import {
   sortableKeyboardCoordinates,
   rectSortingStrategy,
 } from "@dnd-kit/sortable";
-import { useSortingData } from "../hooks/useSortingData";
+import { XMark } from "@medusajs/icons";
+import { Button, Heading, Text } from "@medusajs/ui";
+import { useEffect, useState } from "react";
+
 import { useCategorySorting } from "../hooks/useCategorySorting";
+import { useSortingData } from "../hooks/useSortingData";
+
 import { CategoryGridItem } from "./sorting/CategoryGridItem";
 
 interface Subcategory {

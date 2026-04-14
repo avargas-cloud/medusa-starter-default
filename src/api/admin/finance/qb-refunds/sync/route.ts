@@ -1,6 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { Modules } from "@medusajs/utils";
+
 import {
   bridgeFetch,
   DRY_RUN,
@@ -9,6 +9,7 @@ import {
   writePipelineRow,
   getCachedEditSequence,
 } from "../../../../../lib/quickbooks/qb-pipeline";
+import { FINANCE_MODULE } from "../../../../../modules/finance";
 
 /**
  * POST /admin/finance/qb-refunds/sync
@@ -110,11 +111,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   }
   const customerListId = customer?.metadata?.qb_list_id;
   if (!customerListId) {
-    return res
-      .status(400)
-      .json({
-        error: "Customer does not have a QB ListID — sync customer first",
-      });
+    return res.status(400).json({
+      error: "Customer does not have a QB ListID — sync customer first",
+    });
   }
 
   // 4. Determine refund amount and reference label

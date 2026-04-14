@@ -18,8 +18,8 @@
  */
 
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
-import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
 import type { ICustomerModuleService } from "@medusajs/types";
+import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
 import postgres from "postgres";
 
 export default async function googleOAuthDedupSubscriber({

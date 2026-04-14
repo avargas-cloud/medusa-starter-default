@@ -4,6 +4,7 @@
  * Body: { invoice_id: string, amount: number, applied_by?: string }
  */
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
 
@@ -44,11 +45,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const available = Math.max(0, Number(payment.amount) - alreadyApplied);
 
     if (amount > available) {
-      return res
-        .status(400)
-        .json({
-          error: `Amount (${amount}) exceeds available balance (${available})`,
-        });
+      return res.status(400).json({
+        error: `Amount (${amount}) exceeds available balance (${available})`,
+      });
     }
 
     // 2. Load invoice

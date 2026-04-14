@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
-import { Button, clx } from "@medusajs/ui";
 import { ArrowPath, CheckCircle, ExclamationCircle } from "@medusajs/icons";
+import { Button, clx } from "@medusajs/ui";
+import { useState, useEffect } from "react";
 
 type SyncStatus =
   | "idle"

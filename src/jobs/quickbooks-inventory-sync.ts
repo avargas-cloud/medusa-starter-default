@@ -1,8 +1,9 @@
 import { MedusaContainer } from "@medusajs/framework/types";
 import { Client } from "pg";
-import { syncInventoryCore } from "../lib/quickbooks/sync-inventory-core";
+
 import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard";
 import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger";
+import { syncInventoryCore } from "../lib/quickbooks/sync-inventory-core";
 
 /**
  * QuickBooks Inventory Auto-Sync — cron fires every 10 minutes.

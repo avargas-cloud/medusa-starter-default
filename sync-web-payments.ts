@@ -1,4 +1,5 @@
 import { MedusaContainer } from "@medusajs/framework/types";
+
 import { FINANCE_MODULE } from "./src/modules/finance";
 
 export default async function syncWebPayments({

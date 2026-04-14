@@ -12,9 +12,10 @@ import type {
   MedusaResponse,
 } from "@medusajs/framework/http";
 import jwt from "jsonwebtoken";
-import { sendMail } from "../../../../utils/mailer";
+
 import { POS_USER_MODULE } from "../../../../modules/pos-user";
 import { buildActivationEmail } from "../../../../utils/email-templates";
+import { sendMail } from "../../../../utils/mailer";
 
 type InviteBody = {
   email: string;

@@ -1,9 +1,11 @@
 import {
   createWorkflow,
   WorkflowResponse,
+  createStep,
+  StepResponse,
 } from "@medusajs/framework/workflows-sdk";
-import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 import { Modules } from "@medusajs/utils";
+
 import { PRODUCT_ATTRIBUTES_MODULE } from "../../modules/product-attributes";
 
 // Step: Diff & Update Links

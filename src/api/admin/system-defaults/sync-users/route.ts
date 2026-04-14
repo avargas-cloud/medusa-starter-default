@@ -1,6 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { DB, ensureTable } from "../route";
 import { IUserModuleService } from "@medusajs/framework/types";
+
+import { DB, ensureTable } from "../route";
 
 export async function POST(
   req: MedusaRequest,

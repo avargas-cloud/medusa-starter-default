@@ -1,9 +1,10 @@
-import { voidInvoiceInQb, voidSalesReceiptInQb } from "../qb-bridge-client";
-import { QbSyncLogger } from "../qb-sync-logger";
-import { writePipelineRow } from "../qb-pipeline";
-import { LOG_PREFIX } from "./utils";
 import { getDbPool } from "../../../api/utils/db-pool";
 import { FINANCE_MODULE } from "../../../modules/finance";
+import { voidInvoiceInQb, voidSalesReceiptInQb } from "../qb-bridge-client";
+import { writePipelineRow } from "../qb-pipeline";
+import { QbSyncLogger } from "../qb-sync-logger";
+
+import { LOG_PREFIX } from "./utils";
 
 export async function handleInvoiceVoided(
   data: any,

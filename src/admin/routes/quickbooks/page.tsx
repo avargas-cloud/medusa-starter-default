@@ -2,14 +2,15 @@ import { defineRouteConfig } from "@medusajs/admin-sdk";
 import { BuildingStorefront } from "@medusajs/icons";
 import { Container, Heading, Text, Button, Switch, toast } from "@medusajs/ui";
 import { useState, useEffect } from "react";
-import { SyncReportModal } from "./components/SyncReportModal";
-import { StoreHoursSection } from "./components/StoreHoursSection";
-import { SyncCard } from "./components/SyncCard";
-import { AuditModal } from "./components/AuditModal";
+
 import { ActivityLog } from "./components/ActivityLog";
-import { PipelineTable } from "./components/PipelineTable";
+import { AuditModal } from "./components/AuditModal";
 import { BridgeStatus } from "./components/BridgeStatus";
 import { LegacyImportPanel } from "./components/LegacyImportPanel";
+import { PipelineTable } from "./components/PipelineTable";
+import { StoreHoursSection } from "./components/StoreHoursSection";
+import { SyncCard } from "./components/SyncCard";
+import { SyncReportModal } from "./components/SyncReportModal";
 
 // ─── Interval options ─────────────────────────────────────────────────────────
 const INVENTORY_INTERVALS = [

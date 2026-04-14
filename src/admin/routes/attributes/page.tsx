@@ -21,10 +21,11 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
+
 import { CreateAttributeModal } from "../../components/attributes/create-attribute-modal";
 import { CreateSetModal } from "../../components/attributes/create-set-modal";
-import { RenameSetModal } from "../../components/attributes/rename-set-modal";
 import { DeleteSetModal } from "../../components/attributes/delete-set-modal";
+import { RenameSetModal } from "../../components/attributes/rename-set-modal";
 
 // CONFIGURACIÓN
 export const config = defineRouteConfig({

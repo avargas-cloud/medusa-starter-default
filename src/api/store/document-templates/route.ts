@@ -9,6 +9,7 @@
 
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
+
 import { generateId } from "../../../modules/document-templates/generate-id";
 
 const DB = () =>

@@ -3,8 +3,8 @@ import {
   updateLineItemInCartWorkflow,
   refreshCartItemsWorkflow,
 } from "@medusajs/medusa/core-flows";
-import { StepResponse } from "@medusajs/workflows-sdk";
 import { Modules } from "@medusajs/utils";
+import { StepResponse } from "@medusajs/workflows-sdk";
 
 /**
  * 💰 WHOLESALE PRICING HOOK — Gold Standard Medusa v2 Implementation

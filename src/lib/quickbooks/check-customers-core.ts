@@ -1,5 +1,5 @@
-import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 import { ICustomerModuleService } from "@medusajs/types";
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 import { Client } from "pg";
 
 // Config — from env vars

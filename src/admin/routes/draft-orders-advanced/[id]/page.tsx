@@ -1,24 +1,25 @@
+import { Trash, XCircle } from "@medusajs/icons";
 import { Container, Heading, Badge, Text } from "@medusajs/ui";
 import { useParams, useNavigate } from "react-router-dom";
+
+import { CustomerBlock } from "./components/CustomerBlock";
+import { EstimateInfoBlock } from "./components/EstimateInfoBlock";
+import type { EstimateInfo } from "./components/EstimateInfoBlock";
+import { InlineItemsTable } from "./components/InlineItemsTable";
+import { InlineNotes } from "./components/InlineNotes";
+import { InlineShipping } from "./components/InlineShipping";
+import { InlineTaxes } from "./components/InlineTaxes";
+import { NoShippingModal } from "./components/NoShippingModal";
+import { OrderDrawers } from "./components/OrderDrawers";
+import { OrderHeader } from "./components/OrderHeader";
+import { OrderSidebar } from "./components/OrderSidebar";
+import { OrderTotals } from "./components/OrderTotals";
+import { PromotionsBlock } from "./components/PromotionsBlock";
+import { SendEstimateModal } from "./components/SendEstimateModal";
+import { addrToLines } from "./helpers";
 import { useDraftOrderDetail } from "./hooks/use-draft-order-detail";
 import { useOrderPageState } from "./hooks/use-order-page-state";
 import { usePageDerived } from "./hooks/use-page-derived";
-import { OrderDrawers } from "./components/OrderDrawers";
-import { OrderHeader } from "./components/OrderHeader";
-import { CustomerBlock } from "./components/CustomerBlock";
-import { InlineItemsTable } from "./components/InlineItemsTable";
-import { PromotionsBlock } from "./components/PromotionsBlock";
-import { InlineShipping } from "./components/InlineShipping";
-import { InlineTaxes } from "./components/InlineTaxes";
-import { OrderTotals } from "./components/OrderTotals";
-import { OrderSidebar } from "./components/OrderSidebar";
-import { InlineNotes } from "./components/InlineNotes";
-import { SendEstimateModal } from "./components/SendEstimateModal";
-import { EstimateInfoBlock } from "./components/EstimateInfoBlock";
-import type { EstimateInfo } from "./components/EstimateInfoBlock";
-import { NoShippingModal } from "./components/NoShippingModal";
-import { addrToLines } from "./helpers";
-import { Trash, XCircle } from "@medusajs/icons";
 
 const DraftOrderDetail = () => {
   const { id } = useParams<{ id: string }>();

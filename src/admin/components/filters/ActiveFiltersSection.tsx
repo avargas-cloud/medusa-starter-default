@@ -1,4 +1,3 @@
-import { Text, Badge } from "@medusajs/ui";
 import {
   DndContext,
   closestCenter,
@@ -13,6 +12,8 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
+import { Text, Badge } from "@medusajs/ui";
+
 import { SortableFilterItem } from "./SortableFilterItem";
 
 interface AttributeKey {

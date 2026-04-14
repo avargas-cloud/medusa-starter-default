@@ -1,5 +1,5 @@
-import { Button, Text } from "@medusajs/ui";
 import { ArrowLeftMini, ArrowRightMini } from "@medusajs/icons";
+import { Button, Text } from "@medusajs/ui";
 
 interface InventoryPaginationProps {
   currentPage: number;

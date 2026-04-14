@@ -6,6 +6,7 @@ import {
   createPaymentSessionsWorkflow,
   completeCartWorkflow,
 } from "@medusajs/medusa/core-flows";
+
 import { getDbPool } from "../../utils/db-pool";
 
 // ─── Florida province mapping (must match exact Tax Region province_code in DB)
@@ -478,11 +479,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     if (!paymentCollection?.id) {
-      return res
-        .status(500)
-        .json({
-          error: "Could not obtain payment collection. Please try again.",
-        });
+      return res.status(500).json({
+        error: "Could not obtain payment collection. Please try again.",
+      });
     }
 
     // ── STEP 6: Create Authorize.net payment session ───────────────────────
@@ -564,7 +563,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     const order = (orderResult as any)?.order ?? orderResult;
-    let orderId = order?.id ?? null;
+    const orderId = order?.id ?? null;
     let displayId = order?.display_id ?? null;
 
     // display_id is not always included in the completeCart result — fetch it directly

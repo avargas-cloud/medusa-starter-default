@@ -1,13 +1,14 @@
-import { completeCartWorkflow } from "@medusajs/medusa/core-flows";
 import { StepResponse } from "@medusajs/framework/workflows-sdk";
+import { completeCartWorkflow } from "@medusajs/medusa/core-flows";
 import { Modules } from "@medusajs/utils";
-import { FINANCE_MODULE } from "../../modules/finance";
+
+import { getDbPool } from "../../api/utils/db-pool";
 import {
   processPaymentCaptureInQb,
   ensureCustomerInQb,
 } from "../../lib/quickbooks/order-flow-core";
 import { writePipelineRow } from "../../lib/quickbooks/qb-pipeline";
-import { getDbPool } from "../../api/utils/db-pool";
+import { FINANCE_MODULE } from "../../modules/finance";
 // Workaround for Medusa's exported types missing the internal hooks:
 const hooks = completeCartWorkflow.hooks as any;
 

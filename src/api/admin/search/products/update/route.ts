@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
 import { updateSingleProductWorkflow } from "../../../../../workflows/update-single-product";
 
 /**

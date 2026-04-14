@@ -1,4 +1,5 @@
 import { defineWidgetConfig } from "@medusajs/admin-sdk";
+import { DetailWidgetProps, AdminProduct } from "@medusajs/framework/types";
 import {
   Container,
   Heading,
@@ -10,8 +11,8 @@ import {
   Switch,
 } from "@medusajs/ui";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { DetailWidgetProps, AdminProduct } from "@medusajs/framework/types";
 import { useState, useEffect } from "react";
+
 import { BASE_URL } from "../../lib/sdk";
 
 const LongDescriptionWidget = ({

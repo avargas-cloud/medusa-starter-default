@@ -120,12 +120,10 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     });
   } catch (error: any) {
     console.error("Error in POST /shipping-preview:", error);
-    res
-      .status(500)
-      .json({
-        error: "Failed to calculate shipping preview",
-        details: error.message,
-      });
+    res.status(500).json({
+      error: "Failed to calculate shipping preview",
+      details: error.message,
+    });
   } finally {
     await client.end();
   }
@@ -297,12 +295,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     });
   } catch (error: any) {
     console.error("Error in /shipping-preview:", error);
-    res
-      .status(500)
-      .json({
-        error: "Failed to calculate shipping preview",
-        details: error.message,
-      });
+    res.status(500).json({
+      error: "Failed to calculate shipping preview",
+      details: error.message,
+    });
   } finally {
     await client.end();
   }

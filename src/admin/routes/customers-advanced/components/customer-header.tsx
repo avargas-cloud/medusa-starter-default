@@ -1,7 +1,8 @@
-import { Input, Select, Heading, Button } from "@medusajs/ui";
-import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { MagnifyingGlass, ArrowPath } from "@medusajs/icons";
+import { Input, Select, Heading, Button } from "@medusajs/ui";
+import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+
 import { SyncStatusButton } from "../../../components/shared/sync-status-button";
 
 interface CustomerHeaderProps {

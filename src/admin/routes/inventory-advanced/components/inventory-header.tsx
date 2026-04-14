@@ -1,7 +1,8 @@
-import { Heading, Text, Input, Select } from "@medusajs/ui";
 import { MagnifyingGlass } from "@medusajs/icons";
-import { SyncStatusButton } from "../../../components/shared/sync-status-button";
+import { Heading, Text, Input, Select } from "@medusajs/ui";
 import { useQueryClient } from "@tanstack/react-query";
+
+import { SyncStatusButton } from "../../../components/shared/sync-status-button";
 
 interface InventoryHeaderProps {
   searchQuery: string;

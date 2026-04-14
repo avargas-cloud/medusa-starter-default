@@ -1,17 +1,18 @@
 import { MedusaContainer } from "@medusajs/framework/types";
 import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
 import { Client } from "pg";
-import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard";
-import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger";
+
 import { handleOrderPlaced } from "../lib/quickbooks/handlers/handle-order-placed";
-import { handleDraftOrderCreated } from "../subscribers/qb-draft-order-subscriber";
 import { handlePosPaymentCreated } from "../lib/quickbooks/handlers/handle-pos-payment-created";
+import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard";
 import {
   getEstimateTxnId,
   getSoTxnId,
   getLatestInvoiceTxnId,
 } from "../lib/quickbooks/qb-metadata-types";
+import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger";
 import { FINANCE_MODULE } from "../modules/finance";
+import { handleDraftOrderCreated } from "../subscribers/qb-draft-order-subscriber";
 
 const LOG_PREFIX = "[QB-POS-SYNC]";
 const POS_CHANNEL_ID = process.env.POS_SALES_CHANNEL_ID ?? "";

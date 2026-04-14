@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
 import { Input, Label, Text } from "@medusajs/ui";
+import { useState, useEffect } from "react";
+
 import type { AddrForm } from "../types";
 
 interface SavedAddress {

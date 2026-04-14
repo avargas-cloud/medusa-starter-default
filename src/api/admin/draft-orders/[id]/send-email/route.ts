@@ -1,8 +1,10 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { existsSync, readdirSync } from "fs";
 import { join } from "path";
+
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Client as PgClient } from "pg";
 import { chromium as playwrightChromium } from "playwright-core";
+
 import { sendMail } from "../../../../../utils/mailer";
 
 // ── Template prefetch (avoids headless browser needing an authenticated API call) ──
@@ -831,13 +833,11 @@ export async function POST(
     return void res.status(400).json({ message: "No customer email found" });
 
   if (!process.env.RESEND_API_KEY)
-    return void res
-      .status(200)
-      .json({
-        success: false,
-        preview_only: true,
-        message: "RESEND_API_KEY not set.",
-      });
+    return void res.status(200).json({
+      success: false,
+      preview_only: true,
+      message: "RESEND_API_KEY not set.",
+    });
 
   const params = buildParams(order, "email");
   const docType = documentType ?? "Estimate";
@@ -1129,11 +1129,9 @@ export async function POST(
     /* non-critical */
   }
 
-  res
-    .status(200)
-    .json({
-      success: true,
-      sent_to: customerEmail,
-      pdf_generated: !!pdfBuffer,
-    });
+  res.status(200).json({
+    success: true,
+    sent_to: customerEmail,
+    pdf_generated: !!pdfBuffer,
+  });
 }

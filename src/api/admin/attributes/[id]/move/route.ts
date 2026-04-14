@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+
 import { moveAttributeWorkflow } from "../../../../../workflows/product-attributes/move-attribute";
 
 // POST - Move attribute to a different set

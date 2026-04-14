@@ -1,6 +1,6 @@
+import { XMark } from "@medusajs/icons";
 import { Table, Badge } from "@medusajs/ui";
 import { useQuery } from "@tanstack/react-query";
-import { XMark } from "@medusajs/icons";
 
 interface LocationLevel {
   id: string;

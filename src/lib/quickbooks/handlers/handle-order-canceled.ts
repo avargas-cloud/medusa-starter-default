@@ -1,18 +1,19 @@
+import { getDbPool } from "../../../api/utils/db-pool";
 import { closeSalesOrderInQb, voidInvoiceInQb } from "../qb-bridge-client";
-import { QbSyncLogger } from "../qb-sync-logger";
-import {
-  writePipelineRow,
-  findInFlightQbRows,
-  skipPipelineRowById,
-} from "../qb-pipeline";
 import {
   getSoTxnId,
   getSoRef,
   getLatestInvoiceTxnId,
   getLatestInvoiceRef,
 } from "../qb-metadata-types";
+import {
+  writePipelineRow,
+  findInFlightQbRows,
+  skipPipelineRowById,
+} from "../qb-pipeline";
+import { QbSyncLogger } from "../qb-sync-logger";
+
 import { LOG_PREFIX } from "./utils";
-import { getDbPool } from "../../../api/utils/db-pool";
 
 export async function handleOrderCanceled(
   data: any,

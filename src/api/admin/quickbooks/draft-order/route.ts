@@ -1,7 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
 import { Client } from "pg";
-import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
+
 import {
   ensureCustomerInQb,
   buildQbItems,
@@ -11,6 +11,7 @@ import {
   processUpdateEstimateInQb,
   processDeactivateEstimateInQb,
 } from "../../../../lib/quickbooks/order-flow-core";
+import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
 import {
   buildEstimatePatch,
   getEstimateTxnId,
@@ -266,12 +267,10 @@ export async function POST(
     }
 
     if (!result.enabled) {
-      res
-        .status(503)
-        .json({
-          error:
-            "QuickBooks integration is disabled. Check QB_ORDER_FLOW_ENABLED env var.",
-        });
+      res.status(503).json({
+        error:
+          "QuickBooks integration is disabled. Check QB_ORDER_FLOW_ENABLED env var.",
+      });
       return;
     }
 

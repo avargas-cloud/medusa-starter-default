@@ -1,3 +1,10 @@
+import {
+  createPromotionsWorkflow,
+  addDraftOrderPromotionWorkflow,
+  beginDraftOrderEditWorkflow,
+  confirmDraftOrderEditWorkflow,
+  cancelDraftOrderEditWorkflow,
+} from "@medusajs/core-flows";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import {
   Modules,
@@ -6,15 +13,9 @@ import {
   ApplicationMethodType,
   ApplicationMethodTargetType,
 } from "@medusajs/utils";
-import {
-  createPromotionsWorkflow,
-  addDraftOrderPromotionWorkflow,
-  beginDraftOrderEditWorkflow,
-  confirmDraftOrderEditWorkflow,
-  cancelDraftOrderEditWorkflow,
-} from "@medusajs/core-flows";
-import { getDbPool } from "../../../../utils/db-pool";
+
 import { posOverrideAdjustmentsWorkflow } from "../../../../../workflows/pos-discount/workflows";
+import { getDbPool } from "../../../../utils/db-pool";
 
 /**
  * POST /admin/orders/:id/apply-discount-force

@@ -5,6 +5,7 @@
  */
 
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
 import { getRedis } from "../../../../../../../lib/redis-client";
 
 const LOCK_TTL = 60;

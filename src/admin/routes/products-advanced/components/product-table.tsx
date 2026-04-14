@@ -1,6 +1,7 @@
+import { TagSolid } from "@medusajs/icons";
 import { Table, Text, Badge } from "@medusajs/ui";
 import { Link } from "react-router-dom";
-import { TagSolid } from "@medusajs/icons";
+
 import type { MeiliProduct } from "../../../lib/meili-types";
 
 interface ProductTableProps {

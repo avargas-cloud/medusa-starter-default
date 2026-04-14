@@ -1,6 +1,7 @@
 import { defineRouteConfig } from "@medusajs/admin-sdk";
 import { BuildingStorefront } from "@medusajs/icons";
 import { Heading, Text } from "@medusajs/ui";
+
 import { BankAccountsCard } from "./components/BankAccountsCard";
 import { SequenceManagerCard } from "./components/SequenceManagerCard";
 

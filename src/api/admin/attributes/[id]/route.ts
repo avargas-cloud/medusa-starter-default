@@ -1,7 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
-import { PRODUCT_ATTRIBUTES_MODULE } from "../../../../modules/product-attributes";
 
+import { PRODUCT_ATTRIBUTES_MODULE } from "../../../../modules/product-attributes";
 import { updateAttributeKeyWorkflow } from "../../../../workflows/product-attributes/update-attribute-key";
 
 // GET Individual attribute

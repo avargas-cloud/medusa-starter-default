@@ -4,6 +4,7 @@
  */
 
 import { Module } from "@medusajs/utils";
+
 import PosUserModuleService from "./service";
 
 export const POS_USER_MODULE = "pos_user";

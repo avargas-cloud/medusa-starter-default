@@ -1,3 +1,4 @@
+import { Plus, XMark } from "@medusajs/icons";
 import {
   Button,
   FocusModal,
@@ -10,19 +11,18 @@ import {
   Text,
   Badge,
 } from "@medusajs/ui";
-import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Plus, XMark } from "@medusajs/icons";
+import { useState, useEffect, useMemo } from "react";
 
 // Import modular utilities and hooks
+import { ConfirmationDialog } from "./attribute-management/components/ConfirmationDialog";
+import { useAttributeActions } from "./attribute-management/hooks/useAttributeActions";
+import { useConfirmation } from "./attribute-management/hooks/useConfirmation";
 import {
   groupAttributesByKey,
   getKeyAvailability,
 } from "./attribute-management/utils/groupAttributes";
 import { shouldShowVariantToggle } from "./attribute-management/utils/validateVariants";
-import { useConfirmation } from "./attribute-management/hooks/useConfirmation";
-import { useAttributeActions } from "./attribute-management/hooks/useAttributeActions";
-import { ConfirmationDialog } from "./attribute-management/components/ConfirmationDialog";
 
 type AttributeValue = {
   id: string;

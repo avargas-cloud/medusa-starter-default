@@ -1,8 +1,10 @@
-import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
-import { ICustomerModuleService } from "@medusajs/types";
-import { isQbIntegrationEnabled } from "./qb-integration-guard";
-import postgres from "postgres";
 import { randomUUID } from "crypto";
+
+import { ICustomerModuleService } from "@medusajs/types";
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
+import postgres from "postgres";
+
+import { isQbIntegrationEnabled } from "./qb-integration-guard";
 
 // Config — from env vars
 const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";

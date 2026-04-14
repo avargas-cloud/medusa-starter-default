@@ -1,13 +1,14 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
-import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
 import { Modules } from "@medusajs/utils";
-import { FINANCE_MODULE } from "../../../../../../modules/finance";
+
 import { voidCreditMemoInQb } from "../../../../../../lib/quickbooks/client";
 import {
   writePipelineRow,
   findInFlightQbRowsByRef,
 } from "../../../../../../lib/quickbooks/qb-pipeline";
+import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
+import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
+import { FINANCE_MODULE } from "../../../../../../modules/finance";
 
 export async function POST(
   req: MedusaRequest,

@@ -1,14 +1,14 @@
 import { Container, Toaster, Table } from "@medusajs/ui";
-import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import "../../styles/scrollbar-fix.css";
 
 // Logic
-import { useCustomerPageState } from "./hooks/use-customer-page-state";
 
 // Components
 import { CustomerHeader } from "./components/customer-header";
 import { CustomerTable } from "./components/customer-table";
+import { useCustomerPageState } from "./hooks/use-customer-page-state";
 
 /**
  * Customers Advanced Search Page

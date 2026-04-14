@@ -2,11 +2,12 @@ import { defineRouteConfig } from "@medusajs/admin-sdk";
 import { Funnel } from "@medusajs/icons";
 import { Container, Heading, Text, Button, Checkbox } from "@medusajs/ui";
 import { useState, useEffect } from "react";
-import { CategoryTreeNode } from "../../components/filters/CategoryTreeNode";
+
 import { ActiveFiltersSection } from "../../components/filters/ActiveFiltersSection";
 import { AvailableFiltersSection } from "../../components/filters/AvailableFiltersSection";
-import { useFiltersData } from "../../hooks/useFiltersData";
+import { CategoryTreeNode } from "../../components/filters/CategoryTreeNode";
 import { useCategoryConfig } from "../../hooks/useCategoryConfig";
+import { useFiltersData } from "../../hooks/useFiltersData";
 
 // ============================================================================
 // CONFIG

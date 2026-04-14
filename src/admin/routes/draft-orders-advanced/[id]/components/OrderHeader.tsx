@@ -1,12 +1,4 @@
 import {
-  Container,
-  Heading,
-  Badge,
-  Text,
-  Button,
-  DropdownMenu,
-} from "@medusajs/ui";
-import {
   EllipsisHorizontal,
   PencilSquare,
   ArrowRight,
@@ -15,6 +7,15 @@ import {
   XCircle,
   Trash,
 } from "@medusajs/icons";
+import {
+  Container,
+  Heading,
+  Badge,
+  Text,
+  Button,
+  DropdownMenu,
+} from "@medusajs/ui";
+
 import { fmtDate } from "../helpers";
 
 interface Props {

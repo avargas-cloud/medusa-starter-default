@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { ExclamationCircle } from "@medusajs/icons";
 import {
   Container,
   Heading,
@@ -8,7 +8,7 @@ import {
   toast,
   Badge,
 } from "@medusajs/ui";
-import { ExclamationCircle } from "@medusajs/icons";
+import { useState, useEffect, useCallback } from "react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

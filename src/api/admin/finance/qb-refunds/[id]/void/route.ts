@@ -1,7 +1,8 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { FINANCE_MODULE } from "../../../../../../modules/finance";
+
 import { voidCheckInQb } from "../../../../../../lib/quickbooks/client/checks";
 import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
+import { FINANCE_MODULE } from "../../../../../../modules/finance";
 
 /**
  * POST /admin/finance/qb-refunds/:id/void

@@ -1,3 +1,5 @@
+import { getCachedEditSequence, cacheEditSequence } from "../qb-pipeline";
+
 import { DRY_RUN, bridgeFetch, pollRawOperationResult } from "./core";
 import {
   QbCreateSalesOrderPayload,
@@ -5,7 +7,6 @@ import {
   QbBridgeResult,
   QbAsyncResult,
 } from "./types";
-import { getCachedEditSequence, cacheEditSequence } from "../qb-pipeline";
 
 /**
  * Creates a Sales Order in QuickBooks (async).
@@ -47,9 +48,7 @@ export async function createSalesOrderInQb(
   }
 }
 
-export async function getSalesOrderDetailsFromQb(
-  txnId: string
-): Promise<{
+export async function getSalesOrderDetailsFromQb(txnId: string): Promise<{
   success: boolean;
   editSequence?: string;
   linesByProductId?: Record<string, string[]>;

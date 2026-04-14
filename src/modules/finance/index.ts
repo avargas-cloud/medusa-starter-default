@@ -1,5 +1,6 @@
-import FinanceModuleService from "./service";
 import { Module } from "@medusajs/utils";
+
+import FinanceModuleService from "./service";
 
 export const FINANCE_MODULE = "finance";
 

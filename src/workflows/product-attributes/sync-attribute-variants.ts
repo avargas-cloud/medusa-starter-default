@@ -2,6 +2,7 @@ import {
   createWorkflow,
   WorkflowResponse,
 } from "@medusajs/framework/workflows-sdk";
+
 import { syncVariantsStep } from "./steps/sync-variants";
 
 interface WorkflowInput {

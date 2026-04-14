@@ -1,6 +1,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { getUPSRate } from "../../../modules/ups-rate-cache";
 import { Client } from "pg";
+
+import { getUPSRate } from "../../../modules/ups-rate-cache";
 
 /**
  * GET /admin/ups-rate-preview

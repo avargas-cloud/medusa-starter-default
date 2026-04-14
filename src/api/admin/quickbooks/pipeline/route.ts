@@ -1,10 +1,11 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 import { Client } from "pg";
+
 import {
   bridgeFetch,
   pollOperationResult,
 } from "../../../../lib/quickbooks/client/core";
-import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
 
 /**
@@ -240,12 +241,10 @@ export async function POST(
       [rowId]
     );
     if (!rows.length) {
-      res
-        .status(404)
-        .json({
-          error:
-            "Row not found or not retryable (must be 'failed' or 'waiting'; 'pending' rows are actively processing — wait for timeout)",
-        });
+      res.status(404).json({
+        error:
+          "Row not found or not retryable (must be 'failed' or 'waiting'; 'pending' rows are actively processing — wait for timeout)",
+      });
       return;
     }
     const row = rows[0];

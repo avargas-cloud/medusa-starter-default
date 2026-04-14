@@ -1,6 +1,7 @@
 import { MedusaContainer } from "@medusajs/framework/types";
-import { INVOICE_MODULE } from "./src/modules/invoices";
+
 import { FINANCE_MODULE } from "./src/modules/finance";
+import { INVOICE_MODULE } from "./src/modules/invoices";
 
 export default async function migrateOldPayments({
   container,
@@ -55,7 +56,7 @@ export default async function migrateOldPayments({
       `Invoice ${inv.id} has ${invPayments.length} payments, but only ${appsForInvoice.length} applications. Migrating missing...`
     );
 
-    let poolOfApps = [...appsForInvoice];
+    const poolOfApps = [...appsForInvoice];
 
     for (const payment of invPayments) {
       // Check if there is an app in the pool that matches the amount

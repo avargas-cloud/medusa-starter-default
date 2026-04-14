@@ -1,8 +1,8 @@
-import { useState, useEffect } from "react";
-import { Container, Select, Input, Text, toast } from "@medusajs/ui";
 import { defineWidgetConfig } from "@medusajs/admin-sdk";
 import { DetailWidgetProps } from "@medusajs/framework/types";
 import { HttpTypes } from "@medusajs/types";
+import { Container, Select, Input, Text, toast } from "@medusajs/ui";
+import { useState, useEffect } from "react";
 
 // ── Widget config ─────────────────────────────────────────────────────────────
 

@@ -1,11 +1,10 @@
 import { SubscriberArgs } from "@medusajs/framework";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
+
 import { FINANCE_MODULE } from "../../../modules/finance";
-import {
-  applyPaymentToInvoiceInQb,
-  pollOperationResult,
-} from "../qb-bridge-client";
-import { writePipelineRow, getCachedEditSequence } from "../qb-pipeline";
+import { mergeApplyPaymentInQb } from "../qb-bridge-client";
+import { withQbLockResult } from "../qb-locks";
+import { writePipelineRow, cacheEditSequence } from "../qb-pipeline";
 
 const LOG_PREFIX = "[QB-POS-PAYMENT-APPLIED]";
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";
@@ -110,7 +109,7 @@ export async function handlePosPaymentApplied({
   }
 
   // 2. Fetch the Invoice metadata to get the qb_txn_id
-  let {
+  const {
     data: [invoice],
   } = await query.graph({
     entity: "pos_invoice",
@@ -211,34 +210,6 @@ export async function handlePosPaymentApplied({
     return;
   }
 
-  // Get the EditSequence from cache (saved when the payment was created in QB).
-  // Without this, the bridge would create a new duplicate payment record instead of
-  // modifying the existing one.
-  const editSequence =
-    (await getCachedEditSequence("payment", paymentTxnId).catch(() => null))
-      ?.editSeq ?? null;
-  if (!editSequence) {
-    logger.error(
-      `${LOG_PREFIX} ❌ No EditSequence found in cache for payment TxnID=${paymentTxnId}. Cannot apply via ReceivePaymentMod.`
-    );
-    try {
-      await writePipelineRow({
-        orderId: order_id,
-        referenceId: payment_id,
-        referenceType: "customer_payment",
-        step: "apply_payment",
-        status: "failed",
-        medusaRefNumber: medusaPayRef,
-        error:
-          "EditSequence not cached — payment was created before caching was introduced, or cache expired",
-      });
-    } catch {}
-    return;
-  }
-  logger.info(
-    `${LOG_PREFIX} 🔑 EditSequence resolved for TxnID=${paymentTxnId}`
-  );
-
   // Build updated memo: replace the original "for Order X" with "for Invoice Y"
   // so the QB payment reflects its final use instead of the original deposit context.
   const payDisplayId = (payment as any).display_id;
@@ -248,35 +219,28 @@ export async function handlePosPaymentApplied({
       : `Payment for Invoice ${invoiceNumber}`
     : undefined;
 
-  const applyResult = await applyPaymentToInvoiceInQb({
-    customerId: customerQbId,
-    invoiceId: invoiceTxnId,
-    amount: amount_applied / 100,
-    creditTxnId: paymentTxnId,
-    editSequence,
-    memo: updatedMemo,
-  });
+  // ─────────────────────────────────────────────────────────────────────────
+  // Serialize every merge-apply against the SAME payment. Two concurrent
+  // handlers would each read the same "before" list from QB and the second
+  // Mod would clobber the first. mergeApplyPaymentInQb internally does:
+  //   1) Query fresh EditSequence + current AppliedToTxnRet
+  //   2) Merge the new invoice into that list
+  //   3) Send a single ReceivePaymentMod with the full list
+  //   4) Poll and return the new EditSequence
+  // ─────────────────────────────────────────────────────────────────────────
+  await withQbLockResult(`qb-payment:${paymentTxnId}`, async () => {
+    const applyResult = await mergeApplyPaymentInQb({
+      customerId: customerQbId,
+      invoiceId: invoiceTxnId!,
+      amount: amount_applied / 100,
+      creditTxnId: paymentTxnId!,
+      memo: updatedMemo,
+      log: (m: string) => logger.info(m),
+    });
 
-  if (!applyResult.success) {
-    logger.error(
-      `${LOG_PREFIX} ❌ Failed to apply payment in QB: ${applyResult.error}`
-    );
-    try {
-      await writePipelineRow({
-        orderId: order_id,
-        referenceId: payment_id,
-        referenceType: "customer_payment",
-        step: "apply_payment",
-        status: "failed",
-        medusaRefNumber: medusaPayRef,
-        error: applyResult.error || "Apply failed",
-      });
-    } catch {}
-  } else {
-    const opId = applyResult.data?.operationId;
-    if (opId && opId !== "DRY_RUN") {
-      logger.info(
-        `${LOG_PREFIX} ✅ Application request queued. OperationID: ${opId}`
+    if (!applyResult.success) {
+      logger.error(
+        `${LOG_PREFIX} ❌ Failed to merge-apply payment in QB: ${applyResult.error}`
       );
       try {
         await writePipelineRow({
@@ -284,51 +248,50 @@ export async function handlePosPaymentApplied({
           referenceId: payment_id,
           referenceType: "customer_payment",
           step: "apply_payment",
-          status: "submitted",
+          status: "failed",
           medusaRefNumber: medusaPayRef,
-          bridgeOpId: opId,
+          error: applyResult.error || "Merge-apply failed",
         });
       } catch {}
-      try {
-        const finalResult = await pollOperationResult(opId, (m: string) =>
-          logger.info(m)
-        );
-        if (finalResult && finalResult.txnId) {
-          logger.info(
-            `${LOG_PREFIX} ✅ Successfully applied payment to invoice in QB! TxnID: ${finalResult.txnId}`
-          );
-          await writePipelineRow({
-            orderId: order_id,
-            referenceId: payment_id,
-            referenceType: "customer_payment",
-            step: "apply_payment",
-            status: "confirmed",
-            medusaRefNumber: medusaPayRef,
-            bridgeOpId: opId,
-            qbTxnId: finalResult.txnId,
-          }).catch(() => {});
-        } else {
-          logger.warn(
-            `${LOG_PREFIX} ⚠️ Polling completed but no TxnID returned by WebConnector.`
-          );
-        }
-      } catch (pollErr: any) {
-        logger.error(
-          `${LOG_PREFIX} ❌ QB Application Failed during polling: ${pollErr.message}`
+      return;
+    }
+
+    const opId = applyResult.data?.operationId;
+    const newSeq = applyResult.data?.newEditSequence;
+    const totalApplied = applyResult.data?.totalAppliedCount ?? 0;
+
+    if (opId && opId !== "DRY_RUN") {
+      logger.info(
+        `${LOG_PREFIX} ✅ Merge-apply confirmed. OperationID: ${opId}, now applied to ${totalApplied} invoice(s), new EditSeq: ${newSeq ?? "<not-returned>"}`
+      );
+      if (newSeq) {
+        await cacheEditSequence("payment", paymentTxnId!, newSeq).catch(
+          (e: any) =>
+            logger.warn(
+              `${LOG_PREFIX} Could not cache new EditSequence: ${e.message}`
+            )
         );
       }
+      await writePipelineRow({
+        orderId: order_id,
+        referenceId: payment_id,
+        referenceType: "customer_payment",
+        step: "apply_payment",
+        status: "confirmed",
+        medusaRefNumber: medusaPayRef,
+        bridgeOpId: opId,
+        qbTxnId: paymentTxnId!,
+      }).catch(() => {});
     } else {
       logger.info(`${LOG_PREFIX} ✅ Dry-run or instant success reported.`);
-      try {
-        await writePipelineRow({
-          orderId: order_id,
-          referenceId: payment_id,
-          referenceType: "customer_payment",
-          step: "apply_payment",
-          status: "confirmed",
-          medusaRefNumber: medusaPayRef,
-        });
-      } catch {}
+      await writePipelineRow({
+        orderId: order_id,
+        referenceId: payment_id,
+        referenceType: "customer_payment",
+        step: "apply_payment",
+        status: "confirmed",
+        medusaRefNumber: medusaPayRef,
+      }).catch(() => {});
     }
-  }
+  });
 }

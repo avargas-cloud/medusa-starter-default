@@ -1,4 +1,5 @@
 import { model } from "@medusajs/utils";
+
 import { AttributeSet } from "./attribute-set";
 import { AttributeValue } from "./attribute-value";
 

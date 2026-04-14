@@ -5,6 +5,7 @@
  */
 
 import { MedusaService } from "@medusajs/utils";
+
 import PosDocumentTemplate from "./models/pos-document-template";
 
 class DocumentTemplateModuleService extends MedusaService({

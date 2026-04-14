@@ -1,6 +1,6 @@
+import { updateOrderTaxLinesWorkflow } from "@medusajs/core-flows";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
-import { updateOrderTaxLinesWorkflow } from "@medusajs/core-flows";
 import { Pool } from "pg";
 
 // Lazy DB pool singleton for idempotent tax line cleanup.
@@ -369,18 +369,16 @@ export async function GET(
       computed_discount: discountTotal,
     }).catch(() => {});
 
-    res
-      .status(200)
-      .json({
-        amount,
-        rate,
-        reason,
-        exempt,
-        mode: effectiveMode,
-        subtotal: itemsSubtotal,
-        shippingSubtotal,
-        autoMode,
-      });
+    res.status(200).json({
+      amount,
+      rate,
+      reason,
+      exempt,
+      mode: effectiveMode,
+      subtotal: itemsSubtotal,
+      shippingSubtotal,
+      autoMode,
+    });
   } catch (e: any) {
     console.error("[compute-tax] GET Error:", e?.message);
     res.status(500).json({ message: e?.message ?? "Failed to compute tax" });

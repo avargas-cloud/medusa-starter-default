@@ -1,4 +1,5 @@
 import { Module } from "@medusajs/utils";
+
 import ShippingSettingsModuleService from "./service";
 
 export const SHIPPING_SETTINGS_MODULE = "shippingSettingsModule";
