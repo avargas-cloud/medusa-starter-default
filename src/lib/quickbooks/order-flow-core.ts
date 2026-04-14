@@ -984,30 +984,43 @@ export async function processInvoiceInQb(invoice: {
  * Canonical POS → QB Payment Method name mapping.
  *
  * These values MUST match the `FullName` of entries in the Payment Method
- * List in QuickBooks Desktop. A mismatch (e.g. "MasterCard" vs "Mastercard")
- * causes QB to silently ignore the PaymentMethodRef and leave the field
- * blank on the resulting Sales Receipt / ReceivePayment.
+ * List in THIS COMPANY'S QuickBooks Desktop install exactly. A mismatch
+ * (even a single character — e.g. "Mastercard" vs "MasterCard") causes QB
+ * to silently ignore the PaymentMethodRef and leave the field blank on the
+ * resulting Sales Receipt / ReceivePayment.
  *
- * Keep this in sync with `QB_PAYMENT_METHOD_NAMES` in
- * /api/admin/customer-payments/[id]/route.ts.
+ * ⚠️ DO NOT "fix" typos or casing without first confirming the change in
+ * QB's actual Payment Method List (Lists → Customer & Vendor Profile Lists
+ * → Payment Method List). The typo "Cheking Account" below is intentional
+ * — that is how the entry is spelled inside QB.
+ *
+ * Source of truth: QB screenshot shared by Alejandro on 2026-04-14 showing
+ * the full Payment Method dropdown.
  */
 export const QB_PAYMENT_METHOD_NAMES: Record<string, string> = {
   cash: "Cash",
-  visa: "Visa",
-  mastercard: "Mastercard",
-  discover: "Discover",
-  amex: "American Express",
-  capital_one: "Capital One",
-  debit_card: "Debit Card",
   check: "Check",
-  money_order: "Check",
-  checking_account: "ACH / Bank Transfer",
-  e_check: "ACH / Bank Transfer",
-  transfer: "ACH / Bank Transfer",
-  ach: "ACH / Bank Transfer",
+  checking_account: "Cheking Account", // sic — typo preserved, that is QB's actual entry
+  ach: "Cheking Account", // ACH funds come from a Checking Account in QB
+  money_order: "Money Order",
+  amex: "American Express",
+  american_express: "American Express",
+  discover: "Discover",
+  mastercard: "MasterCard", // note capital C — QB uses "MasterCard", not "Mastercard"
+  visa: "Visa",
+  credit_memo: "Credit Memo",
+  paypal: "Paypal", // single capital P — QB uses "Paypal", not "PayPal"
+  return: "Return",
+  transfer: "Transfer",
   wire_transfer: "Wire Transfer",
-  zelle: "Zelle",
-  paypal: "Other",
+  capital_one: "Capital One",
+  debit: "Debit",
+  debit_card: "Debit Card",
+  gift_card: "Gift Card",
+  e_check: "E-Check",
+  // Not in QB's list — map to closest equivalent or leave unmapped:
+  // zelle     → undefined (no entry in QB list; accounting will categorize manually)
+  // stripe    → undefined (should never hit this path for POS sales anyway)
 };
 
 function mapPaymentMethodToQb(method: string | undefined): string | undefined {
