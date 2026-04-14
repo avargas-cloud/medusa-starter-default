@@ -195,12 +195,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       invoice_total: getNum(invoice.total),
     });
     if (medusaPaymentId) {
-      await financeService
-        .updateCustomerPayments(
-          { id: customerPayment.id },
-          { medusa_payment_synced: true }
-        )
-        .catch(() => {}); // non-fatal
+      await financeService.updateCustomerPayments({
+        id: customerPayment.id,
+        medusa_payment_synced: true,
+      });
     }
 
     const updated = await invoiceService.retrievePosInvoice(id);

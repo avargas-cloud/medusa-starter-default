@@ -394,12 +394,24 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       // Always mark the terminal payment as fully applied once we link it,
       // regardless of SR or regular-invoice mode. Previously this only ran in
       // the non-SR branch, leaving SR-linked payments stuck on status='available'.
-      await financeService
-        .updateCustomerPayments(
-          { id: body.terminal_payment_id },
-          { status: "applied" }
-        )
-        .catch(() => {});
+      await financeService.updateCustomerPayments({
+        id: body.terminal_payment_id,
+        status: "applied",
+      });
+
+      // Register in Medusa native Payment Module so payment_collection.status → 'completed'
+      const medusaPaymentId = await registerMedusaPayment(req.scope, {
+        order_id: body.order_id,
+        amount: body.amount_paid,
+        payment_method: resolvedPaymentMethod,
+        invoice_total: body.total,
+      });
+      if (medusaPaymentId) {
+        await financeService.updateCustomerPayments({
+          id: body.terminal_payment_id,
+          medusa_payment_synced: true,
+        });
+      }
     } else {
       // Fetch strictly continuous sequential payment number
       const seqPgRes = await pgConnection
@@ -494,12 +506,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         invoice_total: body.total,
       });
       if (medusaPaymentId) {
-        await financeService
-          .updateCustomerPayments(
-            { id: customerPayment.id },
-            { medusa_payment_synced: true }
-          )
-          .catch(() => {}); // non-fatal
+        await financeService.updateCustomerPayments({
+          id: customerPayment.id,
+          medusa_payment_synced: true,
+        });
       }
     }
   }
