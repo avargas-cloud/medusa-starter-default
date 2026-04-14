@@ -3,7 +3,7 @@ import { Modules, ContainerRegistrationKeys } from "@medusajs/utils"
 import { FINANCE_MODULE } from "../../../modules/finance"
 import { processPaymentCaptureInQb, ensureCustomerInQb } from "../order-flow-core"
 import { createCreditMemoInQb } from "../client"
-import { writePipelineRow, cacheEditSequence } from "../qb-pipeline"
+import { writePipelineRow, cacheEditSequence, skipPaymentRowByReference } from "../qb-pipeline"
 
 const LOG_PREFIX = "[QB-POS-PAYMENT]"
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
@@ -70,8 +70,20 @@ export async function handlePosPaymentCreated({ event, container }: SubscriberAr
 
         // SALES RECEIPT GUARD: payments captured inside a QB Sales Receipt are already
         // embedded in that transaction — creating a separate ReceivePayment would duplicate it.
-        if (payment.metadata?.qb_source === 'sales_receipt') {
-            logger.info(`${LOG_PREFIX} ⏭️ Skipping: payment ${paymentId} was captured in a Sales Receipt — no standalone ReceivePayment needed`)
+        // Matches 4 flags set by the invoice route or SR handler at various stages.
+        const srEmbedded =
+            payment.metadata?.qb_source === 'sales_receipt'
+         || payment.metadata?.is_sales_receipt_payment === true
+         || payment.metadata?.qb_sync_status === 'pending_sr'
+        if (srEmbedded) {
+            logger.info(`${LOG_PREFIX} ⏭️ Skipping: payment ${paymentId} is embedded in a Sales Receipt — no standalone ReceivePayment needed`)
+            // Defensive: also skip any stale pipeline row that may still be waiting for this payment.
+            try {
+                const n = await skipPaymentRowByReference(paymentId, 'Payment embedded in Sales Receipt — standalone row not needed')
+                if (n > 0) logger.info(`${LOG_PREFIX} ⏭️ Skipped ${n} stale pipeline row(s) for payment ${paymentId}`)
+            } catch (e: any) {
+                logger.warn(`${LOG_PREFIX} Could not skip stale pipeline row for ${paymentId}: ${e.message}`)
+            }
             return
         }
 

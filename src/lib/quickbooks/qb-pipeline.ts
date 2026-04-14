@@ -252,6 +252,53 @@ export async function skipSalesOrderPipelineRow(orderId: string): Promise<void> 
 }
 
 /**
+ * Skips any waiting/pending `payment` or `apply_payment` pipeline rows for an order.
+ * Use when a Sales Receipt supersedes them — the SR embeds the payment, so standalone
+ * ReceivePayment rows are invalid.
+ * Returns the number of rows skipped.
+ */
+export async function skipPendingPaymentRows(
+    orderId: string,
+    reason: string
+): Promise<number> {
+    const pool = getDbPool()
+    const res = await pool.query(
+        `UPDATE qb_order_pipeline
+         SET status     = 'skipped',
+             error      = $2,
+             updated_at = NOW()
+         WHERE order_id = $1
+           AND step IN ('payment', 'apply_payment')
+           AND status IN ('waiting', 'pending')`,
+        [orderId, reason]
+    )
+    return res.rowCount ?? 0
+}
+
+/**
+ * Skips a single waiting/pending pipeline row by its customer_payment reference_id.
+ * Used as a defensive cleanup when we detect a payment was absorbed by a Sales Receipt.
+ */
+export async function skipPaymentRowByReference(
+    paymentId: string,
+    reason: string
+): Promise<number> {
+    const pool = getDbPool()
+    const res = await pool.query(
+        `UPDATE qb_order_pipeline
+         SET status     = 'skipped',
+             error      = $2,
+             updated_at = NOW()
+         WHERE reference_id = $1
+           AND reference_type = 'customer_payment'
+           AND step IN ('payment', 'apply_payment')
+           AND status IN ('waiting', 'pending')`,
+        [paymentId, reason]
+    )
+    return res.rowCount ?? 0
+}
+
+/**
  * Marks a submitted pipeline row as confirmed after the bridge returns success.
  */
 export async function confirmPipelineRow(

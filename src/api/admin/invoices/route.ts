@@ -16,7 +16,7 @@ import { handleFulfillmentCreated } from '../../../lib/quickbooks/handlers/handl
 import { handlePosPaymentCreated } from '../../../lib/quickbooks/handlers/handle-pos-payment-created'
 import { handlePosPaymentApplied } from '../../../lib/quickbooks/handlers/handle-pos-payment-applied'
 import { handleSalesReceiptCreated } from '../../../lib/quickbooks/handlers/handle-sales-receipt-created'
-import { writePipelineRow, skipSalesOrderPipelineRow } from '../../../lib/quickbooks/qb-pipeline'
+import { writePipelineRow, skipSalesOrderPipelineRow, skipPendingPaymentRows } from '../../../lib/quickbooks/qb-pipeline'
 // ── GET /admin/invoices?order_id=:id ─────────────────────────────────────────
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
@@ -95,6 +95,39 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         return res.status(400).json({ error: 'order_id, customer_id, and items are required' })
     }
 
+    // ── Path B detection (auto-downgrade Sales Receipt → Invoice) ─────────────
+    // If the order already has a QB Sales Order or Estimate, OR the order is
+    // more than 1 hour old, we cannot create a Sales Receipt — QB Desktop requires
+    // an Invoice linked to the existing SO/Estimate. Silently downgrade to keep
+    // the POS flow frictionless; accounting reviews documents downstream.
+    if (body.is_sales_receipt) {
+        try {
+            const orderModule = req.scope.resolve(Modules.ORDER)
+            const order = await orderModule.retrieveOrder(body.order_id, {
+                select: ['id', 'created_at', 'metadata'],
+            }) as any
+            const meta = order?.metadata ?? {}
+            const hasExistingQbDoc = Boolean(
+                meta.qb_sales_order_txn_id
+             || meta.qb_estimate_txn_id
+             || meta.qb_sales_order?.txn_id
+             || meta.qb_estimate?.txn_id
+            )
+            const createdAt = order?.created_at ? new Date(order.created_at).getTime() : Date.now()
+            const ageMs = Date.now() - createdAt
+            const ONE_HOUR_MS = 60 * 60 * 1000
+            if (hasExistingQbDoc || ageMs > ONE_HOUR_MS) {
+                console.warn(
+                    `[invoice] Path B detected for order ${body.order_id} — ` +
+                    `downgrading is_sales_receipt=true → false. ` +
+                    `hasExistingQbDoc=${hasExistingQbDoc}, ageMs=${ageMs}`
+                )
+                body.is_sales_receipt = false
+            }
+        } catch (pbErr: any) {
+            console.warn(`[invoice] Path B detection failed for order ${body.order_id}: ${pbErr.message}`)
+        }
+    }
 
     // Fetch strictly continuous sequential document number from PostgreSQL
     const pgConnection = req.scope.resolve("__pg_connection__") as any
@@ -245,6 +278,26 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     [body.terminal_payment_id]
                 ).catch(() => ({ rows: [{ display_id: null }] }))
                 nextPayNum = termPayRes.rows[0]?.display_id ? Number(termPayRes.rows[0].display_id) : null
+            } else {
+                // Sales Receipt: tag the terminal payment so it is treated as embedded.
+                // This prevents handlePosPaymentCreated from ever creating a separate
+                // ReceivePayment in QB for this payment, and gives the SR handler a way
+                // to locate and txn-id the payment after the SR confirms.
+                try {
+                    const termPay = await financeService.retrieveCustomerPayment(body.terminal_payment_id)
+                    await financeService.updateCustomerPayments({
+                        id: body.terminal_payment_id,
+                        metadata: {
+                            ...((termPay as any)?.metadata || {}),
+                            qb_source: 'sales_receipt',
+                            qb_sync_status: 'pending_sr',
+                            invoices_affected: [(invoice as any).id],
+                            invoices_affected_friendly: [`IN-${invoice_number || body.order_display_id}`],
+                        },
+                    })
+                } catch (tagErr: any) {
+                    console.warn(`[invoice] Could not tag terminal payment ${body.terminal_payment_id} as SR-embedded: ${tagErr.message}`)
+                }
             }
 
             const application = await financeService.createPaymentApplications({
@@ -265,7 +318,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 application_id: application.id,
             })
 
-            // Mark the terminal payment as fully applied
+            // Always mark the terminal payment as fully applied once we link it,
+            // regardless of SR or regular-invoice mode. Previously this only ran in
+            // the non-SR branch, leaving SR-linked payments stuck on status='available'.
             await financeService.updateCustomerPayments(
                 { id: body.terminal_payment_id },
                 { status: 'applied' }
@@ -367,7 +422,20 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             if (body.is_sales_receipt) {
                 // ── Sales Receipt flow ────────────────────────────────────────
                 // Payment is embedded in the Sales Receipt — QB handles it internally.
-                // Only one pipeline row needed.
+                // Cancel any stale/preexisting payment pipeline rows first (e.g. from
+                // terminal capture that wrote a row before the SR decision was made).
+                try {
+                    const cancelled = await skipPendingPaymentRows(
+                        body.order_id,
+                        'Superseded by Sales Receipt — payment embedded in SR'
+                    )
+                    if (cancelled > 0) {
+                        console.log(`[invoice] Skipped ${cancelled} stale payment pipeline rows for order ${body.order_id}`)
+                    }
+                } catch (clErr: any) {
+                    console.warn(`[invoice] Could not skip stale payment rows: ${clErr.message}`)
+                }
+
                 await writePipelineRow({
                     orderId: body.order_id,
                     referenceId: (invoice as any).id,
