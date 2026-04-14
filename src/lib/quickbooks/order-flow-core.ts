@@ -991,17 +991,18 @@ export async function processInvoiceInQb(invoice: {
  *
  * ⚠️ DO NOT "fix" typos or casing without first confirming the change in
  * QB's actual Payment Method List (Lists → Customer & Vendor Profile Lists
- * → Payment Method List). The typo "Cheking Account" below is intentional
- * — that is how the entry is spelled inside QB.
+ * → Payment Method List).
  *
  * Source of truth: QB screenshot shared by Alejandro on 2026-04-14 showing
- * the full Payment Method dropdown.
+ * the full Payment Method dropdown. The entry was originally mispelled as
+ * "Cheking Account" in QB; Alejandro is renaming it to "Checking Account"
+ * in QB Desktop at the same time as this mapping update so both sides match.
  */
 export const QB_PAYMENT_METHOD_NAMES: Record<string, string> = {
   cash: "Cash",
   check: "Check",
-  checking_account: "Cheking Account", // sic — typo preserved, that is QB's actual entry
-  ach: "Cheking Account", // ACH funds come from a Checking Account in QB
+  checking_account: "Checking Account",
+  ach: "Checking Account", // ACH funds come from a Checking Account in QB
   money_order: "Money Order",
   amex: "American Express",
   american_express: "American Express",
