@@ -1,10 +1,10 @@
-import { MedusaService } from "@medusajs/utils"
-import PosCreditMemo from './models/pos-credit-memo'
-import PosCreditMemoItem from './models/pos-credit-memo-item'
+import { MedusaService } from "@medusajs/utils";
+import PosCreditMemo from "./models/pos-credit-memo";
+import PosCreditMemoItem from "./models/pos-credit-memo-item";
 
 class CreditMemoModuleService extends MedusaService({
-    PosCreditMemo,
-    PosCreditMemoItem,
+  PosCreditMemo,
+  PosCreditMemoItem,
 }) {}
 
-export default CreditMemoModuleService
+export default CreditMemoModuleService;

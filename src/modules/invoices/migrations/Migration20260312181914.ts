@@ -1,7 +1,6 @@
 import { Migration } from "@medusajs/framework/mikro-orm/migrations";
 
 export class Migration20260312181914 extends Migration {
-
   override async up(): Promise<void> {
     // ── invoice_payment (new table for payment ledger) ──────────────────────
     this.addSql(`
@@ -20,8 +19,12 @@ export class Migration20260312181914 extends Migration {
         constraint "invoice_payment_pkey" primary key ("id")
       );
     `);
-    this.addSql(`CREATE INDEX IF NOT EXISTS "IDX_invoice_payment_invoice_id" ON "invoice_payment" ("invoice_id") WHERE deleted_at IS NULL;`);
-    this.addSql(`CREATE INDEX IF NOT EXISTS "IDX_invoice_payment_deleted_at" ON "invoice_payment" ("deleted_at") WHERE deleted_at IS NULL;`);
+    this.addSql(
+      `CREATE INDEX IF NOT EXISTS "IDX_invoice_payment_invoice_id" ON "invoice_payment" ("invoice_id") WHERE deleted_at IS NULL;`
+    );
+    this.addSql(
+      `CREATE INDEX IF NOT EXISTS "IDX_invoice_payment_deleted_at" ON "invoice_payment" ("deleted_at") WHERE deleted_at IS NULL;`
+    );
 
     // ── pos_invoice ──────────────────────────────────────────────────────────
     this.addSql(`
@@ -55,7 +58,9 @@ export class Migration20260312181914 extends Migration {
         constraint "pos_invoice_pkey" primary key ("id")
       );
     `);
-    this.addSql(`CREATE INDEX IF NOT EXISTS "IDX_pos_invoice_deleted_at" ON "pos_invoice" ("deleted_at") WHERE deleted_at IS NULL;`);
+    this.addSql(
+      `CREATE INDEX IF NOT EXISTS "IDX_pos_invoice_deleted_at" ON "pos_invoice" ("deleted_at") WHERE deleted_at IS NULL;`
+    );
 
     // ── invoice_tracking ────────────────────────────────────────────────────
     this.addSql(`
@@ -73,8 +78,12 @@ export class Migration20260312181914 extends Migration {
         constraint "invoice_tracking_pkey" primary key ("id")
       );
     `);
-    this.addSql(`CREATE INDEX IF NOT EXISTS "IDX_invoice_tracking_invoice_id" ON "invoice_tracking" ("invoice_id") WHERE deleted_at IS NULL;`);
-    this.addSql(`CREATE INDEX IF NOT EXISTS "IDX_invoice_tracking_deleted_at" ON "invoice_tracking" ("deleted_at") WHERE deleted_at IS NULL;`);
+    this.addSql(
+      `CREATE INDEX IF NOT EXISTS "IDX_invoice_tracking_invoice_id" ON "invoice_tracking" ("invoice_id") WHERE deleted_at IS NULL;`
+    );
+    this.addSql(
+      `CREATE INDEX IF NOT EXISTS "IDX_invoice_tracking_deleted_at" ON "invoice_tracking" ("deleted_at") WHERE deleted_at IS NULL;`
+    );
 
     // ── pos_invoice_item ────────────────────────────────────────────────────
     this.addSql(`
@@ -95,21 +104,32 @@ export class Migration20260312181914 extends Migration {
         constraint "pos_invoice_item_pkey" primary key ("id")
       );
     `);
-    this.addSql(`CREATE INDEX IF NOT EXISTS "IDX_pos_invoice_item_invoice_id" ON "pos_invoice_item" ("invoice_id") WHERE deleted_at IS NULL;`);
-    this.addSql(`CREATE INDEX IF NOT EXISTS "IDX_pos_invoice_item_deleted_at" ON "pos_invoice_item" ("deleted_at") WHERE deleted_at IS NULL;`);
+    this.addSql(
+      `CREATE INDEX IF NOT EXISTS "IDX_pos_invoice_item_invoice_id" ON "pos_invoice_item" ("invoice_id") WHERE deleted_at IS NULL;`
+    );
+    this.addSql(
+      `CREATE INDEX IF NOT EXISTS "IDX_pos_invoice_item_deleted_at" ON "pos_invoice_item" ("deleted_at") WHERE deleted_at IS NULL;`
+    );
 
     // ── Foreign keys ─────────────────────────────────────────────────────────
-    this.addSql(`alter table if exists "invoice_tracking" add constraint "invoice_tracking_invoice_id_foreign" foreign key ("invoice_id") references "pos_invoice" ("id") on update cascade;`);
-    this.addSql(`alter table if exists "pos_invoice_item" add constraint "pos_invoice_item_invoice_id_foreign" foreign key ("invoice_id") references "pos_invoice" ("id") on update cascade;`);
+    this.addSql(
+      `alter table if exists "invoice_tracking" add constraint "invoice_tracking_invoice_id_foreign" foreign key ("invoice_id") references "pos_invoice" ("id") on update cascade;`
+    );
+    this.addSql(
+      `alter table if exists "pos_invoice_item" add constraint "pos_invoice_item_invoice_id_foreign" foreign key ("invoice_id") references "pos_invoice" ("id") on update cascade;`
+    );
   }
 
   override async down(): Promise<void> {
-    this.addSql(`alter table if exists "invoice_tracking" drop constraint if exists "invoice_tracking_invoice_id_foreign";`);
-    this.addSql(`alter table if exists "pos_invoice_item" drop constraint if exists "pos_invoice_item_invoice_id_foreign";`);
+    this.addSql(
+      `alter table if exists "invoice_tracking" drop constraint if exists "invoice_tracking_invoice_id_foreign";`
+    );
+    this.addSql(
+      `alter table if exists "pos_invoice_item" drop constraint if exists "pos_invoice_item_invoice_id_foreign";`
+    );
     this.addSql(`drop table if exists "invoice_payment" cascade;`);
     this.addSql(`drop table if exists "pos_invoice" cascade;`);
     this.addSql(`drop table if exists "invoice_tracking" cascade;`);
     this.addSql(`drop table if exists "pos_invoice_item" cascade;`);
   }
-
 }

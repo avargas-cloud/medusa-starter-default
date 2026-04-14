@@ -1,13 +1,13 @@
-import { Migration } from "@mikro-orm/migrations"
+import { Migration } from "@mikro-orm/migrations";
 
 export class Migration1774830000000 extends Migration {
-    async up(): Promise<void> {
-        // Drop old constraint and recreate with refunded + partial_refunded
-        this.addSql(`
+  async up(): Promise<void> {
+    // Drop old constraint and recreate with refunded + partial_refunded
+    this.addSql(`
             ALTER TABLE customer_payment
             DROP CONSTRAINT IF EXISTS customer_payment_status_check;
-        `)
-        this.addSql(`
+        `);
+    this.addSql(`
             ALTER TABLE customer_payment
             ADD CONSTRAINT customer_payment_status_check
             CHECK (status = ANY (ARRAY[
@@ -18,15 +18,15 @@ export class Migration1774830000000 extends Migration {
                 'refunded'::text,
                 'partial_refunded'::text
             ]));
-        `)
-    }
+        `);
+  }
 
-    async down(): Promise<void> {
-        this.addSql(`
+  async down(): Promise<void> {
+    this.addSql(`
             ALTER TABLE customer_payment
             DROP CONSTRAINT IF EXISTS customer_payment_status_check;
-        `)
-        this.addSql(`
+        `);
+    this.addSql(`
             ALTER TABLE customer_payment
             ADD CONSTRAINT customer_payment_status_check
             CHECK (status = ANY (ARRAY[
@@ -35,6 +35,6 @@ export class Migration1774830000000 extends Migration {
                 'applied'::text,
                 'voided'::text
             ]));
-        `)
-    }
+        `);
+  }
 }

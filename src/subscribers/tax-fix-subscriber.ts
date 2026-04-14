@@ -31,84 +31,85 @@
  * Always soft-fails — never blocks the order flow.
  */
 
-import type { SubscriberConfig, SubscriberArgs } from "@medusajs/framework"
-import { Pool } from "pg"
+import type { SubscriberConfig, SubscriberArgs } from "@medusajs/framework";
+import { Pool } from "pg";
 
-const LOG = "[tax-fix]"
+const LOG = "[tax-fix]";
 
-let _pool: Pool | null = null
+let _pool: Pool | null = null;
 function getPool(): Pool {
-    if (!_pool) {
-        _pool = new Pool({
-            connectionString: process.env.DATABASE_URL,
-            ssl: { rejectUnauthorized: false },
-            max: 2,
-        })
-    }
-    return _pool
+  if (!_pool) {
+    _pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+      max: 2,
+    });
+  }
+  return _pool;
 }
 
-type OrderPlacedData    = { id: string }
-type OrderEditConfData  = { order_id: string }
+type OrderPlacedData = { id: string };
+type OrderEditConfData = { order_id: string };
 
 export default async function taxFixSubscriber({
-    event: { name, data },
+  event: { name, data },
 }: SubscriberArgs<OrderPlacedData | OrderEditConfData>) {
+  try {
+    // Resolve order ID: order.placed → data.id, order-edit.confirmed → data.order_id
+    const orderId: string =
+      (data as OrderEditConfData).order_id ?? (data as OrderPlacedData).id;
+
+    if (!orderId?.startsWith("order_")) {
+      console.warn(`${LOG} Skipping — unexpected id: ${orderId}`);
+      return;
+    }
+
+    console.log(`${LOG} [${name}] Removing duplicate tax lines for ${orderId}`);
+
+    const db = getPool();
+    const client = await db.connect();
     try {
-        // Resolve order ID: order.placed → data.id, order-edit.confirmed → data.order_id
-        const orderId: string =
-            (data as OrderEditConfData).order_id ??
-            (data as OrderPlacedData).id
-
-        if (!orderId?.startsWith("order_")) {
-            console.warn(`${LOG} Skipping — unexpected id: ${orderId}`)
-            return
-        }
-
-        console.log(`${LOG} [${name}] Removing duplicate tax lines for ${orderId}`)
-
-        const db = getPool()
-        const client = await db.connect()
-        try {
-            // Delete any non-POS-generated tax lines:
-            //   'manual' lines come from Medusa's native engine (tp_system provider)
-            //   if any stale sub-region rate exists. Deleting these
-            //   removes the double-counting without touching the POS-generated FL lines.
-            const del = await client.query(
-                `DELETE FROM order_line_item_tax_line
+      // Delete any non-POS-generated tax lines:
+      //   'manual' lines come from Medusa's native engine (tp_system provider)
+      //   if any stale sub-region rate exists. Deleting these
+      //   removes the double-counting without touching the POS-generated FL lines.
+      const del = await client.query(
+        `DELETE FROM order_line_item_tax_line
                  WHERE item_id IN (
                      SELECT item_id FROM order_item WHERE order_id = $1
                  )
                  AND code NOT IN ('FL', 'FL-SHIPPING', 'EXEMPT')`,
-                [orderId]
-            )
+        [orderId]
+      );
 
-            if ((del.rowCount ?? 0) > 0) {
-                console.log(`${LOG} ✅ Removed ${del.rowCount} duplicate tax lines for ${orderId}`)
-            } else {
-                console.log(`${LOG} No duplicate lines found for ${orderId} — nothing to do`)
-            }
+      if ((del.rowCount ?? 0) > 0) {
+        console.log(
+          `${LOG} ✅ Removed ${del.rowCount} duplicate tax lines for ${orderId}`
+        );
+      } else {
+        console.log(
+          `${LOG} No duplicate lines found for ${orderId} — nothing to do`
+        );
+      }
 
-            // Note: order_line_item_tax_line stores only `rate`, not `amount`.
-            // Medusa computes the displayed dollar amount as rate × unit_price × qty.
-            // The discount-aware correct amount is stored in order.metadata.computed_tax_amount
-            // and used by the POS UI (computeTotals) and payment collection (convertTrueTotal).
-            // The native Medusa admin will show the gross-based amount — this is a known
-            // Medusa limitation that requires core patching to resolve fully.
-
-        } finally {
-            client.release()
-        }
-
-    } catch (err: any) {
-        // Always soft-fail — never block the order confirmation
-        console.warn(`${LOG} ⚠️ Tax fix soft-failed: ${err?.message}`)
+      // Note: order_line_item_tax_line stores only `rate`, not `amount`.
+      // Medusa computes the displayed dollar amount as rate × unit_price × qty.
+      // The discount-aware correct amount is stored in order.metadata.computed_tax_amount
+      // and used by the POS UI (computeTotals) and payment collection (convertTrueTotal).
+      // The native Medusa admin will show the gross-based amount — this is a known
+      // Medusa limitation that requires core patching to resolve fully.
+    } finally {
+      client.release();
     }
+  } catch (err: any) {
+    // Always soft-fail — never block the order confirmation
+    console.warn(`${LOG} ⚠️ Tax fix soft-failed: ${err?.message}`);
+  }
 }
 
 export const config: SubscriberConfig = {
-    event: [
-        "order.placed",           // Cases 3 (convert draft→order) + 4 (new order)
-        "order-edit.confirmed",   // Case 5 (order edit confirmed)
-    ],
-}
+  event: [
+    "order.placed", // Cases 3 (convert draft→order) + 4 (new order)
+    "order-edit.confirmed", // Case 5 (order edit confirmed)
+  ],
+};

@@ -1,5 +1,5 @@
-import { ExecArgs } from "@medusajs/framework/types"
-import { syncPricesCore } from "../../lib/quickbooks/sync-prices-core"
+import { ExecArgs } from "@medusajs/framework/types";
+import { syncPricesCore } from "../../lib/quickbooks/sync-prices-core";
 
 /**
  * Sync ONLY PRICES from QuickBooks
@@ -7,5 +7,5 @@ import { syncPricesCore } from "../../lib/quickbooks/sync-prices-core"
  * Schedule: 1x per day (night)
  */
 export default async function syncQbPrices({ container }: ExecArgs) {
-    await syncPricesCore(container)
+  await syncPricesCore(container);
 }

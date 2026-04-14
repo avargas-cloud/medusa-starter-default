@@ -1,158 +1,171 @@
-import { defineWidgetConfig } from "@medusajs/admin-sdk"
-import { Container, Heading, Select, Button, toast, Text } from "@medusajs/ui"
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { DetailWidgetProps, AdminProduct } from "@medusajs/framework/types"
-import { useState, useEffect } from "react"
-import { BASE_URL } from "../../lib/sdk"
+import { defineWidgetConfig } from "@medusajs/admin-sdk";
+import { Container, Heading, Select, Button, toast, Text } from "@medusajs/ui";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { DetailWidgetProps, AdminProduct } from "@medusajs/framework/types";
+import { useState, useEffect } from "react";
+import { BASE_URL } from "../../lib/sdk";
 
-const PrimaryCategoryWidget = ({ data: productData }: DetailWidgetProps<AdminProduct>) => {
-    const queryClient = useQueryClient()
-    const [selectedCategory, setSelectedCategory] = useState<string | undefined>(undefined)
+const PrimaryCategoryWidget = ({
+  data: productData,
+}: DetailWidgetProps<AdminProduct>) => {
+  const queryClient = useQueryClient();
+  const [selectedCategory, setSelectedCategory] = useState<string | undefined>(
+    undefined
+  );
 
-    // Fetch product with categories
-    const { data: response, isLoading } = useQuery({
-        queryFn: async () => {
-            const res = await fetch(
-                `${BASE_URL}/admin/products/${productData.id}?fields=+categories.id,+categories.name,+metadata`,
-                {
-                    credentials: "include",
-                }
-            )
-            if (!res.ok) throw new Error("Failed to fetch product")
-            return res.json()
-        },
-        queryKey: ["product", productData.id, "primary-category-sync"],
-    })
-
-    const product = response?.product
-    const associatedCategories = product?.categories || []
-
-    // Sync state with metadata
-    useEffect(() => {
-        if (product?.metadata?.primary_category_id) {
-            setSelectedCategory(product.metadata.primary_category_id as string)
+  // Fetch product with categories
+  const { data: response, isLoading } = useQuery({
+    queryFn: async () => {
+      const res = await fetch(
+        `${BASE_URL}/admin/products/${productData.id}?fields=+categories.id,+categories.name,+metadata`,
+        {
+          credentials: "include",
         }
-    }, [product])
+      );
+      if (!res.ok) throw new Error("Failed to fetch product");
+      return res.json();
+    },
+    queryKey: ["product", productData.id, "primary-category-sync"],
+  });
 
-    // Update mutation - now generates breadcrumbs automatically
-    const updateProduct = useMutation({
-        mutationFn: async (categoryId: string) => {
-            // First, fetch the full category hierarchy to build breadcrumbs
-            const breadcrumbs: Array<{ id: string; name: string; handle: string }> = []
-            let currentCategoryId: string | null = categoryId
+  const product = response?.product;
+  const associatedCategories = product?.categories || [];
 
-            while (currentCategoryId) {
-                const catRes: Response = await fetch(
-                    `${BASE_URL}/admin/product-categories/${currentCategoryId}?fields=id,name,handle,parent_category_id`,
-                    { credentials: "include" }
-                )
-                if (!catRes.ok) break
-
-                const catData: any = await catRes.json()
-                const category: any = catData.product_category
-
-                // Add to beginning of breadcrumb trail
-                breadcrumbs.unshift({
-                    id: category.id,
-                    name: category.name,
-                    handle: category.handle
-                })
-
-                currentCategoryId = category.parent_category_id || null
-            }
-
-            // Update product with both primary_category_id AND breadcrumbs
-            const res = await fetch(`${BASE_URL}/admin/products/${productData.id}`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                credentials: "include",
-                body: JSON.stringify({
-                    metadata: {
-                        ...product?.metadata,
-                        primary_category_id: categoryId,
-                        main_category_breadcrumbs: breadcrumbs,
-                    },
-                })
-            })
-            if (!res.ok) throw new Error("Failed to update primary category")
-            return res.json()
-        },
-        onSuccess: () => {
-            toast.success("Primary category & breadcrumbs updated successfully")
-            queryClient.invalidateQueries({ queryKey: ["product", productData.id] })
-        },
-        onError: (err) => {
-            toast.error("Failed to update", {
-                description: (err as Error).message
-            })
-        }
-    })
-
-    const handleSave = () => {
-        if (selectedCategory) {
-            updateProduct.mutate(selectedCategory)
-        }
+  // Sync state with metadata
+  useEffect(() => {
+    if (product?.metadata?.primary_category_id) {
+      setSelectedCategory(product.metadata.primary_category_id as string);
     }
+  }, [product]);
 
-    if (isLoading || !product) {
-        return (
-            <Container>
-                <div className="px-6 py-4">
-                    <Text size="small" className="text-ui-fg-subtle">Loading...</Text>
-                </div>
-            </Container>
-        )
+  // Update mutation - now generates breadcrumbs automatically
+  const updateProduct = useMutation({
+    mutationFn: async (categoryId: string) => {
+      // First, fetch the full category hierarchy to build breadcrumbs
+      const breadcrumbs: Array<{ id: string; name: string; handle: string }> =
+        [];
+      let currentCategoryId: string | null = categoryId;
+
+      while (currentCategoryId) {
+        const catRes: Response = await fetch(
+          `${BASE_URL}/admin/product-categories/${currentCategoryId}?fields=id,name,handle,parent_category_id`,
+          { credentials: "include" }
+        );
+        if (!catRes.ok) break;
+
+        const catData: any = await catRes.json();
+        const category: any = catData.product_category;
+
+        // Add to beginning of breadcrumb trail
+        breadcrumbs.unshift({
+          id: category.id,
+          name: category.name,
+          handle: category.handle,
+        });
+
+        currentCategoryId = category.parent_category_id || null;
+      }
+
+      // Update product with both primary_category_id AND breadcrumbs
+      const res = await fetch(`${BASE_URL}/admin/products/${productData.id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          metadata: {
+            ...product?.metadata,
+            primary_category_id: categoryId,
+            main_category_breadcrumbs: breadcrumbs,
+          },
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to update primary category");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast.success("Primary category & breadcrumbs updated successfully");
+      queryClient.invalidateQueries({ queryKey: ["product", productData.id] });
+    },
+    onError: (err) => {
+      toast.error("Failed to update", {
+        description: (err as Error).message,
+      });
+    },
+  });
+
+  const handleSave = () => {
+    if (selectedCategory) {
+      updateProduct.mutate(selectedCategory);
     }
+  };
 
+  if (isLoading || !product) {
     return (
-        <Container className="divide-y p-0">
-            <div className="flex items-center justify-between px-6 py-4">
-                <Heading level="h2">Primary Category</Heading>
-            </div>
+      <Container>
+        <div className="px-6 py-4">
+          <Text size="small" className="text-ui-fg-subtle">
+            Loading...
+          </Text>
+        </div>
+      </Container>
+    );
+  }
 
-            <div className="px-6 py-4">
-                {associatedCategories.length === 0 ? (
-                    <Text size="small" className="text-ui-fg-subtle">
-                        This product has no categories assigned. Add categories in the Organization widget above.
-                    </Text>
-                ) : (
-                    <div className="flex flex-col gap-4">
-                        <Select
-                            value={selectedCategory}
-                            onValueChange={setSelectedCategory}
-                        >
-                            <Select.Trigger>
-                                <Select.Value placeholder="Select primary category" />
-                            </Select.Trigger>
-                            <Select.Content>
-                                {associatedCategories.map((cat: { id: string; name: string }) => (
-                                    <Select.Item key={cat.id} value={cat.id}>
-                                        {cat.name}
-                                    </Select.Item>
-                                ))}
-                            </Select.Content>
-                        </Select>
+  return (
+    <Container className="divide-y p-0">
+      <div className="flex items-center justify-between px-6 py-4">
+        <Heading level="h2">Primary Category</Heading>
+      </div>
 
-                        <Button
-                            size="small"
-                            variant="secondary"
-                            onClick={handleSave}
-                            isLoading={updateProduct.isPending}
-                            disabled={!selectedCategory || selectedCategory === product.metadata?.primary_category_id}
-                        >
-                            Save Selection
-                        </Button>
-                    </div>
+      <div className="px-6 py-4">
+        {associatedCategories.length === 0 ? (
+          <Text size="small" className="text-ui-fg-subtle">
+            This product has no categories assigned. Add categories in the
+            Organization widget above.
+          </Text>
+        ) : (
+          <div className="flex flex-col gap-4">
+            <Select
+              value={selectedCategory}
+              onValueChange={setSelectedCategory}
+            >
+              <Select.Trigger>
+                <Select.Value placeholder="Select primary category" />
+              </Select.Trigger>
+              <Select.Content>
+                {associatedCategories.map(
+                  (cat: { id: string; name: string }) => (
+                    <Select.Item key={cat.id} value={cat.id}>
+                      {cat.name}
+                    </Select.Item>
+                  )
                 )}
-            </div>
-        </Container>
-    )
-}
+              </Select.Content>
+            </Select>
+
+            <Button
+              size="small"
+              variant="secondary"
+              onClick={handleSave}
+              isLoading={updateProduct.isPending}
+              disabled={
+                !selectedCategory ||
+                selectedCategory === product.metadata?.primary_category_id
+              }
+            >
+              Save Selection
+            </Button>
+          </div>
+        )}
+      </div>
+    </Container>
+  );
+};
 
 export const config = defineWidgetConfig({
-    zone: "product.details.side.after",
-})
+  zone: "product.details.side.after",
+});
 
-export default PrimaryCategoryWidget
+export default PrimaryCategoryWidget;

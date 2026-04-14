@@ -9,30 +9,32 @@
  * Run:
  *   npx tsx src/scripts/fix/fix-promotion-target-type.ts
  */
-import { Client } from 'pg'
-import dotenv from 'dotenv'
-dotenv.config()
+import { Client } from "pg";
+import dotenv from "dotenv";
+dotenv.config();
 
 async function main() {
-    const db = new Client({ connectionString: process.env.DATABASE_URL })
-    await db.connect()
-    console.log('✅ Connected to DB\n')
+  const db = new Client({ connectionString: process.env.DATABASE_URL });
+  await db.connect();
+  console.log("✅ Connected to DB\n");
 
-    // 1. Show current state
-    const beforeRes = await db.query(`
+  // 1. Show current state
+  const beforeRes = await db.query(`
         SELECT p.code, p.status, am.target_type, am.type, am.value
         FROM promotion p
         JOIN promotion_application_method am ON am.promotion_id = p.id
         WHERE p.deleted_at IS NULL AND am.deleted_at IS NULL
         ORDER BY p.created_at DESC
-    `)
-    console.log('Before:')
-    beforeRes.rows.forEach(r =>
-        console.log(`  ${r.code.padEnd(25)} target_type=${r.target_type}  type=${r.type}  value=${r.value}`)
+    `);
+  console.log("Before:");
+  beforeRes.rows.forEach((r) =>
+    console.log(
+      `  ${r.code.padEnd(25)} target_type=${r.target_type}  type=${r.type}  value=${r.value}`
     )
+  );
 
-    // 2. Fix: set target_type = 'items' for all promotions that have 'order'
-    const updateRes = await db.query(`
+  // 2. Fix: set target_type = 'items' for all promotions that have 'order'
+  const updateRes = await db.query(`
         UPDATE promotion_application_method am
         SET target_type = 'items', updated_at = NOW()
         FROM promotion p
@@ -41,25 +43,32 @@ async function main() {
           AND p.deleted_at IS NULL
           AND am.target_type = 'order'
         RETURNING p.code, am.id
-    `)
-    console.log(`\n✅ Updated ${updateRes.rowCount} promotion(s) → target_type=items`)
-    updateRes.rows.forEach(r => console.log(`  → ${r.code}`))
+    `);
+  console.log(
+    `\n✅ Updated ${updateRes.rowCount} promotion(s) → target_type=items`
+  );
+  updateRes.rows.forEach((r) => console.log(`  → ${r.code}`));
 
-    // 3. Confirm
-    const afterRes = await db.query(`
+  // 3. Confirm
+  const afterRes = await db.query(`
         SELECT p.code, am.target_type
         FROM promotion p
         JOIN promotion_application_method am ON am.promotion_id = p.id
         WHERE p.deleted_at IS NULL AND am.deleted_at IS NULL
         ORDER BY p.created_at DESC
-    `)
-    console.log('\nAfter:')
-    afterRes.rows.forEach(r =>
-        console.log(`  ${r.code.padEnd(25)} target_type=${r.target_type}`)
-    )
+    `);
+  console.log("\nAfter:");
+  afterRes.rows.forEach((r) =>
+    console.log(`  ${r.code.padEnd(25)} target_type=${r.target_type}`)
+  );
 
-    await db.end()
-    console.log('\n✅ Done — now restart the backend and click Force Save on the estimate to re-apply the promotion\n')
+  await db.end();
+  console.log(
+    "\n✅ Done — now restart the backend and click Force Save on the estimate to re-apply the promotion\n"
+  );
 }
 
-main().catch(e => { console.error('❌', e.message); process.exit(1) })
+main().catch((e) => {
+  console.error("❌", e.message);
+  process.exit(1);
+});

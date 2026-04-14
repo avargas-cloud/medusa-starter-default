@@ -1,5 +1,5 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { Client } from "pg"
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { Client } from "pg";
 
 /**
  * GET /admin/quickbooks/logs
@@ -12,23 +12,23 @@ import { Client } from "pg"
  *   status   — 'processing' | 'completed' | 'failed' | 'skipped' (optional)
  */
 export async function GET(
-    req: MedusaRequest,
-    res: MedusaResponse
+  req: MedusaRequest,
+  res: MedusaResponse
 ): Promise<void> {
-    const client = new Client({ connectionString: process.env.DATABASE_URL })
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
 
-    try {
-        const limit = Math.min(parseInt(req.query.limit as string) || 25, 100)
-        const offset = parseInt(req.query.offset as string) || 0
-        const category = req.query.category as string | undefined  // 'order' | 'sync'
-        const status = req.query.status as string | undefined
+  try {
+    const limit = Math.min(parseInt(req.query.limit as string) || 25, 100);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const category = req.query.category as string | undefined; // 'order' | 'sync'
+    const status = req.query.status as string | undefined;
 
-        await client.connect()
+    await client.connect();
 
-        // ── Auto-cleanup: mark stale "processing" entries as failed ──────────
-        // If a sync job crashed/errored after writing the log, it stays stuck at
-        // "processing" forever. Clean up any that are >5 minutes old.
-        await client.query(`
+    // ── Auto-cleanup: mark stale "processing" entries as failed ──────────
+    // If a sync job crashed/errored after writing the log, it stays stuck at
+    // "processing" forever. Clean up any that are >5 minutes old.
+    await client.query(`
             UPDATE qb_sync_log
             SET
                 status       = 'failed',
@@ -37,27 +37,30 @@ export async function GET(
                 error        = 'Job timed out — process may have crashed or restarted'
             WHERE status = 'processing'
               AND initiated_at < NOW() - INTERVAL '5 minutes'
-        `)
+        `);
 
-        const conditions: string[] = []
-        const values: any[] = []
-        let p = 1
+    const conditions: string[] = [];
+    const values: any[] = [];
+    let p = 1;
 
-        // Activity Log only shows background sync operations.
-        // Order/payment events are tracked in the QB Operations Pipeline instead.
-        // The 'sync' category param is kept for backwards compat but is now the default.
-        if (category !== 'all') {
-            conditions.push(`operation IN ('inventory_sync','price_sync','customer_sync','pos_sync')`)
-        }
+    // Activity Log only shows background sync operations.
+    // Order/payment events are tracked in the QB Operations Pipeline instead.
+    // The 'sync' category param is kept for backwards compat but is now the default.
+    if (category !== "all") {
+      conditions.push(
+        `operation IN ('inventory_sync','price_sync','customer_sync','pos_sync')`
+      );
+    }
 
-        if (status) {
-            conditions.push(`status = $${p++}`)
-            values.push(status)
-        }
+    if (status) {
+      conditions.push(`status = $${p++}`);
+      values.push(status);
+    }
 
-        const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
-        const rows = await client.query(`
+    const rows = await client.query(
+      `
             SELECT
                 id,
                 operation,
@@ -81,25 +84,31 @@ export async function GET(
             ${where}
             ORDER BY initiated_at DESC
             LIMIT $${p} OFFSET $${p + 1}
-        `, [...values, limit, offset])
+        `,
+      [...values, limit, offset]
+    );
 
-        const countResult = await client.query(
-            `SELECT COUNT(*) FROM qb_sync_log ${where}`,
-            values
-        )
-        const total = parseInt(countResult.rows[0].count)
+    const countResult = await client.query(
+      `SELECT COUNT(*) FROM qb_sync_log ${where}`,
+      values
+    );
+    const total = parseInt(countResult.rows[0].count);
 
-        res.json({
-            logs: rows.rows,
-            pagination: { total, limit, offset, hasMore: offset + rows.rows.length < total }
-        })
-
-    } catch (error: any) {
-        console.error("Error fetching QB logs:", error)
-        res.status(500).json({ error: "Failed to fetch logs" })
-    } finally {
-        await client.end()
-    }
+    res.json({
+      logs: rows.rows,
+      pagination: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + rows.rows.length < total,
+      },
+    });
+  } catch (error: any) {
+    console.error("Error fetching QB logs:", error);
+    res.status(500).json({ error: "Failed to fetch logs" });
+  } finally {
+    await client.end();
+  }
 }
 
 /**
@@ -107,18 +116,18 @@ export async function GET(
  * Clears all rows from qb_sync_log.
  */
 export async function DELETE(
-    _req: MedusaRequest,
-    res: MedusaResponse
+  _req: MedusaRequest,
+  res: MedusaResponse
 ): Promise<void> {
-    const client = new Client({ connectionString: process.env.DATABASE_URL })
-    try {
-        await client.connect()
-        const { rowCount } = await client.query("DELETE FROM qb_sync_log")
-        res.json({ success: true, deleted: rowCount })
-    } catch (err: any) {
-        console.error("[QB Logs DELETE] Error:", err)
-        res.status(500).json({ error: "Failed to clear logs" })
-    } finally {
-        await client.end()
-    }
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  try {
+    await client.connect();
+    const { rowCount } = await client.query("DELETE FROM qb_sync_log");
+    res.json({ success: true, deleted: rowCount });
+  } catch (err: any) {
+    console.error("[QB Logs DELETE] Error:", err);
+    res.status(500).json({ error: "Failed to clear logs" });
+  } finally {
+    await client.end();
+  }
 }

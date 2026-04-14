@@ -1,12 +1,15 @@
 // @ts-ignore — loadEnv and defineConfig exist at runtime but TypeScript types are missing in this Medusa version
-import { loadEnv, defineConfig } from '@medusajs/framework/utils'
+import { loadEnv, defineConfig } from "@medusajs/framework/utils";
 
-console.log("🔵 Loading medusa-config.ts")
-console.log("🔵 CWD:", process.cwd())
-loadEnv(process.env.NODE_ENV || 'development', process.cwd())
-console.log("🔵 REDIS_URL:", process.env.REDIS_URL ? "FOUND" : "MISSING")
-console.log("🔵 DATABASE_URL:", process.env.DATABASE_URL ? "FOUND" : "MISSING")
-console.log("🔵 WORKER_MODE:", process.env.WORKER_MODE || "NOT SET (will default to 'shared')")
+console.log("🔵 Loading medusa-config.ts");
+console.log("🔵 CWD:", process.cwd());
+loadEnv(process.env.NODE_ENV || "development", process.cwd());
+console.log("🔵 REDIS_URL:", process.env.REDIS_URL ? "FOUND" : "MISSING");
+console.log("🔵 DATABASE_URL:", process.env.DATABASE_URL ? "FOUND" : "MISSING");
+console.log(
+  "🔵 WORKER_MODE:",
+  process.env.WORKER_MODE || "NOT SET (will default to 'shared')"
+);
 
 module.exports = defineConfig({
   projectConfig: {
@@ -14,8 +17,8 @@ module.exports = defineConfig({
     databaseDriverOptions: {
       connection: {
         ssl: {
-          rejectUnauthorized: false
-        }
+          rejectUnauthorized: false,
+        },
       },
       pool: {
         // min: 0 → Knex won't keep idle connections alive.
@@ -23,60 +26,64 @@ module.exports = defineConfig({
         // causing "Connection ended unexpectedly". No idle connections = no drops.
         min: 0,
         max: 10,
-        idleTimeoutMillis: 20000,   // close connections before Railway proxy does
+        idleTimeoutMillis: 20000, // close connections before Railway proxy does
         acquireTimeoutMillis: 30000,
-      }
+      },
     },
     redisUrl: process.env.REDIS_URL,
     redisOptions: {
       connectTimeout: 45000,
-      keepAlive: 10000,        // TCP keepalive — prevents Railway proxy from dropping idle socket
+      keepAlive: 10000, // TCP keepalive — prevents Railway proxy from dropping idle socket
       enableOfflineQueue: true,
       family: 4,
       retryStrategy: (times: number) => Math.min(times * 3000, 30000),
     },
     // CRITICAL: Enable subscribers by setting workerMode to 'shared'
     // Without this, subscribers will NOT load (even if code is correct)
-    workerMode: (process.env.WORKER_MODE || "shared") as "shared" | "worker" | "server",
+    workerMode: (process.env.WORKER_MODE || "shared") as
+      | "shared"
+      | "worker"
+      | "server",
     http: {
       // ✅ CORS: All origins must come from environment variables.
       // Set STORE_CORS, ADMIN_CORS, AUTH_CORS on Railway — no hardcoded fallbacks in production.
-      storeCors: process.env.STORE_CORS || (
-        process.env.NODE_ENV === "production"
-          ? ""  // Must be set via STORE_CORS env var on Railway
-          : "http://localhost:4321,https://localhost:4321,http://localhost:8000,https://docs.medusajs.com,http://localhost:3001"
-      ),
+      storeCors:
+        process.env.STORE_CORS ||
+        (process.env.NODE_ENV === "production"
+          ? "" // Must be set via STORE_CORS env var on Railway
+          : "http://localhost:4321,https://localhost:4321,http://localhost:8000,https://docs.medusajs.com,http://localhost:3001"),
 
-      adminCors: process.env.ADMIN_CORS || (
-        process.env.NODE_ENV === "production"
-          ? ""  // Must be set via ADMIN_CORS env var on Railway
-          : "http://localhost:5173,http://localhost:9000,http://localhost:3001"
-      ),
+      adminCors:
+        process.env.ADMIN_CORS ||
+        (process.env.NODE_ENV === "production"
+          ? "" // Must be set via ADMIN_CORS env var on Railway
+          : "http://localhost:5173,http://localhost:9000,http://localhost:3001"),
 
-      authCors: process.env.AUTH_CORS || (
-        process.env.NODE_ENV === "production"
-          ? ""  // Must be set via AUTH_CORS env var on Railway
-          : "http://localhost:4321,https://localhost:4321,http://localhost:5173,http://localhost:9000,http://localhost:3001"
-      ),
+      authCors:
+        process.env.AUTH_CORS ||
+        (process.env.NODE_ENV === "production"
+          ? "" // Must be set via AUTH_CORS env var on Railway
+          : "http://localhost:4321,https://localhost:4321,http://localhost:5173,http://localhost:9000,http://localhost:3001"),
 
       jwtSecret: process.env.JWT_SECRET || "supersecret",
       cookieSecret: process.env.COOKIE_SECRET || "supersecret",
       authMethodsPerActor: {
         user: ["emailpass"],
         customer: ["emailpass", "google"], // Enable email/password + Google OAuth
-        pos_user: ["emailpass"],           // POS-only staff accounts
+        pos_user: ["emailpass"], // POS-only staff accounts
       },
     },
     cookieOptions: {
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       secure: process.env.NODE_ENV === "production",
       maxAge: 10 * 60 * 60 * 1000, // 10 hours
-    }
+    },
   },
   admin: {
-    backendUrl: process.env.NODE_ENV === "production"
-      ? "https://medusa-starter-default-production-b69e.up.railway.app"
-      : "http://localhost:9000",
+    backendUrl:
+      process.env.NODE_ENV === "production"
+        ? "https://medusa-starter-default-production-b69e.up.railway.app"
+        : "http://localhost:9000",
   },
   plugins: [
     // MinIO / S3 File Storage
@@ -157,7 +164,7 @@ module.exports = defineConfig({
           enableOfflineQueue: true,
           family: 4,
           retryStrategy: (times: number) => {
-            return Math.min(times * 3000, 30000)
+            return Math.min(times * 3000, 30000);
           },
         },
       },
@@ -173,7 +180,7 @@ module.exports = defineConfig({
           enableOfflineQueue: true,
           family: 4,
           retryStrategy: (times: number) => {
-            return Math.min(times * 3000, 30000)
+            return Math.min(times * 3000, 30000);
           },
         },
       },
@@ -189,7 +196,7 @@ module.exports = defineConfig({
           enableOfflineQueue: true,
           family: 4,
           retryStrategy: (times: number) => {
-            return Math.min(times * 3000, 30000)
+            return Math.min(times * 3000, 30000);
           },
         },
       },
@@ -211,7 +218,7 @@ module.exports = defineConfig({
                 enableOfflineQueue: true,
                 family: 4,
                 retryStrategy: (times: number) => {
-                  return Math.min(times * 3000, 30000)
+                  return Math.min(times * 3000, 30000);
                 },
               },
             },
@@ -231,27 +238,31 @@ module.exports = defineConfig({
               hashConfig: {
                 logN: 15,
                 r: 8,
-                p: 1
-              }
-            }
+                p: 1,
+              },
+            },
           },
-          ...(process.env.GOOGLE_CLIENT_ID ? [{
-            resolve: "@medusajs/auth-google",
-            id: "google",
-            options: {
-              clientId: process.env.GOOGLE_CLIENT_ID,
-              clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-              callbackUrl: process.env.GOOGLE_CALLBACK_URL || (
-                process.env.NODE_ENV === 'production'
-                  ? 'https://medusa-starter-default-production-b69e.up.railway.app/auth/customer/google/callback'
-                  // Dev: Route through HTTPS frontend proxy to avoid Chrome HTTPS-First mode issues
-                  // (backend is HTTP-only, Chrome auto-upgrades http://localhost:9000 → https → ERR_SSL)
-                  : `${process.env.STOREFRONT_URL || 'https://localhost:4321'}/api/auth/google/callback`
-              )
-            }
-          }] : [])
-        ]
-      }
+          ...(process.env.GOOGLE_CLIENT_ID
+            ? [
+                {
+                  resolve: "@medusajs/auth-google",
+                  id: "google",
+                  options: {
+                    clientId: process.env.GOOGLE_CLIENT_ID,
+                    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+                    callbackUrl:
+                      process.env.GOOGLE_CALLBACK_URL ||
+                      (process.env.NODE_ENV === "production"
+                        ? "https://medusa-starter-default-production-b69e.up.railway.app/auth/customer/google/callback"
+                        : // Dev: Route through HTTPS frontend proxy to avoid Chrome HTTPS-First mode issues
+                          // (backend is HTTP-only, Chrome auto-upgrades http://localhost:9000 → https → ERR_SSL)
+                          `${process.env.STOREFRONT_URL || "https://localhost:4321"}/api/auth/google/callback`),
+                  },
+                },
+              ]
+            : []),
+        ],
+      },
     },
     {
       resolve: "./src/modules/product-attributes",
@@ -278,9 +289,9 @@ module.exports = defineConfig({
           {
             resolve: "./src/modules/pos-tax",
             id: "pos-tax",
-          }
-        ]
-      }
+          },
+        ],
+      },
     },
     {
       resolve: "@medusajs/medusa/file",
@@ -290,7 +301,9 @@ module.exports = defineConfig({
             resolve: "./src/modules/smart-storage",
             id: "smart-s3",
             options: {
-              file_url: process.env.MINIO_ENDPOINT ? `${process.env.MINIO_ENDPOINT}/${process.env.MINIO_BUCKET}` : "",
+              file_url: process.env.MINIO_ENDPOINT
+                ? `${process.env.MINIO_ENDPOINT}/${process.env.MINIO_BUCKET}`
+                : "",
               accessKeyId: process.env.MINIO_ACCESS_KEY,
               secretAccessKey: process.env.MINIO_SECRET_KEY,
               region: "us-east-1",
@@ -418,7 +431,7 @@ module.exports = defineConfig({
                 "handle",
                 "variant_sku",
                 "metadata_material",
-                "metadata_category"
+                "metadata_category",
               ],
               displayedAttributes: [
                 "id",
@@ -429,14 +442,14 @@ module.exports = defineConfig({
                 "status",
                 "metadata",
                 "updated_at",
-                "created_at"
+                "created_at",
               ],
               sortableAttributes: [
                 "title",
                 "id",
                 "created_at",
                 "updated_at",
-                "status"
+                "status",
               ],
             },
             primaryKey: "id",
@@ -449,7 +462,9 @@ module.exports = defineConfig({
                 handle: product.handle,
                 thumbnail: product.thumbnail,
                 // KEY: Extract all variant SKUs into flat array
-                variant_sku: product.variants?.map((v: any) => v.sku).filter(Boolean) || [],
+                variant_sku:
+                  product.variants?.map((v: any) => v.sku).filter(Boolean) ||
+                  [],
                 // Index metadata for advanced filtering
                 status: product.status, // ✅ CRITICAL: Required for table
                 metadata: product.metadata || {},
@@ -458,8 +473,8 @@ module.exports = defineConfig({
                 // ✅ CRITICAL: Timestamps for O(1) sync staleness detection
                 updated_at: new Date(product.updated_at).getTime(),
                 created_at: new Date(product.created_at).getTime(),
-              }
-            }
+              };
+            },
           },
           customers: {
             indexSettings: {
@@ -468,14 +483,14 @@ module.exports = defineConfig({
                 "first_name",
                 "last_name",
                 "company_name",
-                "phone"
+                "phone",
               ],
               filterableAttributes: [
                 "customer_type",
                 "price_level",
                 "has_account",
                 "groups",
-                "status"
+                "status",
               ],
               displayedAttributes: [
                 "id",
@@ -493,16 +508,17 @@ module.exports = defineConfig({
                 "price_level",
                 "acquisition_channel",
                 "list_id",
-                "status"
+                "status",
               ],
             },
             primaryKey: "id",
             transformer: (customer: any) => {
-              const meta = customer.metadata || {}
-              const groupNames = customer.groups?.map((g: any) => g.name) || []
-              let priceLevel = "Retail"
-              if (groupNames.includes("Wholesale")) priceLevel = "Wholesale"
-              if (meta.price_level || meta.qb_price_level) priceLevel = meta.price_level || meta.qb_price_level
+              const meta = customer.metadata || {};
+              const groupNames = customer.groups?.map((g: any) => g.name) || [];
+              let priceLevel = "Retail";
+              if (groupNames.includes("Wholesale")) priceLevel = "Wholesale";
+              if (meta.price_level || meta.qb_price_level)
+                priceLevel = meta.price_level || meta.qb_price_level;
 
               return {
                 id: customer.id,
@@ -519,15 +535,16 @@ module.exports = defineConfig({
                 updated_at: new Date(customer.updated_at).getTime(),
 
                 // Extracted top-level fields for the POS table view
-                customer_type: meta.qb_customer_type || meta.customer_type || "Standard",
+                customer_type:
+                  meta.qb_customer_type || meta.customer_type || "Standard",
                 price_level: priceLevel,
                 acquisition_channel: meta.acquisition_channel || "",
-                list_id: meta.qb_list_id || ""
-              }
-            }
+                list_id: meta.qb_list_id || "",
+              };
+            },
           },
         },
       },
-    }
-  ]
-})
+    },
+  ],
+});

@@ -18,46 +18,50 @@
  *   metadata.qb_estimate_txn_id — Internal QB transaction ID
  */
 
-import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
-import { Modules } from "@medusajs/utils"
+import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
+import { Modules } from "@medusajs/utils";
 
 export default async function qbMetadataInitSubscriber({
-    event: { data },
-    container,
+  event: { data },
+  container,
 }: SubscriberArgs<{ id: string }>) {
-    const orderId: string = data.id
-    if (!orderId) return
+  const orderId: string = data.id;
+  if (!orderId) return;
 
-    try {
-        const orderModule = container.resolve(Modules.ORDER)
+  try {
+    const orderModule = container.resolve(Modules.ORDER);
 
-        const order = await orderModule.retrieveOrder(orderId, {
-            select: ["id", "status", "metadata"],
-        })
+    const order = await orderModule.retrieveOrder(orderId, {
+      select: ["id", "status", "metadata"],
+    });
 
-        // Only process draft orders
-        if (order.status !== "draft") return
+    // Only process draft orders
+    if (order.status !== "draft") return;
 
-        // Skip if QB metadata already initialized
-        const meta = (order.metadata || {}) as Record<string, any>
-        if ("qb_estimate_ref" in meta || "qb_estimate_txn_id" in meta) return
+    // Skip if QB metadata already initialized
+    const meta = (order.metadata || {}) as Record<string, any>;
+    if ("qb_estimate_ref" in meta || "qb_estimate_txn_id" in meta) return;
 
-        // Initialize QB metadata fields to null
-        await orderModule.updateOrders(orderId, {
-            metadata: {
-                ...meta,
-                qb_estimate_ref: null,
-                qb_estimate_txn_id: null,
-            },
-        })
+    // Initialize QB metadata fields to null
+    await orderModule.updateOrders(orderId, {
+      metadata: {
+        ...meta,
+        qb_estimate_ref: null,
+        qb_estimate_txn_id: null,
+      },
+    });
 
-        console.log(`[QB-INIT] ✅ Initialized QB metadata for draft order ${orderId}`)
-    } catch (err: any) {
-        // Non-fatal — just log and move on
-        console.error(`[QB-INIT] ⚠️ Could not initialize QB metadata for order ${orderId}: ${err.message}`)
-    }
+    console.log(
+      `[QB-INIT] ✅ Initialized QB metadata for draft order ${orderId}`
+    );
+  } catch (err: any) {
+    // Non-fatal — just log and move on
+    console.error(
+      `[QB-INIT] ⚠️ Could not initialize QB metadata for order ${orderId}: ${err.message}`
+    );
+  }
 }
 
 export const config: SubscriberConfig = {
-    event: "order.updated",
-}
+  event: "order.updated",
+};

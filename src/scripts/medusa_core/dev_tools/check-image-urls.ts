@@ -1,13 +1,13 @@
 #!/usr/bin/env tsx
-import { Client } from 'pg';
-import dotenv from 'dotenv';
+import { Client } from "pg";
+import dotenv from "dotenv";
 dotenv.config();
 
 async function checkImageUrls() {
-    const c = new Client({ connectionString: process.env.DATABASE_URL });
-    await c.connect();
+  const c = new Client({ connectionString: process.env.DATABASE_URL });
+  await c.connect();
 
-    const r = await c.query(`
+  const r = await c.query(`
         SELECT 
             id, 
             name, 
@@ -17,17 +17,23 @@ async function checkImageUrls() {
         WHERE handle = 'led-strips'
     `);
 
-    const cat = r.rows[0];
-    const imageObj = JSON.parse(cat.image_metadata || '{}');
+  const cat = r.rows[0];
+  const imageObj = JSON.parse(cat.image_metadata || "{}");
 
-    console.log('\n📦 LED Strips Category:\n');
-    console.log('Column thumbnail:', cat.thumbnail);
-    console.log('metadata.image.url:', imageObj.url);
-    console.log('\n');
-    console.log('✅ Pointing to MinIO?', cat.thumbnail?.includes('bucket-production') ? 'YES' : 'NO');
-    console.log('✅ Pointing to MinIO?', imageObj.url?.includes('bucket-production') ? 'YES' : 'NO (WooCommerce)');
+  console.log("\n📦 LED Strips Category:\n");
+  console.log("Column thumbnail:", cat.thumbnail);
+  console.log("metadata.image.url:", imageObj.url);
+  console.log("\n");
+  console.log(
+    "✅ Pointing to MinIO?",
+    cat.thumbnail?.includes("bucket-production") ? "YES" : "NO"
+  );
+  console.log(
+    "✅ Pointing to MinIO?",
+    imageObj.url?.includes("bucket-production") ? "YES" : "NO (WooCommerce)"
+  );
 
-    await c.end();
+  await c.end();
 }
 
 checkImageUrls();

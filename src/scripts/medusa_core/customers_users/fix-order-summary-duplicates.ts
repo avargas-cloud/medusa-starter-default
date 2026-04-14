@@ -13,19 +13,19 @@
  *
  * Usage: npx -y tsx src/scripts/fix/fix-order-summary-duplicates.ts [--dry-run]
  */
-import { Client } from 'pg'
-import dotenv from 'dotenv'
-dotenv.config()
+import { Client } from "pg";
+import dotenv from "dotenv";
+dotenv.config();
 
-const DRY_RUN = process.argv.includes('--dry-run')
+const DRY_RUN = process.argv.includes("--dry-run");
 
 async function main() {
-    const client = new Client({ connectionString: process.env.DATABASE_URL })
-    await client.connect()
-    console.log(`✅ Connected to Railway DB ${DRY_RUN ? '(DRY RUN)' : ''}\n`)
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  console.log(`✅ Connected to Railway DB ${DRY_RUN ? "(DRY RUN)" : ""}\n`);
 
-    // Find all orders with duplicate order_summary rows
-    const dupes = await client.query(`
+  // Find all orders with duplicate order_summary rows
+  const dupes = await client.query(`
         SELECT 
             order_id,
             COUNT(*) as row_count,
@@ -35,45 +35,56 @@ async function main() {
         GROUP BY order_id
         HAVING COUNT(*) > 1
         ORDER BY MAX(updated_at) DESC
-    `)
+    `);
 
-    if (dupes.rows.length === 0) {
-        console.log('✅ No duplicate order_summary rows found. Nothing to clean.')
-        await client.end()
-        return
+  if (dupes.rows.length === 0) {
+    console.log("✅ No duplicate order_summary rows found. Nothing to clean.");
+    await client.end();
+    return;
+  }
+
+  console.log(
+    `Found ${dupes.rows.length} orders with duplicate order_summary rows:\n`
+  );
+
+  let deletedCount = 0;
+  for (const row of dupes.rows) {
+    const [keepId, ...deleteIds] = row.ids_newest_first;
+    const [keepTotal, ...deleteTotals] = row.totals_newest_first;
+    console.log(`  order_id: ${row.order_id}`);
+    console.log(`    KEEP   id=${keepId}  current_total=${keepTotal}`);
+    for (let i = 0; i < deleteIds.length; i++) {
+      console.log(
+        `    DELETE id=${deleteIds[i]} current_total=${deleteTotals[i]}`
+      );
     }
 
-    console.log(`Found ${dupes.rows.length} orders with duplicate order_summary rows:\n`)
-
-    let deletedCount = 0
-    for (const row of dupes.rows) {
-        const [keepId, ...deleteIds] = row.ids_newest_first
-        const [keepTotal, ...deleteTotals] = row.totals_newest_first
-        console.log(`  order_id: ${row.order_id}`)
-        console.log(`    KEEP   id=${keepId}  current_total=${keepTotal}`)
-        for (let i = 0; i < deleteIds.length; i++) {
-            console.log(`    DELETE id=${deleteIds[i]} current_total=${deleteTotals[i]}`)
-        }
-
-        if (!DRY_RUN) {
-            await client.query(
-                `DELETE FROM order_summary WHERE id = ANY($1::text[])`,
-                [deleteIds]
-            )
-            deletedCount += deleteIds.length
-        }
-        console.log()
+    if (!DRY_RUN) {
+      await client.query(
+        `DELETE FROM order_summary WHERE id = ANY($1::text[])`,
+        [deleteIds]
+      );
+      deletedCount += deleteIds.length;
     }
+    console.log();
+  }
 
-    if (DRY_RUN) {
-        console.log(`\n[DRY RUN] Would delete ${dupes.rows.reduce((acc, r) => acc + r.ids_newest_first.length - 1, 0)} rows.`)
-        console.log('Run without --dry-run to apply changes.')
-    } else {
-        console.log(`✅ Deleted ${deletedCount} duplicate order_summary row(s).`)
-        console.log('The Admin will now read consistent data for all affected orders.')
-    }
+  if (DRY_RUN) {
+    console.log(
+      `\n[DRY RUN] Would delete ${dupes.rows.reduce((acc, r) => acc + r.ids_newest_first.length - 1, 0)} rows.`
+    );
+    console.log("Run without --dry-run to apply changes.");
+  } else {
+    console.log(`✅ Deleted ${deletedCount} duplicate order_summary row(s).`);
+    console.log(
+      "The Admin will now read consistent data for all affected orders."
+    );
+  }
 
-    await client.end()
+  await client.end();
 }
 
-main().catch(e => { console.error('❌', e.message); process.exit(1) })
+main().catch((e) => {
+  console.error("❌", e.message);
+  process.exit(1);
+});

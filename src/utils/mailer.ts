@@ -4,21 +4,21 @@
  * Drop-in replacement for the old @sendgrid/mail usage.
  */
 
-import { Resend } from 'resend'
-import { insertIntoGmailSent } from './gmail-sent-insert'
+import { Resend } from "resend";
+import { insertIntoGmailSent } from "./gmail-sent-insert";
 
 export interface MailOptions {
-    to: string | string[]
-    from?: string
-    replyTo?: string
-    cc?: string | string[]
-    subject: string
-    html: string
-    attachments?: Array<{
-        filename: string
-        content: string   // base64
-        type?: string
-    }>
+  to: string | string[];
+  from?: string;
+  replyTo?: string;
+  cc?: string | string[];
+  subject: string;
+  html: string;
+  attachments?: Array<{
+    filename: string;
+    content: string; // base64
+    type?: string;
+  }>;
 }
 
 /**
@@ -27,41 +27,47 @@ export interface MailOptions {
  * Throws on send failure so callers can handle it.
  */
 export async function sendMail(options: MailOptions): Promise<boolean> {
-    const apiKey = process.env.RESEND_API_KEY
-    if (!apiKey) return false
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) return false;
 
-    const resend = new Resend(apiKey)
-    const from = options.from ?? process.env.RESEND_FROM ?? process.env.SENDGRID_FROM ?? 'noreply@ecopowertech.com'
+  const resend = new Resend(apiKey);
+  const from =
+    options.from ??
+    process.env.RESEND_FROM ??
+    process.env.SENDGRID_FROM ??
+    "noreply@ecopowertech.com";
 
-    const { data, error } = await resend.emails.send({
-        from,
-        to: options.to,
-        replyTo: options.replyTo,
-        cc: options.cc,
-        subject: options.subject,
-        html: options.html,
-        attachments: options.attachments?.map(a => ({
-            filename: a.filename,
-            content: a.content,
-        })),
-    })
+  const { data, error } = await resend.emails.send({
+    from,
+    to: options.to,
+    replyTo: options.replyTo,
+    cc: options.cc,
+    subject: options.subject,
+    html: options.html,
+    attachments: options.attachments?.map((a) => ({
+      filename: a.filename,
+      content: a.content,
+    })),
+  });
 
-    if (error) {
-        console.error("[mailer] Resend API Error:", error)
-        throw new Error(`Resend Error: ${error.message}`)
-    }
+  if (error) {
+    console.error("[mailer] Resend API Error:", error);
+    throw new Error(`Resend Error: ${error.message}`);
+  }
 
-    console.log(`[mailer] Sent successfully. ID: ${data?.id}`)
+  console.log(`[mailer] Sent successfully. ID: ${data?.id}`);
 
-    // Insert a copy into the sender's Gmail Sent folder (non-blocking)
-    // so the sender sees the email in their Gmail without needing CC.
-    insertIntoGmailSent({
-        from,
-        to: options.to,
-        subject: options.subject,
-        html: options.html,
-        attachments: options.attachments,
-    }).catch(() => { /* already logged inside */ })
+  // Insert a copy into the sender's Gmail Sent folder (non-blocking)
+  // so the sender sees the email in their Gmail without needing CC.
+  insertIntoGmailSent({
+    from,
+    to: options.to,
+    subject: options.subject,
+    html: options.html,
+    attachments: options.attachments,
+  }).catch(() => {
+    /* already logged inside */
+  });
 
-    return true
+  return true;
 }

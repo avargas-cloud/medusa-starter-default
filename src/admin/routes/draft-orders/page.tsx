@@ -1,4 +1,4 @@
-import { Navigate } from "react-router-dom"
+import { Navigate } from "react-router-dom";
 
 /**
  * Redirect: /draft-orders → /draft-orders-advanced
@@ -10,7 +10,7 @@ import { Navigate } from "react-router-dom"
  * Use the "Edit ↗" link in /draft-orders-advanced to access the native editor.
  */
 const DraftOrdersRedirect = () => {
-    return <Navigate to="/draft-orders-advanced" replace />
-}
+  return <Navigate to="/draft-orders-advanced" replace />;
+};
 
-export default DraftOrdersRedirect
+export default DraftOrdersRedirect;

@@ -8,4 +8,4 @@
 // For now, the route calls each step workflow individually with .run()
 // which gives us fine-grained error handling and logging at each stage.
 
-export { }
+export {};

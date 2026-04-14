@@ -6,11 +6,11 @@
  * the manual sync route (/admin/quickbooks/order).
  */
 
-import { Client } from "pg"
+import { Client } from "pg";
 
 export interface QbOrderConfig {
-    shippingItemId: string
-    defaultSalesTaxCode: string
+  shippingItemId: string;
+  defaultSalesTaxCode: string;
 }
 
 /**
@@ -18,23 +18,30 @@ export interface QbOrderConfig {
  * Falls back to env vars or safe defaults if DB is unreachable.
  */
 export async function getQbConfig(): Promise<QbOrderConfig> {
-    const client = new Client({ connectionString: process.env.DATABASE_URL })
-    try {
-        await client.connect()
-        const res = await client.query(
-            `SELECT shipping_item_id, default_sales_tax_code FROM quickbooks_config WHERE id = 'default' LIMIT 1`
-        )
-        const row = res.rows[0] || {}
-        return {
-            shippingItemId: row.shipping_item_id || process.env.QB_SHIPPING_ITEM_ID || "800006A3-1395258131",
-            defaultSalesTaxCode: row.default_sales_tax_code || process.env.QB_DEFAULT_SALES_TAX_CODE || "Sale Tax 7%",
-        }
-    } catch {
-        return {
-            shippingItemId: process.env.QB_SHIPPING_ITEM_ID || "800006A3-1395258131",
-            defaultSalesTaxCode: process.env.QB_DEFAULT_SALES_TAX_CODE || "Sale Tax 7%",
-        }
-    } finally {
-        await client.end()
-    }
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  try {
+    await client.connect();
+    const res = await client.query(
+      `SELECT shipping_item_id, default_sales_tax_code FROM quickbooks_config WHERE id = 'default' LIMIT 1`
+    );
+    const row = res.rows[0] || {};
+    return {
+      shippingItemId:
+        row.shipping_item_id ||
+        process.env.QB_SHIPPING_ITEM_ID ||
+        "800006A3-1395258131",
+      defaultSalesTaxCode:
+        row.default_sales_tax_code ||
+        process.env.QB_DEFAULT_SALES_TAX_CODE ||
+        "Sale Tax 7%",
+    };
+  } catch {
+    return {
+      shippingItemId: process.env.QB_SHIPPING_ITEM_ID || "800006A3-1395258131",
+      defaultSalesTaxCode:
+        process.env.QB_DEFAULT_SALES_TAX_CODE || "Sale Tax 7%",
+    };
+  } finally {
+    await client.end();
+  }
 }

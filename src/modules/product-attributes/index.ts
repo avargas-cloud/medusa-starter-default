@@ -1,12 +1,12 @@
-import { Module } from "@medusajs/utils"
-import ProductAttributesModuleService from "./service"
+import { Module } from "@medusajs/utils";
+import ProductAttributesModuleService from "./service";
 
-export const PRODUCT_ATTRIBUTES_MODULE = "productAttributes"
+export const PRODUCT_ATTRIBUTES_MODULE = "productAttributes";
 
 export default Module(PRODUCT_ATTRIBUTES_MODULE, {
-    service: ProductAttributesModuleService,
-})
+  service: ProductAttributesModuleService,
+});
 
-export * from "./models/attribute-key"
-export * from "./models/attribute-value"
-export * from "./models/attribute-set"
+export * from "./models/attribute-key";
+export * from "./models/attribute-value";
+export * from "./models/attribute-set";

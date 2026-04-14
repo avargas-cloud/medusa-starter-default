@@ -15,61 +15,90 @@ import {
   emailButton,
   emailFootnote,
   sectionLabel,
-} from "../../utils/email-templates"
-import { sendMail } from "../../../utils/mailer"
+} from "../../utils/email-templates";
+import { sendMail } from "../../../utils/mailer";
 
 // We also need the order notification templates — import them inline
 // since they're not exported from the subscriber. We'll rebuild them here.
 
-const RECIPIENT = "a.vargas@ecopowertech.com"
+const RECIPIENT = "a.vargas@ecopowertech.com";
 
 async function main() {
   if (!process.env.RESEND_API_KEY) {
-    console.error("❌ RESEND_API_KEY not set")
-    process.exit(1)
+    console.error("❌ RESEND_API_KEY not set");
+    process.exit(1);
   }
 
-  const emails: Array<{ subject: string; html: string; delay?: number }> = []
+  const emails: Array<{ subject: string; html: string; delay?: number }> = [];
 
   // ── 1. Welcome Email ──
   emails.push({
     subject: "📧 PREVIEW 1/6 — Welcome Email",
     html: buildWelcomeEmail("Alejandro"),
-  })
+  });
 
   // ── 2. Password Reset ──
   emails.push({
     subject: "📧 PREVIEW 2/6 — Password Reset",
-    html: buildPasswordResetEmail("Alejandro", "https://ecopowertech.com/reset-password?token=demo-preview-token-12345"),
-  })
+    html: buildPasswordResetEmail(
+      "Alejandro",
+      "https://ecopowertech.com/reset-password?token=demo-preview-token-12345"
+    ),
+  });
 
   // ── 3. Account Activation (QuickBooks) ──
   emails.push({
     subject: "📧 PREVIEW 3/6 — Account Activation",
-    html: buildActivationEmail("Alejandro", "https://ecopowertech.com/activate-account?token=demo-preview-token-12345"),
-  })
+    html: buildActivationEmail(
+      "Alejandro",
+      "https://ecopowertech.com/activate-account?token=demo-preview-token-12345"
+    ),
+  });
 
   // ── 4–6: Order Notification Emails ──
   // These templates are in the subscriber file. We'll import the shared layout
   // and rebuild them with demo data here.
 
-  const STOREFRONT_URL = process.env.STOREFRONT_URL || "https://ecopowertech.com"
-  const BRAND_COLOR = "#0369a1"
+  const STOREFRONT_URL =
+    process.env.STOREFRONT_URL || "https://ecopowertech.com";
+  const BRAND_COLOR = "#0369a1";
 
   function fmt(amount: number): string {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount)
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+    }).format(amount);
   }
 
   function demoItemsTable(): string {
-    const MINIO = process.env.MINIO_ENDPOINT || "https://bucket-production-2e09.up.railway.app"
-    const BUCKET = process.env.MINIO_BUCKET || "medusa-media"
-    const thumbUrl = `${MINIO}/${BUCKET}/ecopowertech-logo.png`
+    const MINIO =
+      process.env.MINIO_ENDPOINT ||
+      "https://bucket-production-2e09.up.railway.app";
+    const BUCKET = process.env.MINIO_BUCKET || "medusa-media";
+    const thumbUrl = `${MINIO}/${BUCKET}/ecopowertech-logo.png`;
     const items = [
-      { title: "LED High Bay Light 200W", sku: "EPT-HBL-200W", qty: 2, price: 89.99 },
-      { title: "Solar Panel 400W Mono", sku: "EPT-SP-400M", qty: 1, price: 349.00 },
-      { title: "LED Strip Light 5m Cool White", sku: "EPT-LST-5CW", qty: 3, price: 24.99 },
-    ]
-    return items.map(item => `
+      {
+        title: "LED High Bay Light 200W",
+        sku: "EPT-HBL-200W",
+        qty: 2,
+        price: 89.99,
+      },
+      {
+        title: "Solar Panel 400W Mono",
+        sku: "EPT-SP-400M",
+        qty: 1,
+        price: 349.0,
+      },
+      {
+        title: "LED Strip Light 5m Cool White",
+        sku: "EPT-LST-5CW",
+        qty: 3,
+        price: 24.99,
+      },
+    ];
+    return items
+      .map(
+        (item) => `
     <tr>
       <td style="padding:16px 0;border-bottom:1px solid #f3f4f6;">
         <table cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
@@ -86,37 +115,44 @@ async function main() {
           </td>
         </tr></table>
       </td>
-    </tr>`).join("")
+    </tr>`
+      )
+      .join("");
   }
 
-  function progressBar(steps: { label: string; done: boolean; active?: boolean }[]): string {
+  function progressBar(
+    steps: { label: string; done: boolean; active?: boolean }[]
+  ): string {
     return `
     <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:24px 0 32px;">
       <tr><td style="text-align:center;">
         <table cellpadding="0" cellspacing="0" border="0" style="display:inline-table;"><tr>
-          ${steps.map((s, i) => {
-      const bg = s.done ? "#0369a1" : s.active ? "#0369a1" : "#e5e7eb"
-      const textColor = s.done || s.active ? "#0369a1" : "#9ca3af"
-      const icon = s.done ? "✓" : s.active ? "●" : `${i + 1}`
-      const iconColor = s.done || s.active ? "#fff" : "#9ca3af"
-      const connector = i < steps.length - 1
-        ? `<td style="width:40px;"><div style="height:2px;background:${s.done ? "#0369a1" : "#e5e7eb"};"></div></td>`
-        : ""
-      return `
+          ${steps
+            .map((s, i) => {
+              const bg = s.done ? "#0369a1" : s.active ? "#0369a1" : "#e5e7eb";
+              const textColor = s.done || s.active ? "#0369a1" : "#9ca3af";
+              const icon = s.done ? "✓" : s.active ? "●" : `${i + 1}`;
+              const iconColor = s.done || s.active ? "#fff" : "#9ca3af";
+              const connector =
+                i < steps.length - 1
+                  ? `<td style="width:40px;"><div style="height:2px;background:${s.done ? "#0369a1" : "#e5e7eb"};"></div></td>`
+                  : "";
+              return `
               <td style="text-align:center;padding:0 10px;">
                 <div style="width:30px;height:30px;background:${bg};border-radius:50%;line-height:30px;color:${iconColor};font-size:13px;font-weight:700;margin:0 auto;">${icon}</div>
                 <div style="color:${textColor};font-size:11px;font-weight:${s.active ? "700" : "500"};margin-top:6px;white-space:nowrap;">${s.label}</div>
-              </td>${connector}`
-    }).join("")}
+              </td>${connector}`;
+            })
+            .join("")}
         </tr></table>
       </td></tr>
-    </table>`
+    </table>`;
   }
 
-  const subtotal = 89.99 * 2 + 349.00 + 24.99 * 3
-  const shipping = 15.00
-  const tax = subtotal * 0.07
-  const total = subtotal + shipping + tax
+  const subtotal = 89.99 * 2 + 349.0 + 24.99 * 3;
+  const shipping = 15.0;
+  const tax = subtotal * 0.07;
+  const total = subtotal + shipping + tax;
 
   // 4. Ready for Pickup
   emails.push({
@@ -150,7 +186,7 @@ async function main() {
 
       ${emailButton("View Order Details", `${STOREFRONT_URL}/account/orders`)}
     `),
-  })
+  });
 
   // 5. Order Shipped
   emails.push({
@@ -160,11 +196,11 @@ async function main() {
       ${emailHeading("Your Order Has Shipped!", `Order <strong style="color:#111827;">#1062</strong> is on its way to you.`)}
 
       ${progressBar([
-      { label: "Ordered", done: true },
-      { label: "Prepared", done: true },
-      { label: "Shipped", done: false, active: true },
-      { label: "Delivered", done: false },
-    ])}
+        { label: "Ordered", done: true },
+        { label: "Prepared", done: true },
+        { label: "Shipped", done: false, active: true },
+        { label: "Delivered", done: false },
+      ])}
 
       <table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#fafafa;border-radius:10px;border:1px solid #e5e7eb;margin-bottom:20px;">
         <tr><td style="padding:18px 22px;">
@@ -194,7 +230,7 @@ async function main() {
 
       ${emailButton("Track Your Order", `${STOREFRONT_URL}/account/orders`)}
     `),
-  })
+  });
 
   // 6. Order Delivered
   emails.push({
@@ -204,11 +240,11 @@ async function main() {
       ${emailHeading("Order Delivered!", `Order <strong style="color:#111827;">#1062</strong> has been delivered. Thank you for your purchase!`)}
 
       ${progressBar([
-      { label: "Ordered", done: true },
-      { label: "Prepared", done: true },
-      { label: "Shipped", done: true },
-      { label: "Delivered", done: true },
-    ])}
+        { label: "Ordered", done: true },
+        { label: "Prepared", done: true },
+        { label: "Shipped", done: true },
+        { label: "Delivered", done: true },
+      ])}
 
       ${sectionLabel("Order Summary")}
       <table cellpadding="0" cellspacing="0" border="0" width="100%">
@@ -226,32 +262,34 @@ async function main() {
 
       ${emailButton("Continue Shopping", STOREFRONT_URL, "#059669")}
     `),
-  })
+  });
 
   // Send all emails with 2-second delay between each
-  console.log(`\n📧 Sending ${emails.length} preview emails to ${RECIPIENT}...\n`)
+  console.log(
+    `\n📧 Sending ${emails.length} preview emails to ${RECIPIENT}...\n`
+  );
 
   for (let i = 0; i < emails.length; i++) {
-    const e = emails[i]!
+    const e = emails[i]!;
     try {
       await sendMail({
         to: RECIPIENT,
         subject: e.subject,
         html: e.html,
-      })
-      console.log(`  ✅ ${i + 1}/${emails.length} — ${e.subject}`)
+      });
+      console.log(`  ✅ ${i + 1}/${emails.length} — ${e.subject}`);
     } catch (err: any) {
-      console.error(`  ❌ ${i + 1}/${emails.length} — ${e.subject}`)
-      console.error(`     Error: ${err.message}`)
+      console.error(`  ❌ ${i + 1}/${emails.length} — ${e.subject}`);
+      console.error(`     Error: ${err.message}`);
     }
 
     // Small delay to avoid rate limiting
     if (i < emails.length - 1) {
-      await new Promise(r => setTimeout(r, 1500))
+      await new Promise((r) => setTimeout(r, 1500));
     }
   }
 
-  console.log(`\n🎉 Done! Check ${RECIPIENT} inbox.\n`)
+  console.log(`\n🎉 Done! Check ${RECIPIENT} inbox.\n`);
 }
 
-main().catch(console.error)
+main().catch(console.error);

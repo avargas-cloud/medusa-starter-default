@@ -20,50 +20,62 @@
  *   QB_PAYMENT_METHOD=Cash|Visa|MasterCard|Check   (default: Cash)
  */
 
-import { qbRequest, waitForOp, DEFAULT_CUSTOMER_LISTID, DEFAULT_PRODUCT_LISTID } from './config';
+import {
+  qbRequest,
+  waitForOp,
+  DEFAULT_CUSTOMER_LISTID,
+  DEFAULT_PRODUCT_LISTID,
+} from "./config";
 
 const CUSTOMER_LISTID = process.env.QB_TEST_CUSTOMER ?? DEFAULT_CUSTOMER_LISTID;
 const PRODUCT_LISTID = process.env.QB_TEST_PRODUCT ?? DEFAULT_PRODUCT_LISTID;
-const PAYMENT_METHOD = process.env.QB_PAYMENT_METHOD ?? 'Cash';
+const PAYMENT_METHOD = process.env.QB_PAYMENT_METHOD ?? "Cash";
 const AMOUNT = Number(process.env.QB_AMOUNT) || 49.99;
 
 async function main() {
-    console.log('\n=== TEST: SALES RECEIPT (Immediate Cash Sale) ===');
-    console.log(`   Customer:       ${CUSTOMER_LISTID}`);
-    console.log(`   Product:        ${PRODUCT_LISTID}`);
-    console.log(`   Payment Method: ${PAYMENT_METHOD}`);
-    console.log(`   Amount:         $${AMOUNT}\n`);
+  console.log("\n=== TEST: SALES RECEIPT (Immediate Cash Sale) ===");
+  console.log(`   Customer:       ${CUSTOMER_LISTID}`);
+  console.log(`   Product:        ${PRODUCT_LISTID}`);
+  console.log(`   Payment Method: ${PAYMENT_METHOD}`);
+  console.log(`   Amount:         $${AMOUNT}\n`);
 
-    const res = await qbRequest('POST', '/api/sales-receipts', {
-        customerId: CUSTOMER_LISTID,
-        date: new Date().toISOString().split('T')[0],
-        paymentMethod: PAYMENT_METHOD,
-        templateRef: 'Sales Receipt Ecopowerte',
-        memo: `Store Sale — ${new Date().toLocaleString()}`,
-        items: [{
-            productId: PRODUCT_LISTID,
-            quantity: 1,
-            rate: AMOUNT,
-            desc: `Test immediate sale (${PAYMENT_METHOD})`,
-        }],
-    });
+  const res = await qbRequest("POST", "/api/sales-receipts", {
+    customerId: CUSTOMER_LISTID,
+    date: new Date().toISOString().split("T")[0],
+    paymentMethod: PAYMENT_METHOD,
+    templateRef: "Sales Receipt Ecopowerte",
+    memo: `Store Sale — ${new Date().toLocaleString()}`,
+    items: [
+      {
+        productId: PRODUCT_LISTID,
+        quantity: 1,
+        rate: AMOUNT,
+        desc: `Test immediate sale (${PAYMENT_METHOD})`,
+      },
+    ],
+  });
 
-    if (!res.operationId) {
-        throw new Error(`Sales Receipt queue failed: ${JSON.stringify(res)}`);
-    }
+  if (!res.operationId) {
+    throw new Error(`Sales Receipt queue failed: ${JSON.stringify(res)}`);
+  }
 
-    console.log(`   OperationID: ${res.operationId}`);
-    const op = await waitForOp(res.operationId, 'Sales Receipt Creation');
+  console.log(`   OperationID: ${res.operationId}`);
+  const op = await waitForOp(res.operationId, "Sales Receipt Creation");
 
-    const ret = (op.result?.QBXML?.QBXMLMsgsRs ?? op.result?.QBXMLMsgsRs)
-        ?.SalesReceiptAddRs?.SalesReceiptRet;
+  const ret = (op.result?.QBXML?.QBXMLMsgsRs ?? op.result?.QBXMLMsgsRs)
+    ?.SalesReceiptAddRs?.SalesReceiptRet;
 
-    console.log('\n✅ Sales Receipt Created!');
-    console.log(`   TxnID:     ${op.txnId ?? ret?.TxnID}`);
-    console.log(`   RefNumber: ${op.refNumber ?? ret?.RefNumber}`);
-    console.log(`   Total:     $${ret?.TotalAmount ?? AMOUNT}`);
-    console.log('\n   → Check QB Desktop — should appear under "Sales Receipts"');
-    console.log('   → No pending invoice — sale & payment recorded in one shot ✅');
+  console.log("\n✅ Sales Receipt Created!");
+  console.log(`   TxnID:     ${op.txnId ?? ret?.TxnID}`);
+  console.log(`   RefNumber: ${op.refNumber ?? ret?.RefNumber}`);
+  console.log(`   Total:     $${ret?.TotalAmount ?? AMOUNT}`);
+  console.log('\n   → Check QB Desktop — should appear under "Sales Receipts"');
+  console.log(
+    "   → No pending invoice — sale & payment recorded in one shot ✅"
+  );
 }
 
-main().catch(e => { console.error('\n❌ TEST FAILED:', e.message); process.exit(1); });
+main().catch((e) => {
+  console.error("\n❌ TEST FAILED:", e.message);
+  process.exit(1);
+});

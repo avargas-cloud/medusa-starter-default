@@ -1,71 +1,67 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 /**
  * Advanced Product Search API Route
- * 
+ *
  * Queries MeiliSearch for products using AND logic and SKU indexing
  * Protected route - Admin only
- * 
+ *
  * GET /admin/search/products?q=<query>
  */
 
-export const GET = async (
-    req: MedusaRequest,
-    res: MedusaResponse
-) => {
-    const query = req.query.q as string
+export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
+  const query = req.query.q as string;
 
-    if (!query || query.trim().length === 0) {
-        return res.json({
-            hits: [],
-            query: "",
-            processingTimeMs: 0,
-            estimatedTotalHits: 0
-        })
-    }
+  if (!query || query.trim().length === 0) {
+    return res.json({
+      hits: [],
+      query: "",
+      processingTimeMs: 0,
+      estimatedTotalHits: 0,
+    });
+  }
 
-    try {
-        // Dynamic import to handle ESM module in CommonJS context
-        const { MeiliSearch } = await import("meilisearch")
+  try {
+    // Dynamic import to handle ESM module in CommonJS context
+    const { MeiliSearch } = await import("meilisearch");
 
-        // Initialize MeiliSearch client
-        const client = new MeiliSearch({
-            host: process.env.MEILISEARCH_HOST!,
-            apiKey: process.env.MEILISEARCH_API_KEY!,
-        })
+    // Initialize MeiliSearch client
+    const client = new MeiliSearch({
+      host: process.env.MEILISEARCH_HOST!,
+      apiKey: process.env.MEILISEARCH_API_KEY!,
+    });
 
-        // Search in products index
-        const index = client.index("products")
+    // Search in products index
+    const index = client.index("products");
 
-        const searchResults = await index.search(query, {
-            limit: 50,
-            attributesToRetrieve: [
-                "id",
-                "title",
-                "handle",
-                "thumbnail",
-                "variant_sku",
-                "description"
-            ],
-        })
+    const searchResults = await index.search(query, {
+      limit: 50,
+      attributesToRetrieve: [
+        "id",
+        "title",
+        "handle",
+        "thumbnail",
+        "variant_sku",
+        "description",
+      ],
+    });
 
-        return res.json({
-            hits: searchResults.hits,
-            query: searchResults.query,
-            processingTimeMs: searchResults.processingTimeMs,
-            estimatedTotalHits: searchResults.estimatedTotalHits,
-        })
+    return res.json({
+      hits: searchResults.hits,
+      query: searchResults.query,
+      processingTimeMs: searchResults.processingTimeMs,
+      estimatedTotalHits: searchResults.estimatedTotalHits,
+    });
+  } catch (error: any) {
+    console.error("[MeiliSearch Error]:", (error as Error).message);
 
-    } catch (error: any) {
-        console.error("[MeiliSearch Error]:", (error as Error).message)
-
-        return res.status(500).json({
-            error: "Search failed",
-            message: (error as Error).message,
-            hits: []
-        })
-    }
-}
+    return res.status(500).json({
+      error: "Search failed",
+      message: (error as Error).message,
+      hits: [],
+    });
+  }
+};
 
 // Middleware to protect this route (admin only)
-export const AUTHENTICATE = ["user"]
+export const AUTHENTICATE = ["user"];

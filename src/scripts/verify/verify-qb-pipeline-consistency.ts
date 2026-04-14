@@ -22,15 +22,15 @@
  * Run: npx ts-node src/scripts/verify/verify-qb-pipeline-consistency.ts
  */
 
-import { Pool } from "pg"
-import * as dotenv from "dotenv"
-dotenv.config()
+import { Pool } from "pg";
+import * as dotenv from "dotenv";
+dotenv.config();
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 async function findOrphanPaymentRows() {
-    const res = await pool.query(
-        `SELECT p.id,
+  const res = await pool.query(
+    `SELECT p.id,
                 p.order_id,
                 p.medusa_ref_number AS payment_ref,
                 p.status           AS payment_status,
@@ -44,13 +44,13 @@ async function findOrphanPaymentRows() {
             AND p.step   IN ('payment','apply_payment')
             AND p.status IN ('waiting','pending')
           ORDER BY sr.created_at DESC`
-    )
-    return res.rows
+  );
+  return res.rows;
 }
 
 async function findUntaggedSrPayments() {
-    const res = await pool.query(
-        `SELECT cp.id,
+  const res = await pool.query(
+    `SELECT cp.id,
                 cp.display_id,
                 cp.status,
                 cp.metadata->>'order_id'       AS order_id,
@@ -69,13 +69,13 @@ async function findUntaggedSrPayments() {
             AND (cp.metadata->>'is_sales_receipt_payment') IS DISTINCT FROM 'true'
             AND cp.status <> 'voided'
             AND cp.deleted_at IS NULL`
-    )
-    return res.rows
+  );
+  return res.rows;
 }
 
 async function findAppliedMismatch() {
-    const res = await pool.query(
-        `SELECT cp.id,
+  const res = await pool.query(
+    `SELECT cp.id,
                 cp.display_id,
                 cp.amount,
                 cp.status,
@@ -87,68 +87,80 @@ async function findAppliedMismatch() {
           GROUP BY cp.id, cp.display_id, cp.amount, cp.status
          HAVING COALESCE(SUM(pa.amount_applied) FILTER (WHERE pa.voided_at IS NULL), 0) >= cp.amount
             AND cp.amount > 0`
-    )
-    return res.rows
+  );
+  return res.rows;
 }
 
 async function main() {
-    const [orphans, untagged, mismatch] = await Promise.all([
-        findOrphanPaymentRows(),
-        findUntaggedSrPayments(),
-        findAppliedMismatch(),
-    ])
+  const [orphans, untagged, mismatch] = await Promise.all([
+    findOrphanPaymentRows(),
+    findUntaggedSrPayments(),
+    findAppliedMismatch(),
+  ]);
 
-    let issues = 0
+  let issues = 0;
 
-    console.log("═══ QB Pipeline Consistency Check ═══\n")
+  console.log("═══ QB Pipeline Consistency Check ═══\n");
 
-    console.log(`1. Orphan payment rows (SR confirmed but payment/apply_payment still waiting):`)
-    if (orphans.length === 0) {
-        console.log("   ✅ None")
-    } else {
-        issues += orphans.length
-        console.log(`   ❌ ${orphans.length} issue(s):`)
-        for (const r of orphans) {
-            console.log(`      - order=${r.order_id} sr=${r.sr_ref} stale=${r.payment_ref}(${r.payment_status})`)
-        }
+  console.log(
+    `1. Orphan payment rows (SR confirmed but payment/apply_payment still waiting):`
+  );
+  if (orphans.length === 0) {
+    console.log("   ✅ None");
+  } else {
+    issues += orphans.length;
+    console.log(`   ❌ ${orphans.length} issue(s):`);
+    for (const r of orphans) {
+      console.log(
+        `      - order=${r.order_id} sr=${r.sr_ref} stale=${r.payment_ref}(${r.payment_status})`
+      );
     }
+  }
 
-    console.log(`\n2. Untagged SR payments (linked to confirmed SR without SR-embedding flag):`)
-    if (untagged.length === 0) {
-        console.log("   ✅ None")
-    } else {
-        issues += untagged.length
-        console.log(`   ❌ ${untagged.length} issue(s):`)
-        for (const r of untagged) {
-            console.log(`      - cpay=${r.id} PAY-${r.display_id} order=${r.order_id} qb_source=${r.qb_source ?? 'null'} status=${r.qb_sync_status ?? 'null'}`)
-        }
+  console.log(
+    `\n2. Untagged SR payments (linked to confirmed SR without SR-embedding flag):`
+  );
+  if (untagged.length === 0) {
+    console.log("   ✅ None");
+  } else {
+    issues += untagged.length;
+    console.log(`   ❌ ${untagged.length} issue(s):`);
+    for (const r of untagged) {
+      console.log(
+        `      - cpay=${r.id} PAY-${r.display_id} order=${r.order_id} qb_source=${r.qb_source ?? "null"} status=${r.qb_sync_status ?? "null"}`
+      );
     }
+  }
 
-    console.log(`\n3. Applied-mismatch payments (fully consumed but status='available'):`)
-    if (mismatch.length === 0) {
-        console.log("   ✅ None")
-    } else {
-        issues += mismatch.length
-        console.log(`   ❌ ${mismatch.length} issue(s):`)
-        for (const r of mismatch) {
-            console.log(`      - cpay=${r.id} PAY-${r.display_id} amount=${r.amount} applied=${r.total_applied}`)
-        }
+  console.log(
+    `\n3. Applied-mismatch payments (fully consumed but status='available'):`
+  );
+  if (mismatch.length === 0) {
+    console.log("   ✅ None");
+  } else {
+    issues += mismatch.length;
+    console.log(`   ❌ ${mismatch.length} issue(s):`);
+    for (const r of mismatch) {
+      console.log(
+        `      - cpay=${r.id} PAY-${r.display_id} amount=${r.amount} applied=${r.total_applied}`
+      );
     }
+  }
 
-    console.log(`\n═════════════════════════════════════`)
-    if (issues === 0) {
-        console.log("✅ All clean — no inconsistencies found.")
-        await pool.end()
-        process.exit(0)
-    } else {
-        console.log(`❌ ${issues} total inconsistencies.`)
-        await pool.end()
-        process.exit(1)
-    }
+  console.log(`\n═════════════════════════════════════`);
+  if (issues === 0) {
+    console.log("✅ All clean — no inconsistencies found.");
+    await pool.end();
+    process.exit(0);
+  } else {
+    console.log(`❌ ${issues} total inconsistencies.`);
+    await pool.end();
+    process.exit(1);
+  }
 }
 
 main().catch(async (err) => {
-    console.error("verify-qb-pipeline-consistency failed:", err)
-    await pool.end()
-    process.exit(2)
-})
+  console.error("verify-qb-pipeline-consistency failed:", err);
+  await pool.end();
+  process.exit(2);
+});

@@ -18,19 +18,19 @@
  *   DRY_RUN=false npx dotenv-cli -e .env -- npx tsx src/scripts/fix/fix-cancelled-display-totals.ts
  */
 
-import { Client } from "pg"
-import * as dotenv from "dotenv"
-dotenv.config()
+import { Client } from "pg";
+import * as dotenv from "dotenv";
+dotenv.config();
 
-const DRY_RUN = process.env.DRY_RUN !== "false"
+const DRY_RUN = process.env.DRY_RUN !== "false";
 
 async function main() {
-    const client = new Client({ connectionString: process.env.DATABASE_URL })
-    await client.connect()
-    console.log(`🔧 Fix Cancelled Order Display Totals (DRY_RUN=${DRY_RUN})\n`)
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  console.log(`🔧 Fix Cancelled Order Display Totals (DRY_RUN=${DRY_RUN})\n`);
 
-    // ── STEP 1: Remove duplicates — keep latest row per order ──────────────────
-    const dupes = await client.query(`
+  // ── STEP 1: Remove duplicates — keep latest row per order ──────────────────
+  const dupes = await client.query(`
         SELECT
           order_id,
           COUNT(*) AS cnt,
@@ -40,33 +40,40 @@ async function main() {
         GROUP BY order_id
         HAVING COUNT(*) > 1
         ORDER BY MAX(updated_at) DESC
-    `)
+    `);
 
-    if (dupes.rows.length > 0) {
-        console.log(`Found ${dupes.rows.length} orders with duplicate order_summary rows:`)
-        let totalDupes = 0
-        const toDelete: string[] = []
+  if (dupes.rows.length > 0) {
+    console.log(
+      `Found ${dupes.rows.length} orders with duplicate order_summary rows:`
+    );
+    let totalDupes = 0;
+    const toDelete: string[] = [];
 
-        for (const row of dupes.rows) {
-            const [keepId, ...deleteIds] = row.ids_newest_first
-            const [keepTotal] = row.totals_newest_first
-            console.log(`  order_id: ${row.order_id} → KEEP ${keepId} (current=${keepTotal}), DELETE ${deleteIds.length} older row(s)`)
-            toDelete.push(...deleteIds)
-            totalDupes += deleteIds.length
-        }
-
-        if (!DRY_RUN && toDelete.length > 0) {
-            await client.query(`DELETE FROM order_summary WHERE id = ANY($1::text[])`, [toDelete])
-            console.log(`✅ Deleted ${toDelete.length} duplicate row(s)\n`)
-        } else {
-            console.log(`[DRY RUN] Would delete ${totalDupes} duplicate row(s)\n`)
-        }
-    } else {
-        console.log("✅ No duplicate order_summary rows found\n")
+    for (const row of dupes.rows) {
+      const [keepId, ...deleteIds] = row.ids_newest_first;
+      const [keepTotal] = row.totals_newest_first;
+      console.log(
+        `  order_id: ${row.order_id} → KEEP ${keepId} (current=${keepTotal}), DELETE ${deleteIds.length} older row(s)`
+      );
+      toDelete.push(...deleteIds);
+      totalDupes += deleteIds.length;
     }
 
-    // ── STEP 2: Find cancelled orders with current_order_total=0 but original>0 ─
-    const candidates = await client.query(`
+    if (!DRY_RUN && toDelete.length > 0) {
+      await client.query(
+        `DELETE FROM order_summary WHERE id = ANY($1::text[])`,
+        [toDelete]
+      );
+      console.log(`✅ Deleted ${toDelete.length} duplicate row(s)\n`);
+    } else {
+      console.log(`[DRY RUN] Would delete ${totalDupes} duplicate row(s)\n`);
+    }
+  } else {
+    console.log("✅ No duplicate order_summary rows found\n");
+  }
+
+  // ── STEP 2: Find cancelled orders with current_order_total=0 but original>0 ─
+  const candidates = await client.query(`
         SELECT
           os.id         AS summary_id,
           o.display_id,
@@ -80,32 +87,35 @@ async function main() {
           AND (os.totals->>'current_order_total')::float8 = 0
           AND (os.totals->>'original_order_total')::float8 > 0
         ORDER BY o.display_id DESC
-    `)
+    `);
 
-    if (candidates.rows.length === 0) {
-        console.log("✅ No cancelled orders need display-total fix.")
-        await client.end()
-        return
-    }
+  if (candidates.rows.length === 0) {
+    console.log("✅ No cancelled orders need display-total fix.");
+    await client.end();
+    return;
+  }
 
-    console.log(`Found ${candidates.rows.length} cancelled order(s) to fix:\n`)
-    for (const row of candidates.rows) {
-        console.log(`  #${row.display_id} → current=$${row.current_total.toFixed(2)} → will set $${row.original_total.toFixed(2)}`)
-    }
+  console.log(`Found ${candidates.rows.length} cancelled order(s) to fix:\n`);
+  for (const row of candidates.rows) {
+    console.log(
+      `  #${row.display_id} → current=$${row.current_total.toFixed(2)} → will set $${row.original_total.toFixed(2)}`
+    );
+  }
 
-    if (DRY_RUN) {
-        console.log("\n⚠️  DRY RUN — no changes made. Set DRY_RUN=false to apply.")
-        await client.end()
-        return
-    }
+  if (DRY_RUN) {
+    console.log("\n⚠️  DRY RUN — no changes made. Set DRY_RUN=false to apply.");
+    await client.end();
+    return;
+  }
 
-    // ── STEP 3: Apply the fix ────────────────────────────────────────────────────
-    // Set current_order_total AND raw_current_order_total to original values
-    // Leave credit_line_total / accounting_total / transaction_total untouched.
-    let fixed = 0
-    for (const row of candidates.rows) {
-        const rawOriginal = JSON.parse(row.raw_original_json || "{}")
-        await client.query(`
+  // ── STEP 3: Apply the fix ────────────────────────────────────────────────────
+  // Set current_order_total AND raw_current_order_total to original values
+  // Leave credit_line_total / accounting_total / transaction_total untouched.
+  let fixed = 0;
+  for (const row of candidates.rows) {
+    const rawOriginal = JSON.parse(row.raw_original_json || "{}");
+    await client.query(
+      `
             UPDATE order_summary
             SET totals = jsonb_set(
               jsonb_set(
@@ -117,15 +127,17 @@ async function main() {
               $1::jsonb
             )
             WHERE id = $2
-        `, [JSON.stringify(rawOriginal), row.summary_id])
-        fixed++
-    }
+        `,
+      [JSON.stringify(rawOriginal), row.summary_id]
+    );
+    fixed++;
+  }
 
-    console.log(`\n✅ Fixed display total for ${fixed} cancelled order(s).`)
-    await client.end()
+  console.log(`\n✅ Fixed display total for ${fixed} cancelled order(s).`);
+  await client.end();
 }
 
 main().catch((err) => {
-    console.error("❌ Error:", err.message)
-    process.exit(1)
-})
+  console.error("❌ Error:", err.message);
+  process.exit(1);
+});

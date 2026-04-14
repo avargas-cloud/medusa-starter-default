@@ -1,8 +1,11 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { Client } from "pg"
-import { bridgeFetch, pollOperationResult } from "../../../../lib/quickbooks/client/core"
-import { ContainerRegistrationKeys, Modules } from "@medusajs/utils"
-import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline"
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { Client } from "pg";
+import {
+  bridgeFetch,
+  pollOperationResult,
+} from "../../../../lib/quickbooks/client/core";
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
+import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
 
 /**
  * GET /admin/quickbooks/pipeline
@@ -22,23 +25,24 @@ import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline"
  */
 
 export async function GET(
-    req: MedusaRequest,
-    res: MedusaResponse
+  req: MedusaRequest,
+  res: MedusaResponse
 ): Promise<void> {
-    const client = new Client({ connectionString: process.env.DATABASE_URL })
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
 
-    try {
-        await client.connect()
+  try {
+    await client.connect();
 
-        const limit  = Math.min(parseInt(req.query.limit  as string) || 30, 100)
-        const offset = parseInt(req.query.offset as string) || 0
-        const status = req.query.status       as string | undefined
-        const step   = req.query.step         as string | undefined
-        const refId  = req.query.reference_id as string | undefined
-        const sortBy = req.query.sort_by === "updated_at" ? "updated_at" : "created_at"
+    const limit = Math.min(parseInt(req.query.limit as string) || 30, 100);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const status = req.query.status as string | undefined;
+    const step = req.query.step as string | undefined;
+    const refId = req.query.reference_id as string | undefined;
+    const sortBy =
+      req.query.sort_by === "updated_at" ? "updated_at" : "created_at";
 
-        // Auto-timeout: submitted rows older than 10 min with no bridge_op_id → failed
-        const { rows: timeout1 } = await client.query(`
+    // Auto-timeout: submitted rows older than 10 min with no bridge_op_id → failed
+    const { rows: timeout1 } = await client.query(`
             UPDATE qb_order_pipeline
             SET status       = 'failed',
                 failed_at    = NOW(),
@@ -49,10 +53,10 @@ export async function GET(
               AND bridge_op_id IS NULL
               AND submitted_at < NOW() - INTERVAL '10 minutes'
             RETURNING step, qb_txn_id
-        `)
+        `);
 
-        // Auto-timeout: submitted rows with bridge_op_id older than 15 min (QBWC not responding) → failed
-        const { rows: timeout2 } = await client.query(`
+    // Auto-timeout: submitted rows with bridge_op_id older than 15 min (QBWC not responding) → failed
+    const { rows: timeout2 } = await client.query(`
             UPDATE qb_order_pipeline
             SET status       = 'failed',
                 failed_at    = NOW(),
@@ -63,11 +67,11 @@ export async function GET(
               AND bridge_op_id IS NOT NULL
               AND submitted_at < NOW() - INTERVAL '15 minutes'
             RETURNING step, qb_txn_id
-        `)
+        `);
 
-        // Auto-timeout: pending rows older than 30 min (handler never re-submitted) → failed
-        // Uses updated_at so reactivated rows (confirmed→pending) don't immediately time out
-        const { rows: timeout3 } = await client.query(`
+    // Auto-timeout: pending rows older than 30 min (handler never re-submitted) → failed
+    // Uses updated_at so reactivated rows (confirmed→pending) don't immediately time out
+    const { rows: timeout3 } = await client.query(`
             UPDATE qb_order_pipeline
             SET status       = 'failed',
                 failed_at    = NOW(),
@@ -77,30 +81,40 @@ export async function GET(
             WHERE status = 'pending'
               AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '30 minutes'
             RETURNING step, qb_txn_id
-        `)
+        `);
 
-        // Invalidate cached EditSequence for all timed-out rows
-        const { invalidateEditSequenceCache } = require("../../../../lib/quickbooks/qb-pipeline")
-        for (const r of [...timeout1, ...timeout2, ...timeout3]) {
-            if (r.qb_txn_id) {
-                await invalidateEditSequenceCache(r.step, r.qb_txn_id).catch(() => {})
-            }
-        }
+    // Invalidate cached EditSequence for all timed-out rows
+    const {
+      invalidateEditSequenceCache,
+    } = require("../../../../lib/quickbooks/qb-pipeline");
+    for (const r of [...timeout1, ...timeout2, ...timeout3]) {
+      if (r.qb_txn_id) {
+        await invalidateEditSequenceCache(r.step, r.qb_txn_id).catch(() => {});
+      }
+    }
 
-        const conditions: string[] = []
-        const values: any[] = []
-        let p = 1
+    const conditions: string[] = [];
+    const values: any[] = [];
+    let p = 1;
 
-        if (status) { conditions.push(`p.status = $${p++}`); values.push(status) }
-        if (step)   { conditions.push(`p.step = $${p++}`);   values.push(step) }
-        if (refId)  {
-            conditions.push(`(p.order_id = $${p} OR p.reference_id = $${p})`)
-            values.push(refId); p++
-        }
+    if (status) {
+      conditions.push(`p.status = $${p++}`);
+      values.push(status);
+    }
+    if (step) {
+      conditions.push(`p.step = $${p++}`);
+      values.push(step);
+    }
+    if (refId) {
+      conditions.push(`(p.order_id = $${p} OR p.reference_id = $${p})`);
+      values.push(refId);
+      p++;
+    }
 
-        const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
-        const { rows } = await client.query(`
+    const { rows } = await client.query(
+      `
             SELECT
                 p.seq,
                 p.id,
@@ -142,70 +156,76 @@ export async function GET(
             ${where}
             ORDER BY ${sortBy === "updated_at" ? "COALESCE(p.updated_at, p.created_at)" : "p.created_at"} DESC
             LIMIT $${p} OFFSET $${p + 1}
-        `, [...values, limit, offset])
+        `,
+      [...values, limit, offset]
+    );
 
-        const countResult = await client.query(
-            `SELECT COUNT(*) FROM qb_order_pipeline p ${where}`,
-            values
-        )
-        const total = parseInt(countResult.rows[0].count)
+    const countResult = await client.query(
+      `SELECT COUNT(*) FROM qb_order_pipeline p ${where}`,
+      values
+    );
+    const total = parseInt(countResult.rows[0].count);
 
-        // Summary counts per status (for header badges)
-        const { rows: summary } = await client.query(`
+    // Summary counts per status (for header badges)
+    const { rows: summary } = await client.query(`
             SELECT status, COUNT(*) AS count
             FROM qb_order_pipeline
             GROUP BY status
-        `)
-        const counts: Record<string, number> = {}
-        for (const row of summary) {
-            counts[row.status] = parseInt(row.count)
-        }
-
-        res.json({
-            pipeline: rows,
-            pagination: { total, limit, offset, hasMore: offset + rows.length < total },
-            counts,
-        })
-
-    } catch (err: any) {
-        console.error("[QB Pipeline GET] Error:", err)
-        res.status(500).json({ error: "Failed to fetch pipeline" })
-    } finally {
-        await client.end()
+        `);
+    const counts: Record<string, number> = {};
+    for (const row of summary) {
+      counts[row.status] = parseInt(row.count);
     }
+
+    res.json({
+      pipeline: rows,
+      pagination: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + rows.length < total,
+      },
+      counts,
+    });
+  } catch (err: any) {
+    console.error("[QB Pipeline GET] Error:", err);
+    res.status(500).json({ error: "Failed to fetch pipeline" });
+  } finally {
+    await client.end();
+  }
 }
 
 export async function POST(
-    req: MedusaRequest,
-    res: MedusaResponse
+  req: MedusaRequest,
+  res: MedusaResponse
 ): Promise<void> {
-    // POST /admin/quickbooks/pipeline?action=retry&id=<uuid>
-    // Re-submits a failed operation immediately:
-    //   1. Reads the row (step, order_id, reference_id)
-    //   2. Deletes it (handler will create a fresh submitted row)
-    //   3. Resets qb_sync_status on the entity so the guard allows re-sync
-    //   4. Calls the appropriate handler in the background
-    const rowId  = req.query.id     as string | undefined
-    const action = req.query.action as string | undefined
+  // POST /admin/quickbooks/pipeline?action=retry&id=<uuid>
+  // Re-submits a failed operation immediately:
+  //   1. Reads the row (step, order_id, reference_id)
+  //   2. Deletes it (handler will create a fresh submitted row)
+  //   3. Resets qb_sync_status on the entity so the guard allows re-sync
+  //   4. Calls the appropriate handler in the background
+  const rowId = req.query.id as string | undefined;
+  const action = req.query.action as string | undefined;
 
-    if (!rowId || action !== "retry") {
-        res.status(400).json({ error: "Requires ?action=retry&id=<uuid>" })
-        return
-    }
+  if (!rowId || action !== "retry") {
+    res.status(400).json({ error: "Requires ?action=retry&id=<uuid>" });
+    return;
+  }
 
-    const logger = req.scope.resolve(ContainerRegistrationKeys.LOGGER)
-    const LOG_PREFIX = "[QB Pipeline Retry]"
+  const logger = req.scope.resolve(ContainerRegistrationKeys.LOGGER);
+  const LOG_PREFIX = "[QB Pipeline Retry]";
 
-    const client = new Client({ connectionString: process.env.DATABASE_URL })
-    try {
-        await client.connect()
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  try {
+    await client.connect();
 
-        // 1. Atomically claim the row — only 'failed' and 'waiting' are retryable.
-        //    'pending' is excluded because it means a handler is already in-flight;
-        //    retrying it would send a second request to QB and create duplicates.
-        //    Stuck-pending rows will auto-timeout to 'failed' via the GET auto-timeout logic.
-        const { rows } = await client.query(
-            `UPDATE qb_order_pipeline
+    // 1. Atomically claim the row — only 'failed' and 'waiting' are retryable.
+    //    'pending' is excluded because it means a handler is already in-flight;
+    //    retrying it would send a second request to QB and create duplicates.
+    //    Stuck-pending rows will auto-timeout to 'failed' via the GET auto-timeout logic.
+    const { rows } = await client.query(
+      `UPDATE qb_order_pipeline
              SET status       = 'pending',
                  error        = NULL,
                  failed_at    = NULL,
@@ -217,185 +237,273 @@ export async function POST(
                  retry_count  = retry_count + 1
              WHERE id = $1 AND status IN ('failed', 'waiting')
              RETURNING id, step, order_id, reference_id, reference_type, retry_count, bridge_op_id`,
-            [rowId]
-        )
-        if (!rows.length) {
-            res.status(404).json({ error: "Row not found or not retryable (must be 'failed' or 'waiting'; 'pending' rows are actively processing — wait for timeout)" })
-            return
-        }
-        const row = rows[0]
-
-        // 2a. If we already have a bridge_op_id, just re-poll — do NOT resubmit to avoid duplicates
-        if (row.bridge_op_id) {
-            await client.end()
-            logger.info(`${LOG_PREFIX} Found existing bridge_op_id=${row.bridge_op_id} — polling instead of resubmitting`)
-
-            ;(async () => {
-                try {
-                    const pollResult = await pollOperationResult(row.bridge_op_id, (m: string) => logger.info(m))
-                    if (pollResult?.txnId) {
-                        await writePipelineRow({
-                            orderId: row.order_id,
-                            step: row.step,
-                            status: "confirmed",
-                            bridgeOpId: row.bridge_op_id,
-                            qbTxnId: pollResult.txnId,
-                            qbRefNumber: pollResult.refNumber ?? null,
-                        })
-                        logger.info(`${LOG_PREFIX} ✅ Re-poll confirmed TxnID=${pollResult.txnId}`)
-                    } else {
-                        logger.warn(`${LOG_PREFIX} ⚠️ Re-poll did not return txnId — bridge op may still be pending`)
-                    }
-                } catch (pollErr: any) {
-                    logger.error(`${LOG_PREFIX} Re-poll failed: ${pollErr.message}`)
-                }
-            })()
-
-            res.json({ message: "Re-polling existing bridge operation", bridge_op_id: row.bridge_op_id })
-            return
-        }
-
-        // 3. Reset qb_sync_status on the entity so guards allow re-sync
-        if (row.order_id) {
-            try {
-                const orderModule = req.scope.resolve(Modules.ORDER)
-                const order = await orderModule.retrieveOrder(row.order_id)
-                const meta = (order as any).metadata || {}
-                const currentStatus = meta.qb_sync_status
-                if (currentStatus && currentStatus !== "error" && currentStatus !== "voided") {
-                    await orderModule.updateOrders(row.order_id, {
-                        metadata: { ...meta, qb_sync_status: "error" }
-                    })
-                }
-            } catch (metaErr: any) {
-                logger.warn(`${LOG_PREFIX} Could not reset qb_sync_status: ${metaErr.message}`)
-            }
-        }
-
-        // 3b. For payment/apply_payment steps: also reset the customer_payment entity's qb_sync_status
-        if ((row.step === "payment" || row.step === "apply_payment") && row.reference_id) {
-            try {
-                const financeService = req.scope.resolve("finance")
-                const payment = await financeService.retrieveCustomerPayment(row.reference_id)
-                const pmeta = (payment as any).metadata || {}
-                if (pmeta.qb_sync_status && pmeta.qb_sync_status !== "error") {
-                    await financeService.updateCustomerPayments({
-                        id: row.reference_id,
-                        metadata: { ...pmeta, qb_sync_status: "error" }
-                    })
-                    logger.info(`${LOG_PREFIX} Reset payment qb_sync_status for ${row.reference_id}`)
-                }
-            } catch (pmErr: any) {
-                logger.warn(`${LOG_PREFIX} Could not reset payment qb_sync_status: ${pmErr.message}`)
-            }
-        }
-
-        // 4. Fire the appropriate handler in the background
-        const retryCount = (row.retry_count ?? 0) + 1
-        logger.info(`${LOG_PREFIX} Retrying step=${row.step} order=${row.order_id} retry#${retryCount}`)
-
-        ;(async () => {
-            try {
-                const orderModule   = req.scope.resolve(Modules.ORDER)
-                const customerModule = req.scope.resolve(Modules.CUSTOMER)
-
-                switch (row.step) {
-                    case "estimate": {
-                        const { handleDraftOrderCreated } = require("../../../../subscribers/qb-draft-order-subscriber")
-                        await handleDraftOrderCreated({ id: row.order_id }, req.scope, logger, true)
-                        break
-                    }
-                    case "sales_order": {
-                        const { handleOrderPlaced } = require("../../../../lib/quickbooks/handlers/handle-order-placed")
-                        await handleOrderPlaced({ id: row.order_id }, orderModule, customerModule, req.scope, logger, false)
-                        break
-                    }
-                    case "invoice": {
-                        const { handleFulfillmentCreated } = require("../../../../lib/quickbooks/handlers/handle-fulfillment-created")
-                        await handleFulfillmentCreated(
-                            { order_id: row.order_id, fulfillment_id: row.reference_id, invoice_id: row.reference_id },
-                            orderModule, customerModule, req.scope, logger
-                        )
-                        break
-                    }
-                    case "sales_receipt": {
-                        const { handleSalesReceiptCreated } = require("../../../../lib/quickbooks/handlers/handle-sales-receipt-created")
-                        await handleSalesReceiptCreated(
-                            { order_id: row.order_id, fulfillment_id: row.reference_id, invoice_id: row.reference_id },
-                            orderModule, customerModule, req.scope, logger
-                        )
-                        break
-                    }
-                    case "payment": {
-                        const { handlePosPaymentCreated } = require("../../../../lib/quickbooks/handlers/handle-pos-payment-created")
-                        await handlePosPaymentCreated({
-                            event: { name: "pos.payment.created", data: { id: row.reference_id ?? row.order_id } },
-                            container: req.scope as any,
-                            pluginOptions: {}
-                        })
-                        break
-                    }
-                    case "apply_payment": {
-                        const { handlePosPaymentApplied } = require("../../../../lib/quickbooks/handlers/handle-pos-payment-applied")
-                        // Fetch the application to get invoice_id and amount_applied
-                        const applyClient = new Client({ connectionString: process.env.DATABASE_URL })
-                        await applyClient.connect()
-                        const { rows: appRows } = await applyClient.query(
-                            `SELECT payment_id, invoice_id, order_id, amount_applied FROM customer_payment_application WHERE payment_id = $1 AND voided_at IS NULL LIMIT 1`,
-                            [row.reference_id]
-                        )
-                        await applyClient.end()
-                        const appRow = appRows[0]
-                        await handlePosPaymentApplied({
-                            event: {
-                                name: "pos.payment.applied",
-                                data: {
-                                    payment_id: row.reference_id,
-                                    invoice_id: appRow?.invoice_id ?? null,
-                                    order_id: appRow?.order_id ?? row.order_id,
-                                    amount_applied: appRow?.amount_applied ?? 0,
-                                }
-                            },
-                            container: req.scope as any,
-                        })
-                        break
-                    }
-                    case "write_check": {
-                        // write_check retries require user to re-select the bank account.
-                        // Reset CustomerPayment.qb to null so it reappears in /accounting as "Pending QB".
-                        if (row.reference_id) {
-                            try {
-                                const retryPool = require("../../../../api/utils/db-pool").getDbPool()
-                                await retryPool.query(
-                                    `UPDATE customer_payment SET qb = NULL WHERE id = $1`,
-                                    [row.reference_id]
-                                )
-                                await retryPool.query(
-                                    `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), confirmed_at = NULL, updated_at = NOW() WHERE id = $1`,
-                                    [row.id, "Retry: re-process from Accounting page — bank account selection required"]
-                                )
-                                logger.info(`${LOG_PREFIX} write_check reset → CustomerPayment ${row.reference_id} qb=null, ready for re-process from Accounting`)
-                            } catch (wcRetryErr: any) {
-                                logger.warn(`${LOG_PREFIX} Could not reset write_check: ${wcRetryErr.message}`)
-                            }
-                        }
-                        break
-                    }
-                    default:
-                        logger.warn(`${LOG_PREFIX} No retry handler for step=${row.step}`)
-                }
-            } catch (handlerErr: any) {
-                logger.error(`${LOG_PREFIX} Background retry failed: ${handlerErr.message}`)
-            }
-        })()
-
-        res.json({ success: true, message: `Retrying ${row.step} — re-submitted to bridge` })
-    } catch (err: any) {
-        logger.error(`${LOG_PREFIX} Error: ${err.message}`)
-        res.status(500).json({ error: "Failed to retry" })
-    } finally {
-        await client.end()
+      [rowId]
+    );
+    if (!rows.length) {
+      res
+        .status(404)
+        .json({
+          error:
+            "Row not found or not retryable (must be 'failed' or 'waiting'; 'pending' rows are actively processing — wait for timeout)",
+        });
+      return;
     }
+    const row = rows[0];
+
+    // 2a. If we already have a bridge_op_id, just re-poll — do NOT resubmit to avoid duplicates
+    if (row.bridge_op_id) {
+      await client.end();
+      logger.info(
+        `${LOG_PREFIX} Found existing bridge_op_id=${row.bridge_op_id} — polling instead of resubmitting`
+      );
+      (async () => {
+        try {
+          const pollResult = await pollOperationResult(
+            row.bridge_op_id,
+            (m: string) => logger.info(m)
+          );
+          if (pollResult?.txnId) {
+            await writePipelineRow({
+              orderId: row.order_id,
+              step: row.step,
+              status: "confirmed",
+              bridgeOpId: row.bridge_op_id,
+              qbTxnId: pollResult.txnId,
+              qbRefNumber: pollResult.refNumber ?? null,
+            });
+            logger.info(
+              `${LOG_PREFIX} ✅ Re-poll confirmed TxnID=${pollResult.txnId}`
+            );
+          } else {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Re-poll did not return txnId — bridge op may still be pending`
+            );
+          }
+        } catch (pollErr: any) {
+          logger.error(`${LOG_PREFIX} Re-poll failed: ${pollErr.message}`);
+        }
+      })();
+
+      res.json({
+        message: "Re-polling existing bridge operation",
+        bridge_op_id: row.bridge_op_id,
+      });
+      return;
+    }
+
+    // 3. Reset qb_sync_status on the entity so guards allow re-sync
+    if (row.order_id) {
+      try {
+        const orderModule = req.scope.resolve(Modules.ORDER);
+        const order = await orderModule.retrieveOrder(row.order_id);
+        const meta = (order as any).metadata || {};
+        const currentStatus = meta.qb_sync_status;
+        if (
+          currentStatus &&
+          currentStatus !== "error" &&
+          currentStatus !== "voided"
+        ) {
+          await orderModule.updateOrders(row.order_id, {
+            metadata: { ...meta, qb_sync_status: "error" },
+          });
+        }
+      } catch (metaErr: any) {
+        logger.warn(
+          `${LOG_PREFIX} Could not reset qb_sync_status: ${metaErr.message}`
+        );
+      }
+    }
+
+    // 3b. For payment/apply_payment steps: also reset the customer_payment entity's qb_sync_status
+    if (
+      (row.step === "payment" || row.step === "apply_payment") &&
+      row.reference_id
+    ) {
+      try {
+        const financeService = req.scope.resolve("finance");
+        const payment = await financeService.retrieveCustomerPayment(
+          row.reference_id
+        );
+        const pmeta = (payment as any).metadata || {};
+        if (pmeta.qb_sync_status && pmeta.qb_sync_status !== "error") {
+          await financeService.updateCustomerPayments({
+            id: row.reference_id,
+            metadata: { ...pmeta, qb_sync_status: "error" },
+          });
+          logger.info(
+            `${LOG_PREFIX} Reset payment qb_sync_status for ${row.reference_id}`
+          );
+        }
+      } catch (pmErr: any) {
+        logger.warn(
+          `${LOG_PREFIX} Could not reset payment qb_sync_status: ${pmErr.message}`
+        );
+      }
+    }
+
+    // 4. Fire the appropriate handler in the background
+    const retryCount = (row.retry_count ?? 0) + 1;
+    logger.info(
+      `${LOG_PREFIX} Retrying step=${row.step} order=${row.order_id} retry#${retryCount}`
+    );
+    (async () => {
+      try {
+        const orderModule = req.scope.resolve(Modules.ORDER);
+        const customerModule = req.scope.resolve(Modules.CUSTOMER);
+
+        switch (row.step) {
+          case "estimate": {
+            const {
+              handleDraftOrderCreated,
+            } = require("../../../../subscribers/qb-draft-order-subscriber");
+            await handleDraftOrderCreated(
+              { id: row.order_id },
+              req.scope,
+              logger,
+              true
+            );
+            break;
+          }
+          case "sales_order": {
+            const {
+              handleOrderPlaced,
+            } = require("../../../../lib/quickbooks/handlers/handle-order-placed");
+            await handleOrderPlaced(
+              { id: row.order_id },
+              orderModule,
+              customerModule,
+              req.scope,
+              logger,
+              false
+            );
+            break;
+          }
+          case "invoice": {
+            const {
+              handleFulfillmentCreated,
+            } = require("../../../../lib/quickbooks/handlers/handle-fulfillment-created");
+            await handleFulfillmentCreated(
+              {
+                order_id: row.order_id,
+                fulfillment_id: row.reference_id,
+                invoice_id: row.reference_id,
+              },
+              orderModule,
+              customerModule,
+              req.scope,
+              logger
+            );
+            break;
+          }
+          case "sales_receipt": {
+            const {
+              handleSalesReceiptCreated,
+            } = require("../../../../lib/quickbooks/handlers/handle-sales-receipt-created");
+            await handleSalesReceiptCreated(
+              {
+                order_id: row.order_id,
+                fulfillment_id: row.reference_id,
+                invoice_id: row.reference_id,
+              },
+              orderModule,
+              customerModule,
+              req.scope,
+              logger
+            );
+            break;
+          }
+          case "payment": {
+            const {
+              handlePosPaymentCreated,
+            } = require("../../../../lib/quickbooks/handlers/handle-pos-payment-created");
+            await handlePosPaymentCreated({
+              event: {
+                name: "pos.payment.created",
+                data: { id: row.reference_id ?? row.order_id },
+              },
+              container: req.scope as any,
+              pluginOptions: {},
+            });
+            break;
+          }
+          case "apply_payment": {
+            const {
+              handlePosPaymentApplied,
+            } = require("../../../../lib/quickbooks/handlers/handle-pos-payment-applied");
+            // Fetch the application to get invoice_id and amount_applied
+            const applyClient = new Client({
+              connectionString: process.env.DATABASE_URL,
+            });
+            await applyClient.connect();
+            const { rows: appRows } = await applyClient.query(
+              `SELECT payment_id, invoice_id, order_id, amount_applied FROM customer_payment_application WHERE payment_id = $1 AND voided_at IS NULL LIMIT 1`,
+              [row.reference_id]
+            );
+            await applyClient.end();
+            const appRow = appRows[0];
+            await handlePosPaymentApplied({
+              event: {
+                name: "pos.payment.applied",
+                data: {
+                  payment_id: row.reference_id,
+                  invoice_id: appRow?.invoice_id ?? null,
+                  order_id: appRow?.order_id ?? row.order_id,
+                  amount_applied: appRow?.amount_applied ?? 0,
+                },
+              },
+              container: req.scope as any,
+            });
+            break;
+          }
+          case "write_check": {
+            // write_check retries require user to re-select the bank account.
+            // Reset CustomerPayment.qb to null so it reappears in /accounting as "Pending QB".
+            if (row.reference_id) {
+              try {
+                const retryPool =
+                  require("../../../../api/utils/db-pool").getDbPool();
+                await retryPool.query(
+                  `UPDATE customer_payment SET qb = NULL WHERE id = $1`,
+                  [row.reference_id]
+                );
+                await retryPool.query(
+                  `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), confirmed_at = NULL, updated_at = NOW() WHERE id = $1`,
+                  [
+                    row.id,
+                    "Retry: re-process from Accounting page — bank account selection required",
+                  ]
+                );
+                logger.info(
+                  `${LOG_PREFIX} write_check reset → CustomerPayment ${row.reference_id} qb=null, ready for re-process from Accounting`
+                );
+              } catch (wcRetryErr: any) {
+                logger.warn(
+                  `${LOG_PREFIX} Could not reset write_check: ${wcRetryErr.message}`
+                );
+              }
+            }
+            break;
+          }
+          default:
+            logger.warn(`${LOG_PREFIX} No retry handler for step=${row.step}`);
+        }
+      } catch (handlerErr: any) {
+        logger.error(
+          `${LOG_PREFIX} Background retry failed: ${handlerErr.message}`
+        );
+      }
+    })();
+
+    res.json({
+      success: true,
+      message: `Retrying ${row.step} — re-submitted to bridge`,
+    });
+  } catch (err: any) {
+    logger.error(`${LOG_PREFIX} Error: ${err.message}`);
+    res.status(500).json({ error: "Failed to retry" });
+  } finally {
+    await client.end();
+  }
 }
 
 /**
@@ -411,39 +519,45 @@ export async function POST(
  *   reason        — optional label for the audit log
  */
 export async function DELETE(
-    req: MedusaRequest,
-    res: MedusaResponse
+  req: MedusaRequest,
+  res: MedusaResponse
 ): Promise<void> {
-    const flushBridge = req.query.bridge !== "false"
-    const flushMedusa = req.query.medusa !== "false"
-    const reason = (req.query.reason as string | undefined)
-        || "Admin pipeline flush via Medusa UI"
+  const flushBridge = req.query.bridge !== "false";
+  const flushMedusa = req.query.medusa !== "false";
+  const reason =
+    (req.query.reason as string | undefined) ||
+    "Admin pipeline flush via Medusa UI";
 
-    const result: Record<string, any> = {}
+  const result: Record<string, any> = {};
 
-    // 1. Flush bridge queue
-    if (flushBridge) {
-        try {
-            const bridgeRes = await bridgeFetch("POST", "/api/sync/queue/flush", { reason })
-            result.bridge = { flushed: bridgeRes.count ?? 0, message: bridgeRes.message }
-        } catch (err: any) {
-            result.bridge = { error: err.message }
-        }
+  // 1. Flush bridge queue
+  if (flushBridge) {
+    try {
+      const bridgeRes = await bridgeFetch("POST", "/api/sync/queue/flush", {
+        reason,
+      });
+      result.bridge = {
+        flushed: bridgeRes.count ?? 0,
+        message: bridgeRes.message,
+      };
+    } catch (err: any) {
+      result.bridge = { error: err.message };
     }
+  }
 
-    // 2. Clear Medusa pipeline table
-    if (flushMedusa) {
-        const client = new Client({ connectionString: process.env.DATABASE_URL })
-        try {
-            await client.connect()
-            const { rowCount } = await client.query("DELETE FROM qb_order_pipeline")
-            result.medusa = { deleted: rowCount }
-        } catch (err: any) {
-            result.medusa = { error: err.message }
-        } finally {
-            await client.end()
-        }
+  // 2. Clear Medusa pipeline table
+  if (flushMedusa) {
+    const client = new Client({ connectionString: process.env.DATABASE_URL });
+    try {
+      await client.connect();
+      const { rowCount } = await client.query("DELETE FROM qb_order_pipeline");
+      result.medusa = { deleted: rowCount };
+    } catch (err: any) {
+      result.medusa = { error: err.message };
+    } finally {
+      await client.end();
     }
+  }
 
-    res.json({ success: true, ...result })
+  res.json({ success: true, ...result });
 }

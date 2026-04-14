@@ -1,5 +1,5 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { refreshCartItemsWorkflow } from "@medusajs/core-flows"
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { refreshCartItemsWorkflow } from "@medusajs/core-flows";
 
 /**
  * POST /store/carts/:id/reprice
@@ -18,29 +18,33 @@ import { refreshCartItemsWorkflow } from "@medusajs/core-flows"
  *   would see it and apply wholesale. Passing force_retail=true bypasses this.
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
-    try {
-        const cartId = req.params.id as string
-        const isAuthenticated = !!(req as any).auth_context?.actor_id
-        const force_retail = !isAuthenticated
+  try {
+    const cartId = req.params.id as string;
+    const isAuthenticated = !!(req as any).auth_context?.actor_id;
+    const force_retail = !isAuthenticated;
 
-        console.log(`[REPRICE] 🔄 Cart ${cartId} | auth=${isAuthenticated} | force_retail=${force_retail}`)
+    console.log(
+      `[REPRICE] 🔄 Cart ${cartId} | auth=${isAuthenticated} | force_retail=${force_retail}`
+    );
 
-        const { result: cart } = await refreshCartItemsWorkflow(req.scope).run({
-            input: {
-                cart_id: cartId,
-                force_refresh: true,
-                additional_data: { force_retail }   // hook reads this to decide retail vs wholesale
-            }
-        })
+    const { result: cart } = await refreshCartItemsWorkflow(req.scope).run({
+      input: {
+        cart_id: cartId,
+        force_refresh: true,
+        additional_data: { force_retail }, // hook reads this to decide retail vs wholesale
+      },
+    });
 
-        console.log(`[REPRICE] ✅ Done.`)
-        return res.json({ success: true, updatesApplied: (cart as any)?.items?.length ?? 0 })
-
-    } catch (error: any) {
-        console.error("[REPRICE] ❌ Error:", error.message, error.stack)
-        return res.status(500).json({
-            error: "Failed to reprice cart",
-            message: error.message
-        })
-    }
-}
+    console.log(`[REPRICE] ✅ Done.`);
+    return res.json({
+      success: true,
+      updatesApplied: (cart as any)?.items?.length ?? 0,
+    });
+  } catch (error: any) {
+    console.error("[REPRICE] ❌ Error:", error.message, error.stack);
+    return res.status(500).json({
+      error: "Failed to reprice cart",
+      message: error.message,
+    });
+  }
+};

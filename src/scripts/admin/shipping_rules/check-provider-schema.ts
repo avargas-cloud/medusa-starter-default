@@ -1,26 +1,26 @@
-import postgres from 'postgres'
-import { loadEnv } from "@medusajs/utils"
+import postgres from "postgres";
+import { loadEnv } from "@medusajs/utils";
 
-loadEnv('development', process.cwd())
-const sql = postgres(process.env.DATABASE_URL!)
+loadEnv("development", process.cwd());
+const sql = postgres(process.env.DATABASE_URL!);
 
 async function checkSchema() {
-    const cols = await sql`
+  const cols = await sql`
         SELECT column_name, data_type 
         FROM information_schema.columns 
         WHERE table_name = 'provider_identity' 
         ORDER BY ordinal_position
-    `
+    `;
 
-    console.log('provider_identity columns:')
-    cols.forEach((c: any) => console.log('  -', c.column_name, ':', c.data_type))
+  console.log("provider_identity columns:");
+  cols.forEach((c: any) => console.log("  -", c.column_name, ":", c.data_type));
 
-    const records = await sql`SELECT * FROM provider_identity LIMIT 1`
-    if (records.length > 0) {
-        console.log('\nSample record:', JSON.stringify(records[0], null, 2))
-    }
+  const records = await sql`SELECT * FROM provider_identity LIMIT 1`;
+  if (records.length > 0) {
+    console.log("\nSample record:", JSON.stringify(records[0], null, 2));
+  }
 
-    await sql.end()
+  await sql.end();
 }
 
-checkSchema()
+checkSchema();

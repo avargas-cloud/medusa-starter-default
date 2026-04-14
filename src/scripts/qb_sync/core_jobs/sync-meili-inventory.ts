@@ -8,15 +8,19 @@
  * Run: yarn medusa exec ./src/scripts/sync/sync-meili-inventory.ts
  */
 
-import { ExecArgs } from "@medusajs/framework/types"
-import { syncInventoryWorkflow } from "../../workflows/sync-inventory"
+import { ExecArgs } from "@medusajs/framework/types";
+import { syncInventoryWorkflow } from "../../workflows/sync-inventory";
 
 export default async function syncMeiliInventory({ container }: ExecArgs) {
-    const logger = (container as any).resolve("logger")
+  const logger = (container as any).resolve("logger");
 
-    logger.info("🔄 Force re-indexing Meilisearch Inventory (with fresh prices from DB)...")
+  logger.info(
+    "🔄 Force re-indexing Meilisearch Inventory (with fresh prices from DB)..."
+  );
 
-    const { result } = await syncInventoryWorkflow(container).run({ input: {} })
+  const { result } = await syncInventoryWorkflow(container).run({ input: {} });
 
-    logger.info(`✅ Done! Re-indexed ${result.synced} items (${result.itemsWithCategory} with category)`)
+  logger.info(
+    `✅ Done! Re-indexed ${result.synced} items (${result.itemsWithCategory} with category)`
+  );
 }

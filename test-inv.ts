@@ -1,4 +1,4 @@
-import { Modules } from "@medusajs/utils"
-import { getDbPool } from "./src/utils/db-pool"
+import { Modules } from "@medusajs/utils";
+import { getDbPool } from "./src/utils/db-pool";
 
-console.log(Object.keys(Modules))
+console.log(Object.keys(Modules));

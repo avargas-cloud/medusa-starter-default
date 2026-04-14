@@ -4,158 +4,209 @@ import { generateJwtToken } from "@medusajs/utils";
 
 /**
  * Google OAuth Callback Handler (Gold Standard)
- * 
+ *
  * Authoritative implementation from Medusa v2 Technical Reference
  * Section: "Google OAuth Callback Implementation Pattern (Gold Standard)"
- * 
+ *
  * This endpoint is called by Google after user authorizes the app.
  * Handles: New customers (Case 1), Existing (Case 2), Legacy activation (Case 3)
  */
 export async function GET(
-    req: MedusaRequest,
-    res: MedusaResponse
+  req: MedusaRequest,
+  res: MedusaResponse
 ): Promise<void> {
-    const authModuleService = req.scope.resolve(Modules.AUTH);
-    const customerModuleService = req.scope.resolve(Modules.CUSTOMER);
+  const authModuleService = req.scope.resolve(Modules.AUTH);
+  const customerModuleService = req.scope.resolve(Modules.CUSTOMER);
 
-    try {
-        console.log('[Google OAuth Callback] Received callback from Google');
-        console.log('[Google OAuth Callback] Query params:', req.query);
+  try {
+    console.log("[Google OAuth Callback] Received callback from Google");
+    console.log("[Google OAuth Callback] Query params:", req.query);
 
-        // Step 1: Auth Module Exchange (Gold Standard Pattern)
-        const authResponse = await authModuleService.authenticate("google", {
-            query: req.query,
-            headers: req.headers,
-            authScope: "store", // MUST be store for storefront customers
-            protocol: req.protocol
-        } as any) as any;
+    // Step 1: Auth Module Exchange (Gold Standard Pattern)
+    const authResponse = (await authModuleService.authenticate("google", {
+      query: req.query,
+      headers: req.headers,
+      authScope: "store", // MUST be store for storefront customers
+      protocol: req.protocol,
+    } as any)) as any;
 
-        console.log('[Google OAuth Callback] Auth response:', JSON.stringify(authResponse, null, 2));
+    console.log(
+      "[Google OAuth Callback] Auth response:",
+      JSON.stringify(authResponse, null, 2)
+    );
 
-        if (!authResponse.success) {
-            console.error('[Google OAuth Callback] Authentication failed:', authResponse.error);
-            const storefrontUrl = process.env.STOREFRONT_URL || (process.env.NODE_ENV === 'production' ? 'https://ecopowertech-headless-medusa.vercel.app' : 'http://localhost:4321');
-            return res.redirect(`${storefrontUrl}/404?error=auth_failed`);
-        }
+    if (!authResponse.success) {
+      console.error(
+        "[Google OAuth Callback] Authentication failed:",
+        authResponse.error
+      );
+      const storefrontUrl =
+        process.env.STOREFRONT_URL ||
+        (process.env.NODE_ENV === "production"
+          ? "https://ecopowertech-headless-medusa.vercel.app"
+          : "http://localhost:4321");
+      return res.redirect(`${storefrontUrl}/404?error=auth_failed`);
+    }
 
-        console.log('[Google OAuth Callback] Authentication successful');
+    console.log("[Google OAuth Callback] Authentication successful");
 
-        // Step 2: Email Extraction (Gold Standard Pattern)
-        const email = (authResponse.authIdentity as any)?.provider_metadata?.email;
+    // Step 2: Email Extraction (Gold Standard Pattern)
+    const email = (authResponse.authIdentity as any)?.provider_metadata?.email;
 
-        if (!email) {
-            console.error('[Google OAuth Callback] No email in auth response');
-            console.error('[Google OAuth Callback] AuthIdentity:', JSON.stringify(authResponse.authIdentity, null, 2));
-            const storefrontUrl = process.env.STOREFRONT_URL || (process.env.NODE_ENV === 'production' ? 'https://ecopowertech-headless-medusa.vercel.app' : 'http://localhost:4321');
-            return res.redirect(`${storefrontUrl}/404?error=no_email`);
-        }
+    if (!email) {
+      console.error("[Google OAuth Callback] No email in auth response");
+      console.error(
+        "[Google OAuth Callback] AuthIdentity:",
+        JSON.stringify(authResponse.authIdentity, null, 2)
+      );
+      const storefrontUrl =
+        process.env.STOREFRONT_URL ||
+        (process.env.NODE_ENV === "production"
+          ? "https://ecopowertech-headless-medusa.vercel.app"
+          : "http://localhost:4321");
+      return res.redirect(`${storefrontUrl}/404?error=no_email`);
+    }
 
-        console.log('[Google OAuth Callback] Email extracted:', email);
+    console.log("[Google OAuth Callback] Email extracted:", email);
 
-        // Step 3: Customer Resolution/Creation (The Array/DTO Pattern)
-        // Note: listCustomers returns [data, count] at runtime, but DTO types often misrepresent this
-        const customersResult = await customerModuleService.listCustomers({ email }) as any;
-        const existingCustomers = customersResult[0]; // Extract data array
+    // Step 3: Customer Resolution/Creation (The Array/DTO Pattern)
+    // Note: listCustomers returns [data, count] at runtime, but DTO types often misrepresent this
+    const customersResult = (await customerModuleService.listCustomers({
+      email,
+    })) as any;
+    const existingCustomers = customersResult[0]; // Extract data array
 
-        let customer = existingCustomers?.[0]; // Get first match
+    let customer = existingCustomers?.[0]; // Get first match
 
-        if (!customer) {
-            // Case 1: New customer - create account
-            console.log('[Google OAuth Callback] Case 1: Creating new customer');
-            customer = await customerModuleService.createCustomers({
-                email,
-                first_name: (authResponse.authIdentity as any)?.provider_metadata?.given_name || '',
-                last_name: (authResponse.authIdentity as any)?.provider_metadata?.family_name || '',
-                has_account: true
-            });
-            console.log('[Google OAuth Callback] Created new customer:', customer.id);
-        } else {
-            console.log('[Google OAuth Callback] Found existing customer:', customer.id);
+    if (!customer) {
+      // Case 1: New customer - create account
+      console.log("[Google OAuth Callback] Case 1: Creating new customer");
+      customer = await customerModuleService.createCustomers({
+        email,
+        first_name:
+          (authResponse.authIdentity as any)?.provider_metadata?.given_name ||
+          "",
+        last_name:
+          (authResponse.authIdentity as any)?.provider_metadata?.family_name ||
+          "",
+        has_account: true,
+      });
+      console.log("[Google OAuth Callback] Created new customer:", customer.id);
+    } else {
+      console.log(
+        "[Google OAuth Callback] Found existing customer:",
+        customer.id
+      );
 
-            // Case 3: Legacy customer activation (QB-imported, has_account = false)
-            if (!customer.has_account) {
-                console.log('[Google OAuth Callback] Case 3: Activating legacy QB customer via Google OAuth');
+      // Case 3: Legacy customer activation (QB-imported, has_account = false)
+      if (!customer.has_account) {
+        console.log(
+          "[Google OAuth Callback] Case 3: Activating legacy QB customer via Google OAuth"
+        );
 
-                try {
-                    const postgres = await import('postgres');
-                    const sql = postgres.default(process.env.DATABASE_URL!);
+        try {
+          const postgres = await import("postgres");
+          const sql = postgres.default(process.env.DATABASE_URL!);
 
-                    // 1. Upgrade customer to registered (has_account = true)
-                    await sql`
+          // 1. Upgrade customer to registered (has_account = true)
+          await sql`
                         UPDATE customer
                         SET has_account = true,
                             first_name = COALESCE(NULLIF(first_name, ''), ${(authResponse.authIdentity as any)?.provider_metadata?.given_name || customer.first_name}),
                             last_name  = COALESCE(NULLIF(last_name, ''), ${(authResponse.authIdentity as any)?.provider_metadata?.family_name || customer.last_name})
                         WHERE id = ${customer.id}
                     `;
-                    console.log('[Google OAuth Callback] ✅ Customer upgraded to registered:', customer.id);
+          console.log(
+            "[Google OAuth Callback] ✅ Customer upgraded to registered:",
+            customer.id
+          );
 
-                    // 2. Refresh customer object so JWT uses updated data
-                    const [updatedCustomer] = await sql`
+          // 2. Refresh customer object so JWT uses updated data
+          const [updatedCustomer] = await sql`
                         SELECT id, email, first_name, last_name, has_account
                         FROM customer WHERE id = ${customer.id}
                     `;
-                    customer = updatedCustomer;
+          customer = updatedCustomer;
 
-                    await sql.end();
-                    console.log('[Google OAuth Callback] ✅ Case 3 activation complete');
+          await sql.end();
+          console.log("[Google OAuth Callback] ✅ Case 3 activation complete");
 
-                    // Sync to MeiliSearch — raw SQL bypasses Medusa events so subscriber never fires
-                    try {
-                        const { MeiliSearch } = await import('meilisearch');
-                        const meili = new MeiliSearch({
-                            host: process.env.MEILISEARCH_HOST!,
-                            apiKey: process.env.MEILISEARCH_API_KEY!
-                        });
-                        await meili.index('customers').updateDocuments([{
-                            id: customer.id,
-                            status: 'Registered'
-                        }]);
-                        console.log('[Google OAuth Callback] ✅ MeiliSearch status updated → Registered');
-                    } catch (meiliError: any) {
-                        console.warn('[Google OAuth Callback] ⚠️  MeiliSearch sync failed (non-fatal):', meiliError.message);
-                    }
-                } catch (activationError: any) {
-                    console.error('[Google OAuth Callback] ❌ Case 3 activation failed:', activationError.message);
-                    // Continue anyway — JWT will still be issued with existing customer.id
-                }
-            } else {
-                console.log('[Google OAuth Callback] Case 2: Existing active customer');
-            }
+          // Sync to MeiliSearch — raw SQL bypasses Medusa events so subscriber never fires
+          try {
+            const { MeiliSearch } = await import("meilisearch");
+            const meili = new MeiliSearch({
+              host: process.env.MEILISEARCH_HOST!,
+              apiKey: process.env.MEILISEARCH_API_KEY!,
+            });
+            await meili.index("customers").updateDocuments([
+              {
+                id: customer.id,
+                status: "Registered",
+              },
+            ]);
+            console.log(
+              "[Google OAuth Callback] ✅ MeiliSearch status updated → Registered"
+            );
+          } catch (meiliError: any) {
+            console.warn(
+              "[Google OAuth Callback] ⚠️  MeiliSearch sync failed (non-fatal):",
+              meiliError.message
+            );
+          }
+        } catch (activationError: any) {
+          console.error(
+            "[Google OAuth Callback] ❌ Case 3 activation failed:",
+            activationError.message
+          );
+          // Continue anyway — JWT will still be issued with existing customer.id
         }
-
-        // Step 4: JWT Generation (Gold Standard)
-        const config = req.scope.resolve(ContainerRegistrationKeys.CONFIG_MODULE);
-        const { http } = config.projectConfig;
-
-        const token = generateJwtToken({
-            actor_id: customer.id,
-            actor_type: "customer",
-            auth_identity_id: (authResponse.authIdentity as any).id,
-            app_metadata: {
-                customer_id: customer.id,
-                provider: "google"
-            }
-        }, {
-            secret: http.jwtSecret,
-            expiresIn: "24h",
-            jwtOptions: http.jwtOptions || {}
-        });
-
-        console.log('[Google OAuth Callback] Token generated successfully');
-
-        // Step 5: Redirection (Gold Standard)
-        const storefrontUrl = process.env.STOREFRONT_URL || (process.env.NODE_ENV === 'production' ? 'https://ecopowertech-headless-medusa.vercel.app' : 'http://localhost:4321');
-        const frontendCallbackUrl = `${storefrontUrl}/auth/callback?token=${token}`;
-
-        console.log('[Google OAuth Callback] Redirecting to:', frontendCallbackUrl);
-
-        return res.redirect(frontendCallbackUrl);
-
-    } catch (error: any) {
-        console.error('[Google OAuth Callback] Error:', error);
-        console.error('[Google OAuth Callback] Error stack:', error.stack);
-        const storefrontUrl = process.env.STOREFRONT_URL || (process.env.NODE_ENV === 'production' ? 'https://ecopowertech-headless-medusa.vercel.app' : 'http://localhost:4321');
-        return res.redirect(`${storefrontUrl}/404?error=server_error`);
+      } else {
+        console.log("[Google OAuth Callback] Case 2: Existing active customer");
+      }
     }
+
+    // Step 4: JWT Generation (Gold Standard)
+    const config = req.scope.resolve(ContainerRegistrationKeys.CONFIG_MODULE);
+    const { http } = config.projectConfig;
+
+    const token = generateJwtToken(
+      {
+        actor_id: customer.id,
+        actor_type: "customer",
+        auth_identity_id: (authResponse.authIdentity as any).id,
+        app_metadata: {
+          customer_id: customer.id,
+          provider: "google",
+        },
+      },
+      {
+        secret: http.jwtSecret,
+        expiresIn: "24h",
+        jwtOptions: http.jwtOptions || {},
+      }
+    );
+
+    console.log("[Google OAuth Callback] Token generated successfully");
+
+    // Step 5: Redirection (Gold Standard)
+    const storefrontUrl =
+      process.env.STOREFRONT_URL ||
+      (process.env.NODE_ENV === "production"
+        ? "https://ecopowertech-headless-medusa.vercel.app"
+        : "http://localhost:4321");
+    const frontendCallbackUrl = `${storefrontUrl}/auth/callback?token=${token}`;
+
+    console.log("[Google OAuth Callback] Redirecting to:", frontendCallbackUrl);
+
+    return res.redirect(frontendCallbackUrl);
+  } catch (error: any) {
+    console.error("[Google OAuth Callback] Error:", error);
+    console.error("[Google OAuth Callback] Error stack:", error.stack);
+    const storefrontUrl =
+      process.env.STOREFRONT_URL ||
+      (process.env.NODE_ENV === "production"
+        ? "https://ecopowertech-headless-medusa.vercel.app"
+        : "http://localhost:4321");
+    return res.redirect(`${storefrontUrl}/404?error=server_error`);
+  }
 }

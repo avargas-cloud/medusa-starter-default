@@ -1,15 +1,15 @@
 #!/usr/bin/env tsx
 
-import { Client } from 'pg'
-import dotenv from 'dotenv'
+import { Client } from "pg";
+import dotenv from "dotenv";
 
-dotenv.config()
+dotenv.config();
 
 async function check() {
-    const client = new Client({ connectionString: process.env.DATABASE_URL })
-    await client.connect()
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
 
-    const result = await client.query(`
+  const result = await client.query(`
     SELECT 
       p.id,
       p.title,
@@ -29,30 +29,32 @@ async function check() {
     AND pcp.product_category_id = (SELECT id FROM product_category WHERE handle = 'led-strips')
     AND p.status = 'published'
     ORDER BY av.value, p.title
-  `)
+  `);
 
-    console.log('LED Strips - Products with color-options:\n')
+  console.log("LED Strips - Products with color-options:\n");
 
-    const byColor: any = {}
-    result.rows.forEach((row: any) => {
-        if (!byColor[row.color_value]) {
-            byColor[row.color_value] = []
-        }
-        byColor[row.color_value].push(row)
-    })
+  const byColor: any = {};
+  result.rows.forEach((row: any) => {
+    if (!byColor[row.color_value]) {
+      byColor[row.color_value] = [];
+    }
+    byColor[row.color_value].push(row);
+  });
 
-    Object.keys(byColor).sort().forEach(color => {
-        console.log(`${color}: (${byColor[color].length} products)`)
-        byColor[color].forEach((p: any) => {
-            console.log(`  - ${p.title}`)
-        })
-        console.log('')
-    })
+  Object.keys(byColor)
+    .sort()
+    .forEach((color) => {
+      console.log(`${color}: (${byColor[color].length} products)`);
+      byColor[color].forEach((p: any) => {
+        console.log(`  - ${p.title}`);
+      });
+      console.log("");
+    });
 
-    console.log(`Total unique colors: ${Object.keys(byColor).length}`)
-    console.log(`Total products: ${result.rows.length}`)
+  console.log(`Total unique colors: ${Object.keys(byColor).length}`);
+  console.log(`Total products: ${result.rows.length}`);
 
-    await client.end()
+  await client.end();
 }
 
-check().catch(console.error)
+check().catch(console.error);

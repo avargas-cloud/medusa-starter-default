@@ -1,21 +1,22 @@
-import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
-import { FINANCE_MODULE } from '../../../../../../modules/finance'
-import { INVOICE_MODULE } from '../../../../../../modules/invoices'
-import { registerMedusaPayment } from '../../../../invoices/register-medusa-payment'
-import { writePipelineRow } from '../../../../../../lib/quickbooks/qb-pipeline'
-import { handlePosPaymentApplied } from '../../../../../../lib/quickbooks/handlers/handle-pos-payment-applied'
-import { getDbPool } from '../../../../../utils/db-pool'
+import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { FINANCE_MODULE } from "../../../../../../modules/finance";
+import { INVOICE_MODULE } from "../../../../../../modules/invoices";
+import { registerMedusaPayment } from "../../../../invoices/register-medusa-payment";
+import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
+import { handlePosPaymentApplied } from "../../../../../../lib/quickbooks/handlers/handle-pos-payment-applied";
+import { getDbPool } from "../../../../../utils/db-pool";
 
 function getNum(val: any): number {
-    if (val === null || val === undefined) return 0;
-    if (typeof val === 'number') return val;
-    if (typeof val === 'string') return Number(val);
-    if (typeof val === 'object') {
-        if ('toNumber' in val && typeof val.toNumber === 'function') return val.toNumber();
-        if ('numeric' in val) return Number(val.numeric);
-        if ('value' in val) return Number(val.value);
-    }
-    return Number(val) || 0;
+  if (val === null || val === undefined) return 0;
+  if (typeof val === "number") return val;
+  if (typeof val === "string") return Number(val);
+  if (typeof val === "object") {
+    if ("toNumber" in val && typeof val.toNumber === "function")
+      return val.toNumber();
+    if ("numeric" in val) return Number(val.numeric);
+    if ("value" in val) return Number(val.value);
+  }
+  return Number(val) || 0;
 }
 
 /**
@@ -24,181 +25,216 @@ function getNum(val: any): number {
  * This also triggers the creation of an InvoicePayment on the target invoice.
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
-    const paymentId = req.params.id!
-    const { invoice_id, amount_applied, applied_by } = req.body as any
-    
-    if (!invoice_id) {
-        return res.status(400).json({ error: 'invoice_id is required' })
+  const paymentId = req.params.id!;
+  const { invoice_id, amount_applied, applied_by } = req.body as any;
+
+  if (!invoice_id) {
+    return res.status(400).json({ error: "invoice_id is required" });
+  }
+  if (!amount_applied || amount_applied <= 0) {
+    return res
+      .status(400)
+      .json({ error: "amount_applied must be a positive number" });
+  }
+
+  const financeService = req.scope.resolve(FINANCE_MODULE);
+  const invoiceService = req.scope.resolve(INVOICE_MODULE);
+
+  try {
+    // 1. Fetch the CustomerPayment with its current applications
+    const payment = await financeService.retrieveCustomerPayment(paymentId, {
+      relations: ["applications"],
+    });
+
+    if (!payment) {
+      return res.status(404).json({ error: "Customer payment not found" });
     }
-    if (!amount_applied || amount_applied <= 0) {
-        return res.status(400).json({ error: 'amount_applied must be a positive number' })
+
+    if (payment.status === "voided") {
+      return res.status(400).json({ error: "Cannot apply a voided payment" });
     }
 
-    const financeService = req.scope.resolve(FINANCE_MODULE)
-    const invoiceService = req.scope.resolve(INVOICE_MODULE)
+    if (payment.source === "web") {
+      return res
+        .status(403)
+        .json({
+          error:
+            "Web checkout payments are automatically applied to their source orders and cannot be manually applied to invoices.",
+        });
+    }
 
-    try {
-        // 1. Fetch the CustomerPayment with its current applications
-        const payment = await financeService.retrieveCustomerPayment(paymentId, {
-            relations: ['applications']
-        })
-        
-        if (!payment) {
-            return res.status(404).json({ error: 'Customer payment not found' })
+    // Calculate available balance
+    const totalApplied = payment.applications
+      .filter((app: any) => !app.voided_at)
+      .reduce((sum: number, app: any) => sum + Number(app.amount_applied), 0);
+
+    const availableAmount = Number(payment.amount) - totalApplied;
+
+    if (amount_applied > availableAmount) {
+      return res.status(400).json({
+        error: `Requested amount (${amount_applied}) exceeds available payment balance (${availableAmount})`,
+      });
+    }
+
+    // 2. Fetch the target invoice to get order_id and ensure it exists
+    const invoice = await invoiceService.retrievePosInvoice(invoice_id);
+    if (!invoice) {
+      return res.status(404).json({ error: "Target invoice not found" });
+    }
+    if (invoice.status === "voided") {
+      return res
+        .status(400)
+        .json({ error: "Cannot apply payment to a voided invoice" });
+    }
+
+    // 3. Create the PaymentApplication record in Finance module
+    const application = await financeService.createPaymentApplications({
+      payment_id: paymentId,
+      invoice_id: invoice_id,
+      invoice_number: String((invoice as any).invoice_number || ""),
+      order_id: invoice.order_id,
+      amount_applied,
+      applied_at: new Date(),
+      applied_by: applied_by || null,
+    });
+
+    // 4. Update the CustomerPayment status
+    const isFullyApplied =
+      totalApplied + Number(amount_applied) >= Number(payment.amount);
+    const newPaymentStatus = isFullyApplied ? "applied" : "partially_applied";
+
+    await financeService.updateCustomerPayments({
+      id: paymentId,
+      status: newPaymentStatus,
+    });
+
+    // 5. Create the corresponding InvoicePayment in the Invoice module
+    await invoiceService.createInvoicePayments({
+      invoice_id: invoice_id,
+      amount: amount_applied,
+      payment_method: "credit", // In the context of the invoice, the method is "customer credit"
+      notes: `Applied from deposit/payment ${payment.reference || paymentId}`,
+      created_by: applied_by || null,
+      paid_at: new Date(),
+    });
+
+    // 6. Recalculate invoice totals and status
+    const allInvoicePayments = await invoiceService.listInvoicePayments({
+      invoice_id: invoice_id,
+    });
+    const totalInvoicePaid = allInvoicePayments.reduce(
+      (sum: number, p: any) => sum + getNum(p.amount),
+      0
+    );
+    const balanceDue = Math.max(0, getNum(invoice.total) - totalInvoicePaid);
+    const newInvoiceStatus = balanceDue <= 0 ? "paid" : "partial";
+
+    await invoiceService.updatePosInvoices({
+      id: invoice_id,
+      amount_paid: totalInvoicePaid,
+      balance_due: balanceDue,
+      status: newInvoiceStatus,
+    });
+
+    // 7. Register in Medusa native Payment Module (best-effort, every payment)
+    if (invoice.order_id) {
+      const medusaPaymentId = await registerMedusaPayment(req.scope, {
+        order_id: invoice.order_id,
+        amount: amount_applied,
+        payment_method:
+          payment.method === "credit_memo" ? "credit" : payment.method,
+        invoice_total: getNum(invoice.total),
+      });
+      if (medusaPaymentId) {
+        await financeService
+          .updateCustomerPayments({
+            id: paymentId,
+            medusa_payment_synced: true,
+          })
+          .catch(() => {}); // non-fatal
+      }
+    }
+
+    // Refetch updated payment for response
+    const updatedPayment = await financeService.retrieveCustomerPayment(
+      paymentId,
+      {
+        relations: ["applications"],
+      }
+    );
+
+    // 8. Write upfront apply_payment pipeline row + fire QB sync via direct exec (bypass BullMQ)
+    if (process.env.QB_ORDER_FLOW_ENABLED === "true" && invoice.order_id) {
+      // Look up the payment's display_id for the medusa ref
+      let applyMedusaRef: string | null = null;
+      try {
+        const payForRef =
+          await financeService.retrieveCustomerPayment(paymentId);
+        if ((payForRef as any).display_id) {
+          applyMedusaRef = `PAY-${(payForRef as any).display_id}`;
         }
-        
-        if (payment.status === 'voided') {
-            return res.status(400).json({ error: 'Cannot apply a voided payment' })
-        }
-        
-        if (payment.source === 'web') {
-            return res.status(403).json({ error: 'Web checkout payments are automatically applied to their source orders and cannot be manually applied to invoices.' })
-        }
+      } catch {}
 
-        // Calculate available balance
-        const totalApplied = payment.applications
-            .filter((app: any) => !app.voided_at)
-            .reduce((sum: number, app: any) => sum + Number(app.amount_applied), 0)
-            
-        const availableAmount = Number(payment.amount) - totalApplied
-        
-        if (amount_applied > availableAmount) {
-            return res.status(400).json({ 
-                error: `Requested amount (${amount_applied}) exceeds available payment balance (${availableAmount})` 
-            })
-        }
-
-        // 2. Fetch the target invoice to get order_id and ensure it exists
-        const invoice = await invoiceService.retrievePosInvoice(invoice_id)
-        if (!invoice) {
-            return res.status(404).json({ error: 'Target invoice not found' })
-        }
-        if (invoice.status === 'voided') {
-            return res.status(400).json({ error: 'Cannot apply payment to a voided invoice' })
-        }
-
-        // 3. Create the PaymentApplication record in Finance module
-        const application = await financeService.createPaymentApplications({
-            payment_id: paymentId,
-            invoice_id: invoice_id,
-            invoice_number: String((invoice as any).invoice_number || ''),
-            order_id: invoice.order_id,
-            amount_applied,
-            applied_at: new Date(),
-            applied_by: applied_by || null
-        })
-
-        // 4. Update the CustomerPayment status
-        const isFullyApplied = (totalApplied + Number(amount_applied)) >= Number(payment.amount)
-        const newPaymentStatus = isFullyApplied ? 'applied' : 'partially_applied'
-
-        await financeService.updateCustomerPayments({ id: paymentId, status: newPaymentStatus })
-
-        // 5. Create the corresponding InvoicePayment in the Invoice module
-        await invoiceService.createInvoicePayments({
-            invoice_id: invoice_id,
-            amount: amount_applied,
-            payment_method: 'credit', // In the context of the invoice, the method is "customer credit"
-            notes: `Applied from deposit/payment ${payment.reference || paymentId}`,
-            created_by: applied_by || null,
-            paid_at: new Date()
-        })
-
-        // 6. Recalculate invoice totals and status
-        const allInvoicePayments = await invoiceService.listInvoicePayments({ invoice_id: invoice_id })
-        const totalInvoicePaid = allInvoicePayments.reduce((sum: number, p: any) => sum + getNum(p.amount), 0)
-        const balanceDue = Math.max(0, getNum(invoice.total) - totalInvoicePaid)
-        const newInvoiceStatus = balanceDue <= 0 ? 'paid' : 'partial'
-
-        await invoiceService.updatePosInvoices({
-            id: invoice_id,
-            amount_paid: totalInvoicePaid,
-            balance_due: balanceDue,
-            status: newInvoiceStatus
-        })
-
-        // 7. Register in Medusa native Payment Module (best-effort, every payment)
-        if (invoice.order_id) {
-            const medusaPaymentId = await registerMedusaPayment(req.scope, {
-                order_id:       invoice.order_id,
-                amount:         amount_applied,
-                payment_method: payment.method === 'credit_memo' ? 'credit' : payment.method,
-                invoice_total:  getNum(invoice.total),
-            })
-            if (medusaPaymentId) {
-                await financeService.updateCustomerPayments({ id: paymentId, medusa_payment_synced: true }).catch(() => {}) // non-fatal
-            }
-        }
-
-        // Refetch updated payment for response
-        const updatedPayment = await financeService.retrieveCustomerPayment(paymentId, {
-            relations: ['applications']
-        })
-
-        // 8. Write upfront apply_payment pipeline row + fire QB sync via direct exec (bypass BullMQ)
-        if (process.env.QB_ORDER_FLOW_ENABLED === "true" && invoice.order_id) {
-            // Look up the payment's display_id for the medusa ref
-            let applyMedusaRef: string | null = null
-            try {
-                const payForRef = await financeService.retrieveCustomerPayment(paymentId)
-                if ((payForRef as any).display_id) {
-                    applyMedusaRef = `PAY-${(payForRef as any).display_id}`
-                }
-            } catch {}
-
-            // Look up invoice pipeline row to set dependsOn
-            let invoicePipelineRowId: string | null = null
-            try {
-                const pool = getDbPool()
-                const { rows: invRows } = await pool.query(
-                    `SELECT id FROM qb_order_pipeline
+      // Look up invoice pipeline row to set dependsOn
+      let invoicePipelineRowId: string | null = null;
+      try {
+        const pool = getDbPool();
+        const { rows: invRows } = await pool.query(
+          `SELECT id FROM qb_order_pipeline
                      WHERE order_id = $1 AND step = 'invoice' AND reference_id = $2
                      ORDER BY created_at DESC LIMIT 1`,
-                    [invoice.order_id, invoice_id]
-                )
-                invoicePipelineRowId = invRows[0]?.id ?? null
-            } catch {}
+          [invoice.order_id, invoice_id]
+        );
+        invoicePipelineRowId = invRows[0]?.id ?? null;
+      } catch {}
 
-            // Upfront waiting row — gives instant UI visibility before handler runs
-            try {
-                await writePipelineRow({
-                    orderId: invoice.order_id,
-                    referenceId: paymentId,
-                    referenceType: "customer_payment",
-                    step: "apply_payment",
-                    status: "waiting",
-                    dependsOn: invoicePipelineRowId,
-                    medusaRefNumber: applyMedusaRef,
-                })
-            } catch (rowErr: any) {
-                req.scope.resolve('logger').warn(`[apply] Could not write upfront pipeline row: ${rowErr.message}`)
-            }
+      // Upfront waiting row — gives instant UI visibility before handler runs
+      try {
+        await writePipelineRow({
+          orderId: invoice.order_id,
+          referenceId: paymentId,
+          referenceType: "customer_payment",
+          step: "apply_payment",
+          status: "waiting",
+          dependsOn: invoicePipelineRowId,
+          medusaRefNumber: applyMedusaRef,
+        });
+      } catch (rowErr: any) {
+        req.scope
+          .resolve("logger")
+          .warn(
+            `[apply] Could not write upfront pipeline row: ${rowErr.message}`
+          );
+      }
 
-            // Direct exec — reliable, bypasses BullMQ outbox
-            setTimeout(async () => {
-                try {
-                    await handlePosPaymentApplied({
-                        event: {
-                            name: "pos.payment.applied",
-                            data: {
-                                payment_id: paymentId,
-                                invoice_id: invoice_id,
-                                order_id: invoice.order_id,
-                                amount_applied,
-                                application_id: application.id,
-                            },
-                        },
-                        container: req.scope,
-                    } as any)
-                } catch (execErr: any) {
-                    req.scope.resolve('logger').error(`[apply] Direct exec pos.payment.applied failed: ${execErr.message}`)
-                }
-            }, 100)
+      // Direct exec — reliable, bypasses BullMQ outbox
+      setTimeout(async () => {
+        try {
+          await handlePosPaymentApplied({
+            event: {
+              name: "pos.payment.applied",
+              data: {
+                payment_id: paymentId,
+                invoice_id: invoice_id,
+                order_id: invoice.order_id,
+                amount_applied,
+                application_id: application.id,
+              },
+            },
+            container: req.scope,
+          } as any);
+        } catch (execErr: any) {
+          req.scope
+            .resolve("logger")
+            .error(
+              `[apply] Direct exec pos.payment.applied failed: ${execErr.message}`
+            );
         }
-
-        return res.json({ payment: updatedPayment, application })
-        
-    } catch (err: any) {
-        return res.status(500).json({ error: err.message })
+      }, 100);
     }
+
+    return res.json({ payment: updatedPayment, application });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
 }

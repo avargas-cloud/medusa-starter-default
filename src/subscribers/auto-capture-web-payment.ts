@@ -1,5 +1,5 @@
-import { SubscriberArgs, type SubscriberConfig } from "@medusajs/framework"
-import { capturePaymentWorkflow } from "@medusajs/core-flows"
+import { SubscriberArgs, type SubscriberConfig } from "@medusajs/framework";
+import { capturePaymentWorkflow } from "@medusajs/core-flows";
 
 /**
  * Subscriber: order.placed (web orders only)
@@ -21,11 +21,11 @@ export default async function autoCaptureWebPayment({
   event: { data },
   container,
 }: SubscriberArgs<{ id: string }>) {
-  const orderId = data.id
-  if (!orderId) return
+  const orderId = data.id;
+  if (!orderId) return;
 
-  const query = container.resolve("query")
-  const logger = container.resolve("logger")
+  const query = container.resolve("query");
+  const logger = container.resolve("logger");
 
   // 1. Fetch the order with its payment collections
   const { data: orders } = await query.graph({
@@ -37,35 +37,39 @@ export default async function autoCaptureWebPayment({
       "payment_collections.payments.provider_id",
     ],
     filters: { id: orderId },
-  })
+  });
 
-  const order = orders?.[0]
-  if (!order) return
+  const order = orders?.[0];
+  if (!order) return;
 
   // 2. Skip POS orders — handled separately via pos.payment.created
-  if (order.metadata?.pos_created === true) return
+  if (order.metadata?.pos_created === true) return;
 
   // 3. Capture each authorized payment
-  const payments: Array<{ id: string; provider_id: string }> = []
+  const payments: Array<{ id: string; provider_id: string }> = [];
   for (const pc of order.payment_collections ?? []) {
-    for (const p of (pc?.payments ?? [])) {
-      if (p?.id) payments.push(p)
+    for (const p of pc?.payments ?? []) {
+      if (p?.id) payments.push(p);
     }
   }
 
   if (payments.length === 0) {
-    logger.warn(`[AutoCapture] No payments found for order ${orderId}`)
-    return
+    logger.warn(`[AutoCapture] No payments found for order ${orderId}`);
+    return;
   }
 
   for (const payment of payments) {
     try {
       await capturePaymentWorkflow(container).run({
         input: { payment_id: payment.id },
-      })
-      logger.info(`[AutoCapture] ✅ Captured payment ${payment.id} for order ${orderId}`)
+      });
+      logger.info(
+        `[AutoCapture] ✅ Captured payment ${payment.id} for order ${orderId}`
+      );
     } catch (err: any) {
-      logger.error(`[AutoCapture] ❌ Failed to capture payment ${payment.id}: ${err.message}`)
+      logger.error(
+        `[AutoCapture] ❌ Failed to capture payment ${payment.id}: ${err.message}`
+      );
     }
   }
 }
@@ -75,4 +79,4 @@ export const config: SubscriberConfig = {
   context: {
     subscriberId: "auto-capture-web-payment",
   },
-}
+};

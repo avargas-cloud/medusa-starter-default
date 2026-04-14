@@ -1,141 +1,178 @@
 import { Input, Select, Heading, Button } from "@medusajs/ui";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-    MagnifyingGlass,
-    ArrowPath,
-} from "@medusajs/icons";
+import { MagnifyingGlass, ArrowPath } from "@medusajs/icons";
 import { SyncStatusButton } from "../../../components/shared/sync-status-button";
 
 interface CustomerHeaderProps {
-    searchQuery: string;
-    setSearchQuery: (query: string) => void;
-    customerTypeFilter: string;
-    setCustomerTypeFilter: (filter: string) => void;
-    priceLevelFilter: string;
-    setPriceLevelFilter: (filter: string) => void;
-    sortBy: string;
-    setSortBy: (sort: string) => void;
-    totalHits: number;
-    isSyncing: boolean;
+  searchQuery: string;
+  setSearchQuery: (query: string) => void;
+  customerTypeFilter: string;
+  setCustomerTypeFilter: (filter: string) => void;
+  priceLevelFilter: string;
+  setPriceLevelFilter: (filter: string) => void;
+  sortBy: string;
+  setSortBy: (sort: string) => void;
+  totalHits: number;
+  isSyncing: boolean;
 }
 
 export const CustomerHeader = ({
-    searchQuery,
-    setSearchQuery,
-    customerTypeFilter,
-    setCustomerTypeFilter,
-    priceLevelFilter,
-    setPriceLevelFilter,
-    sortBy,
-    setSortBy,
-    totalHits,
-    isSyncing
+  searchQuery,
+  setSearchQuery,
+  customerTypeFilter,
+  setCustomerTypeFilter,
+  priceLevelFilter,
+  setPriceLevelFilter,
+  sortBy,
+  setSortBy,
+  totalHits,
+  isSyncing,
 }: CustomerHeaderProps) => {
-    const queryClient = useQueryClient()
-    return (
-        <>
-            {/* Header Title & Sync Status */}
-            <div className="flex items-center justify-between px-6 py-4 border-b">
-                <div>
-                    <div className="flex items-center gap-4">
-                        <Heading level="h1" className="text-ui-fg-base">
-                            Customers
-                        </Heading>
-                        <SyncStatusButton
-                            entity="customers"
-                            onSyncComplete={() => queryClient.invalidateQueries({ queryKey: ["meili-customers"] })}
-                        />
-                        <ResyncGroupsButton onComplete={() => queryClient.invalidateQueries({ queryKey: ["meili-customers"] })} />
-                    </div>
-                    <div className="flex items-center gap-x-2 mt-1">
-                        <span className="text-ui-fg-subtle text-small">
-                            {totalHits} results
-                        </span>
-                        {isSyncing && (
-                            <div className="flex items-center gap-x-2 text-ui-fg-interactive animate-pulse ml-2">
-                                <div className="w-2 h-2 rounded-full bg-ui-bg-interactive" />
-                                <span className="text-small font-medium">Syncing...</span>
-                            </div>
-                        )}
-                    </div>
-                </div>
+  const queryClient = useQueryClient();
+  return (
+    <>
+      {/* Header Title & Sync Status */}
+      <div className="flex items-center justify-between px-6 py-4 border-b">
+        <div>
+          <div className="flex items-center gap-4">
+            <Heading level="h1" className="text-ui-fg-base">
+              Customers
+            </Heading>
+            <SyncStatusButton
+              entity="customers"
+              onSyncComplete={() =>
+                queryClient.invalidateQueries({ queryKey: ["meili-customers"] })
+              }
+            />
+            <ResyncGroupsButton
+              onComplete={() =>
+                queryClient.invalidateQueries({ queryKey: ["meili-customers"] })
+              }
+            />
+          </div>
+          <div className="flex items-center gap-x-2 mt-1">
+            <span className="text-ui-fg-subtle text-small">
+              {totalHits} results
+            </span>
+            {isSyncing && (
+              <div className="flex items-center gap-x-2 text-ui-fg-interactive animate-pulse ml-2">
+                <div className="w-2 h-2 rounded-full bg-ui-bg-interactive" />
+                <span className="text-small font-medium">Syncing...</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Toolbar */}
+      <div className="px-6 py-4 border-b bg-ui-bg-subtle">
+        <div className="flex items-center gap-3">
+          {/* Search */}
+          <div className="flex-1 max-w-md relative">
+            <Input
+              placeholder="Search by name, email, company, list ID..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full"
+              autoFocus
+            />
+            <div className="absolute right-3 top-1/2 -translate-y-1/2 text-ui-fg-muted">
+              <MagnifyingGlass />
             </div>
+          </div>
 
-            {/* Toolbar */}
-            <div className="px-6 py-4 border-b bg-ui-bg-subtle">
-                <div className="flex items-center gap-3">
-                    {/* Search */}
-                    <div className="flex-1 max-w-md relative">
-                        <Input
-                            placeholder="Search by name, email, company, list ID..."
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full"
-                            autoFocus
-                        />
-                        <div className="absolute right-3 top-1/2 -translate-y-1/2 text-ui-fg-muted">
-                            <MagnifyingGlass />
-                        </div>
-                    </div>
+          <div className="flex items-center gap-x-2">
+            {/* Customer Type Filter */}
+            <Select
+              onValueChange={setCustomerTypeFilter}
+              value={customerTypeFilter}
+            >
+              <Select.Trigger className="w-[240px]">
+                <Select.Value placeholder="Customer Types" />
+              </Select.Trigger>
+              <Select.Content className="max-h-[300px]">
+                <Select.Item value="all">All Customer Types</Select.Item>
+                <Select.Item value="Home Owner / Renter">
+                  Home Owner / Renter
+                </Select.Item>
+                <Select.Item value="Commercial Business">
+                  Commercial Business
+                </Select.Item>
+                <Select.Item value="General Contractor">
+                  General Contractor
+                </Select.Item>
+                <Select.Item value="Electrical Contractor">
+                  Electrical Contractor
+                </Select.Item>
+                <Select.Item value="Independent Contractor">
+                  Independent Contractor
+                </Select.Item>
+                <Select.Item value="Carpenter / General Assembler">
+                  Carpenter / General Assembler
+                </Select.Item>
+                <Select.Item value="Designer, Architect">
+                  Designer, Architect
+                </Select.Item>
+                <Select.Item value="Standard">Standard</Select.Item>
+                <Select.Item value="Real State Agent / Company">
+                  Real Estate Agent
+                </Select.Item>
+                <Select.Item value="Developer">Developer</Select.Item>
+                <Select.Item value="Electrician">Electrician</Select.Item>
+                <Select.Item value="Distributor">Distributor</Select.Item>
+                <Select.Item value="Hospitality">Hospitality</Select.Item>
+                <Select.Item value="Signs Manufacturer">
+                  Signs Manufacturer
+                </Select.Item>
+                <Select.Item value="Condo Association">
+                  Condo Association
+                </Select.Item>
+                <Select.Item value="Show Biz Company/Contractor">
+                  Show Biz / Events
+                </Select.Item>
+                <Select.Item value="Online Customer">
+                  Online Customer
+                </Select.Item>
+              </Select.Content>
+            </Select>
 
-                    <div className="flex items-center gap-x-2">
-                        {/* Customer Type Filter */}
-                        <Select onValueChange={setCustomerTypeFilter} value={customerTypeFilter}>
-                            <Select.Trigger className="w-[240px]">
-                                <Select.Value placeholder="Customer Types" />
-                            </Select.Trigger>
-                            <Select.Content className="max-h-[300px]">
-                                <Select.Item value="all">All Customer Types</Select.Item>
-                                <Select.Item value="Home Owner / Renter">Home Owner / Renter</Select.Item>
-                                <Select.Item value="Commercial Business">Commercial Business</Select.Item>
-                                <Select.Item value="General Contractor">General Contractor</Select.Item>
-                                <Select.Item value="Electrical Contractor">Electrical Contractor</Select.Item>
-                                <Select.Item value="Independent Contractor">Independent Contractor</Select.Item>
-                                <Select.Item value="Carpenter / General Assembler">Carpenter / General Assembler</Select.Item>
-                                <Select.Item value="Designer, Architect">Designer, Architect</Select.Item>
-                                <Select.Item value="Standard">Standard</Select.Item>
-                                <Select.Item value="Real State Agent / Company">Real Estate Agent</Select.Item>
-                                <Select.Item value="Developer">Developer</Select.Item>
-                                <Select.Item value="Electrician">Electrician</Select.Item>
-                                <Select.Item value="Distributor">Distributor</Select.Item>
-                                <Select.Item value="Hospitality">Hospitality</Select.Item>
-                                <Select.Item value="Signs Manufacturer">Signs Manufacturer</Select.Item>
-                                <Select.Item value="Condo Association">Condo Association</Select.Item>
-                                <Select.Item value="Show Biz Company/Contractor">Show Biz / Events</Select.Item>
-                                <Select.Item value="Online Customer">Online Customer</Select.Item>
-                            </Select.Content>
-                        </Select>
+            {/* Price Level Filter */}
+            <Select
+              onValueChange={setPriceLevelFilter}
+              value={priceLevelFilter}
+            >
+              <Select.Trigger className="w-[200px]">
+                <Select.Value placeholder="Price Level" />
+              </Select.Trigger>
+              <Select.Content className="max-h-[300px]">
+                <Select.Item value="all">Price Levels</Select.Item>
+                <Select.Item value="Retail">Retail</Select.Item>
+                <Select.Item value="Wholesale">Wholesale</Select.Item>
+              </Select.Content>
+            </Select>
 
-                        {/* Price Level Filter */}
-                        <Select onValueChange={setPriceLevelFilter} value={priceLevelFilter}>
-                            <Select.Trigger className="w-[200px]">
-                                <Select.Value placeholder="Price Level" />
-                            </Select.Trigger>
-                            <Select.Content className="max-h-[300px]">
-                                <Select.Item value="all">Price Levels</Select.Item>
-                                <Select.Item value="Retail">Retail</Select.Item>
-                                <Select.Item value="Wholesale">Wholesale</Select.Item>
-                            </Select.Content>
-                        </Select>
-
-                        {/* Sorting */}
-                        <Select onValueChange={setSortBy} value={sortBy}>
-                            <Select.Trigger className="w-[200px]">
-                                <Select.Value placeholder="Sort by" />
-                            </Select.Trigger>
-                            <Select.Content className="max-h-[300px]">
-                                <Select.Item value="company_name:asc">Company (A-Z)</Select.Item>
-                                <Select.Item value="company_name:desc">Company (Z-A)</Select.Item>
-                                <Select.Item value="created_at:desc">Newest</Select.Item>
-                                <Select.Item value="created_at:asc">Oldest</Select.Item>
-                            </Select.Content>
-                        </Select>
-                    </div>
-                </div>
-            </div>
-        </>
-    );
+            {/* Sorting */}
+            <Select onValueChange={setSortBy} value={sortBy}>
+              <Select.Trigger className="w-[200px]">
+                <Select.Value placeholder="Sort by" />
+              </Select.Trigger>
+              <Select.Content className="max-h-[300px]">
+                <Select.Item value="company_name:asc">
+                  Company (A-Z)
+                </Select.Item>
+                <Select.Item value="company_name:desc">
+                  Company (Z-A)
+                </Select.Item>
+                <Select.Item value="created_at:desc">Newest</Select.Item>
+                <Select.Item value="created_at:asc">Oldest</Select.Item>
+              </Select.Content>
+            </Select>
+          </div>
+        </div>
+      </div>
+    </>
+  );
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -143,54 +180,56 @@ export const CustomerHeader = ({
 // Calls /admin/customers/resync-meili in batches using the admin session
 // ─────────────────────────────────────────────────────────────
 function ResyncGroupsButton({ onComplete }: { onComplete: () => void }) {
-    const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle")
-    const [message, setMessage] = useState("")
+  const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">(
+    "idle"
+  );
+  const [message, setMessage] = useState("");
 
-    const handleResync = async () => {
-        setStatus("loading")
-        setMessage("Resyncing...")
+  const handleResync = async () => {
+    setStatus("loading");
+    setMessage("Resyncing...");
 
-        try {
-            const PAGE = 500
-            let offset = 0
-            let total = Infinity
-            let synced = 0
+    try {
+      const PAGE = 500;
+      let offset = 0;
+      let total = Infinity;
+      let synced = 0;
 
-            while (offset < total) {
-                const res = await fetch("/admin/customers/resync-meili", {
-                    method: "POST",
-                    credentials: "include",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ limit: PAGE, offset })
-                })
-                if (!res.ok) throw new Error(`HTTP ${res.status}`)
-                const data = await res.json()
-                synced += data.synced ?? 0
-                total = data.total ?? 0
-                offset += PAGE
-                setMessage(`Syncing... ${Math.min(synced, total)}/${total}`)
-                if (!data.has_more) break
-            }
+      while (offset < total) {
+        const res = await fetch("/admin/customers/resync-meili", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ limit: PAGE, offset }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        synced += data.synced ?? 0;
+        total = data.total ?? 0;
+        offset += PAGE;
+        setMessage(`Syncing... ${Math.min(synced, total)}/${total}`);
+        if (!data.has_more) break;
+      }
 
-            setStatus("done")
-            setMessage(`✅ ${synced} synced`)
-            onComplete()
-        } catch (err: any) {
-            setStatus("error")
-            setMessage(`Error: ${err.message}`)
-        }
+      setStatus("done");
+      setMessage(`✅ ${synced} synced`);
+      onComplete();
+    } catch (err: any) {
+      setStatus("error");
+      setMessage(`Error: ${err.message}`);
     }
+  };
 
-    return (
-        <Button
-            variant="secondary"
-            size="small"
-            onClick={handleResync}
-            disabled={status === "loading"}
-            className="gap-2"
-        >
-            {status === "loading" && <ArrowPath className="animate-spin" />}
-            <span>{status === "idle" ? "Resync Groups" : message}</span>
-        </Button>
-    )
+  return (
+    <Button
+      variant="secondary"
+      size="small"
+      onClick={handleResync}
+      disabled={status === "loading"}
+      className="gap-2"
+    >
+      {status === "loading" && <ArrowPath className="animate-spin" />}
+      <span>{status === "idle" ? "Resync Groups" : message}</span>
+    </Button>
+  );
 }

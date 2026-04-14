@@ -1,12 +1,14 @@
-import Database from 'better-sqlite3';
+import Database from "better-sqlite3";
 
-const dbPath = '/home/alejo/webapps/quickbooks-bridge/data/database.sqlite';
-const opId = 'e36f48d5-5dce-4381-91c7-240f00fdb21d'; // The failed operation
+const dbPath = "/home/alejo/webapps/quickbooks-bridge/data/database.sqlite";
+const opId = "e36f48d5-5dce-4381-91c7-240f00fdb21d"; // The failed operation
 
 try {
   const db = new Database(dbPath, { readonly: true });
-  const row = db.prepare('SELECT request_xml, payload FROM operation_queue WHERE id = ?').get(opId);
-  
+  const row = db
+    .prepare("SELECT request_xml, payload FROM operation_queue WHERE id = ?")
+    .get(opId);
+
   if (row) {
     console.log("=== EXACT XML STREAM ===");
     console.log(row.request_xml);

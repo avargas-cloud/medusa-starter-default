@@ -1,62 +1,56 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
-import { PRODUCT_ATTRIBUTES_MODULE } from "../../../../modules/product-attributes"
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+import { PRODUCT_ATTRIBUTES_MODULE } from "../../../../modules/product-attributes";
 
 // POST - Update/Rename attribute set
-export async function POST(
-    req: MedusaRequest,
-    res: MedusaResponse
-) {
-    const { id } = req.params
+export async function POST(req: MedusaRequest, res: MedusaResponse) {
+  const { id } = req.params;
 
-    if (!id) {
-        return res.status(400).json({ error: "id parameter is required" })
-    }
+  if (!id) {
+    return res.status(400).json({ error: "id parameter is required" });
+  }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const service = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE) as any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const service = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE) as any;
 
-    try {
-        // Standard Medusa V2 update expects selector + data, or upsert method
-        // But our service extends MedusaService, so we use updateAttributeSets
-        const updated = await service.updateAttributeSets({
-            id: id,
-            ...req.body as any
-        })
+  try {
+    // Standard Medusa V2 update expects selector + data, or upsert method
+    // But our service extends MedusaService, so we use updateAttributeSets
+    const updated = await service.updateAttributeSets({
+      id: id,
+      ...(req.body as any),
+    });
 
-        return res.json({ attribute_set: updated })
-    } catch (error) {
-        return res.status(400).json({
-            message: (error as Error).message,
-        })
-    }
+    return res.json({ attribute_set: updated });
+  } catch (error) {
+    return res.status(400).json({
+      message: (error as Error).message,
+    });
+  }
 }
 
 // DELETE - Safe delete
-export async function DELETE(
-    req: MedusaRequest,
-    res: MedusaResponse
-) {
-    const { id } = req.params
+export async function DELETE(req: MedusaRequest, res: MedusaResponse) {
+  const { id } = req.params;
 
-    if (!id) {
-        return res.status(400).json({ error: "id parameter is required" })
-    }
+  if (!id) {
+    return res.status(400).json({ error: "id parameter is required" });
+  }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const service = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE) as any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const service = req.scope.resolve(PRODUCT_ATTRIBUTES_MODULE) as any;
 
-    try {
-        // MedusaService default delete
-        await service.deleteAttributeSets(id)
+  try {
+    // MedusaService default delete
+    await service.deleteAttributeSets(id);
 
-        return res.json({
-            id,
-            object: "attribute_set",
-            deleted: true,
-        })
-    } catch (error) {
-        return res.status(400).json({
-            message: (error as Error).message,
-        })
-    }
+    return res.json({
+      id,
+      object: "attribute_set",
+      deleted: true,
+    });
+  } catch (error) {
+    return res.status(400).json({
+      message: (error as Error).message,
+    });
+  }
 }

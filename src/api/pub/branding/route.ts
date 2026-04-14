@@ -1,4 +1,4 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 /**
  * GET /pub/branding
@@ -14,19 +14,24 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
  */
 
 function buildLogoUrl(): string {
-  const override = process.env.BRANDING_LOGO_URL
-  if (override) return override
+  const override = process.env.BRANDING_LOGO_URL;
+  if (override) return override;
 
-  const endpoint = process.env.MINIO_ENDPOINT
-  const bucket = process.env.MINIO_BUCKET
+  const endpoint = process.env.MINIO_ENDPOINT;
+  const bucket = process.env.MINIO_BUCKET;
   if (!endpoint || !bucket) {
-    throw new Error("MINIO_ENDPOINT and MINIO_BUCKET are required to build the logo URL")
+    throw new Error(
+      "MINIO_ENDPOINT and MINIO_BUCKET are required to build the logo URL"
+    );
   }
 
-  return `${endpoint}/${bucket}/branding/logo.png`
+  return `${endpoint}/${bucket}/branding/logo.png`;
 }
 
-export const GET = async (_req: MedusaRequest, res: MedusaResponse): Promise<void> => {
+export const GET = async (
+  _req: MedusaRequest,
+  res: MedusaResponse
+): Promise<void> => {
   try {
     const branding = {
       brand_name: process.env.BRANDING_NAME ?? "EcoPowerTech",
@@ -36,7 +41,10 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse): Promise<voi
         alt: process.env.BRANDING_LOGO_ALT ?? "EcoPowerTech Logo",
       },
       logo_dark: process.env.BRANDING_LOGO_DARK_URL
-        ? { url: process.env.BRANDING_LOGO_DARK_URL, alt: "EcoPowerTech Logo (dark)" }
+        ? {
+            url: process.env.BRANDING_LOGO_DARK_URL,
+            alt: "EcoPowerTech Logo (dark)",
+          }
         : null,
       favicon: process.env.BRANDING_FAVICON_URL
         ? { url: process.env.BRANDING_FAVICON_URL, alt: "EcoPowerTech Favicon" }
@@ -50,17 +58,20 @@ export const GET = async (_req: MedusaRequest, res: MedusaResponse): Promise<voi
         background_dark: "#0B1221",
       },
       version: process.env.BRANDING_VERSION ?? "1",
-    }
+    };
 
     res.setHeader(
       "Cache-Control",
       "public, s-maxage=3600, max-age=600, stale-while-revalidate=86400"
-    )
-    res.setHeader("Vary", "Accept-Encoding")
+    );
+    res.setHeader("Vary", "Accept-Encoding");
 
-    res.status(200).json(branding)
+    res.status(200).json(branding);
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to build branding config"
-    res.status(500).json({ error: message })
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to build branding config";
+    res.status(500).json({ error: message });
   }
-}
+};

@@ -9,15 +9,17 @@
  *   Railway / cloud Redis from closing idle connections with ETIMEDOUT.
  * - retryStrategy    → auto-reconnects up to 5 times with exponential backoff.
  */
-import Redis from 'ioredis'
+import Redis from "ioredis";
 
-let _client: Redis | null = null
+let _client: Redis | null = null;
 
 export function getRedis(): Redis {
   if (!_client) {
-    const url = process.env.REDIS_URL
+    const url = process.env.REDIS_URL;
     if (!url) {
-      throw new Error('[Document Lock] REDIS_URL environment variable is not set')
+      throw new Error(
+        "[Document Lock] REDIS_URL environment variable is not set"
+      );
     }
 
     _client = new Redis(url, {
@@ -25,26 +27,29 @@ export function getRedis(): Redis {
       keepAlive: 10_000,
       // Reconnect with exponential backoff (100ms → 200ms → 400ms … max 2s)
       retryStrategy: (times) => {
-        if (times > 5) return null   // Stop retrying after 5 attempts; let next request retry
-        return Math.min(100 * 2 ** times, 2000)
+        if (times > 5) return null; // Stop retrying after 5 attempts; let next request retry
+        return Math.min(100 * 2 ** times, 2000);
       },
       maxRetriesPerRequest: 3,
       enableReadyCheck: false,
       lazyConnect: false,
-    })
+    });
 
-    _client.on('error', (err) => {
+    _client.on("error", (err) => {
       // Log but don't crash — ioredis will auto-reconnect
-      console.warn('[Document Lock] Redis error (will auto-reconnect):', err.message)
-    })
+      console.warn(
+        "[Document Lock] Redis error (will auto-reconnect):",
+        err.message
+      );
+    });
 
-    _client.on('reconnecting', () => {
-      console.info('[Document Lock] Redis reconnecting…')
-    })
+    _client.on("reconnecting", () => {
+      console.info("[Document Lock] Redis reconnecting…");
+    });
 
-    _client.on('ready', () => {
-      console.info('[Document Lock] Redis connection ready')
-    })
+    _client.on("ready", () => {
+      console.info("[Document Lock] Redis connection ready");
+    });
   }
-  return _client
+  return _client;
 }

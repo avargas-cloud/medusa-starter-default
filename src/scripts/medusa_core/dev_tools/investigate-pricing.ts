@@ -1,16 +1,16 @@
-import { Client } from 'pg';
-import dotenv from 'dotenv';
+import { Client } from "pg";
+import dotenv from "dotenv";
 
 dotenv.config();
 
 async function investigatePricing() {
-    const client = new Client({ connectionString: process.env.DATABASE_URL });
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
 
-    try {
-        await client.connect();
+  try {
+    await client.connect();
 
-        console.log('=== 1. Checking price_set linkage ===');
-        const priceSetCheck = await client.query(`
+    console.log("=== 1. Checking price_set linkage ===");
+    const priceSetCheck = await client.query(`
       SELECT 
         pv.id as variant_id,
         pv.sku,
@@ -25,10 +25,10 @@ async function investigatePricing() {
       LIMIT 3
     `);
 
-        console.log(JSON.stringify(priceSetCheck.rows, null, 2));
+    console.log(JSON.stringify(priceSetCheck.rows, null, 2));
 
-        console.log('\n=== 2. Checking actual price records ===');
-        const pricesCheck = await client.query(`
+    console.log("\n=== 2. Checking actual price records ===");
+    const pricesCheck = await client.query(`
       SELECT 
         p.id,
         p.amount,
@@ -44,20 +44,20 @@ async function investigatePricing() {
       LIMIT 5
     `);
 
-        console.log(JSON.stringify(pricesCheck.rows, null, 2));
+    console.log(JSON.stringify(pricesCheck.rows, null, 2));
 
-        console.log('\n=== 3. Checking regions ===');
-        const regions = await client.query(`
+    console.log("\n=== 3. Checking regions ===");
+    const regions = await client.query(`
       SELECT id, name, currency_code
       FROM region
       WHERE deleted_at IS NULL
       LIMIT 5
     `);
 
-        console.log(JSON.stringify(regions.rows, null, 2));
+    console.log(JSON.stringify(regions.rows, null, 2));
 
-        console.log('\n=== 4. Checking price rules (if any) ===');
-        const priceRules = await client.query(`
+    console.log("\n=== 4. Checking price rules (if any) ===");
+    const priceRules = await client.query(`
       SELECT 
         pr.id,
         pr.attribute,
@@ -70,11 +70,10 @@ async function investigatePricing() {
       LIMIT 10
     `);
 
-        console.log(JSON.stringify(priceRules.rows, null, 2));
-
-    } finally {
-        await client.end();
-    }
+    console.log(JSON.stringify(priceRules.rows, null, 2));
+  } finally {
+    await client.end();
+  }
 }
 
 investigatePricing().catch(console.error);

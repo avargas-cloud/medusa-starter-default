@@ -7,32 +7,37 @@
  * Replaces the slow client-side approach of fetching all /admin/orders.
  */
 
-import type { AuthenticatedMedusaRequest, MedusaResponse } from '@medusajs/framework/http'
-import { Client } from 'pg'
+import type {
+  AuthenticatedMedusaRequest,
+  MedusaResponse,
+} from "@medusajs/framework/http";
+import { Client } from "pg";
 
 export async function GET(
-    req: AuthenticatedMedusaRequest,
-    res: MedusaResponse
+  req: AuthenticatedMedusaRequest,
+  res: MedusaResponse
 ) {
-    const { from, to } = req.query as { from?: string; to?: string }
+  const { from, to } = req.query as { from?: string; to?: string };
 
-    if (!from || !to) {
-        return res.status(400).json({ error: 'from and to query params are required (ISO 8601)' })
-    }
+  if (!from || !to) {
+    return res
+      .status(400)
+      .json({ error: "from and to query params are required (ISO 8601)" });
+  }
 
-    const client = new Client({ connectionString: process.env.DATABASE_URL })
-    try {
-        await client.connect()
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  try {
+    await client.connect();
 
-        const { rows } = await client.query<{
-            variant_id: string | null
-            title: string
-            sku: string | null
-            thumbnail: string | null
-            qty_sold: string
-            revenue: string
-        }>(
-            `
+    const { rows } = await client.query<{
+      variant_id: string | null;
+      title: string;
+      sku: string | null;
+      thumbnail: string | null;
+      qty_sold: string;
+      revenue: string;
+    }>(
+      `
             SELECT
                 oi_line.variant_id,
                 oi_line.title,
@@ -50,24 +55,26 @@ export async function GET(
             ORDER  BY revenue DESC
             LIMIT  20
             `,
-            [from, to]
-        )
+      [from, to]
+    );
 
-        return res.json({
-            products: rows.map(r => ({
-                variant_id: r.variant_id,
-                title: r.title,
-                sku: r.sku ?? '',
-                thumbnail: r.thumbnail ?? null,
-                qty_sold: Number(r.qty_sold),
-                revenue: Number(r.revenue),
-            })),
-        })
-    } catch (err: any) {
-        const logger = (req.scope as any).resolve?.('logger')
-        logger?.error?.(`[dashboard/top-products] ${err.message}`)
-        return res.status(500).json({ error: err.message })
-    } finally {
-        await client.end().catch(() => {/* ignore */ })
-    }
+    return res.json({
+      products: rows.map((r) => ({
+        variant_id: r.variant_id,
+        title: r.title,
+        sku: r.sku ?? "",
+        thumbnail: r.thumbnail ?? null,
+        qty_sold: Number(r.qty_sold),
+        revenue: Number(r.revenue),
+      })),
+    });
+  } catch (err: any) {
+    const logger = (req.scope as any).resolve?.("logger");
+    logger?.error?.(`[dashboard/top-products] ${err.message}`);
+    return res.status(500).json({ error: err.message });
+  } finally {
+    await client.end().catch(() => {
+      /* ignore */
+    });
+  }
 }

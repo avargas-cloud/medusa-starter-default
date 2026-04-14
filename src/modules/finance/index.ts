@@ -1,8 +1,8 @@
-import FinanceModuleService from './service'
-import { Module } from "@medusajs/utils"
+import FinanceModuleService from "./service";
+import { Module } from "@medusajs/utils";
 
-export const FINANCE_MODULE = 'finance'
+export const FINANCE_MODULE = "finance";
 
 export default Module(FINANCE_MODULE, {
-    service: FinanceModuleService,
-})
+  service: FinanceModuleService,
+});

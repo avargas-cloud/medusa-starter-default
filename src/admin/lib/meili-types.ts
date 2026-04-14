@@ -7,50 +7,50 @@
  * Matches the transformer definition in medusa-config.ts
  */
 export type MeiliProduct = {
-    /** Product ID (primary key) */
-    id: string;
+  /** Product ID (primary key) */
+  id: string;
 
-    /** Product title */
-    title: string;
+  /** Product title */
+  title: string;
 
-    /** Product handle (slug) */
-    handle: string;
+  /** Product handle (slug) */
+  handle: string;
 
-    /** Product description */
-    description: string | null;
+  /** Product description */
+  description: string | null;
 
-    /** Thumbnail URL */
-    thumbnail: string | null;
+  /** Thumbnail URL */
+  thumbnail: string | null;
 
-    /** Product status (published/draft) */
-    status: "published" | "draft";
+  /** Product status (published/draft) */
+  status: "published" | "draft";
 
-    /** Array of category handles for filtering */
-    category_handles: string[];
+  /** Array of category handles for filtering */
+  category_handles: string[];
 
-    /** Flattened array of variant SKUs for searchability */
-    variant_sku: string[];
+  /** Flattened array of variant SKUs for searchability */
+  variant_sku: string[];
 
-    /** Product metadata object */
-    metadata: Record<string, any>;
+  /** Product metadata object */
+  metadata: Record<string, any>;
 
-    /** Material extracted from metadata */
-    metadata_material: string | null;
+  /** Material extracted from metadata */
+  metadata_material: string | null;
 
-    /** Category extracted from metadata */
-    metadata_category: string | null;
+  /** Category extracted from metadata */
+  metadata_category: string | null;
 };
 
 /**
  * MeiliSearch search response structure
  */
 export type MeiliSearchResponse<T> = {
-    hits: T[];
-    query: string;
-    processingTimeMs: number;
-    limit: number;
-    offset: number;
-    estimatedTotalHits: number;
+  hits: T[];
+  query: string;
+  processingTimeMs: number;
+  limit: number;
+  offset: number;
+  estimatedTotalHits: number;
 };
 
 /**
@@ -58,72 +58,72 @@ export type MeiliSearchResponse<T> = {
  * Used for inventory-advanced search and filtering
  */
 export type MeiliInventoryItem = {
-    /** Inventory Item ID (primary key) */
-    id: string;
+  /** Inventory Item ID (primary key) */
+  id: string;
 
-    /** Product SKU */
-    sku: string;
+  /** Product SKU */
+  sku: string;
 
-    /** Product/Variant title */
-    title: string;
+  /** Product/Variant title */
+  title: string;
 
-    /** Product thumbnail URL */
-    thumbnail: string | null;
+  /** Product thumbnail URL */
+  thumbnail: string | null;
 
-    /** Total stock quantity */
-    totalStock: number;
+  /** Total stock quantity */
+  totalStock: number;
 
-    /** Reserved quantity */
-    totalReserved: number;
+  /** Reserved quantity */
+  totalReserved: number;
 
-    /** Price in dollars (v2 format) */
-    price: number;
+  /** Price in dollars (v2 format) */
+  price: number;
 
-    /** Currency code */
-    currencyCode: string;
+  /** Currency code */
+  currencyCode: string;
 
-    /** Variant ID for navigation */
-    variantId: string | null;
+  /** Variant ID for navigation */
+  variantId: string | null;
 
-    /** Product ID for navigation */
-    productId: string | null;
+  /** Product ID for navigation */
+  productId: string | null;
 
-    /** Array of category handles for filtering (includes parent hierarchy) */
-    category_handles: string[];
+  /** Array of category handles for filtering (includes parent hierarchy) */
+  category_handles: string[];
 
-    /** Product status */
-    status: "published" | "draft";
+  /** Product status */
+  status: "published" | "draft";
 
-    /** Prices indexed by price_list_id (for dynamic price columns).
-     *  Key = price_list_id, Value = amount in dollars.
-     *  Fallback: if a product has no price in a given list, use `price` (retail). */
-    pricesByList?: Record<string, number>;
+  /** Prices indexed by price_list_id (for dynamic price columns).
+   *  Key = price_list_id, Value = amount in dollars.
+   *  Fallback: if a product has no price in a given list, use `price` (retail). */
+  pricesByList?: Record<string, number>;
 
-    /** Timestamps for sync tracking */
-    created_at: number;
-    updated_at: number;
+  /** Timestamps for sync tracking */
+  created_at: number;
+  updated_at: number;
 };
 
 /**
  * Customer document structure as indexed in MeiliSearch
  */
 export type MeiliCustomer = {
-    id: string;
-    email: string;
-    first_name: string | null;
-    last_name: string | null;
-    company_name: string;
-    phone: string | null;
-    has_account: boolean;
-    created_at: number; // timestamp
+  id: string;
+  email: string;
+  first_name: string | null;
+  last_name: string | null;
+  company_name: string;
+  phone: string | null;
+  has_account: boolean;
+  created_at: number; // timestamp
 
-    // QuickBooks Metadata
-    list_id: string;
-    price_level: string;
-    customer_type: string;
+  // QuickBooks Metadata
+  list_id: string;
+  price_level: string;
+  customer_type: string;
 
-    // Groups
-    groups: string[];
+  // Groups
+  groups: string[];
 };
 
 export const CUSTOMERS_INDEX = "customers";

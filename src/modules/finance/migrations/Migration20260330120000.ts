@@ -1,4 +1,4 @@
-import { Migration } from "@medusajs/framework/mikro-orm/migrations"
+import { Migration } from "@medusajs/framework/mikro-orm/migrations";
 
 /**
  * Migration20260330120000
@@ -12,9 +12,8 @@ import { Migration } from "@medusajs/framework/mikro-orm/migrations"
  *   - Prevent duplicate SO creation for orders that were manually entered in QB
  */
 export class Migration20260330120000 extends Migration {
-
-    override async up(): Promise<void> {
-        this.addSql(`
+  override async up(): Promise<void> {
+    this.addSql(`
             CREATE TABLE IF NOT EXISTS qb_legacy_so (
                 id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 qb_txn_id           TEXT NOT NULL UNIQUE,
@@ -27,12 +26,16 @@ export class Migration20260330120000 extends Migration {
                 status              TEXT NOT NULL DEFAULT 'open',
                 imported_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
-        `)
-        this.addSql(`CREATE INDEX IF NOT EXISTS idx_qb_legacy_so_ref ON qb_legacy_so (qb_ref_number);`)
-        this.addSql(`CREATE INDEX IF NOT EXISTS idx_qb_legacy_so_customer ON qb_legacy_so (qb_customer_list_id);`)
-    }
+        `);
+    this.addSql(
+      `CREATE INDEX IF NOT EXISTS idx_qb_legacy_so_ref ON qb_legacy_so (qb_ref_number);`
+    );
+    this.addSql(
+      `CREATE INDEX IF NOT EXISTS idx_qb_legacy_so_customer ON qb_legacy_so (qb_customer_list_id);`
+    );
+  }
 
-    override async down(): Promise<void> {
-        this.addSql(`DROP TABLE IF EXISTS qb_legacy_so;`)
-    }
+  override async down(): Promise<void> {
+    this.addSql(`DROP TABLE IF EXISTS qb_legacy_so;`);
+  }
 }

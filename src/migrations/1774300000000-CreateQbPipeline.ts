@@ -1,13 +1,13 @@
-import { MigrationInterface, QueryRunner } from "typeorm"
+import { MigrationInterface, QueryRunner } from "typeorm";
 
 export class CreateQbPipeline1774300000000 implements MigrationInterface {
-    name = "CreateQbPipeline1774300000000"
+  name = "CreateQbPipeline1774300000000";
 
-    public async up(queryRunner: QueryRunner): Promise<void> {
-        // ─── qb_order_pipeline ────────────────────────────────────────────────
-        // One row per QB document step per order/reference.
-        // depends_on enforces sequential execution (Invoice after Sales Order, etc.)
-        await queryRunner.query(`
+  public async up(queryRunner: QueryRunner): Promise<void> {
+    // ─── qb_order_pipeline ────────────────────────────────────────────────
+    // One row per QB document step per order/reference.
+    // depends_on enforces sequential execution (Invoice after Sales Order, etc.)
+    await queryRunner.query(`
             CREATE TABLE IF NOT EXISTS qb_order_pipeline (
                 id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 
@@ -49,21 +49,29 @@ export class CreateQbPipeline1774300000000 implements MigrationInterface {
                 confirmed_at    timestamptz,
                 failed_at       timestamptz
             )
-        `)
+        `);
 
-        await queryRunner.query(`CREATE INDEX IF NOT EXISTS idx_qb_pipeline_order     ON qb_order_pipeline (order_id, status)`)
-        await queryRunner.query(`CREATE INDEX IF NOT EXISTS idx_qb_pipeline_ref       ON qb_order_pipeline (reference_id, status)`)
-        await queryRunner.query(`CREATE INDEX IF NOT EXISTS idx_qb_pipeline_status    ON qb_order_pipeline (status, created_at DESC)`)
-        await queryRunner.query(`CREATE INDEX IF NOT EXISTS idx_qb_pipeline_submitted ON qb_order_pipeline (bridge_op_id) WHERE bridge_op_id IS NOT NULL`)
+    await queryRunner.query(
+      `CREATE INDEX IF NOT EXISTS idx_qb_pipeline_order     ON qb_order_pipeline (order_id, status)`
+    );
+    await queryRunner.query(
+      `CREATE INDEX IF NOT EXISTS idx_qb_pipeline_ref       ON qb_order_pipeline (reference_id, status)`
+    );
+    await queryRunner.query(
+      `CREATE INDEX IF NOT EXISTS idx_qb_pipeline_status    ON qb_order_pipeline (status, created_at DESC)`
+    );
+    await queryRunner.query(
+      `CREATE INDEX IF NOT EXISTS idx_qb_pipeline_submitted ON qb_order_pipeline (bridge_op_id) WHERE bridge_op_id IS NOT NULL`
+    );
 
-        // ─── qb_edit_sequence_cache ───────────────────────────────────────────
-        // Caches QB EditSequence per entity to avoid a double bridge round-trip
-        // on every Mod (update) operation.
-        // Strategy:
-        //   1. Use cached value → submit Mod
-        //   2. QB returns OK  → update cache with new EditSequence from response
-        //   3. QB returns 3210 (conflict) → DELETE this row → re-fetch → retry
-        await queryRunner.query(`
+    // ─── qb_edit_sequence_cache ───────────────────────────────────────────
+    // Caches QB EditSequence per entity to avoid a double bridge round-trip
+    // on every Mod (update) operation.
+    // Strategy:
+    //   1. Use cached value → submit Mod
+    //   2. QB returns OK  → update cache with new EditSequence from response
+    //   3. QB returns 3210 (conflict) → DELETE this row → re-fetch → retry
+    await queryRunner.query(`
             CREATE TABLE IF NOT EXISTS qb_edit_sequence_cache (
                 entity_type  text        NOT NULL,   -- 'customer' | 'invoice' | 'sales_order'
                 qb_id        text        NOT NULL,   -- QB ListID or TxnID
@@ -71,11 +79,11 @@ export class CreateQbPipeline1774300000000 implements MigrationInterface {
                 cached_at    timestamptz NOT NULL DEFAULT NOW(),
                 PRIMARY KEY (entity_type, qb_id)
             )
-        `)
-    }
+        `);
+  }
 
-    public async down(queryRunner: QueryRunner): Promise<void> {
-        await queryRunner.query(`DROP TABLE IF EXISTS qb_edit_sequence_cache`)
-        await queryRunner.query(`DROP TABLE IF EXISTS qb_order_pipeline`)
-    }
+  public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`DROP TABLE IF EXISTS qb_edit_sequence_cache`);
+    await queryRunner.query(`DROP TABLE IF EXISTS qb_order_pipeline`);
+  }
 }

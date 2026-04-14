@@ -1,5 +1,5 @@
-import { model } from "@medusajs/utils"
-import { CustomerPayment } from './customer-payment'
+import { model } from "@medusajs/utils";
+import { CustomerPayment } from "./customer-payment";
 
 /**
  * PaymentApplication — links a CustomerPayment to a specific invoice (and its parent order).
@@ -17,18 +17,18 @@ import { CustomerPayment } from './customer-payment'
  *
  * A voided application restores the amount_applied back to the CustomerPayment's available balance.
  */
-const PaymentApplication = model.define('payment_application', {
-    id:             model.id({ prefix: 'papp' }).primaryKey(),
-    payment:        model.belongsTo(() => CustomerPayment, { mappedBy: 'applications' }),
-    invoice_id:     model.text().nullable(),        // null for web orders (no PosInvoice)
-    invoice_number: model.text().nullable(),        // human-readable POS invoice number e.g. "30033" — written at apply time
-    order_id:       model.text(),                  // always set — the Medusa order
-    amount_applied: model.bigNumber(),             // in cents
-    applied_at:     model.dateTime(),
-    applied_by:     model.text().nullable(),        // admin user email / "system" for subscribers
-    voided_at:      model.dateTime().nullable(),
-    void_reason:    model.text().nullable(),
-    voided_by:      model.text().nullable(),
-})
+const PaymentApplication = model.define("payment_application", {
+  id: model.id({ prefix: "papp" }).primaryKey(),
+  payment: model.belongsTo(() => CustomerPayment, { mappedBy: "applications" }),
+  invoice_id: model.text().nullable(), // null for web orders (no PosInvoice)
+  invoice_number: model.text().nullable(), // human-readable POS invoice number e.g. "30033" — written at apply time
+  order_id: model.text(), // always set — the Medusa order
+  amount_applied: model.bigNumber(), // in cents
+  applied_at: model.dateTime(),
+  applied_by: model.text().nullable(), // admin user email / "system" for subscribers
+  voided_at: model.dateTime().nullable(),
+  void_reason: model.text().nullable(),
+  voided_by: model.text().nullable(),
+});
 
-export { PaymentApplication }
+export { PaymentApplication };

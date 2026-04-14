@@ -3,31 +3,31 @@
  * Script to investigate and optionally clean up price_rules
  * that are blocking calculatePrices() from working
  */
-import dotenv from 'dotenv'
-import pkg from 'pg'
-import readline from 'readline'
+import dotenv from "dotenv";
+import pkg from "pg";
+import readline from "readline";
 
-const { Client } = pkg
-dotenv.config()
+const { Client } = pkg;
+dotenv.config();
 
 const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-})
+  input: process.stdin,
+  output: process.stdout,
+});
 
 function question(query: string): Promise<string> {
-    return new Promise(resolve => rl.question(query, resolve))
+  return new Promise((resolve) => rl.question(query, resolve));
 }
 
 async function main() {
-    const client = new Client({ connectionString: process.env.DATABASE_URL })
-    await client.connect()
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
 
-    try {
-        console.log('=== INVESTIGATING PRICE RULES ===\n')
+  try {
+    console.log("=== INVESTIGATING PRICE RULES ===\n");
 
-        // Get all price_rules with their attributes
-        const rules = await client.query(`
+    // Get all price_rules with their attributes
+    const rules = await client.query(`
             SELECT 
                 pr.id as rule_id,
                 pr.price_id,
@@ -44,80 +44,102 @@ async function main() {
             JOIN product_variant pv ON pvps.variant_id = pv.id
             WHERE pv.product_id = 'product_01KGAX7RD0E6AS8JDARPEED795'
             AND p.deleted_at IS NULL
-        `)
+        `);
 
-        if (rules.rows.length === 0) {
-            console.log('✅ No price_rules found! Prices should work with calculatePrices()\n')
-            await client.end()
-            rl.close()
-            return
-        }
+    if (rules.rows.length === 0) {
+      console.log(
+        "✅ No price_rules found! Prices should work with calculatePrices()\n"
+      );
+      await client.end();
+      rl.close();
+      return;
+    }
 
-        console.log(`⚠️  Found ${rules.rows.length} price_rules:\n`)
-        console.table(rules.rows)
+    console.log(`⚠️  Found ${rules.rows.length} price_rules:\n`);
+    console.table(rules.rows);
 
-        console.log('\n🔍 ANALYSIS:')
-        const rulesByAttribute = new Map<string, any[]>()
-        rules.rows.forEach(rule => {
-            const attr = rule.rule_attribute || 'unknown'
-            if (!rulesByAttribute.has(attr)) {
-                rulesByAttribute.set(attr, [])
-            }
-            rulesByAttribute.get(attr)!.push(rule)
-        })
+    console.log("\n🔍 ANALYSIS:");
+    const rulesByAttribute = new Map<string, any[]>();
+    rules.rows.forEach((rule) => {
+      const attr = rule.rule_attribute || "unknown";
+      if (!rulesByAttribute.has(attr)) {
+        rulesByAttribute.set(attr, []);
+      }
+      rulesByAttribute.get(attr)!.push(rule);
+    });
 
-        rulesByAttribute.forEach((rules, attribute) => {
-            console.log(`\n  ${attribute}:`)
-            rules.forEach(r => {
-                console.log(`    - Price $${r.price_amount} requires ${attribute} = "${r.rule_value}"`)
-            })
-        })
+    rulesByAttribute.forEach((rules, attribute) => {
+      console.log(`\n  ${attribute}:`);
+      rules.forEach((r) => {
+        console.log(
+          `    - Price $${r.price_amount} requires ${attribute} = "${r.rule_value}"`
+        );
+      });
+    });
 
-        console.log('\n❌ PROBLEM:')
-        console.log('   These rules are blocking calculatePrices() from returning base prices.')
-        console.log('   Unless you provide the EXACT context they require, you get $0.00\n')
+    console.log("\n❌ PROBLEM:");
+    console.log(
+      "   These rules are blocking calculatePrices() from returning base prices."
+    );
+    console.log(
+      "   Unless you provide the EXACT context they require, you get $0.00\n"
+    );
 
-        const answer = await question('Do you want to DELETE all these price_rules? (yes/no): ')
+    const answer = await question(
+      "Do you want to DELETE all these price_rules? (yes/no): "
+    );
 
-        if (answer.toLowerCase() === 'yes' || answer.toLowerCase() === 'y') {
-            const ruleIds = rules.rows.map(r => r.rule_id)
+    if (answer.toLowerCase() === "yes" || answer.toLowerCase() === "y") {
+      const ruleIds = rules.rows.map((r) => r.rule_id);
 
-            const deleteResult = await client.query(`
+      const deleteResult = await client.query(
+        `
                 DELETE FROM price_rule
                 WHERE id = ANY($1)
                 RETURNING id
-            `, [ruleIds])
+            `,
+        [ruleIds]
+      );
 
-            console.log(`\n✅ Deleted ${deleteResult.rowCount} price_rules`)
-            console.log('   Now calculatePrices() should work with just currency_code!\n')
+      console.log(`\n✅ Deleted ${deleteResult.rowCount} price_rules`);
+      console.log(
+        "   Now calculatePrices() should work with just currency_code!\n"
+      );
 
-            // Update rules_count on prices
-            const priceIds = [...new Set(rules.rows.map(r => r.price_id))]
-            await client.query(`
+      // Update rules_count on prices
+      const priceIds = [...new Set(rules.rows.map((r) => r.price_id))];
+      await client.query(
+        `
                 UPDATE price
                 SET rules_count = 0
                 WHERE id = ANY($1)
-            `, [priceIds])
+            `,
+        [priceIds]
+      );
 
-            console.log('✅ Updated price.rules_count to 0\n')
-            console.log('🎯 NEXT STEP: Test your backend endpoint - it should return $60.99!')
-
-        } else {
-            console.log('\n⏭️  Skipped deletion. Rules remain in place.')
-            console.log('   To fix calculatePrices(), you must provide this context:')
-            rulesByAttribute.forEach((rules, attribute) => {
-                const values = [...new Set(rules.map(r => r.rule_value))]
-                console.log(`   context: { ${attribute}: [${values.map(v => `"${v}"`).join(', ')}] }`)
-            })
-        }
-
-    } finally {
-        await client.end()
-        rl.close()
+      console.log("✅ Updated price.rules_count to 0\n");
+      console.log(
+        "🎯 NEXT STEP: Test your backend endpoint - it should return $60.99!"
+      );
+    } else {
+      console.log("\n⏭️  Skipped deletion. Rules remain in place.");
+      console.log(
+        "   To fix calculatePrices(), you must provide this context:"
+      );
+      rulesByAttribute.forEach((rules, attribute) => {
+        const values = [...new Set(rules.map((r) => r.rule_value))];
+        console.log(
+          `   context: { ${attribute}: [${values.map((v) => `"${v}"`).join(", ")}] }`
+        );
+      });
     }
+  } finally {
+    await client.end();
+    rl.close();
+  }
 }
 
-main().catch(error => {
-    console.error('Error:', error)
-    process.exit(1)
-})
+main().catch((error) => {
+  console.error("Error:", error);
+  process.exit(1);
+});

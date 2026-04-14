@@ -1,4 +1,4 @@
-import type { MigrationInterface, QueryRunner } from "typeorm"
+import type { MigrationInterface, QueryRunner } from "typeorm";
 
 /**
  * AddCaseInsensitiveCustomerEmailIndex
@@ -12,19 +12,19 @@ import type { MigrationInterface, QueryRunner } from "typeorm"
  * otherwise the index creation will fail on existing violations.
  */
 export class AddCaseInsensitiveCustomerEmailIndex1774920000000 implements MigrationInterface {
-    name = 'AddCaseInsensitiveCustomerEmailIndex1774920000000'
+  name = "AddCaseInsensitiveCustomerEmailIndex1774920000000";
 
-    public async up(queryRunner: QueryRunner): Promise<void> {
-        await queryRunner.query(`
+  public async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
             CREATE UNIQUE INDEX IF NOT EXISTS customer_email_lower_unique
             ON customer (LOWER(email))
             WHERE deleted_at IS NULL
-        `)
-    }
+        `);
+  }
 
-    public async down(queryRunner: QueryRunner): Promise<void> {
-        await queryRunner.query(`
+  public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
             DROP INDEX IF EXISTS customer_email_lower_unique
-        `)
-    }
+        `);
+  }
 }

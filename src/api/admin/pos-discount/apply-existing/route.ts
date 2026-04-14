@@ -1,12 +1,12 @@
-import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { IPromotionModuleService } from "@medusajs/types"
+import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { IPromotionModuleService } from "@medusajs/types";
 import {
-    beginDraftOrderEditWorkflow,
-    addDraftOrderPromotionWorkflow,
-    confirmDraftOrderEditWorkflow,
-    cancelDraftOrderEditWorkflow,
-} from "@medusajs/core-flows"
-import { posOverrideAdjustmentsWorkflow } from "../../../../workflows/pos-discount/workflows"
+  beginDraftOrderEditWorkflow,
+  addDraftOrderPromotionWorkflow,
+  confirmDraftOrderEditWorkflow,
+  cancelDraftOrderEditWorkflow,
+} from "@medusajs/core-flows";
+import { posOverrideAdjustmentsWorkflow } from "../../../../workflows/pos-discount/workflows";
 
 /**
  * POST /admin/pos-discount/apply-existing
@@ -35,127 +35,161 @@ import { posOverrideAdjustmentsWorkflow } from "../../../../workflows/pos-discou
  *   promotion_id   — promo ID (optional, looked up if missing)
  */
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function runWithLockRetry<T>(
-    fn: () => Promise<T>,
-    retries = 3,
-    delayMs = 1500
+  fn: () => Promise<T>,
+  retries = 3,
+  delayMs = 1500
 ): Promise<T> {
-    let lastErr: any
-    for (let attempt = 1; attempt <= retries; attempt++) {
-        try {
-            return await fn()
-        } catch (err: any) {
-            if (err?.message?.includes('acquire lock') || err?.message?.includes('lock')) {
-                lastErr = err
-                if (attempt < retries) {
-                    await sleep(delayMs)
-                    continue
-                }
-            }
-            throw err
+  let lastErr: any;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      if (
+        err?.message?.includes("acquire lock") ||
+        err?.message?.includes("lock")
+      ) {
+        lastErr = err;
+        if (attempt < retries) {
+          await sleep(delayMs);
+          continue;
         }
+      }
+      throw err;
     }
-    throw lastErr
+  }
+  throw lastErr;
 }
 
 export async function POST(
-    req: MedusaRequest,
-    res: MedusaResponse
+  req: MedusaRequest,
+  res: MedusaResponse
 ): Promise<void> {
-    const { order_id, promotion_code, promotion_id } = req.body as {
-        order_id?: string
-        promotion_code?: string
-        promotion_id?: string
+  const { order_id, promotion_code, promotion_id } = req.body as {
+    order_id?: string;
+    promotion_code?: string;
+    promotion_id?: string;
+  };
+
+  if (!order_id) {
+    res.status(400).json({ error: "order_id is required" });
+    return;
+  }
+  if (!promotion_code) {
+    res.status(400).json({ error: "promotion_code is required" });
+    return;
+  }
+
+  const logger = req.scope.resolve("logger");
+  const knex = req.scope.resolve("__pg_connection__");
+
+  try {
+    // ── Step 0: Resolve promotion ID + extract pct value ──────────────────
+    const promotionModule = req.scope.resolve(
+      "promotion"
+    ) as IPromotionModuleService;
+    let resolvedPromoId: string | undefined = promotion_id;
+    let promoMethodValue: number | null = null;
+
+    if (!resolvedPromoId) {
+      const [promoByCode] = await promotionModule.listPromotions({
+        code: [promotion_code],
+      } as any);
+      resolvedPromoId = promoByCode?.id;
     }
 
-    if (!order_id) { res.status(400).json({ error: "order_id is required" }); return }
-    if (!promotion_code) { res.status(400).json({ error: "promotion_code is required" }); return }
+    // ── Step 1: Normalise promotion settings (ALWAYS) ─────────────────────
+    if (resolvedPromoId) {
+      await (promotionModule as any).updatePromotions({
+        id: resolvedPromoId,
+        status: "active",
+        is_tax_inclusive: false,
+      });
 
-    const logger = req.scope.resolve("logger")
-    const knex = req.scope.resolve("__pg_connection__")
-
-    try {
-        // ── Step 0: Resolve promotion ID + extract pct value ──────────────────
-        const promotionModule = req.scope.resolve("promotion") as IPromotionModuleService
-        let resolvedPromoId: string | undefined = promotion_id
-        let promoMethodValue: number | null = null
-
-        if (!resolvedPromoId) {
-            const [promoByCode] = await promotionModule.listPromotions({ code: [promotion_code] } as any)
-            resolvedPromoId = promoByCode?.id
+      const freshPromo = await promotionModule.retrievePromotion(
+        resolvedPromoId,
+        {
+          relations: ["application_method"],
         }
+      );
+      const appMethod = (freshPromo as any).application_method;
+      promoMethodValue =
+        appMethod?.value != null ? Number(appMethod.value) : null;
 
-        // ── Step 1: Normalise promotion settings (ALWAYS) ─────────────────────
-        if (resolvedPromoId) {
-            await (promotionModule as any).updatePromotions({
-                id: resolvedPromoId,
-                status: "active",
-                is_tax_inclusive: false,
-            })
-
-            const freshPromo = await promotionModule.retrievePromotion(resolvedPromoId, {
-                relations: ["application_method"],
-            })
-            const appMethod = (freshPromo as any).application_method
-            promoMethodValue = appMethod?.value != null ? Number(appMethod.value) : null
-
-            if (appMethod?.id) {
-                await knex.raw(`
+      if (appMethod?.id) {
+        await knex.raw(
+          `
                     UPDATE promotion_application_method
                     SET target_type = 'items', updated_at = NOW()
                     WHERE id = ? AND deleted_at IS NULL
-                `, [appMethod.id])
+                `,
+          [appMethod.id]
+        );
 
-                // ORM cache bust
-                await promotionModule.retrievePromotion(resolvedPromoId, {
-                    relations: ["application_method"],
-                })
-            }
-            logger.info(`[POS apply-existing] Normalised ${promotion_code} → active, is_tax_inclusive=false, target_type=items, pct=${promoMethodValue}`)
-        } else {
-            // Fallback: read pct from DB
-            const pgPromo = await knex.raw(`
+        // ORM cache bust
+        await promotionModule.retrievePromotion(resolvedPromoId, {
+          relations: ["application_method"],
+        });
+      }
+      logger.info(
+        `[POS apply-existing] Normalised ${promotion_code} → active, is_tax_inclusive=false, target_type=items, pct=${promoMethodValue}`
+      );
+    } else {
+      // Fallback: read pct from DB
+      const pgPromo = await knex.raw(
+        `
                 SELECT am.value FROM promotion p
                 JOIN promotion_application_method am ON am.promotion_id = p.id
                 WHERE p.code = ? AND p.deleted_at IS NULL AND am.deleted_at IS NULL LIMIT 1
-            `, [promotion_code])
-            promoMethodValue = pgPromo.rows[0] ? Number(pgPromo.rows[0].value) : null
-            logger.warn(`[POS apply-existing] promotionId not resolved for ${promotion_code}, pct=${promoMethodValue}`)
-        }
+            `,
+        [promotion_code]
+      );
+      promoMethodValue = pgPromo.rows[0] ? Number(pgPromo.rows[0].value) : null;
+      logger.warn(
+        `[POS apply-existing] promotionId not resolved for ${promotion_code}, pct=${promoMethodValue}`
+      );
+    }
 
-        // ── Step 2: Cancel any open order edits ───────────────────────────────
-        try {
-            await cancelDraftOrderEditWorkflow(req.scope).run({ input: { order_id } })
-            await sleep(500)
-        } catch { /* No open edit — fine */ }
+    // ── Step 2: Cancel any open order edits ───────────────────────────────
+    try {
+      await cancelDraftOrderEditWorkflow(req.scope).run({
+        input: { order_id },
+      });
+      await sleep(500);
+    } catch {
+      /* No open edit — fine */
+    }
 
-        // ── Step 3: Begin a new draft order edit ─────────────────────────────
-        await runWithLockRetry(
-            () => beginDraftOrderEditWorkflow(req.scope).run({ input: { order_id } }),
-            3, 1500
-        )
-        logger.info(`[POS apply-existing] Began draft order edit`)
+    // ── Step 3: Begin a new draft order edit ─────────────────────────────
+    await runWithLockRetry(
+      () => beginDraftOrderEditWorkflow(req.scope).run({ input: { order_id } }),
+      3,
+      1500
+    );
+    logger.info(`[POS apply-existing] Began draft order edit`);
 
-        // ── Step 4: Apply the promotion via workflow ───────────────────────────
-        await addDraftOrderPromotionWorkflow(req.scope).run({
-            input: { order_id, promo_codes: [promotion_code] }
-        })
-        logger.info(`[POS apply-existing] Applied ${promotion_code} via workflow`)
+    // ── Step 4: Apply the promotion via workflow ───────────────────────────
+    await addDraftOrderPromotionWorkflow(req.scope).run({
+      input: { order_id, promo_codes: [promotion_code] },
+    });
+    logger.info(`[POS apply-existing] Applied ${promotion_code} via workflow`);
 
-        // ── Step 5 (NEW NATIVE): Override adjustments BEFORE confirmation ──────
-        // Intercept the Draft Edit Payload and overwrite all the bad prorated numbers.
-        await posOverrideAdjustmentsWorkflow(req.scope).run({
-            input: {
-                order_id,
-                promotion_code,
-                pct_discount: promoMethodValue ? promoMethodValue / 100 : null
-            }
-        })
-        logger.info(`[POS apply-existing] Ran posOverrideAdjustmentsWorkflow to patch JSON adjustments payload`)
+    // ── Step 5 (NEW NATIVE): Override adjustments BEFORE confirmation ──────
+    // Intercept the Draft Edit Payload and overwrite all the bad prorated numbers.
+    await posOverrideAdjustmentsWorkflow(req.scope).run({
+      input: {
+        order_id,
+        promotion_code,
+        pct_discount: promoMethodValue ? promoMethodValue / 100 : null,
+      },
+    });
+    logger.info(
+      `[POS apply-existing] Ran posOverrideAdjustmentsWorkflow to patch JSON adjustments payload`
+    );
 
-        /* --- LEGACY SQL FORCE LOGIC (Commented for fallback per user request) ---
+    /* --- LEGACY SQL FORCE LOGIC (Commented for fallback per user request) ---
         // ── Step 5: Soft-delete ALL current active adjustments for this promo ──
         try {
             const del = await knex.raw(\`
@@ -174,19 +208,19 @@ export async function POST(
         }
         ------------------------------------------------------------------------- */
 
-        // ── Step 6: Confirm the edit ──────────────────────────────────────────
-        // Materialises ITEM_ADJUSTMENTS_REPLACE → NEW order_line_item_adjustment rows
-        // with workflow-computed amounts (may be wrong due to ORM snapshot qty mismatch)
-        // BUT we fixed the JSON payload in Step 5, so decorateCartTotals natively succeeds.
-        await confirmDraftOrderEditWorkflow(req.scope).run({
-            input: {
-                order_id,
-                confirmed_by: (req as any).auth_context?.actor_id ?? "pos-system"
-            }
-        })
-        logger.info(`[POS apply-existing] Confirmed draft order edit`)
+    // ── Step 6: Confirm the edit ──────────────────────────────────────────
+    // Materialises ITEM_ADJUSTMENTS_REPLACE → NEW order_line_item_adjustment rows
+    // with workflow-computed amounts (may be wrong due to ORM snapshot qty mismatch)
+    // BUT we fixed the JSON payload in Step 5, so decorateCartTotals natively succeeds.
+    await confirmDraftOrderEditWorkflow(req.scope).run({
+      input: {
+        order_id,
+        confirmed_by: (req as any).auth_context?.actor_id ?? "pos-system",
+      },
+    });
+    logger.info(`[POS apply-existing] Confirmed draft order edit`);
 
-        /* --- LEGACY SQL FORCE LOGIC (Commented for fallback per user request) ---
+    /* --- LEGACY SQL FORCE LOGIC (Commented for fallback per user request) ---
         // ── Step 7: Correct adjustment amounts from authoritative order_item ───
         if (promoMethodValue != null && promoMethodValue > 0) {
             try {
@@ -278,10 +312,9 @@ export async function POST(
         }
         ------------------------------------------------------------------------- */
 
-        res.status(200).json({ success: true })
-
-    } catch (err: any) {
-        logger.error(`[POS apply-existing] Error: ${err.message}`)
-        res.status(500).json({ error: err.message || "Failed to apply promotion" })
-    }
+    res.status(200).json({ success: true });
+  } catch (err: any) {
+    logger.error(`[POS apply-existing] Error: ${err.message}`);
+    res.status(500).json({ error: err.message || "Failed to apply promotion" });
+  }
 }

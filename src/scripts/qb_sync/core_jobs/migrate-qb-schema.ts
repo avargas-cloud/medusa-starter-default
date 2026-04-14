@@ -1,19 +1,19 @@
 #!/usr/bin/env tsx
-import { Client } from 'pg';
-import dotenv from 'dotenv';
+import { Client } from "pg";
+import dotenv from "dotenv";
 dotenv.config();
 
 async function runMigration() {
-    const client = new Client({
-        connectionString: process.env.DATABASE_URL
-    });
+  const client = new Client({
+    connectionString: process.env.DATABASE_URL,
+  });
 
-    try {
-        await client.connect();
-        console.log('✅ Connected to database\n');
+  try {
+    await client.connect();
+    console.log("✅ Connected to database\n");
 
-        // Create quickbooks_config table
-        await client.query(`
+    // Create quickbooks_config table
+    await client.query(`
             CREATE TABLE IF NOT EXISTS quickbooks_config (
                 id VARCHAR(255) PRIMARY KEY,
                 inventory_interval_minutes INT NOT NULL DEFAULT 30,
@@ -26,10 +26,10 @@ async function runMigration() {
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
         `);
-        console.log('✅ Created quickbooks_config table');
+    console.log("✅ Created quickbooks_config table");
 
-        // Create quickbooks_logs table
-        await client.query(`
+    // Create quickbooks_logs table
+    await client.query(`
             CREATE TABLE IF NOT EXISTS quickbooks_logs (
                 id VARCHAR(255) PRIMARY KEY,
                 type VARCHAR(50) NOT NULL,
@@ -42,23 +42,23 @@ async function runMigration() {
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
         `);
-        console.log('✅ Created quickbooks_logs table');
+    console.log("✅ Created quickbooks_logs table");
 
-        // Create indexes
-        await client.query(`
+    // Create indexes
+    await client.query(`
             CREATE INDEX IF NOT EXISTS idx_qb_logs_created_at 
             ON quickbooks_logs(created_at DESC);
         `);
-        console.log('✅ Created index: idx_qb_logs_created_at');
+    console.log("✅ Created index: idx_qb_logs_created_at");
 
-        await client.query(`
+    await client.query(`
             CREATE INDEX IF NOT EXISTS idx_qb_logs_type_status 
             ON quickbooks_logs(type, status);
         `);
-        console.log('✅ Created index: idx_qb_logs_type_status');
+    console.log("✅ Created index: idx_qb_logs_type_status");
 
-        // Insert default configuration
-        await client.query(`
+    // Insert default configuration
+    await client.query(`
             INSERT INTO quickbooks_config (
                 id,
                 inventory_interval_minutes,
@@ -76,16 +76,15 @@ async function runMigration() {
             )
             ON CONFLICT (id) DO NOTHING;
         `);
-        console.log('✅ Inserted default configuration');
+    console.log("✅ Inserted default configuration");
 
-        console.log('\n🎉 Migration completed successfully!\n');
-
-    } catch (error) {
-        console.error('❌ Migration failed:', error);
-        throw error;
-    } finally {
-        await client.end();
-    }
+    console.log("\n🎉 Migration completed successfully!\n");
+  } catch (error) {
+    console.error("❌ Migration failed:", error);
+    throw error;
+  } finally {
+    await client.end();
+  }
 }
 
 runMigration();

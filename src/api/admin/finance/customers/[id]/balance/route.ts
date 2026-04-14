@@ -1,6 +1,6 @@
-import { MedusaRequest, MedusaResponse } from '@medusajs/framework/http'
-import { FINANCE_MODULE } from '../../../../../../modules/finance'
-import { INVOICE_MODULE } from '../../../../../../modules/invoices'
+import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { FINANCE_MODULE } from "../../../../../../modules/finance";
+import { INVOICE_MODULE } from "../../../../../../modules/invoices";
 
 /**
  * GET /admin/finance/customers/:id/balance
@@ -14,80 +14,91 @@ import { INVOICE_MODULE } from '../../../../../../modules/invoices'
  * 5. Outstanding Invoices array
  */
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
-    const customerId = req.params.id
-    
-    if (!customerId) {
-        return res.status(400).json({ error: 'Customer ID is required' })
-    }
+  const customerId = req.params.id;
 
-    try {
-        const financeService = req.scope.resolve(FINANCE_MODULE)
-        const invoiceService = req.scope.resolve(INVOICE_MODULE)
+  if (!customerId) {
+    return res.status(400).json({ error: "Customer ID is required" });
+  }
 
-        // 1. Get Available Credit (from pure POS payments that are not fully applied)
-        // Note: web payments are ALWAYS 'applied', so they are excluded naturally
-        const unappliedPayments = await financeService.listCustomerPayments({
-            customer_id: customerId,
-        }, {
-            relations: ['applications'] // Need this to calculate exact remaining amounts if partially_applied
-        })
-        
-        let availableCreditCents = 0;
-        const availableCreditsList: any[] = []
+  try {
+    const financeService = req.scope.resolve(FINANCE_MODULE);
+    const invoiceService = req.scope.resolve(INVOICE_MODULE);
 
-        unappliedPayments.forEach((p: any) => {
-            if (p.status === 'available' || p.status === 'partially_applied') {
-                const totalApplied = p.applications
-                    .filter((app: any) => !app.voided_at)
-                    .reduce((sum: number, app: any) => sum + Number(app.amount_applied), 0)
-                
-                const remainingAmountCents = Number(p.amount) - totalApplied;
-                
-                if (remainingAmountCents > 0) {
-                    availableCreditCents += remainingAmountCents
-                    availableCreditsList.push({
-                        ...p,
-                        remaining_amount: remainingAmountCents / 100,
-                        locked_order_id: p.locked_order_id as string | null
-                    })
-                }
-            }
-        })
+    // 1. Get Available Credit (from pure POS payments that are not fully applied)
+    // Note: web payments are ALWAYS 'applied', so they are excluded naturally
+    const unappliedPayments = await financeService.listCustomerPayments(
+      {
+        customer_id: customerId,
+      },
+      {
+        relations: ["applications"], // Need this to calculate exact remaining amounts if partially_applied
+      }
+    );
 
-        // 2. Get AR from Outstanding Invoices
-        // Fetch PosInvoices for this customer that are NOT paid and NOT voided
-        const allInvoices = await invoiceService.listPosInvoices({
-            customer_id: customerId
-        })
+    let availableCreditCents = 0;
+    const availableCreditsList: any[] = [];
 
-        const outstandingInvoices = allInvoices.filter((inv: any) => 
-            inv.status !== 'voided' && inv.status !== 'paid' && Number(inv.balance_due) > 0
-        )
+    unappliedPayments.forEach((p: any) => {
+      if (p.status === "available" || p.status === "partially_applied") {
+        const totalApplied = p.applications
+          .filter((app: any) => !app.voided_at)
+          .reduce(
+            (sum: number, app: any) => sum + Number(app.amount_applied),
+            0
+          );
 
-        const totalArOutstandingCents = outstandingInvoices.reduce((sum: number, inv: any) => sum + Number(inv.balance_due), 0)
-        const totalArOutstanding = totalArOutstandingCents / 100;
+        const remainingAmountCents = Number(p.amount) - totalApplied;
 
-        // 3. Computed Balances in DOLLARS for frontend
-        const availableCredit = availableCreditCents / 100;
-        const netBalance = totalArOutstanding - availableCredit;
+        if (remainingAmountCents > 0) {
+          availableCreditCents += remainingAmountCents;
+          availableCreditsList.push({
+            ...p,
+            remaining_amount: remainingAmountCents / 100,
+            locked_order_id: p.locked_order_id as string | null,
+          });
+        }
+      }
+    });
 
-        return res.json({
-            summary: {
-                total_available_credit: availableCredit,
-                total_ar_outstanding: totalArOutstanding,
-                net_balance: netBalance,
-            },
-            details: {
-                available_credits: availableCreditsList,
-                outstanding_invoices: outstandingInvoices.sort((a: any, b: any) => {
-                    const dA = new Date(a.issued_at || 0).getTime();
-                    const dB = new Date(b.issued_at || 0).getTime();
-                    return dB - dA; // Descending
-                })
-            }
-        })
+    // 2. Get AR from Outstanding Invoices
+    // Fetch PosInvoices for this customer that are NOT paid and NOT voided
+    const allInvoices = await invoiceService.listPosInvoices({
+      customer_id: customerId,
+    });
 
-    } catch (err: any) {
-        return res.status(500).json({ error: err.message })
-    }
+    const outstandingInvoices = allInvoices.filter(
+      (inv: any) =>
+        inv.status !== "voided" &&
+        inv.status !== "paid" &&
+        Number(inv.balance_due) > 0
+    );
+
+    const totalArOutstandingCents = outstandingInvoices.reduce(
+      (sum: number, inv: any) => sum + Number(inv.balance_due),
+      0
+    );
+    const totalArOutstanding = totalArOutstandingCents / 100;
+
+    // 3. Computed Balances in DOLLARS for frontend
+    const availableCredit = availableCreditCents / 100;
+    const netBalance = totalArOutstanding - availableCredit;
+
+    return res.json({
+      summary: {
+        total_available_credit: availableCredit,
+        total_ar_outstanding: totalArOutstanding,
+        net_balance: netBalance,
+      },
+      details: {
+        available_credits: availableCreditsList,
+        outstanding_invoices: outstandingInvoices.sort((a: any, b: any) => {
+          const dA = new Date(a.issued_at || 0).getTime();
+          const dB = new Date(b.issued_at || 0).getTime();
+          return dB - dA; // Descending
+        }),
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
 }

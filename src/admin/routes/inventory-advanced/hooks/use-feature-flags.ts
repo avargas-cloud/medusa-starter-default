@@ -1,19 +1,19 @@
-import { useQuery } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query";
 
 export interface PriceList {
-    id: string
-    title: string
+  id: string;
+  title: string;
 }
 
 export interface FeatureFlags {
-    enableDynamicPricing: boolean
-    priceLists: PriceList[]
+  enableDynamicPricing: boolean;
+  priceLists: PriceList[];
 }
 
 const DEFAULT_FLAGS: FeatureFlags = {
-    enableDynamicPricing: false,
-    priceLists: [],
-}
+  enableDynamicPricing: false,
+  priceLists: [],
+};
 
 /**
  * Hook to fetch feature flags from the backend.
@@ -21,19 +21,19 @@ const DEFAULT_FLAGS: FeatureFlags = {
  * staleTime: Infinity — env vars don't change at runtime (requires server restart).
  */
 export const useFeatureFlags = (): FeatureFlags => {
-    const { data } = useQuery<FeatureFlags>({
-        queryKey: ["feature-flags"],
-        queryFn: async () => {
-            const response = await fetch("/admin/config/features", {
-                method: "GET",
-                credentials: "include",
-            })
-            if (!response.ok) throw new Error("Could not load feature flags")
-            return response.json()
-        },
-        staleTime: Infinity,
-        placeholderData: DEFAULT_FLAGS,
-    })
+  const { data } = useQuery<FeatureFlags>({
+    queryKey: ["feature-flags"],
+    queryFn: async () => {
+      const response = await fetch("/admin/config/features", {
+        method: "GET",
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Could not load feature flags");
+      return response.json();
+    },
+    staleTime: Infinity,
+    placeholderData: DEFAULT_FLAGS,
+  });
 
-    return data ?? DEFAULT_FLAGS
-}
+  return data ?? DEFAULT_FLAGS;
+};

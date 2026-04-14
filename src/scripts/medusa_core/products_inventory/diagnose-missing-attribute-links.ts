@@ -1,15 +1,17 @@
-import { ExecArgs } from "@medusajs/framework/types"
-import { ContainerRegistrationKeys } from "@medusajs/utils"
+import { ExecArgs } from "@medusajs/framework/types";
+import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 export default async function ({ container }: ExecArgs) {
-    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
-    const knex = container.resolve("__pg_connection__")
+  const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
+  const knex = container.resolve("__pg_connection__");
 
-    logger.info('🔍 CORRECTED: Finding products with options NOT matched to attributes\n')
+  logger.info(
+    "🔍 CORRECTED: Finding products with options NOT matched to attributes\n"
+  );
 
-    // Find products where they have a product_option 
-    // but NO corresponding attribute with that option's values
-    const result = await knex.raw(`
+  // Find products where they have a product_option
+  // but NO corresponding attribute with that option's values
+  const result = await knex.raw(`
         SELECT 
             p.id,
             p.title as product_title,
@@ -32,24 +34,30 @@ export default async function ({ container }: ExecArgs) {
             )
         GROUP BY p.id, p.title, po.title
         ORDER BY po.title, p.title
-    `)
+    `);
 
-    logger.info(`📊 Found ${result.rows.length} products with options missing corresponding attributes\n`)
+  logger.info(
+    `📊 Found ${result.rows.length} products with options missing corresponding attributes\n`
+  );
 
-    if (result.rows.length === 0) {
-        logger.info('✅ All product options have matching attributes!')
-    } else {
-        const grouped = result.rows.reduce((acc: any, r: any) => {
-            if (!acc[r.option_title]) acc[r.option_title] = []
-            acc[r.option_title].push(r)
-            return acc
-        }, {})
+  if (result.rows.length === 0) {
+    logger.info("✅ All product options have matching attributes!");
+  } else {
+    const grouped = result.rows.reduce((acc: any, r: any) => {
+      if (!acc[r.option_title]) acc[r.option_title] = [];
+      acc[r.option_title].push(r);
+      return acc;
+    }, {});
 
-        Object.keys(grouped).forEach(optionTitle => {
-            logger.info(`\n📌 Option: "${optionTitle}" (${grouped[optionTitle].length} products missing)`)
-            grouped[optionTitle].forEach((r: any, i: number) => {
-                logger.info(`   ${i + 1}. ${r.product_title} (${r.option_values} values)`)
-            })
-        })
-    }
+    Object.keys(grouped).forEach((optionTitle) => {
+      logger.info(
+        `\n📌 Option: "${optionTitle}" (${grouped[optionTitle].length} products missing)`
+      );
+      grouped[optionTitle].forEach((r: any, i: number) => {
+        logger.info(
+          `   ${i + 1}. ${r.product_title} (${r.option_values} values)`
+        );
+      });
+    });
+  }
 }

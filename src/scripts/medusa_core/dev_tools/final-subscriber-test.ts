@@ -1,29 +1,32 @@
-import { ExecArgs } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/utils"
+import { ExecArgs } from "@medusajs/framework/types";
+import { Modules } from "@medusajs/utils";
 
 export default async function ({ container }: ExecArgs) {
-    console.log("🧪 FINAL TEST: Product Update Event")
+  console.log("🧪 FINAL TEST: Product Update Event");
 
-    const productModule = container.resolve(Modules.PRODUCT)
+  const productModule = container.resolve(Modules.PRODUCT);
 
-    const [product] = await productModule.listProducts({}, {
-        take: 1,
-        select: ["id", "title"]
-    })
-
-    if (!product) {
-        console.error("❌ No products")
-        return
+  const [product] = await productModule.listProducts(
+    {},
+    {
+      take: 1,
+      select: ["id", "title"],
     }
+  );
 
-    console.log(`📦 Product: ${product.title}`)
-    console.log("🔄 Updating to trigger event...")
+  if (!product) {
+    console.error("❌ No products");
+    return;
+  }
 
-    await productModule.updateProducts({
-        id: product.id,
-        title: product.title
-    })
+  console.log(`📦 Product: ${product.title}`);
+  console.log("🔄 Updating to trigger event...");
 
-    console.log("✅ Event fired. Check for: '⚡ EVENTO DETECTADO'")
-    await new Promise(r => setTimeout(r, 3000))
+  await productModule.updateProducts({
+    id: product.id,
+    title: product.title,
+  });
+
+  console.log("✅ Event fired. Check for: '⚡ EVENTO DETECTADO'");
+  await new Promise((r) => setTimeout(r, 3000));
 }

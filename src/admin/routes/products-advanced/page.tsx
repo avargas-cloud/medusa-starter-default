@@ -13,29 +13,29 @@ import { ProductPagination } from "./components/product-pagination";
 
 /**
  * Advanced Product Search Page
- * 
- * Clean orchestration component. 
+ *
+ * Clean orchestration component.
  * Delegates logic to `useProductPageState` and rendering to dumb components.
  */
 const ProductSearchPage = () => {
-    const queryClient = useQueryClient();
-    const { headerProps, tableProps, paginationProps } = useProductPageState();
+  const queryClient = useQueryClient();
+  const { headerProps, tableProps, paginationProps } = useProductPageState();
 
-    // Invalidate cache when mounting to ensure fresh data after edits
-    useEffect(() => {
-        queryClient.invalidateQueries({ queryKey: ["meili-products"] });
-    }, [queryClient]);
+  // Invalidate cache when mounting to ensure fresh data after edits
+  useEffect(() => {
+    queryClient.invalidateQueries({ queryKey: ["meili-products"] });
+  }, [queryClient]);
 
-    return (
-        <>
-            <Toaster />
-            <Container className="divide-y p-0 h-full flex flex-col overflow-hidden">
-                <ProductSearchHeader {...headerProps} />
-                <ProductTable {...tableProps} />
-                <ProductPagination {...paginationProps} />
-            </Container>
-        </>
-    );
+  return (
+    <>
+      <Toaster />
+      <Container className="divide-y p-0 h-full flex flex-col overflow-hidden">
+        <ProductSearchHeader {...headerProps} />
+        <ProductTable {...tableProps} />
+        <ProductPagination {...paginationProps} />
+      </Container>
+    </>
+  );
 };
 
 export default ProductSearchPage;

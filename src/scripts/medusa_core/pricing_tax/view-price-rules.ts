@@ -20,6 +20,6 @@ WHERE pv.product_id = 'product_01KGAX7RD0E6AS8JDARPEED795'
 AND p.deleted_at IS NULL;
 `;
 
-console.log('Run this query in your DB:');
+console.log("Run this query in your DB:");
 console.log(query);
-console.log('\nOr paste into Medusa admin SQL console');
+console.log("\nOr paste into Medusa admin SQL console");

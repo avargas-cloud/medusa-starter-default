@@ -1,6 +1,6 @@
-import { SubscriberArgs, type SubscriberConfig } from "@medusajs/framework"
-import { Modules } from "@medusajs/utils"
-import { FINANCE_MODULE } from "../modules/finance"
+import { SubscriberArgs, type SubscriberConfig } from "@medusajs/framework";
+import { Modules } from "@medusajs/utils";
+import { FINANCE_MODULE } from "../modules/finance";
 
 /**
  * Subscriber: payment.captured
@@ -25,30 +25,40 @@ export default async function financePaymentCapturedHandler({
   event: { data },
   container,
 }: SubscriberArgs<{ id: string }>) {
-  const paymentId = data.id
+  const paymentId = data.id;
 
   if (!paymentId) {
-    return
+    return;
   }
 
-  const query = container.resolve("query")
-  const paymentModule = container.resolve(Modules.PAYMENT)
-  const financeService = container.resolve(FINANCE_MODULE)
+  const query = container.resolve("query");
+  const paymentModule = container.resolve(Modules.PAYMENT);
+  const financeService = container.resolve(FINANCE_MODULE);
 
   // 1. Fetch payment via the Payment module (more reliable than query.graph for payment entity)
-  let payment: any
+  let payment: any;
   try {
     payment = await paymentModule.retrievePayment(paymentId, {
-      select: ["id", "amount", "captured_at", "provider_id", "payment_collection_id"],
-    })
+      select: [
+        "id",
+        "amount",
+        "captured_at",
+        "provider_id",
+        "payment_collection_id",
+      ],
+    });
   } catch (err: any) {
-    console.error(`[financePaymentCapturedHandler] Payment ${paymentId} not found: ${err.message}`)
-    return
+    console.error(
+      `[financePaymentCapturedHandler] Payment ${paymentId} not found: ${err.message}`
+    );
+    return;
   }
 
   if (!payment?.payment_collection_id) {
-    console.warn(`[financePaymentCapturedHandler] Payment ${paymentId} has no payment_collection_id. Skipping.`)
-    return
+    console.warn(
+      `[financePaymentCapturedHandler] Payment ${paymentId} has no payment_collection_id. Skipping.`
+    );
+    return;
   }
 
   // 2. Find the order via payment_collection_id
@@ -58,27 +68,33 @@ export default async function financePaymentCapturedHandler({
     filters: {
       payment_collections: { id: payment.payment_collection_id },
     } as any,
-  })
+  });
 
-  const order = orders?.[0]
+  const order = orders?.[0];
   if (!order) {
-    console.warn(`[financePaymentCapturedHandler] No order found for payment ${paymentId}. Skipping.`)
-    return
+    console.warn(
+      `[financePaymentCapturedHandler] No order found for payment ${paymentId}. Skipping.`
+    );
+    return;
   }
 
   if (!order.customer_id) {
-    console.warn(`[financePaymentCapturedHandler] Order ${order.id} has no customer linked (guest checkout). Skipping AR ledger.`)
-    return
+    console.warn(
+      `[financePaymentCapturedHandler] Order ${order.id} has no customer linked (guest checkout). Skipping AR ledger.`
+    );
+    return;
   }
 
   // 3. Idempotency check
   const existingRecords = await financeService.listCustomerPayments({
     medusa_payment_id: paymentId,
-  })
+  });
 
   if (existingRecords && existingRecords.length > 0) {
-    console.log(`[financePaymentCapturedHandler] Payment ${paymentId} already in finance ledger. Skipping.`)
-    return
+    console.log(
+      `[financePaymentCapturedHandler] Payment ${paymentId} already in finance ledger. Skipping.`
+    );
+    return;
   }
 
   // 4. Create the ledger entry
@@ -87,24 +103,31 @@ export default async function financePaymentCapturedHandler({
     await financeService.createCustomerPayments({
       customer_id: order.customer_id as string,
       amount: Number(payment.amount),
-      method: 'card',
+      method: "card",
       reference: payment.provider_id || null,
-      received_at: payment.captured_at ? new Date(payment.captured_at as string) : new Date(),
-      created_by: 'system',
-      source: 'web',
-      type: 'payment',
-      status: 'available',
+      received_at: payment.captured_at
+        ? new Date(payment.captured_at as string)
+        : new Date(),
+      created_by: "system",
+      source: "web",
+      type: "payment",
+      status: "available",
       medusa_payment_id: paymentId,
       medusa_payment_synced: true,
       locked_order_id: order.id,
-    })
+    });
 
-    console.log(`[financePaymentCapturedHandler] Mirrored payment ${paymentId} → customer ${order.customer_id}, order ${order.id}`)
+    console.log(
+      `[financePaymentCapturedHandler] Mirrored payment ${paymentId} → customer ${order.customer_id}, order ${order.id}`
+    );
   } catch (err: any) {
-    console.error(`[financePaymentCapturedHandler] Error creating finance ledger entry:`, err.message)
+    console.error(
+      `[financePaymentCapturedHandler] Error creating finance ledger entry:`,
+      err.message
+    );
   }
 }
 
 export const config: SubscriberConfig = {
   event: "payment.captured",
-}
+};

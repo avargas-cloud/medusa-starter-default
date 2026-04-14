@@ -5,4 +5,4 @@
  * It now acts purely as a backward-compatibility proxy that exports the modularized client.
  */
 
-export * from "./client/index"
+export * from "./client/index";

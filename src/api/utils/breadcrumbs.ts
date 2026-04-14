@@ -1,9 +1,9 @@
-import { IProductModuleService } from "@medusajs/framework/types"
+import { IProductModuleService } from "@medusajs/framework/types";
 
 export interface BreadcrumbItem {
-    id: string
-    name: string
-    handle: string
+  id: string;
+  name: string;
+  handle: string;
 }
 
 /**
@@ -13,30 +13,33 @@ export interface BreadcrumbItem {
  * @returns Array of breadcrumb items from root to leaf
  */
 export async function getCategoryBreadcrumbs(
-    categoryId: string,
-    productModuleService: IProductModuleService
+  categoryId: string,
+  productModuleService: IProductModuleService
 ): Promise<BreadcrumbItem[]> {
-    const breadcrumbs: BreadcrumbItem[] = []
-    let currentCategoryId: string | null = categoryId
+  const breadcrumbs: BreadcrumbItem[] = [];
+  let currentCategoryId: string | null = categoryId;
 
-    // Traverse up the category tree
-    while (currentCategoryId) {
-        const category = await productModuleService.retrieveProductCategory(currentCategoryId, {
-            select: ["id", "name", "handle", "parent_category_id"]
-        })
+  // Traverse up the category tree
+  while (currentCategoryId) {
+    const category = await productModuleService.retrieveProductCategory(
+      currentCategoryId,
+      {
+        select: ["id", "name", "handle", "parent_category_id"],
+      }
+    );
 
-        // Add to beginning of array (we're going bottom-up, want top-down result)
-        breadcrumbs.unshift({
-            id: category.id,
-            name: category.name,
-            handle: category.handle
-        })
+    // Add to beginning of array (we're going bottom-up, want top-down result)
+    breadcrumbs.unshift({
+      id: category.id,
+      name: category.name,
+      handle: category.handle,
+    });
 
-        // Move to parent
-        currentCategoryId = category.parent_category_id || null
-    }
+    // Move to parent
+    currentCategoryId = category.parent_category_id || null;
+  }
 
-    return breadcrumbs
+  return breadcrumbs;
 }
 
 /**
@@ -47,21 +50,26 @@ export async function getCategoryBreadcrumbs(
  * @returns Breadcrumb trail or null if no categories
  */
 export async function getProductMainCategoryBreadcrumbs(
-    product: any,
-    productModuleService: IProductModuleService
+  product: any,
+  productModuleService: IProductModuleService
 ): Promise<BreadcrumbItem[] | null> {
-    // Try to get primary category from metadata (existing widget uses this field)
-    const primaryCategoryId = product.metadata?.primary_category_id as string | undefined
+  // Try to get primary category from metadata (existing widget uses this field)
+  const primaryCategoryId = product.metadata?.primary_category_id as
+    | string
+    | undefined;
 
-    if (primaryCategoryId) {
-        return getCategoryBreadcrumbs(primaryCategoryId, productModuleService)
-    }
+  if (primaryCategoryId) {
+    return getCategoryBreadcrumbs(primaryCategoryId, productModuleService);
+  }
 
-    // Fallback: use first category if available
-    if (product.categories && product.categories.length > 0) {
-        return getCategoryBreadcrumbs(product.categories[0].id, productModuleService)
-    }
+  // Fallback: use first category if available
+  if (product.categories && product.categories.length > 0) {
+    return getCategoryBreadcrumbs(
+      product.categories[0].id,
+      productModuleService
+    );
+  }
 
-    // No categories assigned
-    return null
+  // No categories assigned
+  return null;
 }

@@ -1,27 +1,27 @@
-import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk"
-import { Modules } from "@medusajs/utils"
+import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
+import { Modules } from "@medusajs/utils";
 
 /**
  * Step to find all variants associated with a product option
  */
 export const findVariantsByOptionStep = createStep(
-    "find-variants-by-option",
-    async (input: { optionId: string }, { container }) => {
-        const productService = container.resolve(Modules.PRODUCT)
+  "find-variants-by-option",
+  async (input: { optionId: string }, { container }) => {
+    const productService = container.resolve(Modules.PRODUCT);
 
-        console.log(`🔍 Finding variants for option: ${input.optionId}`)
+    console.log(`🔍 Finding variants for option: ${input.optionId}`);
 
-        // Get all variants that have this option value
-        const variants = await productService.listProductVariants({
-            options: {
-                option_id: input.optionId
-            }
-        })
+    // Get all variants that have this option value
+    const variants = await productService.listProductVariants({
+      options: {
+        option_id: input.optionId,
+      },
+    });
 
-        const variantIds = variants.map(v => v.id)
+    const variantIds = variants.map((v) => v.id);
 
-        console.log(`   Found ${variantIds.length} variants to check`)
+    console.log(`   Found ${variantIds.length} variants to check`);
 
-        return new StepResponse({ variantIds })
-    }
-)
+    return new StepResponse({ variantIds });
+  }
+);

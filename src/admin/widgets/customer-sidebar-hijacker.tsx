@@ -1,4 +1,4 @@
-import { defineWidgetConfig } from "@medusajs/admin-sdk"
+import { defineWidgetConfig } from "@medusajs/admin-sdk";
 
 /**
  * ⚠️ DISABLED BY TUTOR RECOMMENDATION ⚠️
@@ -19,11 +19,11 @@ import { defineWidgetConfig } from "@medusajs/admin-sdk"
 // }
 
 const CustomerSidebarHijacker = () => {
-    return null
-}
+  return null;
+};
 
 export const config = defineWidgetConfig({
-    zone: ["customer.list.before", "order.list.before"],
-})
+  zone: ["customer.list.before", "order.list.before"],
+});
 
-export default CustomerSidebarHijacker
+export default CustomerSidebarHijacker;

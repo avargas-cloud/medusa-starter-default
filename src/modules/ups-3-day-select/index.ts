@@ -1,6 +1,6 @@
-import UPS3DaySelectService from "./service"
-import { ModuleProvider, Modules } from "@medusajs/utils"
+import UPS3DaySelectService from "./service";
+import { ModuleProvider, Modules } from "@medusajs/utils";
 
 export default ModuleProvider(Modules.FULFILLMENT, {
-    services: [UPS3DaySelectService],
-})
+  services: [UPS3DaySelectService],
+});
