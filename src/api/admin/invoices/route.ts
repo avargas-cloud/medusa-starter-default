@@ -82,6 +82,8 @@ interface CreateInvoiceBody {
     email_to?: string
     email_cc?: string
     is_sales_receipt?: boolean
+    /** If set, a CustomerPayment was already created by the terminal route — skip creating a new one and link this ID instead */
+    terminal_payment_id?: string
 }
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
@@ -227,6 +229,48 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     }
                 }
             }
+        } else if (body.terminal_payment_id) {
+            // B-terminal. The CustomerPayment was already created by the terminal route.
+            // Just link it to this invoice via a PaymentApplication — no new payment row.
+            //
+            // For sales receipts the QB handler embeds the payment internally (same as the
+            // manual flow), so we must NOT set paymentIdToEmit — otherwise handlePosPaymentCreated
+            // would fire a second time and create a duplicate QB entry.
+            if (!body.is_sales_receipt) {
+                paymentIdToEmit = body.terminal_payment_id
+
+                // Look up the existing payment's display_id for QB pipeline ref
+                const termPayRes = await pgConnection.raw(
+                    `SELECT display_id FROM customer_payment WHERE id = ?`,
+                    [body.terminal_payment_id]
+                ).catch(() => ({ rows: [{ display_id: null }] }))
+                nextPayNum = termPayRes.rows[0]?.display_id ? Number(termPayRes.rows[0].display_id) : null
+            }
+
+            const application = await financeService.createPaymentApplications({
+                payment_id:      body.terminal_payment_id,
+                invoice_id:      (invoice as any).id,
+                invoice_number:  String(invoice_number || body.order_display_id || ''),
+                order_id:        body.order_id,
+                amount_applied:  body.amount_paid,
+                applied_at:      new Date(),
+                applied_by:      body.created_by || null,
+            })
+
+            applicationsToEmit.push({
+                payment_id:     body.terminal_payment_id,
+                invoice_id:     (invoice as any).id,
+                order_id:       body.order_id,
+                amount_applied: body.amount_paid,
+                application_id: application.id,
+            })
+
+            // Mark the terminal payment as fully applied
+            await financeService.updateCustomerPayments(
+                { id: body.terminal_payment_id },
+                { status: 'applied' }
+            ).catch(() => {})
+
         } else {
             // Fetch strictly continuous sequential payment number
             const seqPgRes = await pgConnection.raw(`SELECT nextval('custom_payment_seq') AS seq`).catch(() => ({ rows: [{ seq: null }] }))

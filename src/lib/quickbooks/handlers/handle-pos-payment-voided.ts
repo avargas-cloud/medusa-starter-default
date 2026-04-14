@@ -2,6 +2,7 @@ import { SubscriberArgs } from "@medusajs/framework"
 import { ContainerRegistrationKeys } from "@medusajs/utils"
 import { FINANCE_MODULE } from "../../../modules/finance"
 import { bridgeFetch } from "../client/core"
+import { writePipelineRow } from "../qb-pipeline"
 
 const LOG_PREFIX = "[QB-POS-PAYMENT-VOIDED]"
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true"
@@ -38,6 +39,8 @@ export async function handlePosPaymentVoided({ event, container }: SubscriberArg
         return
     }
 
+    const orderId: string | undefined = payment.metadata?.order_id as string | undefined
+
     // Sales Receipt payments are embedded in a SR transaction — TxnVoid on the SR
     // is a separate operation not handled here.
     if (payment.metadata?.qb_source === "sales_receipt") {
@@ -46,17 +49,26 @@ export async function handlePosPaymentVoided({ event, container }: SubscriberArg
             id: payment_id,
             metadata: { ...(payment.metadata || {}), qb_sync_status: "voided" },
         })
+        if (orderId) {
+            await writePipelineRow({ orderId, referenceId: payment_id, step: "payment", status: "confirmed" }).catch(() => {})
+        }
         return
     }
 
     const qbTxnId = payment.metadata?.qb_txn_id as string | undefined
 
     if (!qbTxnId) {
+        // Payment was never synced to QB (e.g. orphaned Dejavoo payment from CompleteOrderModal
+        // that was superseded by a Sales Receipt). Mark voided locally and close the
+        // pipeline row so it doesn't stay stuck in "waiting" forever.
         logger.warn(`${LOG_PREFIX} Payment ${payment_id} has no qb_txn_id — marking voided locally only`)
         await financeService.updateCustomerPayments({
             id: payment_id,
             metadata: { ...(payment.metadata || {}), qb_sync_status: "voided" },
         })
+        if (orderId) {
+            await writePipelineRow({ orderId, referenceId: payment_id, step: "payment", status: "confirmed" }).catch(() => {})
+        }
         return
     }
 

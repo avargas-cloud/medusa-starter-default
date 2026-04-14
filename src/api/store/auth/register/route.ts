@@ -7,12 +7,16 @@ export const POST = async (
     req: MedusaRequest,
     res: MedusaResponse
 ) => {
-    const { email, password, first_name, last_name } = req.body as {
+    const { email: rawEmail, password, first_name, last_name } = req.body as {
         email: string
         password: string
         first_name: string
         last_name: string
     }
+
+    // Normalize email to lowercase — prevents zombie duplicates caused by Medusa's
+    // case-sensitive internal customer lookup.
+    const email = rawEmail ? rawEmail.trim().toLowerCase() : rawEmail
 
     // Validate required fields
     if (!email || !password || !first_name || !last_name) {
@@ -23,7 +27,8 @@ export const POST = async (
     }
 
     try {
-        // Check if customer exists (using SQL to bypass cache)
+        // Check if customer exists using case-insensitive lookup (LOWER) to avoid
+        // creating duplicates when the stored email has different casing.
         const postgres = await import('postgres')
         const sql = postgres.default(process.env.DATABASE_URL!)
 
@@ -31,7 +36,8 @@ export const POST = async (
         const [existingCustomer] = await sql`
             SELECT id, email, first_name, last_name, has_account, metadata
             FROM customer
-            WHERE email = ${email}
+            WHERE LOWER(email) = ${email}
+              AND deleted_at IS NULL
         `
         console.log('✅ [CHECKPOINT 2] Query complete')
 
