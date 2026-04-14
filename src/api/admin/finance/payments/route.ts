@@ -72,7 +72,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const financeService = req.scope.resolve(FINANCE_MODULE)
-    const { customer_id, amount, method, reference, notes, received_at, created_by, source, type, metadata } = req.body as any
+    const { customer_id, amount, method, reference, notes, received_at, created_by, source, type, metadata, skip_qb_sync } = req.body as any
 
     if (!customer_id) {
         return res.status(400).json({ error: 'customer_id is required' })
@@ -143,8 +143,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             status: 'available' // A new manual payment is always available until applied
         })
         
-        // Write upfront pipeline row + direct exec (bypasses BullMQ outbox)
-        if (process.env.QB_ORDER_FLOW_ENABLED === "true") {
+        // Write upfront pipeline row + direct exec (bypasses BullMQ outbox).
+        // skip_qb_sync=true is set by the terminal route — QB will be handled
+        // by the invoice route once the invoice is created (avoids a duplicate
+        // "payment" QB row alongside the "sales_receipt" row).
+        if (process.env.QB_ORDER_FLOW_ENABLED === "true" && !skip_qb_sync) {
             const orderId: string | null = (metadata as any)?.order_id ?? null
             try {
                 await writePipelineRow({
