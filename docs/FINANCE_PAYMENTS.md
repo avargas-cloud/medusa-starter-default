@@ -1,7 +1,7 @@
 # Finance Payments -- Pagos, Transacciones y Captura
 > **Tipo**: Technical Reference
 > **Repo**: backend
-> **Ultima verificacion**: 2026-04-08
+> **Ultima verificacion**: 2026-04-15
 > **Estado**: Current
 
 ---
@@ -184,6 +184,8 @@ Handler: `handlePosPaymentCreated`
 - Crea un `ReceivePayment` en QB (credito sin aplicar) via bridge
 - Escribe pipeline row step='payment'
 
+**Caso especial — pago liberado por void de SR:** Cuando el evento es disparado por el void de un Sales Receipt, el handler ya encuentra el pago sin las flags `is_sales_receipt_payment` ni `qb_source`, por lo que el guard de SR no aplica y se crea un ReceivePayment standalone normal. El credito queda sin aplicar en QB hasta ser asociado a un nuevo invoice.
+
 ### pos.payment.applied
 Handler: `handlePosPaymentApplied`
 - Busca el `qb_txn_id` del CustomerPayment (del pipeline confirmado)
@@ -210,6 +212,17 @@ Cuando se crea un invoice con pago inmediato (no a credito):
 - Pipeline step: `sales_receipt`
 
 Esto es mas eficiente en QB porque un Sales Receipt combina invoice + pago en una sola transaccion.
+
+#### Void de Sales Receipt — liberacion del pago
+
+Cuando un Sales Receipt es anulado (void), el `CustomerPayment` asociado **no se voidea** — queda en `status: "available"`. El dinero del cliente sigue en mano y puede reasignarse.
+
+El void limpia las marcas de SR del metadata del pago:
+- Elimina `is_sales_receipt_payment`, `qb_source`, `qb_txn_id`
+- Establece `qb_sync_status: "pending"`
+- Actualiza `customer_payment.reference` al `document_number` de la orden
+
+Tras la limpieza, se dispara asincrono `handlePosPaymentCreated` para crear un **ReceivePayment standalone** en QB por el monto liberado. Dado que las flags de SR ya fueron removidas, el guard de Sales Receipt en el handler se omite y procede como un pago normal. El credito queda sin aplicar en QB hasta que se asocie a un nuevo invoice.
 
 ### Write Check (reembolso a cliente)
 

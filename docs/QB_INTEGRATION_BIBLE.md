@@ -1,7 +1,7 @@
 # QuickBooks Integration — Bible
 > **Tipo**: Technical Reference
 > **Repo**: backend + bridge externo (Node.js en Windows)
-> **Ultima verificacion**: 2026-04-08
+> **Ultima verificacion**: 2026-04-15
 > **Estado**: Current
 
 ---
@@ -125,6 +125,7 @@ type PipelineStep =
     | "void_estimate"        // Anular Estimate
     | "void_invoice"         // Anular Invoice
     | "void_sales_receipt"   // Anular Sales Receipt
+    | "invoice_tax_updated"  // Correccion manual de tax en QB Invoice via updateInvoiceInQb
     | "void_sales_order"     // Anular Sales Order
     | "void_credit_memo"     // Anular Credit Memo
     | "void_check"           // Anular Check
@@ -176,9 +177,14 @@ QB requiere un `EditSequence` actualizado para cualquier operacion Mod (update).
 
 **Flujo:**
 1. Despues de cada Add o Mod confirmada, el consolidator cachea `EditSequence` + `line_ids`
-2. Antes de un Mod, `updateEstimateInQb` y `updateSalesOrderInQb` consultan el cache
+2. Antes de un Mod, `updateEstimateInQb`, `updateSalesOrderInQb` y `updateInvoiceInQb` consultan el cache
 3. Si hay cache hit → saltan el GET round-trip al bridge
 4. Si hay error 3210 (EditSequence stale) → invalidar con `invalidateEditSequence(entityType, qbId)`
+
+**Cobertura actual (completa):** Los tres tipos de documento QB que admiten Mod cachean EditSequence en creacion Y despues de cada Mod:
+- `ReceivePayment` — cacheado via consolidator al confirmar `payment` pipeline step
+- `Invoice` — cacheado via consolidator al confirmar `invoice` pipeline step; tambien tras `updateInvoiceInQb`
+- `Sales Receipt` — cacheado via consolidator al confirmar `sales_receipt` pipeline step
 
 ---
 
@@ -300,6 +306,29 @@ Sync manual desde el POS. Body: `{ type, id, action? }`
 #### type: "payment"
 - Si ya tiene `qb_txn_id`: cachea EditSequence en background.
 - Si no: ejecuta secuencia `handlePosPaymentCreated` → `handlePosPaymentApplied`.
+
+---
+
+### POST /admin/invoices/:id/update-tax
+
+Correccion manual del codigo de tax en un QB Invoice existente.
+
+**Body:** `{ taxMode: 'florida' | 'exempt' }`
+
+**Restriccion:** Solo aplica a Invoice de tipo "Invoice" en QB. Si el invoice de Medusa fue sincronizado como Sales Receipt, se rechaza con `422 SALES_RECEIPT_TAX_LOCKED` (los Sales Receipt embeben el pago y no admiten Mod de tax desde este endpoint).
+
+**Flujo QB (updateInvoiceInQb):**
+1. Consulta `qb_edit_sequence_cache` para el `invoice` TxnID. Si hay cache hit, usa ese `EditSequence` directamente (sin round-trip al bridge).
+2. Si no hay cache → hace GET al bridge para obtener el `EditSequence` fresco.
+3. Envia `PUT /api/invoices/:txnId` al bridge con:
+   - `florida` → `salesTaxCode: qbConfig.defaultSalesTaxCode` (ej. `"Sale Tax 7%"`)
+   - `exempt` → `taxExempt: true`
+4. La operacion es **fire-and-forget**: el log se escribe de inmediato en `QbSyncLogger` para visibilidad en el UI, y el MOD de QB corre en background.
+
+**Tracking en QbSyncLogger:**
+- `operation: "invoice"`
+- `eventType: "invoice.tax_updated"`
+- `triggeredBy: "manual"`
 
 #### type: "return"
 - Solo si `payment.type === "refund"`.
@@ -427,7 +456,7 @@ type QbSyncStatus =
 | `customers.ts` | `createCustomerInQb`, `updateCustomerInQb` |
 | `estimates.ts` | `createEstimateInQb`, `updateEstimateInQb`, `deactivateEstimateInQb`, `cancelEstimateInQb` |
 | `sales-orders.ts` | `createSalesOrderInQb`, `updateSalesOrderInQb`, `getSalesOrderDetailsFromQb`, `closeSalesOrderInQb`, `reopenSalesOrderInQb`, `convertEstimateToSalesOrder` |
-| `invoices.ts` | `createInvoiceInQb`, `applyPaymentToInvoiceInQb` |
+| `invoices.ts` | `createInvoiceInQb`, `updateInvoiceInQb`, `applyPaymentToInvoiceInQb` |
 | `payments.ts` | `receivePaymentInQb` |
 | `sales-receipts.ts` | `createSalesReceiptInQb` |
 | `credit-memos.ts` | `createCreditMemoInQb`, `voidCreditMemoInQb` |
@@ -565,6 +594,15 @@ Cambios significativos implementados que alteran el comportamiento previo:
 
 6. **Feature: EstimateMod ahora consulta EditSequence cache**
    Antes el Mod siempre hacia GET al bridge para obtener el EditSequence. Ahora verifica `qb_edit_sequence_cache` primero y salta el round-trip si hay cache hit.
+
+7. **Feature: void_sales_receipt — comportamiento completo del pago**
+   Cuando se anula un Sales Receipt en QB, el QB ReceivePayment embebido en el SR queda implicitamente desaplicado (el SR se vuelve cero). Para evitar perder el credito del cliente en el AR ledger de QB, el flujo hace lo siguiente:
+   - El `CustomerPayment` en Medusa queda en `status: "available"` (NO se vuelve `voided`).
+   - Los flags de metadata del SR se limpian: se eliminan `is_sales_receipt_payment`, `qb_source`, `qb_txn_id`; `qb_sync_status` se resetea a `"pending"`.
+   - 200ms despues (fire-and-forget), se invoca `handlePosPaymentCreated` para crear un nuevo QB ReceivePayment standalone — el credito migra del SR anulado al ReceivePayment independiente.
+
+8. **Feature: Tax correction via POST /admin/invoices/:id/update-tax**
+   Nuevo endpoint para corregir el codigo de tax de un QB Invoice sin tocar la orden de Medusa. Sales Receipt invoices son bloqueados (422). Ver seccion "Tax Correction (Invoice MOD)" arriba.
 
 ---
 

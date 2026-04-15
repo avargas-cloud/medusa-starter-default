@@ -10,6 +10,7 @@ import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
 import { recalculateOrderStatus } from "../../../../../utils/order-utils";
 import { getDbPool } from "../../../../utils/db-pool";
+import { handlePosPaymentCreated } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-created";
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const invoiceService = req.scope.resolve(INVOICE_MODULE);
@@ -177,6 +178,28 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   }
 
   // 1. UNAPPLY ALL ATTACHED PAYMENTS FIRST (Free up customer balance)
+
+  // Pre-fetch order document_number — used to update SR payment reference on void
+  let orderDocumentNumber: string | null = null;
+  if (invoice.order_id) {
+    try {
+      const orderQuery = req.scope.resolve("query");
+      const { data: [orderData] } = await (orderQuery as any).graph({
+        entity: "order",
+        fields: ["metadata"],
+        filters: { id: invoice.order_id },
+      });
+      orderDocumentNumber =
+        ((orderData?.metadata as Record<string, unknown>)
+          ?.document_number as string) ?? null;
+    } catch {
+      // non-fatal — reference update is best-effort
+    }
+  }
+
+  // Collect SR payment IDs that need a new QB ReceivePayment after void
+  const srPaymentsToRequeue = new Set<string>();
+
   console.log(`[VOID INVOICE] Listing payment applications`);
   const dbApplications = await financeService.listPaymentApplications(
     { invoice_id: id },
@@ -228,32 +251,42 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       currentPaymentDesc.metadata?.is_sales_receipt_payment === true ||
       currentPaymentDesc.metadata?.qb_source === "sales_receipt";
 
-    await financeService.updateCustomerPayments({
-      id: currentPaymentDesc.id,
-      status: isSRPayment
-        ? "voided"
-        : totalStillApplied === 0
-          ? "available"
-          : "partially_applied",
-      notes: isSRPayment
-        ? (
-            (currentPaymentDesc.notes || "") +
-            `\nAuto-voided via Sales Receipt ${invoice.invoice_number || id} voiding`
-          ).trim()
-        : currentPaymentDesc.notes,
-      ...(isSRPayment
-        ? {
-            metadata: {
-              ...(currentPaymentDesc.metadata || {}),
-              qb_sync_status: "voided",
-            },
-            qb: {
-              ...((currentPaymentDesc.qb as any) || {}),
-              status: "voided",
-            },
-          }
-        : {}),
-    });
+    if (isSRPayment) {
+      // SR payments must become AVAILABLE (not voided) — the customer's money is still
+      // in hand. Clear all SR flags so handlePosPaymentCreated will re-sync it as a
+      // standalone QB ReceivePayment. Update reference to the order's document_number.
+      const {
+        is_sales_receipt_payment: _isSR,
+        qb_source: _qbSrc,
+        qb_txn_id: _qbTxn,
+        ...restMeta
+      } = (currentPaymentDesc.metadata || {}) as Record<string, unknown>;
+
+      await financeService.updateCustomerPayments({
+        id: currentPaymentDesc.id,
+        status: totalStillApplied === 0 ? "available" : "partially_applied",
+        reference:
+          orderDocumentNumber ||
+          (currentPaymentDesc.reference as string | null),
+        notes: (
+          (currentPaymentDesc.notes || "") +
+          `\nReleased from voided Sales Receipt ${invoice.invoice_number || id}`
+        ).trim(),
+        metadata: { ...restMeta, qb_sync_status: "pending" },
+        qb: {},
+      });
+
+      console.log(
+        `[VOID INVOICE] SR payment ${currentPaymentDesc.id} released → available (ref: ${orderDocumentNumber ?? "unchanged"})`
+      );
+      srPaymentsToRequeue.add(currentPaymentDesc.id);
+    } else {
+      await financeService.updateCustomerPayments({
+        id: currentPaymentDesc.id,
+        status:
+          totalStillApplied === 0 ? "available" : "partially_applied",
+      });
+    }
 
     // D. Refund Native Medusa Payment (best effort, to keep ledger synced)
     try {
@@ -346,6 +379,31 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     console.log(
       `[VOID INVOICE] Reversed application ${app.id} for amount ${app.amount_applied}`
     );
+  }
+
+  // Fire QB ReceivePayment creation for any SR payments that were released
+  // (fire & forget — does not block the void response)
+  if (process.env.QB_ORDER_FLOW_ENABLED === "true" && srPaymentsToRequeue.size > 0) {
+    for (const srPaymentId of srPaymentsToRequeue) {
+      const capturedId = srPaymentId;
+      setTimeout(async () => {
+        try {
+          await handlePosPaymentCreated({
+            event: { name: "pos.payment.created", data: { id: capturedId } },
+            container: req.scope as any,
+            pluginOptions: {},
+          });
+          console.log(
+            `[VOID INVOICE] ✅ QB ReceivePayment queued for released SR payment ${capturedId}`
+          );
+        } catch (e: any) {
+          console.error(
+            `[VOID INVOICE] QB ReceivePayment creation failed for ${capturedId}:`,
+            e.message
+          );
+        }
+      }, 200);
+    }
   }
 
   // 2. MARK INVOICE AS VOIDED & BALANCE TO 0

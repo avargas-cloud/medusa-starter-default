@@ -2,6 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 
 import { updateInvoiceInQb } from "../../../../../lib/quickbooks/client/invoices";
 import { updateSalesReceiptInQb } from "../../../../../lib/quickbooks/client/sales-receipts";
+import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
 
 /**
@@ -57,13 +58,47 @@ export async function POST(
     return;
   }
 
+  const invoiceRef = (invoice as any).invoice_number
+    ? `INV-${(invoice as any).invoice_number}`
+    : null;
+
+  // Write upfront pipeline row — visible immediately in Pipeline Monitor
+  writePipelineRow({
+    orderId: (invoice as any).order_id ?? null,
+    referenceId: id,
+    referenceType: "pos_invoice",
+    step: "invoice_update",
+    status: "pending",
+    medusaRefNumber: invoiceRef,
+  }).catch(() => {});
+
   const updateFn = isSalesReceipt ? updateSalesReceiptInQb : updateInvoiceInQb;
   const result = await updateFn({ txnId, salesRep: salesRep.trim() });
 
   if (!result.success) {
+    writePipelineRow({
+      orderId: (invoice as any).order_id ?? null,
+      referenceId: id,
+      referenceType: "pos_invoice",
+      step: "invoice_update",
+      status: "failed",
+      medusaRefNumber: invoiceRef,
+      error: result.error ?? "QB update failed",
+    }).catch(() => {});
     res.status(502).json({ error: result.error ?? "QB update failed" });
     return;
   }
+
+  writePipelineRow({
+    orderId: (invoice as any).order_id ?? null,
+    referenceId: id,
+    referenceType: "pos_invoice",
+    step: "invoice_update",
+    status: "confirmed",
+    medusaRefNumber: invoiceRef,
+    bridgeOpId: result.data?.operationId ?? null,
+    qbTxnId: txnId,
+  }).catch(() => {});
 
   res.json({
     success: true,

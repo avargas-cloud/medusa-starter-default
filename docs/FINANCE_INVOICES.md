@@ -1,7 +1,7 @@
 # Finance Invoices -- Modulo POS Invoices
 > **Tipo**: Technical Reference
 > **Repo**: backend
-> **Ultima verificacion**: 2026-04-02
+> **Ultima verificacion**: 2026-04-15
 > **Estado**: Current
 
 ---
@@ -178,11 +178,47 @@ POST /admin/invoices/:id/void (body: void_reason)
 |   +-- Revertir inventario en QB/Medusa
 +-- UPDATE PosInvoice.status = 'voided', voided_at = NOW()
 +-- Void aplicaciones de pago (restore balance al CustomerPayment)
++-- Para pagos de tipo SR (Sales Receipt):
+|   +-- ANTES: status = 'voided' (el dinero desaparecia)
+|   +-- AHORA:  status = 'available' (el dinero queda como credito disponible)
+|   +-- Limpia flags de metadata: elimina is_sales_receipt_payment, qb_source, qb_txn_id
+|   +-- Setea qb_sync_status = 'pending'
+|   +-- Actualiza reference al document_number del order (order.metadata.document_number)
+|   +-- Dispara handlePosPaymentCreated() async (200ms delay, fire & forget)
+|       para crear un nuevo ReceivePayment en QB con el monto liberado
 +-- Recalcular order status
 +-- EMIT 'pos.invoice.voided' -> QB sync (handleInvoiceVoided)
 ```
 
 **Inventario:** El void hace una reversion quirurgica del fulfillment -- devuelve stock a la ubicacion original. Esto usa raw SQL para evitar un bug de Medusa con arrays vacios de DML.
+
+**Pagos SR al void:** El monto del pago SR no se destruye -- se convierte en credito disponible (`status: 'available'`) en el `CustomerPayment`. Esto permite re-aplicarlo a un nuevo invoice sin re-cobrar al cliente.
+
+### Correccion de Tax (POST /admin/invoices/:id/update-tax)
+
+Solo disponible para invoices de tipo **QB Invoice** (pago a credito). Los Sales Receipt tienen el tax bloqueado.
+
+```
+POST /admin/invoices/:id/update-tax (body: { taxMode: 'florida' | 'exempt' })
+    |
++-- Verificar que invoice no esta voided (400 si voided)
++-- Verificar que invoice es tipo QB Invoice, no Sales Receipt
+|   +-- Si es Sales Receipt: 422 con code SALES_RECEIPT_TAX_LOCKED
++-- Recalcular impuestos:
+|   +-- florida: newTax = Math.round(subtotal * 0.07)
+|   +-- exempt:  newTax = 0
+|   +-- newTotal = subtotal + shipping - discount + newTax
+|   +-- newUntaxedTotal = newTotal - newTax
++-- UPDATE pos_invoice: total, tax, untaxed_total, balance_due, amount_paid, status
++-- Si el nuevo total es menor que el monto ya aplicado:
+|   +-- Clampear payment_application.amount_applied al nuevo total
+|   +-- Convertir el exceso en credito disponible en customer_payment
++-- Disparar updateInvoiceInQb() async -> QB Invoice MOD
+    +-- QbSyncLogger: operation='invoice', eventType='invoice.tax_updated',
+        triggeredBy='manual'
+```
+
+**Archivo:** `src/api/admin/invoices/[id]/update-tax/route.ts`
 
 ---
 
@@ -194,6 +230,7 @@ POST /admin/invoices/:id/void (body: void_reason)
 | POST | `/admin/invoices` | Crea invoice + QB sync direct-exec |
 | GET | `/admin/invoices/:id` | Obtiene invoice con items + tracking |
 | POST | `/admin/invoices/:id/void` | Voidea invoice + reversion de inventario |
+| POST | `/admin/invoices/:id/update-tax` | Corrige tax (florida/exempt) en QB Invoice; bloqueado en SR y voided |
 | GET | `/admin/invoices/:id/payments` | Lista pagos del invoice |
 | POST | `/admin/invoices/:id/tracking` | Agrega tracking de envio |
 
@@ -215,6 +252,11 @@ Al crear un invoice:
 
 Al void un invoice:
 - Emite evento `pos.invoice.voided` -> `handleInvoiceVoided` -> void del documento QB correspondiente
+- Si el invoice tenia un pago SR, ese pago se libera como credito disponible y se crea un nuevo ReceivePayment en QB via `handlePosPaymentCreated` (async, fire & forget)
+
+Al corregir tax de un invoice QB Invoice:
+- `updateInvoiceInQb()` async -> MOD del Invoice en QB Desktop
+- Registrado en `QbSyncLogger` (operation=`invoice`, eventType=`invoice.tax_updated`, triggeredBy=`manual`)
 
 ---
 
@@ -230,6 +272,7 @@ Al void un invoice:
 | InvoicePayment model | `src/modules/invoices/models/invoice-payment.ts` | Pagos directos legacy |
 | API list/create | `src/api/admin/invoices/route.ts` | GET + POST |
 | API void | `src/api/admin/invoices/[id]/void/route.ts` | Void + inventario reversal |
+| API update-tax | `src/api/admin/invoices/[id]/update-tax/route.ts` | Correccion de tax en QB Invoice |
 | API payments | `src/api/admin/invoices/[id]/payments/route.ts` | Pagos del invoice |
 | API tracking | `src/api/admin/invoices/[id]/tracking/route.ts` | Tracking de envio |
 | Handler void | `src/lib/quickbooks/handlers/handle-invoice-voided.ts` | QB void |
@@ -240,9 +283,11 @@ Al void un invoice:
 
 ## Reglas Criticas
 
-- **Invoices son read-only despues de emitidos.** No modificar items ni totales -- crear credit memo para ajustes.
+- **Invoices son read-only despues de emitidos.** No modificar items ni totales -- crear credit memo para ajustes. **Excepcion:** el tax puede corregirse en invoices de tipo QB Invoice via `POST /admin/invoices/:id/update-tax`.
+- **Sales Receipt invoices tienen tax inmutable.** El endpoint `update-tax` devuelve 422 con `SALES_RECEIPT_TAX_LOCKED` si se intenta cambiar el tax de un SR invoice.
 - **El campo `discount` es un snapshot en centavos.** Para imprimir: `inv.discount / 100`. No llamar `setDocument()` para print.
 - **El void es irreversible.** Verificar con el usuario antes de ejecutar.
+- **Pagos SR al void se liberan, no se destruyen.** El monto queda como `status: 'available'` en `CustomerPayment` para re-aplicarse a un nuevo invoice.
 - **Direct-exec para QB sync.** El event bus puede perder eventos POS. El route invoca los handlers directamente.
 - **Raw SQL para fetch de items en void.** Medusa ORM tiene un bug con arrays vacios en DML. El void usa `pool.query()` directamente.
 

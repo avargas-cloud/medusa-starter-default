@@ -118,11 +118,15 @@ export interface QbCreateCreditMemoPayload {
 export interface QbUpdateInvoicePayload {
   txnId: string;
   salesRep?: string;
+  salesTaxCode?: string;
+  taxExempt?: boolean;
 }
 
 export interface QbUpdateSalesReceiptPayload {
   txnId: string;
   salesRep?: string;
+  salesTaxCode?: string;
+  taxExempt?: boolean;
 }
 
 export interface QbCreateEstimatePayload {

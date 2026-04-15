@@ -122,6 +122,8 @@ export async function updateSalesReceiptInQb(
       {
         EditSequence: editSequence,
         ...(payload.salesRep ? { salesRepRef: payload.salesRep } : {}),
+        ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
+        ...(payload.taxExempt === true ? { taxExempt: true } : {}),
       }
     );
 

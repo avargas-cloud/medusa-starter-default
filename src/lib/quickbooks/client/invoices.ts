@@ -108,6 +108,8 @@ export async function updateInvoiceInQb(
     const modResp = await bridgeFetch("PUT", `/api/invoices/${payload.txnId}`, {
       EditSequence: editSequence,
       ...(payload.salesRep ? { salesRepRef: payload.salesRep } : {}),
+      ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
+      ...(payload.taxExempt === true ? { taxExempt: true } : {}),
     });
 
     const operationId = modResp?.operationId;
