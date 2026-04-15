@@ -763,7 +763,8 @@ function buildPaymentCard(
   paymentUrl: string,
   amountDisplay: string,
   baseDisplay?: string,
-  feeDisplay?: string
+  feeDisplay?: string,
+  note?: string
 ): string {
   const breakdownHtml =
     baseDisplay && feeDisplay
@@ -784,7 +785,8 @@ function buildPaymentCard(
   return `
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;margin:24px 0;border-collapse:separate;box-shadow:0 4px 6px -1px rgba(0,0,0,0.02),0 2px 4px -1px rgba(0,0,0,0.02);">
   <tr><td style="padding:32px;">
-    <h3 style="margin:0 0 16px;color:#0f172a;font-size:18px;font-weight:700;letter-spacing:-0.02em;">Payment Request</h3>
+    <h3 style="margin:0 0 ${note ? '8px' : '16px'};color:#0f172a;font-size:18px;font-weight:700;letter-spacing:-0.02em;">Payment Request</h3>
+    ${note ? `<p style="margin:0 0 16px;color:#64748b;font-size:14px;line-height:1.5;">${note}</p>` : ''}
     ${breakdownHtml}
     <div style="background:#f8fafc;border-radius:8px;border:1px solid #f1f5f9;padding:24px;margin:20px 0;text-align:center;">
       <p style="margin:0 0 4px;color:#64748b;font-size:13px;font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Total to pay</p>
@@ -823,6 +825,7 @@ export async function POST(
     paymentLinkUrl,
     paymentAmount,
     paymentBaseAmount,
+    paymentNote,
     extraAttachments,
   } = (req.body ?? {}) as any;
   const order = await fetchOrderWithPreview(req, id);
@@ -931,7 +934,8 @@ export async function POST(
           paymentBaseAmount ? fmt(Number(paymentBaseAmount)) : undefined,
           paymentBaseAmount
             ? fmt(Number(paymentAmount) - Number(paymentBaseAmount))
-            : undefined
+            : undefined,
+          paymentNote
         )
       : "";
 
