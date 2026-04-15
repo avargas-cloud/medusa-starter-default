@@ -30,6 +30,7 @@ import {
 import { parseSalesRepInitials } from "../lib/quickbooks/parse-sales-rep";
 import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types";
 import {
+  coalesceIfInFlight,
   writePipelineRow,
   cacheEditSequence,
 } from "../lib/quickbooks/qb-pipeline";
@@ -94,65 +95,52 @@ export async function handleDraftOrderCreated(
   const draftOrderId = data.id;
   logger.info(`${LOG_PREFIX} ── draft_order.created → ${draftOrderId} ──`);
 
-  // Duplicate guard — prevents re-processing an estimate already in flight or done.
+  // next_payload coalescing: if this estimate is already submitted (in-flight),
+  // mark next_payload on the existing row and return — no duplicate bridge call.
+  // The consolidator will reset the row and call us again once the current op confirms.
   //
-  // We check 'submitted' and 'confirmed' only.  'pending' is a cosmetic pre-flight row
-  // that can be orphaned (e.g. if the process crashed before the bridge call), so we
-  // don't use it as a hard block — that would incorrectly lock out legitimate retries.
-  //
-  // isCron=true:
-  //   submitted / confirmed → skip (already handled or done).
-  //   'waiting' is intentionally excluded: the cron's job IS to process waiting rows.
-  //
-  // isCron=false (subscriber / manual save):
-  //   confirmed → silent skip.
-  //   submitted → write a 'waiting' row instead of silently dropping the request.
-  //               Keeps an audit trail and lets the cron retry if the in-flight op fails.
-  try {
-    const { getDbPool } = require("../api/utils/db-pool");
-    const pool = getDbPool();
-    const { rows: existing } = await pool.query(
-      `SELECT id, status FROM qb_order_pipeline
-             WHERE order_id = $1 AND step = 'estimate'
-               AND status IN ('submitted','confirmed')
-             ORDER BY created_at DESC LIMIT 1`,
-      [draftOrderId]
-    );
-
-    if (existing.length > 0) {
-      const existingStatus = existing[0].status as string;
-
-      if (existingStatus === "confirmed" || isCron) {
+  // Skip coalescing for cron calls: the cron should only run when no submitted row
+  // exists (guard below), so coalescing is a no-op there and we fall through normally.
+  if (!isCron) {
+    try {
+      const coalesced = await coalesceIfInFlight(draftOrderId, null, "estimate");
+      if (coalesced) {
         logger.info(
-          `${LOG_PREFIX} ⏭️ Estimate already ${existingStatus} for ${draftOrderId} — skipping`
+          `${LOG_PREFIX} ⏸ Estimate in-flight for ${draftOrderId} — coalesced as next submit`
         );
         return;
       }
-
-      // existingStatus === 'submitted' and this is a manual/subscriber trigger:
-      // record the save intent as a waiting row instead of silently dropping it.
-      const friendlyRef =
-        (data.document_number as string | undefined) ||
-        (data.display_id ? `E${data.display_id}` : undefined);
-      try {
-        await writePipelineRow({
-          orderId: draftOrderId,
-          step: "estimate",
-          status: "waiting",
-          medusaRefNumber: friendlyRef ?? null,
-        });
-      } catch (_) {
-        // non-critical — don't abort the parent flow
-      }
-      logger.info(
-        `${LOG_PREFIX} ⏸️  Estimate already submitted for ${draftOrderId} — queued waiting row for this save`
+    } catch (coalErr: any) {
+      logger.warn(
+        `${LOG_PREFIX} ⚠️ Could not check coalesce state: ${coalErr.message}`
       );
-      return;
     }
-  } catch (dupErr: any) {
-    logger.warn(
-      `${LOG_PREFIX} ⚠️ Could not check duplicate pipeline row: ${dupErr.message}`
-    );
+  }
+
+  // Hard guard for cron: skip if already submitted or confirmed (nothing to do).
+  // 'waiting' is intentionally excluded — the cron's job IS to process waiting rows.
+  if (isCron) {
+    try {
+      const { getDbPool } = require("../api/utils/db-pool");
+      const pool = getDbPool();
+      const { rows: existing } = await pool.query(
+        `SELECT status FROM qb_order_pipeline
+               WHERE order_id = $1 AND step = 'estimate'
+                 AND status IN ('submitted', 'confirmed')
+               LIMIT 1`,
+        [draftOrderId]
+      );
+      if (existing.length > 0) {
+        logger.info(
+          `${LOG_PREFIX} ⏭️ Estimate already ${existing[0].status} for ${draftOrderId} — cron skipping`
+        );
+        return;
+      }
+    } catch (dupErr: any) {
+      logger.warn(
+        `${LOG_PREFIX} ⚠️ Could not check pipeline status: ${dupErr.message}`
+      );
+    }
   }
 
   const query = container.resolve(ContainerRegistrationKeys.QUERY);

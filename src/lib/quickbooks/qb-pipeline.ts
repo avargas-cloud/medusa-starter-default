@@ -638,6 +638,95 @@ export async function invalidateEditSequenceCache(
   );
 }
 
+// ─── next_payload coalescing ─────────────────────────────────────────────────
+//
+// When a document is saved while a QB operation is already in-flight (submitted),
+// we coalesce the new save instead of spawning a duplicate bridge call.
+//
+// Flow:
+//   Save #1 → pending → submitted  (bridge processing)
+//   Save #2 while submitted → next_payload = {coalescedAt} set on the same row
+//                             → caller returns early, no bridge call
+//   Consolidator confirms #1 → claimAndResetForResubmit → row reset to pending
+//                             → appropriate handler called immediately
+//   Row processes normally: pending → submitted → confirmed
+//
+// This keeps exactly 1 pipeline row per document at all times.
+
+/**
+ * Call at the start of every QB handler before touching the bridge.
+ *
+ * If a 'submitted' row already exists for this document+step:
+ *   - Sets next_payload = {coalescedAt: <iso>} on that row (last-write-wins marker)
+ *   - Returns true  → caller MUST return immediately without calling the bridge
+ *
+ * If no submitted row exists:
+ *   - Returns false → caller proceeds normally
+ *
+ * Supports orderId-only, referenceId-only, or both (null-safe).
+ */
+export async function coalesceIfInFlight(
+  orderId: string | null,
+  referenceId: string | null,
+  step: PipelineStep
+): Promise<boolean> {
+  if (!orderId && !referenceId) return false;
+  const pool = getDbPool();
+  const { rows } = await pool.query(
+    `UPDATE qb_order_pipeline
+         SET next_payload = $3::jsonb,
+             updated_at   = NOW()
+         WHERE step   = $2
+           AND status  = 'submitted'
+           AND (
+             ($1::text IS NOT NULL AND order_id = $1::text
+               AND ($4::text IS NULL OR reference_id = $4::text))
+             OR
+             ($1::text IS NULL AND $4::text IS NOT NULL AND reference_id = $4::text)
+           )
+         RETURNING id`,
+    [
+      orderId ?? null,
+      step,
+      JSON.stringify({ coalescedAt: new Date().toISOString() }),
+      referenceId ?? null,
+    ]
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Called by the consolidator immediately after confirming a pipeline row.
+ *
+ * Atomically reads next_payload and, if present, resets the same row back to
+ * 'pending' so the coalesced save can be processed next.
+ *
+ * Returns true if there was a coalesced save pending (consolidator should
+ * call the appropriate handler for this step right away).
+ * Returns false if next_payload was NULL (nothing to do).
+ */
+export async function claimAndResetForResubmit(rowId: string): Promise<boolean> {
+  const pool = getDbPool();
+  const { rows } = await pool.query(
+    `UPDATE qb_order_pipeline
+         SET status        = 'pending',
+             next_payload  = NULL,
+             bridge_op_id  = NULL,
+             qb_result     = NULL,
+             error         = NULL,
+             submitted_at  = NULL,
+             confirmed_at  = NULL,
+             failed_at     = NULL,
+             updated_at    = NOW(),
+             retry_count   = 0
+         WHERE id          = $1
+           AND next_payload IS NOT NULL
+         RETURNING id`,
+    [rowId]
+  );
+  return rows.length > 0;
+}
+
 /**
  * Find the most recent in-flight pipeline row for a given document.
  * Returns the row if one exists with status 'submitted', or 'pending' with a

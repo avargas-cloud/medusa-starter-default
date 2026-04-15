@@ -13,7 +13,11 @@ import {
   getSoTxnId,
   getSoOperationId,
 } from "../qb-metadata-types";
-import { writePipelineRow, cacheEditSequence } from "../qb-pipeline";
+import {
+  coalesceIfInFlight,
+  writePipelineRow,
+  cacheEditSequence,
+} from "../qb-pipeline";
 
 import { LOG_PREFIX, getQbConfig, isPosOrder, processingOrders } from "./utils";
 
@@ -38,6 +42,16 @@ export async function handleOrderPlaced(
 ) {
   const orderId = data.id;
   logger.info(`${LOG_PREFIX} ── order.placed → ${orderId} ──`);
+
+  // Coalesce rapid saves: if a sales_order op is already in-flight, mark next_payload
+  // and return — consolidator will re-submit after current op confirms.
+  if (!isCron) {
+    const coalesced = await coalesceIfInFlight(orderId, null, "sales_order");
+    if (coalesced) {
+      logger.info(`${LOG_PREFIX} ⏸ Sales order in-flight for ${orderId} — coalesced as next submit`);
+      return;
+    }
+  }
 
   // Read QB config (shipping item ID + sales tax code)
   const qbConfig = await getQbConfig();

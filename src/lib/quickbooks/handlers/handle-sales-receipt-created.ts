@@ -14,6 +14,7 @@ import {
   getEstimateTxnId,
 } from "../qb-metadata-types";
 import {
+  coalesceIfInFlight,
   writePipelineRow,
   cacheEditSequence,
   skipSalesOrderPipelineRow,
@@ -36,6 +37,14 @@ export async function handleSalesReceiptCreated(
   logger.info(
     `${LOG_PREFIX} Sales Receipt event data: ${JSON.stringify(data)}`
   );
+
+  // Coalesce rapid saves: if a sales_receipt op is already in-flight, mark next_payload
+  // and return — consolidator will re-submit after current op confirms.
+  const coalescedSR = await coalesceIfInFlight(orderId, null, "sales_receipt");
+  if (coalescedSR) {
+    logger.info(`${LOG_PREFIX} ⏸ Sales receipt in-flight for ${orderId} — coalesced as next submit`);
+    return;
+  }
 
   let order: any;
   try {

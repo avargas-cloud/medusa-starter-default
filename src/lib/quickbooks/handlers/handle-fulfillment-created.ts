@@ -15,6 +15,7 @@ import {
   getLatestPaymentTxnId,
 } from "../qb-metadata-types";
 import {
+  coalesceIfInFlight,
   writePipelineRow,
   cacheEditSequence,
   skipSalesOrderPipelineRow,
@@ -35,6 +36,14 @@ export async function handleFulfillmentCreated(
     `${LOG_PREFIX} ── order.fulfillment_created → orderId=${orderId} ──`
   );
   logger.info(`${LOG_PREFIX} Fulfillment event data: ${JSON.stringify(data)}`);
+
+  // Coalesce rapid saves: if an invoice op is already in-flight, mark next_payload
+  // and return — consolidator will re-submit after current op confirms.
+  const coalescedInv = await coalesceIfInFlight(orderId, null, "invoice");
+  if (coalescedInv) {
+    logger.info(`${LOG_PREFIX} ⏸ Invoice in-flight for ${orderId} — coalesced as next submit`);
+    return;
+  }
 
   let order: any;
   try {

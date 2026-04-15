@@ -9,13 +9,96 @@ import {
   closeSalesOrderInQb,
   reopenSalesOrderInQb,
 } from "../lib/quickbooks/client/sales-orders";
+import { handleDraftOrderCreated } from "../subscribers/qb-draft-order-subscriber";
+import { handleFulfillmentCreated } from "../lib/quickbooks/handlers/handle-fulfillment-created";
+import { handleOrderPlaced } from "../lib/quickbooks/handlers/handle-order-placed";
+import { handleSalesReceiptCreated } from "../lib/quickbooks/handlers/handle-sales-receipt-created";
 import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types";
 import {
+  claimAndResetForResubmit,
   confirmPipelineRow,
   failPipelineRow,
   cacheEditSequence,
   invalidateEditSequenceCache,
 } from "../lib/quickbooks/qb-pipeline";
+
+/**
+ * Re-submits a pipeline row that was coalesced while in-flight.
+ * Called by the consolidator after a row is confirmed and next_payload was present.
+ * The row has already been reset to 'pending' by claimAndResetForResubmit.
+ */
+async function resubmitByStep(
+  row: {
+    id: string;
+    order_id: string | null;
+    reference_id: string | null;
+    reference_type: string | null;
+    step: string;
+  },
+  container: MedusaContainer,
+  logger: any
+): Promise<void> {
+  const orderModule = container.resolve(Modules.ORDER);
+  const customerModule = container.resolve(Modules.CUSTOMER);
+
+  try {
+    switch (row.step) {
+      case "estimate":
+        if (!row.order_id) break;
+        await handleDraftOrderCreated(
+          { id: row.order_id },
+          container,
+          logger,
+          true // isCron — skips the 1h POS delay guard
+        );
+        break;
+
+      case "sales_order":
+        if (!row.order_id) break;
+        await handleOrderPlaced(
+          { id: row.order_id },
+          orderModule,
+          customerModule,
+          container,
+          logger,
+          true
+        );
+        break;
+
+      case "sales_receipt":
+        if (!row.order_id) break;
+        await handleSalesReceiptCreated(
+          { id: row.order_id },
+          orderModule,
+          customerModule,
+          container,
+          logger
+        );
+        break;
+
+      case "invoice":
+        if (!row.order_id) break;
+        await handleFulfillmentCreated(
+          { order_id: row.order_id },
+          orderModule,
+          customerModule,
+          container,
+          logger
+        );
+        break;
+
+      default:
+        // payment and other steps: reset to pending and let qb-pos-sync pick up
+        logger.info(
+          `${LOG_PREFIX} ℹ️ Coalesced resubmit for step=${row.step} — row reset to pending, will be picked up by next cron`
+        );
+    }
+  } catch (err: any) {
+    logger.warn(
+      `${LOG_PREFIX} ⚠️ resubmitByStep failed for row ${row.id} (${row.step}): ${err.message}`
+    );
+  }
+}
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -686,6 +769,22 @@ export default async function qbPipelineConsolidator(
         logger.info(
           `${LOG_PREFIX} ✅ Confirmed row ${row.id} (${row.step}) — TxnID=${txnId}, Ref=${refNumber}`
         );
+
+        // next_payload coalescing: if a save arrived while this row was in-flight,
+        // reset the same row to 'pending' and re-submit immediately.
+        try {
+          const hasCoalesced = await claimAndResetForResubmit(row.id);
+          if (hasCoalesced) {
+            logger.info(
+              `${LOG_PREFIX} ⏩ Coalesced save detected for row ${row.id} (${row.step}) — resubmitting`
+            );
+            await resubmitByStep(row, container, logger);
+          }
+        } catch (resubErr: any) {
+          logger.warn(
+            `${LOG_PREFIX} ⚠️ Could not process coalesced save for row ${row.id}: ${resubErr.message}`
+          );
+        }
       } else if (op.status === "failed") {
         const errMsg = op.error || "QB operation failed (no details)";
         await failPipelineRow(row.id, errMsg);

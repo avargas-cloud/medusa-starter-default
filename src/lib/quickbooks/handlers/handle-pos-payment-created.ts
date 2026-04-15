@@ -8,6 +8,7 @@ import {
   ensureCustomerInQb,
 } from "../order-flow-core";
 import {
+  coalesceIfInFlight,
   writePipelineRow,
   cacheEditSequence,
   skipPaymentRowByReference,
@@ -55,6 +56,15 @@ export async function handlePosPaymentCreated({
   logger.info(
     `${LOG_PREFIX} 📥 Received ${event.name} for payment ${paymentId}`
   );
+
+  // Coalesce rapid saves: if a payment op is already in-flight for this paymentId,
+  // mark next_payload and return — consolidator will re-submit after current op confirms.
+  // Payments use reference_id (not order_id) as the pipeline key.
+  const coalescedPay = await coalesceIfInFlight(null, paymentId, "payment");
+  if (coalescedPay) {
+    logger.info(`${LOG_PREFIX} ⏸ Payment in-flight for ${paymentId} — coalesced as next submit`);
+    return;
+  }
 
   try {
     const query = container.resolve(ContainerRegistrationKeys.QUERY);
