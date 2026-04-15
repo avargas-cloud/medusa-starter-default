@@ -11,14 +11,38 @@
  *   mc ilm rule add --expiry-days 7 --prefix "pdf-shares/" myminio/medusa-media
  */
 
+import { randomBytes } from "crypto";
+
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 
+import { getRedis } from "../../../../../lib/redis-client";
 import {
   fetchTemplateForPdf,
   fetchDefaultTemplateId,
   generatePdfFromUrl,
 } from "../../_shared/pdf";
+
+const SHARE_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+function generateShareSlug(): string {
+  return randomBytes(6).toString("base64url");
+}
+
+function buildPublicBaseUrl(req: MedusaRequest): string {
+  const envBase = process.env.BACKEND_URL ?? process.env.MEDUSA_BACKEND_URL;
+  if (envBase) return envBase.replace(/\/$/, "");
+
+  const forwardedHost = req.headers["x-forwarded-host"] as string | undefined;
+  const forwardedProto =
+    (req.headers["x-forwarded-proto"] as string | undefined) ?? "https";
+  if (forwardedHost) return `${forwardedProto}://${forwardedHost}`;
+
+  const host = req.headers["host"] as string | undefined;
+  if (host) return `http://${host}`;
+
+  return "http://localhost:9000";
+}
 
 function buildS3Client(): S3Client {
   return new S3Client({
@@ -118,11 +142,40 @@ export async function POST(
 
     const pdfUrl = `${endpoint}/${bucket}/${fileKey}`;
     const expiresAt = new Date(
-      Date.now() + 7 * 24 * 60 * 60 * 1000
+      Date.now() + SHARE_TTL_SECONDS * 1000
     ).toISOString();
 
-    console.log(`[pdf-link] Uploaded: ${pdfUrl}`);
-    res.json({ success: true, pdfUrl, expiresAt });
+    // Generate short URL backed by Redis. Retries once on unlikely collision.
+    let slug = generateShareSlug();
+    let shortUrl = pdfUrl;
+    try {
+      const redis = getRedis();
+      const setResult = await redis.set(
+        `pdf-share:${slug}`,
+        pdfUrl,
+        "EX",
+        SHARE_TTL_SECONDS,
+        "NX"
+      );
+      if (setResult !== "OK") {
+        slug = generateShareSlug();
+        await redis.set(
+          `pdf-share:${slug}`,
+          pdfUrl,
+          "EX",
+          SHARE_TTL_SECONDS
+        );
+      }
+      shortUrl = `${buildPublicBaseUrl(req)}/pub/s/${slug}`;
+    } catch (err) {
+      console.warn(
+        "[pdf-link] Redis short-URL failed, falling back to MinIO URL:",
+        err instanceof Error ? err.message : err
+      );
+    }
+
+    console.log(`[pdf-link] Uploaded: ${pdfUrl} → short: ${shortUrl}`);
+    res.json({ success: true, pdfUrl: shortUrl, expiresAt });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("[pdf-link] Error:", message);
