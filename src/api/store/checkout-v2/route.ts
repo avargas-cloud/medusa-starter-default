@@ -154,13 +154,20 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   const {
     cartId,
-    email,
+    email: rawEmail,
     shippingAddress,
     billingAddress,
     shippingMethodId,
     opaqueData,
     amount: frontendAmountDollars,
   } = body;
+
+  // Normalize email to lowercase before any Medusa call — Medusa's internal customer
+  // lookup is case-sensitive, so passing an uppercase email creates a zombie customer
+  // instead of finding the existing record.
+  const email: string | undefined = rawEmail
+    ? (rawEmail as string).trim().toLowerCase()
+    : undefined;
 
   if (!cartId) {
     return res.status(400).json({ error: "Missing cartId" });

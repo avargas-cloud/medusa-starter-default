@@ -54,7 +54,13 @@ export async function GET(
     console.log("[Google OAuth Callback] Authentication successful");
 
     // Step 2: Email Extraction (Gold Standard Pattern)
-    const email = (authResponse.authIdentity as any)?.provider_metadata?.email;
+    // Normalize to lowercase — Google Workspace may return original case,
+    // and Medusa's customer lookup is case-sensitive (would create a zombie).
+    const rawEmail = (authResponse.authIdentity as any)?.provider_metadata
+      ?.email;
+    const email: string | undefined = rawEmail
+      ? String(rawEmail).trim().toLowerCase()
+      : rawEmail;
 
     if (!email) {
       console.error("[Google OAuth Callback] No email in auth response");
