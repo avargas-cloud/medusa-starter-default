@@ -228,8 +228,13 @@ export default async function importCustomersFromQB({ container }: ExecArgs) {
                 ? qbCustomer.Email || ""
                 : qbOriginalEmail || customerEmail,
               email_is_placeholder: isDummyEmail,
-              alt_emails:
-                altEmails.length > 0 ? altEmails.join(", ") : undefined,
+              // Keep only the FIRST alt email (singular slot — matches POS UI
+              // convention in CustomerDetailsCard/AddCustomerModal). Extras
+              // should live in cc_emails, handled by fix/split-multi-alt-email.ts
+              // on historical data. Log a warning so humans can migrate the
+              // rest if they exist.
+              alt_email:
+                altEmails.length > 0 ? altEmails[0].toLowerCase() : undefined,
               alt_first_name: contactName?.first_name || undefined,
               alt_last_name: contactName?.last_name || undefined,
               alt_contact_phone: undefined, // Reserved for future use
