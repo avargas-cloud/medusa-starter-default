@@ -2,6 +2,6 @@
     "build": {},
     "deploy": {
         "healthcheckPath": "/health",
-        "healthcheckTimeout": 600
+        "healthcheckTimeout": 900
     }
 }
