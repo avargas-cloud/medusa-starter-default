@@ -94,19 +94,58 @@ export async function handleDraftOrderCreated(
   const draftOrderId = data.id;
   logger.info(`${LOG_PREFIX} ── draft_order.created → ${draftOrderId} ──`);
 
-  // Duplicate guard: skip if an estimate is already submitted or confirmed for this order
+  // Duplicate guard — prevents re-processing an estimate already in flight or done.
+  //
+  // We check 'submitted' and 'confirmed' only.  'pending' is a cosmetic pre-flight row
+  // that can be orphaned (e.g. if the process crashed before the bridge call), so we
+  // don't use it as a hard block — that would incorrectly lock out legitimate retries.
+  //
+  // isCron=true:
+  //   submitted / confirmed → skip (already handled or done).
+  //   'waiting' is intentionally excluded: the cron's job IS to process waiting rows.
+  //
+  // isCron=false (subscriber / manual save):
+  //   confirmed → silent skip.
+  //   submitted → write a 'waiting' row instead of silently dropping the request.
+  //               Keeps an audit trail and lets the cron retry if the in-flight op fails.
   try {
     const { getDbPool } = require("../api/utils/db-pool");
     const pool = getDbPool();
     const { rows: existing } = await pool.query(
-      `SELECT id FROM qb_order_pipeline
-             WHERE order_id = $1 AND step = 'estimate' AND status IN ('submitted','confirmed')
-             LIMIT 1`,
+      `SELECT id, status FROM qb_order_pipeline
+             WHERE order_id = $1 AND step = 'estimate'
+               AND status IN ('submitted','confirmed')
+             ORDER BY created_at DESC LIMIT 1`,
       [draftOrderId]
     );
+
     if (existing.length > 0) {
+      const existingStatus = existing[0].status as string;
+
+      if (existingStatus === "confirmed" || isCron) {
+        logger.info(
+          `${LOG_PREFIX} ⏭️ Estimate already ${existingStatus} for ${draftOrderId} — skipping`
+        );
+        return;
+      }
+
+      // existingStatus === 'submitted' and this is a manual/subscriber trigger:
+      // record the save intent as a waiting row instead of silently dropping it.
+      const friendlyRef =
+        (data.document_number as string | undefined) ||
+        (data.display_id ? `E${data.display_id}` : undefined);
+      try {
+        await writePipelineRow({
+          orderId: draftOrderId,
+          step: "estimate",
+          status: "waiting",
+          medusaRefNumber: friendlyRef ?? null,
+        });
+      } catch (_) {
+        // non-critical — don't abort the parent flow
+      }
       logger.info(
-        `${LOG_PREFIX} ⏭️ Estimate already submitted/confirmed for ${draftOrderId} — skipping duplicate`
+        `${LOG_PREFIX} ⏸️  Estimate already submitted for ${draftOrderId} — queued waiting row for this save`
       );
       return;
     }
@@ -263,6 +302,10 @@ export async function handleDraftOrderCreated(
   }
 
   // Create Estimate
+  // NOTE: no onSubmitted callback here — the post-result writePipelineRow below
+  // already records the submitted/confirmed status with bridgeOpId. Having both
+  // would INSERT two separate rows for the same operation, causing the consolidator
+  // to confirm duplicates.
   const result = await processEstimateInQb({
     draftOrderId,
     qbCustomerId: custResult.qbCustomerId!,
@@ -271,14 +314,6 @@ export async function handleDraftOrderCreated(
       (draftOrder.metadata?.document_number as string) ||
       `E${draftOrder.display_id}`,
     salesRep: parseSalesRepInitials(draftOrder.metadata?.sales_rep),
-    onSubmitted: async (operationId) => {
-      await writePipelineRow({
-        orderId: draftOrderId,
-        step: "estimate",
-        status: "submitted",
-        bridgeOpId: operationId,
-      });
-    },
   });
 
   if (result.error) {

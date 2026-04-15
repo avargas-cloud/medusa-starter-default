@@ -164,6 +164,9 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
         | string
         | undefined;
 
+      // Skip if already in flight (submitted) or done (confirmed).
+      // 'waiting' is intentionally excluded — that's exactly what the cron should process.
+      // 'pending' is a cosmetic pre-flight row that may be orphaned; don't block on it.
       if (
         latestPipelineStatus === "submitted" ||
         latestPipelineStatus === "confirmed"

@@ -14,7 +14,7 @@ export async function GET(
 
   try {
     const [creditMemos, count] =
-      await creditMemoService.listAndCountPosCreditMemoes(
+      await creditMemoService.listAndCountPosCreditMemos(
         {},
         {
           skip: parseInt(skip),
