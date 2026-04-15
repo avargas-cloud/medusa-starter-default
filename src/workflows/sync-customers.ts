@@ -56,6 +56,14 @@ export const syncCustomersToMeiliStep = createStep(
           "last_name",
           "phone",
         ],
+        rankingRules: [
+          "words",
+          "typo",
+          "proximity",
+          "attribute",
+          "exactness",
+          "sort",
+        ],
         pagination: { maxTotalHits: 20000 },
       });
 
