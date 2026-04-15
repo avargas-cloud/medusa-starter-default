@@ -127,6 +127,7 @@ export default async function importCustomersFromQB({ container }: ExecArgs) {
       try {
         // Smart email extraction (handles multiple emails separated by comma/slash/etc)
         let customerEmail = qbCustomer.Email?.trim();
+        const qbOriginalEmail = customerEmail; // preserved pre-lowercase for metadata
         let altEmails: string[] = [];
         let isDummyEmail = false;
 
@@ -188,6 +189,11 @@ export default async function importCustomersFromQB({ container }: ExecArgs) {
           qbCustomer.CompanyName
         );
 
+        // Normalize email to lowercase before any write or lookup
+        // (Medusa's findOrCreateCustomerStep is case-sensitive — uppercase
+        // emails create zombie duplicates)
+        customerEmail = customerEmail.toLowerCase();
+
         if (!isDryRun) {
           // Skip if a customer with this email already exists in Medusa
           const existing = await customerModule.listCustomers({
@@ -220,7 +226,7 @@ export default async function importCustomersFromQB({ container }: ExecArgs) {
                     : qbCustomer.PriceLevel,
               qb_original_email: isDummyEmail
                 ? qbCustomer.Email || ""
-                : customerEmail,
+                : qbOriginalEmail || customerEmail,
               email_is_placeholder: isDummyEmail,
               alt_emails:
                 altEmails.length > 0 ? altEmails.join(", ") : undefined,

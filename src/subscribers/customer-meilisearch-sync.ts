@@ -64,7 +64,7 @@ export default async function customerMeilisearchSubscriber({
     const meta = (customer.metadata as any) || {};
     const meiliDoc = {
       id: customer.id,
-      email: customer.email,
+      email: (customer.email || "").toLowerCase(),
       first_name: customer.first_name || "",
       last_name: customer.last_name || "",
       company_name: (customer as any).company_name || "",

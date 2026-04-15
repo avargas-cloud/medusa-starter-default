@@ -41,7 +41,6 @@ export async function POST(
     promotion_id,
     order_discount,
     customer_id,
-    customer_email,
   } = req.body as any;
 
   let resolvedId = id;
@@ -197,7 +196,6 @@ export async function POST(
           body: JSON.stringify({
             id: resolvedId,
             customer_id,
-            email: customer_email,
           }),
         }).catch((e) => logger.warn(`Transfer failed: ${e.message}`));
       }

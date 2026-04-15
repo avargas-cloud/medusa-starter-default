@@ -97,7 +97,7 @@ export const syncCustomersToMeiliStep = createStep(
           meta.qb_customer_type ?? meta.customer_type ?? "Standard";
         return {
           id: c.id,
-          email: c.email ?? "",
+          email: (c.email ?? "").toLowerCase(),
           first_name: c.first_name ?? "",
           last_name: c.last_name ?? "",
           company_name: c.company_name ?? "",

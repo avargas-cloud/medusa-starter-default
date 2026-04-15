@@ -6,6 +6,7 @@ import type {
 import { defineMiddlewares } from "@medusajs/medusa";
 
 import { addCategoryBreadcrumbs } from "./middlewares/add-category-breadcrumbs";
+import { validateDraftOrderCustomer } from "./middlewares/validate-draft-order-customer";
 
 // Inline CORS middleware for /pos/* routes.
 // Reads STORE_CORS env var — same origins as the storefront.
@@ -82,6 +83,13 @@ export default defineMiddlewares({
       matcher: "/store/product-categories/:id",
       method: "GET",
       middlewares: [addCategoryBreadcrumbs],
+    },
+    // Guard against zombie-customer creation in Medusa's findOrCreateCustomerStep.
+    // Runs before createOrderWorkflow on POST /admin/draft-orders.
+    {
+      matcher: "/admin/draft-orders",
+      method: ["POST"],
+      middlewares: [validateDraftOrderCustomer],
     },
   ],
 });

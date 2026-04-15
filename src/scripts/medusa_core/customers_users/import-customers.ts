@@ -42,7 +42,8 @@ export default async function importCustomers({ container, args }: ExecArgs) {
 
     if (cols.length < 1) continue;
 
-    const email = cols[0];
+    // Normalize email to lowercase (Medusa findOrCreateCustomerStep is case-sensitive)
+    const email = (cols[0] || "").toLowerCase();
     const firstName = cols[1] || "";
     const lastName = cols[2] || "";
     const qbId = cols[3] || "";

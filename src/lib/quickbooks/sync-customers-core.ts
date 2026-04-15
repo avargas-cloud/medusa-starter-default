@@ -237,10 +237,13 @@ export async function syncCustomersCore(
           qbEmail.toLowerCase() !== medusa.email?.toLowerCase();
 
         if (emailChanged) {
+          const normalizedEmail = qbEmail.toLowerCase();
           log(
-            `   📧 Email changed for QB ${qb.ListID}: ${medusa.email} → ${qbEmail}`
+            `   📧 Email changed for QB ${qb.ListID}: ${medusa.email} → ${normalizedEmail}`
           );
-          await customerModule.updateCustomers(medusa.id, { email: qbEmail });
+          await customerModule.updateCustomers(medusa.id, {
+            email: normalizedEmail,
+          });
           stats.emailsUpdated++;
           emailChangeCount++;
         }
@@ -265,6 +268,7 @@ export async function syncCustomersCore(
       try {
         // Basic email handling
         let email = qb.Email?.trim();
+        const qbOriginalEmail = email; // preserved pre-lowercase for metadata
         let isDummyEmail = false;
 
         if (!email || !email.includes("@")) {
@@ -280,6 +284,9 @@ export async function syncCustomersCore(
           email = `${slug}@noemail.ecopowertech.com`;
           isDummyEmail = true;
         }
+
+        // Normalize email to lowercase (Medusa findOrCreateCustomerStep is case-sensitive)
+        email = email.toLowerCase();
 
         // Basic name parsing
         const firstName = qb.FirstName || qb.Name?.split(" ")[0] || "Customer";
@@ -307,7 +314,9 @@ export async function syncCustomersCore(
           qb_customer_type: customerType,
           qb_price_level: priceLevel,
           email_is_placeholder: isDummyEmail,
-          qb_original_email: isDummyEmail ? qb.Email || "" : email,
+          qb_original_email: isDummyEmail
+            ? qb.Email || ""
+            : qbOriginalEmail || email,
         };
 
         // If customer already exists by email (registered via web), link QB metadata instead of creating duplicate
