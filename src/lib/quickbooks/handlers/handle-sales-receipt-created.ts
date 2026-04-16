@@ -169,14 +169,20 @@ export async function handleSalesReceiptCreated(
   let memo: string | undefined;
   let invoiceShippingAmount: number | undefined;
   let srRefNumber: string | undefined;
+  let invoicePaymentMethod: string | undefined;
 
   try {
-    let sql = `SELECT invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
+    // Fallback for invoice_id when called by the consolidator (which only passes order_id)
+    let sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
     let params: any[] = [data.fulfillment_id];
 
     if (data.invoice_id) {
-      sql = `SELECT invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping FROM pos_invoice WHERE id = $1 LIMIT 1`;
+      sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method FROM pos_invoice WHERE id = $1 LIMIT 1`;
       params = [data.invoice_id];
+    } else if (!data.fulfillment_id && orderId) {
+      // Cron resubmit path — only order_id available
+      sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method FROM pos_invoice WHERE order_id = $1 ORDER BY issued_at DESC LIMIT 1`;
+      params = [orderId];
     }
 
     const invRes = await pool.query(sql, params);
@@ -192,6 +198,14 @@ export async function handleSalesReceiptCreated(
       if (row.shipping !== undefined && row.shipping !== null) {
         // pos_invoice.shipping is stored in cents — convert to dollars for QB
         invoiceShippingAmount = Number(row.shipping) / 100;
+      }
+      if (row.payment_method) {
+        invoicePaymentMethod = String(row.payment_method);
+      }
+      // Hydrate invoice_id for downstream pipeline writes when consolidator
+      // only passed order_id.
+      if (!data.invoice_id && row.id) {
+        data.invoice_id = row.id;
       }
     }
   } catch (e) {}
@@ -291,7 +305,7 @@ export async function handleSalesReceiptCreated(
     orderId,
     orderDisplayId: order.display_id,
     qbCustomerId,
-    paymentMethod: data.payment_method,
+    paymentMethod: data.payment_method || invoicePaymentMethod,
     prebuiltItems,
     salesTaxCode,
     salesRep: parseSalesRepInitials(order.metadata?.sales_rep),
