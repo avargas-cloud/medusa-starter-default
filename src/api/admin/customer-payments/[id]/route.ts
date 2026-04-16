@@ -138,6 +138,66 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
 
     await financeService.updateCustomerPayments({ id, ...fields });
 
+    // ── Sync pos_invoice + invoice_payment payment_method ────────────────
+    // When the payment method changes, propagate it to every linked PosInvoice
+    // and to the matching InvoicePayment record for each application.
+    if (
+      pos_payment_method !== undefined &&
+      pos_payment_method !== meta.pos_payment_method
+    ) {
+      (async () => {
+        try {
+          const invoiceService = req.scope.resolve(INVOICE_MODULE);
+          const apps: any[] = await financeService
+            .listPaymentApplications({ payment_id: id })
+            .catch(() => []);
+
+          const toNum = (v: any): number => {
+            if (v == null) return 0;
+            if (typeof v === "number") return v;
+            if (typeof v === "string") return Number(v);
+            if (typeof v === "object") {
+              if ("toNumber" in v) return (v as any).toNumber();
+              if ("numeric" in v) return Number((v as any).numeric);
+              if ("value" in v) return Number((v as any).value);
+            }
+            return Number(v) || 0;
+          };
+
+          for (const app of apps) {
+            if (!app.invoice_id) continue;
+
+            // 1. Update the invoice's payment_method column (PAYMENT column in list)
+            // Cast required: DB stores detailed methods (e.g. 'visa') beyond the TS enum
+            await invoiceService
+              .updatePosInvoices({
+                id: app.invoice_id,
+                payment_method: pos_payment_method as any,
+              })
+              .catch(() => {});
+
+            // 2. Update the matching invoice_payment record (matched by amount)
+            const ipays: any[] = await invoiceService
+              .listInvoicePayments({ invoice_id: app.invoice_id })
+              .catch(() => []);
+            const appAmt = toNum(app.amount_applied);
+            for (const ip of ipays) {
+              if (Math.abs(toNum(ip.amount) - appAmt) < 1) {
+                await invoiceService
+                  .updateInvoicePayments({
+                    id: ip.id,
+                    payment_method: pos_payment_method,
+                  })
+                  .catch(() => {});
+              }
+            }
+          }
+        } catch {
+          // non-fatal — invoice sync failure should not block the response
+        }
+      })();
+    }
+
     // ── QB re-sync: update PaymentMethodRef in QuickBooks ────────────────
     // Only attempt if the payment method actually changed and QB sync is possible.
     if (
