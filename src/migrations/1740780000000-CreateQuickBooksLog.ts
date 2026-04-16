@@ -63,18 +63,19 @@ export class CreateQuickBooksLog1740780000000 implements MigrationInterface {
     // Auto-cleanup: delete rows older than 90 days via pg_cron (Railway supports this).
     // This keeps the table permanently tiny (~210 rows/day × 90 days = ~19k rows max = ~10MB tops).
     // If pg_cron is not available, the cleanup is done manually via the quickbooks-daily-sync job.
+    // NOTE: nested $$ is invalid in PostgreSQL — use distinct dollar-quote tags ($outer$).
     await queryRunner.query(`
-            DO $$
+            DO $outer$
             BEGIN
                 IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
                     PERFORM cron.schedule(
                         'qb-sync-log-cleanup',
-                        '0 3 * * 0',  -- Every Sunday at 3am
+                        '0 3 * * 0',
                         $$DELETE FROM qb_sync_log WHERE initiated_at < NOW() - INTERVAL '90 days'$$
                     );
                 END IF;
             END
-            $$;
+            $outer$;
         `);
   }
 

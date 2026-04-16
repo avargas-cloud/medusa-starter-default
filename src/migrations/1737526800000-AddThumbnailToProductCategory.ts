@@ -1,18 +1,16 @@
-import { MigrationInterface, QueryRunner, TableColumn } from "typeorm";
+import { MigrationInterface, QueryRunner } from "typeorm";
 
 export class AddThumbnailToProductCategory1737526800000 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.addColumn(
-      "product_category",
-      new TableColumn({
-        name: "thumbnail",
-        type: "text",
-        isNullable: true,
-      })
+    // Raw SQL for idempotency — safe to re-run when tracking table is initialized fresh
+    await queryRunner.query(
+      `ALTER TABLE product_category ADD COLUMN IF NOT EXISTS thumbnail TEXT`
     );
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.dropColumn("product_category", "thumbnail");
+    await queryRunner.query(
+      `ALTER TABLE product_category DROP COLUMN IF EXISTS thumbnail`
+    );
   }
 }
