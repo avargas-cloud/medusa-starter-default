@@ -86,6 +86,65 @@ async function fetchFreshEditSequence(txnId: string): Promise<string> {
   return srRet.EditSequence as string;
 }
 
+export interface QbSalesReceiptLineSnapshot {
+  TxnLineID: string;
+  ItemListID?: string;
+  ItemFullName?: string;
+  Quantity?: number;
+  Rate?: number;
+  Amount?: number;
+  Desc?: string;
+  /** True if the existing QB line has InventorySiteRef (so it's an inventory item). */
+  hasSite?: boolean;
+}
+
+/**
+ * Queries a SalesReceipt from QB and returns its current lines with TxnLineIDs.
+ * Required for SalesReceiptMod operations that want to update/append/delete
+ * specific lines instead of replacing everything blindly.
+ */
+export async function fetchSalesReceiptLinesFromQb(
+  txnId: string
+): Promise<{ editSequence: string; lines: QbSalesReceiptLineSnapshot[] }> {
+  const queryResp = await bridgeFetch("GET", `/api/sales-receipts/${txnId}`);
+  const queryOpId = queryResp?.operationId;
+  if (!queryOpId)
+    throw new Error("Bridge did not return operationId for sales receipt query");
+
+  const rawResult = await pollRawOperationResult(queryOpId);
+  const srRet =
+    rawResult?.QBXML?.QBXMLMsgsRs?.SalesReceiptQueryRs?.SalesReceiptRet ??
+    rawResult?.QBXMLMsgsRs?.SalesReceiptQueryRs?.SalesReceiptRet ??
+    rawResult?.SalesReceiptRet ??
+    rawResult?.SalesReceiptQueryRs?.SalesReceiptRet;
+
+  if (!srRet?.EditSequence)
+    throw new Error("Could not extract EditSequence from sales receipt query result");
+
+  const rawLines = srRet.SalesReceiptLineRet
+    ? Array.isArray(srRet.SalesReceiptLineRet)
+      ? srRet.SalesReceiptLineRet
+      : [srRet.SalesReceiptLineRet]
+    : [];
+
+  const lines: QbSalesReceiptLineSnapshot[] = rawLines
+    .filter((l: any) => l?.TxnLineID)
+    .map((l: any) => ({
+      TxnLineID: String(l.TxnLineID),
+      ItemListID: l.ItemRef?.ListID,
+      ItemFullName: l.ItemRef?.FullName,
+      Quantity:
+        l.Quantity !== undefined && l.Quantity !== "" ? Number(l.Quantity) : undefined,
+      Rate: l.Rate !== undefined && l.Rate !== "" ? Number(l.Rate) : undefined,
+      Amount:
+        l.Amount !== undefined && l.Amount !== "" ? Number(l.Amount) : undefined,
+      Desc: l.Desc,
+      hasSite: !!(l.InventorySiteRef && l.InventorySiteRef.ListID),
+    }));
+
+  return { editSequence: srRet.EditSequence as string, lines };
+}
+
 export interface UpdateSalesReceiptOptions {
   /**
    * Fires right after the Bridge accepts the SalesReceiptMod request and returns
@@ -130,6 +189,9 @@ export async function updateSalesReceiptInQb(
         ...(payload.taxExempt === true ? { taxExempt: true } : {}),
         ...(payload.paymentMethod
           ? { PaymentMethod: payload.paymentMethod }
+          : {}),
+        ...(payload.items && payload.items.length > 0
+          ? { items: payload.items }
           : {}),
       }
     );

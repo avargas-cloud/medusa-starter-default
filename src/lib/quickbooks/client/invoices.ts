@@ -71,6 +71,65 @@ async function fetchFreshInvoiceEditSequence(txnId: string): Promise<string> {
   return invRet.EditSequence as string;
 }
 
+export interface QbInvoiceLineSnapshot {
+  TxnLineID: string;
+  ItemListID?: string;
+  ItemFullName?: string;
+  Quantity?: number;
+  Rate?: number;
+  Amount?: number;
+  Desc?: string;
+  /** True if the existing QB line has InventorySiteRef (so it's an inventory item). */
+  hasSite?: boolean;
+}
+
+/**
+ * Queries an Invoice from QB and returns its current lines with TxnLineIDs.
+ * Required for *Mod operations that want to update/append/delete specific
+ * lines instead of replacing everything blindly (which QB does not support).
+ */
+export async function fetchInvoiceLinesFromQb(
+  txnId: string
+): Promise<{ editSequence: string; lines: QbInvoiceLineSnapshot[] }> {
+  const queryResp = await bridgeFetch("GET", `/api/invoices/${txnId}`);
+  const queryOpId = queryResp?.operationId;
+  if (!queryOpId)
+    throw new Error("Bridge did not return operationId for invoice query");
+
+  const rawResult = await pollRawOperationResult(queryOpId);
+  const invRet =
+    rawResult?.QBXML?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet ??
+    rawResult?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet ??
+    rawResult?.InvoiceRet ??
+    rawResult?.InvoiceQueryRs?.InvoiceRet;
+
+  if (!invRet?.EditSequence)
+    throw new Error("Could not extract EditSequence from invoice query result");
+
+  const rawLines = invRet.InvoiceLineRet
+    ? Array.isArray(invRet.InvoiceLineRet)
+      ? invRet.InvoiceLineRet
+      : [invRet.InvoiceLineRet]
+    : [];
+
+  const lines: QbInvoiceLineSnapshot[] = rawLines
+    .filter((l: any) => l?.TxnLineID)
+    .map((l: any) => ({
+      TxnLineID: String(l.TxnLineID),
+      ItemListID: l.ItemRef?.ListID,
+      ItemFullName: l.ItemRef?.FullName,
+      Quantity:
+        l.Quantity !== undefined && l.Quantity !== "" ? Number(l.Quantity) : undefined,
+      Rate: l.Rate !== undefined && l.Rate !== "" ? Number(l.Rate) : undefined,
+      Amount:
+        l.Amount !== undefined && l.Amount !== "" ? Number(l.Amount) : undefined,
+      Desc: l.Desc,
+      hasSite: !!(l.InventorySiteRef && l.InventorySiteRef.ListID),
+    }));
+
+  return { editSequence: invRet.EditSequence as string, lines };
+}
+
 /**
  * Updates an existing Invoice in QuickBooks (salesRep only for now).
  * Fetches EditSequence from cache or QB, then sends InvoiceMod.
@@ -94,6 +153,9 @@ export async function updateInvoiceInQb(
       ...(payload.salesRep ? { salesRepRef: payload.salesRep } : {}),
       ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
       ...(payload.taxExempt === true ? { taxExempt: true } : {}),
+      ...(payload.items && payload.items.length > 0
+        ? { items: payload.items }
+        : {}),
     });
     const operationId = modResp?.operationId;
     if (!operationId)

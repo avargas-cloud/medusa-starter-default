@@ -9,6 +9,12 @@ export interface QbOrderItem {
   unitOfMeasure?: string;
   desc?: string;
   noSite?: boolean;
+  /**
+   * For *Mod operations only. Use the TxnLineID from an existing QB line
+   * (as returned by InvoiceQuery/SalesReceiptQuery) to update that line,
+   * or "-1" to append a new line. Omit for *Add operations.
+   */
+  TxnLineID?: string;
 }
 
 export interface QbCreateCustomerPayload {
@@ -120,6 +126,7 @@ export interface QbUpdateInvoicePayload {
   salesRep?: string;
   salesTaxCode?: string;
   taxExempt?: boolean;
+  items?: QbOrderItem[];
 }
 
 export interface QbUpdateSalesReceiptPayload {
@@ -128,6 +135,7 @@ export interface QbUpdateSalesReceiptPayload {
   salesTaxCode?: string;
   taxExempt?: boolean;
   paymentMethod?: string; // QB FullName (e.g., 'Visa', 'MasterCard', 'Cash')
+  items?: QbOrderItem[];
 }
 
 export interface QbCreateEstimatePayload {

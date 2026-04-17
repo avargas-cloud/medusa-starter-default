@@ -1,0 +1,88 @@
+# QB Service + Non-Inventory Part items — must NOT carry InventorySiteRef.
+# Source: screenshots from QuickBooks Desktop "Item List" (QB Service + NonInventory).
+# Flag with:
+#   yarn ts-node src/scripts/fix/flag-qb-service-variants.ts --file src/scripts/fix/service-skus.txt
+# Lines starting with # are comments. Blank lines ignored.
+
+# ── Service items ────────────────────────────────────────────────────────────
+3% Merchant Fee
+5228132u
+Charge
+Minfee-100
+Minfee-150
+Minfee-200
+Delete1
+Delete2
+delete3
+Delete4
+Delete5
+ELAB-CUSTOM-NP
+ELAB-CUSTOM-P
+ELAB-LC-45
+ELAB-LC-45-CPIN
+ELAB-LC-Hole
+ELAB-LC-S
+ELAB-REPAIR-S
+ELAB-REPAIR-S-P
+ELAB-RG-1S-NP
+ELAB-RG-1S-P
+ELAB-RG-2S-NP
+ELAB-RG-2S-P
+ELAB-RW-1S-NP
+ELAB-RW-1S-P
+ELAB-RW-2S-NP
+ELAB-RW-2S-P
+ELAB-SC-1S-P
+ELAB-SC-2S-NP
+ELAB-SC-2S-P
+H&P
+Inspection-Request
+INSTALL
+LiftRental
+Programming
+Services
+Assembly-Panels
+CHGVAR
+Expedite-Assembly
+Installation-On-Site
+On-Site-Assestment
+Service-Photometric
+Service-Project
+Turnkey
+Uncollectible Debt
+Unsatisfied Demand
+
+# ── Non-Inventory Part items ────────────────────────────────────────────────
+051141253817
+200102
+5NNG2
+Box
+C232LED-2Ft
+C232LED-NUL 2ft
+C240
+Custom-Mirror
+E89885
+GL-BTA-MED-CL
+GL-BTA-WIDE-CL
+Lamp-Assembly
+LT30334
+MNPT50
+Notes
+Assembly-LED-Panel
+Assembly-Linear
+General-Notes
+No-Services
+Project-Remarks
+NX-IRUI-VKVM
+Office-Product
+Project-Automation
+Project-Commercial
+Project-LED
+Prueba
+PS12V-EU-PLUG
+RetroFit-Plate
+Samples
+Short-BiPin Socket
+Special Sale
+WireConnector
+WireToWire

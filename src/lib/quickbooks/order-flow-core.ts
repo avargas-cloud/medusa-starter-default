@@ -376,6 +376,15 @@ export function buildQbItems(
         item.subtotal > 0
           ? Number((item.subtotal / item.quantity).toFixed(2)) // discounted subtotal ÷ qty
           : item.unit_price || 0; // no discount → original unit price
+      // Service / non-inventory items must NOT carry InventorySiteRef (QB
+      // error 3140). Flag explicitly via variant metadata so the bridge can
+      // skip the tag on both *Add and *Mod operations.
+      const isService = !!(
+        item.variant?.metadata?.quickbooks_is_service === true ||
+        item.variant?.metadata?.quickbooks_is_service === "true" ||
+        item.variant?.metadata?.quickbooks_no_site === true ||
+        item.variant?.metadata?.quickbooks_no_site === "true"
+      );
       return {
         _sortOrder:
           typeof item.metadata?.sort_order === "number"
@@ -393,6 +402,7 @@ export function buildQbItems(
               ? String(item.metadata.sales_description)
               : `${item.title || item.product_title || ""}${item.variant?.sku ? ` (${item.variant.sku})` : ""}`
           ),
+          ...(isService ? { noSite: true } : {}),
         },
       };
     });

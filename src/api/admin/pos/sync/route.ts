@@ -534,7 +534,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 freshInvoice.metadata?.qb_sales_receipt_txn_id;
 
               if (freshTxnId) {
-                // ── EDIT path ── update salesRep (+ cache EditSequence)
+                // ── EDIT path ── Force Sync: send FULL payload (items + discounts
+                // + shipping + salesRep + tax) and write pipeline row for
+                // UI visibility. Regular Save uses /admin/invoices/:id/sync-qb-rep
+                // and /update-tax for lightweight updates.
                 const isSR = !!(
                   freshInvoice.metadata?.qb_sales_receipt_txn_id ||
                   freshInvoice.metadata?.is_sales_receipt === true ||
@@ -545,88 +548,298 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   data: [parentOrder],
                 } = await query.graph({
                   entity: "order",
-                  fields: ["metadata"],
+                  fields: [
+                    "id",
+                    "metadata",
+                    "tax_total",
+                    "subtotal",
+                    "discount_total",
+                    "customer_id",
+                    "customer.*",
+                    "customer.metadata",
+                    "items.*",
+                    "items.variant.*",
+                    "items.variant.metadata",
+                    "shipping_methods.*",
+                  ],
                   filters: { id: invoice.order_id },
                 });
                 const salesRep = parseSalesRepInitials(
                   parentOrder?.metadata?.sales_rep
                 );
 
-                if (salesRep) {
-                  if (isSR) {
-                    const {
-                      updateSalesReceiptInQb,
-                    } = require("../../../../lib/quickbooks/client/sales-receipts");
-                    const modResult = await updateSalesReceiptInQb({
-                      txnId: freshTxnId,
-                      salesRep,
+                const {
+                  buildQbItems,
+                  buildShippingQbItem,
+                  buildQbOrderDiscountLines,
+                } = require("../../../../lib/quickbooks/order-flow-core");
+                const {
+                  getQbConfig,
+                } = require("../../../../lib/quickbooks/handlers/utils");
+                const {
+                  writePipelineRow,
+                } = require("../../../../lib/quickbooks/qb-pipeline");
+
+                const qbConfig = await getQbConfig();
+                const activeItems = (parentOrder?.items || [])
+                  .filter((item: any) => (item.quantity ?? 0) > 0)
+                  .map((item: any) => ({
+                    ...item,
+                    unit_price: Number(item.unit_price || 0),
+                    subtotal: undefined,
+                  }));
+
+                // Fresh-resolve variant metadata: if a variant's quickbooks_id
+                // was added AFTER the order was created, re-query it here so
+                // the item isn't silently dropped by buildQbItems' filter.
+                const variantIdsToRefresh = Array.from(
+                  new Set(
+                    activeItems
+                      .filter(
+                        (i: any) =>
+                          i.variant_id &&
+                          !i.variant?.metadata?.quickbooks_id
+                      )
+                      .map((i: any) => i.variant_id)
+                  )
+                );
+                if (variantIdsToRefresh.length > 0) {
+                  try {
+                    const { data: freshVariants } = await query.graph({
+                      entity: "product_variant",
+                      fields: ["id", "metadata", "sku"],
+                      filters: { id: variantIdsToRefresh as string[] },
                     });
-                    if (!modResult.success) {
-                      logger.error(
-                        `${LOG_PREFIX} ❌ Sales Receipt Mod failed: ${modResult.error}`
-                      );
-                      return;
+                    const byId = new Map(
+                      (freshVariants || []).map((v: any) => [v.id, v])
+                    );
+                    for (const it of activeItems) {
+                      if (
+                        !it.variant?.metadata?.quickbooks_id &&
+                        it.variant_id &&
+                        byId.has(it.variant_id)
+                      ) {
+                        const fresh: any = byId.get(it.variant_id);
+                        if (fresh?.metadata?.quickbooks_id) {
+                          it.variant = {
+                            ...(it.variant || {}),
+                            metadata: {
+                              ...(it.variant?.metadata || {}),
+                              ...(fresh.metadata || {}),
+                            },
+                          };
+                          logger.info(
+                            `${LOG_PREFIX} Fresh-resolved quickbooks_id for variant ${it.variant_id} (sku=${fresh.sku})`
+                          );
+                        }
+                      }
                     }
-                    logger.info(
-                      `${LOG_PREFIX} ✅ Sales Receipt ${freshTxnId} salesRep update queued (op: ${modResult.data?.operationId})`
-                    );
-                  } else {
-                    const {
-                      updateInvoiceInQb,
-                    } = require("../../../../lib/quickbooks/client/invoices");
-                    const modResult = await updateInvoiceInQb({
-                      txnId: freshTxnId,
-                      salesRep,
-                    });
-                    if (!modResult.success) {
-                      logger.error(
-                        `${LOG_PREFIX} ❌ Invoice Mod failed: ${modResult.error}`
-                      );
-                      return;
-                    }
-                    logger.info(
-                      `${LOG_PREFIX} ✅ Invoice ${freshTxnId} salesRep update queued (op: ${modResult.data?.operationId})`
-                    );
-                  }
-                } else {
-                  // No salesRep to update — just cache EditSequence
-                  const {
-                    bridgeFetch,
-                    pollRawOperationResult,
-                  } = require("../../../../lib/quickbooks/client/core");
-                  const {
-                    cacheEditSequence,
-                  } = require("../../../../lib/quickbooks/qb-pipeline");
-                  const endpoint = isSR ? "sales-receipts" : "invoices";
-                  const entityType = isSR ? "sales_receipt" : "invoice";
-                  const resp = await bridgeFetch(
-                    "GET",
-                    `/api/${endpoint}/${freshTxnId}`
-                  );
-                  if (!resp?.operationId) return;
-                  const raw = await pollRawOperationResult(resp.operationId);
-                  const editSeq =
-                    raw?.QBXML?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet
-                      ?.EditSequence ||
-                    raw?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet
-                      ?.EditSequence ||
-                    raw?.InvoiceRet?.EditSequence ||
-                    raw?.QBXML?.QBXMLMsgsRs?.SalesReceiptQueryRs
-                      ?.SalesReceiptRet?.EditSequence ||
-                    raw?.QBXMLMsgsRs?.SalesReceiptQueryRs?.SalesReceiptRet
-                      ?.EditSequence ||
-                    raw?.SalesReceiptRet?.EditSequence;
-                  if (editSeq) {
-                    await cacheEditSequence(
-                      entityType,
-                      freshTxnId,
-                      String(editSeq)
-                    );
-                    logger.info(
-                      `${LOG_PREFIX} ✅ Cached EditSeq for ${entityType} ${freshTxnId}: ${editSeq}`
+                  } catch (rErr: any) {
+                    logger.warn(
+                      `${LOG_PREFIX} ⚠️ Could not fresh-resolve variant metadata: ${rErr.message}`
                     );
                   }
                 }
+
+                // Warn about items that still lack quickbooks_id — they'll be
+                // silently dropped by buildQbItems so QB will miss those lines.
+                const missingQb = activeItems.filter(
+                  (i: any) => !i.variant?.metadata?.quickbooks_id
+                );
+                if (missingQb.length > 0) {
+                  logger.warn(
+                    `${LOG_PREFIX} ⚠️ ${missingQb.length} item(s) lack quickbooks_id and will NOT sync to QB: ${missingQb
+                      .map((i: any) => i.variant?.sku || i.title || i.id)
+                      .join(", ")}`
+                  );
+                }
+
+                const qbItems = buildQbItems(
+                  activeItems,
+                  parentOrder?.metadata || {}
+                );
+
+                const discountTotal = Number(
+                  parentOrder?.discount_total || 0
+                );
+                if (discountTotal > 0) {
+                  const subtotal = Number(parentOrder?.subtotal || 0);
+                  const pct =
+                    subtotal > 0 ? (discountTotal / subtotal) * 100 : null;
+                  buildQbOrderDiscountLines(discountTotal, pct).forEach(
+                    (l: any) => qbItems.push(l)
+                  );
+                }
+
+                const shippingItem = buildShippingQbItem(
+                  parentOrder?.shipping_methods || [],
+                  qbConfig.shippingItemId
+                );
+                if (shippingItem) qbItems.push(shippingItem);
+
+                const hasTax =
+                  parentOrder?.tax_total && parentOrder.tax_total > 0;
+                const salesTaxCode = hasTax
+                  ? qbConfig.defaultSalesTaxCode
+                  : undefined;
+
+                // ── Match Medusa items to existing QB lines via TxnLineID ──
+                // QBXML requires every InvoiceLineMod/SalesReceiptLineMod to
+                // carry a TxnLineID (real one = update, "-1" = append new).
+                // Lines present in QB but not matched to any Medusa item get
+                // dropped from the payload, which QB interprets as "delete".
+                try {
+                  const {
+                    fetchInvoiceLinesFromQb,
+                  } = require("../../../../lib/quickbooks/client/invoices");
+                  const {
+                    fetchSalesReceiptLinesFromQb,
+                  } = require("../../../../lib/quickbooks/client/sales-receipts");
+
+                  const snapshot = isSR
+                    ? await fetchSalesReceiptLinesFromQb(freshTxnId)
+                    : await fetchInvoiceLinesFromQb(freshTxnId);
+
+                  const availableLines = [...(snapshot?.lines || [])];
+                  logger.info(
+                    `${LOG_PREFIX} Pulled ${availableLines.length} existing QB line(s) from ${isSR ? "SalesReceipt" : "Invoice"} ${freshTxnId}`
+                  );
+
+                  for (const it of qbItems) {
+                    const targetId = (it as any).productId;
+                    const targetName = (it as any).productName;
+                    const qty = Number((it as any).quantity ?? 0);
+                    const amt = Number((it as any).amount ?? 0);
+                    const matchesItem = (l: any) =>
+                      (targetId && l.ItemListID === targetId) ||
+                      (!targetId &&
+                        targetName &&
+                        l.ItemFullName === targetName);
+                    const idxExact = availableLines.findIndex(
+                      (l) =>
+                        matchesItem(l) &&
+                        (qty === 0 || Math.abs((l.Quantity ?? 0) - qty) < 0.001) &&
+                        (amt === 0 || Math.abs((l.Amount ?? 0) - amt) < 0.01)
+                    );
+                    const idx =
+                      idxExact >= 0
+                        ? idxExact
+                        : availableLines.findIndex((l) => matchesItem(l));
+                    if (idx >= 0) {
+                      const matched = availableLines[idx];
+                      (it as any).TxnLineID = matched.TxnLineID;
+                      // If QB's existing line had no InventorySiteRef, the item
+                      // is a service/non-inventory type — don't re-emit Site or
+                      // QB throws error 3140 ("Site cannot be set on a
+                      // non-inventory lineitem"). Preserve an explicit noSite
+                      // already set by the backend (shipping/discount).
+                      if (matched.hasSite === false) {
+                        (it as any).noSite = true;
+                      }
+                      availableLines.splice(idx, 1);
+                    } else {
+                      (it as any).TxnLineID = "-1";
+                    }
+                  }
+
+                  if (availableLines.length > 0) {
+                    logger.info(
+                      `${LOG_PREFIX} ${availableLines.length} QB line(s) had no match in Medusa and will be removed from the document`
+                    );
+                  }
+                } catch (mErr: any) {
+                  logger.error(
+                    `${LOG_PREFIX} ❌ Could not pull existing QB lines — aborting Force Sync: ${mErr.message}`
+                  );
+                  try {
+                    await writePipelineRow({
+                      orderId: invoice.order_id,
+                      step: isSR ? "sales_receipt_update" : "invoice_update",
+                      status: "failed",
+                      error: `Line snapshot fetch failed: ${mErr.message}`,
+                      qbTxnId: freshTxnId,
+                      medusaRefNumber: freshInvoice.invoice_number
+                        ? `INV-${freshInvoice.invoice_number}`
+                        : null,
+                    });
+                  } catch {}
+                  return;
+                }
+
+                const pipelineStep = isSR
+                  ? "sales_receipt_update"
+                  : "invoice_update";
+                const medusaRefNumber = freshInvoice.invoice_number
+                  ? `INV-${freshInvoice.invoice_number}`
+                  : null;
+
+                try {
+                  await writePipelineRow({
+                    orderId: invoice.order_id,
+                    step: pipelineStep,
+                    status: "pending",
+                    qbTxnId: freshTxnId,
+                    medusaRefNumber,
+                  });
+                } catch (pErr: any) {
+                  logger.warn(
+                    `${LOG_PREFIX} ⚠️ Could not write pending pipeline row: ${pErr.message}`
+                  );
+                }
+
+                logger.info(
+                  `${LOG_PREFIX} Force Sync → ${isSR ? "SalesReceiptMod" : "InvoiceMod"} ${freshTxnId} with ${qbItems.length} items`
+                );
+
+                const modPayload: any = {
+                  txnId: freshTxnId,
+                  items: qbItems,
+                  ...(salesRep ? { salesRep } : {}),
+                  ...(salesTaxCode
+                    ? { salesTaxCode }
+                    : { taxExempt: true }),
+                };
+
+                const modResult = isSR
+                  ? await require("../../../../lib/quickbooks/client/sales-receipts").updateSalesReceiptInQb(
+                      modPayload
+                    )
+                  : await require("../../../../lib/quickbooks/client/invoices").updateInvoiceInQb(
+                      modPayload
+                    );
+
+                if (!modResult.success) {
+                  logger.error(
+                    `${LOG_PREFIX} ❌ ${isSR ? "Sales Receipt" : "Invoice"} Mod failed: ${modResult.error}`
+                  );
+                  try {
+                    await writePipelineRow({
+                      orderId: invoice.order_id,
+                      step: pipelineStep,
+                      status: "failed",
+                      error: modResult.error,
+                      qbTxnId: freshTxnId,
+                      medusaRefNumber,
+                    });
+                  } catch {}
+                  return;
+                }
+
+                try {
+                  await writePipelineRow({
+                    orderId: invoice.order_id,
+                    step: pipelineStep,
+                    status: "submitted",
+                    bridgeOpId: modResult.data?.operationId || null,
+                    qbTxnId: freshTxnId,
+                    medusaRefNumber,
+                  });
+                } catch {}
+
+                logger.info(
+                  `${LOG_PREFIX} ✅ ${isSR ? "Sales Receipt" : "Invoice"} ${freshTxnId} full sync queued (op: ${modResult.data?.operationId})`
+                );
+
               } else {
                 // ── CREATE path ── Intelligent routing: Invoice vs Sales Receipt
                 const {
