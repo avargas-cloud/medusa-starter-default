@@ -7,6 +7,7 @@ import {
   processPaymentCaptureInQb,
   ensureCustomerInQb,
 } from "../order-flow-core";
+import { sanitizeToQbPaymentMethod } from "../payment-method-sanitizer";
 import {
   coalesceIfInFlight,
   writePipelineRow,
@@ -16,26 +17,6 @@ import {
 
 const LOG_PREFIX = "[QB-POS-PAYMENT]";
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";
-
-const POS_TO_QB_METHOD: Record<string, string> = {
-  cash: "Cash",
-  check: "Check",
-  visa: "Visa",
-  mastercard: "MasterCard",
-  discover: "Discover",
-  amex: "American Express",
-  capital_one: "Capital One",
-  debit_card: "Debit Card",
-  card: "Credit Card",
-  ach: "EFT",
-  zelle: "Zelle",
-  wire_transfer: "Wire Transfer",
-  money_order: "Check",
-};
-
-function mapPosPaymentMethod(method: string): string {
-  return POS_TO_QB_METHOD[method?.toLowerCase()] ?? method;
-}
 
 export async function handlePosPaymentCreated({
   event,
@@ -320,16 +301,35 @@ export async function handlePosPaymentCreated({
       );
     }
 
+    // Resolve the QB PaymentMethod name with full sanitizing. Candidates in
+    // priority order: specific card brand (label from BAMS/Dejavoo), coarse
+    // cardType (CREDIT/DEBIT), then the coarse DB enum. Returns undefined for
+    // generic inputs like "card"/"credit" so the bridge leaves the field
+    // blank instead of triggering QB Error 3140 for a missing list entry.
+    const rawLabel = payment.metadata?.bams_card_label as string | undefined;
+    const rawCardType = payment.metadata?.bams_card_type as string | undefined;
+    const rawPosMethod = payment.metadata?.pos_payment_method as string | undefined;
+    const resolvedQbMethod = sanitizeToQbPaymentMethod(
+      rawLabel,
+      rawPosMethod,
+      rawCardType,
+      payment.method as string
+    );
+    if (!resolvedQbMethod) {
+      logger.warn(
+        `${LOG_PREFIX} ⚠️ Could not resolve QB PaymentMethod for payment ${paymentId} from ` +
+          `{label=${rawLabel ?? "∅"}, cardType=${rawCardType ?? "∅"}, pos_method=${rawPosMethod ?? "∅"}, db_method=${payment.method}} — ` +
+          `sending ReceivePayment without PaymentMethodRef (QB will leave it blank)`
+      );
+    }
+
     const result = await processPaymentCaptureInQb({
       orderId: (orderId as string) || `payment_${paymentId}`,
       orderDisplayId:
         parseInt(String(orderDisplayId || "").replace(/\D/g, ""), 10) ||
         undefined,
       amount: (payment.amount as number) / 100,
-      paymentMethod: mapPosPaymentMethod(
-        (payment.metadata?.pos_payment_method as string) ||
-          (payment.method as string)
-      ),
+      paymentMethod: resolvedQbMethod,
       qbCustomerId: qbCustomerId as string,
       memo,
       onSubmitted: async (operationId) => {

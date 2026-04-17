@@ -981,58 +981,20 @@ export async function processInvoiceInQb(invoice: {
 // ─── 3.5 Process Sales Receipt (Fully Paid POS Cash Sale) ──────────────────────
 
 /**
- * Canonical POS → QB Payment Method name mapping.
- *
- * These values MUST match the `FullName` of entries in the Payment Method
- * List in THIS COMPANY'S QuickBooks Desktop install exactly. A mismatch
- * (even a single character — e.g. "Mastercard" vs "MasterCard") causes QB
- * to silently ignore the PaymentMethodRef and leave the field blank on the
- * resulting Sales Receipt / ReceivePayment.
- *
- * ⚠️ DO NOT "fix" typos or casing without first confirming the change in
- * QB's actual Payment Method List (Lists → Customer & Vendor Profile Lists
- * → Payment Method List).
- *
- * Source of truth: QB screenshot shared by Alejandro on 2026-04-14 showing
- * the full Payment Method dropdown. The entry was originally mispelled as
- * "Cheking Account" in QB; Alejandro is renaming it to "Checking Account"
- * in QB Desktop at the same time as this mapping update so both sides match.
+ * Canonical POS → QB PaymentMethod resolution lives in
+ * `./payment-method-sanitizer.ts` — the single source of truth shared by
+ * every QB handler (ReceivePayment + SalesReceipt). Do not re-inline this
+ * mapping here; add brands/aliases to the sanitizer instead.
  */
-export const QB_PAYMENT_METHOD_NAMES: Record<string, string> = {
-  cash: "Cash",
-  check: "Check",
-  checking_account: "Checking Account",
-  ach: "Checking Account", // ACH funds come from a Checking Account in QB
-  money_order: "Money Order",
-  amex: "American Express",
-  american_express: "American Express",
-  discover: "Discover",
-  mastercard: "MasterCard", // note capital C — QB uses "MasterCard", not "Mastercard"
-  visa: "Visa",
-  credit_memo: "Credit Memo",
-  paypal: "Paypal", // single capital P — QB uses "Paypal", not "PayPal"
-  return: "Return",
-  transfer: "Transfer",
-  wire_transfer: "Wire Transfer",
-  capital_one: "Capital One",
-  debit: "Debit",
-  debit_card: "Debit Card",
-  gift_card: "Gift Card",
-  e_check: "E-Check",
-  zelle: "Zelle", // added to QB Desktop Payment Method List on 2026-04-14
-  // Not in QB's list — map to closest equivalent or leave unmapped:
-  // stripe    → undefined (should never hit this path for POS sales anyway)
-};
+import {
+  sanitizeToQbPaymentMethod,
+  QB_PAYMENT_METHOD_NAMES as _QB_PAYMENT_METHOD_NAMES,
+} from "./payment-method-sanitizer";
+
+export const QB_PAYMENT_METHOD_NAMES = _QB_PAYMENT_METHOD_NAMES;
 
 function mapPaymentMethodToQb(method: string | undefined): string | undefined {
-  if (!method) return undefined;
-  const m = method.toLowerCase().trim().replace(/\s+/g, "_");
-  if (QB_PAYMENT_METHOD_NAMES[m]) return QB_PAYMENT_METHOD_NAMES[m];
-  // Generic aliases — should not be sent as a specific QB method
-  if (m === "card" || m === "credit_card" || m === "credit") return undefined;
-  // Unknown value — return undefined so QB leaves the field blank rather
-  // than sending a name QB Desktop has no entry for.
-  return undefined;
+  return sanitizeToQbPaymentMethod(method);
 }
 
 /**
