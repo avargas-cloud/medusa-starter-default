@@ -162,7 +162,7 @@ export default async function importQbVariantProducts({ container }: ExecArgs) {
               [optionTitle]: displayValue,
             },
             prices: amount > 0 ? [{ currency_code: "usd", amount }] : [],
-            metadata: { qb_sku: v.sku },
+            metadata: { quickbooks_id: v.listId || null, qb_sku: v.sku },
           };
         }),
       };

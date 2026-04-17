@@ -827,10 +827,14 @@ export async function POST(
     paymentBaseAmount,
     paymentNote,
     extraAttachments,
+    orderTotal: frontendOrderTotal,
   } = (req.body ?? {}) as any;
   const order = await fetchOrderWithPreview(req, id);
   if (!order) return void res.status(404).json({ message: "Order not found" });
-  const { customer, total } = buildTotals(order);
+  const { customer, total: backendTotal } = buildTotals(order);
+  // Prefer the exact total from the POS frontend — avoids any mismatch
+  // between backend recalculation and what the user sees on screen.
+  const total = frontendOrderTotal != null ? Number(frontendOrderTotal) : backendTotal;
   const customerEmail = toOverride ?? customer?.email ?? order.email;
   if (!customerEmail)
     return void res.status(400).json({ message: "No customer email found" });

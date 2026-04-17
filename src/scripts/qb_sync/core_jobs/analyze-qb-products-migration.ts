@@ -105,6 +105,7 @@ function hasDescriptionOverlap(items: QBItem[]): boolean {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface QBItem {
+  listId: string;
   sku: string;
   description: string;
   price: number | string;
@@ -254,8 +255,9 @@ export default async function analyzeQbProductsMigration({
   const qbRaw = JSON.parse(fs.readFileSync(QB_DATA_FILE, "utf8"));
   const qbAll: any[] = qbRaw.products || [];
   const qbInventory: QBItem[] = qbAll
-    .filter((p) => p.type === "ItemInventory" && p.sku)
+    .filter((p) => (p.type === "ItemInventory" || p.type === "Unknown") && p.sku)
     .map((p) => ({
+      listId: p.listId ?? "",
       sku: p.sku.trim(),
       description: decode((p.description || "").trim()),
       price: p.price,

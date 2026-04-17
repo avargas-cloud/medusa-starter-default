@@ -66,7 +66,7 @@ export default async function importQbSingleProducts({ container }: ExecArgs) {
   }
 
   const analysis = JSON.parse(fs.readFileSync(ANALYSIS_FILE, "utf8"));
-  const singles: { sku: string; description: string; price: any }[] =
+  const singles: { listId: string; sku: string; description: string; price: any }[] =
     analysis.singles || [];
 
   logger.info(`📋 Singles from analysis: ${singles.length}`);
@@ -141,7 +141,7 @@ export default async function importQbSingleProducts({ container }: ExecArgs) {
             allow_backorder: false,
             prices: amount > 0 ? [{ currency_code: "usd", amount }] : [],
             metadata: {
-              // quickbooks_list_id will be added in a follow-up sync once we have the full listId map
+              quickbooks_id: item.listId || null,
               qb_sku: item.sku,
             },
           },
@@ -201,7 +201,7 @@ export default async function importQbSingleProducts({ container }: ExecArgs) {
                   manage_inventory: true,
                   allow_backorder: false,
                   prices: amount > 0 ? [{ currency_code: "usd", amount }] : [],
-                  metadata: { qb_sku: item.sku },
+                  metadata: { quickbooks_id: item.listId || null, qb_sku: item.sku },
                 },
               ],
             } as any,
