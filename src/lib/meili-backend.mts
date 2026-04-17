@@ -55,6 +55,8 @@ export function transformCustomer(customer: any) {
         customer_type: customer.metadata?.qb_customer_type || customer.metadata?.customer_type || "Standard",
         price_level: customer.metadata?.qb_price_level || customer.metadata?.price_level || "Retail",
         customer_group_ids: customer.groups?.map((g: any) => g.id) || [],
+        default_tax: customer.metadata?.default_tax || null,
+        tax_exempt_reason: customer.metadata?.tax_exempt_reason || null,
         updated_at: new Date(customer.updated_at).getTime(),
         created_at: new Date(customer.created_at).getTime(),
     }
