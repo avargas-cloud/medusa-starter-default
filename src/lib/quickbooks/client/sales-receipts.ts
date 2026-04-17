@@ -86,8 +86,29 @@ async function fetchFreshEditSequence(txnId: string): Promise<string> {
   return srRet.EditSequence as string;
 }
 
+export interface UpdateSalesReceiptOptions {
+  /**
+   * Fires right after the Bridge accepts the SalesReceiptMod request and returns
+   * an operationId — before the helper polls QB for the result. Called on EVERY
+   * submission attempt, including the retry after a stale EditSequence (3200).
+   * Use this to write a pipeline row with status='submitted' so the operation is
+   * visible while QuickBooks WebConnector processes it.
+   */
+  onSubmit?: (operationId: string) => Promise<void>;
+  /**
+   * Fires once when a stale EditSequence (QB 3200) is detected and the helper is
+   * about to invalidate the cache + re-query QB + re-submit the Mod. The failed
+   * operationId is passed so the caller can reset any pipeline row tied to it
+   * (e.g. null out bridge_op_id + set status back to 'pending') — preventing a
+   * Failed transition during the in-flight retry. The row returns to 'submitted'
+   * when onSubmit fires again with the retry's fresh operationId.
+   */
+  onRetryStart?: (failedOperationId: string) => Promise<void>;
+}
+
 export async function updateSalesReceiptInQb(
-  payload: QbUpdateSalesReceiptPayload
+  payload: QbUpdateSalesReceiptPayload,
+  options?: UpdateSalesReceiptOptions
 ): Promise<QbBridgeResult<QbAsyncResult>> {
   if (DRY_RUN) {
     console.log(`[QB DRY RUN] Would update Sales Receipt ${payload.txnId}`);
@@ -107,11 +128,21 @@ export async function updateSalesReceiptInQb(
         ...(payload.salesRep ? { salesRepRef: payload.salesRep } : {}),
         ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
         ...(payload.taxExempt === true ? { taxExempt: true } : {}),
+        ...(payload.paymentMethod
+          ? { PaymentMethod: payload.paymentMethod }
+          : {}),
       }
     );
     const operationId = modResp?.operationId;
     if (!operationId)
       throw new Error("Bridge did not return operationId for sales receipt update (mod)");
+    if (options?.onSubmit) {
+      try {
+        await options.onSubmit(operationId);
+      } catch {
+        // onSubmit side-effects (e.g. pipeline row write) must not block the Mod flow
+      }
+    }
     return operationId;
   };
 
@@ -141,6 +172,17 @@ export async function updateSalesReceiptInQb(
         console.warn(
           `[QB] ⚠️ Stale EditSequence for SR ${payload.txnId} (${editSequence}) — invalidating cache and retrying`
         );
+        // Signal the caller that a retry is starting so it can reset any pipeline
+        // row tied to the failed operationId (prevents a Failed transition during
+        // the in-flight retry). The failed opId is passed so the caller can clear
+        // it from the row.
+        if (options?.onRetryStart) {
+          try {
+            await options.onRetryStart(operationId);
+          } catch {
+            // onRetryStart side-effects must not block the retry flow
+          }
+        }
         await invalidateEditSequence("sales_receipt", payload.txnId);
 
         const freshEditSeq = await fetchFreshEditSequence(payload.txnId);

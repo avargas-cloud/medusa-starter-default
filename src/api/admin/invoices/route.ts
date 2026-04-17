@@ -360,6 +360,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
               ...((termPay as any)?.metadata || {}),
               qb_source: "sales_receipt",
               qb_sync_status: "pending_sr",
+              // Tag required by the PATCH /customer-payments/:id route to take the
+              // SalesReceiptMod branch when a staff member later edits the payment
+              // method. Without this flag the PATCH falls through to ReceivePaymentMod
+              // using the SR's qb_txn_id, which would target the wrong QB entity.
+              is_sales_receipt_payment: true,
               invoices_affected: [(invoice as any).id],
               invoices_affected_friendly: [
                 `IN-${invoice_number || body.order_display_id}`,

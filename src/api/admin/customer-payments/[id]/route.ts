@@ -206,12 +206,30 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
     ) {
       const qbMethodName =
         QB_PAYMENT_METHOD_NAMES[pos_payment_method] ?? pos_payment_method;
-      const isSalesReceiptPayment = meta.is_sales_receipt_payment === true;
+      // Two markers tag a payment as SR-embedded:
+      //   - is_sales_receipt_payment=true → manual Complete Order SR flow.
+      //   - qb_source='sales_receipt'   → Dejavoo terminal-linked SR flow.
+      // Both must route through SalesReceiptMod here (NOT ReceivePaymentMod),
+      // otherwise the Mod uses a SR TxnID against a ReceivePayment endpoint and
+      // fails silently (or updates the wrong entity).
+      const isSalesReceiptPayment =
+        meta.is_sales_receipt_payment === true ||
+        meta.qb_source === "sales_receipt";
       const orderId = meta.order_id as string | undefined;
+
+      // Payment label for the QB pipeline row — matches how Payments appear
+      // elsewhere (e.g. PAY-2070). Falls back to reference if display_id missing.
+      const paymentLabel =
+        (payment as any).display_id != null
+          ? `PAY-${(payment as any).display_id}`
+          : ((payment as any).reference ?? null);
 
       if (isSalesReceiptPayment && orderId) {
         // For Sales Receipt payments: mod the Sales Receipt (not ReceivePayment).
-        // The SR TxnID is in qb_order_pipeline; EditSequence is in qb_edit_sequence_cache.
+        // Delegates to updateSalesReceiptInQb so we get:
+        //   1. Cache hit / fresh-query fallback for EditSequence.
+        //   2. Automatic retry on QB Error 3200 (stale EditSequence): invalidate
+        //      cache → fetch fresh → retry mod once.
         (async () => {
           try {
             const { Client } = require("pg");
@@ -227,50 +245,127 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
               [orderId]
             );
             const srTxnId = pipeRows[0]?.qb_txn_id as string | undefined;
-
-            let editSeq: string | undefined;
-            if (srTxnId) {
-              const { rows: cacheRows } = await pool.query(
-                `SELECT edit_seq FROM qb_edit_sequence_cache
-                                 WHERE entity_type = 'sales_receipt' AND qb_id = $1`,
-                [srTxnId]
-              );
-              editSeq = cacheRows[0]?.edit_seq;
-            }
             await pool.end();
 
-            if (srTxnId && editSeq) {
-              const {
-                bridgeFetch,
-              } = require("../../../../lib/quickbooks/client/core");
-              const modResp = await bridgeFetch(
-                "PUT",
-                `/api/sales-receipts/${srTxnId}`,
-                {
-                  EditSequence: editSeq,
-                  PaymentMethod: qbMethodName,
-                }
-              );
+            if (!srTxnId) {
               req.scope
                 .resolve("logger")
-                ?.info?.(
-                  `[PAYMENT PATCH] Queued SalesReceiptMod for ${srTxnId} — PaymentMethod → ${qbMethodName}`
+                ?.warn?.(
+                  `[PAYMENT PATCH] Could not find SR TxnID for order ${orderId} — skipping QB sync`
                 );
-              await writePipelineRow({
+              return;
+            }
+
+            // Write a 'pending' pipeline row immediately so the operation is visible
+            // in the QB Operations Pipeline the moment the user clicks Save — before
+            // we start the (potentially slow) fresh EditSequence query that runs when
+            // the cache is cold. The onSubmit callback below transitions this same
+            // row in-place to 'submitted' once the bridge accepts the Mod.
+            req.scope
+              .resolve("logger")
+              ?.info?.(
+                `[PAYMENT PATCH] Writing pending pipeline row for SR ${srTxnId} (payment ${paymentLabel}, order ${orderId})`
+              );
+            try {
+              const pipelineRowId = await writePipelineRow({
                 orderId: orderId ?? null,
                 referenceId: id,
                 referenceType: "customer_payment",
                 step: "payment_method_change",
-                status: "submitted",
-                bridgeOpId: modResp?.operationId ?? null,
+                status: "pending",
                 qbTxnId: srTxnId,
-                medusaRefNumber: (payment as any).reference ?? null,
-              }).catch(() => {});
-            } else {
+                medusaRefNumber: paymentLabel,
+              });
+              req.scope
+                .resolve("logger")
+                ?.info?.(
+                  `[PAYMENT PATCH] Pending pipeline row written: ${pipelineRowId}`
+                );
+            } catch (writeErr: any) {
+              req.scope
+                .resolve("logger")
+                ?.error?.(
+                  `[PAYMENT PATCH] Failed to write pending pipeline row: ${writeErr.message}`
+                );
+            }
+
+            const {
+              updateSalesReceiptInQb,
+            } = require("../../../../lib/quickbooks/client/sales-receipts");
+
+            // onSubmit fires immediately after the Bridge accepts each Mod (including
+            // the retry after 3200) — writes a pipeline row with status='submitted'
+            // so the operation is visible while WebConnector is still processing it.
+            // A subscriber transitions the row to 'confirmed'/'failed' on completion.
+            const result = await updateSalesReceiptInQb(
+              {
+                txnId: srTxnId,
+                paymentMethod: qbMethodName,
+              },
+              {
+                onSubmit: async (operationId: string) => {
+                  req.scope
+                    .resolve("logger")
+                    ?.info?.(
+                      `[PAYMENT PATCH] Queued SalesReceiptMod for ${srTxnId} — PaymentMethod → ${qbMethodName} (opId=${operationId})`
+                    );
+                  // On retry, the row may already have been reset to 'pending' by
+                  // onRetryStart (ideal path), OR the subscriber may have marked it
+                  // 'failed' before onRetryStart ran (race). Two-step transition
+                  // covers both: first 'pending' (which reactivates failed rows),
+                  // then 'submitted' (which matches the pending row in-place). Net
+                  // result: always a single row, ending in Submitted with the
+                  // current attempt's opId.
+                  await writePipelineRow({
+                    orderId: orderId ?? null,
+                    referenceId: id,
+                    referenceType: "customer_payment",
+                    step: "payment_method_change",
+                    status: "pending",
+                    qbTxnId: srTxnId,
+                    medusaRefNumber: paymentLabel,
+                  }).catch(() => {});
+                  await writePipelineRow({
+                    orderId: orderId ?? null,
+                    referenceId: id,
+                    referenceType: "customer_payment",
+                    step: "payment_method_change",
+                    status: "submitted",
+                    bridgeOpId: operationId,
+                    qbTxnId: srTxnId,
+                    medusaRefNumber: paymentLabel,
+                  }).catch(() => {});
+                },
+                onRetryStart: async (failedOpId: string) => {
+                  // Fired when 3200 is detected and the helper is about to fetch a
+                  // fresh EditSequence and retry the Mod. Reset the row back to
+                  // 'pending' to null out bridge_op_id — this prevents the Failed
+                  // subscriber from matching the failed op to this row while the
+                  // retry is in flight. onSubmit will transition it back to
+                  // Submitted once the retry Mod is accepted.
+                  req.scope
+                    .resolve("logger")
+                    ?.info?.(
+                      `[PAYMENT PATCH] Retrying after stale EditSequence — resetting pipeline row (failed opId=${failedOpId})`
+                    );
+                  await writePipelineRow({
+                    orderId: orderId ?? null,
+                    referenceId: id,
+                    referenceType: "customer_payment",
+                    step: "payment_method_change",
+                    status: "pending",
+                    qbTxnId: srTxnId,
+                    medusaRefNumber: paymentLabel,
+                  }).catch(() => {});
+                },
+              }
+            );
+
+            if (!result.success) {
               req.scope
                 .resolve("logger")
                 ?.warn?.(
-                  `[PAYMENT PATCH] Could not find SR TxnID/EditSeq for order ${orderId} — skipping QB sync`
+                  `[PAYMENT PATCH] QB SalesReceiptMod failed for ${srTxnId}: ${result.error}`
                 );
             }
           } catch (qbErr: any) {
@@ -333,7 +428,7 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
                   status: "submitted",
                   bridgeOpId: modResp?.operationId ?? null,
                   qbTxnId: qbTxnId,
-                  medusaRefNumber: (payment as any).reference ?? null,
+                  medusaRefNumber: paymentLabel,
                 }).catch(() => {});
                 // Poll Mod result to cache the fresh EditSequence for future mods
                 if (modResp?.operationId) {

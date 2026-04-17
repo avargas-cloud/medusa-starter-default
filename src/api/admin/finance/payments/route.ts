@@ -185,7 +185,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       type: type || "payment",
       metadata: {
         ...(metadata || {}),
-        pos_payment_method: m, // exact original method for QB
+        // Caller-provided pos_payment_method wins: the Dejavoo terminal route must
+        // send method='card' (DB CHECK constraint) but stores the real card network
+        // (e.g. 'visa', 'mastercard') in metadata.pos_payment_method as the source of
+        // truth for QB. All other callers omit metadata.pos_payment_method and fall
+        // back to `m` = lowercased top-level method (unchanged behavior).
+        pos_payment_method: (metadata as any)?.pos_payment_method || m,
         ...(transactionNumber !== null
           ? { transaction_number: transactionNumber }
           : {}),

@@ -127,6 +127,7 @@ export interface QbUpdateSalesReceiptPayload {
   salesRep?: string;
   salesTaxCode?: string;
   taxExempt?: boolean;
+  paymentMethod?: string; // QB FullName (e.g., 'Visa', 'MasterCard', 'Cash')
 }
 
 export interface QbCreateEstimatePayload {
