@@ -39,6 +39,8 @@ export async function POST(
     shipping_price,
     promotion_code,
     promotion_id,
+    discount_type,
+    discount_value,
     order_discount,
     customer_id,
   } = req.body as any;
@@ -128,6 +130,7 @@ export async function POST(
 
       // 4. Promotions / Discounts
       if (promotion_code && promotion_id) {
+        // Preset promo — apply existing by code+id
         await localFetch("/admin/pos-discount/apply-existing", {
           method: "POST",
           body: JSON.stringify({
@@ -138,15 +141,32 @@ export async function POST(
         }).catch((e) =>
           logger.warn(`Promotion failed on create: ${e.message}`)
         );
-      } else if (promotion_code) {
-        await localFetch("/admin/pos-discount", {
+      } else if (promotion_code && discount_type && discount_value > 0) {
+        // Custom promo — find-or-create canonical CPOS-PCT/FIXED via pos-discount
+        const posDiscountRes = await localFetch("/admin/pos-discount", {
           method: "POST",
           body: JSON.stringify({
             order_id: resolvedId,
-            discount_type: order_discount > 0 ? "fixed" : undefined,
-            discount_value: order_discount > 0 ? order_discount : undefined,
+            discount_type,
+            discount_value,
           }),
-        }).catch((e) => logger.warn(`Discount failed on create: ${e.message}`));
+        }).catch((e) => {
+          logger.warn(`Discount failed on create: ${e.message}`);
+          return null;
+        });
+
+        // Write canonical code back to metadata so cleanup/compute-tax stay consistent
+        const canonicalCode = posDiscountRes?.promotion_code;
+        if (canonicalCode && canonicalCode !== promotion_code) {
+          await localFetch(`/admin/draft-orders/${resolvedId}`, {
+            method: "POST",
+            body: JSON.stringify({
+              metadata: { promotion_code: canonicalCode },
+            }),
+          }).catch((e) =>
+            logger.warn(`Failed to persist canonical promo code: ${e.message}`)
+          );
+        }
       }
 
       // Write "waiting" pipeline row immediately so it appears in the QB Pipeline UI
@@ -326,7 +346,8 @@ export async function POST(
         !!currentPromoCode || currentPromoCode !== savedPromoCode;
 
       if (promoNeedsSync) {
-        if (currentPromoCode) {
+        if (currentPromoCode && promotion_id) {
+          // Preset promo — apply existing by code+id
           await localFetch("/admin/pos-discount/apply-existing", {
             method: "POST",
             body: JSON.stringify({
@@ -336,6 +357,42 @@ export async function POST(
               expected_discount: order_discount,
             }),
           }).catch((e) => logger.warn(`Sync promotion failed: ${e.message}`));
+        } else if (
+          currentPromoCode &&
+          discount_type &&
+          discount_value > 0
+        ) {
+          // Custom promo — find-or-create canonical CPOS-PCT/FIXED via pos-discount
+          const posDiscountRes = await localFetch("/admin/pos-discount", {
+            method: "POST",
+            body: JSON.stringify({
+              order_id: resolvedId,
+              discount_type,
+              discount_value,
+              existing_promo_code:
+                savedPromoCode && savedPromoCode !== currentPromoCode
+                  ? savedPromoCode
+                  : undefined,
+            }),
+          }).catch((e) => {
+            logger.warn(`Custom discount failed on update: ${e.message}`);
+            return null;
+          });
+
+          // Write canonical code back to metadata so cleanup/compute-tax stay consistent
+          const canonicalCode = posDiscountRes?.promotion_code;
+          if (canonicalCode && canonicalCode !== currentPromoCode) {
+            await localFetch(`/admin/draft-orders/${resolvedId}`, {
+              method: "POST",
+              body: JSON.stringify({
+                metadata: { promotion_code: canonicalCode },
+              }),
+            }).catch((e) =>
+              logger.warn(
+                `Failed to persist canonical promo code: ${e.message}`
+              )
+            );
+          }
         } else if (savedPromoCode) {
           await localFetch("/admin/pos-discount", {
             method: "DELETE",
@@ -501,8 +558,24 @@ export async function POST(
       // c. Remove adjustments for promo codes that are no longer the active promotion.
       //    When a user switches from promo A → promo B, apply-existing adds promo B's
       //    adjustments but never removes promo A's — this cleans them up.
-      const activePromoCode = promotion_code ?? null;
+      //    Safety: re-read the order's metadata.promotion_code here because the CREATE
+      //    and UPDATE branches above overwrite it with the canonical CPOS-* code after
+      //    applying a custom discount. Using the stale body value would mis-match the
+      //    real adjustment codes and wipe valid discounts.
       let adjOldPromoDel: { rowCount: number | null } = { rowCount: 0 };
+      let activePromoCode: string | null = promotion_code ?? null;
+      try {
+        const { data: freshRows } = await query.graph({
+          entity: "order",
+          fields: ["metadata"],
+          filters: { id: resolvedId },
+        });
+        const freshMeta = (freshRows?.[0] as any)?.metadata ?? {};
+        if (freshMeta.promotion_code) activePromoCode = freshMeta.promotion_code;
+      } catch {
+        /* fall back to body value */
+      }
+
       if (activePromoCode) {
         adjOldPromoDel = await pool.query(
           `DELETE FROM order_line_item_adjustment

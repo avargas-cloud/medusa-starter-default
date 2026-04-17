@@ -350,6 +350,20 @@ export async function POST(
       }
     }
 
+    // Persist canonical promo code to metadata so cleanup paths and downstream
+    // readers (compute-tax, UI) stay consistent with what's in order_line_item_adjustment.
+    if (promotionCode) {
+      try {
+        await orderModule.updateOrders(id, {
+          metadata: { promotion_code: promotionCode },
+        });
+      } catch (e: any) {
+        logger.warn(
+          `[apply-discount-force] Failed to persist canonical promo code to metadata: ${e.message}`
+        );
+      }
+    }
+
     res.status(200).json({
       success: true,
       promotion_code: promotionCode,

@@ -100,6 +100,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
               ? ApplicationMethodType.PERCENTAGE
               : ApplicationMethodType.FIXED,
           target_type: ApplicationMethodTargetType.ITEMS, // CRITICAL: "order" uses subtotal+tax as base (wrong); "items" uses unit_price×qty (pre-tax, correct)
+          allocation: "across" as const, // REQUIRED by Medusa v2 — splits discount proportionally across items
           is_tax_inclusive: false, // Belt-and-suspenders: also set at application_method level
           value: discount_value,
           currency_code:
