@@ -4,7 +4,7 @@ import {
   createStep,
   StepResponse,
 } from "@medusajs/framework/workflows-sdk";
-import { Modules } from "@medusajs/utils";
+import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 // Simple in-memory lock to prevent concurrent syncs
 let isSyncing = false;
@@ -26,7 +26,7 @@ export const syncCustomersToMeiliStep = createStep(
 
     try {
       const { MeiliSearch } = await import("meilisearch");
-      const customerModule = container.resolve(Modules.CUSTOMER) as any;
+      const query = container.resolve(ContainerRegistrationKeys.QUERY) as any;
 
       const client = new MeiliSearch({
         host: process.env.MEILISEARCH_HOST!,
@@ -67,28 +67,19 @@ export const syncCustomersToMeiliStep = createStep(
         pagination: { maxTotalHits: 20000 },
       });
 
-      // 2. Load ALL customers into RAM in a single DB query
+      // 2. Load ALL customers into RAM — query.graph does a single JOIN (no N+1)
       const t0 = Date.now();
       console.log("📥 Loading all customers into RAM (single query)...");
-      const [customers] = await customerModule.listAndCountCustomers(
-        {},
-        {
-          take: 50000,
-          select: [
-            "id",
-            "email",
-            "first_name",
-            "last_name",
-            "company_name",
-            "phone",
-            "has_account",
-            "metadata",
-            "created_at",
-            "updated_at",
-          ],
-          relations: ["groups"],
-        }
-      );
+      const { data: customers } = await query.graph({
+        entity: "customer",
+        fields: [
+          "id", "email", "first_name", "last_name",
+          "company_name", "phone", "has_account",
+          "metadata", "created_at", "updated_at",
+          "customer_groups.name",
+        ],
+        pagination: { take: 50000 },
+      });
       console.log(
         `✅ Loaded ${customers.length} customers from DB in ${Date.now() - t0}ms`
       );
@@ -96,7 +87,7 @@ export const syncCustomersToMeiliStep = createStep(
       // 3. Transform ALL documents in RAM (no I/O, pure CPU)
       const docs = customers.map((c: any) => {
         const meta = (c.metadata as Record<string, any>) ?? {};
-        const groupNames: string[] = c.groups?.map((g: any) => g.name) ?? [];
+        const groupNames: string[] = c.customer_groups?.map((g: any) => g.name) ?? [];
         // Source of truth for price_level = customer groups (not metadata)
         const price_level = groupNames.includes("Wholesale")
           ? "Wholesale"

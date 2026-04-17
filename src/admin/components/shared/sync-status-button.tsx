@@ -1,6 +1,6 @@
 import { ArrowPath, CheckCircle, ExclamationCircle } from "@medusajs/icons";
 import { Button, clx } from "@medusajs/ui";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 type SyncStatus =
   | "idle"
@@ -16,14 +16,30 @@ interface SyncStatusButtonProps {
   showForceSync?: boolean; // show secondary Force Sync button (default: false)
 }
 
+const RESET_DELAY_MS = 4000;
+
 function useSyncAction(
   entity: SyncStatusButtonProps["entity"],
   onSyncComplete?: () => void
 ) {
   const [status, setStatus] = useState<SyncStatus>("idle");
   const [message, setMessage] = useState<string>("");
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scheduleReset = () => {
+    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+    resetTimerRef.current = setTimeout(() => {
+      setStatus("idle");
+      setMessage("");
+    }, RESET_DELAY_MS);
+  };
+
+  useEffect(() => () => {
+    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+  }, []);
 
   const run = async (force = false) => {
+    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
     setStatus("loading");
     setMessage(force ? "Forcing..." : "Checking...");
     try {
@@ -58,13 +74,8 @@ function useSyncAction(
       setStatus("error");
       setMessage("Sync Failed");
     }
+    scheduleReset();
   };
-
-  // Reset state on mount
-  useEffect(() => {
-    setStatus("idle");
-    setMessage("");
-  }, []);
 
   return { status, message, run };
 }

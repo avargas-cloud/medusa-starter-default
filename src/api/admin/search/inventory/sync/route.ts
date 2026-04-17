@@ -20,86 +20,64 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     });
 
     let meiliCount = 0;
-    let meiliLastUpdate = new Date(0);
 
     try {
       const index = client.index("inventory");
       const stats = await index.getStats();
       meiliCount = stats.numberOfDocuments;
-
-      // Get latest updated_at from MeiliSearch
-      const latestMeili = await index.search("", {
-        limit: 1,
-        sort: ["updated_at:desc"],
-      });
-
-      if (latestMeili.hits.length > 0) {
-        const val = (latestMeili.hits[0] as any).updated_at;
-        if (val) meiliLastUpdate = new Date(val);
-      }
     } catch (e) {
       // Index might not exist yet
     }
 
-    // 2. Get DB Stats (using same query as sync workflow)
+    // 2. Get DB Stats — mirrors the sync workflow logic exactly
     const { data: variants } = await query.graph({
       entity: "product_variant",
       fields: [
-        "id",
-        "updated_at",
+        "id", "sku", "updated_at",
         "product.id",
         "inventory_items.inventory.id",
-        "inventory_items.inventory.updated_at", // Added: must match sync workflow
+        "inventory_items.inventory.updated_at",
       ],
     });
 
-    // Transform to inventory items (same logic as sync workflow)
-    const inventoryItems = variants.flatMap((variant: any) => {
-      return (
-        variant.inventory_items?.map((invItem: any) => ({
-          id: invItem.inventory?.id,
-          variantId: variant.id,
-          productId: variant.product?.id,
-          updated_at: invItem.inventory?.updated_at || variant.updated_at, // Match sync workflow
-        })) || []
-      );
-    });
+    // Workflow uploads: inventory-linked items + synthetic docs (no-inventory variants with a product)
+    const inventoryLinked = variants.flatMap((variant: any) =>
+      (variant.inventory_items ?? []).map((invItem: any) => ({
+        variantId: variant.id,
+        productId: variant.product?.id,
+        updated_at: invItem.inventory?.updated_at || variant.updated_at,
+      }))
+    );
 
-    // Filter for valid items only (same logic as sync workflow - line 74)
-    const validItems = inventoryItems.filter(
+    const synthetic = variants
+      .filter((v: any) =>
+        (!v.inventory_items || v.inventory_items.length === 0) &&
+        v.sku && v.product?.id
+      )
+      .map((v: any) => ({
+        variantId: v.id,
+        productId: v.product.id,
+        updated_at: v.updated_at,
+      }));
+
+    const allDocs = [...inventoryLinked, ...synthetic].filter(
       (item: any) => item.variantId && item.productId
     );
-    const dbCount = validItems.length;
-
-    // Find latest update in DB (from valid items only)
-    let dbLastUpdate = new Date(0);
-    if (validItems.length > 0) {
-      const latest = validItems.reduce((max: any, item: any) => {
-        const itemDate = new Date(item.updated_at);
-        return itemDate > new Date(max.updated_at) ? item : max;
-      });
-      dbLastUpdate = new Date(latest.updated_at);
-    }
+    const dbCount = allDocs.length;
 
     console.log(
-      `🔍 [Inventory Sync Check] DB Valid: ${dbCount} (${inventoryItems.length} total, ${inventoryItems.length - dbCount} orphaned) | Meili: ${meiliCount}`
-    );
-    console.log(
-      `🔍 [Inventory Sync Check] DB Last Upd: ${dbLastUpdate.toISOString()} | Meili: ${meiliLastUpdate.toISOString()}`
+      `🔍 [Inventory Sync Check] DB docs: ${dbCount} (${inventoryLinked.length} linked + ${synthetic.length} synthetic) | Meili: ${meiliCount}`
     );
 
     // 3. Check if sync is needed (skip if force=true)
     const force = req.query.force === "true";
     const isCountSync = dbCount === meiliCount;
-    const timeDiff = dbLastUpdate.getTime() - meiliLastUpdate.getTime();
-    const isTimeSync = timeDiff <= 5000; // MeiliSearch can be up to 5s behind
 
     console.log(
-      `🔍 [Inventory Sync Status] Count Match: ${isCountSync}, Time Diff: ${timeDiff}ms, Time Sync: ${isTimeSync}, Force: ${force}`
+      `🔍 [Inventory Sync Status] Count Match: ${isCountSync} (${dbCount} vs ${meiliCount}), Force: ${force}`
     );
 
-    if (!force && isCountSync && isTimeSync) {
-      // Already synced
+    if (!force && isCountSync) {
       console.log(`✅ [Inventory Sync] Already in sync!`);
       return res.json({
         success: true,
