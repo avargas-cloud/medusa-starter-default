@@ -22,10 +22,14 @@ export const sendToQbStep = createStep(
 
       logger.info(`Sending item to QB Bridge: ${input.action} - ${reqUrl}`);
 
+      const apiKey = process.env.QB_API_KEY || "";
+
       const response = await fetch(reqUrl, {
         method,
         headers: {
           "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "bypass-tunnel-reminder": "true",
         },
         body: JSON.stringify({
           action: input.action,
