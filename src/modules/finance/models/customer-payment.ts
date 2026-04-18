@@ -37,17 +37,28 @@ const CustomerPayment = model.define("customer_payment", {
   currency: model.text().default("usd"),
   method: model
     .enum([
+      // Canonical values — new writes should use these.
+      "credit_card",
+      "debit_card",
       "cash",
       "check",
-      "card",
       "ach",
       "zelle",
-      "credit_memo",
+      "credit_memo", // Store credit consumption.
       "stripe",
       "authorize_net",
       "other",
+      // Legacy generic — 'card' retained to read historical rows. Backfill
+      // normalizes to credit_card|debit_card with card_brand populated.
+      "card",
     ])
     .default("other"),
+  /**
+   * Card network (visa, mastercard, amex, discover, capital_one) for card
+   * payments. NULL for non-card methods (cash, check, zelle, ach) and for
+   * debit-only transactions where we intentionally don't record the brand.
+   */
+  card_brand: model.text().nullable(),
   reference: model.text().nullable(), // check #, last4, Stripe charge ID, etc.
   status: model
     .enum([

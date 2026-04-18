@@ -67,7 +67,29 @@ interface CreateInvoiceBody {
   tax: number; // cents
   total: number; // cents
   amount_paid: number; // cents
-  payment_method: "cash" | "check" | "card" | "ach" | "credit" | "mixed";
+  payment_method:
+    // Canonical values — new callers should send these.
+    | "credit_card"
+    | "debit_card"
+    | "cash"
+    | "check"
+    | "ach"
+    | "zelle"
+    | "credit" // Store credit / credit memo — legacy meaning preserved.
+    | "mixed"
+    // Legacy values — accepted for inbound requests but normalized before persist.
+    | "card"
+    | "visa"
+    | "mastercard"
+    | "amex"
+    | "discover"
+    | "capital_one"
+    | "credit_memo";
+  /**
+   * Card network when payment_method is a card. Optional — null for cash/check/zelle/ach
+   * or for debit-only transactions where the brand is intentionally not recorded.
+   */
+  card_brand?: "visa" | "mastercard" | "amex" | "discover" | "capital_one" | null;
   notes?: string;
   created_by?: string;
   shipping_address?: {
@@ -196,6 +218,24 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   const balance_due = body.total - body.amount_paid;
 
+  // Normalize payment_method + card_brand into the canonical split format.
+  //   New callers send:  payment_method='credit_card'|'debit_card'|'cash'|... card_brand=<brand>|null
+  //   Legacy callers send the brand directly as payment_method ('visa', 'mastercard',
+  //   etc.) with no card_brand. We translate those here so persistence is always
+  //   in the new format.
+  //
+  //   Special cases:
+  //   - 'debit_card' is already canonical → pass through, card_brand stays as caller sent
+  //   - 'credit' = store credit (legacy meaning preserved — NOT a credit card)
+  //   - 'credit_memo' = store credit consumption (alias for 'credit' in some old flows)
+  const CARD_BRANDS = new Set(["visa", "mastercard", "amex", "discover", "capital_one"]);
+  let normalizedPaymentMethod: string = body.payment_method;
+  let normalizedCardBrand: string | null = body.card_brand ?? null;
+  if (CARD_BRANDS.has(body.payment_method)) {
+    normalizedPaymentMethod = "credit_card";
+    normalizedCardBrand = body.payment_method;
+  }
+
   let paymentIdToEmit: string | null = null;
   let nextPayNum: number | null = null;
   const applicationsToEmit: any[] = [];
@@ -204,7 +244,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   // 'cash' default, etc.) when the Dejavoo terminal fires the auto-submit. For
   // terminal-sourced payments we override this with the card type that Dejavoo
   // actually reported, stored on the customer_payment metadata.
-  let resolvedPaymentMethod: string = body.payment_method;
+  let resolvedPaymentMethod: string = normalizedPaymentMethod;
+  let resolvedCardBrand: string | null = normalizedCardBrand;
 
   // Step 1: Create the invoice (no nested items — hasMany must be created separately)
   const initialStatus =
@@ -224,7 +265,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     total: body.total,
     amount_paid: body.amount_paid,
     balance_due,
-    payment_method: body.payment_method,
+    payment_method: normalizedPaymentMethod as any,
+    card_brand: normalizedCardBrand,
     issued_at: new Date(),
     paid_at: balance_due <= 0 ? new Date() : null,
     notes: body.notes ?? null,
@@ -251,8 +293,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     );
   }
 
-  // Helper mapper for methods
+  // Helper mapper for methods — maps the normalized pos payment_method into the
+  // customer_payment.method DB enum (which has its own accepted value set).
   function mapPosMethodToDbEnum(method: string): any {
+    if (method === "credit_card" || method === "debit_card") return method;
     if (
       [
         "visa",
@@ -260,11 +304,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         "discover",
         "amex",
         "capital_one",
-        "debit_card",
         "card",
       ].includes(method)
     )
-      return "card";
+      return "card"; // Legacy — backfill normalizes these post-migration.
     if (
       [
         "e_check",
@@ -276,7 +319,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     )
       return "ach";
     if (["paypal", "money_order"].includes(method)) return "other";
-    if (method === "credit") return "credit_memo";
+    if (method === "credit" || method === "credit_memo") return "credit_memo";
     if (["cash", "check", "zelle"].includes(method)) return method;
     return "other";
   }
@@ -289,12 +332,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     await invoiceService.createInvoicePayments({
       invoice_id: (invoice as any).id,
       amount: body.amount_paid,
-      payment_method: body.payment_method,
+      payment_method: normalizedPaymentMethod,
       notes: "Initial payment at issuance",
       created_by: body.created_by ?? null,
       paid_at: paymentDate,
     });
-    if (body.payment_method === "credit") {
+    // 'credit' = store credit (legacy naming, NOT a credit card). Consume path
+    // is gated on that string; credit_card goes through the normal create path.
+    if (normalizedPaymentMethod === "credit") {
       // Consume existing available credit instead of creating a new payment
       const availablePayments = await financeService.listCustomerPayments(
         { customer_id: body.customer_id },
@@ -365,11 +410,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const termPosMethod = termPay?.metadata?.pos_payment_method as
           | string
           | undefined;
-        if (termPosMethod && termPosMethod !== body.payment_method) {
+        const termCardBrand = (termPay?.metadata?.card_brand as string | undefined) ?? null;
+        if (termPosMethod && termPosMethod !== normalizedPaymentMethod) {
           console.log(
-            `[invoice] Overriding payment_method '${body.payment_method}' → '${termPosMethod}' from terminal_payment metadata (source of truth)`
+            `[invoice] Overriding payment_method '${normalizedPaymentMethod}' → '${termPosMethod}' from terminal_payment metadata (source of truth)`
           );
           resolvedPaymentMethod = termPosMethod;
+          resolvedCardBrand = termCardBrand;
+        } else if (termCardBrand && !resolvedCardBrand) {
+          // Method already matches but terminal payment has a brand we don't — adopt it.
+          resolvedCardBrand = termCardBrand;
         }
       } catch (tpErr: any) {
         console.warn(
@@ -467,7 +517,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         customer_id: body.customer_id,
         display_id: nextPayNum,
         amount: body.amount_paid,
-        method: mapPosMethodToDbEnum(body.payment_method),
+        method: mapPosMethodToDbEnum(normalizedPaymentMethod),
+        card_brand: normalizedCardBrand,
         reference: "Deposit",
         notes: "Initial invoice payment via Complete Order",
         received_at: paymentDate,
@@ -480,7 +531,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           deposit_type: "INVOICE",
           order_id: body.order_id,
           order_display_id: body.order_display_id,
-          pos_payment_method: body.payment_method,
+          pos_payment_method: normalizedPaymentMethod,
+          card_brand: normalizedCardBrand,
           invoices_affected: [(invoice as any).id],
           invoices_affected_friendly: [
             `IN-${invoice_number || body.order_display_id}`,
@@ -542,7 +594,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       const medusaPaymentId = await registerMedusaPayment(req.scope, {
         order_id: body.order_id,
         amount: body.amount_paid,
-        payment_method: body.payment_method,
+        payment_method: normalizedPaymentMethod,
         invoice_total: body.total,
       });
       if (medusaPaymentId) {

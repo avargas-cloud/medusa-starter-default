@@ -38,13 +38,31 @@ const PosInvoice = model.define("pos_invoice", {
   refunded_amount: model.bigNumber().default(0), // cumulative items refund from credit memos (cents)
   refunded_shipping: model.bigNumber().default(0), // cumulative shipping refund from credit memos (cents)
   payment_method: model.enum([
+    // Canonical values — new writes should use these.
+    "credit_card",
+    "debit_card",
     "cash",
     "check",
-    "card",
     "ach",
-    "credit",
+    "zelle",
+    "credit", // Store credit / credit memo — legacy meaning preserved.
     "mixed",
+    // Legacy values — retained to read historical rows. Backfill normalizes
+    // these to {credit_card|debit_card, card_brand: <brand>}.
+    "card",
+    "visa",
+    "mastercard",
+    "amex",
+    "discover",
+    "capital_one",
+    "credit_memo",
   ]),
+  /**
+   * Card network (visa, mastercard, amex, discover, capital_one) for card
+   * payments. NULL for non-card methods (cash, check, zelle, ach) and for
+   * debit-only transactions where we intentionally don't record the brand.
+   */
+  card_brand: model.text().nullable(),
   issued_at: model.dateTime().nullable(),
   paid_at: model.dateTime().nullable(),
   voided_at: model.dateTime().nullable(),
