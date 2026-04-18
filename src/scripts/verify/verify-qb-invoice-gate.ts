@@ -2,8 +2,6 @@
  * src/scripts/verify/verify-qb-invoice-gate.ts
  *
  * READ-ONLY verification for the Fase 3 Order Pipeline Gate.
- * Standalone Node script — does NOT bootstrap Medusa (avoids interference from
- * unrelated module load errors). Uses pg directly from DATABASE_URL.
  *
  * This script does NOT create, update, or delete any row. It reads the state
  * of the gate + poller + endpoint modules and reports whether the gate is
@@ -15,14 +13,15 @@
  *  4. Spot-checks recent pos_invoice_items for variants missing quickbooks_id
  *  5. Confirms pos_invoice.metadata and product_variant.metadata columns exist
  *
- * Run:
- *   cd backend
- *   node --import tsx ./src/scripts/verify/verify-qb-invoice-gate.ts
- *     or
- *   DATABASE_URL="…" npx tsx ./src/scripts/verify/verify-qb-invoice-gate.ts
+ * Dual run mode:
+ *   yarn medusa exec ./src/scripts/verify/verify-qb-invoice-gate.ts
+ *     (uses Medusa container to resolve pg)
+ *
+ *   npx tsx ./src/scripts/verify/verify-qb-invoice-gate.ts
+ *     (standalone — connects to DATABASE_URL from .env directly)
  */
-import { readFileSync } from "fs";
-import { join } from "path";
+import { existsSync, readFileSync } from "fs";
+import { join, resolve as resolvePath } from "path";
 import { Client } from "pg";
 
 const PREFIX = "[verify-qb-invoice-gate]";
@@ -41,70 +40,56 @@ const loadDatabaseUrl = (): string => {
   throw new Error("DATABASE_URL not set and .env not found");
 };
 
-async function main() {
+type QueryFn = (sql: string, params?: any[]) => Promise<{ rows: any[] }>;
+
+async function runChecks(queryFn: QueryFn, cleanup?: () => Promise<void>) {
   let failures = 0;
   log("═══════════════════════════════════════════════════════════════");
   log("Fase 3 — QB Invoice Gate verification (READ-ONLY)");
   log("═══════════════════════════════════════════════════════════════");
 
-  // ── 1. Module import sanity ──────────────────────────────────────────
+  // ── 1. Module file + export sanity (static check via fs) ─────────────
+  // Medusa exec and tsx have divergent module resolution for extension-less
+  // imports of sibling .ts files, so we check for file presence on disk and
+  // scan the source for the required export symbols. This is lighter than
+  // actually loading the modules and works identically in both runtimes.
   log("");
-  log("[1/5] Loading gate + poller + endpoint modules…");
-  try {
-    const pollerMod: any = await import("../../jobs/qb-invoice-waiting-gate");
-    if (typeof pollerMod.default !== "function") {
-      err("  ✗ qb-invoice-waiting-gate has no default export function");
+  log("[1/5] Checking gate + poller + endpoint source files…");
+  const scriptDir = __dirname ?? resolvePath(process.cwd(), "src/scripts/verify");
+  const srcRoot = resolvePath(scriptDir, "../..");
+
+  const fileChecks: Array<{ rel: string; expects: string[] }> = [
+    {
+      rel: "jobs/qb-invoice-waiting-gate.ts",
+      expects: ["export default async function", "schedule:"],
+    },
+    {
+      rel: "api/admin/qb-catalog/waiting-invoices/route.ts",
+      expects: ["export const GET"],
+    },
+    {
+      rel: "api/admin/qb-catalog/waiting-invoices/[id]/mark-manual/route.ts",
+      expects: ["export const POST"],
+    },
+  ];
+
+  for (const check of fileChecks) {
+    const abs = resolvePath(srcRoot, check.rel);
+    if (!existsSync(abs)) {
+      err(`  ✗ missing file: src/${check.rel}`);
+      failures++;
+      continue;
+    }
+    const source = readFileSync(abs, "utf8");
+    const missing = check.expects.filter((sym) => !source.includes(sym));
+    if (missing.length > 0) {
+      err(
+        `  ✗ src/${check.rel} missing expected symbols: ${missing.join(", ")}`
+      );
       failures++;
     } else {
-      log("  ✓ jobs/qb-invoice-waiting-gate.ts exports default fn");
-      log("    schedule:", pollerMod.config?.schedule ?? "<missing>");
+      log(`  ✓ src/${check.rel}`);
     }
-  } catch (e: any) {
-    err("  ✗ Failed to import qb-invoice-waiting-gate:", e.message);
-    failures++;
-  }
-
-  try {
-    const listMod: any = await import(
-      "../../api/admin/qb-catalog/waiting-invoices/route"
-    );
-    if (typeof listMod.GET !== "function") {
-      err("  ✗ waiting-invoices/route has no GET export");
-      failures++;
-    } else {
-      log("  ✓ GET /admin/qb-catalog/waiting-invoices exports GET");
-    }
-  } catch (e: any) {
-    err("  ✗ Failed to import waiting-invoices/route:", e.message);
-    failures++;
-  }
-
-  try {
-    const markMod: any = await import(
-      "../../api/admin/qb-catalog/waiting-invoices/[id]/mark-manual/route"
-    );
-    if (typeof markMod.POST !== "function") {
-      err("  ✗ mark-manual/route has no POST export");
-      failures++;
-    } else {
-      log("  ✓ POST mark-manual/route exports POST");
-    }
-  } catch (e: any) {
-    err("  ✗ Failed to import mark-manual/route:", e.message);
-    failures++;
-  }
-
-  // ── DB-backed checks ─────────────────────────────────────────────────
-  const client = new Client({ connectionString: loadDatabaseUrl() });
-  try {
-    await client.connect();
-    log("");
-    log("  ℹ Connected to Postgres");
-  } catch (e: any) {
-    err("  ✗ Could not connect to Postgres:", e.message);
-    err("    Skipping DB-backed checks. Aborting.");
-    process.exitCode = 1;
-    return;
   }
 
   // ── 2. Count currently waiting invoices ──────────────────────────────
@@ -112,7 +97,7 @@ async function main() {
   log("[2/5] Counting pos_invoice rows with waiting_qb_items=true…");
   let waitingInvoices: any[] = [];
   try {
-    const res = await client.query(
+    const res = await queryFn(
       `SELECT id, invoice_number, order_id, total, created_at, metadata
          FROM pos_invoice
         WHERE metadata ->> 'waiting_qb_items' = 'true'
@@ -162,7 +147,7 @@ async function main() {
       continue;
     }
     try {
-      const vRes = await client.query(
+      const vRes = await queryFn(
         `SELECT id, metadata FROM product_variant WHERE id = ANY($1::text[])`,
         [waitIds]
       );
@@ -198,7 +183,7 @@ async function main() {
   log("");
   log("[4/5] Spot-check: recent pos_invoice_items (last 48h) missing qb_id?");
   try {
-    const res = await client.query(
+    const res = await queryFn(
       `SELECT DISTINCT pii.variant_id, pv.sku, pv.metadata->>'quickbooks_id' AS qb_id
          FROM pos_invoice_item pii
          JOIN pos_invoice pi ON pi.id = pii.invoice_id
@@ -228,7 +213,7 @@ async function main() {
   log("");
   log("[5/5] Schema sanity…");
   try {
-    const res = await client.query(
+    const res = await queryFn(
       `SELECT table_name, column_name
          FROM information_schema.columns
         WHERE (table_name = 'pos_invoice' AND column_name = 'metadata')
@@ -251,7 +236,7 @@ async function main() {
     failures++;
   }
 
-  await client.end();
+  if (cleanup) await cleanup();
 
   // ── Summary ──────────────────────────────────────────────────────────
   log("");
@@ -265,7 +250,43 @@ async function main() {
   log("═══════════════════════════════════════════════════════════════");
 }
 
-main().catch((e) => {
-  console.error(PREFIX, "fatal:", e);
-  process.exitCode = 1;
-});
+// ── Entry points ────────────────────────────────────────────────────────
+
+// (A) Medusa exec: yarn medusa exec ./src/scripts/verify/verify-qb-invoice-gate.ts
+// Medusa bootstraps the container and passes it here. We wrap the knex
+// connection to match QueryFn's pg-style signature.
+export default async function ({ container }: { container: any }) {
+  const knex = container.resolve("__pg_connection__");
+  const queryFn: QueryFn = async (sql, params) => {
+    // knex.raw accepts $1 style placeholders when params are given, but the
+    // script was written against pg ($1) syntax — knex translates transparently.
+    const result = await knex.raw(sql, params ?? []);
+    return { rows: result.rows ?? result[0] ?? [] };
+  };
+  await runChecks(queryFn);
+}
+
+// (B) Standalone tsx: npx tsx ./src/scripts/verify/verify-qb-invoice-gate.ts
+// Detect direct execution via require.main === module (works under tsx too).
+const isDirect =
+  typeof require !== "undefined" &&
+  typeof module !== "undefined" &&
+  require.main === module;
+
+if (isDirect) {
+  (async () => {
+    const client = new Client({ connectionString: loadDatabaseUrl() });
+    await client.connect();
+    log("  ℹ Connected to Postgres");
+    const queryFn: QueryFn = async (sql, params) => {
+      const res = await client.query(sql, params);
+      return { rows: res.rows };
+    };
+    await runChecks(queryFn, async () => {
+      await client.end();
+    });
+  })().catch((e) => {
+    console.error(PREFIX, "fatal:", e);
+    process.exitCode = 1;
+  });
+}
