@@ -196,13 +196,12 @@ export default async function fixTerminalSurchargeOverpayments({
     return;
   }
 
-  if (correctable.length === 0) {
-    console.log("[surcharge-fix] Nothing to apply — zero CORRECT rows.\n");
-    return;
-  }
-
   // 6. APPLY — per-row update within a transaction
-  console.log(`[surcharge-fix] Applying ${correctable.length} corrections...\n`);
+  console.log(
+    correctable.length > 0
+      ? `[surcharge-fix] Applying ${correctable.length} corrections...\n`
+      : `[surcharge-fix] Zero new customer_payment rows to correct; checking for order metadata backfill...\n`
+  );
   let applied = 0;
   let failed = 0;
   for (const c of correctable) {
@@ -253,5 +252,69 @@ export default async function fixTerminalSurchargeOverpayments({
     }
   }
 
-  console.log(`\n[surcharge-fix] Done. applied=${applied} failed=${failed}\n`);
+  console.log(`\n[surcharge-fix] Payment rows done. applied=${applied} failed=${failed}\n`);
+
+  // 7. Secondary: correct order.metadata.referential_deposit for the same rows.
+  // This field drives the "DEPOSIT" column in the POS order list. It was written with
+  // the buggy cardholder-charged dollar value (e.g. 55.09) instead of the merchant
+  // amount (53.49). Recompute as SUM(active applications for terminal payments on
+  // this order) / 100 — giving the true pre-invoice captured total.
+  console.log(`[surcharge-fix] Correcting order.metadata.referential_deposit for affected orders...\n`);
+
+  const orderRowsRes = await pg.raw(
+    `
+    SELECT DISTINCT pa.order_id, o.display_id, o.metadata->>'referential_deposit' AS old_deposit_dollars
+    FROM payment_application pa
+    JOIN customer_payment cp ON cp.id = pa.payment_id
+    JOIN "order" o ON o.id = pa.order_id
+    WHERE cp.metadata->>'surcharge_correction_applied_at' IS NOT NULL
+      AND pa.deleted_at IS NULL
+      AND o.deleted_at IS NULL
+      AND (o.metadata->>'referential_deposit_corrected_at') IS NULL
+    `
+  );
+
+  let orderApplied = 0;
+  let orderFailed = 0;
+  for (const orderRow of orderRowsRes.rows) {
+    try {
+      const sumRes = await pg.raw(
+        `
+        SELECT COALESCE(SUM(pa.amount_applied), 0)::text AS applied_cents_str
+        FROM payment_application pa
+        JOIN customer_payment cp ON cp.id = pa.payment_id
+        WHERE pa.order_id = ?
+          AND pa.deleted_at IS NULL
+          AND pa.voided_at IS NULL
+          AND cp.metadata->>'transaction_type' = 'terminal_payment'
+          AND cp.type = 'payment'
+        `,
+        [orderRow.order_id]
+      );
+      const appliedCents = Math.round(Number(sumRes.rows[0].applied_cents_str));
+      const newDepositDollars = (appliedCents / 100).toFixed(2);
+
+      await pg.raw(
+        `
+        UPDATE "order"
+        SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+          'referential_deposit',              ?::text,
+          'referential_deposit_original',     COALESCE(metadata->>'referential_deposit', '0'),
+          'referential_deposit_corrected_at', ?::text
+        ),
+        updated_at = now()
+        WHERE id = ?
+          AND (metadata->>'referential_deposit_corrected_at') IS NULL
+        `,
+        [newDepositDollars, new Date().toISOString(), orderRow.order_id]
+      );
+      orderApplied++;
+      console.log(`  ✅ order #${orderRow.display_id}: referential_deposit $${orderRow.old_deposit_dollars} → $${newDepositDollars}`);
+    } catch (err: any) {
+      orderFailed++;
+      console.error(`  ❌ order #${orderRow.display_id} FAILED: ${err.message}`);
+    }
+  }
+
+  console.log(`\n[surcharge-fix] Order metadata done. applied=${orderApplied} failed=${orderFailed}\n`);
 }

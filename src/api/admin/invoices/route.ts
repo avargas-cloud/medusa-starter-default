@@ -552,6 +552,36 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         });
       }
     }
+
+    // Update order.metadata.referential_deposit so the POS order list "DEPOSIT" column
+    // reflects money received for this order regardless of capture path (cash/check at
+    // Create Invoice, credit consume, etc). Terminal flow already writes this field
+    // at capture time in store-pos/.../bams/terminal/route.ts, so we skip when a
+    // terminal_payment_id was used — prevents double-counting.
+    if (!body.terminal_payment_id) {
+      try {
+        const orderModule = req.scope.resolve(Modules.ORDER);
+        const currentOrder = (await orderModule.retrieveOrder(body.order_id, {
+          select: ["id", "metadata"],
+        })) as any;
+        const existingMeta = currentOrder?.metadata ?? {};
+        const currentDepositDollars = Number(existingMeta.referential_deposit ?? 0);
+        const incrementDollars = body.amount_paid / 100;
+        const newDepositDollars = Number(
+          (currentDepositDollars + incrementDollars).toFixed(2)
+        );
+        await orderModule.updateOrders(body.order_id, {
+          metadata: {
+            ...existingMeta,
+            referential_deposit: newDepositDollars,
+          },
+        });
+      } catch (depErr: any) {
+        console.warn(
+          `[invoice] Failed to update order referential_deposit for ${body.order_id}: ${depErr.message}`
+        );
+      }
+    }
   }
 
   // Write upfront pipeline rows immediately so the UI shows the complete expected flow
