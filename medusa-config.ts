@@ -283,6 +283,9 @@ module.exports = defineConfig({
       resolve: "./src/modules/document-templates",
     },
     {
+      resolve: "./src/modules/quickbooks-catalog",
+    },
+    {
       resolve: "@medusajs/medusa/tax",
       options: {
         providers: [

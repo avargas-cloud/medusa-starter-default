@@ -5,9 +5,7 @@ import { useState, useEffect } from "react";
 
 import { ActivityLog } from "./components/ActivityLog";
 import { AuditModal } from "./components/AuditModal";
-import { BridgeStatus } from "./components/BridgeStatus";
 import { LegacyImportPanel } from "./components/LegacyImportPanel";
-import { PipelineTable } from "./components/PipelineTable";
 import { StoreHoursSection } from "./components/StoreHoursSection";
 import { SyncCard } from "./components/SyncCard";
 import { SyncReportModal } from "./components/SyncReportModal";
@@ -612,12 +610,6 @@ const QuickBooksPage = () => {
       {/* Activity Log */}
       <ActivityLog />
 
-      {/* QB Bridge Status — live queue stats + busy clear */}
-      <BridgeStatus />
-
-      {/* QB Operations Pipeline — real-time queue */}
-      <PipelineTable />
-
       {/* Modals */}
       {reportModal && (
         <SyncReportModal
@@ -637,7 +629,7 @@ const QuickBooksPage = () => {
 };
 
 export const config = defineRouteConfig({
-  label: "QuickBooks",
+  label: "QB Sync",
   icon: BuildingStorefront,
 });
 

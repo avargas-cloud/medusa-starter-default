@@ -1,0 +1,495 @@
+{
+  "dryRun": false,
+  "totalScanned": 2556,
+  "totalWithoutInventoryItem": 94,
+  "counts": {
+    "PHYSICAL": 38,
+    "SERVICE": 50,
+    "PLACEHOLDER": 6,
+    "AMBIGUOUS": 0
+  },
+  "applied": {
+    "inventoryItemsCreated": 38,
+    "manageInventoryDisabled": 31
+  },
+  "groups": {
+    "PHYSICAL": [
+      {
+        "sku": "5228332u",
+        "variantId": "variant_01KPE2XS83335J4ZJ0A5E9VY9G",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "Box",
+        "variantId": "variant_01KPE2XS83CYDZERQGQ15RSV9Z",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "C240",
+        "variantId": "variant_01KPE2XS83EMW525AHW9E0A8VQ",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "C232LED-NUL 2ft",
+        "variantId": "variant_01KPE2XS83GHAZTT4VCT2AP0K9",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "200102",
+        "variantId": "variant_01KPE2XS83Q0FWE2C1ZN0C49FR",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "C232LED-2Ft",
+        "variantId": "variant_01KPE2XS83Q82HQ03536ZAG6MD",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "051141253817",
+        "variantId": "variant_01KPE2XS83QHH5M9KKHHZSYJFG",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "Custom-Mirror",
+        "variantId": "variant_01KPE2XS83T6HBFK7D070X9QJW",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "5NNG2",
+        "variantId": "variant_01KPE2XS83YYVB6ZB4FSF3YSJM",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "E89885",
+        "variantId": "variant_01KPE2XS841VW9Y5F6F6DGT96B",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "GL-G-96720",
+        "variantId": "variant_01KPE2XS842RQJEBS1DSEEZHQ5",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "ET2-E24646-144GLD",
+        "variantId": "variant_01KPE2XS846QKX7SKVE3WE2BXH",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "ET2-E24643-144GLD",
+        "variantId": "variant_01KPE2XS846VHM767MSF9877ZB",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "GL-BTA-MED-CL",
+        "variantId": "variant_01KPE2XS849G09FZ1RJB87VSKM",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "ECTSK-RM3&4C4ZB",
+        "variantId": "variant_01KPE2XS84BT0G29PGC3CQ2MPQ",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "EMSH4V160D30WRW6",
+        "variantId": "variant_01KPE2XS84CHVWZJEGA3D0AXX6",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "GL-G-20226",
+        "variantId": "variant_01KPE2XS84DDBT3V1K1N9981YJ",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "ET2-E24188-148GLD",
+        "variantId": "variant_01KPE2XS84KAWJM18JMJW8XY66",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "GL-BTA-WIDE-CL",
+        "variantId": "variant_01KPE2XS84TS6E6QJZN337HR7V",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "Lamp-Assembly",
+        "variantId": "variant_01KPE2XSF7FMZP59M4CS48343A",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "MAX-88723BK",
+        "variantId": "variant_01KPE2XSF81E5WPAM07R23MR1B",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "LUX-LR24010",
+        "variantId": "variant_01KPE2XSF8AG9CX8DK7GBZF0SH",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "MNPT50",
+        "variantId": "variant_01KPE2XSF8BQP3HM93479GN58M",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "LT30334",
+        "variantId": "variant_01KPE2XSF8GFF4M52N4MSSP2VE",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "MAX-88831BK",
+        "variantId": "variant_01KPE2XSF8JWYP4NGJB7NKPY07",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "LUX-LR24014",
+        "variantId": "variant_01KPE2XSF8KAFCDCW0ZNN6AQG1",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "MAX-88833BK",
+        "variantId": "variant_01KPE2XSF8KYJMPX686K95Q52Z",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "LUM-A31 -1/8\" IPS",
+        "variantId": "variant_01KPE2XSF8MVH96735XNK2C6A7",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "LUX-LR24012",
+        "variantId": "variant_01KPE2XSF8WAJXFGR0K4ZV72QC",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "Office-Product",
+        "variantId": "variant_01KPE2XSF9404B1N0MJ6E65VF4",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "Samples",
+        "variantId": "variant_01KPE2XSF94187G9DGKAT4W1J3",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "RetroFit-Plate",
+        "variantId": "variant_01KPE2XSF94A8J64SAK8R4QJGB",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "NX-IRUI-VKVM",
+        "variantId": "variant_01KPE2XSF992VSJ8FHE9ZRCWWZ",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "PS12V-EU-PLUG",
+        "variantId": "variant_01KPE2XSF9BYB74CZABCCVV3CW",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "SUN-49104-SU",
+        "variantId": "variant_01KPE2XSP01M0EAP6CCJVJD306",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "Short-BiPin Socket",
+        "variantId": "variant_01KPE2XSP0W3VQFRPN7K2RCCCC",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "WireConnector",
+        "variantId": "variant_01KPE2XSP14T35XK6HXECD5HEM",
+        "action": "create inventory item + link + manage_inventory=true"
+      },
+      {
+        "sku": "WireToWire",
+        "variantId": "variant_01KPE2XSP1950JV33K419GS1JQ",
+        "action": "create inventory item + link + manage_inventory=true"
+      }
+    ],
+    "SERVICE": [
+      {
+        "sku": "ELAB-CUSTOM-NP",
+        "variantId": "variant_01KKPJWNMC072WDPY02E8HCBA0",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-CUSTOM-P",
+        "variantId": "variant_01KKPJWR56HFE5EJ8KMM1XMGX1",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-LC-45",
+        "variantId": "variant_01KKPJWTM9248P20NAHFHFHW7V",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-LC-45-CPIN",
+        "variantId": "variant_01KKPJWX3T6DMZMCN11EKSWMZS",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-LC-Hole",
+        "variantId": "variant_01KKPJWZKTQ5ZSFB0GGQGXA3TA",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-LC-S",
+        "variantId": "variant_01KKPJX23GD9FC4H08HE26RW5B",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-REPAIR-S",
+        "variantId": "variant_01KKPJX4KAY0Z2H4B27TMM5FYS",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-REPAIR-S-P",
+        "variantId": "variant_01KKPJX72K13XYFCCE5E2P2CGG",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-RG-1S-NP",
+        "variantId": "variant_01KKPJX9HXQZEBRYH5X1JDQD0Y",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-RG-1S-P",
+        "variantId": "variant_01KKPJXC1QFN9F3VGTXAZ89CVV",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-RG-2S-NP",
+        "variantId": "variant_01KKPJXEHEZJT0TVJWVB2WWFKV",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-RG-2S-P",
+        "variantId": "variant_01KKPJXH0HX8YS7VKA5Z5QDDVR",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-RW-1S-NP",
+        "variantId": "variant_01KKPJXKG5VFD4YAVV5V2YNXHQ",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-RW-1S-P",
+        "variantId": "variant_01KKPJXNZBE0XHQ1M5A6X2M0Q2",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-RW-2S-NP",
+        "variantId": "variant_01KKPJXREHPNSESDQVD4E2NAG0",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-RW-2S-P",
+        "variantId": "variant_01KKPJXTY7EH9XH31JAZMD2XZK",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-SC-1S-P",
+        "variantId": "variant_01KKPJXXFDE72CYC1FNYX5WZWK",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-SC-2S-NP",
+        "variantId": "variant_01KKPK1K8BYXW2J2E4WTFZAGYD",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "ELAB-SC-2S-P",
+        "variantId": "variant_01KKPK1NZESRQRMPJ2Z1567C4Y",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Charge",
+        "variantId": "variant_01KPE2XS83G462G2BP1K8QPQQD",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Charge:Minfee-200",
+        "variantId": "variant_01KPE2XS83S4H0DPAKYHVRP9T6",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "3% Merchant Fee",
+        "variantId": "variant_01KPE2XS83WZBG7Z9R8HWWDS8S",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Inspection-Request",
+        "variantId": "variant_01KPE2XS848XC1P33A0EEDZZPZ",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "H&P",
+        "variantId": "variant_01KPE2XS84SM0T3ZKMBQRQDQ00",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "LiftRental",
+        "variantId": "variant_01KPE2XSF7CBSPWHJECVBHYMFN",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "INSTALL",
+        "variantId": "variant_01KPE2XSF7YW52KWXEXAD8TVQH",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Notes:Assembly-LED-Panels",
+        "variantId": "variant_01KPE2XSF8099NCZ8SN9HFTFAG",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Notes",
+        "variantId": "variant_01KPE2XSF83QWAXZZ3QZ9MV841",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Notes:General-Notes",
+        "variantId": "variant_01KPE2XSF8DNF7GRJ035JWR3SH",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Notes:Assembly-Linear",
+        "variantId": "variant_01KPE2XSF8ENE102VX23GVQJA8",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Notes:No-Services",
+        "variantId": "variant_01KPE2XSF91K9SAV94AXN5V0AR",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Programming",
+        "variantId": "variant_01KPE2XSF94GTGG677SY5JHQK0",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Services:Assembly-Panels",
+        "variantId": "variant_01KPE2XSF96RKVPGJ8GB1TZ5ZN",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Notes:Project-Remarks",
+        "variantId": "variant_01KPE2XSF9HX37EG4YNV43Y700",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Project-LED",
+        "variantId": "variant_01KPE2XSF9J3KW2ZXK3P45QES2",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Services",
+        "variantId": "variant_01KPE2XSF9S95VRBYGPRHJA2N2",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Project-Automation",
+        "variantId": "variant_01KPE2XSF9TQTW63NGH7609DC0",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Project-Commercial",
+        "variantId": "variant_01KPE2XSF9X7SFJB50AB83QS6V",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Turnkey",
+        "variantId": "variant_01KPE2XSP0280404G2C3TDAEED",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Services:Service-Photometric",
+        "variantId": "variant_01KPE2XSP05K0CMPJF0SC9ZG2K",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Uncollectible Debt",
+        "variantId": "variant_01KPE2XSP075NNSQTN0VJ5750S",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Services:Service-Project",
+        "variantId": "variant_01KPE2XSP07VXHEQQXZ8NN18TA",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Services:CHGVAR",
+        "variantId": "variant_01KPE2XSP0FWJT91DT9R6BY2A4",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Special Sale",
+        "variantId": "variant_01KPE2XSP0HY87E3FC1AY2GT13",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Services:On-Site-Assestment",
+        "variantId": "variant_01KPE2XSP0QD8K6F08S7X85E7A",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Services:Expedite-Assembly",
+        "variantId": "variant_01KPE2XSP0QT84GAH2RZ6YWM3S",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Services:Installation-On-Site",
+        "variantId": "variant_01KPE2XSP0ZWNBF7SZR8EV6ZTB",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Unsatisfied Demand",
+        "variantId": "variant_01KPE2XSP1TFDT6BAFJR4F4RTD",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Charge:Minfee-100",
+        "variantId": "variant_01KPE2YTVE830DKSA43FSP9ZT5",
+        "action": "set manage_inventory=false (no inventory item)"
+      },
+      {
+        "sku": "Charge:Minfee-150",
+        "variantId": "variant_01KPE2YTVEVEEZM1KABSBXA3ER",
+        "action": "set manage_inventory=false (no inventory item)"
+      }
+    ],
+    "PLACEHOLDER": [
+      {
+        "sku": "Delete1",
+        "variantId": "variant_01KPE2XS839WAPZ20E86SZETDD",
+        "action": "MANUAL REVIEW — likely unlink from QB and delete"
+      },
+      {
+        "sku": "Delete5",
+        "variantId": "variant_01KPE2XS843R598JJ8R7GVRM5R",
+        "action": "MANUAL REVIEW — likely unlink from QB and delete"
+      },
+      {
+        "sku": "Delete4",
+        "variantId": "variant_01KPE2XS84HRP7KZJ5G2A4DMG8",
+        "action": "MANUAL REVIEW — likely unlink from QB and delete"
+      },
+      {
+        "sku": "delete3",
+        "variantId": "variant_01KPE2XS84X84QX7EX19C2NCP7",
+        "action": "MANUAL REVIEW — likely unlink from QB and delete"
+      },
+      {
+        "sku": "Delete2",
+        "variantId": "variant_01KPE2XS84Z62ZFVABFJMHWMHF",
+        "action": "MANUAL REVIEW — likely unlink from QB and delete"
+      },
+      {
+        "sku": "Prueba",
+        "variantId": "variant_01KPE2XSF9YNFWHB9QBETSTHK6",
+        "action": "MANUAL REVIEW — likely unlink from QB and delete"
+      }
+    ],
+    "AMBIGUOUS": []
+  },
+  "errors": []
+}

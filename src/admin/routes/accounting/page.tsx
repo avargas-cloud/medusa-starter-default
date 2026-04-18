@@ -3,6 +3,8 @@ import { BuildingStorefront } from "@medusajs/icons";
 import { Heading, Text } from "@medusajs/ui";
 
 import { BankAccountsCard } from "./components/BankAccountsCard";
+import { QbAccountsCard } from "./components/QbAccountsCard";
+import { QbVendorsCard } from "./components/QbVendorsCard";
 import { SequenceManagerCard } from "./components/SequenceManagerCard";
 
 const AccountingPage = () => {
@@ -18,6 +20,8 @@ const AccountingPage = () => {
 
       <SequenceManagerCard />
       <BankAccountsCard />
+      <QbAccountsCard />
+      <QbVendorsCard />
     </div>
   );
 };
