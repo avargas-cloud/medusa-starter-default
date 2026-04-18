@@ -636,9 +636,60 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
   }
 
+  // ── Fase 3: QB items readiness gate ────────────────────────────────────────
+  // If any variant in this invoice was recently created via POS Product V2 and
+  // has not yet received its QuickBooks ListID (metadata.quickbooks_id), defer
+  // the entire QB dispatch. The invoice creates, the cashier can charge/print,
+  // but the SalesReceipt/Invoice push to QB is held until every variant has a
+  // ListID. The waiting-gate poller (qb-invoice-waiting-gate.ts) promotes the
+  // invoice once ready.
+  let waitingForQbItems = false;
+  try {
+    const variantIds = (body.items ?? [])
+      .map((it) => it.variant_id)
+      .filter((x): x is string => !!x);
+    if (variantIds.length > 0) {
+      const vRes = await pgConnection.raw(
+        `SELECT id, metadata FROM product_variant WHERE id = ANY(?::text[])`,
+        [variantIds]
+      );
+      const missing = ((vRes.rows ?? []) as any[])
+        .filter((v) => !v.metadata?.quickbooks_id)
+        .map((v) => v.id);
+      if (missing.length > 0) {
+        waitingForQbItems = true;
+        const existingMeta = (invoice as any).metadata ?? {};
+        await invoiceService.updatePosInvoices({
+          id: (invoice as any).id,
+          metadata: {
+            ...existingMeta,
+            waiting_qb_items: true,
+            waiting_variant_ids: missing,
+            qb_dispatch_payload: {
+              is_sales_receipt: !!body.is_sales_receipt,
+              fulfillment_id: body.fulfillment_id ?? null,
+              resolved_payment_method: resolvedPaymentMethod,
+              payment_id_to_emit: paymentIdToEmit,
+              applications_to_emit: applicationsToEmit,
+              next_pay_num: nextPayNum,
+              invoice_number,
+            },
+          },
+        });
+        console.log(
+          `[invoice] Deferring QB sync for invoice ${(invoice as any).id} — ${missing.length} variant(s) waiting for ListID`
+        );
+      }
+    }
+  } catch (gateErr: any) {
+    console.warn(
+      `[invoice] QB items gate check failed, proceeding with normal dispatch: ${gateErr.message}`
+    );
+  }
+
   // Write upfront pipeline rows immediately so the UI shows the complete expected flow
   // before any QB handler runs. Each row starts as 'waiting' and transitions in-place.
-  if (process.env.QB_ORDER_FLOW_ENABLED === "true") {
+  if (!waitingForQbItems && process.env.QB_ORDER_FLOW_ENABLED === "true") {
     try {
       if (body.is_sales_receipt) {
         // ── Sales Receipt flow ────────────────────────────────────────
@@ -740,7 +791,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   // Use direct background execution (Event Loop) to guarantee 100% reliable QuickBooks Syncing,
   // thereby bypassing the Medusa v2 BullMQ Outbox which silently drops multiple sequential events.
-  setTimeout(async () => {
+  // Skipped when the QB items gate fired above — the waiting-gate poller will dispatch later.
+  if (!waitingForQbItems) setTimeout(async () => {
     try {
       const container = req.scope;
       const orderModule = container.resolve(Modules.ORDER);
