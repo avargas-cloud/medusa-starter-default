@@ -5,6 +5,9 @@ import {
 } from "@medusajs/framework/workflows-sdk";
 import { createProductsWorkflow } from "@medusajs/medusa/core-flows";
 
+import { syncProductToMeiliSearchWorkflow } from "../sync-product-meilisearch";
+import { updateInventoryIncrementalWorkflow } from "../update-inventory-incremental";
+
 import {
   enqueueQbItemsStep,
   QbItemType,
@@ -200,6 +203,15 @@ export const createPosProductV2Workflow = createWorkflow(
     });
 
     linkQbVendorStep({ links: vendorLinks });
+
+    // Meilisearch indexes must reflect the new product immediately so the cashier
+    // can find it in Load Template / product search right after creation. The QB
+    // item poller will re-sync on ListID resolution (see qb-item-pipeline-poller).
+    const meiliInput = transform({ productRef }, (data) => ({
+      productId: (data.productRef as any)?.id as string,
+    }));
+    syncProductToMeiliSearchWorkflow.runAsStep({ input: meiliInput });
+    updateInventoryIncrementalWorkflow.runAsStep({ input: meiliInput });
 
     return new WorkflowResponse({
       product: productRef,

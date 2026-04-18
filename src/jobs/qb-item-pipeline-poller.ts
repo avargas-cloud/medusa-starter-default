@@ -2,6 +2,8 @@ import { MedusaContainer } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../modules/quickbooks-catalog";
+import { syncProductToMeiliSearchWorkflow } from "../workflows/sync-product-meilisearch";
+import { updateInventoryIncrementalWorkflow } from "../workflows/update-inventory-incremental";
 
 const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
 const API_KEY = process.env.QB_API_KEY || "";
@@ -139,6 +141,33 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
          WHERE id = ?`,
         [listId, editSequence, row.variant_id]
       );
+
+      // Raw UPDATE bypasses Medusa's event bus, so product.updated never fires.
+      // Re-sync both Meili indexes explicitly so POS search reflects the new
+      // quickbooks_id (and picks up the product for the first time if it was
+      // just created via POS Product Creation V2).
+      try {
+        const { data: variantRow } = await query.graph({
+          entity: "product_variant",
+          fields: ["product_id"],
+          filters: { id: row.variant_id } as any,
+        });
+        const productId = (variantRow as any[])?.[0]?.product_id;
+        if (productId) {
+          await syncProductToMeiliSearchWorkflow(container).run({
+            input: { productId },
+            throwOnError: false,
+          });
+          await updateInventoryIncrementalWorkflow(container).run({
+            input: { productId },
+            throwOnError: false,
+          });
+        }
+      } catch (meiliErr: any) {
+        logger.warn(
+          `[qb-item-pipeline-poller] Meili re-sync failed for variant ${row.variant_id}: ${meiliErr.message}`
+        );
+      }
 
       await catalog.updateQbItemPipelines({
         id: row.id,
