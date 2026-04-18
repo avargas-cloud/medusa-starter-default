@@ -301,24 +301,38 @@ export async function handlePosPaymentCreated({
       );
     }
 
-    // Resolve the QB PaymentMethod name with full sanitizing. Candidates in
-    // priority order: specific card brand (label from BAMS/Dejavoo), coarse
-    // cardType (CREDIT/DEBIT), then the coarse DB enum. Returns undefined for
-    // generic inputs like "card"/"credit" so the bridge leaves the field
-    // blank instead of triggering QB Error 3140 for a missing list entry.
+    // Resolve the QB PaymentMethod name with full sanitizing.
+    //   DEBIT → always "Debit Card" bucket in QB regardless of brand, so credit-vs-debit
+    //           accounting stays clean. All debit cards converge there.
+    //   CREDIT → resolve to the specific brand (Visa/MasterCard/Amex/Discover/CapitalOne).
+    //           If no brand is resolvable, we return undefined so QB leaves the field blank
+    //           (avoids a 3140 error from an unknown PaymentMethod entry).
+    const canonicalBrand = (payment as any).card_brand as string | undefined;
     const rawLabel = payment.metadata?.bams_card_label as string | undefined;
+    const metaBrand = payment.metadata?.card_brand as string | undefined;
     const rawCardType = payment.metadata?.bams_card_type as string | undefined;
     const rawPosMethod = payment.metadata?.pos_payment_method as string | undefined;
-    const resolvedQbMethod = sanitizeToQbPaymentMethod(
-      rawLabel,
-      rawPosMethod,
-      rawCardType,
-      payment.method as string
-    );
+
+    const isDebit =
+      payment.method === "debit_card" ||
+      rawPosMethod === "debit_card" ||
+      (rawCardType ?? "").toUpperCase() === "DEBIT";
+
+    const resolvedQbMethod = isDebit
+      ? sanitizeToQbPaymentMethod("debit_card")
+      : sanitizeToQbPaymentMethod(
+          canonicalBrand,
+          rawLabel,
+          metaBrand,
+          rawPosMethod,
+          rawCardType,
+          payment.method as string
+        );
     if (!resolvedQbMethod) {
       logger.warn(
         `${LOG_PREFIX} ⚠️ Could not resolve QB PaymentMethod for payment ${paymentId} from ` +
-          `{label=${rawLabel ?? "∅"}, cardType=${rawCardType ?? "∅"}, pos_method=${rawPosMethod ?? "∅"}, db_method=${payment.method}} — ` +
+          `{canonical_brand=${canonicalBrand ?? "∅"}, label=${rawLabel ?? "∅"}, meta_brand=${metaBrand ?? "∅"}, ` +
+          `cardType=${rawCardType ?? "∅"}, pos_method=${rawPosMethod ?? "∅"}, db_method=${payment.method}} — ` +
           `sending ReceivePayment without PaymentMethodRef (QB will leave it blank)`
       );
     }

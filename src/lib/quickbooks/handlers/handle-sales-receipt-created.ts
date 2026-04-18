@@ -170,18 +170,19 @@ export async function handleSalesReceiptCreated(
   let invoiceShippingAmount: number | undefined;
   let srRefNumber: string | undefined;
   let invoicePaymentMethod: string | undefined;
+  let invoiceCardBrand: string | undefined;
 
   try {
     // Fallback for invoice_id when called by the consolidator (which only passes order_id)
-    let sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
+    let sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method, card_brand FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
     let params: any[] = [data.fulfillment_id];
 
     if (data.invoice_id) {
-      sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method FROM pos_invoice WHERE id = $1 LIMIT 1`;
+      sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method, card_brand FROM pos_invoice WHERE id = $1 LIMIT 1`;
       params = [data.invoice_id];
     } else if (!data.fulfillment_id && orderId) {
       // Cron resubmit path — only order_id available
-      sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method FROM pos_invoice WHERE order_id = $1 ORDER BY issued_at DESC LIMIT 1`;
+      sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method, card_brand FROM pos_invoice WHERE order_id = $1 ORDER BY issued_at DESC LIMIT 1`;
       params = [orderId];
     }
 
@@ -201,6 +202,9 @@ export async function handleSalesReceiptCreated(
       }
       if (row.payment_method) {
         invoicePaymentMethod = String(row.payment_method);
+      }
+      if (row.card_brand) {
+        invoiceCardBrand = String(row.card_brand);
       }
       // Hydrate invoice_id for downstream pipeline writes when consolidator
       // only passed order_id.
@@ -305,7 +309,14 @@ export async function handleSalesReceiptCreated(
     orderId,
     orderDisplayId: order.display_id,
     qbCustomerId,
-    paymentMethod: data.payment_method || invoicePaymentMethod,
+    // For QB we prefer the card brand (Visa/MasterCard/Amex/Discover/CapitalOne) since
+    // QB maps those to its PaymentMethod list directly. For debit transactions with
+    // brand, we still pass the canonical payment_method='debit_card' so the sanitizer
+    // picks "Debit Card" rather than the brand — that preserves the credit-vs-debit
+    // distinction in QB accounting.
+    paymentMethod:
+      (invoicePaymentMethod === "debit_card" ? "debit_card" :
+       (invoiceCardBrand || data.payment_method || invoicePaymentMethod)),
     prebuiltItems,
     salesTaxCode,
     salesRep: parseSalesRepInitials(order.metadata?.sales_rep),

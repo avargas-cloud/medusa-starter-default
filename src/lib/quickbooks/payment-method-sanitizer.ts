@@ -80,12 +80,16 @@ const ALIAS_PATTERNS: Array<[RegExp, string]> = [
 const GENERIC_CARD_TOKENS = new Set([
   "card",
   "credit",
-  "credit_card",
   "creditcard",
   "cc",
   "other",
   "unknown",
   "",
+  // NOTE: 'credit_card' (canonical since Phase 1) is NOT in this set.
+  // Callers should pass `card_brand` (visa/mastercard/...) first — if brand is
+  // resolvable, it wins. If only 'credit_card' is passed with no brand, we fall
+  // through to the ALIAS_PATTERNS which has no match for credit_card, so the
+  // sanitizer returns undefined (same behavior as before for unknown brands).
 ]);
 
 /**
