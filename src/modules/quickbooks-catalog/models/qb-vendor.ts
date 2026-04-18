@@ -43,6 +43,11 @@ export const QbVendor = model.define("qb_vendor", {
 
   notes: model.text().nullable(),
 
+  sync_status: model.text().nullable(),
+  qb_operation_id: model.text().nullable(),
+  last_error: model.text().nullable(),
+  resolved_at: model.dateTime().nullable(),
+
   last_synced_at: model.dateTime().default(new Date()),
   metadata: model.json().nullable(),
 });
