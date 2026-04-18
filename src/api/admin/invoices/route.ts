@@ -102,6 +102,41 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       .json({ error: "order_id, customer_id, and items are required" });
   }
 
+  // ── Idempotency: a terminal_payment_id can only be applied to ONE invoice ──
+  // The terminal route already created a CustomerPayment when the card was
+  // charged. If the client retries this POST (browser double-click, network
+  // retry, recovery button), we must NOT create a second invoice — it would
+  // consume two sequence numbers and leave an orphan Sales Receipt in QB.
+  // Runs BEFORE nextval() so we don't burn invoice/SR sequence numbers on retries.
+  if (body.terminal_payment_id) {
+    try {
+      const existingApplications = await financeService.listPaymentApplications({
+        payment_id: body.terminal_payment_id,
+      });
+      if (existingApplications.length > 0) {
+        const existingInvoiceId = (existingApplications[0] as any).invoice_id;
+        const existingInvoice = await invoiceService.retrievePosInvoice(
+          existingInvoiceId
+        );
+        console.warn(
+          `[invoice] Idempotent short-circuit: terminal_payment ${body.terminal_payment_id} ` +
+          `already applied to invoice ${existingInvoiceId}. Returning existing.`
+        );
+        return res.status(200).json({
+          invoice: existingInvoice,
+          idempotent: true,
+        });
+      }
+    } catch (idemErr: any) {
+      // Non-fatal — fall through to normal creation path. Worst case: duplicate
+      // invoice if the listPaymentApplications call was transiently broken, but
+      // that's no worse than the pre-idempotency behavior.
+      console.warn(
+        `[invoice] Idempotency check failed for terminal_payment ${body.terminal_payment_id}: ${idemErr.message}`
+      );
+    }
+  }
+
   // ── Path B detection (auto-downgrade Sales Receipt → Invoice) ─────────────
   // If the order already has a QB Sales Order or Estimate, OR the order is
   // more than 1 hour old, we cannot create a Sales Receipt — QB Desktop requires
