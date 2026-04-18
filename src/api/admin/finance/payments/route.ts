@@ -85,6 +85,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     customer_id,
     amount,
     method,
+    card_brand,
     reference,
     notes,
     received_at,
@@ -104,24 +105,30 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       .json({ error: "amount must be a non-negative number (cents)" });
   }
 
-  // Map POS specific methods to valid backend schema enums:
-  // ['cash', 'check', 'card', 'ach', 'zelle', 'credit_memo', 'stripe', 'authorize_net', 'other']
+  // Map POS-specific methods to valid customer_payment.method enum values:
+  //   ['credit_card', 'debit_card', 'cash', 'check', 'card', 'ach', 'zelle',
+  //    'credit_memo', 'stripe', 'authorize_net', 'other']
+  //
+  // Legacy brand values (visa/mastercard/amex/discover/capital_one) are normalized
+  // to 'credit_card' and the brand is extracted into mappedCardBrand for persistence.
+  const CARD_BRAND_SET = new Set(["visa", "mastercard", "amex", "discover", "capital_one"]);
   let mappedMethod = "other";
+  let mappedCardBrand: string | null =
+    typeof card_brand === "string" && CARD_BRAND_SET.has(card_brand.toLowerCase())
+      ? card_brand.toLowerCase()
+      : null;
   const m = (method || "").toLowerCase();
 
-  if (m === "cash" || m === "check" || m === "zelle" || m === "credit_memo") {
+  if (m === "credit_card" || m === "debit_card") {
     mappedMethod = m;
-  } else if (
-    [
-      "visa",
-      "mastercard",
-      "discover",
-      "amex",
-      "capital_one",
-      "debit_card",
-      "card",
-    ].includes(m)
-  ) {
+  } else if (m === "cash" || m === "check" || m === "zelle" || m === "credit_memo") {
+    mappedMethod = m;
+  } else if (CARD_BRAND_SET.has(m)) {
+    // Legacy: caller sent a brand as the method → normalize to credit_card + brand.
+    mappedMethod = "credit_card";
+    if (!mappedCardBrand) mappedCardBrand = m;
+  } else if (m === "card") {
+    // Legacy generic — keep 'card' for backward compatibility (historical rows).
     mappedMethod = "card";
   } else if (
     [
@@ -177,6 +184,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       display_id: nextPayNum,
       amount,
       method: mappedMethod as any,
+      card_brand: mappedCardBrand,
       reference: reference || null,
       notes: notes || null,
       received_at: received_at ? new Date(received_at) : new Date(),
