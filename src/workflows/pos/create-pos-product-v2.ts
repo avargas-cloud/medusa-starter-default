@@ -51,6 +51,8 @@ export type CreatePosProductV2Input = {
   vendor_qb_id?: string;
   variants: CreatePosProductV2VariantInput[];
   currency_code?: string;
+  /** MinIO URLs from POST /admin/uploads. First entry becomes the thumbnail. */
+  image_urls?: string[];
 };
 
 const VENDOR_QB_ID_PLACEHOLDER = "__NO_VENDOR__";
@@ -117,6 +119,10 @@ export const createPosProductV2Workflow = createWorkflow(
         };
       });
 
+      const imageUrls = (i.image_urls ?? []).filter(
+        (u): u is string => typeof u === "string" && u.trim().length > 0
+      );
+
       return [
         {
           title: i.title,
@@ -129,6 +135,10 @@ export const createPosProductV2Workflow = createWorkflow(
               : undefined,
           options: [{ title: optionTitle, values: optionValues }],
           variants,
+          thumbnail: imageUrls[0],
+          images: imageUrls.length > 0
+            ? imageUrls.map((url) => ({ url }))
+            : undefined,
         },
       ];
     });
