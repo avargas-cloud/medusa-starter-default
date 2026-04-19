@@ -18,6 +18,7 @@ type SequencesData = {
   custom_invoice_seq: number | null;
   custom_sales_receipt_seq: number | null;
   custom_payment_seq: number | null;
+  custom_inventory_count_seq: number | null;
 };
 
 const SEQUENCE_LABELS: Record<keyof SequencesData, string> = {
@@ -28,6 +29,7 @@ const SEQUENCE_LABELS: Record<keyof SequencesData, string> = {
   custom_invoice_seq: "QB Invoices & Credit Memos",
   custom_sales_receipt_seq: "QB Sales Receipts",
   custom_payment_seq: "Payments",
+  custom_inventory_count_seq: "Inventory Counts",
 };
 
 export function SequenceManagerCard() {
