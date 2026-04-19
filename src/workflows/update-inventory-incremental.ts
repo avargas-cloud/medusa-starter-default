@@ -25,6 +25,7 @@ const updateInventoryIncrementalStep = createStep(
   ) => {
     const logger = container.resolve("logger");
     const query = container.resolve("query");
+    const pricingService = container.resolve("pricing") as any;
 
     try {
       // Dynamic import for ESM compatibility
@@ -50,12 +51,44 @@ const updateInventoryIncrementalStep = createStep(
         return new StepResponse({ success: false, itemsUpdated: 0 });
       }
 
+      // 1b. Load price_list prices indexed by price_set_id (mirrors
+      // sync-inventory.ts logic) so the Meili doc carries `pricesByList`
+      // — otherwise wholesale pricing never makes it to the inventory index.
+      const pricesByPriceSet = new Map<string, Record<string, number>>();
+      try {
+        const allPriceLists = await pricingService.listPriceLists();
+        const priceListIds = allPriceLists.map((pl: any) => pl.id);
+        if (priceListIds.length > 0) {
+          const priceListPrices = await pricingService.listPrices(
+            { price_list_id: priceListIds },
+            { take: 100000 }
+          );
+          for (const p of priceListPrices) {
+            if (
+              !p.price_set_id ||
+              !p.price_list_id ||
+              p.currency_code !== "usd"
+            )
+              continue;
+            if (!pricesByPriceSet.has(p.price_set_id)) {
+              pricesByPriceSet.set(p.price_set_id, {});
+            }
+            pricesByPriceSet.get(p.price_set_id)![p.price_list_id] = p.amount;
+          }
+        }
+      } catch (e: any) {
+        logger.warn(
+          `[MEILI-INVENTORY-INCREMENTAL] Could not load price list prices: ${e.message}`
+        );
+      }
+
       // 2. Fetch variants with all data (MUST MATCH sync-inventory.ts fields!)
       const { data: variants } = await query.graph({
         entity: "product_variant",
         fields: [
           "id",
           "sku",
+          "price_set.id",
           "created_at",
           "updated_at",
           "product.id",
@@ -83,6 +116,10 @@ const updateInventoryIncrementalStep = createStep(
       const inventoryItems = variants.flatMap((variant: any) => {
         const product = variant.product;
         const priceObj = variant.prices?.[0];
+        const priceSetId = variant.price_set?.id;
+        const pricesByList = priceSetId
+          ? (pricesByPriceSet.get(priceSetId) ?? {})
+          : {};
 
         // ✅ Flatten all category handles (including parents) - SAME AS FULL SYNC
         const allCategoryHandles = new Set<string>();
@@ -109,6 +146,7 @@ const updateInventoryIncrementalStep = createStep(
                 totalReserved: inventory.reserved_quantity || 0, // ✅ FIXED: Direct field
                 price: priceObj?.amount || 0, // v2: already in dollars
                 currencyCode: priceObj?.currency_code?.toUpperCase() || "USD",
+                pricesByList,
                 variantId: variant.id,
                 productId: product.id,
                 category_handles: Array.from(allCategoryHandles), // ✅ FIXED: Include parents

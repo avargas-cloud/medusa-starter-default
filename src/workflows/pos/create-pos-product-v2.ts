@@ -7,6 +7,7 @@ import { createProductsWorkflow } from "@medusajs/medusa/core-flows";
 
 import { syncProductToMeiliSearchWorkflow } from "../sync-product-meilisearch";
 import { updateInventoryIncrementalWorkflow } from "../update-inventory-incremental";
+import { updateProductAttributesWorkflow } from "../product-attributes/update-product-attributes";
 
 import {
   enqueueQbItemsStep,
@@ -14,13 +15,13 @@ import {
 } from "./steps/enqueue-qb-items-step";
 import { applyWholesalePricesStep } from "./steps/apply-wholesale-prices-step";
 import { linkQbVendorStep } from "./steps/link-qb-vendor-step";
+import { applyShippingAttributesStep } from "./steps/apply-shipping-attributes-step";
 
 export type CreatePosProductV2VariantInput = {
   sku: string;
   title?: string;
   barcode?: string;
   mpn?: string;
-  weight?: number;
   material?: string;
   hs_code?: string;
   country_of_origin?: string;
@@ -38,6 +39,20 @@ export type CreatePosProductV2VariantInput = {
   };
 };
 
+/**
+ * Shipping Attributes panel in the admin stores weight/length/width/height
+ * directly on inventory_item (lbs and inches — UPS rate quote units).
+ * These values are shared across all variants of a product, so they live
+ * at the root level of the input and fan out to each variant's auto-created
+ * inventory_item after createProductsWorkflow runs.
+ */
+export type ShippingAttributes = {
+  weight_lbs?: number;
+  length_in?: number;
+  width_in?: number;
+  height_in?: number;
+};
+
 export type CreatePosProductV2Input = {
   item_type: QbItemType;
   title: string;
@@ -53,6 +68,19 @@ export type CreatePosProductV2Input = {
   currency_code?: string;
   /** MinIO URLs from POST /admin/uploads. First entry becomes the thumbnail. */
   image_urls?: string[];
+  /** Shared across every variant's inventory_item for UPS rate quotes. */
+  shipping_attributes?: ShippingAttributes;
+  /**
+   * Product-attributes module link — when the POS picks an attribute
+   * (e.g. Color Options) and enables values (3000K, 4000K), we pass the
+   * attribute_key id + selected attribute_value ids here so the backend can
+   * link them through the product-attributes module and mark the attribute
+   * as "variant" (shows the purple Variant badge in admin).
+   */
+  product_attribute?: {
+    attribute_key_id: string;
+    attribute_value_ids: string[];
+  };
 };
 
 const VENDOR_QB_ID_PLACEHOLDER = "__NO_VENDOR__";
@@ -72,13 +100,30 @@ export const createPosProductV2Workflow = createWorkflow(
         qb_vendor_list_id: i.vendor_qb_id ?? null,
       };
 
-      const optionTitle = i.option_title ?? "Item";
-      const optionValues =
-        i.option_values && i.option_values.length > 0
-          ? i.option_values
-          : i.variants.map(
-              (v, idx) => v.options?.[optionTitle] ?? v.title ?? `Variant ${idx + 1}`
-            );
+      // Prefer explicit option_title; otherwise infer from the first variant's
+      // options keys so the product shows e.g. "Color Options" → [3000K, 4000K]
+      // instead of the generic "Item" fallback when the POS picks an attribute.
+      const inferredTitle =
+        i.option_title ??
+        (i.variants[0]?.options
+          ? Object.keys(i.variants[0].options)[0]
+          : undefined) ??
+        "Item";
+      const optionTitle = inferredTitle;
+
+      const optionValues = (() => {
+        if (i.option_values && i.option_values.length > 0) return i.option_values;
+        // Dedupe values coming from variants to avoid duplicate entries when
+        // multiple variants share the same option value.
+        const fromVariants = i.variants
+          .map((v) => v.options?.[optionTitle])
+          .filter((x): x is string => !!x);
+        if (fromVariants.length > 0) return Array.from(new Set(fromVariants));
+        // Single-product fallback — synthesize one value per variant.
+        return i.variants.map(
+          (v, idx) => v.title ?? `Variant ${idx + 1}`
+        );
+      })();
 
       const variants = i.variants.map((v, idx) => {
         const optValue =
@@ -87,7 +132,6 @@ export const createPosProductV2Workflow = createWorkflow(
           title: v.title ?? v.sku,
           sku: v.sku,
           barcode: v.barcode,
-          weight: v.weight,
           material: v.material,
           hs_code: v.hs_code,
           origin_country: v.country_of_origin,
@@ -123,9 +167,24 @@ export const createPosProductV2Workflow = createWorkflow(
         (u): u is string => typeof u === "string" && u.trim().length > 0
       );
 
+      // Medusa enforces a unique product.handle. Titles like "TEST" collide
+      // quickly across POS-created products, so we slugify the title and append
+      // a short random suffix to guarantee uniqueness without forcing the
+      // cashier to invent distinct titles.
+      const slugBase = i.title
+        .toLowerCase()
+        .trim()
+        .replace(/['"]/g, "")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 60) || "product";
+      const suffix = Math.random().toString(36).slice(2, 6);
+      const handle = `${slugBase}-${suffix}`;
+
       return [
         {
           title: i.title,
+          handle,
           description: i.sales_description,
           status: "draft" as const,
           sales_channels: [],
@@ -213,6 +272,40 @@ export const createPosProductV2Workflow = createWorkflow(
     });
 
     linkQbVendorStep({ links: vendorLinks });
+
+    // Link attribute values + mark as "Variant" — mirrors the admin's
+    // "Manage Product Attributes" modal (Save button). Empty attribute_value_ids
+    // or no attribute_key_id = single product, we skip the call.
+    const productAttributesInput = transform(
+      { input, productRef },
+      (data) => {
+        const pa = data.input.product_attribute;
+        return {
+          productId: (data.productRef as any)?.id as string,
+          valueIds: pa?.attribute_value_ids ?? [],
+          variantKeys: pa?.attribute_key_id ? [pa.attribute_key_id] : [],
+        };
+      }
+    );
+    updateProductAttributesWorkflow.runAsStep({ input: productAttributesInput });
+
+    // Write UPS shipping attrs (lbs, inches) onto each variant's inventory_item —
+    // same columns the admin "Shipping Attributes" widget uses. Values are shared
+    // at the product level because variants of one product usually ship identically.
+    const shippingStepInput = transform(
+      { input, productRef },
+      (data) => {
+        const attrs = data.input.shipping_attributes ?? {};
+        return {
+          product_id: (data.productRef as any)?.id as string,
+          weight_lbs: attrs.weight_lbs ?? null,
+          length_in: attrs.length_in ?? null,
+          width_in: attrs.width_in ?? null,
+          height_in: attrs.height_in ?? null,
+        };
+      }
+    );
+    applyShippingAttributesStep(shippingStepInput);
 
     // Meilisearch indexes must reflect the new product immediately so the cashier
     // can find it in Load Template / product search right after creation. The QB
