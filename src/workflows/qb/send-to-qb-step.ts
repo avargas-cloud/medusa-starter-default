@@ -3,12 +3,27 @@ import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 type SendToQbInput = {
   action: "add" | "mod";
   data: any;
+  /** When true the step short-circuits and returns a null operationId.
+   * Callers can build a QB payload only when QB-relevant fields changed,
+   * avoiding unnecessary QBXML round-trips for non-QB edits (images,
+   * categories, shipping, etc.). */
+  skip?: boolean;
 };
 
 export const sendToQbStep = createStep(
   "send-to-qb-step",
   async (input: SendToQbInput, { container }) => {
     const logger = container.resolve("logger");
+
+    if (input.skip) {
+      logger.info(
+        `[sendToQbStep] skipped — no QB-relevant fields changed (action=${input.action})`
+      );
+      return new StepResponse(
+        { success: true, operationId: null, response: null },
+        null
+      );
+    }
 
     try {
       // we should pull the bridge URL from environment or hardcode to localhost:3000

@@ -13,13 +13,17 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
   try {
     const id = req.params.id;
+    const bodyVariantId = (req.body as { variant_id?: string })?.variant_id;
 
-    // Fetch Native Variant and Metadata first to get current qb_edit_sequence
-    // Since the POS currently knows the product, we can fetch exactly what we need
+    // Resolve the EXACT variant the UI opened. If the modal passed variant_id,
+    // filter by it directly (multi-variant products). Otherwise fall back to
+    // the first variant of the product for backwards compatibility.
     const { data: variants } = await query.graph({
       entity: "product_variant",
       fields: ["id", "product_id", "metadata"],
-      filters: { product_id: id }, // Using product_id if the UI passes Product ID, or id itself if passing Variant ID. Assuming Product ID.
+      filters: bodyVariantId
+        ? { id: bodyVariantId }
+        : { product_id: id },
     });
 
     if (!variants || variants.length === 0) {
@@ -45,12 +49,21 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       );
     }
 
+    // Strip routing/identity keys from body so the client cannot override them.
+    const {
+      id: _bodyId,
+      variant_id: _bodyVariantId,
+      qb_id: _bodyQbId,
+      qb_edit_sequence: _bodyEditSeq,
+      ...restBody
+    } = (req.body as Record<string, unknown>) ?? {};
+
     const inputPayload: UpdatePosProductInput = {
       id: variant.product_id,
       variant_id: variant.id,
       qb_id: qbId,
       qb_edit_sequence: qbEditSequence || "",
-      ...(req.body as any),
+      ...restBody,
     };
 
     const { result, errors } = await updatePosProductWorkflow(req.scope).run({
