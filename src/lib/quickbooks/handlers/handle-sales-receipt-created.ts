@@ -8,6 +8,7 @@ import {
   buildQbOrderDiscountLines,
 } from "../order-flow-core";
 import { parseSalesRepInitials } from "../parse-sales-rep";
+import { resolveQbPaymentMethodForPayment } from "../payment-method-sanitizer";
 import {
   buildInvoicePatch,
   getSoTxnId,
@@ -305,18 +306,28 @@ export async function handleSalesReceiptCreated(
     );
   }
 
+  // Resolve the QB PaymentMethod via the canonical split-aware helper:
+  //   credit_card → send card_brand (Visa/MasterCard/Amex/Discover/Capital One)
+  //   anything else → send payment_method (Debit Card / Cash / Check / ...)
+  // Prefer the pos_invoice row (source of truth in DB); fall back to
+  // data.payment_method only if the invoice row couldn't be read.
+  const qbPaymentMethod = resolveQbPaymentMethodForPayment(
+    invoicePaymentMethod ?? data.payment_method ?? null,
+    invoiceCardBrand ?? null
+  );
+  if (!qbPaymentMethod) {
+    logger.warn(
+      `${LOG_PREFIX} ⚠️ Could not resolve QB PaymentMethod for SR order ${orderId} ` +
+        `from {payment_method=${invoicePaymentMethod ?? "∅"}, card_brand=${invoiceCardBrand ?? "∅"}, ` +
+        `data.payment_method=${data.payment_method ?? "∅"}} — SR will have PaymentMethod blank`
+    );
+  }
+
   const result = await processSalesReceiptInQb({
     orderId,
     orderDisplayId: order.display_id,
     qbCustomerId,
-    // For QB we prefer the card brand (Visa/MasterCard/Amex/Discover/CapitalOne) since
-    // QB maps those to its PaymentMethod list directly. For debit transactions with
-    // brand, we still pass the canonical payment_method='debit_card' so the sanitizer
-    // picks "Debit Card" rather than the brand — that preserves the credit-vs-debit
-    // distinction in QB accounting.
-    paymentMethod:
-      (invoicePaymentMethod === "debit_card" ? "debit_card" :
-       (invoiceCardBrand || data.payment_method || invoicePaymentMethod)),
+    paymentMethod: qbPaymentMethod,
     prebuiltItems,
     salesTaxCode,
     salesRep: parseSalesRepInitials(order.metadata?.sales_rep),

@@ -11,7 +11,10 @@
  */
 
 import { MedusaContainer } from "@medusajs/framework/types";
-import { sanitizeToQbPaymentMethod } from "../../lib/quickbooks/payment-method-sanitizer";
+import {
+  resolveQbPaymentMethodForPayment,
+  sanitizeToQbPaymentMethod,
+} from "../../lib/quickbooks/payment-method-sanitizer";
 
 /** Synthetic payment/invoice row — what the handler reads from the DB. */
 interface PaymentSnapshot {
@@ -31,7 +34,10 @@ interface PaymentSnapshot {
 
 /**
  * Mirror of the production handler in handle-pos-payment-created.ts.
- * Keep this in sync with that file — it's the code under test.
+ * After the 2026-04-20 gold-standard refactor, the handler first tries the
+ * canonical helper; only if that returns undefined does it fall back to the
+ * legacy candidate chain. Keep this in sync with that file — it's the code
+ * under test.
  */
 function handlerResolveQbMethod(p: PaymentSnapshot): string | undefined {
   const canonicalBrand = p.card_brand ?? undefined;
@@ -40,36 +46,35 @@ function handlerResolveQbMethod(p: PaymentSnapshot): string | undefined {
   const rawCardType = p.bams_card_type ?? undefined;
   const rawPosMethod = p.pos_method ?? undefined;
 
-  const isDebit =
-    p.method === "debit_card" ||
-    rawPosMethod === "debit_card" ||
-    (rawCardType ?? "").toUpperCase() === "DEBIT";
-
-  return isDebit
-    ? sanitizeToQbPaymentMethod("debit_card")
-    : sanitizeToQbPaymentMethod(
-        canonicalBrand,
-        rawLabel,
-        metaBrand,
-        rawPosMethod,
-        rawCardType,
-        p.method
-      );
+  let resolved = resolveQbPaymentMethodForPayment(
+    p.method,
+    canonicalBrand ?? metaBrand
+  );
+  if (!resolved) {
+    resolved = sanitizeToQbPaymentMethod(
+      canonicalBrand,
+      rawLabel,
+      metaBrand,
+      rawPosMethod,
+      rawCardType,
+      p.method
+    );
+  }
+  return resolved;
 }
 
 /**
- * Mirror of the Sales Receipt handler logic (handle-sales-receipt-created.ts).
- * It passes `invoicePaymentMethod==='debit_card' ? 'debit_card' : (card_brand || payment_method)`.
+ * Mirror of the Sales Receipt handler (handle-sales-receipt-created.ts) after
+ * the 2026-04-20 refactor: delegates straight to the canonical helper.
  */
 function srResolveQbMethod(invoice: {
   payment_method: string;
   card_brand: string | null;
 }): string | undefined {
-  const paymentMethod =
-    invoice.payment_method === "debit_card"
-      ? "debit_card"
-      : (invoice.card_brand || invoice.payment_method);
-  return sanitizeToQbPaymentMethod(paymentMethod);
+  return resolveQbPaymentMethodForPayment(
+    invoice.payment_method,
+    invoice.card_brand
+  );
 }
 
 interface TestCase {
@@ -299,6 +304,47 @@ const TESTS: TestCase[] = [
   },
 ];
 
+/**
+ * Direct unit tests for `resolveQbPaymentMethodForPayment` — the canonical
+ * split-aware helper shared by all QB payment handlers. These test the helper
+ * in isolation, with no legacy fallbacks.
+ */
+interface HelperCase {
+  label: string;
+  payment_method: string | null | undefined;
+  card_brand: string | null | undefined;
+  expected: string | undefined;
+}
+
+const HELPER_TESTS: HelperCase[] = [
+  // credit_card → card_brand
+  { label: "credit_card + visa", payment_method: "credit_card", card_brand: "visa", expected: "Visa" },
+  { label: "credit_card + mastercard", payment_method: "credit_card", card_brand: "mastercard", expected: "MasterCard" },
+  { label: "credit_card + amex", payment_method: "credit_card", card_brand: "amex", expected: "American Express" },
+  { label: "credit_card + discover", payment_method: "credit_card", card_brand: "discover", expected: "Discover" },
+  { label: "credit_card + capital_one", payment_method: "credit_card", card_brand: "capital_one", expected: "Capital One" },
+  { label: "credit_card + null brand → omitted", payment_method: "credit_card", card_brand: null, expected: undefined },
+  { label: "credit_card + unknown brand (jcb) → omitted", payment_method: "credit_card", card_brand: "jcb", expected: undefined },
+  // debit_card → 'Debit Card' bucket regardless of brand
+  { label: "debit_card + mastercard → Debit Card", payment_method: "debit_card", card_brand: "mastercard", expected: "Debit Card" },
+  { label: "debit_card + null brand → Debit Card", payment_method: "debit_card", card_brand: null, expected: "Debit Card" },
+  // Non-card methods pass through
+  { label: "cash", payment_method: "cash", card_brand: null, expected: "Cash" },
+  { label: "check", payment_method: "check", card_brand: null, expected: "Check" },
+  { label: "zelle", payment_method: "zelle", card_brand: null, expected: "Zelle" },
+  { label: "ach → Checking Account", payment_method: "ach", card_brand: null, expected: "Checking Account" },
+  // Store credit should NOT map to a QB PaymentMethod
+  { label: "credit (store credit) → omitted", payment_method: "credit", card_brand: null, expected: undefined },
+  // Null / empty inputs
+  { label: "null payment_method → omitted", payment_method: null, card_brand: null, expected: undefined },
+  { label: "undefined payment_method → omitted", payment_method: undefined, card_brand: undefined, expected: undefined },
+  // Regression: credit_card + mastercard = "MasterCard" NOT "Debit Card"
+  // (the bug the 2026-04-20 upstream fix addresses — stale body.payment_method
+  // arriving as 'credit_card' when the swipe was actually debit must be caught
+  // at the route.ts level, not here. This helper honors whatever it receives.)
+  { label: "credit_card + mastercard (stale body) → MasterCard", payment_method: "credit_card", card_brand: "mastercard", expected: "MasterCard" },
+];
+
 export default async function verify({ container: _c }: { container: MedusaContainer }) {
   let pass = 0;
   let fail = 0;
@@ -306,6 +352,23 @@ export default async function verify({ container: _c }: { container: MedusaConta
   console.log(`\n┌──────────────────────────────────────────────────────────────────────────────┐`);
   console.log(`│  QB PaymentMethod Resolution — static verification (no QB calls)            │`);
   console.log(`└──────────────────────────────────────────────────────────────────────────────┘\n`);
+
+  console.log(`── HELPER: resolveQbPaymentMethodForPayment (direct) ─────────────────\n`);
+  for (const h of HELPER_TESTS) {
+    const actual = resolveQbPaymentMethodForPayment(h.payment_method, h.card_brand);
+    const ok = actual === h.expected;
+    const icon = ok ? "✅" : "❌";
+    const got = actual ?? "(omitted)";
+    console.log(`  ${icon} ${h.label.padEnd(54)}  →  ${got}`);
+    if (!ok) {
+      console.log(`         expected: ${h.expected ?? "(omitted)"}`);
+      console.log(`         input:    payment_method=${h.payment_method ?? "∅"}, card_brand=${h.card_brand ?? "∅"}`);
+      fail++;
+    } else {
+      pass++;
+    }
+  }
+  console.log();
 
   const groups: Record<string, TestCase[]> = {};
   for (const t of TESTS) {

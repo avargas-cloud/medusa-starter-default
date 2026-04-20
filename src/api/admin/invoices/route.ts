@@ -247,6 +247,45 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   let resolvedPaymentMethod: string = normalizedPaymentMethod;
   let resolvedCardBrand: string | null = normalizedCardBrand;
 
+  // Pre-create override: for terminal-sourced payments, the Dejavoo terminal
+  // stores the actual detected payment method + card brand on the
+  // customer_payment.metadata. body.payment_method can be stale (e.g. body
+  // arrives as 'credit_card' when the swipe was actually debit, or 'cash'
+  // default) because the POS auto-submit fires before React setState
+  // finishes propagating the update. We MUST read the terminal's
+  // source-of-truth BEFORE createPosInvoices so every downstream consumer
+  // (including the QB Sales Receipt / ReceivePayment handlers that read from
+  // pos_invoice.payment_method + pos_invoice.card_brand) sees the correct
+  // values. Keep this retrieve hoisted so the terminal sub-branch below can
+  // reuse termPay for tagging without a second DB round-trip.
+  let termPay: any = null;
+  if (body.terminal_payment_id) {
+    try {
+      termPay = await financeService.retrieveCustomerPayment(
+        body.terminal_payment_id
+      );
+      const termPosMethod = termPay?.metadata?.pos_payment_method as
+        | string
+        | undefined;
+      const termCardBrand =
+        (termPay?.metadata?.card_brand as string | undefined) ?? null;
+      if (termPosMethod && termPosMethod !== normalizedPaymentMethod) {
+        console.log(
+          `[invoice] Overriding payment_method '${normalizedPaymentMethod}' → '${termPosMethod}' from terminal_payment metadata (source of truth)`
+        );
+        resolvedPaymentMethod = termPosMethod;
+        resolvedCardBrand = termCardBrand;
+      } else if (termCardBrand && !resolvedCardBrand) {
+        // Method already matches but terminal payment has a brand we don't — adopt it.
+        resolvedCardBrand = termCardBrand;
+      }
+    } catch (tpErr: any) {
+      console.warn(
+        `[invoice] Could not read terminal_payment metadata for ${body.terminal_payment_id}: ${tpErr.message}`
+      );
+    }
+  }
+
   // Step 1: Create the invoice (no nested items — hasMany must be created separately)
   const initialStatus =
     balance_due <= 0 ? "paid" : body.amount_paid > 0 ? "partial" : "issued";
@@ -265,8 +304,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     total: body.total,
     amount_paid: body.amount_paid,
     balance_due,
-    payment_method: normalizedPaymentMethod as any,
-    card_brand: normalizedCardBrand,
+    payment_method: resolvedPaymentMethod as any,
+    card_brand: resolvedCardBrand,
     issued_at: new Date(),
     paid_at: balance_due <= 0 ? new Date() : null,
     notes: body.notes ?? null,
@@ -332,14 +371,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     await invoiceService.createInvoicePayments({
       invoice_id: (invoice as any).id,
       amount: body.amount_paid,
-      payment_method: normalizedPaymentMethod,
+      payment_method: resolvedPaymentMethod,
       notes: "Initial payment at issuance",
       created_by: body.created_by ?? null,
       paid_at: paymentDate,
     });
     // 'credit' = store credit (legacy naming, NOT a credit card). Consume path
     // is gated on that string; credit_card goes through the normal create path.
-    if (normalizedPaymentMethod === "credit") {
+    if (resolvedPaymentMethod === "credit") {
       // Consume existing available credit instead of creating a new payment
       const availablePayments = await financeService.listCustomerPayments(
         { customer_id: body.customer_id },
@@ -394,38 +433,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     } else if (body.terminal_payment_id) {
       // B-terminal. The CustomerPayment was already created by the terminal route.
       // Just link it to this invoice via a PaymentApplication — no new payment row.
-      //
-      // We retrieve the terminal payment ONCE here so both SR and non-SR sub-branches
-      // can read its metadata. This is also the source of truth for the QB payment
-      // method: the Dejavoo terminal stores the actual detected card type (e.g.
-      // 'mastercard', 'visa') on customer_payment.metadata.pos_payment_method.
-      // body.payment_method can be stale ('cash' default) due to React setState
-      // timing on the POS auto-submit flow, which caused QB Sales Receipts to
-      // arrive with no Payment Method selected.
-      let termPay: any = null;
-      try {
-        termPay = await financeService.retrieveCustomerPayment(
-          body.terminal_payment_id
-        );
-        const termPosMethod = termPay?.metadata?.pos_payment_method as
-          | string
-          | undefined;
-        const termCardBrand = (termPay?.metadata?.card_brand as string | undefined) ?? null;
-        if (termPosMethod && termPosMethod !== normalizedPaymentMethod) {
-          console.log(
-            `[invoice] Overriding payment_method '${normalizedPaymentMethod}' → '${termPosMethod}' from terminal_payment metadata (source of truth)`
-          );
-          resolvedPaymentMethod = termPosMethod;
-          resolvedCardBrand = termCardBrand;
-        } else if (termCardBrand && !resolvedCardBrand) {
-          // Method already matches but terminal payment has a brand we don't — adopt it.
-          resolvedCardBrand = termCardBrand;
-        }
-      } catch (tpErr: any) {
-        console.warn(
-          `[invoice] Could not read terminal_payment metadata for ${body.terminal_payment_id}: ${tpErr.message}`
-        );
-      }
+      // termPay was retrieved upfront (before createPosInvoices) to propagate
+      // the terminal's source-of-truth method/brand into pos_invoice. Reuse it
+      // here for the SR tagging + display_id lookup.
 
       // For sales receipts the QB handler embeds the payment internally (same as the
       // manual flow), so we must NOT set paymentIdToEmit — otherwise handlePosPaymentCreated
@@ -517,8 +527,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         customer_id: body.customer_id,
         display_id: nextPayNum,
         amount: body.amount_paid,
-        method: mapPosMethodToDbEnum(normalizedPaymentMethod),
-        card_brand: normalizedCardBrand,
+        method: mapPosMethodToDbEnum(resolvedPaymentMethod),
+        card_brand: resolvedCardBrand,
         reference: "Deposit",
         notes: "Initial invoice payment via Complete Order",
         received_at: paymentDate,
@@ -531,8 +541,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           deposit_type: "INVOICE",
           order_id: body.order_id,
           order_display_id: body.order_display_id,
-          pos_payment_method: normalizedPaymentMethod,
-          card_brand: normalizedCardBrand,
+          pos_payment_method: resolvedPaymentMethod,
+          card_brand: resolvedCardBrand,
           invoices_affected: [(invoice as any).id],
           invoices_affected_friendly: [
             `IN-${invoice_number || body.order_display_id}`,
@@ -594,7 +604,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       const medusaPaymentId = await registerMedusaPayment(req.scope, {
         order_id: body.order_id,
         amount: body.amount_paid,
-        payment_method: normalizedPaymentMethod,
+        payment_method: resolvedPaymentMethod,
         invoice_total: body.total,
       });
       if (medusaPaymentId) {

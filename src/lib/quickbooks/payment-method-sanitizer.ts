@@ -134,3 +134,34 @@ export function sanitizeToQbPaymentMethod(
   }
   return undefined;
 }
+
+/**
+ * The canonical QB PaymentMethod resolver for a split `payment_method` +
+ * `card_brand` pair (the schema shipped 2026-04-18 on pos_invoice and
+ * customer_payment). Rule:
+ *
+ *   - If payment_method === 'credit_card' → send the card brand
+ *     (Visa / MasterCard / American Express / Discover / Capital One).
+ *     This is what the POS user sees as "Credit" + the Dejavoo-detected brand.
+ *
+ *   - Otherwise → send the payment_method itself
+ *     (Debit Card / Cash / Check / Checking Account / Zelle / ...).
+ *     Debit cards always collapse to the "Debit Card" bucket regardless of
+ *     brand, so the credit-vs-debit distinction in QB accounting stays clean.
+ *
+ * Returns `undefined` when no specific resolution is possible (e.g.
+ * credit_card with no brand recorded) — caller should omit PaymentMethodRef.
+ *
+ * This helper is the single source of truth for the split-aware resolution.
+ * All QB payment / sales-receipt handlers MUST use it; do not inline the
+ * credit_card → brand logic anywhere else.
+ */
+export function resolveQbPaymentMethodForPayment(
+  paymentMethod: string | null | undefined,
+  cardBrand: string | null | undefined
+): string | undefined {
+  if (paymentMethod === "credit_card") {
+    return sanitizeToQbPaymentMethod(cardBrand);
+  }
+  return sanitizeToQbPaymentMethod(paymentMethod);
+}

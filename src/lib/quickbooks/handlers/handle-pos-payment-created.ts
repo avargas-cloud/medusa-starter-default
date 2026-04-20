@@ -7,7 +7,10 @@ import {
   processPaymentCaptureInQb,
   ensureCustomerInQb,
 } from "../order-flow-core";
-import { sanitizeToQbPaymentMethod } from "../payment-method-sanitizer";
+import {
+  resolveQbPaymentMethodForPayment,
+  sanitizeToQbPaymentMethod,
+} from "../payment-method-sanitizer";
 import {
   coalesceIfInFlight,
   writePipelineRow,
@@ -301,38 +304,44 @@ export async function handlePosPaymentCreated({
       );
     }
 
-    // Resolve the QB PaymentMethod name with full sanitizing.
-    //   DEBIT → always "Debit Card" bucket in QB regardless of brand, so credit-vs-debit
-    //           accounting stays clean. All debit cards converge there.
-    //   CREDIT → resolve to the specific brand (Visa/MasterCard/Amex/Discover/CapitalOne).
-    //           If no brand is resolvable, we return undefined so QB leaves the field blank
-    //           (avoids a 3140 error from an unknown PaymentMethod entry).
+    // Resolve the QB PaymentMethod name via the canonical split-aware helper:
+    //   - credit_card → send card_brand (Visa/MasterCard/Amex/Discover/Capital One)
+    //   - anything else → send payment_method itself (Debit Card / Cash / Check / ...)
+    //
+    // Legacy fallbacks (bams_card_label, bams_card_type, metadata.card_brand,
+    // metadata.pos_payment_method) are only consulted when the canonical
+    // payment.method / payment.card_brand are unset — the 2026-04-18 backfill
+    // populated both canonical columns, so in steady state the helper's two
+    // inputs are enough. The fallback chain stays here purely as belt-and-
+    // suspenders for any row that somehow escaped the backfill.
+    const canonicalMethod = payment.method as string | undefined;
     const canonicalBrand = (payment as any).card_brand as string | undefined;
     const rawLabel = payment.metadata?.bams_card_label as string | undefined;
     const metaBrand = payment.metadata?.card_brand as string | undefined;
     const rawCardType = payment.metadata?.bams_card_type as string | undefined;
     const rawPosMethod = payment.metadata?.pos_payment_method as string | undefined;
 
-    const isDebit =
-      payment.method === "debit_card" ||
-      rawPosMethod === "debit_card" ||
-      (rawCardType ?? "").toUpperCase() === "DEBIT";
-
-    const resolvedQbMethod = isDebit
-      ? sanitizeToQbPaymentMethod("debit_card")
-      : sanitizeToQbPaymentMethod(
-          canonicalBrand,
-          rawLabel,
-          metaBrand,
-          rawPosMethod,
-          rawCardType,
-          payment.method as string
-        );
+    let resolvedQbMethod = resolveQbPaymentMethodForPayment(
+      canonicalMethod,
+      canonicalBrand ?? metaBrand
+    );
+    if (!resolvedQbMethod) {
+      // Legacy belt-and-suspenders: try the full candidate chain in case the
+      // canonical columns were unpopulated (pre-backfill rows or manual inserts).
+      resolvedQbMethod = sanitizeToQbPaymentMethod(
+        canonicalBrand,
+        rawLabel,
+        metaBrand,
+        rawPosMethod,
+        rawCardType,
+        canonicalMethod
+      );
+    }
     if (!resolvedQbMethod) {
       logger.warn(
         `${LOG_PREFIX} ⚠️ Could not resolve QB PaymentMethod for payment ${paymentId} from ` +
-          `{canonical_brand=${canonicalBrand ?? "∅"}, label=${rawLabel ?? "∅"}, meta_brand=${metaBrand ?? "∅"}, ` +
-          `cardType=${rawCardType ?? "∅"}, pos_method=${rawPosMethod ?? "∅"}, db_method=${payment.method}} — ` +
+          `{method=${canonicalMethod ?? "∅"}, canonical_brand=${canonicalBrand ?? "∅"}, label=${rawLabel ?? "∅"}, ` +
+          `meta_brand=${metaBrand ?? "∅"}, cardType=${rawCardType ?? "∅"}, pos_method=${rawPosMethod ?? "∅"}} — ` +
           `sending ReceivePayment without PaymentMethodRef (QB will leave it blank)`
       );
     }

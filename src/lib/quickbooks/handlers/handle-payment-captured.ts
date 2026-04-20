@@ -1,6 +1,7 @@
 import { processPaymentCaptureInQb } from "../order-flow-core";
 import { applyPaymentToInvoiceInQb } from "../qb-bridge-client";
 import { buildPaymentPatch, getLatestInvoiceTxnId } from "../qb-metadata-types";
+import { resolveQbPaymentMethodForPayment } from "../payment-method-sanitizer";
 import { writePipelineRow } from "../qb-pipeline";
 
 import { LOG_PREFIX, isPosOrder } from "./utils";
@@ -75,7 +76,16 @@ export async function handlePaymentCaptured(
   const amount = amountInCents / 100;
   logger.info(`${LOG_PREFIX} Payment amount: $${amount.toFixed(2)}`);
 
-  const paymentMethod = "Credit Card";
+  // This handler only fires in edge cases (non-POS orders whose payment event
+  // bypasses the maintain-cart-prices hook). Web checkout is Credit Card via
+  // Authorize.Net, so that's the safe default — but if the event payload
+  // surfaces a specific method / brand, we use the canonical helper to honor
+  // the split-aware rule: credit_card → card_brand, else → payment_method.
+  const rawMethod = (data.payment_method ?? data.method) as string | undefined;
+  const rawBrand =
+    (data.card_brand ?? data.metadata?.card_brand) as string | undefined;
+  const paymentMethod =
+    resolveQbPaymentMethodForPayment(rawMethod, rawBrand) ?? "Credit Card";
 
   // Write "pending" pipeline row immediately so it appears in the UI before polling starts
   try {
