@@ -69,6 +69,14 @@ export default defineMiddlewares({
       bodyParser: { sizeLimit: "50mb" },
       middlewares: [],
     },
+    // pdf-link receives posState (localStorage snapshot w/ attached base64 images).
+    // Default 100kb is too tight; 2mb is ~10× the realistic max usage.
+    {
+      matcher: "/admin/draft-orders/:id/pdf-link",
+      method: "POST",
+      bodyParser: { sizeLimit: "2mb" },
+      middlewares: [],
+    },
     // CORS for POS-specific routes (no Medusa auth gating — validated in-route)
     {
       matcher: "/pos/*",
