@@ -238,7 +238,7 @@ Cuando se procesa un reembolso con impacto en QB:
 
 | Metodo | Path | Descripcion |
 |--------|------|-------------|
-| GET | `/admin/customer-payments` | Lista pagos (legacy) |
+| GET | `/admin/customer-payments` | Lista pagos (legacy). Soporta `?customer_id=` y `?limit=` (clamp 1-500). |
 | POST | `/admin/customer-payments` | Crea pago |
 | POST | `/admin/customer-payments/:id/apply` | Aplica pago a invoice |
 | POST | `/admin/customer-payments/:id/refund` | Procesa reembolso |
@@ -247,6 +247,7 @@ Cuando se procesa un reembolso con impacto en QB:
 | GET | `/admin/finance/payments/:id` | Obtiene pago |
 | POST | `/admin/finance/payments/:id/apply` | Aplica pago |
 | POST | `/admin/finance/applications/:id/void` | Voidea aplicacion |
+| GET | `/admin/invoices/:id/applied-payments` | Lista de `payment_application` enriquecidas con `customer_payment` (sequence #, method/card_brand, reference, captured_at, amount_applied_cents, voided). Consumido por el CapturePaymentModal del POS (panel `Applied Payments`). |
 | GET | `/admin/finance/qb-refunds/pending` | Pending refunds para Write Check |
 | POST | `/admin/finance/qb-refunds/sync` | Ejecuta Write Check en QB |
 | POST | `/admin/finance/qb-refunds/:id/void` | Voidea reembolso |
