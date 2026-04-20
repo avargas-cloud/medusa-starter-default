@@ -4,7 +4,9 @@
 > **Ultima verificacion**: 2026-04-20 (bridge DTD fix + orphan rescue)
 > **Estado**: Current
 
-> **Ver tambien**: [QB_PAYMENT_METHOD.md](./QB_PAYMENT_METHOD.md) — rule + resolver para el `PaymentMethodRef` de cada ReceivePayment / SalesReceipt.
+> **Ver tambien**:
+> - [QB_PAYMENT_METHOD.md](./QB_PAYMENT_METHOD.md) — rule + resolver para el `PaymentMethodRef` de cada ReceivePayment / SalesReceipt.
+> - [QB_MASS_METADATA_SYNC.md](./QB_MASS_METADATA_SYNC.md) — bulk sync de metadata de items (income/cogs/vendor/cost/mpn/edit_sequence) con dry-run, apply y rollback.
 
 ---
 
