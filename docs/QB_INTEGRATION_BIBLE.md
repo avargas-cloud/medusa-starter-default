@@ -1,8 +1,10 @@
 # QuickBooks Integration — Bible
 > **Tipo**: Technical Reference
 > **Repo**: backend + bridge externo (Node.js en Windows)
-> **Ultima verificacion**: 2026-04-15
+> **Ultima verificacion**: 2026-04-20
 > **Estado**: Current
+
+> **Ver tambien**: [QB_PAYMENT_METHOD.md](./QB_PAYMENT_METHOD.md) — rule + resolver para el `PaymentMethodRef` de cada ReceivePayment / SalesReceipt.
 
 ---
 
