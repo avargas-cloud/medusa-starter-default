@@ -6,6 +6,7 @@ import { BridgeStatus } from "../qb-sync/components/BridgeStatus";
 import { PipelineTable } from "../qb-sync/components/PipelineTable";
 import { InventoryAdjustmentPipelineSection } from "./components/InventoryAdjustmentPipelineSection";
 import { ItemPipelineSection } from "./components/ItemPipelineSection";
+import { VendorPipelineSection } from "./components/VendorPipelineSection";
 import { WaitingOrdersSection } from "./components/WaitingOrdersSection";
 
 const QbPipelinePage = () => {
@@ -43,6 +44,12 @@ const QbPipelinePage = () => {
             Inventory Adjustments
           </Tabs.Trigger>
           <Tabs.Trigger
+            value="vendors"
+            className="px-4 py-2 font-semibold data-[state=active]:bg-ui-bg-base-pressed data-[state=active]:text-ui-fg-base data-[state=active]:border-b-2 data-[state=active]:border-ui-fg-interactive"
+          >
+            Vendors
+          </Tabs.Trigger>
+          <Tabs.Trigger
             value="waiting-orders"
             className="px-4 py-2 font-semibold data-[state=active]:bg-ui-bg-base-pressed data-[state=active]:text-ui-fg-base data-[state=active]:border-b-2 data-[state=active]:border-ui-fg-interactive"
           >
@@ -57,6 +64,9 @@ const QbPipelinePage = () => {
         </Tabs.Content>
         <Tabs.Content value="inventory-adjustments" className="pt-4">
           <InventoryAdjustmentPipelineSection />
+        </Tabs.Content>
+        <Tabs.Content value="vendors" className="pt-4">
+          <VendorPipelineSection />
         </Tabs.Content>
         <Tabs.Content value="waiting-orders" className="pt-4">
           <WaitingOrdersSection />

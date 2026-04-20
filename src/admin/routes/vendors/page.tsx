@@ -124,10 +124,17 @@ const VendorsPage = () => {
             and preferred vendor assignment in POS product creation.
           </Text>
         </div>
-        <Button variant="secondary" onClick={handleSync} isLoading={syncing}>
-          <ArrowPath />
-          Sync from QuickBooks
-        </Button>
+        <div className="flex flex-col items-end gap-1">
+          <Button variant="secondary" onClick={handleSync} isLoading={syncing} disabled={syncing}>
+            <ArrowPath className={syncing ? "animate-spin" : undefined} />
+            {syncing ? "Syncing Vendors…" : "Sync from QuickBooks"}
+          </Button>
+          {syncing && (
+            <Text className="text-ui-fg-subtle text-xs">
+              Pulling vendors from QuickBooks — this takes ~1–2 min.
+            </Text>
+          )}
+        </div>
       </div>
 
       <Container className="p-0">

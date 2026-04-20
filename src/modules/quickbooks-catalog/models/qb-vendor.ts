@@ -39,14 +39,16 @@ export const QbVendor = model.define("qb_vendor", {
 
   tax_identity: model.text().nullable(),
   is_vendor_eligible_for_1099: model.boolean().nullable(),
-  credit_limit: model.bigNumber().nullable(),
+  credit_limit: model.number().nullable(),
 
   notes: model.text().nullable(),
 
-  sync_status: model.text().nullable(),
+  sync_status: model.text().nullable(), // waiting | synced | error | failed_permanent
   qb_operation_id: model.text().nullable(),
   last_error: model.text().nullable(),
   resolved_at: model.dateTime().nullable(),
+  retry_count: model.number().default(0),
+  next_retry_at: model.dateTime().nullable(),
 
   last_synced_at: model.dateTime().default(new Date()),
   metadata: model.json().nullable(),

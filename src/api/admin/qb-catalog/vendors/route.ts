@@ -84,6 +84,13 @@ export const POST = async (
       last_synced_at: new Date(),
     });
 
+    const pipelineRow = await catalog.createQbVendorPipelines({
+      vendor_id: local.id,
+      vendor_name: name,
+      op_type: "create",
+      status: "waiting",
+    });
+
     const bridgePayload = {
       action: "add",
       Name: name,
@@ -133,6 +140,10 @@ export const POST = async (
         id: local.id,
         qb_operation_id: data.operationId,
       });
+      await catalog.updateQbVendorPipelines({
+        id: pipelineRow.id,
+        qb_operation_id: data.operationId,
+      });
       logger.info(
         `[qb-catalog vendor create] "${name}" queued op=${data.operationId}`
       );
@@ -141,6 +152,11 @@ export const POST = async (
       await catalog.updateQbVendors({
         id: local.id,
         sync_status: "error",
+        last_error: err.message,
+      });
+      await catalog.updateQbVendorPipelines({
+        id: pipelineRow.id,
+        status: "error",
         last_error: err.message,
       });
       logger.error(

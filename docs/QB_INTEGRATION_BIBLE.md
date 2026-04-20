@@ -1,7 +1,7 @@
 # QuickBooks Integration — Bible
 > **Tipo**: Technical Reference
 > **Repo**: backend + bridge externo (Node.js en Windows)
-> **Ultima verificacion**: 2026-04-20
+> **Ultima verificacion**: 2026-04-20 (bridge DTD fix + orphan rescue)
 > **Estado**: Current
 
 > **Ver tambien**: [QB_PAYMENT_METHOD.md](./QB_PAYMENT_METHOD.md) — rule + resolver para el `PaymentMethodRef` de cada ReceivePayment / SalesReceipt.
@@ -605,6 +605,18 @@ Cambios significativos implementados que alteran el comportamiento previo:
 
 8. **Feature: Tax correction via POST /admin/invoices/:id/update-tax**
    Nuevo endpoint para corregir el codigo de tax de un QB Invoice sin tocar la orden de Medusa. Sales Receipt invoices son bloqueados (422). Ver seccion "Tax Correction (Invoice MOD)" arriba.
+
+9. **Bug: buildItemQuery generaba QBXML invalido (HRESULT 0x80040400)** — 2026-04-20
+   `quickbooks-bridge/src/qbxml/builders/item.ts` ponia `<OwnerID>` antes de `<IncludeRetElement>`, violando el orden DTD estricto de `ItemQueryRq` (DTD requiere: filtros -> IncludeRetElement+ -> OwnerID). QB Desktop respondia con `HRESULT 0x80040400` ("QuickBooks found an error when parsing the provided XML text stream") y **todos** los `GET /api/products` (bulk o filtrados por FullName/ListID) fallaban silenciosamente. Items creados en QB durante ese periodo nunca llegaron a Medusa. Fix: mover `<OwnerID>0</OwnerID>` al final del template. `buildItemQueryActiveWithDesc` ya tenia el orden correcto — por eso `/api/products/active-with-description` seguia funcionando.
+
+10. **Poison-op stall del bridge pipeline** — 2026-04-20
+    Un solo op QBXML malformado (version no soportada -> HRESULT 0x80040423) re-encolado infinitamente stalla TODO el pipeline: QBWC saca el op malo, QB lo rechaza, bridge lo re-encola y aborta la sesion cleanly. El siguiente tick saca el mismo op, loop eterno, ops legitimos stuck en `submitted`. Sintoma: UI pipeline dice "Web Connector may not be running" aunque QBWC este OK. **Fix:** boton "Flush Bridge" en la UI del pipeline — Medusa auto-reenqueue ops legitimos con IDs frescos en ~1 min. **Antes de experimentar** con `type: "raw"` o QBXML custom, probar en bridge dev.
+
+11. **Rescue scripts para orphan variants post-POS V2** — 2026-04-20
+    El flow de POS Product Creation V2 puede dejar variants parcialmente conectadas: `metadata.quickbooks_id` set, pero sin `price_set` (-> $0 en POS) o sin `inventory_item` linkeado (-> "checking..." eterno en search). Dos scripts nuevos:
+    - `src/scripts/qb_sync/core_jobs/import-qb-item-by-sku.ts` — pull individual por `QB_SKU=...`, detecta orphan con handle matching, attach via `updateProductsWorkflow` + fallback a `pricingModule.createPriceSets` + `remoteLink.create` cuando la variant no tenia `price_set` previo (el workflow descarta `prices` silenciosamente sin price_set existente).
+    - `src/scripts/qb_sync/data_rescue/fix-orphan-pos-variants.ts` — escanea TODAS las variants con `metadata.quickbooks_id` y arregla las que falten price_set y/o inventory_item. Scope `QB_SKUS=...` o full-catalog.
+    Ambos usan `/api/products/active-with-description` (documentado working) y traen precio, descripcion y ListID. Para obtener vendor/cost/MPN (campos que no estan en ese endpoint) usar `/api/products?FullName=...` via `buildItemQuery` (ya con DTD correcto post-fix #9).
 
 ---
 

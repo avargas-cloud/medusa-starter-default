@@ -6,6 +6,9 @@ import { QUICKBOOKS_CATALOG_MODULE } from "../modules/quickbooks-catalog";
 const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
 const API_KEY = process.env.QB_API_KEY || "";
 const MAX_ROWS_PER_TICK = 30;
+const MAX_RETRIES = 3;
+// Backoff caps ladder (minutes) — scheduled next_retry_at after Nth failure
+const BACKOFF_MINUTES = [2, 4, 8];
 
 type BridgeStatusResponse = {
   operation?: {
@@ -25,32 +28,144 @@ const extractListId = (data: BridgeStatusResponse): string | null => {
   return msgs?.VendorAddRs?.VendorRet?.ListID ?? null;
 };
 
+const computeNextRetry = (attemptsSoFar: number): Date => {
+  const idx = Math.min(attemptsSoFar, BACKOFF_MINUTES.length - 1);
+  const minutes = BACKOFF_MINUTES[idx] ?? BACKOFF_MINUTES[BACKOFF_MINUTES.length - 1] ?? 8;
+  return new Date(Date.now() + minutes * 60 * 1000);
+};
+
+type VendorRow = {
+  id: string;
+  full_name: string;
+  qb_operation_id: string | null;
+  qb_list_id: string | null;
+  sync_status: string | null;
+  retry_count: number | null;
+  next_retry_at: Date | string | null;
+};
+
+/**
+ * Find the pipeline row tracking this bridge op and update it.
+ * Observability-only — failures here never break the vendor resolution.
+ */
+const syncPipelineRow = async (
+  container: MedusaContainer,
+  qbOperationId: string | null,
+  patch: Record<string, unknown>
+): Promise<void> => {
+  if (!qbOperationId) return;
+  try {
+    const query = container.resolve(ContainerRegistrationKeys.QUERY);
+    const catalog = container.resolve(QUICKBOOKS_CATALOG_MODULE) as any;
+    const { data } = await query.graph({
+      entity: "qb_vendor_pipeline",
+      fields: ["id"],
+      filters: { qb_operation_id: qbOperationId } as any,
+      pagination: { skip: 0, take: 1 },
+    });
+    const row = (data as { id: string }[])[0];
+    if (!row) return;
+    await catalog.updateQbVendorPipelines({ id: row.id, ...patch });
+  } catch {
+    // swallow — pipeline is observability, not a gate
+  }
+};
+
+/**
+ * Mark a row as errored — advance retry_count and next_retry_at, or flip
+ * to failed_permanent if the MAX_RETRIES cap is exceeded.
+ */
+const markError = async (
+  catalog: any,
+  row: VendorRow,
+  message: string
+): Promise<void> => {
+  const attempts = (row.retry_count ?? 0) + 1;
+  if (attempts >= MAX_RETRIES) {
+    await catalog.updateQbVendors({
+      id: row.id,
+      sync_status: "failed_permanent",
+      last_error: message,
+      retry_count: attempts,
+      next_retry_at: null,
+    });
+    return;
+  }
+  await catalog.updateQbVendors({
+    id: row.id,
+    sync_status: "error",
+    last_error: message,
+    retry_count: attempts,
+    next_retry_at: computeNextRetry(attempts - 1),
+  });
+};
+
 export default async function qbVendorPoller(container: MedusaContainer) {
   const logger = container.resolve("logger");
   const query = container.resolve(ContainerRegistrationKeys.QUERY);
   const catalog = container.resolve(QUICKBOOKS_CATALOG_MODULE) as any;
+  const pipelineSync = (opId: string | null, patch: Record<string, unknown>) =>
+    syncPipelineRow(container, opId, patch);
+  const now = new Date();
 
-  const { data: pending } = await query.graph({
+  // Pull waiting + (error AND due for retry). Done in two filter passes
+  // because the graph query builder doesn't support OR across status + timestamp.
+  const { data: waiting } = await query.graph({
     entity: "qb_vendor",
-    fields: ["id", "full_name", "qb_operation_id", "qb_list_id"],
+    fields: [
+      "id",
+      "full_name",
+      "qb_operation_id",
+      "qb_list_id",
+      "sync_status",
+      "retry_count",
+      "next_retry_at",
+    ],
     filters: { sync_status: "waiting" } as any,
     pagination: { skip: 0, take: MAX_ROWS_PER_TICK },
   });
 
-  if (!pending || pending.length === 0) return;
+  const { data: errored } = await query.graph({
+    entity: "qb_vendor",
+    fields: [
+      "id",
+      "full_name",
+      "qb_operation_id",
+      "qb_list_id",
+      "sync_status",
+      "retry_count",
+      "next_retry_at",
+    ],
+    filters: { sync_status: "error" } as any,
+    pagination: { skip: 0, take: MAX_ROWS_PER_TICK },
+  });
 
-  logger.info(`[qb-vendor-poller] processing ${pending.length} waiting vendors`);
+  const dueForRetry = (errored as VendorRow[]).filter((row) => {
+    if (!row.next_retry_at) return true;
+    const due = row.next_retry_at instanceof Date
+      ? row.next_retry_at
+      : new Date(row.next_retry_at);
+    return due.getTime() <= now.getTime();
+  });
+
+  const pending: VendorRow[] = [
+    ...(waiting as VendorRow[]),
+    ...dueForRetry,
+  ].slice(0, MAX_ROWS_PER_TICK);
+
+  if (pending.length === 0) return;
+
+  logger.info(
+    `[qb-vendor-poller] processing ${pending.length} rows ` +
+    `(${(waiting as any[]).length} waiting + ${dueForRetry.length} due-for-retry)`
+  );
 
   let resolved = 0;
   let failed = 0;
 
-  for (const row of pending as any[]) {
+  for (const row of pending) {
     if (!row.qb_operation_id) {
-      await catalog.updateQbVendors({
-        id: row.id,
-        sync_status: "error",
-        last_error: "Missing qb_operation_id",
-      });
+      await markError(catalog, row, "Missing qb_operation_id");
       failed++;
       continue;
     }
@@ -70,10 +185,11 @@ export default async function qbVendorPoller(container: MedusaContainer) {
       const status = data.operation?.status;
 
       if (status === "failed") {
-        await catalog.updateQbVendors({
-          id: row.id,
-          sync_status: "error",
-          last_error: data.operation?.error ?? "Bridge returned failed",
+        const errMsg = data.operation?.error ?? "Bridge returned failed";
+        await markError(catalog, row, errMsg);
+        await pipelineSync(row.qb_operation_id, {
+          status: "error",
+          last_error: errMsg,
         });
         failed++;
         continue;
@@ -83,25 +199,35 @@ export default async function qbVendorPoller(container: MedusaContainer) {
 
       const listId = extractListId(data);
       if (!listId) {
-        await catalog.updateQbVendors({
-          id: row.id,
-          sync_status: "error",
+        await markError(catalog, row, "Completed but no ListID in response");
+        await pipelineSync(row.qb_operation_id, {
+          status: "error",
           last_error: "Completed but no ListID in response",
         });
         failed++;
         continue;
       }
 
+      const resolvedAt = new Date();
       await catalog.updateQbVendors({
         id: row.id,
         qb_list_id: listId,
         sync_status: "synced",
-        resolved_at: new Date(),
+        resolved_at: resolvedAt,
+        last_error: null,
+        next_retry_at: null,
+      });
+      await pipelineSync(row.qb_operation_id, {
+        status: "synced",
+        qb_list_id: listId,
+        resolved_at: resolvedAt,
+        last_error: null,
       });
       resolved++;
     } catch (err: any) {
-      await catalog.updateQbVendors({
-        id: row.id,
+      await markError(catalog, row, err.message);
+      await pipelineSync(row.qb_operation_id, {
+        status: "error",
         last_error: err.message,
       });
       logger.warn(

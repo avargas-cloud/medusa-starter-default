@@ -9,7 +9,7 @@
  */
 
 import { ExecArgs } from "@medusajs/framework/types";
-import { syncInventoryWorkflow } from "../../workflows/sync-inventory";
+import { syncInventoryWorkflow } from "../../../workflows/sync-inventory";
 
 export default async function syncMeiliInventory({ container }: ExecArgs) {
   const logger = (container as any).resolve("logger");

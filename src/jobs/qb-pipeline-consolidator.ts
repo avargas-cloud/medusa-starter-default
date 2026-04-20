@@ -273,6 +273,57 @@ export default async function qbPipelineConsolidator(
         // it synchronously; async confirmations come through this consolidator path).
         // Credit memo step: write TxnID + EditSequence to pos_credit_memo
         // so future void operations can reference the QB record.
+
+        // sales_receipt / invoice confirmed via async poll → propagate qb_sync_status='synced'
+        // to pos_invoice.metadata AND clear stale 'error' on order.metadata.
+        // Handler wrote qb_txn_id/qb_ref_number on its sync return, but qb_sync_status
+        // stays 'error' when the retry went through the admin endpoint (which pre-sets
+        // qb_sync_status='error' before calling the handler). Without this, the POS
+        // invoice list shows X even though the pipeline is Confirmed.
+        if (
+          txnId &&
+          (row.step === "sales_receipt" || row.step === "invoice") &&
+          row.reference_id
+        ) {
+          try {
+            await pool.query(
+              `UPDATE pos_invoice
+                             SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
+                             WHERE id = $1`,
+              [
+                row.reference_id,
+                JSON.stringify({
+                  qb_txn_id: txnId,
+                  qb_ref_number: refNumber,
+                  qb_sync_status: "synced",
+                }),
+              ]
+            );
+            logger.info(
+              `${LOG_PREFIX} ✅ Synced pos_invoice ${row.reference_id} → qb_sync_status='synced', TxnID=${txnId}`
+            );
+          } catch (posInvErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Could not update pos_invoice metadata: ${posInvErr.message}`
+            );
+          }
+
+          if (row.order_id) {
+            try {
+              await pool.query(
+                `UPDATE "order"
+                                 SET metadata = metadata || '{"qb_sync_status":"child_synced"}'::jsonb
+                                 WHERE id = $1 AND metadata->>'qb_sync_status' = 'error'`,
+                [row.order_id]
+              );
+            } catch (ordErr: any) {
+              logger.warn(
+                `${LOG_PREFIX} ⚠️ Could not clear stale qb_sync_status='error' on order ${row.order_id}: ${ordErr.message}`
+              );
+            }
+          }
+        }
+
         if (txnId && row.step === "credit_memo" && row.reference_id) {
           try {
             await pool.query(
