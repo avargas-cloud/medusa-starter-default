@@ -71,10 +71,22 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const financeService = req.scope.resolve(FINANCE_MODULE);
   const customerModule = req.scope.resolve(Modules.CUSTOMER);
 
+  const q = (req.query ?? {}) as Record<string, string | string[] | undefined>;
+  const customerIdParam = Array.isArray(q.customer_id) ? q.customer_id[0] : q.customer_id;
+  const limitParam = Array.isArray(q.limit) ? q.limit[0] : q.limit;
+  const parsedLimit = limitParam ? Math.max(1, Math.min(500, parseInt(limitParam, 10) || 0)) : undefined;
+
+  const filters: Record<string, unknown> = {};
+  if (customerIdParam) filters.customer_id = customerIdParam;
+
   try {
     const payments = await financeService.listCustomerPayments(
-      {},
-      { order: { received_at: "DESC" }, relations: ["applications"] }
+      filters,
+      {
+        order: { received_at: "DESC" },
+        relations: ["applications"],
+        ...(parsedLimit ? { take: parsedLimit } : {}),
+      }
     );
 
     const enriched = await enrichWithCustomer(payments, customerModule);
