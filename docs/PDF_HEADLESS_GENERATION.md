@@ -139,6 +139,7 @@ El modo normal (usuario en el browser) sigue funcionando igual: `useDocumentTemp
 | Browserless via `http://` en puerto 3000 | ECONNREFUSED | Browserless escucha en 8080, no 3000 |
 | Browserless via `http://` en puerto 8080 | ws://0.0.0.0:8080 ECONNREFUSED | HTTP lookup retorna bind address del container |
 | Inyectar token en `pos-auth` localStorage | `data-pdf-ready` timeout | `authStore` no lee `token` desde localStorage (diseño intencional) |
+| Ruta `/admin/draft-orders/:id/pdf-link` sin `bodyParser` override (2026-04-20) | `PayloadTooLargeError: request entity too large` | Default de express body-parser (100 KB) insuficiente para `posState` con `attachedImage` base64. Fix: `sizeLimit: "2mb"` en `src/api/middlewares.ts` |
 
 ---
 
@@ -159,3 +160,4 @@ El modo normal (usuario en el browser) sigue funcionando igual: `useDocumentTemp
 2. **`data-pdf-ready` timeout** → el template no se inyectó. Verificar que `fetchTemplateForPdf` retorna datos (revisar que el `templateId` existe en `pos_document_template`)
 3. **PDF blank o spinner** → `networkidle` se cumplió pero `data-pdf-ready` no apareció → revisar que el frontend de Vercel tiene el código actualizado
 4. **PDF con datos incorrectos** → verificar que `posState` viene en el body del request y que tiene el formato correcto de `pos-documents`
+5. **`PayloadTooLargeError: request entity too large` en `POST /admin/draft-orders/:id/pdf-link`** (2026-04-20) → el body supera el límite del body-parser. Verificar que el matcher para `pdf-link` existe en `src/api/middlewares.ts` con `sizeLimit: "2mb"`. Si aparece a pesar del override, hay imágenes `attachedImage` base64 anómalamente grandes (deberían ser ~3 KB post-`cropAndCompress` en 96×96) o `draftCache` acumuló demasiadas órdenes abiertas.
