@@ -77,7 +77,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       "created_at",
       "updated_at",
     ],
-    pagination: { skip: 0, take: 1 },
+    pagination: { skip: 0, take: 20 },
   });
 
   const all = data as any[];
