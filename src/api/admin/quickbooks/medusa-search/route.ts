@@ -71,8 +71,8 @@ async function search(
   type: PosDocType,
   q: string
 ): Promise<SearchHit[]> {
-  if (type === "estimate") return searchOrderLike(client, q, "draft", "E");
-  if (type === "order")    return searchOrderLike(client, q, "non-draft", "S");
+  if (type === "estimate") return searchOrderLike(client, q, "estimate", "E");
+  if (type === "order")    return searchOrderLike(client, q, "order", "S");
   if (type === "invoice")  return searchInvoice(client, q);
   if (type === "return")   return searchReturn(client, q);
   if (type === "payment")  return searchPayment(client, q);
@@ -82,10 +82,15 @@ async function search(
 async function searchOrderLike(
   client: InstanceType<typeof Client>,
   q: string,
-  mode: "draft" | "non-draft",
+  mode: "estimate" | "order",
   prefix: "E" | "S"
 ): Promise<SearchHit[]> {
-  const statusPredicate = mode === "draft" ? `status = 'draft'` : `status != 'draft'`;
+  // Medusa v2 distinguishes estimates from sales orders via `is_draft_order`,
+  // NOT by `status` — canceled estimates keep is_draft_order=true and
+  // status='canceled', so a status-based filter leaks them into order results.
+  const statusPredicate = mode === "estimate"
+    ? `is_draft_order = TRUE`
+    : `is_draft_order = FALSE`;
 
   const params: unknown[] = [];
   let wherePattern = "";
