@@ -3,10 +3,7 @@ import { randomUUID } from "crypto";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 
-import {
-  createCreditMemoInQb,
-  createCheckInQb,
-} from "../../../../../../lib/quickbooks/client";
+import { createCreditMemoInQb } from "../../../../../../lib/quickbooks/client";
 import {
   ensureCustomerInQb,
   buildQbOrderDiscountLines,
@@ -404,9 +401,12 @@ export async function POST(
 
           // -- REFUND PATH BEGIN --
           // Cashier chose Refund → flip the freshly-created payment to
-          // 'refunded' so it appears in accounting's Refund queue, and queue a
-          // QB Write Check against AR. Accounting then applies the payment to
-          // the check to close the refund.
+          // 'refunded' so it surfaces in the accounting Pending QB Refunds
+          // queue. The physical QB Write Check + apply-payment is initiated
+          // manually by administration from /accounting → POST
+          // /admin/finance/qb-refunds/sync. We intentionally do NOT pre-emit
+          // the Write Check here to avoid duplicate checks (that route writes
+          // its own pipeline rows indexed by customer_payment_id).
           if (isRefund) {
             try {
               const refundMeta = {
@@ -422,71 +422,12 @@ export async function POST(
                 [JSON.stringify(refundMeta), createdPayment.id]
               );
               logger.info(
-                `[credit_memos complete] Flipped payment ${createdPayment.id} → refunded for CM ${cmRef}`
+                `[credit_memos complete] Flipped payment ${createdPayment.id} → refunded for CM ${cmRef} (accounting will process QB Write Check)`
               );
             } catch (flipErr: any) {
               logger.error(
                 `[credit_memos complete] Could not mark payment as refunded: ${flipErr.message}`
               );
-            }
-
-            if (custResult?.qbCustomerId) {
-              const bankAccountListId = process.env.QB_BANK_ACCOUNT_LIST_ID;
-              if (!bankAccountListId) {
-                logger.warn(
-                  `[credit_memos complete] QB_BANK_ACCOUNT_LIST_ID not set — skipping Write Check`
-                );
-              } else {
-                try {
-                  await writePipelineRow({
-                    referenceId: id,
-                    referenceType: "credit_memo",
-                    step: "write_check",
-                    status: "pending",
-                    medusaRefNumber: creditMemo.credit_memo_number ?? null,
-                    error: null,
-                  });
-
-                  const checkResult = await createCheckInQb({
-                    customerId: custResult.qbCustomerId,
-                    bankAccountListId,
-                    amount: cmTotal / 100,
-                    date: new Date().toISOString().split("T")[0],
-                    refNumber: `CM-${creditMemo.credit_memo_number || id.slice(-6)}`,
-                    memo: `Refund for CM ${creditMemo.credit_memo_number || ""}`.trim(),
-                    expenseAccountName: "Accounts Receivable",
-                  });
-
-                  if (checkResult.success && checkResult.data?.operationId) {
-                    await writePipelineRow({
-                      referenceId: id,
-                      referenceType: "credit_memo",
-                      step: "write_check",
-                      status: "submitted",
-                      bridgeOpId: checkResult.data.operationId,
-                      medusaRefNumber: creditMemo.credit_memo_number ?? null,
-                    });
-                    logger.info(
-                      `[credit_memos complete] Write Check queued in QB: op=${checkResult.data.operationId}`
-                    );
-                  } else {
-                    await writePipelineRow({
-                      referenceId: id,
-                      referenceType: "credit_memo",
-                      step: "write_check",
-                      status: "failed",
-                      error: checkResult.error || "Write Check creation failed",
-                    });
-                    logger.error(
-                      `[credit_memos complete] Write Check failed: ${checkResult.error}`
-                    );
-                  }
-                } catch (checkErr: any) {
-                  logger.error(
-                    `[credit_memos complete] Write Check execution error: ${checkErr.message}`
-                  );
-                }
-              }
             }
           }
           // -- REFUND PATH END --

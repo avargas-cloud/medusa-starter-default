@@ -6,18 +6,19 @@
  * pre-fix code path tried to insert a customer_payment with method='refund' —
  * which violates the method CHECK constraint on customer_payment — and the
  * failure was silently swallowed. The Credit Memo landed in 'completed' state
- * (QB synced, invoice refunded_amount updated, Medusa refund emitted) but the
- * finance-ledger row that represents the customer's store credit / refund
- * simply never got created.
+ * (QB synced, invoice refunded_amount updated) but the finance-ledger row
+ * that represents the customer's refund simply never got created.
  *
- * This script replicates what the refactored /complete route's refund path
- * would do today:
+ * This script mirrors what the refactored /complete route's refund path does
+ * today:
  *   1. Sets pos_credit_memo.refund_method = 'refund' so the UI shows the badge.
  *   2. Creates customer_payment (type=credit_memo, method=credit_memo,
- *      reference='CM-1001', amount=4279, status=refunded) — mirroring the
- *      flip that /complete applies when refund_method='refund'.
- *   3. Queues a QB Write Check against Accounts Receivable (same mechanism
- *      accounting uses for every refund).
+ *      reference='CM-1001', amount=4279, status=refunded + refund metadata).
+ *
+ * The QB Write Check is NOT pre-emitted here — administration processes it
+ * manually from /accounting → Pending QB Refunds → "Process" (which fires
+ * POST /admin/finance/qb-refunds/sync). The record created by this script
+ * surfaces there automatically via the status='refunded' filter.
  *
  * The orphan native-Medusa refund (ref_01KPRW06CNG4ZYC500AEKM0JGX) is left
  * intact — it is internal Medusa tracking only, and the new /complete route
@@ -29,8 +30,6 @@
  */
 import { MedusaContainer } from "@medusajs/framework/types";
 
-import { createCheckInQb } from "../../lib/quickbooks/client";
-import { writePipelineRow } from "../../lib/quickbooks/qb-pipeline";
 import { CREDIT_MEMO_MODULE } from "../../modules/credit_memos";
 import { FINANCE_MODULE } from "../../modules/finance";
 
@@ -57,8 +56,7 @@ export default async function fixCm1001MissingPayment({
       "customer_id",
       "total",
       "status",
-      "refund_method",
-      "qb_txn_id"
+      "refund_method"
     )
     .first();
 
@@ -101,9 +99,6 @@ export default async function fixCm1001MissingPayment({
   logger.info(
     `  2. INSERT customer_payment (type=credit_memo, method=credit_memo, status=refunded, ref=${CM_NUMBER}, amount=${CM_AMOUNT_CENTS})`
   );
-  logger.info(
-    `  3. QUEUE QB Write Check against AR for $${(CM_AMOUNT_CENTS / 100).toFixed(2)}`
-  );
   if (!apply) {
     logger.warn(
       "[fix-cm-1001] DRY RUN — re-run with APPLY=1 to execute the steps above."
@@ -136,9 +131,7 @@ export default async function fixCm1001MissingPayment({
   const seqRes = await pg
     .raw(`SELECT nextval('custom_payment_seq') AS seq`)
     .catch(() => ({ rows: [{ seq: null }] }));
-  const nextPayNum = seqRes.rows[0]?.seq
-    ? Number(seqRes.rows[0].seq)
-    : null;
+  const nextPayNum = seqRes.rows[0]?.seq ? Number(seqRes.rows[0].seq) : null;
 
   const createdPayment = await financeService.createCustomerPayments({
     customer_id: cmRow.customer_id,
@@ -170,85 +163,7 @@ export default async function fixCm1001MissingPayment({
   logger.info(
     `[fix-cm-1001] ✅ customer_payment created: display_id=${nextPayNum}, id=${createdPayment.id}, status=refunded`
   );
-
-  // ─ 3. Emit QB Write Check ───────────────────────────────────────────────────
-  // Resolve QB customer ListID from customer metadata (qb_list_id is the
-  // canonical field populated by ensureCustomerInQb on sync).
-  const customerRow = await pg("customer")
-    .where({ id: cmRow.customer_id })
-    .select("metadata")
-    .first();
-  const metadata = (customerRow?.metadata ?? {}) as Record<string, any>;
-  const resolvedQbCustomerId: string | null =
-    metadata?.qb_list_id ||
-    metadata?.quickbooks_customer_id ||
-    metadata?.qb?.customer_id ||
-    metadata?.qb_customer_id ||
-    null;
-
-  if (!resolvedQbCustomerId) {
-    logger.warn(
-      "[fix-cm-1001] No QB customer ID on customer metadata — skipping Write Check. You can re-run Write Check manually from accounting."
-    );
-    logger.info("[fix-cm-1001] DONE (partial — payment created, QB check skipped).");
-    return;
-  }
-
-  const bankAccountListId = process.env.QB_BANK_ACCOUNT_LIST_ID;
-  if (!bankAccountListId) {
-    logger.warn(
-      "[fix-cm-1001] QB_BANK_ACCOUNT_LIST_ID not set — skipping Write Check. Set the env var and re-run with APPLY=1 to queue the check."
-    );
-    logger.info("[fix-cm-1001] DONE (partial — payment created, QB check skipped).");
-    return;
-  }
-
-  try {
-    await writePipelineRow({
-      referenceId: CM_ID,
-      referenceType: "credit_memo",
-      step: "write_check",
-      status: "pending",
-      medusaRefNumber: CM_NUMBER,
-      error: null,
-    });
-    const checkResult = await createCheckInQb({
-      customerId: resolvedQbCustomerId,
-      bankAccountListId,
-      amount: CM_AMOUNT_CENTS / 100,
-      date: new Date().toISOString().split("T")[0],
-      refNumber: CM_NUMBER,
-      memo: `Refund for CM ${CM_NUMBER}`,
-      expenseAccountName: "Accounts Receivable",
-    });
-
-    if (checkResult.success && checkResult.data?.operationId) {
-      await writePipelineRow({
-        referenceId: CM_ID,
-        referenceType: "credit_memo",
-        step: "write_check",
-        status: "submitted",
-        bridgeOpId: checkResult.data.operationId,
-        medusaRefNumber: CM_NUMBER,
-      });
-      logger.info(
-        `[fix-cm-1001] ✅ QB Write Check queued: op=${checkResult.data.operationId}`
-      );
-    } else {
-      await writePipelineRow({
-        referenceId: CM_ID,
-        referenceType: "credit_memo",
-        step: "write_check",
-        status: "failed",
-        error: checkResult.error || "Write Check creation failed",
-      });
-      logger.error(
-        `[fix-cm-1001] QB Write Check failed: ${checkResult.error}`
-      );
-    }
-  } catch (e: any) {
-    logger.error(`[fix-cm-1001] Write Check execution error: ${e.message}`);
-  }
-
-  logger.info("[fix-cm-1001] DONE.");
+  logger.info(
+    "[fix-cm-1001] DONE. Payment now appears in /accounting Pending QB Refunds — admin can initiate the Write Check from there."
+  );
 }
