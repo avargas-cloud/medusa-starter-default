@@ -1,108 +1,119 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+import { detectDrift } from "../../../../../lib/meilisearch/drift-detection";
 import { syncInventoryWorkflow } from "../../../../../workflows/sync-inventory";
 
 /**
  * POST /admin/search/inventory/sync
  *
- * Synchronize all inventory items to MeiliSearch index
- * Now with smart sync verification (checks count + timestamp)
+ * Drift check + non-destructive full sync for the `inventory` index.
+ * Now checks count + timestamp + content sample, where the previous
+ * implementation only checked count (and missed silent doc mutations).
+ *
+ * The content sample looks at `variantId` specifically — the field that
+ * powers the edit modal's variant resolution. A wiped or wrong
+ * `variantId` is the most common way this index drifts silently.
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
-    const query = req.scope.resolve("query");
-
-    // 1. Get MeiliSearch Stats (dynamic import for ESM compatibility)
+    const query = req.scope.resolve("query") as any;
     const { MeiliSearch } = await import("meilisearch");
     const client = new MeiliSearch({
       host: process.env.MEILISEARCH_HOST!,
       apiKey: process.env.MEILISEARCH_API_KEY!,
     });
 
-    let meiliCount = 0;
+    const force = req.query.force === "true";
 
-    try {
-      const index = client.index("inventory");
-      const stats = await index.getStats();
-      meiliCount = stats.numberOfDocuments;
-    } catch (e) {
-      // Index might not exist yet
-    }
-
-    // 2. Get DB Stats — mirrors the sync workflow logic exactly
+    // Build the DB doc snapshot the same way syncInventoryWorkflow does.
     const { data: variants } = await query.graph({
       entity: "product_variant",
       fields: [
-        "id", "sku", "updated_at",
+        "id",
+        "sku",
+        "updated_at",
         "product.id",
         "inventory_items.inventory.id",
         "inventory_items.inventory.updated_at",
       ],
     });
 
-    // Workflow uploads: inventory-linked items + synthetic docs (no-inventory variants with a product)
-    const inventoryLinked = variants.flatMap((variant: any) =>
-      (variant.inventory_items ?? []).map((invItem: any) => ({
-        variantId: variant.id,
-        productId: variant.product?.id,
-        updated_at: invItem.inventory?.updated_at || variant.updated_at,
-      }))
+    type Doc = { id: string; variantId: string; updatedAtMs: number };
+    const inventoryLinked: Doc[] = variants.flatMap((v: any) =>
+      (v.inventory_items ?? [])
+        .filter((ii: any) => ii.inventory?.id)
+        .map((ii: any) => ({
+          id: ii.inventory.id as string,
+          variantId: v.id as string,
+          updatedAtMs: new Date(
+            ii.inventory.updated_at ?? v.updated_at
+          ).getTime(),
+        }))
     );
-
-    const synthetic = variants
-      .filter((v: any) =>
-        (!v.inventory_items || v.inventory_items.length === 0) &&
-        v.sku && v.product?.id
+    const synthetic: Doc[] = variants
+      .filter(
+        (v: any) =>
+          (!v.inventory_items || v.inventory_items.length === 0) &&
+          v.sku &&
+          v.product?.id
       )
       .map((v: any) => ({
-        variantId: v.id,
-        productId: v.product.id,
-        updated_at: v.updated_at,
+        id: v.id as string,
+        variantId: v.id as string,
+        updatedAtMs: new Date(v.updated_at).getTime(),
       }));
 
-    const allDocs = [...inventoryLinked, ...synthetic].filter(
-      (item: any) => item.variantId && item.productId
+    const dbDocs = [...inventoryLinked, ...synthetic];
+    const dbLatestMs = dbDocs.reduce(
+      (m, d) => (d.updatedAtMs > m ? d.updatedAtMs : m),
+      0
     );
-    const dbCount = allDocs.length;
+
+    const drift = await detectDrift({
+      client,
+      indexName: "inventory",
+      dbDocs,
+      dbLatestMs,
+      force,
+      sampleFields: ["variantId"],
+      logger: {
+        info: (m) => console.log(m),
+        warn: (m) => console.warn(m),
+      },
+    });
 
     console.log(
-      `🔍 [Inventory Sync Check] DB docs: ${dbCount} (${inventoryLinked.length} linked + ${synthetic.length} synthetic) | Meili: ${meiliCount}`
+      `🔍 [Inventory Sync] db=${drift.dbCount} meili=${drift.meiliCount} ` +
+        `timeDiff=${drift.timeDiffMs}ms drift=${drift.driftMismatches}/${drift.driftSampleSize} ` +
+        `reason=${drift.reason}`
     );
 
-    // 3. Check if sync is needed (skip if force=true)
-    const force = req.query.force === "true";
-    const isCountSync = dbCount === meiliCount;
-
-    console.log(
-      `🔍 [Inventory Sync Status] Count Match: ${isCountSync} (${dbCount} vs ${meiliCount}), Force: ${force}`
-    );
-
-    if (!force && isCountSync) {
-      console.log(`✅ [Inventory Sync] Already in sync!`);
+    if (!drift.shouldSync) {
       return res.json({
         success: true,
         synced: 0,
         status: "already_synced",
-        message: "Inventory already synced",
+        message: "Inventory already in sync",
+        dbCount: drift.dbCount,
+        meiliCount: drift.meiliCount,
       });
     }
 
-    // 4. Perform full sync
-    console.log(`🔄 [Inventory Sync] Starting full sync...`);
     const { result } = await syncInventoryWorkflow(req.scope).run({
       input: {},
     });
-
     return res.json({
       ...result,
-      status: "synced",
+      status: "synced_now",
+      reason: drift.reason,
+      dbCount: drift.dbCount,
+      meiliCount: drift.meiliCount,
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error(
       "[MeiliSearch Inventory Sync Error]:",
       (error as Error).message
     );
-
     return res.status(500).json({
       success: false,
       error: "Sync failed",
@@ -111,5 +122,4 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   }
 };
 
-// Middleware to protect this route (admin only)
 export const AUTHENTICATE = ["user"];

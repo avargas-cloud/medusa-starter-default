@@ -1,100 +1,86 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+import { detectDrift } from "../../../../../lib/meilisearch/drift-detection";
 import { syncCustomersWorkflow } from "../../../../../workflows/sync-customers";
 
 /**
  * POST /admin/search/customers/sync
  *
- * Synchronize all customers to MeiliSearch index
- * Called automatically when Advanced Search page loads
+ * Drift check + non-destructive full sync for the `customers` index.
+ * Honors ?force=true (unlike the previous implementation which ignored it).
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
     const customerModule = req.scope.resolve("customer");
-    //         const ___query = req.scope.resolve("query")
     const { MeiliSearch } = await import("meilisearch");
-
-    // 1. Get MeiliSearch Stats
     const client = new MeiliSearch({
       host: process.env.MEILISEARCH_HOST!,
       apiKey: process.env.MEILISEARCH_API_KEY!,
     });
-    const index = client.index("customers");
-    let meiliLastUpdate = new Date(0);
-    let meiliCount = 0;
 
-    try {
-      const stats = await index.getStats();
-      meiliCount = stats.numberOfDocuments;
+    const force = req.query.force === "true";
 
-      const latestMeili = await index.search("", {
-        limit: 1,
-        sort: ["updated_at:desc"],
-        attributesToRetrieve: ["updated_at"],
-      });
-
-      if (latestMeili.hits.length > 0) {
-        const val = latestMeili.hits[0]!.updated_at;
-        if (val) meiliLastUpdate = new Date(val);
-      }
-    } catch (e) {}
-
-    // 2. Get DB Stats
-    // Use query graph or module. Customer module `listAndCountCustomers`
-    const [_, dbCount] = await customerModule.listAndCountCustomers(
-      {},
-      { select: ["id"], take: 0 }
-    );
-
-    // Check latest customer
-    const [latestCustomer] = await customerModule.listCustomers(
+    const customers = await customerModule.listCustomers(
       {},
       {
-        select: ["updated_at"],
+        select: ["id", "updated_at"],
         order: { updated_at: "DESC" },
-        take: 1,
+        take: 50000,
       }
     );
-    const dbLastDate = latestCustomer
-      ? new Date(latestCustomer.updated_at)
-      : new Date(0);
+
+    const dbDocs = customers.map((c: any) => ({ id: c.id as string }));
+    const dbLatestMs = customers[0]
+      ? new Date(customers[0].updated_at).getTime()
+      : 0;
+
+    const drift = await detectDrift({
+      client,
+      indexName: "customers",
+      dbDocs,
+      dbLatestMs,
+      force,
+      // Customer updates are bursty; a 2s tolerance keeps noise down
+      // without missing genuine drift.
+      toleranceMs: 2000,
+      logger: {
+        info: (m) => console.log(m),
+        warn: (m) => console.warn(m),
+      },
+    });
 
     console.log(
-      `🔍 [Customer Sync Check] DB: ${dbCount} | Meili: ${meiliCount}`
+      `🔍 [Customers Sync] db=${drift.dbCount} meili=${drift.meiliCount} ` +
+        `timeDiff=${drift.timeDiffMs}ms drift=${drift.driftMismatches}/${drift.driftSampleSize} ` +
+        `reason=${drift.reason}`
     );
 
-    // 3. Compare (Count exact match)
-    // 3. Compare (Count & Timestamp)
-    const isCountSync = Math.abs(dbCount - meiliCount) === 0;
-
-    // 4. Time Check
-    const isTimeSync =
-      Math.abs(dbLastDate.getTime() - meiliLastUpdate.getTime()) < 2000; // 2s tolerance
-
-    console.log(
-      `🔍 [Customer Sync Check] DB: ${dbCount}, Last: ${dbLastDate.toISOString()} | Meili: ${meiliCount}, Last: ${meiliLastUpdate.toISOString()}`
-    );
-
-    if (isCountSync && isTimeSync && dbCount > 0) {
+    if (!drift.shouldSync) {
       return res.json({
         success: true,
         synced: 0,
         status: "already_synced",
-        message: "Synced Already",
+        message: "Customers already in sync",
+        dbCount: drift.dbCount,
+        meiliCount: drift.meiliCount,
       });
     }
 
     const { result } = await syncCustomersWorkflow(req.scope).run();
-
-    res.json({
+    return res.json({
       success: true,
-      message: "Synced Now",
-      status: "synced_now",
       synced: result.synced,
+      status: "synced_now",
+      message: "Customers synced",
+      reason: drift.reason,
+      dbCount: drift.dbCount,
+      meiliCount: drift.meiliCount,
     });
-    return;
-  } catch (error: any) {
-    console.error("[MeiliSearch Sync Error]:", (error as Error).message);
+  } catch (error) {
+    console.error(
+      "[MeiliSearch Customer Sync Error]:",
+      (error as Error).message
+    );
     return res.status(500).json({
       success: false,
       error: "Sync failed",
@@ -103,5 +89,4 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   }
 };
 
-// Middleware to protect this route (admin only)
 export const AUTHENTICATE = ["user"];
