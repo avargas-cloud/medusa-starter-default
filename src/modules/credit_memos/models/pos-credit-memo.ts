@@ -19,6 +19,7 @@ const PosCreditMemo = model.define("pos_credit_memo", {
   total: model.bigNumber().default(0), // final refund/credit total
 
   sales_rep: model.json().nullable(), // { initials: "AVP", name: "Alejandro Vargas" }
+  refund_method: model.enum(["store_credit", "refund"]).nullable(), // cashier's choice at Complete time
   shipping_option_id: model.text().nullable(),
   shipping_option_name: model.text().nullable(),
   qb_txn_id: model.text().nullable(), // QB TxnID after sync — needed for void

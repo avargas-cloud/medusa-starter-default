@@ -26,12 +26,28 @@ export async function POST(
     };
 
     // ── Invoice-linked validation ─────────────────────────────────────────────────
+    // Each item may not exceed (invoiced_qty − already_refunded_qty). When editing
+    // an existing CM, the CM's own items are subtracted from already_refunded so
+    // the cashier can freely tweak quantities within that CM without triggering
+    // a false-positive rejection.
     if (payload.invoice_id && items && items.length > 0) {
       try {
         const pgConnection = req.scope.resolve("__pg_connection__") as any;
         const invItems = await pgConnection("pos_invoice_item")
           .where({ invoice_id: payload.invoice_id })
-          .select("variant_id", "sku", "quantity");
+          .select("id", "variant_id", "sku", "quantity", "refunded_quantity");
+
+        const isUpdate =
+          !(action === "create" || id === "new" || !id || id.startsWith("new:"));
+
+        const currentCmItems: Array<{ sku: string | null; quantity: number }> =
+          isUpdate && id
+            ? (
+                await creditMemoService.listPosCreditMemoItems({
+                  credit_memo_id: id,
+                })
+              ).map((i: any) => ({ sku: i.sku ?? null, quantity: Number(i.quantity ?? 0) }))
+            : [];
 
         if (invItems.length > 0) {
           for (const item of items) {
@@ -47,10 +63,21 @@ export async function POST(
               });
               return;
             }
-            if (item.quantity > match.quantity) {
+            const ownContribution = currentCmItems
+              .filter((ci) => ci.sku && item.sku && ci.sku === item.sku)
+              .reduce((s, ci) => s + ci.quantity, 0);
+            const alreadyRefunded = Math.max(
+              0,
+              Number(match.refunded_quantity ?? 0) - ownContribution
+            );
+            const remaining = Number(match.quantity ?? 0) - alreadyRefunded;
+            if (item.quantity > remaining) {
               res.status(400).json({
                 success: false,
-                message: `Return quantity ${item.quantity} exceeds invoiced quantity ${match.quantity} for "${item.title}"`,
+                message:
+                  remaining <= 0
+                    ? `Item "${item.title}" has already been fully returned on prior credit memos.`
+                    : `Return quantity ${item.quantity} exceeds remaining returnable qty ${remaining} (invoiced ${match.quantity}, already refunded ${alreadyRefunded}) for "${item.title}"`,
               });
               return;
             }

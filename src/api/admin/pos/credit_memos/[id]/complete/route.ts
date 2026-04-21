@@ -48,6 +48,15 @@ export async function POST(
       return;
     }
 
+    // Cashier's choice at Complete time — persisted so the UI can always
+    // show which option was picked, and drives the refund mirror path below.
+    const { refund_method: refundMethodBody } = req.body as {
+      refund_method?: string;
+    };
+    const refundMethod: "store_credit" | "refund" =
+      refundMethodBody === "refund" ? "refund" : "store_credit";
+    const isRefund = refundMethod === "refund";
+
     // Lock immediately to prevent duplicate completions from concurrent requests
     // (QB sync can take 1-2 min; without this, a second click passes the guard above)
     const updateMethodName =
@@ -65,6 +74,7 @@ export async function POST(
       id,
       status: "completed",
       completed_at: new Date(),
+      refund_method: refundMethod,
     });
 
     // Restock Inventory for every variant in the credit memo
@@ -280,13 +290,11 @@ export async function POST(
     // -- QUICKBOOKS SYNC END --
 
     // -- AR LEDGER SYNC BEGIN --
-    // Register a Finance Ledger entry based on the chosen refund method:
-    //   store_credit → type:'credit_memo', status:'available'  (credit for future purchases)
-    //   refund       → type:'refund',      status:'applied'    (physical refund done by staff)
-    const { refund_method } = req.body as { refund_method?: string };
-    const isStoreCredit = !refund_method || refund_method === "store_credit";
-
-    // Compute CM total once — used for both native Medusa refund and Finance Ledger
+    // The finance-ledger entry is ALWAYS created the same way (type=credit_memo,
+    // method=credit_memo, status=available). The difference between 'store_credit'
+    // and 'refund' only matters at the extra step after: for refund, we mark the
+    // freshly-created payment as refunded so it lands in accounting's queue to be
+    // physically processed — and we issue a QB Write Check against AR.
     const cmTotal =
       (creditMemo as any).total ||
       (creditMemo as any).subtotal ||
@@ -294,60 +302,6 @@ export async function POST(
         (sum: number, i: any) => sum + i.quantity * i.unit_price,
         0
       );
-
-    // -- NATIVE MEDUSA REFUND BEGIN --
-    // If the parent order has a Medusa payment_collection (created by registerMedusaPayment
-    // during Sales Receipt / Invoice flow), issue a native refund so Medusa tracks it properly.
-    if ((creditMemo as any).order_id) {
-      try {
-        const MODULE_PAYMENT = "payment";
-        const query = req.scope.resolve("query");
-        const {
-          data: [orderData],
-        } = await query.graph({
-          entity: "order",
-          fields: [
-            "payment_collections.payments.id",
-            "payment_collections.payments.captures.*",
-            "payment_collections.payments.refunds.*",
-          ],
-          filters: { id: (creditMemo as any).order_id },
-        });
-        const payments = (orderData?.payment_collections ?? []).flatMap(
-          (pc: any) => pc.payments ?? []
-        );
-        const refundAmountDollars = cmTotal / 100; // cmTotal is in cents
-
-        for (const payment of payments) {
-          const captured = (payment.captures ?? []).reduce(
-            (s: number, c: any) => s + Number(c.amount),
-            0
-          );
-          const refunded = (payment.refunds ?? []).reduce(
-            (s: number, r: any) => s + Number(r.amount),
-            0
-          );
-          const available = captured - refunded;
-
-          if (available >= refundAmountDollars - 0.001) {
-            const paymentModule = req.scope.resolve(MODULE_PAYMENT);
-            await paymentModule.refundPayment({
-              payment_id: payment.id,
-              amount: refundAmountDollars,
-            });
-            logger.info(
-              `[credit_memos complete] ✅ Native Medusa refund: $${refundAmountDollars.toFixed(2)} on payment ${payment.id}`
-            );
-            break;
-          }
-        }
-      } catch (refundErr: any) {
-        logger.warn(
-          `[credit_memos complete] Native Medusa refund failed (non-fatal): ${refundErr.message}`
-        );
-      }
-    }
-    // -- NATIVE MEDUSA REFUND END --
 
     // -- POS INVOICE REFUND STATUS BEGIN --
     // Update the parent pos_invoice: status, refunded_amount, refunded_shipping,
@@ -429,87 +383,113 @@ export async function POST(
             `[credit_memos complete] Payment for ${cmRef} already exists (id=${existingPayments[0].id}) — skipping duplicate`
           );
         } else {
-          await financeService.createCustomerPayments({
+          const createdPayment = (await financeService.createCustomerPayments({
             customer_id: creditMemo.customer_id,
             display_id: nextPayNum,
             amount: cmTotal,
-            method: isStoreCredit ? "credit_memo" : "refund",
+            method: "credit_memo",
             reference: cmRef,
-            notes: isStoreCredit
-              ? `Store Credit generated from Return/Credit Memo`
-              : `Refund — to be processed manually by staff`,
+            notes: `Store Credit generated from Return/Credit Memo`,
             received_at: new Date(),
             created_by: "system",
             source: "pos",
-            type: isStoreCredit ? "credit_memo" : "refund",
-            status: isStoreCredit ? "available" : "applied",
+            type: "credit_memo",
+            status: "available",
             medusa_payment_synced: false,
-          });
+          })) as any;
 
           logger.info(
-            `[credit_memos complete] Registered $${cmTotal} as '${isStoreCredit ? "store_credit" : "refund"}' ` +
-              `in Finance Ledger for customer ${creditMemo.customer_id}`
+            `[credit_memos complete] Registered $${cmTotal} as credit_memo for customer ${creditMemo.customer_id} (refund_method=${refundMethod})`
           );
 
-          // If this is a physical cash refund → create Write Check in QB
-          if (!isStoreCredit && custResult?.qbCustomerId) {
-            const bankAccountListId = process.env.QB_BANK_ACCOUNT_LIST_ID;
-            if (!bankAccountListId) {
-              logger.warn(
-                `[credit_memos complete] QB_BANK_ACCOUNT_LIST_ID not set — skipping Write Check`
+          // -- REFUND PATH BEGIN --
+          // Cashier chose Refund → flip the freshly-created payment to
+          // 'refunded' so it appears in accounting's Refund queue, and queue a
+          // QB Write Check against AR. Accounting then applies the payment to
+          // the check to close the refund.
+          if (isRefund) {
+            try {
+              const refundMeta = {
+                refund_amount: Number(cmTotal),
+                refunded_at: new Date().toISOString(),
+                refund_notes: `Triggered by CM ${creditMemo.credit_memo_number ?? ""} completion`,
+                refunded_by: "system",
+              };
+              await pgConnection.raw(
+                `UPDATE customer_payment
+                   SET status = 'refunded', metadata = ?::jsonb
+                   WHERE id = ?`,
+                [JSON.stringify(refundMeta), createdPayment.id]
               );
-            } else {
-              try {
-                await writePipelineRow({
-                  referenceId: id,
-                  referenceType: "credit_memo",
-                  step: "write_check",
-                  status: "pending",
-                  medusaRefNumber: creditMemo.credit_memo_number ?? null,
-                  error: null,
-                });
+              logger.info(
+                `[credit_memos complete] Flipped payment ${createdPayment.id} → refunded for CM ${cmRef}`
+              );
+            } catch (flipErr: any) {
+              logger.error(
+                `[credit_memos complete] Could not mark payment as refunded: ${flipErr.message}`
+              );
+            }
 
-                const checkResult = await createCheckInQb({
-                  customerId: custResult.qbCustomerId,
-                  bankAccountListId,
-                  amount: cmTotal / 100,
-                  date: new Date().toISOString().split("T")[0],
-                  refNumber: `CM-${creditMemo.credit_memo_number || id.slice(-6)}`,
-                  memo: `Refund for CM ${creditMemo.credit_memo_number || ""}`.trim(),
-                  expenseAccountName: "Accounts Receivable",
-                });
-
-                if (checkResult.success && checkResult.data?.operationId) {
+            if (custResult?.qbCustomerId) {
+              const bankAccountListId = process.env.QB_BANK_ACCOUNT_LIST_ID;
+              if (!bankAccountListId) {
+                logger.warn(
+                  `[credit_memos complete] QB_BANK_ACCOUNT_LIST_ID not set — skipping Write Check`
+                );
+              } else {
+                try {
                   await writePipelineRow({
                     referenceId: id,
                     referenceType: "credit_memo",
                     step: "write_check",
-                    status: "submitted",
-                    bridgeOpId: checkResult.data.operationId,
+                    status: "pending",
                     medusaRefNumber: creditMemo.credit_memo_number ?? null,
+                    error: null,
                   });
-                  logger.info(
-                    `[credit_memos complete] Write Check queued in QB: op=${checkResult.data.operationId}`
-                  );
-                } else {
-                  await writePipelineRow({
-                    referenceId: id,
-                    referenceType: "credit_memo",
-                    step: "write_check",
-                    status: "failed",
-                    error: checkResult.error || "Write Check creation failed",
+
+                  const checkResult = await createCheckInQb({
+                    customerId: custResult.qbCustomerId,
+                    bankAccountListId,
+                    amount: cmTotal / 100,
+                    date: new Date().toISOString().split("T")[0],
+                    refNumber: `CM-${creditMemo.credit_memo_number || id.slice(-6)}`,
+                    memo: `Refund for CM ${creditMemo.credit_memo_number || ""}`.trim(),
+                    expenseAccountName: "Accounts Receivable",
                   });
+
+                  if (checkResult.success && checkResult.data?.operationId) {
+                    await writePipelineRow({
+                      referenceId: id,
+                      referenceType: "credit_memo",
+                      step: "write_check",
+                      status: "submitted",
+                      bridgeOpId: checkResult.data.operationId,
+                      medusaRefNumber: creditMemo.credit_memo_number ?? null,
+                    });
+                    logger.info(
+                      `[credit_memos complete] Write Check queued in QB: op=${checkResult.data.operationId}`
+                    );
+                  } else {
+                    await writePipelineRow({
+                      referenceId: id,
+                      referenceType: "credit_memo",
+                      step: "write_check",
+                      status: "failed",
+                      error: checkResult.error || "Write Check creation failed",
+                    });
+                    logger.error(
+                      `[credit_memos complete] Write Check failed: ${checkResult.error}`
+                    );
+                  }
+                } catch (checkErr: any) {
                   logger.error(
-                    `[credit_memos complete] Write Check failed: ${checkResult.error}`
+                    `[credit_memos complete] Write Check execution error: ${checkErr.message}`
                   );
                 }
-              } catch (checkErr: any) {
-                logger.error(
-                  `[credit_memos complete] Write Check execution error: ${checkErr.message}`
-                );
               }
             }
           }
+          // -- REFUND PATH END --
         }
       } catch (finErr: any) {
         logger.error(
