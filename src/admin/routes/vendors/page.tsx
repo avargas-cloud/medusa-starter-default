@@ -10,8 +10,32 @@ import {
   Text,
   toast,
 } from "@medusajs/ui";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+
+type SyncRun = {
+  id: string;
+  status: "queued" | "fetching" | "processing" | "completed" | "failed" | "cancelled";
+  total_count: number;
+  processed_count: number;
+  created_count: number;
+  updated_count: number;
+  error_count: number;
+  started_at: string | null;
+  completed_at: string | null;
+  last_error: string | null;
+};
+
+const ACTIVE_SYNC_STATUSES = new Set(["queued", "fetching", "processing"]);
+
+const syncStatusLabel = (status: SyncRun["status"]): string => {
+  if (status === "queued") return "Queued — starting in ~30s…";
+  if (status === "fetching") return "Fetching vendors from QuickBooks…";
+  if (status === "processing") return "Processing vendors…";
+  if (status === "completed") return "Sync completed";
+  if (status === "failed") return "Sync failed";
+  return "Sync cancelled";
+};
 
 type QbVendor = {
   id: string;
@@ -38,8 +62,13 @@ const VendorsPage = () => {
   const navigate = useNavigate();
   const [vendors, setVendors] = useState<QbVendor[]>([]);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
   const [search, setSearch] = useState("");
+  const [syncRun, setSyncRun] = useState<SyncRun | null>(null);
+  const [startingSync, setStartingSync] = useState(false);
+  const [meiliSyncing, setMeiliSyncing] = useState(false);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const syncing = syncRun != null && ACTIVE_SYNC_STATUSES.has(syncRun.status);
 
   const fetchVendors = async () => {
     setLoading(true);
@@ -59,9 +88,56 @@ const VendorsPage = () => {
     }
   };
 
+  const fetchLatestRun = async (): Promise<SyncRun | null> => {
+    try {
+      const res = await fetch("/admin/qb-catalog/vendors/sync", {
+        credentials: "include",
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return (data.run as SyncRun | null) ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  // Load vendors + restore sync state on mount.
   useEffect(() => {
     fetchVendors();
+    fetchLatestRun().then((r) => setSyncRun(r));
   }, []);
+
+  // Poll progress every 3s while a sync is active.
+  useEffect(() => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    if (!syncing || !syncRun) return;
+    pollTimerRef.current = setInterval(async () => {
+      const fresh = await fetchLatestRun();
+      if (!fresh) return;
+      setSyncRun(fresh);
+      if (!ACTIVE_SYNC_STATUSES.has(fresh.status)) {
+        // Sync just finished — reload the vendor list.
+        fetchVendors();
+        if (fresh.status === "completed") {
+          toast.success("Vendor sync completed", {
+            description: `Created ${fresh.created_count}, updated ${fresh.updated_count}, errors ${fresh.error_count}`,
+          });
+        } else if (fresh.status === "failed") {
+          toast.error("Vendor sync failed", {
+            description: fresh.last_error ?? "Unknown error",
+          });
+        }
+      }
+    }, 3000);
+    return () => {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncing, syncRun?.id]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return vendors;
@@ -86,22 +162,92 @@ const VendorsPage = () => {
   }, [vendors, search]);
 
   const handleSync = async () => {
-    setSyncing(true);
+    setStartingSync(true);
     try {
       const res = await fetch("/admin/qb-catalog/vendors/sync", {
         method: "POST",
         credentials: "include",
       });
       const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error ?? "Sync failed");
+      if (res.status === 409) {
+        toast.info("A vendor sync is already running", {
+          description: "Progress shown above.",
+        });
+      } else if (!res.ok || !data.success) {
+        throw new Error(data.error ?? "Failed to start sync");
+      } else {
+        toast.success("Sync queued", { description: data.message });
       }
-      toast.success("Vendors synced", { description: data.message });
-      fetchVendors();
+      const fresh = await fetchLatestRun();
+      setSyncRun(fresh);
     } catch (e) {
-      toast.error("Sync failed", { description: (e as Error).message });
+      toast.error("Failed to start sync", {
+        description: (e as Error).message,
+      });
     } finally {
-      setSyncing(false);
+      setStartingSync(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!syncRun) return;
+    try {
+      const res = await fetch(
+        `/admin/qb-catalog/vendors/sync/${syncRun.id}`,
+        { method: "DELETE", credentials: "include" }
+      );
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error ?? "Cancel failed");
+      }
+      toast.success("Sync cancelled");
+      const fresh = await fetchLatestRun();
+      setSyncRun(fresh);
+    } catch (e) {
+      toast.error("Failed to cancel sync", {
+        description: (e as Error).message,
+      });
+    }
+  };
+
+  const handleMeiliSync = async () => {
+    setMeiliSyncing(true);
+    try {
+      const res = await fetch("/admin/qb-catalog/vendors/sync-meili", {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error ?? "Meilisearch sync failed");
+      }
+      toast.success("Meilisearch index refreshed", {
+        description: `${data.synced ?? 0} vendor(s) upserted`,
+      });
+    } catch (e) {
+      toast.error("Meilisearch sync failed", {
+        description: (e as Error).message,
+      });
+    } finally {
+      setMeiliSyncing(false);
+    }
+  };
+
+  const handleMeiliSyncSingle = async (vendorId: string, label: string) => {
+    try {
+      const res = await fetch(
+        `/admin/qb-catalog/vendors/${vendorId}/sync-meili`,
+        { method: "POST", credentials: "include" }
+      );
+      const data = await res.json();
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error ?? "Meilisearch sync failed");
+      }
+      toast.success(`${label} re-indexed to Meilisearch`);
+    } catch (e) {
+      toast.error("Vendor re-index failed", {
+        description: (e as Error).message,
+      });
     }
   };
 
@@ -125,17 +271,43 @@ const VendorsPage = () => {
           </Text>
         </div>
         <div className="flex flex-col items-end gap-1">
-          <Button variant="secondary" onClick={handleSync} isLoading={syncing} disabled={syncing}>
-            <ArrowPath className={syncing ? "animate-spin" : undefined} />
-            {syncing ? "Syncing Vendors…" : "Sync from QuickBooks"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              onClick={handleSync}
+              isLoading={startingSync}
+              disabled={startingSync || syncing}
+            >
+              <ArrowPath className={syncing ? "animate-spin" : undefined} />
+              {syncing ? "Syncing Vendors…" : "Sync from QuickBooks"}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={handleMeiliSync}
+              isLoading={meiliSyncing}
+              disabled={meiliSyncing}
+              title="Re-index every vendor into the Meilisearch vendors index"
+            >
+              <ArrowPath className={meiliSyncing ? "animate-spin" : undefined} />
+              {meiliSyncing ? "Refreshing Meili…" : "Sync Meilisearch"}
+            </Button>
+            {syncing && (
+              <Button variant="danger" size="small" onClick={handleCancel}>
+                Cancel
+              </Button>
+            )}
+          </div>
           {syncing && (
             <Text className="text-ui-fg-subtle text-xs">
-              Pulling vendors from QuickBooks — this takes ~1–2 min.
+              Safe to close this tab — sync runs in the background.
             </Text>
           )}
         </div>
       </div>
+
+      {syncRun && (
+        <SyncProgressPanel run={syncRun} />
+      )}
 
       <Container className="p-0">
         <div className="flex items-center gap-3 px-6 py-3 border-b border-ui-border-base">
@@ -171,6 +343,7 @@ const VendorsPage = () => {
                   <Table.HeaderCell>Location</Table.HeaderCell>
                   <Table.HeaderCell>Terms</Table.HeaderCell>
                   <Table.HeaderCell>Status</Table.HeaderCell>
+                  <Table.HeaderCell>Actions</Table.HeaderCell>
                 </Table.Row>
               </Table.Header>
               <Table.Body>
@@ -212,6 +385,22 @@ const VendorsPage = () => {
                         </Badge>
                       )}
                     </Table.Cell>
+                    <Table.Cell
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-right"
+                    >
+                      <Button
+                        variant="transparent"
+                        size="small"
+                        onClick={() =>
+                          handleMeiliSyncSingle(v.id, v.full_name)
+                        }
+                        title="Re-index this vendor in Meilisearch"
+                      >
+                        <ArrowPath />
+                        <span className="text-xs">Re-index</span>
+                      </Button>
+                    </Table.Cell>
                   </Table.Row>
                 ))}
               </Table.Body>
@@ -220,6 +409,76 @@ const VendorsPage = () => {
         )}
       </Container>
     </div>
+  );
+};
+
+const SyncProgressPanel = ({ run }: { run: SyncRun }) => {
+  const active = ACTIVE_SYNC_STATUSES.has(run.status);
+  const pct = run.total_count > 0
+    ? Math.min(100, Math.round((run.processed_count / run.total_count) * 100))
+    : run.status === "fetching" ? 5 : run.status === "queued" ? 1 : 100;
+
+  const barColor =
+    run.status === "completed" ? "bg-ui-tag-green-bg"
+    : run.status === "failed" ? "bg-ui-tag-red-bg"
+    : run.status === "cancelled" ? "bg-ui-bg-base-pressed"
+    : "bg-ui-tag-blue-bg";
+
+  const tone: "green" | "red" | "orange" | "blue" | "grey" =
+    run.status === "completed" ? "green"
+    : run.status === "failed" ? "red"
+    : run.status === "cancelled" ? "grey"
+    : run.status === "queued" ? "orange"
+    : "blue";
+
+  const fmt = (iso: string | null): string => iso ? new Date(iso).toLocaleString() : "—";
+
+  return (
+    <Container className="p-4 flex flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <Badge color={tone} size="small">{run.status}</Badge>
+        <Text className="text-ui-fg-base text-sm font-medium">
+          {syncStatusLabel(run.status)}
+        </Text>
+        <Text className="text-ui-fg-subtle text-xs ml-auto">
+          {run.total_count > 0
+            ? `${run.processed_count.toLocaleString()} / ${run.total_count.toLocaleString()} vendors`
+            : active ? "Waiting for QuickBooks…" : "—"}
+        </Text>
+      </div>
+
+      <div className="w-full h-2 rounded-full bg-ui-bg-subtle overflow-hidden">
+        <div
+          className={`h-full ${barColor} transition-all duration-500`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+
+      <div className="grid grid-cols-4 gap-4 text-xs">
+        <div>
+          <Text className="text-ui-fg-subtle">Created</Text>
+          <Text className="font-mono">{run.created_count.toLocaleString()}</Text>
+        </div>
+        <div>
+          <Text className="text-ui-fg-subtle">Updated</Text>
+          <Text className="font-mono">{run.updated_count.toLocaleString()}</Text>
+        </div>
+        <div>
+          <Text className="text-ui-fg-subtle">Errors</Text>
+          <Text className="font-mono">{run.error_count.toLocaleString()}</Text>
+        </div>
+        <div>
+          <Text className="text-ui-fg-subtle">Started</Text>
+          <Text className="font-mono">{fmt(run.started_at)}</Text>
+        </div>
+      </div>
+
+      {run.last_error && (
+        <Text className="text-ui-fg-error text-xs font-mono border-l-2 border-ui-tag-red-border pl-2">
+          {run.last_error}
+        </Text>
+      )}
+    </Container>
   );
 };
 

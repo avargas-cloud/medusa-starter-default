@@ -19,6 +19,9 @@ type SequencesData = {
   custom_sales_receipt_seq: number | null;
   custom_payment_seq: number | null;
   custom_inventory_count_seq: number | null;
+  custom_unmet_demand_seq: number | null;
+  custom_purchase_order_seq: number | null;
+  custom_po_receipt_seq: number | null;
 };
 
 const SEQUENCE_LABELS: Record<keyof SequencesData, string> = {
@@ -30,6 +33,9 @@ const SEQUENCE_LABELS: Record<keyof SequencesData, string> = {
   custom_sales_receipt_seq: "QB Sales Receipts",
   custom_payment_seq: "Payments",
   custom_inventory_count_seq: "Inventory Counts",
+  custom_unmet_demand_seq: "Unmet Demand",
+  custom_purchase_order_seq: "Purchase Orders",
+  custom_po_receipt_seq: "PO Receipts",
 };
 
 export function SequenceManagerCard() {

@@ -17,6 +17,7 @@ export const meiliClient = new MeiliSearch({
 export const PRODUCTS_INDEX = "products"
 export const CUSTOMERS_INDEX = "customers"
 export const INVENTORY_INDEX = "inventory"
+export const VENDORS_INDEX = "vendors"
 
 /**
  * Product transformer (matches medusa-config.ts transformer)
@@ -35,6 +36,57 @@ export function transformProduct(product: any) {
         metadata_category: product.metadata?.category || null,
         updated_at: new Date(product.updated_at).getTime(),
         created_at: new Date(product.created_at).getTime(),
+    }
+}
+
+/**
+ * Vendor transformer — maps a qb_vendor DB row to a Meili document.
+ *
+ * Searchable surface: full_name, name, company_name, email, phone,
+ * qb_list_id, account_number, tax_identity, city, state, contact.
+ * Used by the Purchase Order vendor picker (store-pos) and future
+ * vendor-facing UIs.
+ */
+export function transformVendor(vendor: any) {
+    return {
+        id: vendor.id,
+        qb_list_id: vendor.qb_list_id ?? null,
+        full_name: vendor.full_name ?? null,
+        name: vendor.name ?? null,
+        company_name: vendor.company_name ?? null,
+        account_number: vendor.account_number ?? null,
+        is_active: vendor.is_active ?? true,
+
+        first_name: vendor.first_name ?? null,
+        last_name: vendor.last_name ?? null,
+        contact: vendor.contact ?? null,
+
+        email: vendor.email ?? null,
+        phone: vendor.phone ?? null,
+        alt_phone: vendor.alt_phone ?? null,
+        fax: vendor.fax ?? null,
+
+        city: vendor.city ?? null,
+        state: vendor.state ?? null,
+        postal_code: vendor.postal_code ?? null,
+        country: vendor.country ?? null,
+
+        terms_ref_name: vendor.terms_ref_name ?? null,
+        vendor_type_ref_name: vendor.vendor_type_ref_name ?? null,
+        currency_ref_name: vendor.currency_ref_name ?? null,
+
+        tax_identity: vendor.tax_identity ?? null,
+        is_vendor_eligible_for_1099: vendor.is_vendor_eligible_for_1099 ?? null,
+        credit_limit: vendor.credit_limit ?? null,
+
+        sync_status: vendor.sync_status ?? null,
+
+        updated_at: vendor.updated_at
+            ? new Date(vendor.updated_at).getTime()
+            : Date.now(),
+        created_at: vendor.created_at
+            ? new Date(vendor.created_at).getTime()
+            : Date.now(),
     }
 }
 
