@@ -1,6 +1,7 @@
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
 
+import { syncInventoryItemToMeiliSearchWorkflow } from "../workflows/sync-inventory-item-meilisearch";
 import { syncProductToMeiliSearchWorkflow } from "../workflows/sync-product-meilisearch";
 
 /**
@@ -26,7 +27,9 @@ export default async function productMeilisearchSyncSubscriber({
   const productId: string = event.data?.id;
   if (!productId) return;
 
-  // DELETE path — remove from Meili without needing DB data.
+  // DELETE path — remove from BOTH the `products` index and the `inventory`
+  // index. The inventory cleanup uses the incremental workflow's search-by-
+  // productId fallback because the variant rows are already gone from the DB.
   if (event.name === "product.deleted") {
     try {
       const { MeiliSearch } = await import("meilisearch");
@@ -36,11 +39,24 @@ export default async function productMeilisearchSyncSubscriber({
       });
       await client.index("products").deleteDocument(productId);
       logger.info(
-        `[ProductMeilisearchSync] 🗑️  Deleted from Meili: ${productId}`
+        `[ProductMeilisearchSync] 🗑️  Deleted from products index: ${productId}`
       );
     } catch (err: any) {
       logger.warn(
-        `[ProductMeilisearchSync] ⚠️ Meili delete failed for ${productId}: ${err.message}`
+        `[ProductMeilisearchSync] ⚠️ products index delete failed for ${productId}: ${err.message}`
+      );
+    }
+
+    try {
+      const { result } = await syncInventoryItemToMeiliSearchWorkflow(
+        container
+      ).run({ input: { productId, deleteWhenMissing: true } });
+      logger.info(
+        `[ProductMeilisearchSync] 🗑️  inventory index cleanup for ${productId} — deleted=${result.deleted}`
+      );
+    } catch (err: any) {
+      logger.warn(
+        `[ProductMeilisearchSync] ⚠️ inventory cleanup failed for ${productId}: ${err.message}`
       );
     }
     return;

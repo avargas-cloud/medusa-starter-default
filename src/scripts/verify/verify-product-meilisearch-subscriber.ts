@@ -52,7 +52,8 @@ function run() {
     ),
   });
 
-  // 3. Delete branch exists and short-circuits with deleteDocument.
+  // 3. Delete branch exists and short-circuits with deleteDocument on the
+  //    products index + cascades inventory cleanup.
   const deleteBranch =
     /event\.name\s*===\s*"product\.deleted"[\s\S]*?deleteDocument\(\s*productId\s*\)/.test(
       src
@@ -60,9 +61,14 @@ function run() {
   checks.push({
     name: `delete branch calls client.index("products").deleteDocument(productId)`,
     pass: deleteBranch,
-    detail: deleteBranch
-      ? undefined
-      : "expected a branch guarded by event.name === 'product.deleted' that calls deleteDocument",
+  });
+  const deleteCascadesInventory =
+    /event\.name\s*===\s*"product\.deleted"[\s\S]*?syncInventoryItemToMeiliSearchWorkflow[\s\S]*?deleteWhenMissing:\s*true/.test(
+      src
+    );
+  checks.push({
+    name: `delete branch also runs inventory cleanup via syncInventoryItemToMeiliSearchWorkflow(deleteWhenMissing:true)`,
+    pass: deleteCascadesInventory,
   });
 
   // 4. Delete branch returns before falling through to upsert.
