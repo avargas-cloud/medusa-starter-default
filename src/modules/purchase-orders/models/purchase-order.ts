@@ -19,12 +19,19 @@ export const PurchaseOrder = model.define("purchase_order", {
   id: model.id({ prefix: "po" }).primaryKey(),
 
   // Numbering — PO-{seq} e.g. PO-1001
-  // Allocated at submit time from the `custom_purchase_order_seq`
-  // Postgres sequence. Null while status='draft'.
+  // Allocated at CREATION time from the `custom_purchase_order_seq` Postgres
+  // sequence so drafts carry a stable human-readable identifier staff can
+  // reference before QuickBooks submission. Nullable only for legacy rows
+  // created before this change.
   number: model.text().nullable(),
   seq: model.number().nullable(),
 
   status: model.text().default("draft"),
+
+  // User-managed workflow status (independent of `status`). Values come from
+  // the system_defaults "PO Status" field — e.g. "PO Sent", "US Customs Delay".
+  // Nullable: drafts/legacy rows have no tag.
+  po_status: model.text().nullable(),
 
   // Vendor — FK into quickbooks-catalog.qb_vendor (soft reference; no cascade)
   vendor_id: model.text(),

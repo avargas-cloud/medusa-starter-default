@@ -19,8 +19,9 @@ import { useState, useEffect, useCallback, useRef } from "react";
 const ALL_DOC_SCOPES = [
   { key: "customers", label: "Customers" },
   { key: "orders", label: "Orders" },
+  { key: "purchase_orders", label: "Purchase Orders" },
 ] as const;
-type DocScopeKey = (typeof ALL_DOC_SCOPES)[number]["key"]; // "customers" | "orders"
+type DocScopeKey = (typeof ALL_DOC_SCOPES)[number]["key"]; // "customers" | "orders" | "purchase_orders"
 
 type DataScope = string; // comma-separated DocScopeKeys, e.g. "customers,orders"
 
@@ -60,6 +61,7 @@ const KNOWN_FIELDS_BY_CONTEXT: Record<string, string[]> = {
     "FOB",
     "Ship Via",
     "Project Phase",
+    "PO Status",
   ],
   "Templates Footer": [
     "Draft Order (Estimates)",
@@ -80,15 +82,17 @@ const FIELD_DEFAULT_SCOPE: Record<string, string> = {
   FOB: "orders",
   "Ship Via": "orders",
   "Project Phase": "orders",
+  "PO Status": "purchase_orders",
   "Draft Order (Estimates)": "orders",
   "Order (Sales Order)": "orders",
   Invoice: "orders",
   referential_deposit: "orders",
 };
 
-const SCOPE_BADGE_COLOR: Record<DocScopeKey, "blue" | "green"> = {
+const SCOPE_BADGE_COLOR: Record<DocScopeKey, "blue" | "green" | "orange"> = {
   customers: "green",
   orders: "blue",
+  purchase_orders: "orange",
 };
 
 const CONTEXT_COLORS: Record<

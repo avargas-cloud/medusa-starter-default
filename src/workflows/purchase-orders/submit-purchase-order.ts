@@ -46,7 +46,7 @@ export const submitPurchaseOrderWorkflow = createWorkflow(
   ): WorkflowResponse<SubmitPurchaseOrderWorkflowOutput> {
     const validated = validatePoForSubmitStep({ po_id: input.po_id });
 
-    const seq = allocatePoSequenceStep({});
+    const seq = allocatePoSequenceStep({ po_id: input.po_id });
 
     const snapshotInput = transform(
       { input, validated, seq },

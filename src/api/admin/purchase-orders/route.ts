@@ -97,15 +97,23 @@ export async function POST(
     other_fees_cents: body.other_fees_cents,
   });
 
+  // Allocate the human-readable PO number at creation time so drafts carry a
+  // stable identifier staff can reference before QuickBooks submission.
+  const seq = await service.getNextPoSequence();
+  const number = `PO-${seq}`;
+
   const [po] = await service.createPurchaseOrders([
     {
       status: "draft",
+      number,
+      seq,
       vendor_id: body.vendor_id,
       stock_location_id: body.stock_location_id,
       ordered_at: body.ordered_at ? new Date(body.ordered_at) : null,
       expected_at: body.expected_at ? new Date(body.expected_at) : null,
       memo: body.memo ?? null,
       reference_number: body.reference_number ?? null,
+      po_status: body.po_status ?? null,
       subtotal_cents: totals.subtotal_cents,
       tax_cents: totals.tax_cents,
       shipping_cents: totals.shipping_cents,

@@ -13,12 +13,71 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+import { Modules } from "@medusajs/utils";
+import type { IUserModuleService } from "@medusajs/framework/types";
 
 import { getActorUserId, UnauthenticatedError } from "../_lib/auth";
 import { zodErrorToBody } from "../_lib/format";
 import { getPurchaseOrdersService } from "../_lib/service-resolver";
 import { computeTotals, normalizeLine } from "../_lib/totals";
 import { updateDraftSchema } from "../_lib/validators";
+
+interface QbVendorLike {
+  id: string;
+  qb_list_id: string | null;
+  full_name: string | null;
+  name: string;
+  company_name: string | null;
+  email: string | null;
+  phone: string | null;
+  addr1: string | null;
+  addr2: string | null;
+  city: string | null;
+  state: string | null;
+  postal_code: string | null;
+  country: string | null;
+}
+
+interface QbCatalogServiceLike {
+  retrieveQbVendor: (id: string) => Promise<QbVendorLike | null>;
+}
+
+interface ProductVariantLike {
+  id: string;
+  product?: { thumbnail?: string | null } | null;
+}
+
+interface ProductModuleLike {
+  listProductVariants: (
+    where: Record<string, unknown>,
+    config?: { relations?: string[] }
+  ) => Promise<ProductVariantLike[]>;
+}
+
+async function resolveUserBrief(
+  req: AuthenticatedMedusaRequest,
+  userId: string | null | undefined
+): Promise<{ id: string; first_name: string | null; last_name: string | null; email: string | null } | null> {
+  if (!userId) return null;
+  try {
+    const userModule = req.scope.resolve(Modules.USER) as IUserModuleService;
+    const user = (await userModule.retrieveUser(userId)) as unknown as {
+      id: string;
+      first_name?: string | null;
+      last_name?: string | null;
+      email?: string | null;
+    } | null;
+    if (!user) return null;
+    return {
+      id: user.id,
+      first_name: user.first_name ?? null,
+      last_name: user.last_name ?? null,
+      email: user.email ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
 
 interface PoHeader {
   id: string;
@@ -81,11 +140,70 @@ export async function GET(
     lines: linesByReceipt.get(r.id) ?? [],
   }));
 
+  // ── Hydrations for the editor: vendor contact, creator/actor users,
+  //    product variant thumbnails so refresh shows everything the picker did.
+  const vendor = await (async () => {
+    try {
+      const qbCatalog = req.scope.resolve(
+        "quickbooks_catalog"
+      ) as unknown as QbCatalogServiceLike;
+      return await qbCatalog.retrieveQbVendor(po.vendor_id);
+    } catch {
+      return null;
+    }
+  })();
+
+  const creator = await resolveUserBrief(
+    req,
+    (po as unknown as { created_by_user_id?: string | null }).created_by_user_id
+  );
+  const submitter = await resolveUserBrief(
+    req,
+    (po as unknown as { submitted_by_user_id?: string | null }).submitted_by_user_id
+  );
+
+  // Line thumbnails — batched variant lookup
+  const variantIds = Array.from(
+    new Set(
+      lines
+        .map((l) => (l as { product_variant_id?: string | null }).product_variant_id)
+        .filter((v): v is string => !!v)
+    )
+  );
+  const thumbnailByVariantId = new Map<string, string | null>();
+  if (variantIds.length > 0) {
+    try {
+      const productModule = req.scope.resolve(
+        Modules.PRODUCT
+      ) as unknown as ProductModuleLike;
+      const variants = await productModule.listProductVariants(
+        { id: variantIds },
+        { relations: ["product"] }
+      );
+      for (const v of variants) {
+        thumbnailByVariantId.set(v.id, v.product?.thumbnail ?? null);
+      }
+    } catch {
+      // Silent — thumbnails are decorative; missing thumbnails fall back to a placeholder.
+    }
+  }
+
+  const decoratedLines = lines.map((l) => {
+    const vid = (l as { product_variant_id?: string | null }).product_variant_id;
+    return {
+      ...l,
+      thumbnail: vid ? thumbnailByVariantId.get(vid) ?? null : null,
+    };
+  });
+
   return res.json({
     purchase_order: {
       ...po,
-      lines,
+      lines: decoratedLines,
       receipts: decoratedReceipts,
+      vendor,
+      creator,
+      submitter,
     },
   });
 }
@@ -116,15 +234,21 @@ export async function PATCH(
   if (!existing) {
     return res.status(404).json({ error: "Purchase order not found", code: "not_found" });
   }
-  if (existing.status !== "draft") {
+
+  // `po_status` is a user-coordination tag independent from lifecycle — editable
+  // at any stage. All other fields require status='draft'.
+  const { po_status: bodyPoStatus, ...bodyRest } = body;
+  const hasNonStatusChanges = Object.values(bodyRest).some((v) => v !== undefined);
+  if (hasNonStatusChanges && existing.status !== "draft") {
     return res.status(409).json({
-      error: `Cannot edit a PO in status '${existing.status}'. Only drafts are mutable.`,
+      error: `Cannot edit a PO in status '${existing.status}'. Only drafts are mutable (po_status is always editable).`,
       code: "not_editable",
     });
   }
 
   // Header patch
   const headerUpdate: Record<string, unknown> = { id };
+  if (bodyPoStatus !== undefined) headerUpdate.po_status = bodyPoStatus ?? null;
   if (body.vendor_id !== undefined) headerUpdate.vendor_id = body.vendor_id;
   if (body.stock_location_id !== undefined)
     headerUpdate.stock_location_id = body.stock_location_id;
@@ -136,7 +260,9 @@ export async function PATCH(
   if (body.reference_number !== undefined)
     headerUpdate.reference_number = body.reference_number ?? null;
 
-  // Replace lines if provided
+  // Replace lines if provided — hard-delete (no soft-delete / version history
+  // so removed items vanish from the PO entirely). MedusaService's deleteXXX
+  // already does a hard delete (softDeleteXXX is a separate method).
   if (body.lines !== undefined) {
     const oldLines = (await service.listPurchaseOrderLines(
       { purchase_order_id: id },
