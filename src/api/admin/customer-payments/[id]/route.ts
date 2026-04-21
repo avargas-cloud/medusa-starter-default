@@ -257,7 +257,7 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
             }
 
             // Write a 'pending' pipeline row immediately so the operation is visible
-            // in the QB Operations Pipeline the moment the user clicks Save — before
+            // in the QB Sales Pipeline the moment the user clicks Save — before
             // we start the (potentially slow) fresh EditSequence query that runs when
             // the cache is cold. The onSubmit callback below transitions this same
             // row in-place to 'submitted' once the bridge accepts the Mod.

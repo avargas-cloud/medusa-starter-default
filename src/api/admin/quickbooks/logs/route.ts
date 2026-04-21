@@ -44,7 +44,7 @@ export async function GET(
     let p = 1;
 
     // Activity Log only shows background sync operations.
-    // Order/payment events are tracked in the QB Operations Pipeline instead.
+    // Order/payment events are tracked in the QB Sales Pipeline instead.
     // The 'sync' category param is kept for backwards compat but is now the default.
     if (category !== "all") {
       conditions.push(

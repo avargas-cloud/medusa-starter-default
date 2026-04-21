@@ -17,7 +17,7 @@ const QbPipelinePage = () => {
         <Text className="text-ui-fg-subtle mt-1">
           Real-time queues for item creation and order document sync with
           QuickBooks Desktop. Errored items can be retried; failed ops can be
-          flushed from the Operations tab.
+          flushed from the Sales Pipeline tab.
         </Text>
       </div>
 
@@ -29,7 +29,7 @@ const QbPipelinePage = () => {
             value="operations"
             className="px-4 py-2 font-semibold data-[state=active]:bg-ui-bg-base-pressed data-[state=active]:text-ui-fg-base data-[state=active]:border-b-2 data-[state=active]:border-ui-fg-interactive"
           >
-            Operations Pipeline
+            Sales Pipeline
           </Tabs.Trigger>
           <Tabs.Trigger
             value="items"
@@ -47,7 +47,7 @@ const QbPipelinePage = () => {
             value="vendors"
             className="px-4 py-2 font-semibold data-[state=active]:bg-ui-bg-base-pressed data-[state=active]:text-ui-fg-base data-[state=active]:border-b-2 data-[state=active]:border-ui-fg-interactive"
           >
-            Vendors
+            Purchase Pipeline
           </Tabs.Trigger>
           <Tabs.Trigger
             value="waiting-orders"

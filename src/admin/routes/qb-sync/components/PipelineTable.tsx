@@ -614,7 +614,7 @@ export function PipelineTable() {
               level="h3"
               className="text-sm font-medium flex items-center gap-2"
             >
-              ⚡ QB Operations Pipeline
+              ⚡ QB Sales Pipeline
               {hasPending && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-normal text-blue-600 animate-pulse">
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block" />

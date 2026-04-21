@@ -289,6 +289,12 @@ module.exports = defineConfig({
       resolve: "./src/modules/inventory-count",
     },
     {
+      resolve: "./src/modules/unmet-demand",
+    },
+    {
+      resolve: "./src/modules/purchase-orders",
+    },
+    {
       resolve: "@medusajs/medusa/tax",
       options: {
         providers: [
