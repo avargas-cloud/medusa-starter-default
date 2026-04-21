@@ -3,6 +3,16 @@ import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 
 import { getDbPool } from "../api/utils/db-pool";
 import { bridgeFetch } from "../lib/quickbooks/client/core";
+
+function compareTxnLineIds(a: string, b: string): number {
+  const numA = Number(a);
+  const numB = Number(b);
+  if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+  const hexA = parseInt((a ?? "").split("-")[0] ?? a, 16);
+  const hexB = parseInt((b ?? "").split("-")[0] ?? b, 16);
+  if (!isNaN(hexA) && !isNaN(hexB)) return hexA - hexB;
+  return String(a).localeCompare(String(b));
+}
 import { voidCreditMemoInQb } from "../lib/quickbooks/client/credit-memos";
 import { voidInvoiceInQb } from "../lib/quickbooks/client/invoices";
 import {
@@ -216,10 +226,11 @@ export default async function qbPipelineConsolidator(
         ): Record<string, string[]> | null => {
           if (!lineRet) return null;
           const arr: unknown[] = Array.isArray(lineRet) ? lineRet : [lineRet];
-          const sorted = [...arr].sort(
-            (a, b) =>
-              Number((a as Record<string, unknown>)?.TxnLineID ?? 0) -
-              Number((b as Record<string, unknown>)?.TxnLineID ?? 0)
+          const sorted = [...arr].sort((a, b) =>
+            compareTxnLineIds(
+              String((a as Record<string, unknown>)?.TxnLineID ?? ""),
+              String((b as Record<string, unknown>)?.TxnLineID ?? "")
+            )
           );
           const map: Record<string, string[]> = {};
           for (const line of sorted) {

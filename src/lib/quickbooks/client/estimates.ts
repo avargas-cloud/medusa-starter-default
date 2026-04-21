@@ -10,6 +10,21 @@ import {
 } from "./types";
 
 /**
+ * Compares two QB TxnLineID strings for ascending sort.
+ * Number() on hex-format IDs like "1C1255-1776781804" returns NaN, breaking sort.
+ * Falls back to parsing the first hex segment when numeric conversion fails.
+ */
+function compareTxnLineIds(a: string, b: string): number {
+  const numA = Number(a);
+  const numB = Number(b);
+  if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+  const hexA = parseInt(a.split("-")[0] ?? a, 16);
+  const hexB = parseInt(b.split("-")[0] ?? b, 16);
+  if (!isNaN(hexA) && !isNaN(hexB)) return hexA - hexB;
+  return a.localeCompare(b);
+}
+
+/**
  * Creates an Estimate in QuickBooks (async — used for Draft Orders).
  * Returns operationId. Poll for txnId (qb_estimate_txn_id) + refNumber (qb_estimate_ref).
  */
@@ -117,7 +132,7 @@ export async function updateEstimateInQb(
       // Sort ascending by TxnLineID (numeric) so the queue matches QB line order.
       // Duplicate products (same QB ListID) are supported via arrays.
       const sortedLines = [...linesArr].sort(
-        (a, b) => Number(a?.TxnLineID ?? 0) - Number(b?.TxnLineID ?? 0)
+        (a, b) => compareTxnLineIds(String(a?.TxnLineID ?? ""), String(b?.TxnLineID ?? ""))
       );
       for (const line of sortedLines) {
         const productId = line?.ItemRef?.ListID;
@@ -162,7 +177,7 @@ export async function updateEstimateInQb(
       // Items without TxnLineID (new lines) go last so QB appends them.
       .sort((a, b) => {
         if (a.TxnLineID && b.TxnLineID)
-          return Number(a.TxnLineID) - Number(b.TxnLineID);
+          return compareTxnLineIds(String(a.TxnLineID), String(b.TxnLineID));
         if (a.TxnLineID) return -1; // existing line → before new
         if (b.TxnLineID) return 1; // new line → after existing
         return 0;

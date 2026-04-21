@@ -1,6 +1,16 @@
 import { getCachedEditSequence, cacheEditSequence } from "../qb-pipeline";
 
 import { DRY_RUN, bridgeFetch, pollRawOperationResult } from "./core";
+
+function compareTxnLineIds(a: string, b: string): number {
+  const numA = Number(a);
+  const numB = Number(b);
+  if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+  const hexA = parseInt((a ?? "").split("-")[0] ?? a, 16);
+  const hexB = parseInt((b ?? "").split("-")[0] ?? b, 16);
+  if (!isNaN(hexA) && !isNaN(hexB)) return hexA - hexB;
+  return String(a).localeCompare(String(b));
+}
 import {
   QbCreateSalesOrderPayload,
   QbUpdateSalesOrderPayload,
@@ -105,7 +115,7 @@ export async function getSalesOrderDetailsFromQb(txnId: string): Promise<{
     // Duplicate products (same QB ListID) are supported via arrays.
     const qbLinesByProductId: Record<string, string[]> = {};
     const sortedLines = [...linesArr].sort(
-      (a, b) => Number(a?.TxnLineID ?? 0) - Number(b?.TxnLineID ?? 0)
+      (a, b) => compareTxnLineIds(String(a?.TxnLineID ?? ""), String(b?.TxnLineID ?? ""))
     );
     for (const line of sortedLines) {
       const productId = line?.ItemRef?.ListID;
@@ -193,7 +203,7 @@ export async function updateSalesOrderInQb(
       // Items without TxnLineID (new lines) go last so QB appends them.
       .sort((a, b) => {
         if (a.TxnLineID && b.TxnLineID)
-          return Number(a.TxnLineID) - Number(b.TxnLineID);
+          return compareTxnLineIds(String(a.TxnLineID), String(b.TxnLineID));
         if (a.TxnLineID) return -1;
         if (b.TxnLineID) return 1;
         return 0;
