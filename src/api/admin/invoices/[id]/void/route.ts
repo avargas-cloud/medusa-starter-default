@@ -4,13 +4,18 @@
  */
 
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { Modules } from "@medusajs/utils";
+import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
 import { recalculateOrderStatus } from "../../../../../utils/order-utils";
 import { getDbPool } from "../../../../utils/db-pool";
 import { handlePosPaymentCreated } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-created";
+import { voidInvoiceInQb } from "../../../../../lib/quickbooks/client";
+import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
+import { buildQbItems } from "../../../../../lib/quickbooks/order-flow-core";
+import { createSalesOrderInQb } from "../../../../../lib/quickbooks/client/sales-orders";
+import { parseSalesRepInitials } from "../../../../../lib/quickbooks/parse-sales-rep";
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const invoiceService = req.scope.resolve(INVOICE_MODULE);
@@ -533,6 +538,230 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       fulfillment_id: invoice.fulfillment_id ?? null,
     },
   });
+
+  // -- QB VOID SYNC --
+  // Look up the invoice's pipeline row to decide how to void it in QB.
+  //   confirmed  → fire voidInvoiceInQb immediately (fire & forget)
+  //   submitted / pending / waiting → create void_invoice row with depends_on so
+  //                                    the consolidator voids it once QB confirms the invoice
+  //   no row     → invoice was never synced to QB, nothing to do
+  if (process.env.QB_ORDER_FLOW_ENABLED === "true") {
+    try {
+      const pool = getDbPool();
+      const { rows: invPipelineRows } = await pool.query<{
+        id: string; status: string; qb_txn_id: string | null; order_id: string | null;
+      }>(
+        `SELECT id, status, qb_txn_id, order_id
+           FROM qb_order_pipeline
+          WHERE reference_id = $1 AND step IN ('invoice', 'sales_receipt')
+          ORDER BY created_at DESC LIMIT 1`,
+        [id]
+      );
+      const invRow = invPipelineRows[0];
+
+      if (invRow) {
+        if (invRow.status === "confirmed" && invRow.qb_txn_id) {
+          // Invoice already in QB — void it now (fire & forget)
+          setTimeout(async () => {
+            try {
+              await writePipelineRow({
+                orderId: invRow.order_id,
+                referenceId: id,
+                referenceType: "pos_invoice",
+                step: "void_invoice",
+                status: "pending",
+                medusaRefNumber: invoice.invoice_number ?? null,
+              });
+              const voidRes = await voidInvoiceInQb(
+                invRow.qb_txn_id!,
+                (msg) => console.log(msg)
+              );
+              if (voidRes.success) {
+                await pool.query(
+                  `UPDATE qb_order_pipeline SET status='confirmed', confirmed_at=NOW()
+                     WHERE reference_id=$1 AND step='void_invoice'`,
+                  [id]
+                );
+                console.log(`[VOID INVOICE] ✅ QB Invoice ${invRow.qb_txn_id} voided`);
+              } else {
+                console.error(`[VOID INVOICE] ❌ QB void failed: ${voidRes.error}`);
+              }
+            } catch (e: any) {
+              console.error(`[VOID INVOICE] QB void error: ${e.message}`);
+            }
+          }, 200);
+        } else if (["submitted", "pending", "waiting"].includes(invRow.status)) {
+          // Invoice still in-flight — queue void to run after QB confirms it
+          await writePipelineRow({
+            orderId: invRow.order_id,
+            referenceId: id,
+            referenceType: "pos_invoice",
+            step: "void_invoice",
+            status: "waiting",
+            dependsOn: invRow.id,
+            medusaRefNumber: invoice.invoice_number ?? null,
+          });
+          console.log(
+            `[VOID INVOICE] QB invoice in-flight (${invRow.status}) — void_invoice row queued with depends_on=${invRow.id}`
+          );
+        }
+      } else {
+        console.log(`[VOID INVOICE] No QB pipeline row found for invoice ${id} — skipping QB void`);
+      }
+    } catch (qbErr: any) {
+      console.error(`[VOID INVOICE] QB void sync error (non-fatal): ${qbErr.message}`);
+    }
+  }
+  // -- QB VOID SYNC END --
+
+  // -- SO REPAIR AFTER INVOICE VOID --
+  // If this order never got a QB Sales Order (went direct to invoice), and the invoice is
+  // now voided, we need to restore the pipeline so a SO can be created.
+  //   < 1h old  → pipeline sales_order row: skipped → waiting (will be processed when aged)
+  //   >= 1h old → pipeline sales_order row: skipped → submitted + fire SO creation immediately
+  if (process.env.QB_ORDER_FLOW_ENABLED === "true" && invoice.order_id) {
+    try {
+      const pool = getDbPool();
+
+      const { rows: soCheckRows } = await pool.query<{
+        created_at: Date;
+        qb_list_id: string | null;
+        document_number: string | null;
+        display_id: number | null;
+        sales_rep: string | null;
+        so_flat: string | null;
+        so_new: string | null;
+        est_flat: string | null;
+        est_new: string | null;
+      }>(
+        `SELECT
+           o.created_at,
+           o.metadata->>'qb_list_id'               AS qb_list_id,
+           o.metadata->>'document_number'           AS document_number,
+           o.display_id,
+           o.metadata->>'sales_rep'                 AS sales_rep,
+           o.metadata->>'qb_sales_order_txn_id'     AS so_flat,
+           o.metadata->'qb_sales_order'->>'txn_id'  AS so_new,
+           o.metadata->>'qb_estimate_txn_id'        AS est_flat,
+           o.metadata->'qb_estimate'->>'txn_id'     AS est_new
+         FROM "order" o WHERE o.id = $1`,
+        [invoice.order_id]
+      );
+
+      const orderRow = soCheckRows[0];
+      if (orderRow) {
+        const hasQbDoc = !!(
+          orderRow.so_flat || orderRow.so_new ||
+          orderRow.est_flat || orderRow.est_new
+        );
+
+        if (!hasQbDoc) {
+          const ageMs = Date.now() - new Date(orderRow.created_at).getTime();
+          const ONE_HOUR_MS = 60 * 60 * 1000;
+
+          if (ageMs < ONE_HOUR_MS) {
+            // Too new — bump pipeline back to waiting; cron/next-Save will pick it up
+            await pool.query(
+              `UPDATE qb_order_pipeline
+                  SET status = 'waiting', updated_at = NOW()
+                WHERE order_id = $1 AND step = 'sales_order' AND status = 'skipped'`,
+              [invoice.order_id]
+            );
+            console.log(
+              `[VOID INVOICE] SO repair: order < 1h — pipeline set to waiting for ${invoice.order_id}`
+            );
+          } else {
+            // Old enough — create SO in QB now (fire & forget)
+            const friendlyRef =
+              orderRow.document_number ||
+              (orderRow.display_id ? `S${orderRow.display_id}` : undefined);
+            const salesRep = parseSalesRepInitials(orderRow.sales_rep ?? undefined);
+
+            if (orderRow.qb_list_id) {
+              const query = req.scope.resolve(ContainerRegistrationKeys.QUERY);
+              const { data: orderData } = await query.graph({
+                entity: "order",
+                fields: [
+                  "id",
+                  "display_id",
+                  "metadata",
+                  "items.*",
+                  "items.variant.*",
+                  "items.variant.metadata",
+                ],
+                filters: { id: invoice.order_id },
+              });
+              const fullOrder = orderData?.[0];
+              const qbItems = buildQbItems(
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                ((fullOrder?.items ?? []).filter(Boolean) as any[]),
+                fullOrder?.metadata ?? undefined
+              );
+              const qbListId = orderRow.qb_list_id as string;
+
+              await writePipelineRow({
+                orderId: invoice.order_id,
+                step: "sales_order",
+                status: "pending",
+                medusaRefNumber: friendlyRef,
+              });
+
+              console.log(
+                `[VOID INVOICE] SO repair: order >= 1h — firing QB SO creation for ${invoice.order_id}`
+              );
+
+              setTimeout(async () => {
+                try {
+                  const todayDate = new Date().toISOString().split("T")[0]!;
+                  const soRes = await createSalesOrderInQb({
+                    customerId: qbListId,
+                    date: todayDate,
+                    items: qbItems,
+                    ...(friendlyRef ? { refNumber: friendlyRef } : {}),
+                    ...(salesRep ? { salesRep } : {}),
+                  });
+
+                  if (soRes.success && soRes.data?.operationId) {
+                    await writePipelineRow({
+                      orderId: invoice.order_id,
+                      step: "sales_order",
+                      status: "submitted",
+                      bridgeOpId: soRes.data.operationId,
+                      medusaRefNumber: friendlyRef,
+                    });
+                    console.log(
+                      `[VOID INVOICE] ✅ QB SO submitted after void, opId=${soRes.data.operationId}`
+                    );
+                  } else {
+                    console.error(
+                      `[VOID INVOICE] ❌ QB SO creation failed after void: ${soRes.error}`
+                    );
+                  }
+                } catch (soErr: any) {
+                  console.error(
+                    `[VOID INVOICE] ❌ QB SO creation error after void: ${soErr.message}`
+                  );
+                }
+              }, 300);
+            } else {
+              console.warn(
+                `[VOID INVOICE] SO repair: order >= 1h but no qb_list_id — cannot create SO for ${invoice.order_id}`
+              );
+            }
+          }
+        } else {
+          console.log(
+            `[VOID INVOICE] SO repair: order already has QB SO/Estimate — skipping for ${invoice.order_id}`
+          );
+        }
+      }
+    } catch (soRepairErr: any) {
+      console.error(
+        `[VOID INVOICE] SO repair error (non-fatal): ${soRepairErr.message}`
+      );
+    }
+  }
+  // -- SO REPAIR END --
 
   console.log(`[VOID INVOICE] Final API Response Payload ready. Success.`);
 

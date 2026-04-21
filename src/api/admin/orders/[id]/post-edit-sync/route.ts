@@ -560,7 +560,39 @@ export async function POST(
   // ── Update QuickBooks Sales Order / Estimate (Sync Edits) ───────────────────
   try {
     const qbEnabled = process.env.QB_ORDER_FLOW_ENABLED === "true";
-    const skipQb = (req.body as any).skip_qb === true;
+    let skipQb = (req.body as any).skip_qb === true;
+
+    // Override skip_qb when the order needs a new QB Sales Order after a void.
+    // This is a one-time repair: invoice was voided but no SO exists — the backend
+    // must create one regardless of whether items changed in this save.
+    if (qbEnabled && skipQb) {
+      try {
+        const { getDbPool: _pool } = require("../../../../utils/db-pool");
+        const { rows: peekRows } = await _pool().query(
+          `SELECT (
+             (o.metadata->>'qb_sales_order_txn_id' IS NULL)
+             AND ((o.metadata->'qb_sales_order'->>'txn_id') IS NULL)
+             AND (o.metadata->>'qb_estimate_txn_id' IS NULL)
+             AND ((o.metadata->'qb_estimate'->>'txn_id') IS NULL)
+             AND EXISTS (
+               SELECT 1 FROM pos_invoice pi
+               WHERE pi.order_id = $1 AND pi.status = 'voided' AND pi.deleted_at IS NULL
+             )
+           ) AS needs_so_repair
+           FROM "order" o WHERE o.id = $1`,
+          [id]
+        );
+        if (peekRows[0]?.needs_so_repair === true) {
+          skipQb = false;
+          logger.info(
+            `[post-edit-sync] 🔧 skip_qb overridden — voided invoice detected, forcing SO repair for order ${id}`
+          );
+        }
+      } catch (peekErr: any) {
+        logger.warn(`[post-edit-sync] Could not peek order QB state: ${peekErr.message}`);
+      }
+    }
+
     if (qbEnabled && !skipQb) {
       const { data: qbOrderData } = await query.graph({
         entity: "order",
@@ -584,6 +616,7 @@ export async function POST(
       const {
         getSoTxnId,
         getEstimateTxnId,
+        getLatestInvoiceTxnId,
       } = require("../../../../../lib/quickbooks/qb-metadata-types");
       const {
         updateSalesOrderInQb,
@@ -601,9 +634,59 @@ export async function POST(
 
       const soTxnId = getSoTxnId(qbOrder?.metadata);
       const estimateTxnId = getEstimateTxnId(qbOrder?.metadata);
+      const invoiceTxnId = getLatestInvoiceTxnId(qbOrder?.metadata);
+
+      // Determine whether the QB invoice is still active (confirmed but not voided).
+      // A voided invoice means the SO may be open again — allow the Mod in that case.
+      // Two void signals: confirmed void_invoice pipeline row OR pos_invoice.status='voided'.
+      // The latter covers voids that happened before QB void-sync was wired up.
+      let hasActiveInvoice = false;
+      if (invoiceTxnId) {
+        const { rows: activeRows } = await getDbPool().query(
+          `SELECT id FROM qb_order_pipeline
+           WHERE order_id = $1 AND step IN ('invoice', 'sales_receipt') AND status = 'confirmed'
+           AND NOT EXISTS (
+             SELECT 1 FROM qb_order_pipeline v
+             WHERE v.order_id = $1 AND v.step = 'void_invoice' AND v.status = 'confirmed'
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM pos_invoice pi
+             WHERE pi.order_id = $1 AND pi.status = 'voided' AND pi.deleted_at IS NULL
+           )
+           LIMIT 1`,
+          [id]
+        );
+        hasActiveInvoice = activeRows.length > 0;
+      }
+
+      // Check if a QB Sales Order needs to be created after a void.
+      // Two signals:
+      //   'waiting'  — void route (new path) explicitly bumped the row, SO needs creation
+      //   'skipped' + voided pos_invoice — void happened before repair code was deployed;
+      //               invoice was never QB-synced so invoiceTxnId is also null
+      // Guard: for >= 1h, void route fires SO creation directly (pipeline → 'submitted'),
+      // so this stays false — no duplicate risk.
+      const { rows: soRepairRows } = await getDbPool().query(
+        `SELECT 1 FROM qb_order_pipeline
+         WHERE order_id = $1 AND step = 'sales_order'
+           AND (
+             status = 'waiting'
+             OR (
+               status = 'skipped'
+               AND EXISTS (
+                 SELECT 1 FROM pos_invoice pi
+                 WHERE pi.order_id = $1 AND pi.status = 'voided' AND pi.deleted_at IS NULL
+               )
+             )
+           )
+         LIMIT 1`,
+        [id]
+      );
+      const soNeedsRepair = soRepairRows.length > 0;
 
       if (
         (soTxnId || estimateTxnId) &&
+        !hasActiveInvoice &&
         qbOrder?.items &&
         qbOrder.items.length > 0
       ) {
@@ -725,6 +808,169 @@ export async function POST(
         );
 
         results.qb_sync = "queued_async";
+      } else if (hasActiveInvoice) {
+        // Active invoice in QB — SO is closed, but the order IS synced via invoice.
+        // Clear any stale "error" by reflecting the real QB state.
+        logger.info(
+          `[post-edit-sync] ⏭️ QB SO/Estimate Mod skipped — active invoice (${invoiceTxnId}) owns the QB document`
+        );
+        try {
+          await getDbPool().query(
+            `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status":"child_synced"}'::jsonb WHERE id = $1`,
+            [id]
+          );
+        } catch (e) {}
+        results.qb_sync = "skipped_invoiced";
+      } else {
+        // No SO/Estimate in QB (order was direct-to-invoice or SO skipped).
+        // soNeedsRepair covers orders where the invoice was voided but never QB-synced
+        // (invoiceTxnId would be null). The void route sets the pipeline row to 'waiting'
+        // as the signal. For >= 1h orders, the void route fires SO creation directly
+        // (pipeline goes to 'submitted'), so soNeedsRepair is false — no duplicate risk.
+        if (
+          (invoiceTxnId || soNeedsRepair) &&
+          !hasActiveInvoice &&
+          (qbOrder?.items?.length ?? 0) > 0
+        ) {
+          // Invoice was voided → order is open again with items.
+          // Respect the 1-hour window: if the order is < 1h old, skip SO creation —
+          // it will go directly to Invoice/Sales Receipt (same guard as qb-pos-sync cron).
+          const { rows: orderTimeRows } = await getDbPool().query(
+            `SELECT created_at FROM "order" WHERE id = $1`,
+            [id]
+          );
+          const createdAt: Date | undefined = orderTimeRows[0]?.created_at;
+          const ageMs = createdAt ? Date.now() - new Date(createdAt).getTime() : Infinity;
+          const ONE_HOUR_MS = 60 * 60 * 1000;
+
+          if (ageMs < ONE_HOUR_MS) {
+            logger.info(
+              `[post-edit-sync] ⏭️ Order < 1h old — skipping SO creation after void (expect direct Invoice/SR)`
+            );
+            results.qb_sync = "skipped_too_new";
+          } else {
+            // → Order is old enough: create a new QB Sales Order.
+            // qb_list_id may not be in order metadata if the order was placed before
+            // qb_list_id propagation was wired up — fall back to the customer record.
+            let qbListId = qbOrder?.metadata?.qb_list_id as string | undefined;
+            if (!qbListId) {
+              try {
+                const custRes = await getDbPool().query(
+                  `SELECT c.metadata->>'qb_list_id' AS qb_list_id
+                   FROM "order" o JOIN customer c ON c.id = o.customer_id
+                   WHERE o.id = $1`,
+                  [id]
+                );
+                const custQbId = custRes.rows[0]?.qb_list_id as string | null | undefined;
+                qbListId = custQbId ?? undefined;
+                if (qbListId) {
+                  logger.info(`[post-edit-sync] 📋 Using customer qb_list_id=${qbListId} (not in order metadata)`);
+                }
+              } catch (custErr: any) {
+                logger.warn(`[post-edit-sync] Could not fetch customer qb_list_id: ${custErr.message}`);
+              }
+            }
+            if (qbListId) {
+              const {
+                createSalesOrderInQb,
+              } = require("../../../../../lib/quickbooks/client/sales-orders");
+              const createItems = buildQbItems(qbOrder!.items, qbOrder!.metadata);
+              const salesRep = parseSalesRepInitials(qbOrder?.metadata?.sales_rep);
+              const friendlyRef =
+                (qbOrder?.metadata?.document_number as string) ||
+                (qbOrder?.display_id ? `S${qbOrder.display_id}` : undefined);
+
+              logger.info(
+                `[post-edit-sync] 🔄 Voided invoice detected — queuing new QB SO for order ${id}...`
+              );
+
+              try {
+                await getDbPool().query(
+                  `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status":"pending"}'::jsonb WHERE id = $1`,
+                  [id]
+                );
+              } catch (mErr) {}
+
+              try {
+                await writePipelineRow({
+                  orderId: id,
+                  step: "sales_order",
+                  status: "pending",
+                  medusaRefNumber: friendlyRef,
+                });
+              } catch (pErr: any) {}
+
+              withQbSerialized(
+                `sales_order:${id}`,
+                { orderId: id, steps: ["sales_order"] },
+                async () => {
+                  try {
+                    const soRes = await createSalesOrderInQb({
+                      customerId: qbListId,
+                      date: new Date().toISOString().split("T")[0],
+                      items: createItems,
+                      ...(friendlyRef ? { refNumber: friendlyRef } : {}),
+                      ...(salesRep ? { salesRep } : {}),
+                    });
+                    if (soRes.success) {
+                      logger.info(
+                        `[post-edit-sync] ✅ New QB SO queued opId=${soRes.data?.operationId}`
+                      );
+                      await writePipelineRow({
+                        orderId: id,
+                        step: "sales_order",
+                        status: "submitted",
+                        bridgeOpId: soRes.data?.operationId,
+                      });
+                    } else {
+                      logger.error(
+                        `[post-edit-sync] ❌ New QB SO failed: ${soRes.error}`
+                      );
+                      try {
+                        await getDbPool().query(
+                          `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status":"error"}'::jsonb WHERE id = $1`,
+                          [id]
+                        );
+                        await writePipelineRow({
+                          orderId: id,
+                          step: "sales_order",
+                          status: "failed",
+                          error: soRes.error,
+                        });
+                      } catch (e) {}
+                    }
+                  } catch (e: any) {
+                    logger.error(
+                      `[post-edit-sync] ❌ New QB SO exception: ${e.message}`
+                    );
+                    try {
+                      await getDbPool().query(
+                        `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status":"error"}'::jsonb WHERE id = $1`,
+                        [id]
+                      );
+                      await writePipelineRow({
+                        orderId: id,
+                        step: "sales_order",
+                        status: "failed",
+                        error: e.message,
+                      });
+                    } catch (err) {}
+                  }
+                },
+                { logger }
+              );
+
+              results.qb_sync = "new_so_queued";
+            } else {
+              logger.warn(
+                `[post-edit-sync] ⚠️ Voided invoice but no qb_list_id on order — cannot create QB SO`
+              );
+              results.qb_sync = "no_qb_customer";
+            }
+          }
+        } else {
+          results.qb_sync = "no_so_to_update";
+        }
       }
     } else if (skipQb) {
       logger.info(

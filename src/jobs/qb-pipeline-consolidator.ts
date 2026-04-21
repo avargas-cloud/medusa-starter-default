@@ -779,9 +779,26 @@ export default async function qbPipelineConsolidator(
                 editSequence: editSeq,
                 syncStatus: "synced",
               });
+            } else if (row.step === "sales_order" && txnId) {
+              // Always persist SO TxnId — handles both fresh creation and updates.
+              const existing =
+                (existingMeta.qb_sales_order as Record<string, any> | undefined) || {};
+              patch = {
+                ...existingMeta,
+                qb_sales_order: {
+                  ...existing,
+                  txn_id: txnId,
+                  ref_number: refNumber || existing.ref_number || null,
+                  operation_id: null,
+                  edit_sequence: editSeq || existing.edit_sequence || null,
+                  synced_at: new Date().toISOString(),
+                },
+                qb_sales_order_txn_id: txnId,
+                qb_sync_status: "sales_order",
+              };
             } else {
               // For other steps, only update if we have an editSequence to save
-              // (full patches for SO/Invoice/Payment are written by their own handlers)
+              // (full patches for Invoice/Payment are written by their own handlers)
               if (!editSeq) {
                 logger.info(
                   `${LOG_PREFIX} ℹ️ No metadata update needed for step=${row.step} (no editSequence)`
@@ -790,19 +807,11 @@ export default async function qbPipelineConsolidator(
               }
               // Merge editSequence into existing qb_<step> sub-object
               const stepKey =
-                row.step === "sales_order"
-                  ? "qb_sales_order"
-                  : row.step === "invoice"
-                    ? "qb_invoices"
-                    : null;
-              if (stepKey && stepKey !== "qb_invoices") {
-                const existing = existingMeta[stepKey] || {};
-                patch = {
-                  ...existingMeta,
-                  [stepKey]: { ...existing, edit_sequence: editSeq },
-                };
-              } else {
+                row.step === "invoice" ? "qb_invoices" : null;
+              if (stepKey === null) {
                 patch = existingMeta; // nothing to merge safely
+              } else {
+                patch = existingMeta; // qb_invoices patches handled by fulfillment handler
               }
             }
 
