@@ -48,6 +48,25 @@ export async function POST(
       return;
     }
 
+    // Lock immediately to prevent duplicate completions from concurrent requests
+    // (QB sync can take 1-2 min; without this, a second click passes the guard above)
+    const updateMethodName =
+      typeof (creditMemoService as any).updatePosCreditMemos === "function"
+        ? "updatePosCreditMemos"
+        : typeof (creditMemoService as any).updatePosCreditMemoes === "function"
+          ? "updatePosCreditMemoes"
+          : Object.keys(creditMemoService as any).find(
+              (k) =>
+                k.startsWith("update") && k.toLowerCase().includes("credit")
+            );
+    if (!updateMethodName)
+      throw new Error("Cannot find updatePosCreditMemo* method on service");
+    await (creditMemoService as any)[updateMethodName]({
+      id,
+      status: "completed",
+      completed_at: new Date(),
+    });
+
     // Restock Inventory for every variant in the credit memo
     // Use the first active stock location (no assumption on name)
     const allLocations = await stockLocationService.listStockLocations({});
@@ -260,24 +279,6 @@ export async function POST(
     }
     // -- QUICKBOOKS SYNC END --
 
-    // Mark Credit Memo as completed — discover method name at runtime
-    const updateMethodName =
-      typeof (creditMemoService as any).updatePosCreditMemos === "function"
-        ? "updatePosCreditMemos"
-        : typeof (creditMemoService as any).updatePosCreditMemoes === "function"
-          ? "updatePosCreditMemoes"
-          : Object.keys(creditMemoService as any).find(
-              (k) =>
-                k.startsWith("update") && k.toLowerCase().includes("credit")
-            );
-    if (!updateMethodName)
-      throw new Error("Cannot find updatePosCreditMemo* method on service");
-    await (creditMemoService as any)[updateMethodName]({
-      id,
-      status: "completed",
-      completed_at: new Date(),
-    });
-
     // -- AR LEDGER SYNC BEGIN --
     // Register a Finance Ledger entry based on the chosen refund method:
     //   store_credit → type:'credit_memo', status:'available'  (credit for future purchases)
@@ -418,85 +419,95 @@ export async function POST(
         const cmRef =
           creditMemo.credit_memo_number ?? `CM-${creditMemo.id.slice(-6)}`;
 
-        await financeService.createCustomerPayments({
-          customer_id: creditMemo.customer_id,
-          display_id: nextPayNum,
-          amount: cmTotal,
-          method: isStoreCredit ? "credit_memo" : "refund",
-          reference: cmRef,
-          notes: isStoreCredit
-            ? `Store Credit generated from Return/Credit Memo`
-            : `Refund — to be processed manually by staff`,
-          received_at: new Date(),
-          created_by: "system",
-          source: "pos",
-          type: isStoreCredit ? "credit_memo" : "refund",
-          status: isStoreCredit ? "available" : "applied",
-          medusa_payment_synced: false,
-        });
-
-        logger.info(
-          `[credit_memos complete] Registered $${cmTotal} as '${isStoreCredit ? "store_credit" : "refund"}' ` +
-            `in Finance Ledger for customer ${creditMemo.customer_id}`
+        // Secondary idempotency guard: skip if a payment for this CM already exists
+        const existingPayments = await financeService.listCustomerPayments(
+          { reference: cmRef, customer_id: creditMemo.customer_id },
+          { take: 1 }
         );
+        if (existingPayments?.length > 0) {
+          logger.warn(
+            `[credit_memos complete] Payment for ${cmRef} already exists (id=${existingPayments[0].id}) — skipping duplicate`
+          );
+        } else {
+          await financeService.createCustomerPayments({
+            customer_id: creditMemo.customer_id,
+            display_id: nextPayNum,
+            amount: cmTotal,
+            method: isStoreCredit ? "credit_memo" : "refund",
+            reference: cmRef,
+            notes: isStoreCredit
+              ? `Store Credit generated from Return/Credit Memo`
+              : `Refund — to be processed manually by staff`,
+            received_at: new Date(),
+            created_by: "system",
+            source: "pos",
+            type: isStoreCredit ? "credit_memo" : "refund",
+            status: isStoreCredit ? "available" : "applied",
+            medusa_payment_synced: false,
+          });
 
-        // If this is a physical cash refund → create Write Check in QB
-        if (!isStoreCredit && custResult?.qbCustomerId) {
-          const bankAccountListId = process.env.QB_BANK_ACCOUNT_LIST_ID;
-          if (!bankAccountListId) {
-            logger.warn(
-              `[credit_memos complete] QB_BANK_ACCOUNT_LIST_ID not set — skipping Write Check`
-            );
-          } else {
-            try {
-              // Record as pending before calling bridge
-              await writePipelineRow({
-                referenceId: id,
-                referenceType: "credit_memo",
-                step: "write_check",
-                status: "pending",
-                medusaRefNumber: creditMemo.credit_memo_number ?? null,
-                error: null,
-              });
+          logger.info(
+            `[credit_memos complete] Registered $${cmTotal} as '${isStoreCredit ? "store_credit" : "refund"}' ` +
+              `in Finance Ledger for customer ${creditMemo.customer_id}`
+          );
 
-              const checkResult = await createCheckInQb({
-                customerId: custResult.qbCustomerId,
-                bankAccountListId,
-                amount: cmTotal / 100,
-                date: new Date().toISOString().split("T")[0],
-                refNumber: `CM-${creditMemo.credit_memo_number || id.slice(-6)}`,
-                memo: `Refund for CM ${creditMemo.credit_memo_number || ""}`.trim(),
-                expenseAccountName: "Accounts Receivable",
-              });
-
-              if (checkResult.success && checkResult.data?.operationId) {
+          // If this is a physical cash refund → create Write Check in QB
+          if (!isStoreCredit && custResult?.qbCustomerId) {
+            const bankAccountListId = process.env.QB_BANK_ACCOUNT_LIST_ID;
+            if (!bankAccountListId) {
+              logger.warn(
+                `[credit_memos complete] QB_BANK_ACCOUNT_LIST_ID not set — skipping Write Check`
+              );
+            } else {
+              try {
                 await writePipelineRow({
                   referenceId: id,
                   referenceType: "credit_memo",
                   step: "write_check",
-                  status: "submitted",
-                  bridgeOpId: checkResult.data.operationId,
+                  status: "pending",
                   medusaRefNumber: creditMemo.credit_memo_number ?? null,
+                  error: null,
                 });
-                logger.info(
-                  `[credit_memos complete] Write Check queued in QB: op=${checkResult.data.operationId}`
-                );
-              } else {
-                await writePipelineRow({
-                  referenceId: id,
-                  referenceType: "credit_memo",
-                  step: "write_check",
-                  status: "failed",
-                  error: checkResult.error || "Write Check creation failed",
+
+                const checkResult = await createCheckInQb({
+                  customerId: custResult.qbCustomerId,
+                  bankAccountListId,
+                  amount: cmTotal / 100,
+                  date: new Date().toISOString().split("T")[0],
+                  refNumber: `CM-${creditMemo.credit_memo_number || id.slice(-6)}`,
+                  memo: `Refund for CM ${creditMemo.credit_memo_number || ""}`.trim(),
+                  expenseAccountName: "Accounts Receivable",
                 });
+
+                if (checkResult.success && checkResult.data?.operationId) {
+                  await writePipelineRow({
+                    referenceId: id,
+                    referenceType: "credit_memo",
+                    step: "write_check",
+                    status: "submitted",
+                    bridgeOpId: checkResult.data.operationId,
+                    medusaRefNumber: creditMemo.credit_memo_number ?? null,
+                  });
+                  logger.info(
+                    `[credit_memos complete] Write Check queued in QB: op=${checkResult.data.operationId}`
+                  );
+                } else {
+                  await writePipelineRow({
+                    referenceId: id,
+                    referenceType: "credit_memo",
+                    step: "write_check",
+                    status: "failed",
+                    error: checkResult.error || "Write Check creation failed",
+                  });
+                  logger.error(
+                    `[credit_memos complete] Write Check failed: ${checkResult.error}`
+                  );
+                }
+              } catch (checkErr: any) {
                 logger.error(
-                  `[credit_memos complete] Write Check failed: ${checkResult.error}`
+                  `[credit_memos complete] Write Check execution error: ${checkErr.message}`
                 );
               }
-            } catch (checkErr: any) {
-              logger.error(
-                `[credit_memos complete] Write Check execution error: ${checkErr.message}`
-              );
             }
           }
         }

@@ -97,6 +97,21 @@ export async function POST(
     other_fees_cents: body.other_fees_cents,
   });
 
+  // Snapshot vendor name at creation so drafts display the name before submit.
+  const qbCatalog = req.scope.resolve("quickbooks_catalog") as unknown as {
+    retrieveQbVendor: (id: string) => Promise<{
+      qb_list_id: string | null;
+      full_name: string | null;
+      name: string;
+      company_name: string | null;
+    } | null>;
+  };
+  const vendorRow = await qbCatalog.retrieveQbVendor(body.vendor_id).catch(() => null);
+  const vendorNameSnapshot = vendorRow
+    ? (vendorRow.company_name ?? vendorRow.full_name ?? vendorRow.name)
+    : null;
+  const vendorQbListIdSnapshot = vendorRow?.qb_list_id ?? null;
+
   // Allocate the human-readable PO number at creation time so drafts carry a
   // stable identifier staff can reference before QuickBooks submission.
   const seq = await service.getNextPoSequence();
@@ -108,6 +123,8 @@ export async function POST(
       number,
       seq,
       vendor_id: body.vendor_id,
+      vendor_name_snapshot: vendorNameSnapshot,
+      vendor_qb_list_id_snapshot: vendorQbListIdSnapshot,
       stock_location_id: body.stock_location_id,
       ordered_at: body.ordered_at ? new Date(body.ordered_at) : null,
       expected_at: body.expected_at ? new Date(body.expected_at) : null,

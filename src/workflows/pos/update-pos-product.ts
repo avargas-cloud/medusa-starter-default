@@ -78,8 +78,8 @@ export const updatePosProductWorkflow = createWorkflow(
 
       const productPatch: Record<string, unknown> = { id: i.id };
       if (i.title !== undefined) productPatch.title = i.title;
-      if (i.salesDescription !== undefined)
-        productPatch.description = i.salesDescription;
+      // salesDescription is variant-level only — do NOT write to product.description
+      // (doing so would bleed across all other variants via the hydration fallback).
       // category_ids / image_urls: undefined = no change, [] = clear all.
       if (i.category_ids !== undefined) {
         productPatch.categories = i.category_ids.map((id) => ({ id }));
