@@ -6,6 +6,8 @@ import {
 } from "@medusajs/framework/workflows-sdk";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
+import { safeSyncIndex } from "../lib/meilisearch/safe-sync";
+
 // Simple in-memory lock to prevent concurrent syncs
 let isSyncing = false;
 
@@ -31,40 +33,6 @@ export const syncCustomersToMeiliStep = createStep(
       const client = new MeiliSearch({
         host: process.env.MEILISEARCH_HOST!,
         apiKey: process.env.MEILISEARCH_API_KEY!,
-      });
-      const index = client.index("customers");
-
-      // 1. Update index settings (once per sync)
-      await index.updateSettings({
-        filterableAttributes: [
-          "customer_type",
-          "price_level",
-          "has_account",
-          "groups",
-        ],
-        sortableAttributes: [
-          "company_name",
-          "created_at",
-          "updated_at",
-          "email",
-        ],
-        searchableAttributes: [
-          "company_name",
-          "email",
-          "list_id",
-          "first_name",
-          "last_name",
-          "phone",
-        ],
-        rankingRules: [
-          "words",
-          "typo",
-          "proximity",
-          "attribute",
-          "exactness",
-          "sort",
-        ],
-        pagination: { maxTotalHits: 20000 },
       });
 
       // 2. Load ALL customers into RAM — query.graph does a single JOIN (no N+1)
@@ -113,32 +81,49 @@ export const syncCustomersToMeiliStep = createStep(
       });
       console.log(`🔄 Transformed ${docs.length} documents in RAM`);
 
-      // 4. Atomic clear — wait for completion before uploading
-      // (prevents race condition where async delete wipes freshly uploaded docs)
-      console.log("🗑️  Clearing index (waiting for completion)...");
-      const deleteTask = await index.deleteAllDocuments();
-      await client.tasks.waitForTask(deleteTask.taskUid);
-      console.log("✅ Index cleared");
-
-      // 5. Upload ALL chunks in parallel (no sequential waiting)
-      const CHUNK = 1000;
-      const chunks: (typeof docs)[] = [];
-      for (let i = 0; i < docs.length; i += CHUNK) {
-        chunks.push(docs.slice(i, i + CHUNK));
-      }
-
-      console.log(`🚀 Uploading ${chunks.length} chunks in parallel...`);
-      const t1 = Date.now();
-      const uploadTasks = await Promise.all(
-        chunks.map((chunk) => index.addDocuments(chunk, { primaryKey: "id" }))
-      );
-      // Wait for all Meili tasks to complete
-      await Promise.all(
-        uploadTasks.map((task) => client.tasks.waitForTask(task.taskUid))
-      );
-      console.log(
-        `✅ Synced ${docs.length} customers to MeiliSearch in ${Date.now() - t1}ms`
-      );
+      // 4. Safe upsert + orphan cleanup (replaces destructive delete-all).
+      const result = await safeSyncIndex({
+        client,
+        indexName: "customers",
+        primaryKey: "id",
+        docs,
+        settings: {
+          filterableAttributes: [
+            "customer_type",
+            "price_level",
+            "has_account",
+            "groups",
+          ],
+          sortableAttributes: [
+            "company_name",
+            "created_at",
+            "updated_at",
+            "email",
+          ],
+          searchableAttributes: [
+            "company_name",
+            "email",
+            "list_id",
+            "first_name",
+            "last_name",
+            "phone",
+          ],
+          rankingRules: [
+            "words",
+            "typo",
+            "proximity",
+            "attribute",
+            "exactness",
+            "sort",
+          ],
+          pagination: { maxTotalHits: 20000 },
+        },
+        logger: {
+          info: (m) => console.log(m),
+          warn: (m) => console.warn(m),
+          error: (m) => console.error(m),
+        },
+      });
 
       isSyncing = false;
       console.log("🔓 Released Sync Lock");
@@ -146,7 +131,10 @@ export const syncCustomersToMeiliStep = createStep(
       return new StepResponse({
         success: true,
         message: "Sync completed successfully",
-        synced: docs.length,
+        synced: result.upserted,
+        orphansDeleted: result.orphansDeleted,
+        totalInIndex: result.totalInIndex,
+        durationMs: result.durationMs,
       });
     } catch (error: any) {
       isSyncing = false;

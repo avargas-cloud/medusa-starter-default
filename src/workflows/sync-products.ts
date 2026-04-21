@@ -5,6 +5,8 @@ import {
   StepResponse,
 } from "@medusajs/framework/workflows-sdk";
 
+import { safeSyncIndex } from "../lib/meilisearch/safe-sync";
+
 export const syncProductsToMeiliStep = createStep(
   "sync-products-to-meili-step",
   async (_, { container }) => {
@@ -15,7 +17,6 @@ export const syncProductsToMeiliStep = createStep(
       host: process.env.MEILISEARCH_HOST!,
       apiKey: process.env.MEILISEARCH_API_KEY!,
     });
-    const index = client.index("products");
 
     // 1. Load ALL products into RAM in a single query (no pagination loop)
     const t0 = Date.now();
@@ -74,62 +75,55 @@ export const syncProductsToMeiliStep = createStep(
       `🔄 [sync-products] Transformed ${meiliProducts.length} documents in RAM`
     );
 
-    // 3. Update settings
-    await index.updateSettings({
-      displayedAttributes: [
-        "id",
-        "title",
-        "handle",
-        "thumbnail",
-        "status",
-        "variant_sku",
-        "updated_at",
-        "created_at",
-        "metadata",
-        "description",
-        "category_handles",
-      ],
-      filterableAttributes: ["category_handles", "status", "id", "variant_sku"],
-      sortableAttributes: ["title", "status", "id", "updated_at", "created_at"],
-      searchableAttributes: [
-        "title",
-        "variant_sku",
-        "handle",
-        "description",
-        "metadata_material",
-      ],
+    // 3. Safe upsert + orphan cleanup (replaces destructive delete-all).
+    const result = await safeSyncIndex({
+      client,
+      indexName: "products",
+      primaryKey: "id",
+      docs: meiliProducts,
+      settings: {
+        displayedAttributes: [
+          "id",
+          "title",
+          "handle",
+          "thumbnail",
+          "status",
+          "variant_sku",
+          "updated_at",
+          "created_at",
+          "metadata",
+          "description",
+          "category_handles",
+        ],
+        filterableAttributes: ["category_handles", "status", "id", "variant_sku"],
+        sortableAttributes: [
+          "title",
+          "status",
+          "id",
+          "updated_at",
+          "created_at",
+        ],
+        searchableAttributes: [
+          "title",
+          "variant_sku",
+          "handle",
+          "description",
+          "metadata_material",
+        ],
+      },
+      logger: {
+        info: (m) => console.log(m),
+        warn: (m) => console.warn(m),
+        error: (m) => console.error(m),
+      },
     });
-
-    // 4. Atomic clear — wait for completion before uploading (prevents race condition)
-    console.log(
-      "🗑️  [sync-products] Clearing index (waiting for completion)..."
-    );
-    const deleteTask = await index.deleteAllDocuments();
-    await (client as any).tasks.waitForTask(deleteTask.taskUid);
-    console.log("✅ [sync-products] Index cleared");
-
-    // 5. Upload ALL chunks in parallel
-    const CHUNK = 1000;
-    const chunks: (typeof meiliProducts)[] = [];
-    for (let i = 0; i < meiliProducts.length; i += CHUNK) {
-      chunks.push(meiliProducts.slice(i, i + CHUNK));
-    }
-
-    console.log(
-      `🚀 [sync-products] Uploading ${chunks.length} chunks in parallel...`
-    );
-    const t1 = Date.now();
-    const uploadTasks = await Promise.all(
-      chunks.map((chunk) => index.addDocuments(chunk, { primaryKey: "id" }))
-    );
-    await (client as any).tasks.waitForTasks(uploadTasks.map((t) => t.taskUid));
-    console.log(
-      `✅ [sync-products] Synced ${meiliProducts.length} products in ${Date.now() - t1}ms`
-    );
 
     return new StepResponse({
       success: true,
-      synced: meiliProducts.length,
+      synced: result.upserted,
+      orphansDeleted: result.orphansDeleted,
+      totalInIndex: result.totalInIndex,
+      durationMs: result.durationMs,
     });
   }
 );

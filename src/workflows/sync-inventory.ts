@@ -6,6 +6,8 @@ import {
 } from "@medusajs/framework/workflows-sdk";
 import { Modules } from "@medusajs/utils";
 
+import { safeSyncIndex } from "../lib/meilisearch/safe-sync";
+
 export const syncInventoryToMeiliStep = createStep(
   "sync-to-meili-step",
   async (_, { container }) => {
@@ -135,9 +137,7 @@ export const syncInventoryToMeiliStep = createStep(
             productId: product?.id || null,
             handle: product?.handle || null,
             salesDescription:
-              (variant?.metadata as any)?.sales_description ||
-              (product?.metadata as any)?.sales_description ||
-              null,
+              (variant?.metadata as any)?.sales_description || null,
             cost: (variant?.metadata as any)?.qb_purchase_cost || null,
             vendorName: (variant?.metadata as any)?.qb_vendor_name || null,
             options: mappedOptions,
@@ -165,9 +165,7 @@ export const syncInventoryToMeiliStep = createStep(
           productId: product?.id || null,
           handle: product?.handle || null,
           salesDescription:
-            (variant?.metadata as any)?.sales_description ||
-            (product?.metadata as any)?.sales_description ||
-            null,
+            (variant?.metadata as any)?.sales_description || null,
           cost: (variant?.metadata as any)?.qb_purchase_cost || null,
           vendorName: (variant?.metadata as any)?.qb_vendor_name || null,
           options: mappedOptions,
@@ -190,49 +188,31 @@ export const syncInventoryToMeiliStep = createStep(
       `🔄 [sync-inventory] Transformed ${validItems.length} valid items in RAM`
     );
 
-    const index = client.index("inventory");
-
-    // Update settings
-    await index.updateSettings({
-      filterableAttributes: ["category_handles", "status", "id", "sku"],
-      sortableAttributes: [
-        "title",
-        "sku",
-        "totalStock",
-        "price",
-        "totalReserved",
-        "updated_at",
-        "created_at",
-      ],
-      searchableAttributes: ["title", "sku"],
+    // Safe upsert + orphan cleanup (replaces destructive delete-all).
+    const result = await safeSyncIndex({
+      client,
+      indexName: "inventory",
+      primaryKey: "id",
+      docs: validItems,
+      settings: {
+        filterableAttributes: ["category_handles", "status", "id", "sku"],
+        sortableAttributes: [
+          "title",
+          "sku",
+          "totalStock",
+          "price",
+          "totalReserved",
+          "updated_at",
+          "created_at",
+        ],
+        searchableAttributes: ["title", "sku", "salesDescription"],
+      },
+      logger: {
+        info: (m) => console.log(m),
+        warn: (m) => console.warn(m),
+        error: (m) => console.error(m),
+      },
     });
-
-    // Atomic clear — wait for completion before uploading (prevents race condition)
-    console.log(
-      "🗑️  [sync-inventory] Clearing index (waiting for completion)..."
-    );
-    const deleteTask = await index.deleteAllDocuments();
-    await (client as any).tasks.waitForTask(deleteTask.taskUid);
-    console.log("✅ [sync-inventory] Index cleared");
-
-    // Upload ALL chunks in parallel
-    const CHUNK = 1000;
-    const chunks: (typeof validItems)[] = [];
-    for (let i = 0; i < validItems.length; i += CHUNK) {
-      chunks.push(validItems.slice(i, i + CHUNK));
-    }
-
-    console.log(
-      `🚀 [sync-inventory] Uploading ${chunks.length} chunks in parallel...`
-    );
-    const t1 = Date.now();
-    const uploadTasks = await Promise.all(
-      chunks.map((chunk) => index.addDocuments(chunk, { primaryKey: "id" }))
-    );
-    await (client as any).tasks.waitForTasks(uploadTasks.map((t) => t.taskUid));
-    console.log(
-      `✅ [sync-inventory] Synced ${validItems.length} items in ${Date.now() - t1}ms`
-    );
 
     const withCategory = validItems.filter(
       (i: any) => i.category_handles.length > 0
@@ -240,8 +220,11 @@ export const syncInventoryToMeiliStep = createStep(
 
     return new StepResponse({
       success: true,
-      synced: validItems.length,
+      synced: result.upserted,
       itemsWithCategory: withCategory.length,
+      orphansDeleted: result.orphansDeleted,
+      totalInIndex: result.totalInIndex,
+      durationMs: result.durationMs,
     });
   }
 );
