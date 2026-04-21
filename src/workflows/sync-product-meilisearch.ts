@@ -5,18 +5,31 @@ import {
   StepResponse,
 } from "@medusajs/framework/workflows-sdk";
 
+import { syncInventoryItemToMeiliSearchWorkflow } from "./sync-inventory-item-meilisearch";
+
 /**
- * Step: Sync product to MeiliSearch
+ * Single-product sync to both MeiliSearch indexes:
+ *   • `products`   → the product-level doc used by `products-advanced`
+ *   • `inventory`  → every inventory_item doc that rolls up from this
+ *                    product's variants (cascaded through
+ *                    syncInventoryItemToMeiliSearchWorkflow)
+ *
+ * The cascade means any caller that already trusts this workflow for product
+ * sync (lifecycle subscriber, POS create/update workflows, QB item-pipeline
+ * poller) now also keeps the inventory index fresh without extra calls.
  */
-const syncProductToMeiliSearchStep = createStep(
-  "sync-product-to-meilisearch",
+
+const syncProductDocStep = createStep(
+  "sync-product-doc-to-meili",
   async ({ productId }: { productId: string }, { container }) => {
-    const logger = container.resolve("logger");
-    const query = container.resolve("query");
+    const logger = container.resolve("logger") as {
+      info: (m: string) => void;
+      warn: (m: string) => void;
+      error: (m: string) => void;
+    };
+    const query = container.resolve("query") as any;
 
     try {
-      logger.info(`[MeiliSearch Workflow] Syncing product: ${productId}`);
-
       const { data: products } = await query.graph({
         entity: "product",
         fields: [
@@ -33,27 +46,19 @@ const syncProductToMeiliSearchStep = createStep(
         filters: { id: productId },
       });
 
-      if (!products || products.length === 0) {
-        logger.warn(`[MeiliSearch Workflow] Product not found: ${productId}`);
-        return new StepResponse({ synced: false });
-      }
-
-      const product = products[0];
-
+      const product = products?.[0];
       if (!product) {
         logger.warn(
-          `[MeiliSearch Workflow] Product data is invalid: ${productId}`
+          `[syncProductDoc] Product not found: ${productId} — skipping doc upsert`
         );
         return new StepResponse({ synced: false });
       }
 
       const { MeiliSearch } = await import("meilisearch");
-
       const client = new MeiliSearch({
         host: process.env.MEILISEARCH_HOST || "http://localhost:7700",
         apiKey: process.env.MEILISEARCH_API_KEY || "",
       });
-
       const index = client.index("products");
 
       const document = {
@@ -65,32 +70,31 @@ const syncProductToMeiliSearchStep = createStep(
         variant_sku:
           product.variants?.map((v: any) => v.sku).filter(Boolean) || [],
         metadata: product.metadata || {},
-        metadata_material: product.metadata?.material || null,
-        metadata_category: product.metadata?.category || null,
+        metadata_material: (product.metadata as any)?.material || null,
+        metadata_category: (product.metadata as any)?.category || null,
         status: product.status,
       };
 
       await index.addDocuments([document], { primaryKey: "id" });
-
       logger.info(
-        `[MeiliSearch Workflow] ✅ Synced: ${product.title} | SKUs: [${document.variant_sku.join(", ")}]`
+        `[syncProductDoc] ✅ products index synced: ${product.title} | SKUs: [${document.variant_sku.join(", ")}]`
       );
-
       return new StepResponse({ synced: true, product: product.title });
     } catch (error: any) {
-      logger.error(`[MeiliSearch Workflow] ❌ Error: ${error.message}`);
+      logger.error(`[syncProductDoc] ❌ ${error.message}`);
       return new StepResponse({ synced: false, error: error.message });
     }
   }
 );
 
-/**
- * Workflow: Sync product to MeiliSearch
- */
 export const syncProductToMeiliSearchWorkflow = createWorkflow(
   "sync-product-to-meilisearch",
   (input: { productId: string }) => {
-    const result = syncProductToMeiliSearchStep({ productId: input.productId });
-    return new WorkflowResponse(result);
+    const productResult = syncProductDocStep({ productId: input.productId });
+    // Cascade: also refresh every inventory doc for this product.
+    syncInventoryItemToMeiliSearchWorkflow.runAsStep({
+      input: { productId: input.productId },
+    });
+    return new WorkflowResponse(productResult);
   }
 );
