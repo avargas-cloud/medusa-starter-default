@@ -4,32 +4,53 @@ import { Modules } from "@medusajs/utils";
 import { syncProductToMeiliSearchWorkflow } from "../workflows/sync-product-meilisearch";
 
 /**
- * AUTO-SET THUMBNAIL + MEILISEARCH SYNC ON PRODUCT UPDATE
+ * PRODUCT LIFECYCLE → THUMBNAIL + MEILISEARCH SYNC
  *
- * Fires on every product.updated event. Does two things:
+ * Fires on product.created / product.updated / product.deleted.
  *
- * 1. Thumbnail auto-assign: If the product has images but thumbnail = null,
- *    sets thumbnail to the first image (rank=0). This covers the case where
- *    a user uploads images via the admin Media section without explicitly
- *    clicking "Set as thumbnail".
+ *  • product.created  → sync new product to MeiliSearch `products` index.
+ *  • product.updated  → auto-set thumbnail (first image when thumbnail is
+ *                       missing) AND sync to MeiliSearch.
+ *  • product.deleted  → remove the document from MeiliSearch `products`.
  *
- * 2. Meilisearch sync: Syncs the product to Meilisearch immediately so the
- *    products-advanced page shows the updated thumbnail without waiting for
- *    the next inventory sync re-index cycle.
+ * Without the created/deleted listeners, freshly created products were
+ * invisible in the advanced search page until the first edit, and deleted
+ * products lingered in the index until a full re-sync.
  */
-export default async function productThumbnailSyncSubscriber({
+export default async function productMeilisearchSyncSubscriber({
   event,
   container,
 }: SubscriberArgs<{ id: string }>) {
   const logger = container.resolve("logger");
-  const productService = container.resolve(Modules.PRODUCT);
-  const query = container.resolve("query");
 
   const productId: string = event.data?.id;
   if (!productId) return;
 
+  // DELETE path — remove from Meili without needing DB data.
+  if (event.name === "product.deleted") {
+    try {
+      const { MeiliSearch } = await import("meilisearch");
+      const client = new MeiliSearch({
+        host: process.env.MEILISEARCH_HOST || "http://localhost:7700",
+        apiKey: process.env.MEILISEARCH_API_KEY || "",
+      });
+      await client.index("products").deleteDocument(productId);
+      logger.info(
+        `[ProductMeilisearchSync] 🗑️  Deleted from Meili: ${productId}`
+      );
+    } catch (err: any) {
+      logger.warn(
+        `[ProductMeilisearchSync] ⚠️ Meili delete failed for ${productId}: ${err.message}`
+      );
+    }
+    return;
+  }
+
+  // CREATE / UPDATE path — fetch fresh DB data, upsert to Meili.
+  const productService = container.resolve(Modules.PRODUCT);
+  const query = container.resolve("query");
+
   try {
-    // Fetch product with images
     const { data: products } = await query.graph({
       entity: "product",
       fields: ["id", "title", "thumbnail", "images.url", "images.rank"],
@@ -39,8 +60,14 @@ export default async function productThumbnailSyncSubscriber({
     const product = products[0];
     if (!product) return;
 
-    // 1. Auto-set thumbnail if missing but images exist
-    if (!product.thumbnail && product.images && product.images.length > 0) {
+    // Thumbnail auto-assign — only meaningful on update when an image was
+    // uploaded without the user explicitly setting the thumbnail.
+    if (
+      event.name === "product.updated" &&
+      !product.thumbnail &&
+      product.images &&
+      product.images.length > 0
+    ) {
       const sorted = [...product.images].sort(
         (a: any, b: any) => (a.rank ?? 0) - (b.rank ?? 0)
       );
@@ -51,30 +78,29 @@ export default async function productThumbnailSyncSubscriber({
       });
 
       logger.info(
-        `[ProductThumbnailSync] ✅ Auto-set thumbnail for "${product.title}": ${firstImageUrl}`
+        `[ProductMeilisearchSync] ✅ Auto-set thumbnail for "${product.title}": ${firstImageUrl}`
       );
     }
 
-    // 2. Sync to Meilisearch immediately (non-blocking — errors don't fail the event)
     try {
       await syncProductToMeiliSearchWorkflow(container).run({
         input: { productId },
       });
       logger.info(
-        `[ProductThumbnailSync] ✅ Meilisearch synced for "${product.title}"`
+        `[ProductMeilisearchSync] ✅ Meili synced (${event.name}) for "${product.title}"`
       );
     } catch (meiliErr: any) {
       logger.warn(
-        `[ProductThumbnailSync] ⚠️ Meilisearch sync failed (thumbnail still saved): ${meiliErr.message}`
+        `[ProductMeilisearchSync] ⚠️ Meili sync failed: ${meiliErr.message}`
       );
     }
   } catch (err: any) {
     logger.error(
-      `[ProductThumbnailSync] ❌ Error for product ${productId}: ${err.message}`
+      `[ProductMeilisearchSync] ❌ Error for product ${productId}: ${err.message}`
     );
   }
 }
 
 export const config: SubscriberConfig = {
-  event: "product.updated",
+  event: ["product.created", "product.updated", "product.deleted"],
 };
