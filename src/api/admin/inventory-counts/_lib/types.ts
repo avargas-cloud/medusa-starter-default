@@ -80,7 +80,8 @@ export interface UpdateDraftLineInput {
 }
 
 export interface UpdateDraftBody {
-  lines: UpdateDraftLineInput[];
+  lines?: UpdateDraftLineInput[];
+  memo?: string;
 }
 
 export interface SubmitBody {

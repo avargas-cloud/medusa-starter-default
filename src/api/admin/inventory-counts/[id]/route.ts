@@ -41,7 +41,7 @@ export async function GET(
 }
 
 export async function PATCH(
-  req: AuthenticatedMedusaRequest<{ lines: UpdateDraftLineInput[] }>,
+  req: AuthenticatedMedusaRequest<{ lines?: UpdateDraftLineInput[]; memo?: string }>,
   res: MedusaResponse
 ) {
   const { id } = req.params;
@@ -62,7 +62,15 @@ export async function PATCH(
   if (!parsed.success) {
     return res.status(400).json(zodErrorToBody(parsed.error));
   }
-  const incoming = parsed.data.lines;
+  const { lines: incoming, memo } = parsed.data;
+
+  // Memo-only update — skip all line processing
+  if (incoming === undefined) {
+    if (memo !== undefined) {
+      await service.updateInventoryCounts([{ id, memo }]);
+    }
+    return res.json({ inventory_count_id: id, lines: [], created: 0, updated: 0 });
+  }
 
   const existing = await service.listInventoryCountLines(
     { inventory_count_id: id },
@@ -104,9 +112,13 @@ export async function PATCH(
   if (toCreate.length) await service.createInventoryCountLines(toCreate);
   if (toUpdate.length) await service.updateInventoryCountLines(toUpdate);
 
-  await service.updateInventoryCounts([
-    { id, total_lines: existing.length + toCreate.length },
-  ]);
+  const countUpdate: Record<string, unknown> = {
+    id,
+    total_lines: existing.length + toCreate.length,
+  };
+  if (memo !== undefined) countUpdate.memo = memo;
+
+  await service.updateInventoryCounts([countUpdate]);
 
   const refreshed = await service.listInventoryCountLines(
     { inventory_count_id: id },

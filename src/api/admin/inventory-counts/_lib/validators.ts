@@ -27,7 +27,8 @@ export const updateDraftLineSchema = z.object({
 });
 
 export const updateDraftSchema = z.object({
-  lines: z.array(updateDraftLineSchema).max(2000),
+  lines: z.array(updateDraftLineSchema).max(2000).optional(),
+  memo: z.string().trim().max(500).optional(),
 });
 
 export const submitSchema = z.object({
