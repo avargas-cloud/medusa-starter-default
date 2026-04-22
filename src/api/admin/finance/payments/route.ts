@@ -212,6 +212,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // skip_qb_sync=true is set by the terminal route — QB will be handled
     // by the invoice route once the invoice is created (avoids a duplicate
     // "payment" QB row alongside the "sales_receipt" row).
+    console.info(
+      `[finance/payments] payment=${payment.id} skip_qb_sync=${skip_qb_sync} QB_ORDER_FLOW_ENABLED=${process.env.QB_ORDER_FLOW_ENABLED}`
+    );
     if (process.env.QB_ORDER_FLOW_ENABLED === "true" && !skip_qb_sync) {
       const orderId: string | null = (metadata as any)?.order_id ?? null;
       try {

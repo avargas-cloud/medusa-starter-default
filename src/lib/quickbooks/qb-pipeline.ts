@@ -351,6 +351,10 @@ export async function skipPendingPaymentRows(
   reason: string
 ): Promise<number> {
   const pool = getDbPool();
+  // Also cancel 'submitted' rows where confirmed_at IS NULL — the QB bridge may
+  // not have processed them yet (confirmed_at is set on bridge ack). This closes
+  // the race window where handlePosPaymentCreated submits a row at T+100ms but
+  // the invoice route only runs skipPendingPaymentRows at T+1300ms.
   const res = await pool.query(
     `UPDATE qb_order_pipeline
          SET status     = 'skipped',
@@ -358,7 +362,10 @@ export async function skipPendingPaymentRows(
              updated_at = NOW()
          WHERE order_id = $1
            AND step IN ('payment', 'apply_payment')
-           AND status IN ('waiting', 'pending')`,
+           AND (
+             status IN ('waiting', 'pending')
+             OR (status = 'submitted' AND confirmed_at IS NULL)
+           )`,
     [orderId, reason]
   );
   return res.rowCount ?? 0;
