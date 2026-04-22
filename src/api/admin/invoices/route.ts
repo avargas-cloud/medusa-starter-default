@@ -25,6 +25,7 @@ import { registerMedusaPayment } from "./register-medusa-payment";
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const invoiceService = req.scope.resolve(INVOICE_MODULE);
+  const customerModule = req.scope.resolve(Modules.CUSTOMER);
   const { order_id, customer_id, created_at, status, limit, offset } =
     req.query as Record<string, any>;
 
@@ -37,13 +38,28 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const config: Record<string, any> = {
     relations: ["items", "tracking_links"],
     order: { created_at: "DESC" },
+    take: limit ? parseInt(limit, 10) : 200,
   };
-  if (limit) config.take = parseInt(limit, 10);
   if (offset) config.skip = parseInt(offset, 10);
 
   const invoices = await invoiceService.listPosInvoices(filters, config);
 
-  return res.json({ invoices });
+  // Enrich with customer data in a single batch query
+  const customerIds = [...new Set(invoices.map((i: any) => i.customer_id).filter(Boolean))];
+  const customers = customerIds.length
+    ? await customerModule.listCustomers(
+        { id: customerIds },
+        { select: ["id", "first_name", "last_name", "email", "phone", "company_name"] }
+      )
+    : [];
+  const customerMap = Object.fromEntries(customers.map((c: any) => [c.id, c]));
+
+  const enriched = invoices.map((inv: any) => ({
+    ...inv,
+    customer: customerMap[inv.customer_id] ?? null,
+  }));
+
+  return res.json({ invoices: enriched });
 }
 
 // ── POST /admin/invoices ──────────────────────────────────────────────────────
