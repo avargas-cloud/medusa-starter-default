@@ -20,8 +20,10 @@ import {
   reopenSalesOrderInQb,
 } from "../lib/quickbooks/client/sales-orders";
 import { handleDraftOrderCreated } from "../subscribers/qb-draft-order-subscriber";
+import { handleDraftOrderUpdated } from "../lib/quickbooks/handlers/handle-draft-order-updated";
 import { handleFulfillmentCreated } from "../lib/quickbooks/handlers/handle-fulfillment-created";
 import { handleOrderPlaced } from "../lib/quickbooks/handlers/handle-order-placed";
+import { handleOrderUpdated } from "../lib/quickbooks/handlers/handle-order-updated";
 import { handleSalesReceiptCreated } from "../lib/quickbooks/handlers/handle-sales-receipt-created";
 import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types";
 import {
@@ -44,6 +46,7 @@ async function resubmitByStep(
     reference_id: string | null;
     reference_type: string | null;
     step: string;
+    qb_txn_id?: string | null;
   },
   container: MedusaContainer,
   logger: any
@@ -55,24 +58,53 @@ async function resubmitByStep(
     switch (row.step) {
       case "estimate":
         if (!row.order_id) break;
-        await handleDraftOrderCreated(
-          { id: row.order_id },
-          container,
-          logger,
-          true // isCron — skips the 1h POS delay guard
-        );
+        // Always attempt MOD first — handleDraftOrderUpdated reads the FRESH
+        // qb_estimate_txn_id from order metadata (which was just updated by the
+        // confirm step above). Returns "skipped" if metadata has no txn_id yet,
+        // in which case we fall back to CREATE. Prevents duplicate QB Estimates
+        // for coalesced saves picked up by the consolidator.
+        {
+          const outcome = await handleDraftOrderUpdated(
+            row.order_id,
+            container,
+            logger,
+            { isCron: true, awaitSerialized: true }
+          );
+          if (outcome === "skipped") {
+            await handleDraftOrderCreated(
+              { id: row.order_id },
+              container,
+              logger,
+              true // isCron — skips the 1h POS delay guard
+            );
+          }
+        }
         break;
 
       case "sales_order":
         if (!row.order_id) break;
-        await handleOrderPlaced(
-          { id: row.order_id },
-          orderModule,
-          customerModule,
-          container,
-          logger,
-          true
-        );
+        // Always try MOD first — handleOrderUpdated reads fresh qb_sales_order.txn_id
+        // from metadata. Returns "skipped" when no txn_id exists (SO never made it
+        // to QB) → fall back to CREATE via handleOrderPlaced. Prevents duplicate
+        // QB Sales Orders on coalesced resubmits.
+        {
+          const outcome = await handleOrderUpdated(
+            row.order_id,
+            container,
+            logger,
+            { isCron: true, awaitSerialized: true }
+          );
+          if (outcome === "skipped") {
+            await handleOrderPlaced(
+              { id: row.order_id },
+              orderModule,
+              customerModule,
+              container,
+              logger,
+              true
+            );
+          }
+        }
         break;
 
       case "sales_receipt":

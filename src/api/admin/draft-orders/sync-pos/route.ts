@@ -1,20 +1,9 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
-import {
-  buildQbItems,
-  type MedusaOrderForQb,
-} from "../../../../lib/quickbooks/order-flow-core";
-import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
-import {
-  getEstimateTxnId,
-  getEstimateRef,
-} from "../../../../lib/quickbooks/qb-metadata-types";
-import {
-  writePipelineRow,
-  pollUntilQbConfirmed,
-} from "../../../../lib/quickbooks/qb-pipeline";
-import { withQbSerialized } from "../../../../lib/quickbooks/qb-serializer";
+import { getEstimateTxnId } from "../../../../lib/quickbooks/qb-metadata-types";
+import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
+import { handleDraftOrderUpdated } from "../../../../lib/quickbooks/handlers/handle-draft-order-updated";
 import { getDbPool } from "../../../utils/db-pool";
 
 export async function POST(
@@ -413,108 +402,18 @@ export async function POST(
         logger.info(`[sync-pos] qbTxnId found: ${qbTxnId}`);
         if (qbTxnId) {
           try {
-            const {
-              updateEstimateInQb,
-            } = require("../../../../lib/quickbooks/client/estimates");
-
             await localFetch(`/admin/draft-orders/${resolvedId}`, {
               method: "POST",
               body: JSON.stringify({ metadata: { qb_sync_status: "pending" } }),
             }).catch(() => {});
 
-            const medusaRef = draftOrderModel?.display_id
-              ? `E${draftOrderModel.display_id}`
-              : null;
-            const qbRef = getEstimateRef(draftOrderModel?.metadata) ?? null;
-
-            await writePipelineRow({
-              orderId: resolvedId,
-              step: "estimate",
-              status: "pending",
-              qbTxnId,
-              qbRefNumber: qbRef,
-              medusaRefNumber: medusaRef,
-            }).catch((e: any) =>
-              logger.warn(
-                `[sync-pos] Could not write pending pipeline row: ${e.message}`
-              )
-            );
-
-            // Serialized per order via withQbLock.
-            // If save 2 arrives while save 1 is in-flight, save 2 waits until
-            // save 1 is CONFIRMED by the consolidator — so its fresh EditSequence
-            // is in the cache and save 2 can skip the QB GET round-trip entirely.
-            withQbSerialized(
-              `estimate:${resolvedId}`,
-              { orderId: resolvedId, steps: ["estimate"] },
-              async () => {
-                const {
-                  data: [fullOrder],
-                } = await query.graph({
-                  entity: "order",
-                  fields: [
-                    "*",
-                    "items.*",
-                    "items.variant.*",
-                    "items.variant.metadata",
-                    "customer.*",
-                    "shipping_methods.*",
-                  ],
-                  filters: { id: resolvedId },
-                });
-                if (!fullOrder) return;
-
-                const typedOrder = fullOrder as unknown as MedusaOrderForQb;
-                const qbItems = buildQbItems(
-                  typedOrder.items || [],
-                  typedOrder.metadata
-                );
-                const memo =
-                  (fullOrder.metadata?.document_number as string) ||
-                  (fullOrder.display_id ? `E${fullOrder.display_id}` : qbTxnId);
-
-                const salesRep = parseSalesRepInitials(
-                  fullOrder.metadata?.sales_rep
-                );
-                const result = await updateEstimateInQb({
-                  txnId: qbTxnId,
-                  items: qbItems,
-                  memo,
-                  salesRep,
-                });
-                if (result.success) {
-                  const rowId = await writePipelineRow({
-                    orderId: resolvedId,
-                    step: "estimate",
-                    status: "submitted",
-                    bridgeOpId: result.data?.operationId || null,
-                    qbTxnId,
-                    qbRefNumber: qbRef,
-                    medusaRefNumber: medusaRef,
-                  });
-                  // Wait for the consolidator to confirm this operation (max 5 min).
-                  // This ensures the next queued save picks up the fresh EditSequence
-                  // from the cache rather than fetching from QB under a stale EditSequence.
-                  const outcome = await pollUntilQbConfirmed(rowId);
-                  if (outcome === "timeout") {
-                    logger.warn(
-                      `[sync-pos] QB estimate mod timed out waiting for confirmation (rowId=${rowId})`
-                    );
-                  }
-                } else {
-                  await writePipelineRow({
-                    orderId: resolvedId,
-                    step: "estimate",
-                    status: "failed",
-                    qbTxnId,
-                    qbRefNumber: qbRef,
-                    medusaRefNumber: medusaRef,
-                    error: result.error,
-                  });
-                }
-              },
-              { logger }
-            );
+            // Delegate to the shared MOD handler. It handles:
+            //   - coalesceIfInFlight (rapid sequential saves → next_payload)
+            //   - writePipelineRow(pending) (pre-flight + in-lock idempotent reset)
+            //   - withQbSerialized (per-order single-writer guarantee)
+            //   - updateEstimateInQb + pollUntilQbConfirmed
+            //   - writePipelineRow(submitted/failed)
+            await handleDraftOrderUpdated(resolvedId, req.scope, logger);
           } catch (qbErr: any) {
             logger.error(
               `[sync-pos] Failed to queue QB sync for modified estimate: ${qbErr.message}`

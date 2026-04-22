@@ -206,6 +206,50 @@ export async function writePipelineRow(
       ]
     );
     if (updated.length > 0) return updated[0].id as string;
+
+    // Final idempotency guard for terminal statuses: if no pending/submitted row matched,
+    // a prior callback may have already transitioned the row to the SAME terminal state
+    // (e.g. two serialized save callbacks both end in 'failed' after a bridge outage).
+    // Match the MOST RECENT row for this (order_id, reference_id, step) via a subquery
+    // with LIMIT 1 so we never silently clobber multiple rows if the "1 row per
+    // (order_id, step)" invariant is ever violated (by a DB manual insert, broken
+    // migration, etc.). The id-based UPDATE is atomic.
+    const { rows: idempotent } = await pool.query(
+      `UPDATE qb_order_pipeline
+             SET status            = $3,
+                 updated_at        = NOW(),
+                 bridge_op_id      = COALESCE($4, bridge_op_id),
+                 qb_txn_id         = COALESCE($5, qb_txn_id),
+                 qb_ref_number     = COALESCE($6, qb_ref_number),
+                 medusa_ref_number  = COALESCE($7, medusa_ref_number),
+                 error             = $8,
+                 submitted_at  = CASE WHEN $3 = 'submitted' THEN NOW() ELSE submitted_at END,
+                 confirmed_at  = CASE WHEN $3 = 'confirmed' THEN NOW() ELSE confirmed_at END,
+                 failed_at     = CASE WHEN $3 = 'failed'    THEN NOW() ELSE failed_at    END
+             WHERE id = (
+               SELECT id FROM qb_order_pipeline
+                 WHERE step = $2
+                   AND (
+                     ($1::text IS NOT NULL AND order_id = $1::text AND ($9::text IS NULL OR reference_id = $9::text))
+                     OR ($1::text IS NULL AND $9::text IS NOT NULL AND reference_id = $9::text)
+                   )
+                 ORDER BY COALESCE(updated_at, created_at) DESC
+                 LIMIT 1
+             )
+             RETURNING id`,
+      [
+        input.orderId ?? null,
+        input.step,
+        input.status,
+        input.bridgeOpId ?? null,
+        input.qbTxnId ?? null,
+        input.qbRefNumber ?? null,
+        input.medusaRefNumber ?? null,
+        input.error ?? null,
+        input.referenceId ?? null,
+      ]
+    );
+    if (idempotent.length > 0) return idempotent[0].id as string;
   }
 
   // Final guard: if ANY row exists for this order+step (any status), reset it to pending instead

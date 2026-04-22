@@ -201,17 +201,56 @@ export async function POST(
   res: MedusaResponse
 ): Promise<void> {
   // POST /admin/quickbooks/pipeline?action=retry&id=<uuid>
-  // Re-submits a failed operation immediately:
-  //   1. Reads the row (step, order_id, reference_id)
-  //   2. Deletes it (handler will create a fresh submitted row)
-  //   3. Resets qb_sync_status on the entity so the guard allows re-sync
-  //   4. Calls the appropriate handler in the background
+  //   Re-submits a failed operation immediately.
+  // POST /admin/quickbooks/pipeline?action=mark-fixed&id=<uuid>
+  //   Marks a failed row as 'fixed' (acknowledged — user resolved manually
+  //   in QuickBooks Desktop). No bridge call, no retry; just updates status.
   const rowId = req.query.id as string | undefined;
   const action = req.query.action as string | undefined;
 
-  if (!rowId || action !== "retry") {
-    res.status(400).json({ error: "Requires ?action=retry&id=<uuid>" });
+  if (!rowId || (action !== "retry" && action !== "mark-fixed")) {
+    res.status(400).json({
+      error: "Requires ?action=retry|mark-fixed&id=<uuid>",
+    });
     return;
+  }
+
+  const logger0 = req.scope.resolve(ContainerRegistrationKeys.LOGGER);
+
+  if (action === "mark-fixed") {
+    const client = new Client({ connectionString: process.env.DATABASE_URL });
+    try {
+      await client.connect();
+      const { rows } = await client.query(
+        `UPDATE qb_order_pipeline
+            SET status = 'fixed', updated_at = NOW()
+          WHERE id = $1 AND status IN ('failed', 'manual')
+          RETURNING id, step, order_id, medusa_ref_number, qb_ref_number`,
+        [rowId]
+      );
+      if (!rows.length) {
+        res.status(404).json({
+          error: "Row not found or not in 'failed'/'manual' status",
+        });
+        return;
+      }
+      const row = rows[0];
+      logger0.info(
+        `[QB Pipeline Mark-Fixed] ${row.step} ${row.medusa_ref_number ?? row.order_id} → fixed`
+      );
+      res.status(200).json({
+        success: true,
+        id: row.id,
+        message: `Marked as fixed: ${row.medusa_ref_number ?? row.qb_ref_number ?? row.order_id} (${row.step})`,
+      });
+      return;
+    } catch (e: any) {
+      logger0.error(`[QB Pipeline Mark-Fixed] failed: ${e.message}`);
+      res.status(500).json({ error: e.message });
+      return;
+    } finally {
+      await client.end();
+    }
   }
 
   const logger = req.scope.resolve(ContainerRegistrationKeys.LOGGER);
@@ -225,6 +264,10 @@ export async function POST(
     //    'pending' is excluded because it means a handler is already in-flight;
     //    retrying it would send a second request to QB and create duplicates.
     //    Stuck-pending rows will auto-timeout to 'failed' via the GET auto-timeout logic.
+    //
+    //    For steps that support MOD (estimate, invoice, sales_order), PRESERVE qb_txn_id
+    //    and qb_ref_number so the retry hits the MOD path (updates existing QB doc)
+    //    instead of CREATE (which would produce duplicate QB documents).
     const { rows } = await client.query(
       `UPDATE qb_order_pipeline
              SET status       = 'pending',
@@ -233,11 +276,17 @@ export async function POST(
                  confirmed_at = NULL,
                  submitted_at = NULL,
                  bridge_op_id = NULL,
-                 qb_txn_id    = NULL,
-                 qb_ref_number = NULL,
+                 qb_txn_id    = CASE
+                   WHEN step IN ('estimate', 'invoice', 'sales_order') THEN qb_txn_id
+                   ELSE NULL
+                 END,
+                 qb_ref_number = CASE
+                   WHEN step IN ('estimate', 'invoice', 'sales_order') THEN qb_ref_number
+                   ELSE NULL
+                 END,
                  retry_count  = retry_count + 1
              WHERE id = $1 AND status IN ('failed', 'waiting')
-             RETURNING id, step, order_id, reference_id, reference_type, retry_count, bridge_op_id`,
+             RETURNING id, step, order_id, reference_id, reference_type, retry_count, bridge_op_id, qb_txn_id, qb_ref_number`,
       [rowId]
     );
     if (!rows.length) {
@@ -352,29 +401,83 @@ export async function POST(
 
         switch (row.step) {
           case "estimate": {
-            const {
-              handleDraftOrderCreated,
-            } = require("../../../../subscribers/qb-draft-order-subscriber");
-            await handleDraftOrderCreated(
-              { id: row.order_id },
-              req.scope,
-              logger,
-              true
-            );
+            // If the estimate already exists in QB (row has qb_txn_id), use the MOD path
+            // to avoid creating a duplicate QB Estimate. Fall back to CREATE only if
+            // the Estimate never made it to QB (no txn_id) OR the MOD handler reports
+            // that metadata has no txn_id.
+            if (row.qb_txn_id) {
+              const {
+                handleDraftOrderUpdated,
+              } = require("../../../../lib/quickbooks/handlers/handle-draft-order-updated");
+              const outcome = await handleDraftOrderUpdated(
+                row.order_id,
+                req.scope,
+                logger,
+                { isCron: true, awaitSerialized: true }
+              );
+              if (outcome === "skipped") {
+                const {
+                  handleDraftOrderCreated,
+                } = require("../../../../subscribers/qb-draft-order-subscriber");
+                await handleDraftOrderCreated(
+                  { id: row.order_id },
+                  req.scope,
+                  logger,
+                  true
+                );
+              }
+            } else {
+              const {
+                handleDraftOrderCreated,
+              } = require("../../../../subscribers/qb-draft-order-subscriber");
+              await handleDraftOrderCreated(
+                { id: row.order_id },
+                req.scope,
+                logger,
+                true
+              );
+            }
             break;
           }
           case "sales_order": {
-            const {
-              handleOrderPlaced,
-            } = require("../../../../lib/quickbooks/handlers/handle-order-placed");
-            await handleOrderPlaced(
-              { id: row.order_id },
-              orderModule,
-              customerModule,
-              req.scope,
-              logger,
-              false
-            );
+            // If SO already exists in QB, use MOD path to avoid duplicate SO creation.
+            // Fall back to CREATE only when the SO never made it to QB (no txn_id).
+            if (row.qb_txn_id) {
+              const {
+                handleOrderUpdated,
+              } = require("../../../../lib/quickbooks/handlers/handle-order-updated");
+              const outcome = await handleOrderUpdated(
+                row.order_id,
+                req.scope,
+                logger,
+                { isCron: true, awaitSerialized: true }
+              );
+              if (outcome === "skipped") {
+                const {
+                  handleOrderPlaced,
+                } = require("../../../../lib/quickbooks/handlers/handle-order-placed");
+                await handleOrderPlaced(
+                  { id: row.order_id },
+                  orderModule,
+                  customerModule,
+                  req.scope,
+                  logger,
+                  false
+                );
+              }
+            } else {
+              const {
+                handleOrderPlaced,
+              } = require("../../../../lib/quickbooks/handlers/handle-order-placed");
+              await handleOrderPlaced(
+                { id: row.order_id },
+                orderModule,
+                customerModule,
+                req.scope,
+                logger,
+                false
+              );
+            }
             break;
           }
           case "invoice": {

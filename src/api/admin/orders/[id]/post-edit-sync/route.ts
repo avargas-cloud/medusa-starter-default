@@ -619,12 +619,6 @@ export async function POST(
         getLatestInvoiceTxnId,
       } = require("../../../../../lib/quickbooks/qb-metadata-types");
       const {
-        updateSalesOrderInQb,
-      } = require("../../../../../lib/quickbooks/client/sales-orders");
-      const {
-        updateEstimateInQb,
-      } = require("../../../../../lib/quickbooks/client/estimates");
-      const {
         buildQbItems,
       } = require("../../../../../lib/quickbooks/order-flow-core");
       const {
@@ -693,119 +687,33 @@ export async function POST(
         const isEstimateOnly = estimateTxnId && !soTxnId;
         const txnId = soTxnId || estimateTxnId;
         const docTypeStr = isEstimateOnly ? "Estimate" : "Sales Order";
-        const pipelineStep = isEstimateOnly ? "estimate" : "sales_order";
 
         logger.info(
           `[post-edit-sync] QB integration: Pushing ${docTypeStr} modifications to txnId=${txnId}...`
         );
-        const modItems = buildQbItems(qbOrder.items, qbOrder.metadata);
 
-        // Inject pre-flight metadata so UI shows "PENDING"
-        const friendlyRef =
-          (qbOrder.metadata?.document_number as string) ||
-          (qbOrder.display_id
-            ? isEstimateOnly
-              ? `E${qbOrder.display_id}`
-              : `S${qbOrder.display_id}`
-            : null);
-
+        // Delegate to the shared MOD handler — gold-standard sequential-save
+        // pattern: coalesceIfInFlight → writePipelineRow(pending) → withQbSerialized
+        // callback (idempotent reset + bridge MOD + writePipelineRow(submitted/failed)
+        // + pollUntilQbConfirmed). Prevents duplicate pipeline rows on rapid saves
+        // and avoids duplicate bridge calls by coalescing into next_payload.
         try {
-          const pool = getDbPool();
-          await pool.query(
-            `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || $1::jsonb WHERE id = $2`,
-            [JSON.stringify({ qb_sync_status: "pending" }), id]
-          );
-        } catch (mErr) {
-          logger.warn(`[post-edit-sync] Could not set pending status: ${mErr}`);
-        }
-
-        // Write "pending" pipeline row immediately
-        try {
-          await writePipelineRow({
-            orderId: id,
-            step: pipelineStep,
-            status: "pending",
-            medusaRefNumber: friendlyRef,
-          });
-        } catch (pErr: any) {
-          logger.warn(
-            `[post-edit-sync] ⚠️ Could not write pre-flight pipeline row: ${pErr.message}`
+          if (isEstimateOnly) {
+            const {
+              handleDraftOrderUpdated,
+            } = require("../../../../../lib/quickbooks/handlers/handle-draft-order-updated");
+            await handleDraftOrderUpdated(id, req.scope, logger);
+          } else {
+            const {
+              handleOrderUpdated,
+            } = require("../../../../../lib/quickbooks/handlers/handle-order-updated");
+            await handleOrderUpdated(id, req.scope, logger);
+          }
+        } catch (modErr: any) {
+          logger.error(
+            `[post-edit-sync] ❌ Failed to schedule ${docTypeStr} MOD: ${modErr.message}`
           );
         }
-
-        // Serialized per order — prevents EditSequence conflicts on rapid saves
-        const salesRep = parseSalesRepInitials(qbOrder?.metadata?.sales_rep);
-        const updateFn = isEstimateOnly
-          ? updateEstimateInQb
-          : updateSalesOrderInQb;
-        withQbSerialized(
-          `${pipelineStep}:${id}`,
-          { orderId: id, steps: [pipelineStep] },
-          async () => {
-            try {
-              const qbRes = await updateFn({
-                txnId,
-                items: modItems,
-                ...(salesRep ? { salesRep } : {}),
-              });
-              if (qbRes.success) {
-                logger.info(
-                  `[post-edit-sync] ✅ Async QB ${docTypeStr} queue successful! opId=${qbRes.data?.operationId}`
-                );
-                try {
-                  await writePipelineRow({
-                    orderId: id,
-                    step: pipelineStep,
-                    status: "submitted",
-                    bridgeOpId: qbRes.data?.operationId,
-                    qbTxnId: txnId,
-                  });
-                } catch (e: any) {
-                  logger.warn(
-                    `[post-edit-sync] Could not update pipeline row on success: ${e.message}`
-                  );
-                }
-              } else {
-                logger.error(
-                  `[post-edit-sync] ❌ Async QB ${docTypeStr} Mod failed: ${qbRes.error}`
-                );
-                try {
-                  const pool = getDbPool();
-                  await pool.query(
-                    `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status": "error"}'::jsonb WHERE id = $1`,
-                    [id]
-                  );
-                  await writePipelineRow({
-                    orderId: id,
-                    step: pipelineStep,
-                    status: "failed",
-                    error: qbRes.error,
-                    qbTxnId: txnId,
-                  });
-                } catch (e) {}
-              }
-            } catch (e: any) {
-              logger.error(
-                `[post-edit-sync] ❌ Async QB ${docTypeStr} Mod Exception: ${e.message}`
-              );
-              try {
-                const pool = getDbPool();
-                await pool.query(
-                  `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status": "error"}'::jsonb WHERE id = $1`,
-                  [id]
-                );
-                await writePipelineRow({
-                  orderId: id,
-                  step: pipelineStep,
-                  status: "failed",
-                  error: e.message,
-                  qbTxnId: txnId,
-                });
-              } catch (err) {}
-            }
-          },
-          { logger }
-        );
 
         results.qb_sync = "queued_async";
       } else if (hasActiveInvoice) {
@@ -874,6 +782,9 @@ export async function POST(
               const {
                 createSalesOrderInQb,
               } = require("../../../../../lib/quickbooks/client/sales-orders");
+              const {
+                coalesceIfInFlight,
+              } = require("../../../../../lib/quickbooks/qb-pipeline");
               const createItems = buildQbItems(qbOrder!.items, qbOrder!.metadata);
               const salesRep = parseSalesRepInitials(qbOrder?.metadata?.sales_rep);
               const friendlyRef =
@@ -883,6 +794,19 @@ export async function POST(
               logger.info(
                 `[post-edit-sync] 🔄 Voided invoice detected — queuing new QB SO for order ${id}...`
               );
+
+              // Guard against duplicate QB SO creation on rapid post-edit-syncs:
+              // if a sales_order op is already submitted/in-flight, coalesce into
+              // next_payload and skip the bridge call. The consolidator will
+              // re-submit via resubmitByStep after the in-flight op confirms.
+              const coalesced = await coalesceIfInFlight(id, null, "sales_order");
+              if (coalesced) {
+                logger.info(
+                  `[post-edit-sync] ⏸ SO CREATE coalesced — in-flight op will pick up latest state after confirm`
+                );
+                results.qb_sync = "coalesced";
+                // continue past this branch
+              } else {
 
               try {
                 await getDbPool().query(
@@ -961,6 +885,7 @@ export async function POST(
               );
 
               results.qb_sync = "new_so_queued";
+              } // end else (not coalesced)
             } else {
               logger.warn(
                 `[post-edit-sync] ⚠️ Voided invoice but no qb_list_id on order — cannot create QB SO`
