@@ -12,36 +12,55 @@ import {
 } from "@medusajs/ui";
 import { useEffect, useMemo, useState } from "react";
 
+type PipelineStatus = "waiting" | "synced" | "error" | "failed_permanent";
+
 type PipelineRow = {
   id: string;
   variant_id: string;
   sku: string;
   item_type: "Inventory" | "Service" | "NonInventory";
-  status: "waiting" | "synced" | "error";
+  status: PipelineStatus;
+  op_action: "add" | "mod" | null;
   qb_list_id: string | null;
   qb_operation_id: string | null;
   last_error: string | null;
   retries: number;
+  next_retry_at: string | null;
+  failed_at: string | null;
   resolved_at: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
 
-type Counts = { waiting: number; synced: number; error: number };
+type Counts = {
+  waiting: number;
+  synced: number;
+  error: number;
+  failed_permanent: number;
+};
 
 const STATUS_FILTERS = [
   { label: "All", value: "__all__" },
   { label: "Waiting", value: "waiting" },
   { label: "Synced", value: "synced" },
   { label: "Error", value: "error" },
+  { label: "Failed Permanent", value: "failed_permanent" },
 ];
 
 const StatusBadge = ({ status }: { status: PipelineRow["status"] }) => {
   if (status === "synced")
     return <Badge color="green" size="2xsmall">synced</Badge>;
+  if (status === "failed_permanent")
+    return <Badge color="red" size="2xsmall">failed permanent</Badge>;
   if (status === "error")
     return <Badge color="red" size="2xsmall">error</Badge>;
   return <Badge color="orange" size="2xsmall">waiting</Badge>;
+};
+
+const ActionBadge = ({ action }: { action: "add" | "mod" | null }) => {
+  if (action === "mod")
+    return <Badge color="blue" size="2xsmall">mod</Badge>;
+  return <Badge color="grey" size="2xsmall">add</Badge>;
 };
 
 export const ItemPipelineSection = () => {
@@ -50,6 +69,7 @@ export const ItemPipelineSection = () => {
     waiting: 0,
     synced: 0,
     error: 0,
+    failed_permanent: 0,
   });
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("__all__");
@@ -67,7 +87,14 @@ export const ItemPipelineSection = () => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setRows(data.rows ?? []);
-      setCounts(data.counts ?? { waiting: 0, synced: 0, error: 0 });
+      setCounts(
+        data.counts ?? {
+          waiting: 0,
+          synced: 0,
+          error: 0,
+          failed_permanent: 0,
+        }
+      );
     } catch (e) {
       toast.error("Failed to load item pipeline", {
         description: (e as Error).message,
@@ -138,6 +165,9 @@ export const ItemPipelineSection = () => {
         <Badge color="red" size="small">
           Error: {counts.error}
         </Badge>
+        <Badge color="red" size="small">
+          Failed Permanent: {counts.failed_permanent}
+        </Badge>
       </div>
 
       <Container className="p-0">
@@ -181,9 +211,11 @@ export const ItemPipelineSection = () => {
                 <Table.Row>
                   <Table.HeaderCell>SKU</Table.HeaderCell>
                   <Table.HeaderCell>Type</Table.HeaderCell>
+                  <Table.HeaderCell>Op</Table.HeaderCell>
                   <Table.HeaderCell>Status</Table.HeaderCell>
                   <Table.HeaderCell>QB ListID</Table.HeaderCell>
                   <Table.HeaderCell>Retries</Table.HeaderCell>
+                  <Table.HeaderCell>Next Retry</Table.HeaderCell>
                   <Table.HeaderCell>Created</Table.HeaderCell>
                   <Table.HeaderCell>Resolved</Table.HeaderCell>
                   <Table.HeaderCell>Error</Table.HeaderCell>
@@ -200,12 +232,18 @@ export const ItemPipelineSection = () => {
                       <Badge size="2xsmall">{r.item_type}</Badge>
                     </Table.Cell>
                     <Table.Cell>
+                      <ActionBadge action={r.op_action} />
+                    </Table.Cell>
+                    <Table.Cell>
                       <StatusBadge status={r.status} />
                     </Table.Cell>
                     <Table.Cell className="font-mono text-xs">
                       {r.qb_list_id ?? "—"}
                     </Table.Cell>
                     <Table.Cell>{r.retries}</Table.Cell>
+                    <Table.Cell className="text-ui-fg-subtle text-xs">
+                      {fmt(r.next_retry_at)}
+                    </Table.Cell>
                     <Table.Cell className="text-ui-fg-subtle text-xs">
                       {fmt(r.created_at)}
                     </Table.Cell>
@@ -224,7 +262,8 @@ export const ItemPipelineSection = () => {
                       )}
                     </Table.Cell>
                     <Table.Cell>
-                      {r.status === "error" && (
+                      {(r.status === "error" ||
+                        r.status === "failed_permanent") && (
                         <Button
                           size="small"
                           variant="secondary"

@@ -181,6 +181,11 @@ export const updatePosProductWorkflow = createWorkflow(
       return {
         action: "mod" as const,
         skip: !hasQbFields,
+        pipeline: {
+          variant_id: i.variant_id,
+          sku: i.sku ?? "",
+          item_type: "Inventory" as const,
+        },
         data: {
           ListID: i.qb_id,
           EditSequence: i.qb_edit_sequence,
@@ -216,6 +221,8 @@ export const updatePosProductWorkflow = createWorkflow(
 
     return new WorkflowResponse({
       qbOperationId: qbResponse.operationId,
+      pipelineRowId: qbResponse.pipeline_row_id,
+      qbOpQueued: qbResponse.qb_op_queued,
     });
   }
 );

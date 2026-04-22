@@ -1,7 +1,12 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
-const ALLOWED_STATUSES = new Set(["waiting", "synced", "error"]);
+const ALLOWED_STATUSES = new Set([
+  "waiting",
+  "synced",
+  "error",
+  "failed_permanent",
+]);
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const query = req.scope.resolve(ContainerRegistrationKeys.QUERY);
@@ -22,11 +27,15 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       "sku",
       "item_type",
       "status",
+      "op_action",
       "qb_operation_id",
       "qb_list_id",
+      "qb_id",
       "qb_edit_sequence",
       "last_error",
       "retries",
+      "next_retry_at",
+      "failed_at",
       "resolved_at",
       "created_at",
       "updated_at",
@@ -43,6 +52,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     waiting: 0,
     synced: 0,
     error: 0,
+    failed_permanent: 0,
   };
   const { data: all } = await query.graph({
     entity: "qb_item_pipeline",

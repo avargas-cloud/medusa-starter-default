@@ -88,11 +88,13 @@ const updateInventoryIncrementalStep = createStep(
         fields: [
           "id",
           "sku",
+          "metadata",
           "price_set.id",
           "created_at",
           "updated_at",
           "product.id",
           "product.title",
+          "product.handle",
           "product.thumbnail",
           "product.status",
           "product.categories.id",
@@ -108,6 +110,8 @@ const updateInventoryIncrementalStep = createStep(
           "inventory_items.inventory.updated_at",
           "inventory_items.inventory.stocked_quantity", // ✅ DIRECT field (not location_levels)
           "inventory_items.inventory.reserved_quantity", // ✅ DIRECT field
+          "options.value",
+          "options.option.title",
         ],
         filters: { id: variantIds },
       });
@@ -131,6 +135,11 @@ const updateInventoryIncrementalStep = createStep(
             allCategoryHandles.add(c.parent_category.parent_category.handle);
         });
 
+        const mappedOptions = (variant.options || []).map((opt: any) => ({
+          title: opt.option?.title || "Option",
+          value: opt.value || "",
+        }));
+
         return (
           variant.inventory_items
             ?.map((invItem: any) => {
@@ -149,6 +158,12 @@ const updateInventoryIncrementalStep = createStep(
                 pricesByList,
                 variantId: variant.id,
                 productId: product.id,
+                handle: product?.handle || null,
+                salesDescription:
+                  (variant?.metadata as any)?.sales_description || null,
+                cost: (variant?.metadata as any)?.qb_purchase_cost || null,
+                vendorName: (variant?.metadata as any)?.qb_vendor_name || null,
+                options: mappedOptions,
                 category_handles: Array.from(allCategoryHandles), // ✅ FIXED: Include parents
                 status: product.status || "draft",
                 created_at: new Date(

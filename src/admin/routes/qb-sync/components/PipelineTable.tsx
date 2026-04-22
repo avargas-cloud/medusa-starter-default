@@ -15,6 +15,7 @@ type PipelineStatus =
   | "submitted"
   | "confirmed"
   | "failed"
+  | "fixed"
   | "skipped"
   | "waiting"
   | "manual";
@@ -52,6 +53,7 @@ interface PipelineCounts {
   submitted?: number;
   confirmed?: number;
   failed?: number;
+  fixed?: number;
   skipped?: number;
   waiting?: number;
 }
@@ -98,6 +100,7 @@ function StatusBadge({ status }: { status: PipelineStatus }) {
     submitted: { color: "blue", label: "Submitted" },
     confirmed: { color: "green", label: "Confirmed" },
     failed: { color: "red", label: "Failed" },
+    fixed: { color: "grey", label: "Fixed" },
     skipped: { color: "grey", label: "Skipped" },
     waiting: { color: "blue", label: "Waiting" },
     manual: { color: "grey", label: "Manual" },
@@ -150,11 +153,15 @@ function formatPipelineDate(iso: string | null): ReactNode {
 function PipelineRow({
   row,
   onRetry,
+  onMarkFixed,
   retrying,
+  markingFixed,
 }: {
   row: PipelineRow;
   onRetry: (id: string) => void;
+  onMarkFixed: (id: string) => void;
   retrying: boolean;
+  markingFixed: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const icon = STEP_ICONS[row.step] ?? "📎";
@@ -376,6 +383,24 @@ function PipelineRow({
                 className="ml-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-ui-button-neutral hover:bg-ui-button-neutral-hover text-ui-fg-base border border-ui-border-base disabled:opacity-50"
               >
                 {retrying ? "…" : "Retry"}
+              </button>
+            )}
+            {(row.status === "failed" || row.status === "manual") && (
+              <button
+                onClick={() => {
+                  if (
+                    confirm(
+                      "Mark this row as Fixed? Use this only if you resolved the issue manually in QuickBooks Desktop."
+                    )
+                  ) {
+                    onMarkFixed(row.id);
+                  }
+                }}
+                disabled={markingFixed}
+                title="Acknowledge — already resolved in QuickBooks"
+                className="ml-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-ui-button-neutral hover:bg-ui-button-neutral-hover text-ui-fg-base border border-ui-border-base disabled:opacity-50"
+              >
+                {markingFixed ? "…" : "Mark Fixed"}
               </button>
             )}
             {row.status === "manual" && (
@@ -602,6 +627,26 @@ export function PipelineTable() {
     }
   };
 
+  const [markingFixedId, setMarkingFixedId] = useState<string | null>(null);
+
+  const handleMarkFixed = async (id: string) => {
+    setMarkingFixedId(id);
+    try {
+      const res = await fetch(
+        `/admin/quickbooks/pipeline?action=mark-fixed&id=${id}`,
+        {
+          method: "POST",
+          credentials: "include",
+        }
+      );
+      if (res.ok) await fetchPipeline(true);
+    } catch {
+      /* non-blocking */
+    } finally {
+      setMarkingFixedId(null);
+    }
+  };
+
   const hasPending = (counts.pending ?? 0) > 0 || (counts.submitted ?? 0) > 0;
 
   return (
@@ -652,6 +697,7 @@ export function PipelineTable() {
               { key: "submitted", label: "Submitted", color: "blue" },
               { key: "confirmed", label: "Confirmed", color: "green" },
               { key: "failed", label: "Failed", color: "red" },
+              { key: "fixed", label: "Fixed", color: "grey" },
               { key: "skipped", label: "Skipped", color: "grey" },
             ] as { key: string; label: string; color: BadgeColor }[]
           ).map(({ key, label, color }) => {
@@ -683,6 +729,7 @@ export function PipelineTable() {
             <option value="submitted">Submitted</option>
             <option value="confirmed">Confirmed</option>
             <option value="failed">Failed</option>
+            <option value="fixed">Fixed</option>
             <option value="skipped">Skipped</option>
           </select>
           <select
@@ -775,7 +822,9 @@ export function PipelineTable() {
                     key={row.id}
                     row={row}
                     onRetry={handleRetry}
+                    onMarkFixed={handleMarkFixed}
                     retrying={retryingId === row.id}
+                    markingFixed={markingFixedId === row.id}
                   />
                 ))}
               </tbody>
