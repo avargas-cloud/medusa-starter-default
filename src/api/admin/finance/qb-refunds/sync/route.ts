@@ -156,7 +156,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         PayeeEntityRef: { ListID: customerListId },
         RefNumber: refLabel,
         TxnDate: new Date().toISOString().split("T")[0],
-        Memo: `POS Refund — ${refLabel}`,
+        Memo: `POS Refund - ${refLabel}`,
         ExpenseLineAdd: [
           {
             AccountRef: { FullName: "Accounts Receivable" },
