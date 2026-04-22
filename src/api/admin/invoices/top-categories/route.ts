@@ -32,21 +32,21 @@ export async function GET(
     ),
     l1 AS (
       -- Direct children of BY CATEGORIES (e.g. "LED Strips", "LED Channels", …)
-      SELECT id, name
+      SELECT id, name, (metadata->>'image')::jsonb->>'url' AS image_url
       FROM product_category
       WHERE parent_category_id = (SELECT id FROM by_cat)
     ),
     l2 AS (
-      -- Grandchildren — mapped back to their L1 parent name
-      SELECT pc.id, l1.name AS l1_name
+      -- Grandchildren — mapped back to their L1 parent name and image
+      SELECT pc.id, l1.name AS l1_name, l1.image_url AS l1_image_url
       FROM product_category pc
       JOIN l1 ON l1.id = pc.parent_category_id
     ),
     cat_map AS (
-      -- Union: a category id → its L1 name (works for both L1 and L2 entries)
-      SELECT id, name AS l1_name FROM l1
+      -- Union: a category id → its L1 name + image (works for both L1 and L2 entries)
+      SELECT id, name AS l1_name, image_url AS l1_image_url FROM l1
       UNION ALL
-      SELECT id, l1_name FROM l2
+      SELECT id, l1_name, l1_image_url FROM l2
     ),
     invoice_items AS (
       SELECT pii.variant_id, pii.quantity, pii.total
@@ -64,19 +64,21 @@ export async function GET(
         ii.total,
         -- Prefer product.metadata->>'main_category' when set and maps to an L1;
         -- fall back to alphabetical MIN to avoid double-counting multi-category products.
-        COALESCE(main_cat.name, MIN(cm.l1_name)) AS l1_category
+        COALESCE(main_cat.name, MIN(cm.l1_name)) AS l1_category,
+        COALESCE(main_cat.image_url, MIN(cm.l1_image_url)) AS l1_image_url
       FROM invoice_items ii
       JOIN product_variant pv ON pv.id = ii.variant_id
       JOIN product p ON p.id = pv.product_id
       JOIN product_category_product pcp ON pcp.product_id = pv.product_id
       JOIN cat_map cm ON cm.id = pcp.product_category_id
       LEFT JOIN l1 main_cat ON LOWER(main_cat.name) = LOWER(p.metadata->>'main_category')
-      GROUP BY ii.variant_id, ii.quantity, ii.total, main_cat.name
+      GROUP BY ii.variant_id, ii.quantity, ii.total, main_cat.name, main_cat.image_url
     )
     SELECT
       l1_category AS name,
       SUM(quantity)::int AS qty,
-      ROUND(SUM(total) / 100, 2) AS revenue
+      ROUND(SUM(total) / 100, 2) AS revenue,
+      MIN(l1_image_url) AS image_url
     FROM item_with_category
     WHERE l1_category IS NOT NULL
     GROUP BY l1_category
@@ -89,6 +91,7 @@ export async function GET(
       name: row.name,
       qty: Number(row.qty),
       revenue: Number(row.revenue),
+      image_url: (row.image_url ?? null) as string | null,
     }));
     res.json({ categories });
   } catch (err: unknown) {
