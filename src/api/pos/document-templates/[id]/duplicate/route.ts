@@ -31,15 +31,16 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     const now = new Date().toISOString();
     const newId = generateId();
     const result = await db.query(
-      `INSERT INTO pos_document_template (id, name, doc_type, is_default, thumbnail, field_config, layout_data, created_by, created_at, updated_at)
-             VALUES ($1,$2,$3,false,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      `INSERT INTO pos_document_template (id, name, doc_type, is_default, thumbnail, field_config, layout_data, layout_guides, created_by, created_at, updated_at)
+             VALUES ($1,$2,$3,false,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [
         newId,
         `${t.name} (Copy)`,
         t.doc_type,
         t.thumbnail,
-        t.field_config,
-        t.layout_data,
+        JSON.stringify(t.field_config),
+        JSON.stringify(t.layout_data),
+        JSON.stringify(t.layout_guides ?? []),
         t.created_by,
         now,
         now,

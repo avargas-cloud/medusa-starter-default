@@ -37,8 +37,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
     const result = await db.query(
       `INSERT INTO pos_document_template
-             (id, name, doc_type, is_default, thumbnail, field_config, layout_data, created_by, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             (id, name, doc_type, is_default, thumbnail, field_config, layout_data, layout_guides, created_by, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
              RETURNING *`,
       [
         newId,
@@ -48,6 +48,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         source.thumbnail,
         JSON.stringify(source.field_config ?? {}),
         JSON.stringify(source.layout_data ?? []),
+        JSON.stringify(source.layout_guides ?? []),
         null,
         now,
         now,
