@@ -54,6 +54,9 @@ export const syncInventoryToMeiliStep = createStep(
       fields: [
         "id",
         "sku",
+        "thumbnail",
+        "images.id",
+        "images.url",
         "metadata",
         "created_at",
         "updated_at",
@@ -119,6 +122,13 @@ export const syncInventoryToMeiliStep = createStep(
         value: opt.value || "",
       }));
 
+      const variantThumbnail =
+        variant.thumbnail ??
+        (Array.isArray(variant.images) && variant.images.length > 0
+          ? (variant.images[0] as { url?: string }).url ?? null
+          : null);
+      const resolvedThumbnail = variantThumbnail ?? product?.thumbnail ?? null;
+
       // No inventory items → synthetic document (unmanaged/services)
       if (!variant.inventory_items || variant.inventory_items.length === 0) {
         if (!variant.sku) return [];
@@ -127,7 +137,7 @@ export const syncInventoryToMeiliStep = createStep(
             id: variant.id,
             sku: variant.sku,
             title: product?.title || "Untitled",
-            thumbnail: product?.thumbnail || null,
+            thumbnail: resolvedThumbnail,
             totalStock: null,
             totalReserved: 0,
             price: retailPrice?.amount || 0,
@@ -155,7 +165,7 @@ export const syncInventoryToMeiliStep = createStep(
           id: inventory.id,
           sku: inventory.sku || variant.sku || "",
           title: inventory.title || product?.title || "Untitled",
-          thumbnail: product?.thumbnail || null,
+          thumbnail: resolvedThumbnail,
           totalStock: inventory.stocked_quantity || 0,
           totalReserved: inventory.reserved_quantity || 0,
           price: retailPrice?.amount || 0,

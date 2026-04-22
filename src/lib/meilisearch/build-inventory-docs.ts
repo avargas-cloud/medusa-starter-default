@@ -75,6 +75,14 @@ export function buildInventoryDocsForVariants(
 
     const vmeta = (variant?.metadata || {}) as AnyRec;
 
+    // Prefer variant-specific image over parent product thumbnail.
+    const variantThumbnail =
+      variant.thumbnail ??
+      (Array.isArray(variant.images) && variant.images.length > 0
+        ? (variant.images[0] as { url?: string }).url ?? null
+        : null);
+    const resolvedThumbnail = variantThumbnail ?? product?.thumbnail ?? null;
+
     // No inventory items → synthetic doc keyed by variant.id (services etc.)
     if (!variant.inventory_items || variant.inventory_items.length === 0) {
       if (!variant.sku) continue;
@@ -82,7 +90,7 @@ export function buildInventoryDocsForVariants(
         id: variant.id,
         sku: variant.sku,
         title: product?.title || "Untitled",
-        thumbnail: product?.thumbnail || null,
+        thumbnail: resolvedThumbnail,
         totalStock: null,
         totalReserved: 0,
         price: retailPrice?.amount || 0,
@@ -112,7 +120,7 @@ export function buildInventoryDocsForVariants(
         id: inventory.id,
         sku: inventory.sku || variant.sku || "",
         title: inventory.title || product?.title || "Untitled",
-        thumbnail: product?.thumbnail || null,
+        thumbnail: resolvedThumbnail,
         totalStock: inventory.stocked_quantity || 0,
         totalReserved: inventory.reserved_quantity || 0,
         price: retailPrice?.amount || 0,
@@ -145,6 +153,9 @@ export function buildInventoryDocsForVariants(
 export const INVENTORY_DOC_FIELDS = [
   "id",
   "sku",
+  "thumbnail",
+  "images.id",
+  "images.url",
   "metadata",
   "created_at",
   "updated_at",
