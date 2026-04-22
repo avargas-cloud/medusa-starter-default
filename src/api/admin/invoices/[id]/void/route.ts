@@ -663,7 +663,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             // Too new — bump pipeline back to waiting; cron/next-Save will pick it up
             await pool.query(
               `UPDATE qb_order_pipeline
-                  SET status = 'waiting', updated_at = NOW()
+                  SET status = 'waiting', error = NULL, updated_at = NOW()
                 WHERE order_id = $1 AND step = 'sales_order' AND status = 'skipped'`,
               [invoice.order_id]
             );
