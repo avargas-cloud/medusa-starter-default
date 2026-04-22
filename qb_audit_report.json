@@ -1,0 +1,124 @@
+{
+  "generated_at": "2026-04-22T19:55:16.504Z",
+  "stats": {
+    "qb_total": 7654,
+    "medusa_total": 7567,
+    "no_qb_id": 10,
+    "missing_in_medusa": 2,
+    "orphan_in_medusa": 3
+  },
+  "a_no_qb_id": [
+    {
+      "medusa_id": "cus_01KJ5WCMSB3HWW3Y7MDQR95YC2",
+      "email": "alejosvp@gmail.com",
+      "name": "Legacy Customer",
+      "has_account": true,
+      "created_at": "2026-02-23T18:32:36.413Z"
+    },
+    {
+      "medusa_id": "cus_01KJ6SQBNV60T05J0ESKN0VBTJ",
+      "email": "browser-test-1771902315132@test.com",
+      "name": "Test User",
+      "has_account": true,
+      "created_at": "2026-02-24T03:05:16.220Z"
+    },
+    {
+      "medusa_id": "cus_01KPRR37YYFKD30XH71QZ0R4HB",
+      "email": "contac@flashlandscape.com",
+      "name": "MARC WINKLER",
+      "has_account": false,
+      "created_at": "2026-04-21T19:25:55.551Z"
+    },
+    {
+      "medusa_id": "cus_01KMGHHNGCSAADY7R61C961Z93",
+      "email": "test2@aaaaa.com",
+      "name": "Test2 Test2",
+      "has_account": false,
+      "created_at": "2026-03-24T18:26:09.037Z"
+    },
+    {
+      "medusa_id": "cus_01KMGJD3292SAQFA7SXVAAQMCD",
+      "email": "test3@test3.com",
+      "name": "Test3 Test3",
+      "has_account": false,
+      "created_at": "2026-03-24T18:41:07.657Z"
+    },
+    {
+      "medusa_id": "cus_01KMGK8ZRKD4YBKFV1MJR21KQG",
+      "email": "test5@test5.com",
+      "name": "Test5 Test5",
+      "has_account": false,
+      "created_at": "2026-03-24T18:56:21.780Z"
+    },
+    {
+      "medusa_id": "cus_01KJ8MP0CJDYP33NNG67NJB2NJ",
+      "email": "test@ecopowertech.com",
+      "name": "",
+      "has_account": false,
+      "created_at": "2026-02-24T20:15:37.875Z"
+    },
+    {
+      "medusa_id": "cus_01KJ62XG18WW6S97WTHVY5Z826",
+      "email": "test.fast.checkout@ecopowertech.com",
+      "name": "",
+      "has_account": false,
+      "created_at": "2026-02-23T20:26:40.040Z"
+    },
+    {
+      "medusa_id": "cus_01KMGGZ3ZKZ56F76HGZ93AGKAS",
+      "email": "test@test123.com",
+      "name": "Test1 Test2",
+      "has_account": false,
+      "created_at": "2026-03-24T18:16:01.267Z"
+    },
+    {
+      "medusa_id": "cus_01KMGFVPHHA44Z5H25HWZYA0GT",
+      "email": "testuser@test.com",
+      "name": "Test User",
+      "has_account": false,
+      "created_at": "2026-03-24T17:56:40.625Z"
+    }
+  ],
+  "b_missing_in_medusa": [
+    {
+      "qb_list_id": "800022AC-1776260557",
+      "name": "ASA WILLWORD LLC",
+      "first_name": "ARTURO",
+      "last_name": "SOTO",
+      "company": "ASA WILLWORD LLC",
+      "email": "ARTURO6709@HOTMAIL.COM",
+      "price_level": "Wholesale",
+      "customer_type": "Carpenter / General Assembler"
+    },
+    {
+      "qb_list_id": "8000228B-1773678912",
+      "name": "RENE HERNANDEZ",
+      "first_name": "RENE",
+      "last_name": "HERNANDEZ",
+      "company": "",
+      "email": "RENEHD2506832gmailcom",
+      "price_level": "Wholesale",
+      "customer_type": "Carpenter / General Assembler"
+    }
+  ],
+  "c_orphan_in_medusa": [
+    {
+      "medusa_id": "cus_01KMGKJEH369F6CMZBBBE0VA5T",
+      "email": "noemail-1774378891713@ecopowertech.com",
+      "name": "test6 test6",
+      "stale_qb_list_id": "80002296-1774378921"
+    },
+    {
+      "medusa_id": "cus_01KMGKVG6F5A4VVHF1XXPZSPPK",
+      "email": "test7@test7.com",
+      "name": "Test7 Test7",
+      "stale_qb_list_id": "80002297-1774379269"
+    },
+    {
+      "medusa_id": "cus_01KJ3WK1WCHT23SK378V891J9G",
+      "email": "test@example.com",
+      "name": "Test Customer 65",
+      "stale_qb_list_id": "80002246-1769455260"
+    }
+  ]
+}

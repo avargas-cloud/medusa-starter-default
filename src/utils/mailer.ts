@@ -23,6 +23,24 @@ export interface MailOptions {
 }
 
 /**
+ * Strips the "dup_" prefix from an email address.
+ *
+ * Some customers share emails across two QB accounts. The duplicate record is
+ * stored with a "dup_" prefix (e.g. "dup_john@gmail.com") so the real email
+ * stays available for the canonical customer. When we send mail to a dup_
+ * address we transparently deliver to the real address instead.
+ */
+function resolveDupEmail(email: string): string {
+  return email.toLowerCase().startsWith("dup_") ? email.slice(4) : email;
+}
+
+function normalizeRecipients(field: string | string[] | undefined) {
+  if (!field) return field;
+  if (Array.isArray(field)) return field.map(resolveDupEmail);
+  return resolveDupEmail(field);
+}
+
+/**
  * Send a transactional email via Resend.
  * Returns true if sent, false if API key is missing.
  * Throws on send failure so callers can handle it.
@@ -38,11 +56,28 @@ export async function sendMail(options: MailOptions): Promise<boolean> {
     process.env.SENDGRID_FROM ??
     "noreply@ecopowertech.com";
 
+  const to = normalizeRecipients(options.to)!;
+  const cc = normalizeRecipients(options.cc);
+  const replyTo = normalizeRecipients(options.replyTo) as string | undefined;
+
+  // Log when a dup_ address is resolved so it's visible in server logs
+  const allOriginal = [options.to, options.cc, options.replyTo]
+    .flat()
+    .filter(Boolean) as string[];
+  const dupResolved = allOriginal.filter((e) =>
+    e.toLowerCase().startsWith("dup_")
+  );
+  if (dupResolved.length > 0) {
+    console.log(
+      `[mailer] dup_ address resolved: ${dupResolved.map((e) => `${e} → ${e.slice(4)}`).join(", ")}`
+    );
+  }
+
   const { data, error } = await resend.emails.send({
     from,
-    to: options.to,
-    replyTo: options.replyTo,
-    cc: options.cc,
+    to,
+    replyTo,
+    cc,
     subject: options.subject,
     html: options.html,
     attachments: options.attachments?.map((a) => ({
@@ -62,7 +97,7 @@ export async function sendMail(options: MailOptions): Promise<boolean> {
   // so the sender sees the email in their Gmail without needing CC.
   insertIntoGmailSent({
     from,
-    to: options.to,
+    to,
     subject: options.subject,
     html: options.html,
     attachments: options.attachments,
