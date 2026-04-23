@@ -833,7 +833,6 @@ export async function POST(
                       customerId: qbListId,
                       date: new Date().toISOString().split("T")[0],
                       items: createItems,
-                      ...(friendlyRef ? { refNumber: friendlyRef } : {}),
                       ...(salesRep ? { salesRep } : {}),
                     });
                     if (soRes.success) {

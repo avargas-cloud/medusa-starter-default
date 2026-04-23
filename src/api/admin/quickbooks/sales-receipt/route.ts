@@ -172,7 +172,6 @@ export async function POST(
     // ── Create Sales Receipt in QB ─────────────────────────────────────────
     const result = await createSalesReceiptInQb({
       customerId: qbCustomerId,
-      refNumber: String(order.display_id),
       items: qbItems,
       paymentMethod: paymentMethod || "Credit Card",
       salesRep: salesRep,

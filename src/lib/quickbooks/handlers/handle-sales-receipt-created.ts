@@ -169,7 +169,6 @@ export async function handleSalesReceiptCreated(
   const pool = getDbPool();
   let memo: string | undefined;
   let invoiceShippingAmount: number | undefined;
-  let srRefNumber: string | undefined;
   let invoicePaymentMethod: string | undefined;
   let invoiceCardBrand: string | undefined;
 
@@ -190,10 +189,6 @@ export async function handleSalesReceiptCreated(
     const invRes = await pool.query(sql, params);
     const row = invRes.rows[0];
     if (row) {
-      const seq = row.qb_ref_number || row.invoice_number;
-      if (seq) {
-        srRefNumber = String(seq);
-      }
       if (row.invoice_number) {
         memo = `POS Invoice ${row.invoice_number}`;
       }
@@ -331,7 +326,6 @@ export async function handleSalesReceiptCreated(
     prebuiltItems,
     salesTaxCode,
     salesRep: parseSalesRepInitials(order.metadata?.sales_rep),
-    refNumber: srRefNumber,
     memo,
     onSubmitted: async (operationId) => {
       await writePipelineRow({

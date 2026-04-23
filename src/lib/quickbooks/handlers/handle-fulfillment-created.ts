@@ -225,7 +225,6 @@ export async function handleFulfillmentCreated(
   const pool = getDbPool();
   let memo: string | undefined;
   let invoiceShippingAmount: number | undefined;
-  let invRefNumber: string | undefined;
 
   try {
     let sql = `SELECT invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
@@ -241,7 +240,6 @@ export async function handleFulfillmentCreated(
     if (row) {
       const seq = row.qb_ref_number || row.invoice_number;
       if (seq) {
-        invRefNumber = String(seq);
         memo = `POS Invoice ${seq}`;
       }
       if (row.shipping !== undefined && row.shipping !== null) {
@@ -402,7 +400,6 @@ export async function handleFulfillmentCreated(
     salesTaxCode,
     salesRep: parseSalesRepInitials(order.metadata?.sales_rep),
     memo,
-    refNumber: invRefNumber,
     onSubmitted: async (operationId) => {
       await writePipelineRow({
         orderId,

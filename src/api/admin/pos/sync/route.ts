@@ -1257,9 +1257,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           date: creditMemo.completed_at
             ? new Date(creditMemo.completed_at).toISOString().split("T")[0]
             : new Date().toISOString().split("T")[0],
-          refNumber: creditMemo.credit_memo_number
-            ? `CM-${creditMemo.credit_memo_number}`
-            : `CM-${creditMemo.id.slice(-6)}`,
           memo: `Medusa POS Credit Memo`,
           items: qbItems,
         });

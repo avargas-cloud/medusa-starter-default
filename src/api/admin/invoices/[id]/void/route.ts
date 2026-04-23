@@ -644,7 +644,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     customerId: qbListId,
                     date: todayDate,
                     items: qbItems,
-                    ...(friendlyRef ? { refNumber: friendlyRef } : {}),
                     ...(salesRep ? { salesRep } : {}),
                   });
 
