@@ -7,6 +7,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
+import { registerMedusaPayment } from "../../../invoices/register-medusa-payment";
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const id = req.params.id!;
@@ -86,6 +87,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         status: balanceDue <= 0 ? "paid" : "partial",
       }
     );
+
+    // 5a. Register capture in Medusa native payment module so order.payment_status updates
+    if (invoice.order_id) {
+      await registerMedusaPayment(req.scope, {
+        order_id: invoice.order_id,
+        amount,
+        payment_method: payment.method,
+        invoice_total: Number(invoice.total),
+      }).catch(() => {}); // non-fatal
+    }
 
     // 5. Update payment status
     const newApplied = alreadyApplied + amount;

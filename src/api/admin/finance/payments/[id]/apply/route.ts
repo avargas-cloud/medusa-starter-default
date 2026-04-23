@@ -140,8 +140,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       const medusaPaymentId = await registerMedusaPayment(req.scope, {
         order_id: invoice.order_id,
         amount: amount_applied,
-        payment_method:
-          payment.method === "credit_memo" ? "credit" : payment.method,
+        payment_method: payment.method,
         invoice_total: getNum(invoice.total),
       });
       if (medusaPaymentId) {
