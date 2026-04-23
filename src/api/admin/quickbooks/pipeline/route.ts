@@ -714,7 +714,6 @@ export async function POST(
             });
             const cmResult = await createCreditMemoInQb({
               customerId: custResult.qbCustomerId,
-              refNumber: cm.credit_memo_number || undefined,
               date: cm.completed_at
                 ? new Date(cm.completed_at).toISOString().split("T")[0]
                 : new Date().toISOString().split("T")[0],

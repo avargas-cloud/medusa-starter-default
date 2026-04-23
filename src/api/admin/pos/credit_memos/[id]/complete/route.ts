@@ -229,7 +229,6 @@ export async function POST(
           );
           const cmResult = await createCreditMemoInQb({
             customerId: qbCustomerId,
-            refNumber: creditMemo.credit_memo_number || undefined,
             date: new Date().toISOString().split("T")[0],
             memo: `POS Return ${creditMemo.credit_memo_number || ""}`.trim(),
             items: qbItems,
