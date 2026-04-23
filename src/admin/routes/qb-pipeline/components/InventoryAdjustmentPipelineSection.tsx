@@ -17,6 +17,7 @@ type VoidStatus = null | "waiting" | "processing" | "voided" | "error";
 
 interface PipelineRow {
   id: string;
+  seq: number;
   status: AddStatus;
   void_status: VoidStatus;
   count_id: string;
@@ -216,6 +217,7 @@ export const InventoryAdjustmentPipelineSection = () => {
             <Table>
               <Table.Header>
                 <Table.Row>
+                  <Table.HeaderCell>#</Table.HeaderCell>
                   <Table.HeaderCell>Count</Table.HeaderCell>
                   <Table.HeaderCell>Status</Table.HeaderCell>
                   <Table.HeaderCell>Void</Table.HeaderCell>
@@ -237,6 +239,9 @@ export const InventoryAdjustmentPipelineSection = () => {
                     r.status === "error" || r.void_status === "error";
                   return (
                     <Table.Row key={r.id}>
+                      <Table.Cell className="font-mono text-sm text-ui-fg-subtle">
+                        #{r.seq}
+                      </Table.Cell>
                       <Table.Cell className="font-mono text-sm">
                         {r.count_number ?? truncate(r.count_id, 12)}
                       </Table.Cell>

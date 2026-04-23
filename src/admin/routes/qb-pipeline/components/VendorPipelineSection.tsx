@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 
 type VendorPipelineRow = {
   id: string;
+  seq: number;
   vendor_id: string;
   vendor_name: string;
   op_type: "create" | "update" | string;
@@ -174,6 +175,7 @@ export const VendorPipelineSection = () => {
             <Table>
               <Table.Header>
                 <Table.Row>
+                  <Table.HeaderCell>#</Table.HeaderCell>
                   <Table.HeaderCell>Vendor</Table.HeaderCell>
                   <Table.HeaderCell>Op</Table.HeaderCell>
                   <Table.HeaderCell>Status</Table.HeaderCell>
@@ -188,6 +190,9 @@ export const VendorPipelineSection = () => {
               <Table.Body>
                 {filtered.map((r) => (
                   <Table.Row key={r.id}>
+                    <Table.Cell className="font-mono text-sm text-ui-fg-subtle">
+                      #{r.seq}
+                    </Table.Cell>
                     <Table.Cell className="font-medium text-sm">
                       {r.vendor_name}
                     </Table.Cell>

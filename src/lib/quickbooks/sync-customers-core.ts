@@ -13,6 +13,28 @@ const POLL_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes — 7200 customers take tim
 const INITIAL_WAIT_MS = 2 * 60 * 1000; // wait 2 min before first poll
 const MAX_POLL_ATTEMPTS = 8; // up to 16 min total
 
+// QB custom field name for acquisition channel ("Distribution Channel" en QB UI).
+const DISTRIBUTION_CHANNEL_FIELD = "Distribution Channel";
+
+// Legacy QB values that no longer should be used — mapped to current values.
+const LEGACY_CHANNEL_MAP: Record<string, string> = {
+  "Walk In": "Sign",
+  International: "Referred",
+};
+
+function extractDistributionChannel(qb: any): string | null {
+  const raw = qb?.DataExtRet;
+  if (!raw) return null;
+  const list = Array.isArray(raw) ? raw : [raw];
+  for (const d of list) {
+    if (d?.DataExtName === DISTRIBUTION_CHANNEL_FIELD) {
+      const v = (d.DataExtValue || "").trim();
+      return v || null;
+    }
+  }
+  return null;
+}
+
 export interface SyncCustomersResult {
   success: boolean;
   stats: {
@@ -56,6 +78,31 @@ export async function syncCustomersCore(
     imported: 0,
     emailsUpdated: 0,
     errors: 0,
+  };
+
+  // Load valid acquisition_channel values from system_defaults.
+  // Usado para validar el valor de Distribution Channel que viene de QB
+  // antes de escribirlo a customer.metadata.acquisition_channel.
+  const pg = container.resolve("__pg_connection__") as {
+    raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+  };
+  let validChannelValues = new Set<string>();
+  try {
+    const defaultsRes = await pg.raw(
+      `SELECT value FROM system_defaults
+       WHERE context = 'Customer Defaults'
+         AND field_name = 'Acquisition Channel';`
+    );
+    validChannelValues = new Set(
+      (defaultsRes.rows as Array<{ value: string }>).map((r) => r.value)
+    );
+  } catch {
+    // Non-fatal — if the table isn't available, acquisition_channel just won't be set.
+  }
+  const resolveChannel = (raw: string | null): string | null => {
+    if (!raw) return null;
+    const mapped = LEGACY_CHANNEL_MAP[raw] ?? raw;
+    return validChannelValues.has(mapped) ? mapped : null;
   };
 
   try {
@@ -307,7 +354,11 @@ export async function syncCustomersCore(
         const customerType =
           qb.CustomerTypeRef?.FullName || qb.CustomerType || "";
 
-        const qbMeta = {
+        // Acquisition Channel desde QB DataExtRet["Distribution Channel"].
+        // Valores legacy se mapean; valores no listados en system_defaults se ignoran.
+        const channel = resolveChannel(extractDistributionChannel(qb));
+
+        const qbMeta: Record<string, any> = {
           legacy_customer: true,
           qb_list_id: qb.ListID,
           qb_display_name: qb.Name,
@@ -318,6 +369,9 @@ export async function syncCustomersCore(
             ? qb.Email || ""
             : qbOriginalEmail || email,
         };
+        if (channel) {
+          qbMeta.acquisition_channel = channel;
+        }
 
         // If customer already exists by email (registered via web), link QB metadata instead of creating duplicate
         const existingId = emailToMedusaId.get(email.toLowerCase());

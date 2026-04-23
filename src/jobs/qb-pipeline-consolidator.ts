@@ -27,6 +27,7 @@ import { handleOrderUpdated } from "../lib/quickbooks/handlers/handle-order-upda
 import { handleSalesReceiptCreated } from "../lib/quickbooks/handlers/handle-sales-receipt-created";
 import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types";
 import { ensureCustomerInQb } from "../lib/quickbooks/order-flow-core";
+import { syncCustomerDataExtToQb } from "../lib/quickbooks/sync-customer-data-ext";
 import {
   claimAndResetForResubmit,
   confirmPipelineRow,
@@ -138,6 +139,109 @@ async function processCustomerPipelineRow(
 }
 
 /**
+ * Processes a single step='customer_data_ext' pipeline row.
+ * Escribe a QB el valor actual de customer.metadata.acquisition_channel
+ * como DataExt "Distribution Channel" en el customer identificado por qb_list_id.
+ * Idempotente: intenta DataExtAdd primero; si ya existe, cae a DataExtMod.
+ */
+async function processCustomerDataExtPipelineRow(
+  row: { id: string; customer_id: string },
+  customerModule: any,
+  logger: any
+): Promise<void> {
+  const pool = getDbPool();
+
+  try {
+    const customer = await customerModule.retrieveCustomer(row.customer_id);
+    const meta = (customer.metadata ?? {}) as Record<string, unknown>;
+    const qbListId = typeof meta.qb_list_id === "string" ? meta.qb_list_id : null;
+    const channel =
+      typeof meta.acquisition_channel === "string"
+        ? (meta.acquisition_channel as string).trim()
+        : "";
+
+    if (!qbListId) {
+      // Customer todavía no sincronizado a QB. Esta fila debería haber estado
+      // 'waiting' con depends_on del step='customer'. Si llegó acá sin qb_list_id,
+      // la fallamos para investigar — no tiene sentido reintentar sin ese id.
+      await pool.query(
+        `UPDATE qb_order_pipeline
+            SET status='failed', failed_at=NOW(), updated_at=NOW(),
+                error='customer has no qb_list_id in metadata'
+          WHERE id=$1`,
+        [row.id]
+      );
+      return;
+    }
+    if (!channel) {
+      // Sin valor en Medusa no hay nada que escribir a QB. Confirmamos la fila
+      // como no-op para que no se reintente infinitamente.
+      await pool.query(
+        `UPDATE qb_order_pipeline
+            SET status='confirmed', confirmed_at=NOW(), updated_at=NOW(),
+                error=NULL
+          WHERE id=$1`,
+        [row.id]
+      );
+      return;
+    }
+
+    await pool.query(
+      `UPDATE qb_order_pipeline
+          SET status='submitted', submitted_at=NOW(), updated_at=NOW(), error=NULL
+        WHERE id=$1`,
+      [row.id]
+    );
+
+    const result = await syncCustomerDataExtToQb({
+      qbListId,
+      dataExtName: "Distribution Channel",
+      dataExtValue: channel,
+      logger: {
+        info: (m) => logger.info(`${LOG_PREFIX} ${m}`),
+        warn: (m) => logger.warn(`${LOG_PREFIX} ${m}`),
+      },
+    });
+
+    if (result.success) {
+      await pool.query(
+        `UPDATE qb_order_pipeline
+            SET status='confirmed', confirmed_at=NOW(), updated_at=NOW(),
+                error=NULL
+          WHERE id=$1`,
+        [row.id]
+      );
+      logger.info(
+        `${LOG_PREFIX} ✅ customer_data_ext row ${row.id} confirmed (${result.action}): ${qbListId} = "${channel}"`
+      );
+    } else {
+      await pool.query(
+        `UPDATE qb_order_pipeline
+            SET status='failed', failed_at=NOW(), updated_at=NOW(), error=$2
+          WHERE id=$1`,
+        [row.id, result.error ?? "unknown data-ext error"]
+      );
+      logger.warn(
+        `${LOG_PREFIX} ❌ customer_data_ext row ${row.id} failed: ${result.error}`
+      );
+    }
+  } catch (err: any) {
+    const msg = err?.message ?? String(err);
+    await pool
+      .query(
+        `UPDATE qb_order_pipeline
+            SET status='failed', failed_at=NOW(), updated_at=NOW(), error=$2
+          WHERE id=$1`,
+        [row.id, msg]
+      )
+      .catch(() => {});
+    logger.warn(
+      `${LOG_PREFIX} ❌ customer_data_ext row ${row.id} exception: ${msg}`
+    );
+  }
+}
+
+/**
  * Re-submits a pipeline row that was coalesced while in-flight.
  * Called by the consolidator after a row is confirmed and next_payload was present.
  * The row has already been reset to 'pending' by claimAndResetForResubmit.
@@ -241,6 +345,15 @@ async function resubmitByStep(
         );
         break;
 
+      case "customer_data_ext":
+        if (!row.reference_id) break;
+        await processCustomerDataExtPipelineRow(
+          { id: row.id, customer_id: row.reference_id },
+          customerModule,
+          logger
+        );
+        break;
+
       default:
         // payment and other steps: reset to pending and let qb-pos-sync pick up
         logger.info(
@@ -300,11 +413,14 @@ export default async function qbPipelineConsolidator(
     return;
   }
 
-  if (submittedRows.length === 0) return;
-
-  logger.info(
-    `${LOG_PREFIX} Polling ${submittedRows.length} submitted operations...`
-  );
+  // NOTE: No early return aquí — los passes de customer / customer_data_ext
+  // / wake-dependents / stale timeouts de abajo deben correr siempre, aunque
+  // no haya submitted rows para pollear.
+  if (submittedRows.length > 0) {
+    logger.info(
+      `${LOG_PREFIX} Polling ${submittedRows.length} submitted operations...`
+    );
+  }
 
   for (const row of submittedRows) {
     try {
@@ -1320,6 +1436,39 @@ export default async function qbPipelineConsolidator(
   } catch (custPassErr: any) {
     logger.warn(
       `${LOG_PREFIX} ⚠️ Customer pipeline pass error: ${custPassErr.message}`
+    );
+  }
+
+  // ── Customer data-ext (custom fields) pass ─────────────────────────────────
+  // Processes step='customer_data_ext' rows: escribe customer.metadata.acquisition_channel
+  // al custom field "Distribution Channel" del customer en QB.
+  try {
+    const { rows: pendingDataExt } = await pool.query(`
+      SELECT id, reference_id
+        FROM qb_order_pipeline
+       WHERE step = 'customer_data_ext'
+         AND status = 'pending'
+         AND reference_id IS NOT NULL
+       ORDER BY COALESCE(updated_at, created_at) ASC
+       LIMIT 10
+    `);
+
+    if (pendingDataExt.length > 0) {
+      const customerModule = container.resolve(Modules.CUSTOMER);
+      logger.info(
+        `${LOG_PREFIX} Processing ${pendingDataExt.length} pending customer_data_ext row(s)...`
+      );
+      for (const r of pendingDataExt) {
+        await processCustomerDataExtPipelineRow(
+          { id: r.id, customer_id: r.reference_id },
+          customerModule,
+          logger
+        );
+      }
+    }
+  } catch (dePassErr: any) {
+    logger.warn(
+      `${LOG_PREFIX} ⚠️ customer_data_ext pass error: ${dePassErr.message}`
     );
   }
 

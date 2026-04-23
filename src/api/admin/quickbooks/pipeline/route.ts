@@ -105,6 +105,10 @@ export async function GET(
     if (step) {
       conditions.push(`p.step = $${p++}`);
       values.push(step);
+    } else {
+      // El Sales Pipeline (sin filtro step explícito) no debe mostrar
+      // rows de customer_data_ext — tienen su propio tab "Customer Sync".
+      conditions.push(`p.step <> 'customer_data_ext'`);
     }
     if (refId) {
       conditions.push(`(p.order_id = $${p} OR p.reference_id = $${p})`);

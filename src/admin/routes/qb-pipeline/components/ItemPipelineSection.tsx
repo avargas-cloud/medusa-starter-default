@@ -16,6 +16,7 @@ type PipelineStatus = "waiting" | "synced" | "error" | "failed_permanent";
 
 type PipelineRow = {
   id: string;
+  seq: number;
   variant_id: string;
   sku: string;
   item_type: "Inventory" | "Service" | "NonInventory";
@@ -209,6 +210,7 @@ export const ItemPipelineSection = () => {
             <Table>
               <Table.Header>
                 <Table.Row>
+                  <Table.HeaderCell>#</Table.HeaderCell>
                   <Table.HeaderCell>SKU</Table.HeaderCell>
                   <Table.HeaderCell>Type</Table.HeaderCell>
                   <Table.HeaderCell>Op</Table.HeaderCell>
@@ -225,6 +227,9 @@ export const ItemPipelineSection = () => {
               <Table.Body>
                 {filtered.map((r) => (
                   <Table.Row key={r.id}>
+                    <Table.Cell className="font-mono text-sm text-ui-fg-subtle">
+                      #{r.seq}
+                    </Table.Cell>
                     <Table.Cell className="font-mono text-sm">
                       {r.sku}
                     </Table.Cell>

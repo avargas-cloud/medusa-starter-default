@@ -21,6 +21,7 @@ export const QbInventoryAdjustmentPipeline = model.define(
   "qb_inventory_adjustment_pipeline",
   {
     id: model.id({ prefix: "qbinvadj" }).primaryKey(),
+    seq: model.number(), // Short sequential reference id — DB BIGSERIAL
 
     inventory_count_id: model.text(),
     qb_account_list_id: model.text(),

@@ -1,0 +1,373 @@
+{
+  "QBXML": {
+    "QBXMLMsgsRs": {
+      "CustomerQueryRs": {
+        "$": {
+          "statusCode": "0",
+          "statusSeverity": "Info",
+          "statusMessage": "Status OK"
+        },
+        "CustomerRet": [
+          {
+            "ListID": "80001777-1605105028",
+            "TimeCreated": "2020-11-11T09:30:28-05:00",
+            "TimeModified": "2026-01-27T15:43:19-05:00",
+            "EditSequence": "1769546599",
+            "Name": "1 New Project",
+            "FullName": "1 New Project",
+            "IsActive": "true",
+            "Sublevel": "0",
+            "CompanyName": "1 New Project",
+            "FirstName": "Jorge",
+            "LastName": "Carvajal",
+            "BillAddress": {
+              "Addr1": "1 New Project",
+              "Addr2": "Jorge Carvajal",
+              "Addr3": "4821 NW 101st Pl",
+              "City": "Miami",
+              "State": "FL",
+              "PostalCode": "33178"
+            },
+            "BillAddressBlock": {
+              "Addr1": "1 New Project",
+              "Addr2": "Jorge Carvajal",
+              "Addr3": "4821 NW 101st Pl",
+              "Addr4": "Miami FL 33178"
+            },
+            "ShipAddress": {
+              "Addr1": "1 New Project",
+              "Addr2": "Jorge Carvajal",
+              "Addr3": "4821 NW 101st Pl",
+              "City": "Miami",
+              "State": "FL",
+              "PostalCode": "33178"
+            },
+            "ShipAddressBlock": {
+              "Addr1": "1 New Project",
+              "Addr2": "Jorge Carvajal",
+              "Addr3": "4821 NW 101st Pl",
+              "Addr4": "Miami FL 33178"
+            },
+            "Phone": "3054681711",
+            "AltPhone": "3057423524",
+            "Email": "info@1newproject.com",
+            "Contact": "Jorge Carvajal",
+            "CustomerTypeRef": {
+              "ListID": "80000005-1454518858",
+              "FullName": "Independent Contractor"
+            },
+            "SalesRepRef": {
+              "ListID": "8000002A-1670258786",
+              "FullName": "RM"
+            },
+            "Balance": "0.00",
+            "TotalBalance": "0.00",
+            "SalesTaxCodeRef": {
+              "ListID": "80000001-1317838585",
+              "FullName": "Tax"
+            },
+            "ItemSalesTaxRef": {
+              "ListID": "8000010E-1340914624",
+              "FullName": "Sale Tax 7%"
+            },
+            "JobStatus": "None",
+            "PriceLevelRef": {
+              "ListID": "80000003-1331072502",
+              "FullName": "Wholesale"
+            },
+            "CurrencyRef": {
+              "ListID": "80000096-1317838592",
+              "FullName": "US Dollar"
+            },
+            "DataExtRet": [
+              {
+                "OwnerID": "0",
+                "DataExtName": "Distribution Channel",
+                "DataExtType": "STR255TYPE",
+                "DataExtValue": "Sign"
+              },
+              {
+                "OwnerID": "0",
+                "DataExtName": "Order Type",
+                "DataExtType": "STR255TYPE",
+                "DataExtValue": "Regular Order"
+              },
+              {
+                "OwnerID": "0",
+                "DataExtName": "Lead Time",
+                "DataExtType": "STR255TYPE",
+                "DataExtValue": "In stock as of date on quote"
+              },
+              {
+                "OwnerID": "0",
+                "DataExtName": "Payment Terms",
+                "DataExtType": "STR255TYPE",
+                "DataExtValue": "Due on Receipt"
+              }
+            ]
+          },
+          {
+            "ListID": "80001720-1600792798",
+            "TimeCreated": "2020-09-22T12:39:58-05:00",
+            "TimeModified": "2025-09-17T14:58:44-05:00",
+            "EditSequence": "1740770790",
+            "Name": "1 Up Construction",
+            "FullName": "1 Up Construction",
+            "IsActive": "true",
+            "Sublevel": "0",
+            "CompanyName": "1 Up Construction",
+            "FirstName": "Alexander",
+            "LastName": "Barrios",
+            "BillAddress": {
+              "Addr1": "1 Up Construction",
+              "Addr2": "Alexander Barrios",
+              "Addr3": "8400 NW 36th St Suite 450",
+              "City": "Doral",
+              "State": "FL",
+              "PostalCode": "33166"
+            },
+            "BillAddressBlock": {
+              "Addr1": "1 Up Construction",
+              "Addr2": "Alexander Barrios",
+              "Addr3": "8400 NW 36th St Suite 450",
+              "Addr4": "Doral Fl 33166"
+            },
+            "Phone": "7863062897",
+            "Email": "abarrios@1upbuilders.com",
+            "Contact": "Alexander Barrios",
+            "CustomerTypeRef": {
+              "ListID": "80000005-1454518858",
+              "FullName": "Independent Contractor"
+            },
+            "Balance": "0.00",
+            "TotalBalance": "0.00",
+            "SalesTaxCodeRef": {
+              "ListID": "80000001-1317838585",
+              "FullName": "Tax"
+            },
+            "ItemSalesTaxRef": {
+              "ListID": "8000010E-1340914624",
+              "FullName": "Sale Tax 7%"
+            },
+            "JobStatus": "None",
+            "PriceLevelRef": {
+              "ListID": "80000003-1331072502",
+              "FullName": "Wholesale"
+            },
+            "CurrencyRef": {
+              "ListID": "80000096-1317838592",
+              "FullName": "US Dollar"
+            },
+            "DataExtRet": {
+              "OwnerID": "0",
+              "DataExtName": "Distribution Channel",
+              "DataExtType": "STR255TYPE",
+              "DataExtValue": "Referred"
+            }
+          },
+          {
+            "ListID": "80001BC3-1663682480",
+            "TimeCreated": "2022-09-20T10:01:20-05:00",
+            "TimeModified": "2025-09-22T00:15:03-05:00",
+            "EditSequence": "1740770871",
+            "Name": "123 Supply",
+            "FullName": "123 Supply",
+            "IsActive": "true",
+            "Sublevel": "0",
+            "CompanyName": "123 Supply",
+            "FirstName": "Jorge",
+            "LastName": "Chakira",
+            "BillAddress": {
+              "Addr1": "123 Supply",
+              "Addr2": "Jorge Chakira"
+            },
+            "BillAddressBlock": {
+              "Addr1": "123 Supply",
+              "Addr2": "Jorge Chakira"
+            },
+            "Phone": "7867205407",
+            "Email": "123supplyinc@gmail.com",
+            "Contact": "Jorge Chakira",
+            "CustomerTypeRef": {
+              "ListID": "80000005-1454518858",
+              "FullName": "Independent Contractor"
+            },
+            "SalesRepRef": {
+              "ListID": "80000027-1653419140",
+              "FullName": "MG"
+            },
+            "Balance": "0.00",
+            "TotalBalance": "0.00",
+            "SalesTaxCodeRef": {
+              "ListID": "80000001-1317838585",
+              "FullName": "Tax"
+            },
+            "ItemSalesTaxRef": {
+              "ListID": "8000010E-1340914624",
+              "FullName": "Sale Tax 7%"
+            },
+            "JobStatus": "None",
+            "PriceLevelRef": {
+              "ListID": "80000003-1331072502",
+              "FullName": "Wholesale"
+            },
+            "CurrencyRef": {
+              "ListID": "80000096-1317838592",
+              "FullName": "US Dollar"
+            },
+            "DataExtRet": [
+              {
+                "OwnerID": "0",
+                "DataExtName": "Distribution Channel",
+                "DataExtType": "STR255TYPE",
+                "DataExtValue": "Referred"
+              },
+              {
+                "OwnerID": "0",
+                "DataExtName": "Order Type",
+                "DataExtType": "STR255TYPE",
+                "DataExtValue": "Regular Order"
+              },
+              {
+                "OwnerID": "0",
+                "DataExtName": "Lead Time",
+                "DataExtType": "STR255TYPE",
+                "DataExtValue": "In stock as of date on quote"
+              },
+              {
+                "OwnerID": "0",
+                "DataExtName": "Payment Terms",
+                "DataExtType": "STR255TYPE",
+                "DataExtValue": "Due on Receipt"
+              }
+            ]
+          },
+          {
+            "ListID": "800014AA-1571669670",
+            "TimeCreated": "2019-10-21T10:54:30-05:00",
+            "TimeModified": "2025-09-17T00:52:36-05:00",
+            "EditSequence": "1740770743",
+            "Name": "1616 Investments, LLC",
+            "FullName": "1616 Investments, LLC",
+            "IsActive": "true",
+            "Sublevel": "0",
+            "CompanyName": "1616 Investments, LLC",
+            "FirstName": "Giuliano",
+            "LastName": "Rovis",
+            "BillAddress": {
+              "Addr1": "1616 Investments, LLC",
+              "Addr2": "Giuliano Rovis",
+              "City": "2271 W 77 st Hialeah",
+              "State": "FL",
+              "PostalCode": "33016"
+            },
+            "BillAddressBlock": {
+              "Addr1": "1616 Investments, LLC",
+              "Addr2": "Giuliano Rovis",
+              "Addr3": "2271 W 77 st Hialeah, fl 33016"
+            },
+            "Phone": "7865226060",
+            "Email": "carmax67@gmail.com",
+            "Contact": "Giuliano Rovis",
+            "CustomerTypeRef": {
+              "ListID": "80000013-1476558311",
+              "FullName": "Commercial Business"
+            },
+            "SalesRepRef": {
+              "ListID": "80000017-1520632087",
+              "FullName": "YJC"
+            },
+            "Balance": "0.00",
+            "TotalBalance": "0.00",
+            "SalesTaxCodeRef": {
+              "ListID": "80000001-1317838585",
+              "FullName": "Tax"
+            },
+            "ItemSalesTaxRef": {
+              "ListID": "8000010E-1340914624",
+              "FullName": "Sale Tax 7%"
+            },
+            "JobStatus": "None",
+            "PriceLevelRef": {
+              "ListID": "80000002-1331072484",
+              "FullName": "Retail"
+            },
+            "CurrencyRef": {
+              "ListID": "80000096-1317838592",
+              "FullName": "US Dollar"
+            },
+            "DataExtRet": {
+              "OwnerID": "0",
+              "DataExtName": "Distribution Channel",
+              "DataExtType": "STR255TYPE",
+              "DataExtValue": "Sign"
+            }
+          },
+          {
+            "ListID": "800018D1-1623260010",
+            "TimeCreated": "2021-06-09T13:33:30-05:00",
+            "TimeModified": "2025-09-19T13:39:32-05:00",
+            "EditSequence": "1740770820",
+            "Name": "1644 OSCEOLA GROVES LLC",
+            "FullName": "1644 OSCEOLA GROVES LLC",
+            "IsActive": "true",
+            "Sublevel": "0",
+            "CompanyName": "1644 OSCEOLA GROVES LLC",
+            "FirstName": "JORGE",
+            "LastName": "HERNANDEZ",
+            "BillAddress": {
+              "Addr1": "1644 OSCEOLA GROVES LLC",
+              "Addr2": "JORGE HERNANDEZ",
+              "Addr3": "1644SW 19 ST",
+              "City": "MIAMI.FL",
+              "State": "33145",
+              "PostalCode": "33145"
+            },
+            "BillAddressBlock": {
+              "Addr1": "1644 OSCEOLA GROVES LLC",
+              "Addr2": "JORGE HERNANDEZ",
+              "Addr3": "1644SW 19 ST",
+              "Addr4": "MIAMI.FL, 33145 33145"
+            },
+            "Phone": "7874572679",
+            "Email": "jhemanuelli@outlook.com",
+            "Contact": "JORGE HERNANDEZ",
+            "CustomerTypeRef": {
+              "ListID": "80000015-1477501022",
+              "FullName": "Developer"
+            },
+            "SalesRepRef": {
+              "ListID": "80000022-1623767002",
+              "FullName": "MAM"
+            },
+            "Balance": "0.00",
+            "TotalBalance": "0.00",
+            "SalesTaxCodeRef": {
+              "ListID": "80000001-1317838585",
+              "FullName": "Tax"
+            },
+            "ItemSalesTaxRef": {
+              "ListID": "8000010E-1340914624",
+              "FullName": "Sale Tax 7%"
+            },
+            "JobStatus": "None",
+            "PriceLevelRef": {
+              "ListID": "80000003-1331072502",
+              "FullName": "Wholesale"
+            },
+            "CurrencyRef": {
+              "ListID": "80000096-1317838592",
+              "FullName": "US Dollar"
+            },
+            "DataExtRet": {
+              "OwnerID": "0",
+              "DataExtName": "Distribution Channel",
+              "DataExtType": "STR255TYPE",
+              "DataExtValue": "Sign"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

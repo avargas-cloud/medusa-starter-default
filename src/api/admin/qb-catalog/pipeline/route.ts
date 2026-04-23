@@ -23,6 +23,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     entity: "qb_item_pipeline",
     fields: [
       "id",
+      "seq",
       "variant_id",
       "sku",
       "item_type",

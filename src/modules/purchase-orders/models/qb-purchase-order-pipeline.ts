@@ -23,6 +23,7 @@ export const QbPurchaseOrderPipeline = model.define(
   "qb_purchase_order_pipeline",
   {
     id: model.id({ prefix: "qbpopipe" }).primaryKey(),
+    seq: model.number(), // Short sequential reference id — DB BIGSERIAL
 
     purchase_order_id: model.text(),
 

@@ -25,6 +25,7 @@ export const QbItemReceiptPipeline = model.define(
   "qb_item_receipt_pipeline",
   {
     id: model.id({ prefix: "qbrcpipe" }).primaryKey(),
+    seq: model.number(), // Short sequential reference id — DB BIGSERIAL
 
     purchase_order_receipt_id: model.text(),
     purchase_order_id: model.text(), // denormalized for admin views

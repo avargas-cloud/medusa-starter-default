@@ -4,6 +4,7 @@ import { Heading, Tabs, Text } from "@medusajs/ui";
 
 import { BridgeStatus } from "../qb-sync/components/BridgeStatus";
 import { PipelineTable } from "../qb-sync/components/PipelineTable";
+import { CustomerSyncPipelineSection } from "./components/CustomerSyncPipelineSection";
 import { InventoryAdjustmentPipelineSection } from "./components/InventoryAdjustmentPipelineSection";
 import { ItemPipelineSection } from "./components/ItemPipelineSection";
 import { VendorPipelineSection } from "./components/VendorPipelineSection";
@@ -55,6 +56,12 @@ const QbPipelinePage = () => {
           >
             Waiting Orders
           </Tabs.Trigger>
+          <Tabs.Trigger
+            value="customer-sync"
+            className="px-4 py-2 font-semibold data-[state=active]:bg-ui-bg-base-pressed data-[state=active]:text-ui-fg-base data-[state=active]:border-b-2 data-[state=active]:border-ui-fg-interactive"
+          >
+            Customer Sync
+          </Tabs.Trigger>
         </Tabs.List>
         <Tabs.Content value="operations" className="pt-4">
           <PipelineTable />
@@ -70,6 +77,9 @@ const QbPipelinePage = () => {
         </Tabs.Content>
         <Tabs.Content value="waiting-orders" className="pt-4">
           <WaitingOrdersSection />
+        </Tabs.Content>
+        <Tabs.Content value="customer-sync" className="pt-4">
+          <CustomerSyncPipelineSection />
         </Tabs.Content>
       </Tabs>
     </div>

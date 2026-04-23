@@ -81,6 +81,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     entity: "qb_inventory_adjustment_pipeline",
     fields: [
       "id",
+      "seq",
       "inventory_count_id",
       "qb_account_list_id",
       "status",
@@ -129,6 +130,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     );
     return {
       id: r.id,
+      seq: (r as any).seq,
       status: r.status,
       void_status: r.void_status,
       count_id: r.inventory_count_id,

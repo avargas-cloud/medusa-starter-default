@@ -180,6 +180,19 @@ const DEFAULT_VALUES = [
     sort_order: 1,
   },
 
+  // Customer Defaults — Acquisition Channel
+  // Mirrors QuickBooks custom field "Distribution Channel" (DataExt, OwnerID=0).
+  // Values must match QB exactly — se copian literal sin normalización.
+  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Sign", sort_order: 1 },
+  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Online Search", sort_order: 2 },
+  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Online E-Commerce", sort_order: 3 },
+  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Referred", sort_order: 4 },
+  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Field Visit", sort_order: 5 },
+  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Email Marketing", sort_order: 6 },
+  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Facebook", sort_order: 7 },
+  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Instagram", sort_order: 8 },
+  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Ebay", sort_order: 9 },
+
   // Templates Footer
   {
     context: "Templates Footer",
@@ -383,12 +396,14 @@ export async function ensureTable(client: Client) {
         ADD COLUMN IF NOT EXISTS metadata JSONB NULL
     `);
 
-  // Migration: consolidate old Customer Defaults / Order Defaults contexts
+  // Migration: consolidate legacy "Order Defaults" context → "Document Defaults".
+  // Nota: "Customer Defaults" se re-introdujo como context válido para
+  // Acquisition Channel (2026-04), así que solo cae "Order Defaults" aquí.
   try {
     await client.query(`
             UPDATE system_defaults
             SET context = 'Document Defaults'
-            WHERE context IN ('Customer Defaults', 'Order Defaults')
+            WHERE context = 'Order Defaults'
             AND NOT EXISTS (
                 SELECT 1 FROM system_defaults sd2
                 WHERE sd2.context = 'Document Defaults'
@@ -397,7 +412,7 @@ export async function ensureTable(client: Client) {
             )
         `);
     await client.query(`
-            DELETE FROM system_defaults WHERE context IN ('Customer Defaults', 'Order Defaults')
+            DELETE FROM system_defaults WHERE context = 'Order Defaults'
         `);
   } catch (e) {
     // ignore unique constraint errors from migration

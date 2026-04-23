@@ -46,6 +46,7 @@ interface SystemDefault {
 
 const KNOWN_CONTEXTS = [
   "Document Defaults",
+  "Customer Defaults",
   "Templates Footer",
   "Metadata Options",
 ];
@@ -63,6 +64,7 @@ const KNOWN_FIELDS_BY_CONTEXT: Record<string, string[]> = {
     "Project Phase",
     "PO Status",
   ],
+  "Customer Defaults": ["Acquisition Channel"],
   "Templates Footer": [
     "Draft Order (Estimates)",
     "Order (Sales Order)",
@@ -83,6 +85,7 @@ const FIELD_DEFAULT_SCOPE: Record<string, string> = {
   "Ship Via": "orders",
   "Project Phase": "orders",
   "PO Status": "purchase_orders",
+  "Acquisition Channel": "customers",
   "Draft Order (Estimates)": "orders",
   "Order (Sales Order)": "orders",
   Invoice: "orders",
@@ -100,6 +103,7 @@ const CONTEXT_COLORS: Record<
   "blue" | "green" | "orange" | "purple" | "grey"
 > = {
   "Document Defaults": "blue",
+  "Customer Defaults": "green",
   "Templates Footer": "purple",
   "Metadata Options": "orange",
 };
