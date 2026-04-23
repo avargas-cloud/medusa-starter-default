@@ -287,6 +287,64 @@ export async function mergeApplyPaymentInQb(payload: {
 }
 
 /**
+ * Applies a QB Credit Memo to an Invoice by creating a new ReceivePayment (Add)
+ * with SetCredit. Used when customer_payment.type === 'credit_memo'.
+ * Unlike mergeApplyPaymentInQb, this does NOT query an existing ReceivePayment —
+ * the creditMemoTxnId belongs to a CreditMemo record, not a ReceivePayment.
+ */
+export async function applyCreditMemoToInvoiceInQb(payload: {
+  customerId: string;
+  creditMemoTxnId: string;
+  invoiceTxnId: string;
+  amount: number;
+  refNumber?: string;
+  memo?: string;
+  log?: (msg: string) => void;
+}): Promise<QbBridgeResult<MergeApplyResult>> {
+  const log = payload.log ?? console.log;
+
+  if (DRY_RUN) {
+    log(
+      `[QB DRY RUN] Would apply credit memo ${payload.creditMemoTxnId} to invoice ${payload.invoiceTxnId}`
+    );
+    return {
+      success: true,
+      dryRun: true,
+      data: { operationId: "DRY_RUN", newEditSequence: null, totalAppliedCount: 1 },
+    };
+  }
+
+  try {
+    const enqueueRes = await bridgeFetch("POST", "/api/payments", {
+      customerId: payload.customerId,
+      totalAmount: 0,
+      invoiceId: payload.invoiceTxnId,
+      paymentAmount: 0,
+      creditTxnId: payload.creditMemoTxnId,
+      amount: payload.amount,
+      ...(payload.refNumber ? { refNumber: payload.refNumber } : {}),
+      ...(payload.memo ? { memo: payload.memo } : {}),
+    });
+
+    const operationId: string = enqueueRes?.operationId;
+    if (!operationId)
+      throw new Error("Bridge did not return operationId for credit-memo apply");
+
+    const addResult = await pollOperationResult(operationId, log);
+    return {
+      success: true,
+      data: {
+        operationId,
+        newEditSequence: addResult?.editSequence || null,
+        totalAppliedCount: 1,
+      },
+    };
+  } catch (err: any) {
+    return { success: false, error: err?.message || String(err) };
+  }
+}
+
+/**
  * Unapplies a payment from a specific invoice in QuickBooks.
  * This instructs QBXML to send a ReceivePaymentMod setting the PaymentAmount for the target invoice to 0.00.
  * Requires the EditSequence to be supplied (fetch via query first).

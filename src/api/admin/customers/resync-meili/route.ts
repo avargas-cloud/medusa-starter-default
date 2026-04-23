@@ -81,6 +81,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         has_account: c.has_account,
         status: c.has_account ? "Registered" : "Guest",
         list_id: meta.qb_list_id || "",
+        acquisition_channel: meta.acquisition_channel || "",
         customer_type,
         price_level,
         groups: groupNames,

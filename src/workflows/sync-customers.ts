@@ -72,6 +72,7 @@ export const syncCustomersToMeiliStep = createStep(
           has_account: c.has_account ?? false,
           status: c.has_account ? "Registered" : "Guest",
           list_id: meta.qb_list_id ?? "",
+          acquisition_channel: meta.acquisition_channel ?? "",
           customer_type,
           price_level,
           groups: groupNames,

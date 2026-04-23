@@ -631,6 +631,12 @@ export function PipelineTable() {
 
   const handleMarkFixed = async (id: string) => {
     setMarkingFixedId(id);
+    // Optimistic update so the badge reflects the change immediately
+    setCounts((prev) => ({
+      ...prev,
+      failed: Math.max(0, (prev.failed ?? 0) - 1),
+      fixed: (prev.fixed ?? 0) + 1,
+    }));
     try {
       const res = await fetch(
         `/admin/quickbooks/pipeline?action=mark-fixed&id=${id}`,
@@ -639,9 +645,10 @@ export function PipelineTable() {
           credentials: "include",
         }
       );
-      if (res.ok) await fetchPipeline(true);
+      await fetchPipeline(true);
+      if (!res.ok) return;
     } catch {
-      /* non-blocking */
+      await fetchPipeline(true);
     } finally {
       setMarkingFixedId(null);
     }

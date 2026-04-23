@@ -538,7 +538,7 @@ export async function POST(
             });
             await applyClient.connect();
             const { rows: appRows } = await applyClient.query(
-              `SELECT payment_id, invoice_id, order_id, amount_applied FROM customer_payment_application WHERE payment_id = $1 AND voided_at IS NULL LIMIT 1`,
+              `SELECT payment_id, invoice_id, order_id, amount_applied FROM payment_application WHERE payment_id = $1 AND voided_at IS NULL LIMIT 1`,
               [row.reference_id]
             );
             await applyClient.end();
@@ -555,6 +555,58 @@ export async function POST(
               },
               container: req.scope as any,
             });
+            break;
+          }
+          case "void_sales_order": {
+            // qb_txn_id may be NULL when the row was created by the chaining mechanism
+            // (order canceled while estimate was still in-flight). Look it up from the
+            // confirmed estimate/sales_order row for the same order.
+            let soTxnId: string | null = row.qb_txn_id ?? null;
+            if (!soTxnId && row.order_id) {
+              const voidPool = require("../../../../api/utils/db-pool").getDbPool();
+              const { rows: soRows } = await voidPool.query(
+                `SELECT qb_txn_id FROM qb_order_pipeline
+                 WHERE order_id = $1
+                   AND step IN ('estimate', 'sales_order')
+                   AND status = 'confirmed'
+                   AND qb_txn_id IS NOT NULL
+                 ORDER BY confirmed_at DESC LIMIT 1`,
+                [row.order_id]
+              );
+              soTxnId = soRows[0]?.qb_txn_id ?? null;
+              if (soTxnId) {
+                await voidPool.query(
+                  `UPDATE qb_order_pipeline SET qb_txn_id = $2, updated_at = NOW() WHERE id = $1`,
+                  [row.id, soTxnId]
+                );
+              }
+            }
+            if (!soTxnId) {
+              logger.warn(`${LOG_PREFIX} void_sales_order: no QB TxnID for order ${row.order_id} — marking failed`);
+              const voidPool = require("../../../../api/utils/db-pool").getDbPool();
+              await voidPool.query(
+                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                [row.id, "Cannot retry: no confirmed estimate/sales_order TxnID found"]
+              );
+              break;
+            }
+            const { closeSalesOrderInQb } = require("../../../../lib/quickbooks/qb-bridge-client");
+            const closeResult = await closeSalesOrderInQb(soTxnId, (m: string) => logger.info(m));
+            const voidPool2 = require("../../../../api/utils/db-pool").getDbPool();
+            if (!closeResult.success) {
+              logger.error(`${LOG_PREFIX} void_sales_order failed: ${closeResult.error}`);
+              await voidPool2.query(
+                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW(), qb_txn_id = $3 WHERE id = $1`,
+                [row.id, closeResult.error ?? "SO close failed", soTxnId]
+              );
+            } else {
+              const soOpId = closeResult.data?.operationId ?? null;
+              logger.info(`${LOG_PREFIX} void_sales_order queued (op: ${soOpId})`);
+              await voidPool2.query(
+                `UPDATE qb_order_pipeline SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), qb_txn_id = $3, updated_at = NOW() WHERE id = $1`,
+                [row.id, soOpId, soTxnId]
+              );
+            }
             break;
           }
           case "write_check": {
@@ -583,6 +635,110 @@ export async function POST(
                   `${LOG_PREFIX} Could not reset write_check: ${wcRetryErr.message}`
                 );
               }
+            }
+            break;
+          }
+          case "credit_memo": {
+            if (!row.reference_id) {
+              logger.warn(`${LOG_PREFIX} credit_memo retry: no reference_id`);
+              break;
+            }
+            const cmPool = require("../../../../api/utils/db-pool").getDbPool();
+            const { rows: cmRows } = await cmPool.query(
+              `SELECT cm.id, cm.credit_memo_number, cm.customer_id, cm.completed_at,
+                      cm.discount, cm.shipping, cm.shipping_option_name,
+                      COALESCE(
+                        json_agg(
+                          json_build_object(
+                            'sku', i.sku,
+                            'title', i.title,
+                            'description', i.description,
+                            'quantity', i.quantity,
+                            'unit_price', i.unit_price,
+                            'quickbooks_id', pv.metadata->>'quickbooks_id'
+                          )
+                        ) FILTER (WHERE i.id IS NOT NULL),
+                        '[]'
+                      ) AS items
+               FROM pos_credit_memo cm
+               LEFT JOIN pos_credit_memo_item i
+                 ON i.credit_memo_id = cm.id AND i.deleted_at IS NULL AND i.quantity > 0
+               LEFT JOIN product_variant pv ON pv.id = i.variant_id
+               WHERE cm.id = $1
+               GROUP BY cm.id`,
+              [row.reference_id]
+            );
+            const cm = cmRows[0];
+            if (!cm) {
+              logger.warn(`${LOG_PREFIX} credit_memo retry: CM not found ${row.reference_id}`);
+              break;
+            }
+            let cmCustomer: any;
+            try {
+              cmCustomer = await customerModule.retrieveCustomer(cm.customer_id);
+            } catch {
+              await cmPool.query(
+                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                [row.id, `Customer not found: ${cm.customer_id}`]
+              );
+              break;
+            }
+            const {
+              ensureCustomerInQb,
+            } = require("../../../../lib/quickbooks/order-flow-core");
+            const {
+              createCreditMemoInQb,
+            } = require("../../../../lib/quickbooks/client");
+            const custResult = await ensureCustomerInQb(
+              cmCustomer,
+              customerModule,
+              (m: string) => logger.info(m)
+            );
+            if (!custResult.success || !custResult.qbCustomerId) {
+              await cmPool.query(
+                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                [row.id, `Customer not in QB: ${custResult.error ?? "unknown"}`]
+              );
+              break;
+            }
+            const qbItems = (cm.items ?? []).map((item: any) => {
+              const unitPriceDollars = (item.unit_price || 0) / 100;
+              return {
+                ...(item.quickbooks_id ? { productId: item.quickbooks_id } : {}),
+                productName: item.sku || item.title,
+                quantity: item.quantity,
+                price: unitPriceDollars,
+                amount: Number((unitPriceDollars * item.quantity).toFixed(2)),
+                desc: item.description || item.title,
+              };
+            });
+            const cmResult = await createCreditMemoInQb({
+              customerId: custResult.qbCustomerId,
+              refNumber: cm.credit_memo_number || undefined,
+              date: cm.completed_at
+                ? new Date(cm.completed_at).toISOString().split("T")[0]
+                : new Date().toISOString().split("T")[0],
+              memo: `POS Return ${cm.credit_memo_number || ""}`.trim(),
+              items: qbItems,
+            });
+            if (cmResult.success && cmResult.data?.operationId) {
+              await cmPool.query(
+                `UPDATE qb_order_pipeline
+                 SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW()
+                 WHERE id = $1`,
+                [row.id, cmResult.data.operationId]
+              );
+              logger.info(
+                `${LOG_PREFIX} credit_memo re-queued op=${cmResult.data.operationId}`
+              );
+            } else {
+              await cmPool.query(
+                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                [row.id, cmResult.error ?? "QB credit memo creation failed"]
+              );
+              logger.error(
+                `${LOG_PREFIX} credit_memo retry failed: ${cmResult.error}`
+              );
             }
             break;
           }

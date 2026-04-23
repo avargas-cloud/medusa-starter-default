@@ -3,7 +3,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const query = req.scope.resolve("query");
 
-  const { data: qb_bank_accounts, metadata } = await query.graph({
+  const { data: all_accounts } = await query.graph({
     entity: "qb_bank_account",
     fields: [
       "id",
@@ -16,16 +16,18 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       "updated_at",
     ],
     pagination: {
-      skip: (req.validatedQuery?.skip as number) ?? 0,
-      take: (req.validatedQuery?.take as number) ?? 50,
+      skip: 0,
+      take: 200,
     },
   });
 
+  const qb_bank_accounts = all_accounts.filter((a: any) => a.type === "Bank");
+
   res.json({
     qb_bank_accounts,
-    count: metadata?.count ?? qb_bank_accounts.length,
-    offset: metadata?.skip ?? 0,
-    limit: metadata?.take ?? 50,
+    count: qb_bank_accounts.length,
+    offset: 0,
+    limit: 200,
   });
 };
 

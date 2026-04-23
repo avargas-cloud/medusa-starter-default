@@ -9,25 +9,34 @@
  *
  * QB Name field limit: 41 characters total.
  *
- * No suffix is added. If QB rejects the name as duplicate, the caller
- * should handle that error (logged + returned as error from ensureCustomerInQb).
+ * No suffix is added on the first attempt. If QB rejects the name as a
+ * duplicate (error 3100 "already in use"), the bridge re-queues the op
+ * with data.nameSuffixed = true, and on the second call this function
+ * appends " #XXXXXX" (last 6 chars of Medusa customer ID) to make the
+ * name unique in QB.
  */
 
-export function buildQbCustomerName(customer: {
-  company_name?: string | null;
-  first_name?: string | null;
-  last_name?: string | null;
-  id: string;
-}): string {
+export function buildQbCustomerName(
+  customer: {
+    company_name?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
+    id: string;
+  },
+  { addSuffix = false }: { addSuffix?: boolean } = {}
+): string {
   const MAX_LEN = 41; // QB hard limit
+  const suffix = addSuffix ? " #" + customer.id.slice(-6).toUpperCase() : "";
+  const AVAILABLE = MAX_LEN - suffix.length;
 
   if (customer.company_name?.trim()) {
-    return customer.company_name.trim().slice(0, MAX_LEN);
+    return customer.company_name.trim().slice(0, AVAILABLE) + suffix;
   }
 
   const first = (customer.first_name || "").trim();
   const last = (customer.last_name || "").trim();
-  return `${first} ${last}`.trim().slice(0, MAX_LEN);
+  const base = `${first} ${last}`.trim();
+  return (base.slice(0, AVAILABLE) + suffix).trim();
 }
 
 /**

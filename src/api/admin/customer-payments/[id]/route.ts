@@ -78,6 +78,20 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       Number(payment.amount) - amountApplied
     );
 
+    // For credit_memo payments, look up the originating pos_credit_memo
+    let sourceCreditMemo: { id: string; credit_memo_number: string } | null = null;
+    if ((payment as any).type === "credit_memo" && (payment as any).reference) {
+      try {
+        const { getDbPool } = require("../../../../api/utils/db-pool");
+        const pool = getDbPool();
+        const { rows } = await pool.query(
+          `SELECT id, credit_memo_number FROM pos_credit_memo WHERE credit_memo_number = $1 AND deleted_at IS NULL LIMIT 1`,
+          [(payment as any).reference]
+        );
+        if (rows[0]) sourceCreditMemo = { id: rows[0].id, credit_memo_number: rows[0].credit_memo_number };
+      } catch { /* non-fatal */ }
+    }
+
     return res.json({
       payment: {
         ...payment,
@@ -85,6 +99,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         customer,
         amount_applied: amountApplied,
         available_balance: availableBalance,
+        source_credit_memo: sourceCreditMemo,
       },
     });
   } catch (err: any) {

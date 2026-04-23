@@ -118,6 +118,7 @@ async function syncCustomer(
       price_level: priceLevel,
       status: customer.has_account ? "Registered" : "Guest",
       list_id: meta.qb_list_id || "",
+      acquisition_channel: meta.acquisition_channel || "",
       groups: customer.groups?.map((g: any) => g.name) || [],
       updated_at: new Date(customer.updated_at).getTime(),
       created_at: new Date(customer.created_at).getTime(),

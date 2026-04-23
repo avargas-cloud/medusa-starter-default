@@ -2,7 +2,7 @@ import { SubscriberArgs } from "@medusajs/framework";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { FINANCE_MODULE } from "../../../modules/finance";
-import { mergeApplyPaymentInQb } from "../qb-bridge-client";
+import { mergeApplyPaymentInQb, applyCreditMemoToInvoiceInQb } from "../qb-bridge-client";
 import { withQbLockResult } from "../qb-locks";
 import { writePipelineRow, cacheEditSequence } from "../qb-pipeline";
 
@@ -220,23 +220,30 @@ export async function handlePosPaymentApplied({
     : undefined;
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Serialize every merge-apply against the SAME payment. Two concurrent
-  // handlers would each read the same "before" list from QB and the second
-  // Mod would clobber the first. mergeApplyPaymentInQb internally does:
-  //   1) Query fresh EditSequence + current AppliedToTxnRet
-  //   2) Merge the new invoice into that list
-  //   3) Send a single ReceivePaymentMod with the full list
-  //   4) Poll and return the new EditSequence
+  // Routing: credit_memo payments carry a CreditMemo TxnID, not a ReceivePayment
+  // TxnID. Applying them requires ReceivePaymentAdd+SetCredit (a new record),
+  // not ReceivePaymentMod of an existing one. All other payments use merge-apply.
   // ─────────────────────────────────────────────────────────────────────────
+  const isCreditMemoPayment = (payment as any).type === 'credit_memo';
+
   await withQbLockResult(`qb-payment:${paymentTxnId}`, async () => {
-    const applyResult = await mergeApplyPaymentInQb({
-      customerId: customerQbId,
-      invoiceId: invoiceTxnId!,
-      amount: amount_applied / 100,
-      creditTxnId: paymentTxnId!,
-      memo: updatedMemo,
-      log: (m: string) => logger.info(m),
-    });
+    const applyResult = isCreditMemoPayment
+      ? await applyCreditMemoToInvoiceInQb({
+          customerId: customerQbId,
+          creditMemoTxnId: paymentTxnId!,
+          invoiceTxnId: invoiceTxnId!,
+          amount: amount_applied / 100,
+          memo: updatedMemo,
+          log: (m: string) => logger.info(m),
+        })
+      : await mergeApplyPaymentInQb({
+          customerId: customerQbId,
+          invoiceId: invoiceTxnId!,
+          amount: amount_applied / 100,
+          creditTxnId: paymentTxnId!,
+          memo: updatedMemo,
+          log: (m: string) => logger.info(m),
+        });
 
     if (!applyResult.success) {
       logger.error(

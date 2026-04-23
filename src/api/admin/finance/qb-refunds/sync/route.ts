@@ -101,6 +101,11 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   } as any);
   const bank = (banks as any[])[0];
   if (!bank) return res.status(404).json({ error: "Bank account not found" });
+  if (bank.type !== "Bank") {
+    return res.status(400).json({
+      error: `Selected account "${bank.name}" is type "${bank.type}", not a Bank account. CheckAdd requires a Bank account.`,
+    });
+  }
 
   // 3. Fetch customer QB ListID
   let customer: any;

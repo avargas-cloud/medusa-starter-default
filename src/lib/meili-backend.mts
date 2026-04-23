@@ -104,6 +104,7 @@ export function transformCustomer(customer: any) {
         has_account: customer.has_account,
         // QuickBooks metadata
         list_id: customer.metadata?.qb_list_id || "",
+        acquisition_channel: customer.metadata?.acquisition_channel || "",
         customer_type: customer.metadata?.qb_customer_type || customer.metadata?.customer_type || "Standard",
         price_level: customer.metadata?.qb_price_level || customer.metadata?.price_level || "Retail",
         customer_group_ids: customer.groups?.map((g: any) => g.id) || [],
