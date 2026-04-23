@@ -17,6 +17,7 @@ import {
   coalesceIfInFlight,
   writePipelineRow,
   cacheEditSequence,
+  requireQbCustomer,
 } from "../qb-pipeline";
 
 import { LOG_PREFIX, getQbConfig, isPosOrder, processingOrders } from "./utils";
@@ -229,6 +230,30 @@ export async function handleOrderPlaced(
       );
     } else {
       logger.warn(`${LOG_PREFIX} ⚠️ Order ${orderId} has no customer_id`);
+    }
+
+    // Preflight: if customer has no qb_list_id, enqueue a customer pipeline row,
+    // mark this SO row as waiting with depends_on, and return early. The
+    // consolidator will create the customer and wake this row automatically.
+    if (
+      order.customer_id &&
+      !(order.metadata?.qb_list_id) &&
+      !(customer?.metadata?.qb_list_id)
+    ) {
+      const check = await requireQbCustomer({
+        customerId: order.customer_id,
+        orderId,
+        step: "sales_order",
+        selfMedusaRefNumber:
+          (order.metadata?.document_number as string | undefined) ||
+          (order.display_id ? `S${order.display_id}` : null),
+      });
+      if ("waiting" in check) {
+        logger.info(
+          `${LOG_PREFIX} ⏸ Waiting on customer ${order.customer_id} (customer row ${check.customerRowId}) before submitting SO`
+        );
+        return;
+      }
     }
 
     const orderDiscountTotal = Number(order.discount_total || 0);

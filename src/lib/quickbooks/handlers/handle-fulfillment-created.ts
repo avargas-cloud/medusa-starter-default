@@ -17,6 +17,7 @@ import {
 import {
   coalesceIfInFlight,
   writePipelineRow,
+  requireQbCustomer,
   cacheEditSequence,
   skipSalesOrderPipelineRow,
 } from "../qb-pipeline";
@@ -95,20 +96,24 @@ export async function handleFulfillmentCreated(
   let qbCustomerId: string | undefined = order.metadata?.qb_list_id;
 
   if (!qbCustomerId && order.customer_id) {
-    logger.info(
-      `${LOG_PREFIX} qb_list_id not in order.metadata — fetching customer ${order.customer_id}...`
-    );
-    try {
-      const customer = await customerModule.retrieveCustomer(order.customer_id);
-      qbCustomerId = customer.metadata?.qb_list_id;
+    const check = await requireQbCustomer({
+      customerId: order.customer_id,
+      orderId,
+      step: "invoice",
+      selfReferenceId: data.invoice_id || data.fulfillment_id || null,
+      selfReferenceType: data.invoice_id
+        ? "pos_invoice"
+        : data.fulfillment_id
+          ? "fulfillment"
+          : null,
+    });
+    if ("waiting" in check) {
       logger.info(
-        `${LOG_PREFIX} Customer metadata: ${JSON.stringify(customer.metadata || {})}`
+        `${LOG_PREFIX} ⏸ Waiting on customer ${order.customer_id} (customer row ${check.customerRowId}) before submitting Invoice`
       );
-    } catch (custErr: any) {
-      logger.warn(
-        `${LOG_PREFIX} ⚠️ Could not fetch customer: ${custErr.message}`
-      );
+      return;
     }
+    qbCustomerId = check.qbListId;
   }
 
   let qbSoTxnId: string | undefined = getSoTxnId(order.metadata);
@@ -122,7 +127,7 @@ export async function handleFulfillmentCreated(
 
   if (!qbCustomerId) {
     logger.warn(
-      `${LOG_PREFIX} ❌ Missing required qb_list_id for invoice creation.`
+      `${LOG_PREFIX} ❌ Missing customer_id on order ${orderId} — cannot create Invoice.`
     );
     return;
   }

@@ -19,6 +19,7 @@ import {
   writePipelineRow,
   cacheEditSequence,
   skipSalesOrderPipelineRow,
+  requireQbCustomer,
 } from "../qb-pipeline";
 
 import { handleFulfillmentCreated } from "./handle-fulfillment-created";
@@ -94,23 +95,39 @@ export async function handleSalesReceiptCreated(
   let qbCustomerId: string | undefined = order.metadata?.qb_list_id;
 
   if (!qbCustomerId && order.customer_id) {
-    logger.info(
-      `${LOG_PREFIX} qb_list_id not in order.metadata — fetching customer ${order.customer_id}...`
-    );
-    try {
-      const customer = await customerModule.retrieveCustomer(order.customer_id);
-      qbCustomerId = customer.metadata?.qb_list_id;
-    } catch (custErr: any) {
-      logger.warn(
-        `${LOG_PREFIX} ⚠️ Could not fetch customer: ${custErr.message}`
+    const check = await requireQbCustomer({
+      customerId: order.customer_id,
+      orderId,
+      step: "sales_receipt",
+      selfReferenceId: data.invoice_id || null,
+      selfReferenceType: data.invoice_id ? "pos_invoice" : null,
+    });
+    if ("waiting" in check) {
+      logger.info(
+        `${LOG_PREFIX} ⏸ Waiting on customer ${order.customer_id} (customer row ${check.customerRowId}) before submitting SR`
       );
+      return;
     }
+    qbCustomerId = check.qbListId;
   }
 
   if (!qbCustomerId) {
-    logger.warn(
-      `${LOG_PREFIX} ❌ Missing required qb_list_id for Sales Receipt creation.`
-    );
+    const errMsg = `Missing customer_id on order ${orderId} — cannot create Sales Receipt.`;
+    logger.warn(`${LOG_PREFIX} ❌ ${errMsg}`);
+    try {
+      await writePipelineRow({
+        orderId,
+        referenceId: data.invoice_id || null,
+        referenceType: data.invoice_id ? "pos_invoice" : null,
+        step: "sales_receipt",
+        status: "failed",
+        error: errMsg,
+      });
+    } catch (pErr: any) {
+      logger.warn(
+        `${LOG_PREFIX} ⚠️ Could not write failed pipeline row: ${pErr.message}`
+      );
+    }
     return;
   }
 

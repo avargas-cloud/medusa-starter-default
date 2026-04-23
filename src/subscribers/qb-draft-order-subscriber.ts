@@ -22,7 +22,6 @@ import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
 import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
 
 import {
-  ensureCustomerInQb,
   buildQbItems,
   buildQbOrderDiscountLines,
   processEstimateInQb,
@@ -33,6 +32,7 @@ import {
   coalesceIfInFlight,
   writePipelineRow,
   cacheEditSequence,
+  requireQbCustomer,
 } from "../lib/quickbooks/qb-pipeline";
 
 const LOG_PREFIX = "[QB-DRAFT]";
@@ -144,7 +144,6 @@ export async function handleDraftOrderCreated(
   }
 
   const query = container.resolve(ContainerRegistrationKeys.QUERY);
-  const customerModule = container.resolve(Modules.CUSTOMER);
 
   // Fetch draft order with items + customer
   let draftOrder: any;
@@ -225,17 +224,30 @@ export async function handleDraftOrderCreated(
     `${LOG_PREFIX} Customer: ${customer.email} | qb_list_id=${customer.metadata?.qb_list_id ?? "NOT SET"}`
   );
 
-  const custResult = await ensureCustomerInQb(customer, customerModule, (msg) =>
-    logger.info(msg)
-  );
-  if (!custResult.success) {
-    logger.error(`${LOG_PREFIX} ❌ Customer check failed: ${custResult.error}`);
-    return;
+  let qbCustomerId: string | undefined = customer.metadata?.qb_list_id as
+    | string
+    | undefined;
+
+  if (!qbCustomerId) {
+    const estimateRef =
+      (draftOrder.metadata?.document_number as string | undefined) ||
+      (draftOrder.display_id ? `E${draftOrder.display_id}` : null);
+    const check = await requireQbCustomer({
+      customerId: customer.id,
+      orderId: draftOrderId,
+      step: "estimate",
+      selfMedusaRefNumber: estimateRef ?? null,
+    });
+    if ("waiting" in check) {
+      logger.info(
+        `${LOG_PREFIX} ⏸ Waiting on customer ${customer.id} (customer row ${check.customerRowId}) before submitting Estimate`
+      );
+      return;
+    }
+    qbCustomerId = check.qbListId;
   }
 
-  logger.info(
-    `${LOG_PREFIX} ✅ Customer in QB: qb_list_id=${custResult.qbCustomerId}`
-  );
+  logger.info(`${LOG_PREFIX} ✅ Customer in QB: qb_list_id=${qbCustomerId}`);
 
   // Build QB items — query.graph returns unit_price in DOLLARS; buildQbItems also expects DOLLARS
   const qbItems = buildQbItems(draftOrder.items || [], draftOrder.metadata);
@@ -296,7 +308,7 @@ export async function handleDraftOrderCreated(
   // to confirm duplicates.
   const result = await processEstimateInQb({
     draftOrderId,
-    qbCustomerId: custResult.qbCustomerId!,
+    qbCustomerId: qbCustomerId!,
     items: qbItems,
     memo:
       (draftOrder.metadata?.document_number as string) ||
@@ -355,7 +367,7 @@ export async function handleDraftOrderCreated(
       // Determine sync status: "pending" if still waiting for QBWC, "synced" if already confirmed
       const isAsync = !!result.operationId && !result.txnId;
       const patch = buildEstimatePatch(
-        { ...currentMetadata, qb_list_id: custResult.qbCustomerId },
+        { ...currentMetadata, qb_list_id: qbCustomerId },
         {
           txnId: result.txnId || "",
           refNumber: result.refNumber || null,

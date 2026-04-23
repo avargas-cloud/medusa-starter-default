@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+import { getPrimaryPipelineRow } from "../../../../../lib/quickbooks/get-primary-pipeline-row";
 import { CREDIT_MEMO_MODULE } from "../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../modules/credit_memos/service";
 
@@ -52,8 +53,16 @@ export async function GET(
       }
     }
 
+    // Attach the most recent credit_memo pipeline row so the POS can derive
+    // the QB SYNC button state without a second round-trip.
+    const qb_pipeline = await getPrimaryPipelineRow({
+      referenceId: creditMemo.id,
+      step: "credit_memo",
+    }).catch(() => null);
+
     res.status(200).json({
       credit_memo: { ...creditMemo, invoice_number, order_display_id },
+      qb_pipeline,
     });
   } catch (e: any) {
     logger.error(`[credit_memos GET] failed: ${e.message}`);

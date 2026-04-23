@@ -645,8 +645,19 @@ export async function POST(
             }
             const cmPool = require("../../../../api/utils/db-pool").getDbPool();
             const { rows: cmRows } = await cmPool.query(
-              `SELECT cm.id, cm.credit_memo_number, cm.customer_id, cm.completed_at,
+              `SELECT cm.id, cm.credit_memo_number, cm.customer_id, cm.invoice_id,
+                      cm.completed_at,
                       cm.discount, cm.shipping, cm.shipping_option_name,
+                      -- Tax-exempt logic:
+                      --   invoice_id set → from parent pos_invoice (tax=0 & subtotal>0 => exempt)
+                      --   else (quick credit) → from customer metadata
+                      CASE
+                        WHEN cm.invoice_id IS NOT NULL
+                          THEN (inv.tax = 0 AND inv.subtotal > 0)
+                        ELSE (
+                          LOWER(c.metadata->>'is_tax_exempt') IN ('yes','true')
+                        )
+                      END AS is_tax_exempt,
                       COALESCE(
                         json_agg(
                           json_build_object(
@@ -655,7 +666,13 @@ export async function POST(
                             'description', i.description,
                             'quantity', i.quantity,
                             'unit_price', i.unit_price,
-                            'quickbooks_id', pv.metadata->>'quickbooks_id'
+                            'variant_id', i.variant_id,
+                            'quickbooks_id', pv.metadata->>'quickbooks_id',
+                            'is_service', (pv.metadata->>'quickbooks_is_service' = 'true'
+                                           OR pv.metadata->>'quickbooks_no_site' = 'true'
+                                           OR pv.metadata->>'qb_item_type' IN
+                                               ('Service','NonInventory','NonInventoryPart',
+                                                'OtherCharge','Discount'))
                           )
                         ) FILTER (WHERE i.id IS NOT NULL),
                         '[]'
@@ -664,8 +681,10 @@ export async function POST(
                LEFT JOIN pos_credit_memo_item i
                  ON i.credit_memo_id = cm.id AND i.deleted_at IS NULL AND i.quantity > 0
                LEFT JOIN product_variant pv ON pv.id = i.variant_id
+               LEFT JOIN pos_invoice inv ON inv.id = cm.invoice_id
+               LEFT JOIN customer c ON c.id = cm.customer_id
                WHERE cm.id = $1
-               GROUP BY cm.id`,
+               GROUP BY cm.id, inv.tax, inv.subtotal, c.metadata`,
               [row.reference_id]
             );
             const cm = cmRows[0];
@@ -703,6 +722,9 @@ export async function POST(
             }
             const qbItems = (cm.items ?? []).map((item: any) => {
               const unitPriceDollars = (item.unit_price || 0) / 100;
+              // Service / non-inventory items (Adjustment lines or QB service
+              // products) must NOT carry InventorySiteRef (QB error 3140).
+              const isService = !item.variant_id || item.is_service === true;
               return {
                 ...(item.quickbooks_id ? { productId: item.quickbooks_id } : {}),
                 productName: item.sku || item.title,
@@ -710,6 +732,7 @@ export async function POST(
                 price: unitPriceDollars,
                 amount: Number((unitPriceDollars * item.quantity).toFixed(2)),
                 desc: item.description || item.title,
+                ...(isService ? { noSite: true } : {}),
               };
             });
             const cmResult = await createCreditMemoInQb({
@@ -719,6 +742,7 @@ export async function POST(
                 : new Date().toISOString().split("T")[0],
               memo: `POS Return ${cm.credit_memo_number || ""}`.trim(),
               items: qbItems,
+              ...(cm.is_tax_exempt === true ? { taxExempt: true } : {}),
             });
             if (cmResult.success && cmResult.data?.operationId) {
               await cmPool.query(

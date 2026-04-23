@@ -26,6 +26,7 @@ import { handleOrderPlaced } from "../lib/quickbooks/handlers/handle-order-place
 import { handleOrderUpdated } from "../lib/quickbooks/handlers/handle-order-updated";
 import { handleSalesReceiptCreated } from "../lib/quickbooks/handlers/handle-sales-receipt-created";
 import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types";
+import { ensureCustomerInQb } from "../lib/quickbooks/order-flow-core";
 import {
   claimAndResetForResubmit,
   confirmPipelineRow,
@@ -33,6 +34,108 @@ import {
   cacheEditSequence,
   invalidateEditSequenceCache,
 } from "../lib/quickbooks/qb-pipeline";
+
+/**
+ * Processes a single step='customer' pipeline row by calling ensureCustomerInQb.
+ * On success, the row is marked 'confirmed' with qb_txn_id = qb_list_id and the
+ * customer.metadata.qb_list_id is populated by ensureCustomerInQb itself.
+ * On failure, the row is marked 'failed' with the error surfaced in the UI.
+ */
+async function processCustomerPipelineRow(
+  row: { id: string; customer_id: string },
+  customerModule: any,
+  logger: any
+): Promise<void> {
+  const pool = getDbPool();
+
+  try {
+    const customer = await customerModule.retrieveCustomer(row.customer_id, {
+      relations: ["addresses"],
+    });
+
+    const customerForQb = {
+      id: customer.id,
+      email: customer.email,
+      first_name: customer.first_name ?? null,
+      last_name: customer.last_name ?? null,
+      company_name: (customer as any).company_name ?? null,
+      phone: customer.phone ?? null,
+      metadata: customer.metadata ?? {},
+      addresses: (customer.addresses ?? []).map((a: any) => ({
+        address_1: a.address_1,
+        address_2: a.address_2,
+        city: a.city,
+        province: a.province,
+        postal_code: a.postal_code,
+        is_default_billing:
+          a.is_default_billing ?? a.metadata?.is_default_billing ?? false,
+        is_default_shipping:
+          a.is_default_shipping ?? a.metadata?.is_default_shipping ?? false,
+        metadata: a.metadata ?? {},
+      })),
+    };
+
+    // Mark row 'submitted' so UI shows progress while the bridge call is in flight.
+    await pool.query(
+      `UPDATE qb_order_pipeline
+          SET status = 'submitted', submitted_at = NOW(), updated_at = NOW(), error = NULL
+        WHERE id = $1`,
+      [row.id]
+    );
+
+    const result = await ensureCustomerInQb(
+      customerForQb as any,
+      customerModule,
+      (msg) => logger.info(msg)
+    );
+
+    if (result.success && result.qbCustomerId) {
+      await pool.query(
+        `UPDATE qb_order_pipeline
+            SET status       = 'confirmed',
+                qb_txn_id    = $2,
+                confirmed_at = NOW(),
+                updated_at   = NOW(),
+                error        = NULL
+          WHERE id = $1`,
+        [row.id, result.qbCustomerId]
+      );
+      logger.info(
+        `${LOG_PREFIX} ✅ Customer pipeline row ${row.id} confirmed — qb_list_id=${result.qbCustomerId}`
+      );
+    } else {
+      const errMsg = result.error ?? "ensureCustomerInQb returned no qbCustomerId";
+      await pool.query(
+        `UPDATE qb_order_pipeline
+            SET status     = 'failed',
+                failed_at  = NOW(),
+                updated_at = NOW(),
+                error      = $2
+          WHERE id = $1`,
+        [row.id, errMsg]
+      );
+      logger.warn(
+        `${LOG_PREFIX} ❌ Customer pipeline row ${row.id} failed: ${errMsg}`
+      );
+    }
+  } catch (err: any) {
+    const msg = err?.message ?? String(err);
+    await pool
+      .query(
+        `UPDATE qb_order_pipeline
+            SET status     = 'failed',
+                failed_at  = NOW(),
+                updated_at = NOW(),
+                error      = $2
+          WHERE id = $1`,
+        [row.id, msg]
+      )
+      .catch(() => {});
+    logger.warn(
+      `${LOG_PREFIX} ❌ Customer pipeline row ${row.id} exception: ${msg}`
+    );
+  }
+}
 
 /**
  * Re-submits a pipeline row that was coalesced while in-flight.
@@ -125,6 +228,15 @@ async function resubmitByStep(
           orderModule,
           customerModule,
           container,
+          logger
+        );
+        break;
+
+      case "customer":
+        if (!row.reference_id) break;
+        await processCustomerPipelineRow(
+          { id: row.id, customer_id: row.reference_id },
+          customerModule,
           logger
         );
         break;
@@ -1174,6 +1286,85 @@ export default async function qbPipelineConsolidator(
     logger.warn(
       `${LOG_PREFIX} ⚠️ SO recovery pass error: ${soRecoveryErr.message}`
     );
+  }
+
+  // ── Customer pipeline pass ─────────────────────────────────────────────────
+  // Process step='customer' rows in 'pending' state by calling ensureCustomerInQb.
+  // On success: row → confirmed with qb_txn_id=qb_list_id.
+  // On failure: row → failed with error visible in UI.
+  // Limited to 10 per tick to stay under bridge rate limits.
+  try {
+    const { rows: pendingCustomers } = await pool.query(`
+      SELECT id, reference_id
+        FROM qb_order_pipeline
+       WHERE step = 'customer'
+         AND status = 'pending'
+         AND reference_id IS NOT NULL
+       ORDER BY COALESCE(updated_at, created_at) ASC
+       LIMIT 10
+    `);
+
+    if (pendingCustomers.length > 0) {
+      const customerModule = container.resolve(Modules.CUSTOMER);
+      logger.info(
+        `${LOG_PREFIX} Processing ${pendingCustomers.length} pending customer row(s)...`
+      );
+      for (const custRow of pendingCustomers) {
+        await processCustomerPipelineRow(
+          { id: custRow.id, customer_id: custRow.reference_id },
+          customerModule,
+          logger
+        );
+      }
+    }
+  } catch (custPassErr: any) {
+    logger.warn(
+      `${LOG_PREFIX} ⚠️ Customer pipeline pass error: ${custPassErr.message}`
+    );
+  }
+
+  // ── Wake dependents pass ───────────────────────────────────────────────────
+  // Any 'waiting' row whose depends_on row is now 'confirmed' is moved to
+  // 'pending' AND the correct handler is re-fired immediately (same dispatch
+  // the consolidator uses for coalesced resubmits). Typical case: a document
+  // was blocked on customer creation; once the customer confirms, the
+  // dependent document auto-resubmits with no user intervention.
+  try {
+    const { rows: awakenedRows } = await pool.query(
+      `UPDATE qb_order_pipeline w
+          SET status       = 'pending',
+              updated_at   = NOW(),
+              error        = NULL,
+              failed_at    = NULL,
+              submitted_at = NULL,
+              bridge_op_id = NULL
+         FROM qb_order_pipeline d
+        WHERE w.depends_on = d.id
+          AND w.status     = 'waiting'
+          AND d.status     = 'confirmed'
+        RETURNING w.id, w.order_id, w.reference_id, w.reference_type, w.step, w.qb_txn_id`
+    );
+    if (awakenedRows.length > 0) {
+      logger.info(
+        `${LOG_PREFIX} ⏯️ Woke ${awakenedRows.length} waiting row(s) whose dependencies confirmed`
+      );
+      for (const r of awakenedRows) {
+        await resubmitByStep(
+          {
+            id: r.id,
+            order_id: r.order_id,
+            reference_id: r.reference_id,
+            reference_type: r.reference_type,
+            step: r.step,
+            qb_txn_id: r.qb_txn_id,
+          },
+          container,
+          logger
+        );
+      }
+    }
+  } catch (wakeErr: any) {
+    logger.warn(`${LOG_PREFIX} ⚠️ Wake-dependents pass error: ${wakeErr.message}`);
   }
 
   // ── Timeout pass: pending rows stuck for >20 minutes → failed ──────────────

@@ -5,11 +5,13 @@ import { Modules } from "@medusajs/utils";
 
 import { createCreditMemoInQb } from "../../../../../../lib/quickbooks/client";
 import {
-  ensureCustomerInQb,
   buildQbOrderDiscountLines,
   buildShippingQbItem,
 } from "../../../../../../lib/quickbooks/order-flow-core";
-import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
+import {
+  writePipelineRow,
+  requireQbCustomer,
+} from "../../../../../../lib/quickbooks/qb-pipeline";
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
@@ -23,7 +25,6 @@ export async function POST(
     req.scope.resolve(CREDIT_MEMO_MODULE);
   const inventoryService = req.scope.resolve(Modules.INVENTORY);
   const stockLocationService = req.scope.resolve(Modules.STOCK_LOCATION);
-  const customerModule = req.scope.resolve(Modules.CUSTOMER);
   const productModule = req.scope.resolve(Modules.PRODUCT) as any;
   const financeService = req.scope.resolve(FINANCE_MODULE) as any;
 
@@ -173,22 +174,25 @@ export async function POST(
 
     // -- QUICKBOOKS SYNC BEGIN --
     let qbOperationId = null;
-    let custResult: any = null;
     try {
       if (creditMemo.customer_id) {
-        // Ensure customer in QB
-        const customer = await customerModule.retrieveCustomer(
-          creditMemo.customer_id,
-          { relations: ["addresses"] }
-        );
-        custResult = await ensureCustomerInQb(
-          customer,
-          customerModule,
-          (m: string) => logger.info(m)
-        );
+        // Preflight: if customer has no qb_list_id, enqueue customer pipeline row
+        // and mark credit_memo row as waiting with depends_on. Consolidator will
+        // create the customer and wake the credit_memo row automatically.
+        const check = await requireQbCustomer({
+          customerId: creditMemo.customer_id,
+          step: "credit_memo",
+          selfReferenceId: id,
+          selfReferenceType: "credit_memo",
+          selfMedusaRefNumber: creditMemo.credit_memo_number ?? null,
+        });
 
-        if (custResult.success && custResult.qbCustomerId) {
-          const qbCustomerId = custResult.qbCustomerId;
+        if ("waiting" in check) {
+          logger.info(
+            `[credit_memos complete] ⏸ Waiting on customer ${creditMemo.customer_id} (customer row ${check.customerRowId}) before submitting Credit Memo`
+          );
+        } else {
+          const qbCustomerId = check.qbListId;
 
           // Map items for QB Payload.
           // unit_price is stored in cents → divide by 100 for QB dollars.
@@ -211,17 +215,29 @@ export async function POST(
             variants.map((v) => [v.id, v.metadata || {}])
           );
 
+          const NON_INVENTORY_QB_TYPES = new Set([
+            "Service",
+            "NonInventory",
+            "NonInventoryPart",
+            "OtherCharge",
+            "Discount",
+          ]);
           const qbItems = creditMemo.items.map((item: any) => {
             const unitPriceDollars = (item.unit_price || 0) / 100;
             const meta = item.variant_id ? variantMetaMap.get(item.variant_id) : null;
+            const qbListId = meta?.quickbooks_id as string | undefined;
             const isService = !!(
               !item.variant_id ||
               meta?.quickbooks_is_service === true ||
               meta?.quickbooks_is_service === "true" ||
               meta?.quickbooks_no_site === true ||
-              meta?.quickbooks_no_site === "true"
+              meta?.quickbooks_no_site === "true" ||
+              (typeof meta?.qb_item_type === "string" &&
+                NON_INVENTORY_QB_TYPES.has(meta.qb_item_type))
             );
             return {
+              // Prefer ListID (stable) over FullName (SKU can be renamed in Medusa)
+              ...(qbListId ? { productId: qbListId } : {}),
               productName: item.sku || item.title,
               quantity: item.quantity,
               price: unitPriceDollars,
@@ -230,6 +246,38 @@ export async function POST(
               ...(isService ? { noSite: true } : {}),
             };
           });
+
+          // Determine taxExempt for the whole CM:
+          //   - if invoice_id set → inherit from the parent pos_invoice (tax=0 && subtotal>0 => was exempt)
+          //   - else (quick credit) → read customer.metadata.is_tax_exempt
+          let isTaxExempt = false;
+          try {
+            const pg = req.scope.resolve("__pg_connection__") as any;
+            if (creditMemo.invoice_id) {
+              const invRes = await pg.raw(
+                `SELECT tax, subtotal FROM pos_invoice WHERE id = ? LIMIT 1`,
+                [creditMemo.invoice_id]
+              );
+              const inv = invRes?.rows?.[0];
+              if (inv) {
+                isTaxExempt = Number(inv.tax) === 0 && Number(inv.subtotal) > 0;
+              }
+            } else if (creditMemo.customer_id) {
+              const custRes = await pg.raw(
+                `SELECT metadata FROM customer WHERE id = ? LIMIT 1`,
+                [creditMemo.customer_id]
+              );
+              const flag = custRes?.rows?.[0]?.metadata?.is_tax_exempt;
+              isTaxExempt =
+                flag === true ||
+                (typeof flag === "string" &&
+                  (flag.toLowerCase() === "yes" || flag.toLowerCase() === "true"));
+            }
+          } catch (teErr: any) {
+            logger.warn(
+              `[credit_memos complete] Could not determine taxExempt (non-fatal): ${teErr.message}`
+            );
+          }
 
           // Add order-level discount lines (Subtotal + Discount QB items)
           if (creditMemo.discount > 0) {
@@ -259,6 +307,7 @@ export async function POST(
             date: new Date().toISOString().split("T")[0],
             memo: `POS Return ${creditMemo.credit_memo_number || ""}`.trim(),
             items: qbItems,
+            ...(isTaxExempt ? { taxExempt: true } : {}),
           });
 
           if (cmResult.success && cmResult.data?.operationId) {
