@@ -195,10 +195,10 @@ export const CustomerSyncPipelineSection = () => {
   const retry = async (id: string) => {
     setRetrying((s) => new Set(s).add(id));
     try {
-      const res = await fetch(`/admin/quickbooks/pipeline/${id}/retry`, {
-        method: "POST",
-        credentials: "include",
-      });
+      const res = await fetch(
+        `/admin/quickbooks/pipeline?action=retry&id=${encodeURIComponent(id)}`,
+        { method: "POST", credentials: "include" }
+      );
       if (!res.ok) throw new Error(`${res.status}`);
       toast.success("Retry queued");
       await fetchRows();
