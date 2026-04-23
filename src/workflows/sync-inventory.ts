@@ -122,12 +122,9 @@ export const syncInventoryToMeiliStep = createStep(
         value: opt.value || "",
       }));
 
-      const variantThumbnail =
-        variant.thumbnail ??
-        (Array.isArray(variant.images) && variant.images.length > 0
-          ? (variant.images[0] as { url?: string }).url ?? null
-          : null);
-      const resolvedThumbnail = variantThumbnail ?? product?.thumbnail ?? null;
+      // variant.thumbnail is set explicitly via backfill or the new variant
+      // thumbnail mechanism. Falls back to the product's designated thumbnail.
+      const resolvedThumbnail = variant.thumbnail ?? product?.thumbnail ?? null;
 
       // No inventory items → synthetic document (unmanaged/services)
       if (!variant.inventory_items || variant.inventory_items.length === 0) {
