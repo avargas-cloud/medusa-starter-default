@@ -24,6 +24,7 @@ export async function POST(
   const inventoryService = req.scope.resolve(Modules.INVENTORY);
   const stockLocationService = req.scope.resolve(Modules.STOCK_LOCATION);
   const customerModule = req.scope.resolve(Modules.CUSTOMER);
+  const productModule = req.scope.resolve(Modules.PRODUCT) as any;
   const financeService = req.scope.resolve(FINANCE_MODULE) as any;
 
   const { id } = req.params as { id: string };
@@ -193,14 +194,40 @@ export async function POST(
           // unit_price is stored in cents → divide by 100 for QB dollars.
           // productId is intentionally omitted — we use FullName (SKU) so QB
           // can resolve the item without needing its internal ListID.
+          //
+          // Service / non-inventory items (Adjustment lines, QB service products)
+          // must NOT carry InventorySiteRef (QB error 3140). We flag them with
+          // noSite: true so the bridge skips the Site tag.
+          const variantIds: string[] = creditMemo.items
+            .map((i: any) => i.variant_id)
+            .filter((id: any): id is string => !!id);
+
+          const variants: any[] = variantIds.length
+            ? await productModule
+                .listProductVariants({ id: variantIds }, { select: ["id", "metadata"] })
+                .catch(() => [])
+            : [];
+          const variantMetaMap = new Map<string, any>(
+            variants.map((v) => [v.id, v.metadata || {}])
+          );
+
           const qbItems = creditMemo.items.map((item: any) => {
             const unitPriceDollars = (item.unit_price || 0) / 100;
+            const meta = item.variant_id ? variantMetaMap.get(item.variant_id) : null;
+            const isService = !!(
+              !item.variant_id ||
+              meta?.quickbooks_is_service === true ||
+              meta?.quickbooks_is_service === "true" ||
+              meta?.quickbooks_no_site === true ||
+              meta?.quickbooks_no_site === "true"
+            );
             return {
               productName: item.sku || item.title,
               quantity: item.quantity,
               price: unitPriceDollars,
               amount: Number((unitPriceDollars * item.quantity).toFixed(2)),
               desc: item.description || item.title,
+              ...(isService ? { noSite: true } : {}),
             };
           });
 
