@@ -11,7 +11,6 @@ import { INVOICE_MODULE } from "../../../../../modules/invoices";
 import { recalculateOrderStatus } from "../../../../../utils/order-utils";
 import { getDbPool } from "../../../../utils/db-pool";
 import { handlePosPaymentCreated } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-created";
-import { voidInvoiceInQb } from "../../../../../lib/quickbooks/client";
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
 import { buildQbItems } from "../../../../../lib/quickbooks/order-flow-core";
 import { createSalesOrderInQb } from "../../../../../lib/quickbooks/client/sales-orders";
@@ -539,80 +538,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     },
   });
 
-  // -- QB VOID SYNC --
-  // Look up the invoice's pipeline row to decide how to void it in QB.
-  //   confirmed  → fire voidInvoiceInQb immediately (fire & forget)
-  //   submitted / pending / waiting → create void_invoice row with depends_on so
-  //                                    the consolidator voids it once QB confirms the invoice
-  //   no row     → invoice was never synced to QB, nothing to do
-  if (process.env.QB_ORDER_FLOW_ENABLED === "true") {
-    try {
-      const pool = getDbPool();
-      const { rows: invPipelineRows } = await pool.query<{
-        id: string; status: string; qb_txn_id: string | null; order_id: string | null;
-      }>(
-        `SELECT id, status, qb_txn_id, order_id
-           FROM qb_order_pipeline
-          WHERE reference_id = $1 AND step IN ('invoice', 'sales_receipt')
-          ORDER BY created_at DESC LIMIT 1`,
-        [id]
-      );
-      const invRow = invPipelineRows[0];
-
-      if (invRow) {
-        if (invRow.status === "confirmed" && invRow.qb_txn_id) {
-          // Invoice already in QB — void it now (fire & forget)
-          setTimeout(async () => {
-            try {
-              await writePipelineRow({
-                orderId: invRow.order_id,
-                referenceId: id,
-                referenceType: "pos_invoice",
-                step: "void_invoice",
-                status: "pending",
-                medusaRefNumber: invoice.invoice_number ?? null,
-              });
-              const voidRes = await voidInvoiceInQb(
-                invRow.qb_txn_id!,
-                (msg) => console.log(msg)
-              );
-              if (voidRes.success) {
-                await pool.query(
-                  `UPDATE qb_order_pipeline SET status='confirmed', confirmed_at=NOW()
-                     WHERE reference_id=$1 AND step='void_invoice'`,
-                  [id]
-                );
-                console.log(`[VOID INVOICE] ✅ QB Invoice ${invRow.qb_txn_id} voided`);
-              } else {
-                console.error(`[VOID INVOICE] ❌ QB void failed: ${voidRes.error}`);
-              }
-            } catch (e: any) {
-              console.error(`[VOID INVOICE] QB void error: ${e.message}`);
-            }
-          }, 200);
-        } else if (["submitted", "pending", "waiting"].includes(invRow.status)) {
-          // Invoice still in-flight — queue void to run after QB confirms it
-          await writePipelineRow({
-            orderId: invRow.order_id,
-            referenceId: id,
-            referenceType: "pos_invoice",
-            step: "void_invoice",
-            status: "waiting",
-            dependsOn: invRow.id,
-            medusaRefNumber: invoice.invoice_number ?? null,
-          });
-          console.log(
-            `[VOID INVOICE] QB invoice in-flight (${invRow.status}) — void_invoice row queued with depends_on=${invRow.id}`
-          );
-        }
-      } else {
-        console.log(`[VOID INVOICE] No QB pipeline row found for invoice ${id} — skipping QB void`);
-      }
-    } catch (qbErr: any) {
-      console.error(`[VOID INVOICE] QB void sync error (non-fatal): ${qbErr.message}`);
-    }
-  }
-  // -- QB VOID SYNC END --
+  // QB void is handled by handleInvoiceVoided (subscriber on pos.invoice.voided above).
+  // That handler correctly distinguishes void_sales_receipt vs void_invoice.
 
   // -- SO REPAIR AFTER INVOICE VOID --
   // If this order never got a QB Sales Order (went direct to invoice), and the invoice is

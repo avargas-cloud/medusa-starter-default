@@ -298,9 +298,21 @@ export function buildInvoicePatch(
     invoice_id: opts.invoiceId ?? null,
     synced_at: now,
   };
+  // Upsert: replace the existing entry for this invoiceId/fulfillmentId instead of
+  // appending a duplicate. A pre-flight write leaves an empty entry; the confirmation
+  // write must overwrite it so the array stays 1-entry-per-invoice.
+  const matchIdx = opts.invoiceId
+    ? existing.findIndex((e) => e.invoice_id === opts.invoiceId)
+    : opts.fulfillmentId
+    ? existing.findIndex((e) => e.fulfillment_id === opts.fulfillmentId)
+    : -1;
+  const merged =
+    matchIdx >= 0
+      ? [...existing.slice(0, matchIdx), newEntry, ...existing.slice(matchIdx + 1)]
+      : [...existing, newEntry];
   return {
     ...existingMeta,
-    qb_invoices: [...existing, newEntry],
+    qb_invoices: merged,
     qb_sync_status: opts.syncStatus ?? "synced",
     qb_synced_at: now,
   };
