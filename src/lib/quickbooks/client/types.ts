@@ -120,6 +120,15 @@ export interface QbCreateCreditMemoPayload {
   salesRepRef?: string;
 }
 
+export interface QbUpdateCreditMemoPayload {
+  txnId: string;
+  editSequence: string;
+  salesRepRef?: string;
+  salesTaxCode?: string;
+  taxExempt?: boolean;
+  memo?: string;
+}
+
 export interface QbUpdateInvoicePayload {
   txnId: string;
   salesRep?: string;

@@ -1,6 +1,9 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
+import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
+import { updateCreditMemoInQb } from "../../../../../../lib/quickbooks/client/credit-memos";
+import { getQbConfig } from "../../../../../../lib/quickbooks/qb-config";
 
 /**
  * PATCH /admin/pos/credit_memos/:id/patch-meta
@@ -106,6 +109,61 @@ export async function PATCH(
   }
 
   await (creditMemoService as any).updatePosCreditMemos({ id, ...update });
+
+  // ── QB Mod — fire-and-forget pipeline entry if this CM is synced to QB ──────
+  const qbTxnId = (memo as any).qb_txn_id as string | null | undefined;
+  const qbEditSeq = (memo as any).qb_edit_sequence as string | null | undefined;
+  const cmNumber = (memo as any).credit_memo_number as string | null | undefined;
+
+  if (qbTxnId && process.env.QB_ORDER_FLOW_ENABLED === "true") {
+    const salesRepRef =
+      sales_rep !== undefined
+        ? (sales_rep?.name || sales_rep?.initials || undefined)
+        : undefined;
+    const isFlorida = tax_mode === "florida";
+    const isExempt = tax_mode === "exempt";
+
+    writePipelineRow({
+      referenceId: id,
+      referenceType: "credit_memo",
+      step: "credit_memo_mod",
+      status: "pending",
+      medusaRefNumber: cmNumber ?? null,
+      qbTxnId,
+    }).then(async () => {
+      const qbConfig = isFlorida ? await getQbConfig() : null;
+      return updateCreditMemoInQb({
+        txnId: qbTxnId,
+        editSequence: qbEditSeq ?? "",
+        ...(salesRepRef !== undefined ? { salesRepRef } : {}),
+        ...(isFlorida && qbConfig ? { salesTaxCode: qbConfig.defaultSalesTaxCode } : {}),
+        ...(isExempt ? { taxExempt: true } : {}),
+      }).then((result) => {
+        const status = result.success ? "confirmed" : "failed";
+        return writePipelineRow({
+          referenceId: id,
+          referenceType: "credit_memo",
+          step: "credit_memo_mod",
+          status,
+          medusaRefNumber: cmNumber ?? null,
+          qbTxnId,
+          bridgeOpId: result.data?.operationId ?? null,
+          error: result.error ?? null,
+        });
+      });
+    }).catch((err: Error) => {
+      console.error(`[patch-meta] QB credit_memo_mod pipeline error for ${id}:`, err.message);
+      writePipelineRow({
+        referenceId: id,
+        referenceType: "credit_memo",
+        step: "credit_memo_mod",
+        status: "failed",
+        medusaRefNumber: cmNumber ?? null,
+        qbTxnId,
+        error: err.message,
+      }).catch(() => {});
+    });
+  }
 
   res.status(200).json({ success: true });
 }

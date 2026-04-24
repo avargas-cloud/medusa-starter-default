@@ -5,7 +5,13 @@ import {
   pollOperationResult,
 } from "./core";
 import {
+  getCachedEditSequence,
+  cacheEditSequence,
+  invalidateEditSequence,
+} from "../qb-pipeline";
+import {
   QbCreateCreditMemoPayload,
+  QbUpdateCreditMemoPayload,
   QbBridgeResult,
   QbAsyncResult,
 } from "./types";
@@ -40,6 +46,67 @@ export async function createCreditMemoInQb(
     if (!operationId)
       throw new Error("Bridge did not return an operationId for Credit Memo");
     return { success: true, data: { operationId } };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Updates an existing Credit Memo in QuickBooks (salesRep, tax, memo).
+ * Uses cached EditSequence when available; falls back to the value provided by the caller.
+ * On 3200 (stale EditSequence), invalidates cache and retries once.
+ */
+export async function updateCreditMemoInQb(
+  payload: QbUpdateCreditMemoPayload
+): Promise<QbBridgeResult<QbAsyncResult>> {
+  if (DRY_RUN) {
+    console.log(`[QB DRY RUN] Would update Credit Memo ${payload.txnId}`);
+    return {
+      success: true,
+      dryRun: true,
+      data: { operationId: "DRY_RUN", txnId: payload.txnId },
+    };
+  }
+
+  const sendMod = async (editSequence: string) => {
+    const modResp = await bridgeFetch("PUT", `/api/credit-memos/${payload.txnId}`, {
+      EditSequence: editSequence,
+      ...(payload.salesRepRef ? { salesRepRef: payload.salesRepRef } : {}),
+      ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
+      ...(payload.taxExempt === true ? { taxExempt: true } : {}),
+      ...(payload.memo ? { memo: payload.memo } : {}),
+    });
+    const operationId = modResp?.operationId;
+    if (!operationId)
+      throw new Error("Bridge did not return operationId for credit memo mod");
+    return operationId;
+  };
+
+  try {
+    let editSequence: string;
+    const cached = await getCachedEditSequence("credit_memo", payload.txnId);
+    if (cached?.editSeq) {
+      console.log(`[QB] ✅ Cache hit for credit memo ${payload.txnId} — skipping GET`);
+      editSequence = cached.editSeq;
+    } else {
+      console.log(`[QB] Cache miss for credit memo ${payload.txnId} — using stored EditSequence`);
+      editSequence = payload.editSequence;
+      if (!editSequence)
+        throw new Error(`No EditSequence available for credit memo ${payload.txnId}. Sync the CM first.`);
+      cacheEditSequence("credit_memo", payload.txnId, editSequence).catch(() => {});
+    }
+
+    try {
+      const operationId = await sendMod(editSequence);
+      return { success: true, data: { operationId, txnId: payload.txnId } };
+    } catch (firstErr: any) {
+      if (firstErr.message?.includes("3200")) {
+        console.log(`[QB] EditSequence stale for credit memo ${payload.txnId} — invalidating cache and retrying`);
+        await invalidateEditSequence("credit_memo", payload.txnId);
+        throw new Error(`EditSequence stale for credit memo ${payload.txnId}. Retry or re-complete the CM.`);
+      }
+      throw firstErr;
+    }
   } catch (err: any) {
     return { success: false, error: err.message };
   }
