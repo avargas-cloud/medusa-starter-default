@@ -8,6 +8,10 @@ import CreditMemoModuleService from "../../../../../../modules/credit_memos/serv
  * Lightweight partial update for completed credit memos.
  * Only updates sales_rep and/or tax fields without touching items.
  *
+ * When tax_mode changes:
+ *   1. Validates that the new lower total doesn't undercut already-applied credit.
+ *   2. Updates the linked customer_payment amount to match.
+ *
  * Body: {
  *   sales_rep?: { initials: string; name: string } | null
  *   tax_mode?:  'florida' | 'exempt'
@@ -36,6 +40,7 @@ export async function PATCH(
   }
 
   const creditMemoService = req.scope.resolve<CreditMemoModuleService>(CREDIT_MEMO_MODULE);
+  const pgConnection = req.scope.resolve("__pg_connection__") as any;
 
   const [memo] = await (creditMemoService as any)
     .listPosCreditMemos({ id: [id] })
@@ -56,6 +61,46 @@ export async function PATCH(
     const sub = subtotal ?? (memo as any).subtotal ?? 0;
     const newTax = tax_mode === "florida" ? Math.round(Number(sub) * 0.07) : 0;
     const newTotal = Number(sub) + newTax + Number((memo as any).shipping ?? 0);
+
+    // ── Payment guard: cannot reduce below already-applied credit ────────────
+    const cmNumber = (memo as any).credit_memo_number as string | null | undefined;
+    if (cmNumber) {
+      const payment = await pgConnection("customer_payment")
+        .where({ reference: cmNumber, type: "credit_memo" })
+        .whereNull("deleted_at")
+        .first()
+        .catch(() => null);
+
+      if (payment) {
+        const applyRow = await pgConnection("payment_application")
+          .where({ payment_id: payment.id })
+          .whereNull("voided_at")
+          .whereNull("deleted_at")
+          .sum("amount_applied as total")
+          .first()
+          .catch(() => null);
+
+        const appliedTotal = Number(applyRow?.total ?? 0);
+
+        if (newTotal < appliedTotal) {
+          const appliedDollars = (appliedTotal / 100).toFixed(2);
+          res.status(409).json({
+            error: `Cannot reduce credit: $${appliedDollars} has already been applied to invoices. Reverse those applications first.`,
+          });
+          return;
+        }
+
+        // Update payment amount to reflect new total
+        await pgConnection("customer_payment")
+          .where({ id: payment.id })
+          .update({
+            amount: newTotal,
+            raw_amount: JSON.stringify({ value: String(newTotal), precision: 20 }),
+            updated_at: new Date(),
+          });
+      }
+    }
+
     update.tax = newTax;
     update.total = newTotal;
   }
