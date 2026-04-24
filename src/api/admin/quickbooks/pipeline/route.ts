@@ -39,6 +39,7 @@ export async function GET(
     const status = req.query.status as string | undefined;
     const step = req.query.step as string | undefined;
     const refId = req.query.reference_id as string | undefined;
+    const search = req.query.search as string | undefined;
     const sortBy =
       req.query.sort_by === "updated_at" ? "updated_at" : "created_at";
 
@@ -115,6 +116,13 @@ export async function GET(
       values.push(refId);
       p++;
     }
+    if (search) {
+      conditions.push(
+        `(p.medusa_ref_number ILIKE $${p} OR p.qb_ref_number ILIKE $${p})`
+      );
+      values.push(`%${search}%`);
+      p++;
+    }
 
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
@@ -171,14 +179,21 @@ export async function GET(
     );
     const total = parseInt(countResult.rows[0].count);
 
-    // Summary counts per status (for header badges)
-    // Exclude customer_data_ext — that step belongs to a separate pipeline view
-    const { rows: summary } = await client.query(`
-            SELECT status, COUNT(*) AS count
-            FROM qb_order_pipeline
-            WHERE step <> 'customer_data_ext'
-            GROUP BY status
-        `);
+    // Summary counts per status (for header badges).
+    // Uses the same step scope as the main rows query so the badge always
+    // matches what the user sees — but excludes the status filter so we get
+    // a count for every status bucket, not just the active one.
+    const summaryStepCondition = step
+      ? `step = $1`
+      : `step <> 'customer_data_ext'`;
+    const summaryValues = step ? [step] : [];
+    const { rows: summary } = await client.query(
+      `SELECT status, COUNT(*) AS count
+       FROM qb_order_pipeline
+       WHERE ${summaryStepCondition}
+       GROUP BY status`,
+      summaryValues
+    );
     const counts: Record<string, number> = {};
     for (const row of summary) {
       counts[row.status] = parseInt(row.count);

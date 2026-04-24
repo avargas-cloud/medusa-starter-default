@@ -113,6 +113,28 @@ export async function GET(
       }
     }
 
+    // Enrich with customer display fields so the frontend can hydrate without a second fetch
+    let customer_name: string | null = null;
+    let customer_email: string | null = null;
+    let customer_phone: string | null = null;
+    let customer_company: string | null = null;
+    if ((creditMemo as any).customer_id) {
+      try {
+        const cust = await pgConnection("customer")
+          .where({ id: (creditMemo as any).customer_id })
+          .select("first_name", "last_name", "email", "phone", "company_name")
+          .first();
+        if (cust) {
+          customer_name = `${cust.first_name ?? ""} ${cust.last_name ?? ""}`.trim() || null;
+          customer_email = cust.email ?? null;
+          customer_phone = cust.phone ?? null;
+          customer_company = cust.company_name ?? null;
+        }
+      } catch {
+        /* non-critical */
+      }
+    }
+
     res.status(200).json({
       credit_memo: {
         ...creditMemo,
@@ -122,6 +144,10 @@ export async function GET(
         payment_id,
         payment_display_id,
         credit_available,
+        customer_name,
+        customer_email,
+        customer_phone,
+        customer_company,
       },
     });
   } catch (e: any) {

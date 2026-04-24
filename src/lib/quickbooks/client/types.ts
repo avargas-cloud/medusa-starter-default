@@ -117,6 +117,7 @@ export interface QbCreateCreditMemoPayload {
   items?: QbOrderItem[];
   taxExempt?: boolean;
   salesTaxCode?: string;
+  salesRepRef?: string;
 }
 
 export interface QbUpdateInvoicePayload {

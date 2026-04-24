@@ -146,6 +146,8 @@ export async function POST(
       const nextCmNum = seqRes.rows[0].seq || seqRes.rows[0].SEQ;
       const cmNumber = `CM-${nextCmNum}`;
 
+      const actorId = (req as any).auth_context?.actor_id ?? null;
+
       // @ts-ignore - Medusa DML types it as Memoes but runtime is Memos
       const created = await (creditMemoService as any).createPosCreditMemos({
         credit_memo_number: cmNumber,
@@ -155,6 +157,7 @@ export async function POST(
         status: "created",
         notes: payload.notes || null,
         sales_rep: payload.sales_rep ?? null,
+        created_by: actorId,
         shipping_option_id: shipping?.optionId || null,
         shipping_option_name: shipping?.optionName || null,
         ...dbTotals,

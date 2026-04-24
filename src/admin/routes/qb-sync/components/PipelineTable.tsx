@@ -560,6 +560,7 @@ export function PipelineTable() {
   const [sortBy, setSortBy] = useState<"created_at" | "updated_at">(
     "created_at"
   );
+  const [searchQuery, setSearchQuery] = useState<string>("");
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -573,6 +574,7 @@ export function PipelineTable() {
         });
         if (statusFilter !== "all") params.set("status", statusFilter);
         if (stepFilter !== "all") params.set("step", stepFilter);
+        if (searchQuery.trim()) params.set("search", searchQuery.trim());
         params.set("sort_by", sortBy);
 
         const res = await fetch(`/admin/quickbooks/pipeline?${params}`, {
@@ -589,7 +591,7 @@ export function PipelineTable() {
         if (!silent) setLoading(false);
       }
     },
-    [statusFilter, stepFilter, sortBy, page]
+    [statusFilter, stepFilter, sortBy, searchQuery, page]
   );
 
   // Initial load + filter changes
@@ -724,7 +726,17 @@ export function PipelineTable() {
         </div>
 
         {/* Filters */}
-        <div className="flex items-center gap-2 mb-3">
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <input
+            type="text"
+            placeholder="Search ref # or QB ref…"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setPage(0);
+            }}
+            className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base w-48 placeholder:text-ui-fg-muted"
+          />
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}

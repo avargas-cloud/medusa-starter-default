@@ -302,12 +302,16 @@ export async function POST(
           logger.info(
             `[credit_memos complete] Mirroring Credit Memo to QB for customer ${qbCustomerId}...`
           );
+          const cmSalesRep = (creditMemo as any).sales_rep as { initials?: string; name?: string } | null | undefined;
+          const salesRepRef = cmSalesRep?.name || cmSalesRep?.initials || undefined;
+
           const cmResult = await createCreditMemoInQb({
             customerId: qbCustomerId,
             date: new Date().toISOString().split("T")[0],
             memo: `POS Return ${creditMemo.credit_memo_number || ""}`.trim(),
             items: qbItems,
             ...(isTaxExempt ? { taxExempt: true } : {}),
+            ...(salesRepRef ? { salesRepRef } : {}),
           });
 
           if (cmResult.success && cmResult.data?.operationId) {

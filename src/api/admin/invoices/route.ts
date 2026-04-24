@@ -442,6 +442,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
               status: newRemaining <= 0 ? "applied" : "partially_applied",
             });
 
+            // If this available payment is a real money movement (type="payment",
+            // e.g. a terminal capture that was left as "available") and hasn't been
+            // synced to QB yet, it still needs a ReceivePayment in QB — treat it
+            // exactly like a terminal_payment_id so the QB pipeline picks it up.
+            // credit_memo / refund types are already in QB as Credit Memos; skip.
+            const needsQbSync =
+              (p as any).type === "payment" &&
+              (p as any).metadata?.qb_sync_status !== "synced" &&
+              !paymentIdToEmit; // only set once — first unsynced payment wins
+            if (needsQbSync) {
+              paymentIdToEmit = p.id;
+              nextPayNum = (p as any).display_id
+                ? Number((p as any).display_id)
+                : null;
+            }
+
             amountToFind -= applyAmount;
           }
         }
