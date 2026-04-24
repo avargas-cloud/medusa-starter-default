@@ -958,6 +958,58 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
   }, 100);
 
+  // Auto-update order.metadata.order_status based on delivery type + fulfillment result.
+  // Priority: Voided (no-op) > shipping → "Ready to Ship" > fulfilled pickup → "Fulfilled" > default "Approved".
+  // Non-fatal: invoice already committed; a status-write failure never blocks the 201 response.
+  try {
+    const PICKUP_KEYWORDS = [
+      "pickup", "pick up", "pick-up", "store pickup", "local pickup", "in-store", "miami",
+    ];
+    const orderModForStatus = req.scope.resolve(Modules.ORDER);
+    const orderForStatus = (await orderModForStatus.retrieveOrder(body.order_id, {
+      select: ["id", "fulfillment_status", "metadata"],
+      relations: ["shipping_methods"],
+    })) as any;
+
+    const existingOrderStatus: string | undefined = orderForStatus?.metadata?.order_status;
+    if (existingOrderStatus !== "Voided") {
+      const shippingMethods: Array<{ name?: string }> = orderForStatus?.shipping_methods ?? [];
+      const isPickup =
+        shippingMethods.length > 0 &&
+        shippingMethods.some((m) =>
+          PICKUP_KEYWORDS.some((kw) => (m?.name ?? "").toLowerCase().includes(kw))
+        );
+      const isShipping = shippingMethods.length > 0 && !isPickup;
+      const fulfillmentStatus: string = orderForStatus?.fulfillment_status ?? "";
+
+      let derivedOrderStatus: string;
+      if (isShipping) {
+        derivedOrderStatus = "Ready to Ship";
+      } else if (
+        body.fulfillment_id &&
+        ["fulfilled", "delivered"].includes(fulfillmentStatus)
+      ) {
+        derivedOrderStatus = "Fulfilled";
+      } else {
+        derivedOrderStatus = "Approved";
+      }
+
+      await orderModForStatus.updateOrders(body.order_id, {
+        metadata: {
+          ...(orderForStatus?.metadata ?? {}),
+          order_status: derivedOrderStatus,
+        },
+      });
+      console.log(
+        `[invoice] order_status auto-set to "${derivedOrderStatus}" for order ${body.order_id}`
+      );
+    }
+  } catch (statusErr: any) {
+    console.warn(
+      `[invoice] Failed to auto-set order_status for ${body.order_id}: ${statusErr.message}`
+    );
+  }
+
   // Re-fetch with relations for the response
   const full = await invoiceService
     .retrievePosInvoice((invoice as any).id, {
