@@ -18,7 +18,7 @@ const DIGEST_WINDOW_HOURS = Number(
 
 /**
  * Daily digest of QuickBooks pipeline errors across all 4 pipelines.
- * Runs at 12:00 UTC = 8 AM EDT (7 AM EST during standard time).
+ * Runs daily at midnight (00:00 server time).
  * Skips email send when zero errors across all pipelines (no spam).
  */
 
@@ -425,10 +425,10 @@ export default async function qbPipelineErrorDigest(
 }
 
 /**
- * Daily at 12:00 UTC = 8 AM EDT (7 AM EST during standard time).
+ * Daily at 00:00 server time (midnight).
  * The 1-hour DST shift twice a year is acceptable for a daily ops digest.
  */
 export const config = {
   name: "qb-pipeline-error-digest",
-  schedule: "0 12 * * *",
+  schedule: "0 0 * * *",
 };

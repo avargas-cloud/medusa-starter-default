@@ -56,7 +56,6 @@ export interface QbCreateSalesOrderPayload {
   customerId: string;
   date: string;
   items: QbOrderItem[];
-  templateRef?: string;
   memo?: string;
   poNumber?: string;
   refNumber?: string;
@@ -103,7 +102,6 @@ export interface QbCreateInvoicePayload {
   date?: string;
   LinkToTxnID?: string;
   refNumber?: string;
-  templateRef?: string;
   memo?: string;
   items?: QbOrderItem[];
   taxExempt?: boolean;
@@ -142,7 +140,6 @@ export interface QbCreateEstimatePayload {
   customerId: string;
   date: string;
   items: QbOrderItem[];
-  templateRef?: string;
   memo?: string;
   poNumber?: string;
   refNumber?: string;

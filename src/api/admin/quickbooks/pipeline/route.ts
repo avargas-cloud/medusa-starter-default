@@ -172,9 +172,11 @@ export async function GET(
     const total = parseInt(countResult.rows[0].count);
 
     // Summary counts per status (for header badges)
+    // Exclude customer_data_ext — that step belongs to a separate pipeline view
     const { rows: summary } = await client.query(`
             SELECT status, COUNT(*) AS count
             FROM qb_order_pipeline
+            WHERE step <> 'customer_data_ext'
             GROUP BY status
         `);
     const counts: Record<string, number> = {};

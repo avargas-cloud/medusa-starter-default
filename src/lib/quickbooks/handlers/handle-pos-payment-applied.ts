@@ -121,6 +121,15 @@ export async function handlePosPaymentApplied({
     logger.warn(
       `${LOG_PREFIX} Invoice ${invoice_id} not found. Cannot apply payment.`
     );
+    await writePipelineRow({
+      orderId: order_id,
+      referenceId: payment_id,
+      referenceType: "customer_payment",
+      step: "apply_payment",
+      status: "failed",
+      medusaRefNumber: medusaPayRef,
+      error: `Invoice ${invoice_id} not found in DB`,
+    }).catch(() => {});
     return;
   }
 
@@ -167,6 +176,15 @@ export async function handlePosPaymentApplied({
     logger.error(
       `${LOG_PREFIX} ❌ Timed out waiting for Invoice TxnID on order ${order_id}. Cannot apply payment ${paymentTxnId}.`
     );
+    await writePipelineRow({
+      orderId: order_id,
+      referenceId: payment_id,
+      referenceType: "customer_payment",
+      step: "apply_payment",
+      status: "failed",
+      medusaRefNumber: medusaPayRef,
+      error: "Timed out waiting for Invoice to sync to QB — retry after invoice is confirmed",
+    }).catch(() => {});
     return;
   }
 
@@ -207,6 +225,15 @@ export async function handlePosPaymentApplied({
     logger.error(
       `${LOG_PREFIX} ❌ Customer ${payment.customer_id} has no qb_list_id. Cannot apply payment.`
     );
+    await writePipelineRow({
+      orderId: order_id,
+      referenceId: payment_id,
+      referenceType: "customer_payment",
+      step: "apply_payment",
+      status: "failed",
+      medusaRefNumber: medusaPayRef,
+      error: `Customer ${payment.customer_id} not synced to QB — no qb_list_id`,
+    }).catch(() => {});
     return;
   }
 
@@ -226,6 +253,23 @@ export async function handlePosPaymentApplied({
   // ─────────────────────────────────────────────────────────────────────────
   const isCreditMemoPayment = (payment as any).type === 'credit_memo';
 
+  // Write `submitted` with bridgeOpId as soon as the op is enqueued to the bridge,
+  // before polling for completion. This prevents orphaned `pending` rows if the
+  // process crashes or restarts during the poll.
+  const onQueued = async (opId: string) => {
+    await writePipelineRow({
+      orderId: order_id,
+      referenceId: payment_id,
+      referenceType: "customer_payment",
+      step: "apply_payment",
+      status: "submitted",
+      medusaRefNumber: medusaPayRef,
+      bridgeOpId: opId,
+    }).catch((e: any) =>
+      logger.warn(`${LOG_PREFIX} Could not write submitted row: ${e.message}`)
+    );
+  };
+
   await withQbLockResult(`qb-payment:${paymentTxnId}`, async () => {
     const applyResult = isCreditMemoPayment
       ? await applyCreditMemoToInvoiceInQb({
@@ -235,6 +279,7 @@ export async function handlePosPaymentApplied({
           amount: amount_applied / 100,
           memo: updatedMemo,
           log: (m: string) => logger.info(m),
+          onQueued,
         })
       : await mergeApplyPaymentInQb({
           customerId: customerQbId,
@@ -243,6 +288,7 @@ export async function handlePosPaymentApplied({
           creditTxnId: paymentTxnId!,
           memo: updatedMemo,
           log: (m: string) => logger.info(m),
+          onQueued,
         });
 
     if (!applyResult.success) {
@@ -300,5 +346,12 @@ export async function handlePosPaymentApplied({
         medusaRefNumber: medusaPayRef,
       }).catch(() => {});
     }
+
+    await financeService.updateCustomerPayments({
+      id: payment_id,
+      metadata: { ...(payment.metadata || {}), qb_sync_status: "synced" },
+    }).catch((err: any) =>
+      logger.warn(`${LOG_PREFIX} ⚠️ Could not update qb_sync_status to synced: ${err.message}`)
+    );
   });
 }

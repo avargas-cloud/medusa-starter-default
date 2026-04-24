@@ -51,7 +51,6 @@ export async function createEstimateInQb(
   try {
     const body = {
       ...payload,
-      templateRef: payload.templateRef || undefined, // Only send if explicitly set
       salesRepRef: payload.salesRep,
     };
     const data = await bridgeFetch("POST", "/api/estimates", body);

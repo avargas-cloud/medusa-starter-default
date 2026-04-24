@@ -45,7 +45,6 @@ export async function createSalesOrderInQb(
   try {
     const body = {
       ...payload,
-      templateRef: payload.templateRef || "Sales Order Original",
       salesRepRef: payload.salesRep,
     };
     const data = await bridgeFetch("POST", "/api/sales-orders", body);

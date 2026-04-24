@@ -205,6 +205,7 @@ export async function mergeApplyPaymentInQb(payload: {
   creditTxnId: string;
   memo?: string;
   log?: (msg: string) => void;
+  onQueued?: (operationId: string) => Promise<void>;
 }): Promise<QbBridgeResult<MergeApplyResult>> {
   const log = payload.log ?? console.log;
 
@@ -269,6 +270,13 @@ export async function mergeApplyPaymentInQb(payload: {
       throw new Error("Bridge did not return operationId for merge-apply");
     }
 
+    // Notify caller that the operation is enqueued so it can write a `submitted`
+    // pipeline row before we block on polling. This prevents orphaned `pending` rows
+    // if the process crashes during the poll.
+    if (payload.onQueued) {
+      await payload.onQueued(operationId);
+    }
+
     // ── Step 4: poll for Mod completion to capture new EditSequence ────────
     const modResult = await pollOperationResult(operationId, log);
     const newEditSequence = modResult.editSequence || null;
@@ -300,6 +308,7 @@ export async function applyCreditMemoToInvoiceInQb(payload: {
   refNumber?: string;
   memo?: string;
   log?: (msg: string) => void;
+  onQueued?: (operationId: string) => Promise<void>;
 }): Promise<QbBridgeResult<MergeApplyResult>> {
   const log = payload.log ?? console.log;
 
@@ -329,6 +338,10 @@ export async function applyCreditMemoToInvoiceInQb(payload: {
     const operationId: string = enqueueRes?.operationId;
     if (!operationId)
       throw new Error("Bridge did not return operationId for credit-memo apply");
+
+    if (payload.onQueued) {
+      await payload.onQueued(operationId);
+    }
 
     const addResult = await pollOperationResult(operationId, log);
     return {
