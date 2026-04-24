@@ -117,9 +117,14 @@ export async function GET(
       p++;
     }
     if (search) {
-      conditions.push(
-        `(p.medusa_ref_number ILIKE $${p} OR p.qb_ref_number ILIKE $${p})`
-      );
+      conditions.push(`(
+        p.medusa_ref_number ILIKE $${p}
+        OR p.qb_ref_number ILIKE $${p}
+        OR CAST(p.seq AS TEXT) ILIKE $${p}
+        OR p.order_id IN (
+          SELECT id FROM "order" WHERE CAST(display_id AS TEXT) ILIKE $${p}
+        )
+      )`);
       values.push(`%${search}%`);
       p++;
     }
