@@ -277,6 +277,7 @@ export async function POST(
     const { rows } = await client.query(
       `UPDATE qb_order_pipeline
              SET status       = 'pending',
+                 updated_at   = NOW(),
                  error        = NULL,
                  failed_at    = NULL,
                  confirmed_at = NULL,

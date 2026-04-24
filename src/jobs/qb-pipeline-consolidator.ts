@@ -24,6 +24,7 @@ import { handleDraftOrderUpdated } from "../lib/quickbooks/handlers/handle-draft
 import { handleFulfillmentCreated } from "../lib/quickbooks/handlers/handle-fulfillment-created";
 import { handleOrderPlaced } from "../lib/quickbooks/handlers/handle-order-placed";
 import { handleOrderUpdated } from "../lib/quickbooks/handlers/handle-order-updated";
+import { handlePosPaymentApplied } from "../lib/quickbooks/handlers/handle-pos-payment-applied";
 import { handleSalesReceiptCreated } from "../lib/quickbooks/handlers/handle-sales-receipt-created";
 import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types";
 import { ensureCustomerInQb } from "../lib/quickbooks/order-flow-core";
@@ -353,6 +354,38 @@ async function resubmitByStep(
           logger
         );
         break;
+
+      case "apply_payment": {
+        if (!row.reference_id) break;
+        const applyPool = getDbPool();
+        const { rows: appRows } = await applyPool.query(
+          `SELECT payment_id, invoice_id, order_id, amount_applied
+           FROM payment_application
+           WHERE payment_id = $1 AND voided_at IS NULL
+           LIMIT 1`,
+          [row.reference_id]
+        );
+        const appRow = appRows[0];
+        if (!appRow) {
+          logger.warn(
+            `${LOG_PREFIX} ⚠️ No payment_application found for apply_payment row ${row.id} (ref=${row.reference_id})`
+          );
+          break;
+        }
+        await handlePosPaymentApplied({
+          event: {
+            name: "pos.payment.applied",
+            data: {
+              payment_id: row.reference_id,
+              invoice_id: appRow.invoice_id ?? null,
+              order_id: appRow.order_id ?? row.order_id,
+              amount_applied: appRow.amount_applied ?? 0,
+            },
+          },
+          container,
+        } as any);
+        break;
+      }
 
       default:
         // payment and other steps: reset to pending and let qb-pos-sync pick up
