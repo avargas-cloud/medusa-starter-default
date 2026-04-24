@@ -29,6 +29,7 @@ async function enqueueDataExt(
 ): Promise<string> {
   const res = await fetch(`${BRIDGE_URL}/api/sync/enqueue`, {
     method: "POST",
+    signal: AbortSignal.timeout(8000),
     headers: {
       "Content-Type": "application/json",
       "x-api-key": API_KEY,
@@ -71,7 +72,7 @@ async function pollOperation(operationId: string): Promise<PollResult> {
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     const res = await fetch(
       `${BRIDGE_URL}/api/sync/status/${operationId}`,
-      { headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" } }
+      { signal: AbortSignal.timeout(8000), headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" } }
     );
     if (!res.ok) continue;
     const json = (await res.json()) as any;

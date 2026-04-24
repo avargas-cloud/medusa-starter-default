@@ -759,8 +759,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         });
 
         // 2. Payment row — waiting (only for non-credit new payments)
+        let paymentPipelineRowId: string | null = null;
         if (paymentIdToEmit) {
-          await writePipelineRow({
+          paymentPipelineRowId = await writePipelineRow({
             orderId: body.order_id,
             referenceId: paymentIdToEmit,
             referenceType: "customer_payment",
@@ -770,7 +771,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           });
         }
 
-        // 3. Apply-payment row — one per application, each depends on invoice
+        // 3. Apply-payment row — one per application.
+        // When a payment step exists, apply_payment must wait for the payment to
+        // be confirmed in QB before running — otherwise the bridge has no TxnID to
+        // apply. Depend on paymentPipelineRowId when this application's payment is
+        // the newly-created one; fall back to invoicePipelineRowId for pre-existing
+        // credit/CM payments that are already in QB.
         for (const app of applicationsToEmit) {
           const applyPayRef = app.payment_id;
           // Use nextPayNum only for the newly-created payment; look up others
@@ -794,7 +800,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             referenceType: "customer_payment",
             step: "apply_payment",
             status: "waiting",
-            dependsOn: invoicePipelineRowId,
+            dependsOn:
+              paymentIdToEmit &&
+              app.payment_id === paymentIdToEmit &&
+              paymentPipelineRowId
+                ? paymentPipelineRowId
+                : invoicePipelineRowId,
             medusaRefNumber: applyMedusaRef,
           });
         }
@@ -888,17 +899,42 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             "DIRECT EXEC: Skipping pos.payment.applied emit because this is a Sales Receipt."
           );
         } else {
-          await Promise.all(
-            applicationsToEmit.map(async (appPayload) => {
-              await handlePosPaymentApplied({
-                event: { name: "pos.payment.applied", data: appPayload },
-                container,
-              } as any);
-              console.log(
-                `DIRECT EXEC: pos.payment.applied executed for Payment ${appPayload.payment_id}!`
-              );
-            })
-          );
+          // Guard: only run apply_payment immediately if the new payment is already
+          // confirmed in QB. When handlePosPaymentCreated short-circuits (idempotency —
+          // finance/payments/route.ts already started it), the payment is still being
+          // processed asynchronously. Running apply_payment now would poll for 400s and
+          // fail. The upfront `apply_payment` waiting row already has depends_on pointing
+          // to the payment row, so wakeDependentsOfConfirmed will trigger it correctly
+          // once the payment confirms.
+          let paymentReadyForDirectApply = !paymentIdToEmit; // true when no payment step needed
+          if (paymentIdToEmit) {
+            try {
+              const finSvcCheck = container.resolve(FINANCE_MODULE) as any;
+              const [freshPay] = await finSvcCheck.listCustomerPayments({ id: paymentIdToEmit });
+              paymentReadyForDirectApply =
+                freshPay?.metadata?.qb_sync_status === "synced";
+            } catch {
+              paymentReadyForDirectApply = false;
+            }
+          }
+
+          if (!paymentReadyForDirectApply) {
+            console.log(
+              "DIRECT EXEC: Payment not yet confirmed in QB — apply_payment deferred to waiting gate (depends_on payment row)"
+            );
+          } else {
+            await Promise.all(
+              applicationsToEmit.map(async (appPayload) => {
+                await handlePosPaymentApplied({
+                  event: { name: "pos.payment.applied", data: appPayload },
+                  container,
+                } as any);
+                console.log(
+                  `DIRECT EXEC: pos.payment.applied executed for Payment ${appPayload.payment_id}!`
+                );
+              })
+            );
+          }
         }
       }
     } catch (execErr: any) {
