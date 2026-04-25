@@ -89,3 +89,13 @@ export const QB_PO_VOID_STATUSES = [
 ] as const;
 
 export type QbPoVoidStatus = (typeof QB_PO_VOID_STATUSES)[number];
+
+/**
+ * Vendor Bill lifecycle:
+ *   draft     → created from receipt lines; fields can be freely edited
+ *   confirmed → landed costs calculated and distributed; variant metadata updated
+ *   synced    → QB Vendor Bill Add succeeded (future)
+ */
+export const VENDOR_BILL_STATUSES = ["draft", "confirmed", "synced"] as const;
+
+export type VendorBillStatus = (typeof VENDOR_BILL_STATUSES)[number];

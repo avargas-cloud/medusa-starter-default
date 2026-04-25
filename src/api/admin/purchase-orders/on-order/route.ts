@@ -1,10 +1,9 @@
 /**
  * GET /admin/purchase-orders/on-order?sku=XXX
+ * GET /admin/purchase-orders/on-order?sku[]=XXX&sku[]=YYY  (multi-SKU)
  *
- * Returns the total pending (not yet received) units for a given SKU across
- * all submitted/partially_received purchase orders.
- *
- * Used by the POS item search and stock popup to show "On Order" quantities.
+ * Single SKU:  { on_order: number }
+ * Multi SKU:   { on_order: Record<string, number> }
  */
 
 import type {
@@ -21,20 +20,26 @@ export async function GET(
   req: AuthenticatedMedusaRequest,
   res: MedusaResponse
 ) {
-  const sku = (req.query.sku as string | undefined)?.trim();
-  if (!sku) {
+  const skuParam = req.query["sku"] as string | string[] | undefined;
+  const skus: string[] = Array.isArray(skuParam)
+    ? skuParam.map((s) => s.trim()).filter(Boolean)
+    : skuParam?.trim()
+    ? [skuParam.trim()]
+    : [];
+
+  if (!skus.length) {
     return res.status(400).json({ error: "sku query param is required" });
   }
 
   const service = getPurchaseOrdersService(req);
 
-  // All lines for this SKU regardless of PO status — we filter next.
+  const filter = skus.length === 1 ? { sku_snapshot: skus[0] } : { sku_snapshot: skus };
   const lines = (await service.listPurchaseOrderLines(
-    { sku_snapshot: sku },
-    { take: 1000, skip: 0 }
+    filter,
+    { take: 5000, skip: 0 }
   )) as Array<{
     purchase_order_id: string;
-    product_variant_id: string;
+    sku_snapshot: string;
     qty_ordered: number;
     qty_received: number;
     qty_cancelled: number;
@@ -42,10 +47,12 @@ export async function GET(
   }>;
 
   if (!lines.length) {
-    return res.json({ on_order: 0 });
+    if (skus.length === 1) return res.json({ on_order: 0 });
+    const empty: Record<string, number> = {};
+    for (const s of skus) empty[s] = 0;
+    return res.json({ on_order: empty });
   }
 
-  // Check which parent POs are in an active (ordering) status.
   const poIds = [...new Set(lines.map((l) => l.purchase_order_id))];
   const activePOs = new Set<string>();
   try {
@@ -55,16 +62,33 @@ export async function GET(
     )) as Array<{ id: string }>;
     for (const po of pos) activePOs.add(po.id);
   } catch {
-    return res.json({ on_order: 0 });
+    if (skus.length === 1) return res.json({ on_order: 0 });
+    const empty: Record<string, number> = {};
+    for (const s of skus) empty[s] = 0;
+    return res.json({ on_order: empty });
   }
 
-  let onOrder = 0;
+  if (skus.length === 1) {
+    let onOrder = 0;
+    for (const line of lines) {
+      if (!activePOs.has(line.purchase_order_id)) continue;
+      if (!(ACTIVE_LINE_STATUSES as readonly string[]).includes(line.status)) continue;
+      const pending = line.qty_ordered - line.qty_received - line.qty_cancelled;
+      if (pending > 0) onOrder += pending;
+    }
+    return res.json({ on_order: onOrder });
+  }
+
+  // Multi-SKU — return map
+  const result: Record<string, number> = {};
+  for (const s of skus) result[s] = 0;
   for (const line of lines) {
     if (!activePOs.has(line.purchase_order_id)) continue;
     if (!(ACTIVE_LINE_STATUSES as readonly string[]).includes(line.status)) continue;
     const pending = line.qty_ordered - line.qty_received - line.qty_cancelled;
-    if (pending > 0) onOrder += pending;
+    if (pending > 0 && line.sku_snapshot && line.sku_snapshot in result) {
+      result[line.sku_snapshot] = (result[line.sku_snapshot] ?? 0) + pending;
+    }
   }
-
-  return res.json({ on_order: onOrder });
+  return res.json({ on_order: result });
 }

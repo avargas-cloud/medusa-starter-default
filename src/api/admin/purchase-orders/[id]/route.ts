@@ -196,9 +196,16 @@ export async function GET(
     };
   });
 
+  const rawLinkedIds = (po as unknown as { linked_order_ids?: string | null }).linked_order_ids;
+  const linked_order_ids: string[] = (() => {
+    if (!rawLinkedIds) return [];
+    try { return JSON.parse(rawLinkedIds) as string[]; } catch { return []; }
+  })();
+
   return res.json({
     purchase_order: {
       ...po,
+      linked_order_ids,
       lines: decoratedLines,
       receipts: decoratedReceipts,
       vendor,
@@ -259,6 +266,11 @@ export async function PATCH(
   if (body.memo !== undefined) headerUpdate.memo = body.memo ?? null;
   if (body.reference_number !== undefined)
     headerUpdate.reference_number = body.reference_number ?? null;
+  if (body.linked_order_ids !== undefined) {
+    headerUpdate.linked_order_ids = body.linked_order_ids?.length
+      ? JSON.stringify(body.linked_order_ids)
+      : null;
+  }
 
   // Replace lines if provided — hard-delete (no soft-delete / version history
   // so removed items vanish from the PO entirely). MedusaService's deleteXXX

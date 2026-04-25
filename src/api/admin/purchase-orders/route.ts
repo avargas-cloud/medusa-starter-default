@@ -112,16 +112,17 @@ export async function POST(
     : null;
   const vendorQbListIdSnapshot = vendorRow?.qb_list_id ?? null;
 
-  // Allocate the human-readable PO number at creation time so drafts carry a
-  // stable identifier staff can reference before QuickBooks submission.
-  const seq = await service.getNextPoSequence();
-  const number = `PO-${seq}`;
+  // Drafts get a throwaway D-{n} label from a separate sequence.
+  // The real PO-{n} is assigned only when the draft is submitted (approved),
+  // so exploratory or AI-generated drafts never consume real PO numbers.
+  const draftSeq = await service.getNextDraftSequence();
+  const number = `D-${draftSeq}`;
 
   const [po] = await service.createPurchaseOrders([
     {
       status: "draft",
       number,
-      seq,
+      seq: null,
       vendor_id: body.vendor_id,
       vendor_name_snapshot: vendorNameSnapshot,
       vendor_qb_list_id_snapshot: vendorQbListIdSnapshot,
@@ -131,6 +132,9 @@ export async function POST(
       memo: body.memo ?? null,
       reference_number: body.reference_number ?? null,
       po_status: body.po_status ?? null,
+      linked_order_ids: body.linked_order_ids?.length
+        ? JSON.stringify(body.linked_order_ids)
+        : null,
       subtotal_cents: totals.subtotal_cents,
       tax_cents: totals.tax_cents,
       shipping_cents: totals.shipping_cents,

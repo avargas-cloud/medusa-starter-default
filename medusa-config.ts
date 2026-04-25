@@ -295,6 +295,9 @@ module.exports = defineConfig({
       resolve: "./src/modules/purchase-orders",
     },
     {
+      resolve: "./src/modules/purchasing",
+    },
+    {
       resolve: "@medusajs/medusa/tax",
       options: {
         providers: [

@@ -108,6 +108,30 @@ export const validatePoForSubmitStep = createStep(
       );
     }
 
+    // For lines whose qb_item_list_id_snapshot was not set at creation time,
+    // fall back to product_variant.metadata.quickbooks_id (the authoritative QB item ListID).
+    const knex = container.resolve("__pg_connection__") as {
+      raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
+    };
+
+    const variantIdsNeedingLookup = lineRows
+      .filter((l) => !l.qb_item_list_id_snapshot)
+      .map((l) => l.product_variant_id as string)
+      .filter(Boolean);
+
+    const metadataMap: Record<string, string> = {};
+    if (variantIdsNeedingLookup.length > 0) {
+      const res = await knex.raw(
+        `SELECT id, metadata->>'quickbooks_id' AS qb_list_id
+           FROM product_variant
+          WHERE id = ANY(?::text[]) AND deleted_at IS NULL`,
+        [variantIdsNeedingLookup]
+      );
+      for (const row of res.rows) {
+        if (row.qb_list_id) metadataMap[row.id as string] = row.qb_list_id as string;
+      }
+    }
+
     const validated: ValidatedPoLine[] = [];
     for (const l of lineRows) {
       const lineId = l.id as string;
@@ -120,18 +144,17 @@ export const validatePoForSubmitStep = createStep(
       const variantId = l.product_variant_id as string | null;
       const invItemId = l.inventory_item_id as string | null;
       const sku = l.sku_snapshot as string | null;
-      const qbItemListId = l.qb_item_list_id_snapshot as string | null;
       if (!variantId || !invItemId || !sku) {
         throw new Error(
           `Line ${lineId} is missing variant/inventory/SKU snapshots`
         );
       }
+      const qbItemListId = (l.qb_item_list_id_snapshot as string | null) ?? metadataMap[variantId] ?? null;
       if (!qbItemListId) {
         throw new Error(
-          `Line ${lineId} (${sku}) has no qb_item_list_id_snapshot; QB PurchaseOrderAdd cannot reference unsynced items`
+          `Line ${lineId} (${sku}) has no QB item ListID; sync the item to QuickBooks before submitting`
         );
       }
-
       validated.push({
         line_id: lineId,
         product_variant_id: variantId,
@@ -153,13 +176,15 @@ export const validatePoForSubmitStep = createStep(
     const vendorId = poRow.vendor_id as string;
     const vendor = await qbCatalog.retrieveQbVendor(vendorId);
     if (!vendor) {
-      throw new Error(`Vendor ${vendorId} not found in qb_vendor`);
+      throw new Error(`Vendor ${vendorId} not found in QB catalog`);
     }
     if (!vendor.qb_list_id) {
       throw new Error(
-        `Vendor ${vendorId} (${vendor.full_name ?? vendor.name}) has no qb_list_id; resolve vendor in QuickBooks before submitting`
+        `Vendor ${vendor.full_name ?? vendor.name} has no QB ListID; sync vendor to QuickBooks before submitting`
       );
     }
+    const vendorName = vendor.full_name ?? vendor.name;
+    const vendorQbListId = vendor.qb_list_id;
 
     return new StepResponse(
       {
@@ -179,8 +204,8 @@ export const validatePoForSubmitStep = createStep(
         },
         vendor: {
           vendor_id: vendorId,
-          vendor_name: vendor.full_name ?? vendor.name,
-          vendor_qb_list_id: vendor.qb_list_id,
+          vendor_name: vendorName,
+          vendor_qb_list_id: vendorQbListId,
         },
         lines: validated,
       },

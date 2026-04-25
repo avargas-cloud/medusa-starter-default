@@ -36,7 +36,13 @@ export const allocatePoSequenceStep = createStep(
       | { seq?: number | null; number?: string | null }
       | null;
 
-    if (existing && existing.seq != null && existing.number) {
+    // Idempotent: if the PO already has a real PO-{n} number, return it as-is.
+    // D-{n} draft labels do NOT count — they must be replaced with a real number.
+    if (
+      existing &&
+      existing.seq != null &&
+      existing.number?.startsWith("PO-")
+    ) {
       return new StepResponse(
         { seq: existing.seq, number: existing.number },
         null

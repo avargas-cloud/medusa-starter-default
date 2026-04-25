@@ -58,6 +58,8 @@ export const PurchaseOrder = model.define("purchase_order", {
   memo: model.text().nullable(),
   // Vendor's own PO reference number, if any (e.g. sales order # from vendor)
   reference_number: model.text().nullable(),
+  // JSON array of Medusa order IDs linked to this PO (e.g. orders this PO fulfills)
+  linked_order_ids: model.text().nullable(),
 
   // Audit — creation
   created_by_user_id: model.text(),

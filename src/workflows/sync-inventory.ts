@@ -6,6 +6,8 @@ import {
 } from "@medusajs/framework/workflows-sdk";
 import { Modules } from "@medusajs/utils";
 
+const CHINA_LOCATION_ID = "sloc_01KQ14C1CFX30EDD722BF87HDM";
+
 import { safeSyncIndex } from "../lib/meilisearch/safe-sync";
 
 export const syncInventoryToMeiliStep = createStep(
@@ -19,6 +21,24 @@ export const syncInventoryToMeiliStep = createStep(
       host: process.env.MEILISEARCH_HOST!,
       apiKey: process.env.MEILISEARCH_API_KEY!,
     });
+
+    // ─── BULK: Load China warehouse stock levels into RAM once ───────────────
+    const chinaStockMap = new Map<string, number>();
+    try {
+      const inventoryService: any = container.resolve(Modules.INVENTORY);
+      const chinaLevels = await inventoryService.listInventoryLevels(
+        { location_id: CHINA_LOCATION_ID },
+        { take: 100000 }
+      );
+      for (const level of chinaLevels) {
+        if (level.inventory_item_id && level.stocked_quantity != null) {
+          chinaStockMap.set(level.inventory_item_id, level.stocked_quantity);
+        }
+      }
+      console.log(`📦 [sync-inventory] Loaded ${chinaStockMap.size} China warehouse levels`);
+    } catch (e: any) {
+      console.warn("[sync-inventory] Could not load China warehouse levels:", e.message);
+    }
 
     // ─── BULK: Load all price list prices into RAM once ─────────────────────
     const pricesByPriceSet = new Map<string, Record<string, number>>();
@@ -147,6 +167,8 @@ export const syncInventoryToMeiliStep = createStep(
               (variant?.metadata as any)?.sales_description || null,
             cost: (variant?.metadata as any)?.qb_purchase_cost || null,
             vendorName: (variant?.metadata as any)?.qb_vendor_name || null,
+            mpn: (variant?.metadata as any)?.mpn || null,
+            chinaStock: 0,
             options: mappedOptions,
             category_handles: Array.from(allCategoryHandles),
             status: product?.status || "draft",
@@ -175,6 +197,8 @@ export const syncInventoryToMeiliStep = createStep(
             (variant?.metadata as any)?.sales_description || null,
           cost: (variant?.metadata as any)?.qb_purchase_cost || null,
           vendorName: (variant?.metadata as any)?.qb_vendor_name || null,
+          mpn: (variant?.metadata as any)?.mpn || null,
+          chinaStock: chinaStockMap.get(inventory.id) ?? 0,
           options: mappedOptions,
           category_handles: Array.from(allCategoryHandles),
           status: product?.status || "draft",

@@ -25,6 +25,8 @@ export interface MeiliInventoryDoc {
   productId: string | null;
   handle: string | null;
   salesDescription: string | null;
+  purchaseDescription: string | null;
+  quickbooks_id: string | null;
   cost: number | null;
   vendorName: string | null;
   options: { title: string; value: string }[];
@@ -102,6 +104,8 @@ export function buildInventoryDocsForVariants(
         productId: product?.id || null,
         handle: product?.handle || null,
         salesDescription: (vmeta.sales_description as string) || null,
+        purchaseDescription: (vmeta.purchase_description as string) || null,
+        quickbooks_id: (vmeta.quickbooks_id as string) || null,
         cost: (vmeta.qb_purchase_cost as number) || null,
         vendorName: (vmeta.qb_vendor_name as string) || null,
         options: mappedOptions,
@@ -132,6 +136,8 @@ export function buildInventoryDocsForVariants(
         productId: product?.id || null,
         handle: product?.handle || null,
         salesDescription: (vmeta.sales_description as string) || null,
+        purchaseDescription: (vmeta.purchase_description as string) || null,
+        quickbooks_id: (vmeta.quickbooks_id as string) || null,
         cost: (vmeta.qb_purchase_cost as number) || null,
         vendorName: (vmeta.qb_vendor_name as string) || null,
         options: mappedOptions,

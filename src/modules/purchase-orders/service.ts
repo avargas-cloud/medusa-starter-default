@@ -19,6 +19,8 @@ import { PurchaseOrderReceipt } from "./models/purchase-order-receipt";
 import { PurchaseOrderReceiptLine } from "./models/purchase-order-receipt-line";
 import { QbPurchaseOrderPipeline } from "./models/qb-purchase-order-pipeline";
 import { QbItemReceiptPipeline } from "./models/qb-item-receipt-pipeline";
+import { VendorBill } from "./models/vendor-bill";
+import { VendorBillLine } from "./models/vendor-bill-line";
 
 class PurchaseOrdersModuleService extends MedusaService({
   PurchaseOrder,
@@ -27,6 +29,8 @@ class PurchaseOrdersModuleService extends MedusaService({
   PurchaseOrderReceiptLine,
   QbPurchaseOrderPipeline,
   QbItemReceiptPipeline,
+  VendorBill,
+  VendorBillLine,
 }) {
   /**
    * Allocate the next PO number from `custom_purchase_order_seq`.
@@ -42,6 +46,15 @@ class PurchaseOrdersModuleService extends MedusaService({
    */
   async getNextReceiptSequence(): Promise<number> {
     return this.nextval("custom_po_receipt_seq");
+  }
+
+  /**
+   * Allocate a throwaway draft identifier from `custom_po_draft_seq`.
+   * Caller composes the display label as `D-${seq}`.
+   * This sequence is non-auditable — gaps are expected when drafts are discarded.
+   */
+  async getNextDraftSequence(): Promise<number> {
+    return this.nextval("custom_po_draft_seq");
   }
 
   private async nextval(sequenceName: string): Promise<number> {
