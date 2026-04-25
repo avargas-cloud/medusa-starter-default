@@ -446,6 +446,13 @@ export async function ensureTable(client: Client) {
             WHERE field_name = 'Payment Terms'
             AND (data_scope IS NULL OR data_scope IN ('Customer Data', 'Document Data', ''))
         `);
+    // Add purchase_orders scope to Payment Terms so they appear in PO editor dropdown
+    await client.query(`
+            UPDATE system_defaults
+            SET data_scope = 'customers,orders,purchase_orders', updated_at = NOW()
+            WHERE field_name = 'Payment Terms'
+            AND data_scope NOT LIKE '%purchase_orders%'
+        `);
   } catch (e) {
     // ignore errors if already migrated
   }
@@ -478,6 +485,24 @@ export async function ensureTable(client: Client) {
             VALUES ('Document Defaults', 'Project Name', '-', 1, 'orders')
             ON CONFLICT DO NOTHING
         `);
+  } catch (e) {
+    // ignore errors
+  }
+
+  // Migration: seed Shipping Method options (idempotent)
+  try {
+    const shippingMethods = [
+      'UPS Ground', 'UPS 2nd Day Air', 'UPS Next Day Air', 'UPS DDP',
+      'UPS Fast Service', 'Ocean Freight', 'FedEx International', 'DHL Express', 'Pickup',
+    ];
+    for (let i = 0; i < shippingMethods.length; i++) {
+      await client.query(
+        `INSERT INTO system_defaults (context, field_name, value, sort_order, data_scope)
+         VALUES ('Document Defaults', 'Shipping Method', $1, $2, 'purchase_orders')
+         ON CONFLICT (context, field_name, value) DO NOTHING`,
+        [shippingMethods[i], i + 1]
+      );
+    }
   } catch (e) {
     // ignore errors
   }

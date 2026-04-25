@@ -12,10 +12,14 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
   const statusParam = req.query.status ? String(req.query.status) : "";
   const search = req.query.search ? String(req.query.search).toLowerCase() : "";
+  const vendorId = req.query.vendor_id ? String(req.query.vendor_id) : "";
 
   const filters: Record<string, unknown> = {};
   if (ALLOWED_STATUSES.has(statusParam)) {
     filters.status = statusParam;
+  }
+  if (vendorId) {
+    filters.vendor_id = vendorId;
   }
 
   const { data } = await query.graph({

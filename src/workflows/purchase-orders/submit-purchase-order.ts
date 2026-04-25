@@ -35,7 +35,7 @@ export interface SubmitPurchaseOrderWorkflowOutput {
   po_id: string;
   number: string;
   status: "submitted";
-  qb_pipeline_id: string;
+  qb_pipeline_id: string | null;
   submitted_at: Date;
 }
 

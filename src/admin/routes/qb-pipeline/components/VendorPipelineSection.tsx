@@ -7,7 +7,6 @@ import {
   Select,
   Table,
   Text,
-  Tooltip,
   toast,
 } from "@medusajs/ui";
 import { useEffect, useMemo, useState } from "react";
@@ -56,6 +55,14 @@ export const VendorPipelineSection = () => {
   const [status, setStatus] = useState("__all__");
   const [search, setSearch] = useState("");
   const [retrying, setRetrying] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const toggleExpand = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
 
   const fetchRows = async () => {
     setLoading(true);
@@ -189,53 +196,65 @@ export const VendorPipelineSection = () => {
               </Table.Header>
               <Table.Body>
                 {filtered.map((r) => (
-                  <Table.Row key={r.id}>
-                    <Table.Cell className="font-mono text-sm text-ui-fg-subtle">
-                      #{r.seq}
-                    </Table.Cell>
-                    <Table.Cell className="font-medium text-sm">
-                      {r.vendor_name}
-                    </Table.Cell>
-                    <Table.Cell>
-                      <Badge size="2xsmall">{r.op_type}</Badge>
-                    </Table.Cell>
-                    <Table.Cell>
-                      <StatusBadge status={r.status} />
-                    </Table.Cell>
-                    <Table.Cell className="font-mono text-xs">
-                      {r.qb_list_id ?? "—"}
-                    </Table.Cell>
-                    <Table.Cell>{r.retries}</Table.Cell>
-                    <Table.Cell className="text-ui-fg-subtle text-xs">
-                      {fmt(r.created_at)}
-                    </Table.Cell>
-                    <Table.Cell className="text-ui-fg-subtle text-xs">
-                      {fmt(r.resolved_at)}
-                    </Table.Cell>
-                    <Table.Cell className="max-w-xs">
-                      {r.last_error ? (
-                        <Tooltip content={r.last_error}>
-                          <span className="text-ui-fg-error text-xs truncate block">
+                  <>
+                    <Table.Row key={r.id}>
+                      <Table.Cell className="font-mono text-sm text-ui-fg-subtle">
+                        #{r.seq}
+                      </Table.Cell>
+                      <Table.Cell className="font-medium text-sm">
+                        {r.vendor_name}
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Badge size="2xsmall">{r.op_type}</Badge>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <StatusBadge status={r.status} />
+                      </Table.Cell>
+                      <Table.Cell className="font-mono text-xs">
+                        {r.qb_list_id ?? "—"}
+                      </Table.Cell>
+                      <Table.Cell>{r.retries}</Table.Cell>
+                      <Table.Cell className="text-ui-fg-subtle text-xs">
+                        {fmt(r.created_at)}
+                      </Table.Cell>
+                      <Table.Cell className="text-ui-fg-subtle text-xs">
+                        {fmt(r.resolved_at)}
+                      </Table.Cell>
+                      <Table.Cell>
+                        {r.last_error ? (
+                          <button
+                            onClick={() => toggleExpand(r.id)}
+                            className="text-xs text-ui-fg-error hover:underline whitespace-nowrap"
+                          >
+                            {expanded.has(r.id) ? "▲ hide" : "▼ error"}
+                          </button>
+                        ) : (
+                          "—"
+                        )}
+                      </Table.Cell>
+                      <Table.Cell>
+                        {r.status === "error" && (
+                          <Button
+                            size="small"
+                            variant="secondary"
+                            onClick={() => retry(r)}
+                            isLoading={retrying.has(r.id)}
+                          >
+                            <ArrowPath /> Retry
+                          </Button>
+                        )}
+                      </Table.Cell>
+                    </Table.Row>
+                    {expanded.has(r.id) && r.last_error && (
+                      <tr key={`${r.id}-err`} className="bg-red-50/10">
+                        <td colSpan={10} className="px-6 py-2">
+                          <p className="text-xs text-ui-fg-error font-mono break-words whitespace-pre-wrap">
                             {r.last_error}
-                          </span>
-                        </Tooltip>
-                      ) : (
-                        "—"
-                      )}
-                    </Table.Cell>
-                    <Table.Cell>
-                      {r.status === "error" && (
-                        <Button
-                          size="small"
-                          variant="secondary"
-                          onClick={() => retry(r)}
-                          isLoading={retrying.has(r.id)}
-                        >
-                          <ArrowPath /> Retry
-                        </Button>
-                      )}
-                    </Table.Cell>
-                  </Table.Row>
+                          </p>
+                        </td>
+                      </tr>
+                    )}
+                  </>
                 ))}
               </Table.Body>
             </Table>

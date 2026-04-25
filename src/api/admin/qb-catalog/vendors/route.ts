@@ -26,6 +26,8 @@ type CreateVendorBody = {
   notes?: string | null;
   tax_identity?: string | null;
   is_vendor_eligible_for_1099?: boolean | null;
+  terms_ref_name?: string | null;
+  vendor_type_ref_name?: string | null;
 };
 
 export const POST = async (
@@ -80,16 +82,23 @@ export const POST = async (
       notes: body.notes ?? null,
       tax_identity: body.tax_identity ?? null,
       is_vendor_eligible_for_1099: body.is_vendor_eligible_for_1099 ?? null,
+      terms_ref_name: body.terms_ref_name ?? null,
+      vendor_type_ref_name: body.vendor_type_ref_name ?? null,
       sync_status: "waiting",
       last_synced_at: new Date(),
     });
 
-    const pipelineRow = await catalog.createQbVendorPipelines({
-      vendor_id: local.id,
-      vendor_name: name,
-      op_type: "create",
-      status: "waiting",
-    });
+    let pipelineRow: { id: string } | null = null;
+    try {
+      pipelineRow = await catalog.createQbVendorPipelines({
+        vendor_id: local.id,
+        vendor_name: name,
+        op_type: "create",
+        status: "waiting",
+      });
+    } catch (pipelineErr: any) {
+      logger.error(`[qb-catalog vendor create] pipeline insert failed (non-fatal): ${pipelineErr.message}`);
+    }
 
     const bridgePayload = {
       action: "add",
@@ -107,6 +116,8 @@ export const POST = async (
       Notes: body.notes ?? undefined,
       VendorTaxIdent: body.tax_identity ?? undefined,
       IsVendorEligibleFor1099: body.is_vendor_eligible_for_1099 ?? undefined,
+      TermsRef: body.terms_ref_name ?? undefined,
+      VendorTypeRef: body.vendor_type_ref_name ?? undefined,
       VendorAddress:
         body.addr1 || body.city || body.state
           ? {
@@ -140,10 +151,12 @@ export const POST = async (
         id: local.id,
         qb_operation_id: data.operationId,
       });
-      await catalog.updateQbVendorPipelines({
-        id: pipelineRow.id,
-        qb_operation_id: data.operationId,
-      });
+      if (pipelineRow) {
+        await catalog.updateQbVendorPipelines({
+          id: pipelineRow.id,
+          qb_operation_id: data.operationId,
+        });
+      }
       logger.info(
         `[qb-catalog vendor create] "${name}" queued op=${data.operationId}`
       );
@@ -154,11 +167,13 @@ export const POST = async (
         sync_status: "error",
         last_error: err.message,
       });
-      await catalog.updateQbVendorPipelines({
-        id: pipelineRow.id,
-        status: "error",
-        last_error: err.message,
-      });
+      if (pipelineRow) {
+        await catalog.updateQbVendorPipelines({
+          id: pipelineRow.id,
+          status: "error",
+          last_error: err.message,
+        });
+      }
       logger.error(
         `[qb-catalog vendor create] bridge failed for "${name}": ${err.message}`
       );
@@ -184,6 +199,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
   const search = req.query.search ? String(req.query.search).toLowerCase() : undefined;
   const activeOnly = req.query.active !== "false";
+  const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 100;
 
   const filters: any = {};
   if (activeOnly) filters.is_active = true;
@@ -214,27 +230,34 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     pagination: { skip: 0, take: 2000 },
   });
 
+  const vendorScore = (v: any): number => {
+    if (!search) return 0
+    const name = (v.full_name ?? '').toLowerCase()
+    const company = (v.company_name ?? '').toLowerCase()
+    const contact = [v.contact, v.first_name, v.last_name].filter(Boolean).join(' ').toLowerCase()
+    const secondary = [v.phone, v.email].filter(Boolean).join(' ').toLowerCase()
+    if (name.includes(search)) return 4
+    if (company.includes(search)) return 3
+    if (contact.includes(search)) return 2
+    if (secondary.includes(search)) return 1
+    return 0
+  }
+
   const filtered = search
-    ? data.filter((v: any) => {
-        const haystack = [
-          v.full_name,
-          v.company_name,
-          v.email,
-          v.phone,
-          v.contact,
-          v.first_name,
-          v.last_name,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return haystack.includes(search);
-      })
+    ? data.filter((v: any) => vendorScore(v) > 0)
     : data;
 
+  const sorted = filtered.sort((a: any, b: any) => {
+    const scoreDiff = vendorScore(b) - vendorScore(a)
+    if (scoreDiff !== 0) return scoreDiff
+    return a.full_name.localeCompare(b.full_name)
+  });
+  const sliced = sorted.slice(0, limit);
+
   return res.json({
-    vendors: filtered.sort((a: any, b: any) => a.full_name.localeCompare(b.full_name)),
-    count: filtered.length,
+    vendors: sliced,
+    count: sliced.length,
+    total: filtered.length,
     module: QUICKBOOKS_CATALOG_MODULE,
   });
 };

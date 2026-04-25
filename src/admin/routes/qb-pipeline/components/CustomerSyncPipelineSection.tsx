@@ -32,6 +32,7 @@ type CustomerRow = PipelineRow & {
   customer_email: string;
   acquisition_channel: string;
   qb_list_id: string | null;
+  customer_created_at: string | null;
   /** Independent Customer Sync index (1, 2, 3…) computed locally — NOT the
    * shared qb_order_pipeline.seq. Oldest row = #1. */
   display_seq: number;
@@ -110,11 +111,11 @@ export const CustomerSyncPipelineSection = () => {
       ];
       let customerMap = new Map<
         string,
-        { name: string; email: string; acq: string; list_id: string | null }
+        { name: string; email: string; acq: string; list_id: string | null; created_at: string | null }
       >();
       if (uniqueIds.length > 0) {
         const cRes = await fetch(
-          `/admin/customers?id[]=${uniqueIds.join("&id[]=")}&limit=${uniqueIds.length}&fields=id,first_name,last_name,email,metadata`,
+          `/admin/customers?id[]=${uniqueIds.join("&id[]=")}&limit=${uniqueIds.length}&fields=id,first_name,last_name,email,metadata,created_at`,
           { credentials: "include" }
         );
         if (cRes.ok) {
@@ -130,6 +131,7 @@ export const CustomerSyncPipelineSection = () => {
                   : "",
               list_id:
                 typeof meta.qb_list_id === "string" ? meta.qb_list_id : null,
+              created_at: typeof c.created_at === "string" ? c.created_at : null,
             });
           }
         }
@@ -153,6 +155,7 @@ export const CustomerSyncPipelineSection = () => {
           customer_email: info?.email ?? "",
           acquisition_channel: info?.acq ?? "",
           qb_list_id: info?.list_id ?? null,
+          customer_created_at: info?.created_at ?? null,
           display_seq: seqToDisplay.get(r.seq) ?? 0,
         };
       });
@@ -289,7 +292,14 @@ export const CustomerSyncPipelineSection = () => {
             filtered.map((r) => {
               const resolved =
                 r.confirmed_at ?? r.failed_at ?? null;
-              const isDataExt = r.step === "customer_data_ext";
+              const isNewCustomer = (() => {
+                if (!r.customer_created_at) return false;
+                const diff = Math.abs(
+                  new Date(r.created_at).getTime() -
+                  new Date(r.customer_created_at).getTime()
+                );
+                return diff < 5 * 60 * 1000;
+              })();
               const isExpanded = expanded.has(r.id);
               const toggleExpand = () =>
                 setExpanded((s) => {
@@ -312,16 +322,14 @@ export const CustomerSyncPipelineSection = () => {
                       </div>
                     </Table.Cell>
                     <Table.Cell>
-                      {isDataExt ? (
-                        <Badge
-                          size="2xsmall"
-                          color="purple"
-                          className="whitespace-nowrap capitalize"
-                        >
-                          Channel: {r.acquisition_channel || "—"}
+                      {isNewCustomer ? (
+                        <Badge size="2xsmall" color="green" className="whitespace-nowrap">
+                          New Customer
                         </Badge>
                       ) : (
-                        <Badge size="2xsmall" color="grey">Customer</Badge>
+                        <Badge size="2xsmall" color="blue" className="whitespace-nowrap">
+                          Edit Customer
+                        </Badge>
                       )}
                     </Table.Cell>
                     <Table.Cell>

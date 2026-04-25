@@ -14,7 +14,7 @@ import { model } from "@medusajs/utils";
  */
 export const QbVendorPipeline = model.define("qb_vendor_pipeline", {
   id: model.id({ prefix: "qbvndp" }).primaryKey(),
-  seq: model.number(), // Short sequential reference id (1, 2, 3, ...) — DB BIGSERIAL
+  seq: model.number().nullable(), // DB BIGSERIAL auto-generated — do not pass on insert
   vendor_id: model.text(), // qb_vendor.id this row tracks
   vendor_name: model.text(), // snapshot of full_name at dispatch time
   op_type: model.text().default("create"), // create | update

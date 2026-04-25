@@ -38,6 +38,8 @@ type VendorRow = {
   notes: string | null;
   tax_identity: string | null;
   is_vendor_eligible_for_1099: boolean | null;
+  terms_ref_name: string | null;
+  vendor_type_ref_name: string | null;
 };
 
 const buildPayload = (v: VendorRow, opType: string) => ({
@@ -56,6 +58,8 @@ const buildPayload = (v: VendorRow, opType: string) => ({
   Notes: v.notes ?? undefined,
   VendorTaxIdent: v.tax_identity ?? undefined,
   IsVendorEligibleFor1099: v.is_vendor_eligible_for_1099 ?? undefined,
+  TermsRef: v.terms_ref_name ?? undefined,
+  VendorTypeRef: v.vendor_type_ref_name ?? undefined,
   VendorAddress:
     v.addr1 || v.city || v.state
       ? {
@@ -113,6 +117,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       "notes",
       "tax_identity",
       "is_vendor_eligible_for_1099",
+      "terms_ref_name",
+      "vendor_type_ref_name",
     ],
     filters: { id: row.vendor_id },
     pagination: { skip: 0, take: 1 },

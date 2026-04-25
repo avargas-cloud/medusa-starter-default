@@ -489,7 +489,7 @@ export async function POST(
                   customerModule,
                   req.scope,
                   logger,
-                  false
+                  true
                 );
               }
             } else {
@@ -502,7 +502,7 @@ export async function POST(
                 customerModule,
                 req.scope,
                 logger,
-                false
+                true
               );
             }
             break;

@@ -53,6 +53,7 @@ export async function GET(
 
     res.status(200).json({
       payment_terms: getOptions("Payment Terms"),
+      shipping_methods: getOptions("Shipping Method"),
       lead_times: getOptions("Lead Time"),
       order_types: getOptions("Order Type"),
       sales_reps: getSalesReps(),
@@ -61,6 +62,7 @@ export async function GET(
     // Fallback to empty arrays if table is missing or DB error
     res.status(200).json({
       payment_terms: [],
+      shipping_methods: [],
       lead_times: [],
       order_types: [],
       sales_reps: [],

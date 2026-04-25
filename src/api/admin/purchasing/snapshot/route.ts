@@ -23,6 +23,8 @@ import * as dotenv from "dotenv";
 
 dotenv.config();
 
+const USA_LOC = process.env.ECOPOWERTECH_MIAMI_LOCATION_ID ?? "sloc_01KFS2AV3TAKR141KC2D6JCGTR";
+
 // Excel-derived peak daily sales per SKU — loaded once, used as lower bound
 let excelPeak: Record<string, number> | null = null;
 function getExcelPeak(): Record<string, number> {
@@ -55,6 +57,14 @@ export async function GET(
   const limit  = Math.min(5000, parseInt((req.query as Record<string, string>).limit ?? "200", 10) || 200);
   const offset = parseInt((req.query as Record<string, string>).offset ?? "0", 10) || 0;
 
+  // sku / sku[] — exact SKU filter (qs parses ?sku[]=X as req.query.sku)
+  const skuParam = req.query["sku"] as string | string[] | undefined;
+  const skuFilter: string[] = Array.isArray(skuParam)
+    ? skuParam.filter(Boolean)
+    : skuParam?.trim()
+    ? [skuParam.trim()]
+    : [];
+
   const db = await getDb();
   try {
     const conditions: string[] = ["snap.variant_id IS NOT NULL"];
@@ -71,6 +81,10 @@ export async function GET(
     if (xyzFilter.length > 0) {
       params.push(xyzFilter);
       conditions.push(`snap.xyz_class = ANY($${params.length}::text[])`);
+    }
+    if (skuFilter.length > 0) {
+      params.push(skuFilter);
+      conditions.push(`pv.sku = ANY($${params.length}::text[])`);
     }
 
     const where = conditions.join(" AND ");
@@ -90,6 +104,7 @@ export async function GET(
          snap.variant_id,
          pv.sku,
          p.title AS product_title,
+         COALESCE(pv.metadata->>'sales_description', '') AS sales_description,
          snap.tier0_30d,
          snap.sales_q1, snap.sales_q2, snap.sales_q3, snap.sales_q4,
          snap.daily_sales_est, snap.monthly_sales_est,
@@ -98,8 +113,10 @@ export async function GET(
          snap.inv_usa, snap.inv_china,
          snap.qty_to_transfer, snap.qty_to_factory,
          snap.last_calculated_at,
+         COALESCE((p.metadata->>'is_sourced_via_agent')::boolean, false) AS is_sourced_via_agent,
          COALESCE(open_po.on_order, 0)::int AS qty_on_po,
-         COALESCE(max_day.max_daily_sales, 0)::int AS max_daily_sales
+         COALESCE(max_day.max_daily_sales, 0)::int AS max_daily_sales,
+         COALESCE(res_usa.inv_usa_reserved, 0)::int AS inv_usa_reserved
        FROM purchasing_snapshot snap
        JOIN product_variant pv ON pv.id = snap.variant_id AND pv.deleted_at IS NULL
        JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
@@ -114,22 +131,31 @@ export async function GET(
          GROUP BY pol.sku_snapshot
        ) open_po ON open_po.sku_snapshot = pv.sku
        LEFT JOIN (
-         SELECT oli.variant_sku,
+         SELECT pii.variant_id,
                 MAX(day_qty)::int AS max_daily_sales
          FROM (
-           SELECT oli2.variant_sku,
-                  DATE(o.created_at AT TIME ZONE 'America/New_York') AS sale_day,
-                  SUM(oi.quantity)::int AS day_qty
-           FROM order_item oi
-           JOIN order_line_item oli2 ON oli2.id = oi.item_id AND oli2.deleted_at IS NULL
-           JOIN "order" o ON o.id = oi.order_id
-             AND o.status NOT IN ('canceled', 'archived')
-             AND o.deleted_at IS NULL
-           WHERE o.created_at >= NOW() - INTERVAL '12 months'
-           GROUP BY oli2.variant_sku, DATE(o.created_at AT TIME ZONE 'America/New_York')
-         ) oli
-         GROUP BY oli.variant_sku
-       ) max_day ON max_day.variant_sku = pv.sku
+           SELECT pii2.variant_id,
+                  DATE(pi.issued_at AT TIME ZONE 'America/New_York') AS sale_day,
+                  SUM(pii2.quantity - pii2.refunded_quantity)::int AS day_qty
+           FROM pos_invoice_item pii2
+           JOIN pos_invoice pi ON pi.id = pii2.invoice_id
+           WHERE pi.issued_at >= NOW() - INTERVAL '12 months'
+             AND pi.status NOT IN ('voided')
+             AND pii2.deleted_at IS NULL
+             AND pii2.variant_id IS NOT NULL
+           GROUP BY pii2.variant_id, DATE(pi.issued_at AT TIME ZONE 'America/New_York')
+         ) pii
+         GROUP BY pii.variant_id
+       ) max_day ON max_day.variant_id = snap.variant_id
+       LEFT JOIN (
+         SELECT pvii.variant_id,
+                COALESCE(SUM(il.reserved_quantity), 0)::int AS inv_usa_reserved
+         FROM product_variant_inventory_item pvii
+         JOIN inventory_item ii ON ii.id = pvii.inventory_item_id AND ii.deleted_at IS NULL
+         JOIN inventory_level il ON il.inventory_item_id = ii.id
+           AND il.location_id = '${USA_LOC}' AND il.deleted_at IS NULL
+         GROUP BY pvii.variant_id
+       ) res_usa ON res_usa.variant_id = snap.variant_id
        WHERE ${where}
        ORDER BY snap.abc_class NULLS LAST, snap.daily_sales_est DESC
        LIMIT $${params.length - 1} OFFSET $${params.length}`,

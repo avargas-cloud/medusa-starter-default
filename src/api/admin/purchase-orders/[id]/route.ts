@@ -44,6 +44,7 @@ interface QbCatalogServiceLike {
 
 interface ProductVariantLike {
   id: string;
+  metadata?: Record<string, unknown> | null;
   product?: { thumbnail?: string | null } | null;
 }
 
@@ -171,6 +172,7 @@ export async function GET(
     )
   );
   const thumbnailByVariantId = new Map<string, string | null>();
+  const mpnByVariantId = new Map<string, string | null>();
   if (variantIds.length > 0) {
     try {
       const productModule = req.scope.resolve(
@@ -182,6 +184,8 @@ export async function GET(
       );
       for (const v of variants) {
         thumbnailByVariantId.set(v.id, v.product?.thumbnail ?? null);
+        const mpn = v.metadata?.mpn;
+        mpnByVariantId.set(v.id, typeof mpn === "string" ? mpn : null);
       }
     } catch {
       // Silent — thumbnails are decorative; missing thumbnails fall back to a placeholder.
@@ -193,6 +197,7 @@ export async function GET(
     return {
       ...l,
       thumbnail: vid ? thumbnailByVariantId.get(vid) ?? null : null,
+      mpn: vid ? mpnByVariantId.get(vid) ?? null : null,
     };
   });
 
@@ -242,13 +247,13 @@ export async function PATCH(
     return res.status(404).json({ error: "Purchase order not found", code: "not_found" });
   }
 
-  // `po_status` is a user-coordination tag independent from lifecycle — editable
-  // at any stage. All other fields require status='draft'.
-  const { po_status: bodyPoStatus, ...bodyRest } = body;
+  // `po_status`, `shipping_method`, and `payment_terms` are coordination/info
+  // fields editable at any lifecycle stage. All other fields require status='draft'.
+  const { po_status: bodyPoStatus, shipping_method: bodyShippingMethod, payment_terms: bodyPaymentTerms, ...bodyRest } = body;
   const hasNonStatusChanges = Object.values(bodyRest).some((v) => v !== undefined);
   if (hasNonStatusChanges && existing.status !== "draft") {
     return res.status(409).json({
-      error: `Cannot edit a PO in status '${existing.status}'. Only drafts are mutable (po_status is always editable).`,
+      error: `Cannot edit a PO in status '${existing.status}'. Only drafts are mutable (po_status, shipping_method, and payment_terms are always editable).`,
       code: "not_editable",
     });
   }
@@ -266,6 +271,10 @@ export async function PATCH(
   if (body.memo !== undefined) headerUpdate.memo = body.memo ?? null;
   if (body.reference_number !== undefined)
     headerUpdate.reference_number = body.reference_number ?? null;
+  if (bodyShippingMethod !== undefined)
+    headerUpdate.shipping_method = bodyShippingMethod ?? null;
+  if (bodyPaymentTerms !== undefined)
+    headerUpdate.payment_terms = bodyPaymentTerms ?? null;
   if (body.linked_order_ids !== undefined) {
     headerUpdate.linked_order_ids = body.linked_order_ids?.length
       ? JSON.stringify(body.linked_order_ids)

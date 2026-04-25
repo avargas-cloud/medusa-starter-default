@@ -23,7 +23,7 @@ export interface FreezePoSnapshotStepInput {
   number: string;
   submitted_by_user_id: string;
   vendor_name: string;
-  vendor_qb_list_id: string;
+  vendor_qb_list_id: string | null;
 }
 
 export interface FreezePoSnapshotStepOutput {

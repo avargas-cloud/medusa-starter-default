@@ -77,6 +77,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     Notes: vendor.notes ?? undefined,
     VendorTaxIdent: vendor.tax_identity ?? undefined,
     IsVendorEligibleFor1099: vendor.is_vendor_eligible_for_1099 ?? undefined,
+    TermsRef: vendor.terms_ref_name ?? undefined,
+    VendorTypeRef: vendor.vendor_type_ref_name ?? undefined,
     VendorAddress:
       vendor.addr1 || vendor.city || vendor.state
         ? {
@@ -115,6 +117,18 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       retry_count: 0,
       next_retry_at: null,
     });
+
+    try {
+      await catalog.createQbVendorPipelines({
+        vendor_id: vendor.id,
+        vendor_name: vendor.full_name ?? vendor.name,
+        op_type: "create",
+        qb_operation_id: bridgeData.operationId,
+        status: "waiting",
+      });
+    } catch (pipelineErr: any) {
+      logger.error(`[qb-vendor force-resync] pipeline insert failed (non-fatal): ${pipelineErr.message}`);
+    }
 
     logger.info(
       `[qb-vendor force-resync] "${vendor.full_name}" re-queued op=${bridgeData.operationId}`

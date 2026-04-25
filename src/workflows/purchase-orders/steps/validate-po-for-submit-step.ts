@@ -8,8 +8,8 @@
  *   - PO has zero lines
  *   - Any line has qty_ordered <= 0
  *   - Any line is missing inventory_item_id or product_variant_id
- *   - Any line is missing qb_item_list_id_snapshot (QB PurchaseOrderAdd cannot reference an unsynced item)
- *   - Vendor cannot be resolved OR vendor has no qb_list_id (QB PurchaseOrderAdd requires VendorRef)
+ *   - Any line is missing qb_item_list_id_snapshot (attempted from metadata fallback; null is OK — QB sync skipped)
+ *   - Vendor QB ListID is attempted but not required — missing refs only skip QB enqueue, never block submit
  *
  * Returns the resolved vendor snapshot so later steps can reuse it without
  * re-querying.
@@ -27,7 +27,7 @@ export interface ValidatePoForSubmitStepInput {
 export interface ValidatedVendor {
   vendor_id: string;
   vendor_name: string;
-  vendor_qb_list_id: string;
+  vendor_qb_list_id: string | null;
 }
 
 export interface ValidatedPoLine {
@@ -36,7 +36,7 @@ export interface ValidatedPoLine {
   inventory_item_id: string;
   sku: string;
   description: string;
-  qb_item_list_id: string;
+  qb_item_list_id: string | null;
   qty_ordered: number;
   unit_cost_cents: number;
   total_cents: number;
@@ -150,11 +150,6 @@ export const validatePoForSubmitStep = createStep(
         );
       }
       const qbItemListId = (l.qb_item_list_id_snapshot as string | null) ?? metadataMap[variantId] ?? null;
-      if (!qbItemListId) {
-        throw new Error(
-          `Line ${lineId} (${sku}) has no QB item ListID; sync the item to QuickBooks before submitting`
-        );
-      }
       validated.push({
         line_id: lineId,
         product_variant_id: variantId,
@@ -174,17 +169,9 @@ export const validatePoForSubmitStep = createStep(
     ) as unknown as QbCatalogServiceLike;
 
     const vendorId = poRow.vendor_id as string;
-    const vendor = await qbCatalog.retrieveQbVendor(vendorId);
-    if (!vendor) {
-      throw new Error(`Vendor ${vendorId} not found in QB catalog`);
-    }
-    if (!vendor.qb_list_id) {
-      throw new Error(
-        `Vendor ${vendor.full_name ?? vendor.name} has no QB ListID; sync vendor to QuickBooks before submitting`
-      );
-    }
-    const vendorName = vendor.full_name ?? vendor.name;
-    const vendorQbListId = vendor.qb_list_id;
+    const vendor = await qbCatalog.retrieveQbVendor(vendorId).catch(() => null);
+    const vendorName = vendor?.full_name ?? vendor?.name ?? vendorId;
+    const vendorQbListId = vendor?.qb_list_id ?? null;
 
     return new StepResponse(
       {
