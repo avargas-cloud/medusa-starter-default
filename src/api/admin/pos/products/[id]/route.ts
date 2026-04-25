@@ -5,6 +5,7 @@ import {
   updatePosProductWorkflow,
   type UpdatePosProductInput,
 } from "../../../../../workflows/pos/update-pos-product";
+import { updateSingleProductWorkflow } from "../../../../../workflows/update-single-product";
 
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   const logger = req.scope.resolve("logger");
@@ -81,6 +82,11 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     // Pipeline visibility flags so the modal can render an honest toast:
     //   qb_op_queued: true       → "Item updated — QB sync queued"
     //   skipped_qb:   true       → "Saved locally — no QB metadata changes"
+    const productId = req.params.id as string;
+    void updateSingleProductWorkflow(req.scope)
+      .run({ input: { productId } })
+      .catch((e) => logger.error(`[pos-product] Meili sync failed for ${productId}:`, e?.message));
+
     return res.status(200).json({
       success: true,
       qbOperationId: result?.qbOperationId ?? null,

@@ -72,6 +72,7 @@ export function transformVendor(vendor: any) {
         country: vendor.country ?? null,
 
         terms_ref_name: vendor.terms_ref_name ?? null,
+        payment_terms: (vendor.metadata as Record<string, unknown> | null)?.payment_terms as string ?? null,
         vendor_type_ref_name: vendor.vendor_type_ref_name ?? null,
         currency_ref_name: vendor.currency_ref_name ?? null,
 

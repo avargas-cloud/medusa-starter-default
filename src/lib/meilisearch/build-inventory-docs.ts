@@ -29,6 +29,8 @@ export interface MeiliInventoryDoc {
   quickbooks_id: string | null;
   cost: number | null;
   vendorName: string | null;
+  mpn: string | null;
+  chinaStock: number;
   options: { title: string; value: string }[];
   category_handles: string[];
   status: string;
@@ -40,7 +42,8 @@ type AnyRec = Record<string, unknown>;
 
 export function buildInventoryDocsForVariants(
   variants: any[],
-  pricesByPriceSet: Map<string, Record<string, number>> = new Map()
+  pricesByPriceSet: Map<string, Record<string, number>> = new Map(),
+  chinaStockMap: Map<string, number> = new Map()
 ): MeiliInventoryDoc[] {
   const docs: MeiliInventoryDoc[] = [];
 
@@ -77,13 +80,11 @@ export function buildInventoryDocsForVariants(
 
     const vmeta = (variant?.metadata || {}) as AnyRec;
 
-    // Prefer variant-specific image over parent product thumbnail.
-    const variantThumbnail =
-      variant.thumbnail ??
-      (Array.isArray(variant.images) && variant.images.length > 0
-        ? (variant.images[0] as { url?: string }).url ?? null
-        : null);
-    const resolvedThumbnail = variantThumbnail ?? product?.thumbnail ?? null;
+    // variant.thumbnail is set explicitly per-variant when a specific finish
+    // image is needed. Falls back to the product-level thumbnail.
+    // Intentionally skips variant.images[0] — that array can contain secondary
+    // images that are NOT the representative thumbnail for the variant.
+    const resolvedThumbnail = variant.thumbnail ?? product?.thumbnail ?? null;
 
     // No inventory items → synthetic doc keyed by variant.id (services etc.)
     if (!variant.inventory_items || variant.inventory_items.length === 0) {
@@ -108,6 +109,8 @@ export function buildInventoryDocsForVariants(
         quickbooks_id: (vmeta.quickbooks_id as string) || null,
         cost: (vmeta.qb_purchase_cost as number) || null,
         vendorName: (vmeta.qb_vendor_name as string) || null,
+        mpn: (vmeta.mpn as string) || null,
+        chinaStock: 0,
         options: mappedOptions,
         category_handles: Array.from(allCategoryHandles),
         status: product?.status || "draft",
@@ -140,6 +143,8 @@ export function buildInventoryDocsForVariants(
         quickbooks_id: (vmeta.quickbooks_id as string) || null,
         cost: (vmeta.qb_purchase_cost as number) || null,
         vendorName: (vmeta.qb_vendor_name as string) || null,
+        mpn: (vmeta.mpn as string) || null,
+        chinaStock: chinaStockMap.get(inventory.id) ?? 0,
         options: mappedOptions,
         category_handles: Array.from(allCategoryHandles),
         status: product?.status || "draft",
@@ -160,8 +165,6 @@ export const INVENTORY_DOC_FIELDS = [
   "id",
   "sku",
   "thumbnail",
-  "images.id",
-  "images.url",
   "metadata",
   "created_at",
   "updated_at",

@@ -85,6 +85,7 @@ export async function GET(
       inv_usa: number; inv_usa_reserved: number; inv_china: number;
       abc_class: string | null; xyz_class: string | null;
       daily_sales_est: string | null; monthly_sales_est: string | null;
+      sales_last_24d: string | null;
       qty_on_po: number; max_daily_sales: number; qty_to_factory: number;
       is_sourced_via_agent: boolean;
     }>(`
@@ -102,6 +103,7 @@ export async function GET(
         snap.xyz_class,
         snap.daily_sales_est,
         snap.monthly_sales_est,
+        COALESCE(snap.sales_last_24d, 0) AS sales_last_24d,
         COALESCE(snap.qty_to_factory, 0)::int AS qty_to_factory,
         COALESCE((p.metadata->>'is_sourced_via_agent')::boolean, false) AS is_sourced_via_agent,
         COALESCE(open_po.on_order, 0)::int AS qty_on_po,
@@ -141,7 +143,7 @@ export async function GET(
         AND pv.deleted_at IS NULL
       GROUP BY pa.id, pa.priority, pv.id, pv.sku, p.title, pv.metadata,
                snap.abc_class, snap.xyz_class, snap.daily_sales_est, snap.monthly_sales_est,
-               snap.qty_to_factory, p.metadata, open_po.on_order
+               snap.sales_last_24d, snap.qty_to_factory, p.metadata, open_po.on_order
       ORDER BY pa.priority ASC, pv.sku
     `, [variantId, USA_LOC, CHINA_LOC]);
 

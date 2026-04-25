@@ -122,6 +122,7 @@ export async function POST(
     {
       status: "draft",
       number,
+      draft_number: number,
       seq: null,
       vendor_id: body.vendor_id,
       vendor_name_snapshot: vendorNameSnapshot,

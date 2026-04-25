@@ -9,6 +9,10 @@ import { Modules } from "@medusajs/utils";
 const CHINA_LOCATION_ID = "sloc_01KQ14C1CFX30EDD722BF87HDM";
 
 import { safeSyncIndex } from "../lib/meilisearch/safe-sync";
+import {
+  buildInventoryDocsForVariants,
+  INVENTORY_DOC_FIELDS,
+} from "../lib/meilisearch/build-inventory-docs";
 
 export const syncInventoryToMeiliStep = createStep(
   "sync-to-meili-step",
@@ -71,39 +75,7 @@ export const syncInventoryToMeiliStep = createStep(
     console.log("📥 [sync-inventory] Loading all variants into RAM...");
     const { data: allVariants } = await query.graph({
       entity: "product_variant",
-      fields: [
-        "id",
-        "sku",
-        "thumbnail",
-        "images.id",
-        "images.url",
-        "metadata",
-        "created_at",
-        "updated_at",
-        "price_set.id",
-        "product.id",
-        "product.title",
-        "product.handle",
-        "product.thumbnail",
-        "product.status",
-        "product.metadata",
-        "product.categories.id",
-        "product.categories.handle",
-        "product.categories.parent_category.handle",
-        "product.categories.parent_category.parent_category.handle",
-        "prices.amount",
-        "prices.currency_code",
-        "prices.price_list_id",
-        "inventory_items.inventory.id",
-        "inventory_items.inventory.sku",
-        "inventory_items.inventory.title",
-        "inventory_items.inventory.created_at",
-        "inventory_items.inventory.updated_at",
-        "inventory_items.inventory.stocked_quantity",
-        "inventory_items.inventory.reserved_quantity",
-        "options.value",
-        "options.option.title",
-      ],
+      fields: [...INVENTORY_DOC_FIELDS],
       pagination: { skip: 0, take: 50000 },
     });
     console.log(
@@ -111,109 +83,14 @@ export const syncInventoryToMeiliStep = createStep(
     );
 
     // ─── Transform ALL in RAM ─────────────────────────────────────────────────
-    const meiliInventoryItems = allVariants.flatMap((variant: any) => {
-      const product = variant.product;
-      const usdPrices = (variant.prices || []).filter(
-        (p: any) => p.currency_code === "usd"
-      );
-      const retailPrice =
-        usdPrices.length > 0
-          ? usdPrices.reduce((max: any, p: any) =>
-              p.amount > max.amount ? p : max
-            )
-          : null;
-
-      const priceSetId = variant.price_set?.id;
-      const pricesByList = priceSetId
-        ? (pricesByPriceSet.get(priceSetId) ?? {})
-        : {};
-
-      const allCategoryHandles = new Set<string>();
-      product?.categories?.forEach((c: any) => {
-        if (c.handle) allCategoryHandles.add(c.handle);
-        if (c.parent_category?.handle)
-          allCategoryHandles.add(c.parent_category.handle);
-        if (c.parent_category?.parent_category?.handle)
-          allCategoryHandles.add(c.parent_category.parent_category.handle);
-      });
-
-      const mappedOptions = (variant.options || []).map((opt: any) => ({
-        title: opt.option?.title || "Option",
-        value: opt.value || "",
-      }));
-
-      // variant.thumbnail is set explicitly via backfill or the new variant
-      // thumbnail mechanism. Falls back to the product's designated thumbnail.
-      const resolvedThumbnail = variant.thumbnail ?? product?.thumbnail ?? null;
-
-      // No inventory items → synthetic document (unmanaged/services)
-      if (!variant.inventory_items || variant.inventory_items.length === 0) {
-        if (!variant.sku) return [];
-        return [
-          {
-            id: variant.id,
-            sku: variant.sku,
-            title: product?.title || "Untitled",
-            thumbnail: resolvedThumbnail,
-            totalStock: null,
-            totalReserved: 0,
-            price: retailPrice?.amount || 0,
-            currencyCode: retailPrice?.currency_code?.toUpperCase() || "USD",
-            pricesByList,
-            variantId: variant.id,
-            productId: product?.id || null,
-            handle: product?.handle || null,
-            salesDescription:
-              (variant?.metadata as any)?.sales_description || null,
-            cost: (variant?.metadata as any)?.qb_purchase_cost || null,
-            vendorName: (variant?.metadata as any)?.qb_vendor_name || null,
-            mpn: (variant?.metadata as any)?.mpn || null,
-            chinaStock: 0,
-            options: mappedOptions,
-            category_handles: Array.from(allCategoryHandles),
-            status: product?.status || "draft",
-            created_at: new Date(variant.created_at).getTime(),
-            updated_at: new Date(variant.updated_at).getTime(),
-          },
-        ];
-      }
-
-      return (variant.inventory_items || []).map((invItem: any) => {
-        const inventory = invItem.inventory;
-        return {
-          id: inventory.id,
-          sku: inventory.sku || variant.sku || "",
-          title: inventory.title || product?.title || "Untitled",
-          thumbnail: resolvedThumbnail,
-          totalStock: inventory.stocked_quantity || 0,
-          totalReserved: inventory.reserved_quantity || 0,
-          price: retailPrice?.amount || 0,
-          currencyCode: retailPrice?.currency_code?.toUpperCase() || "USD",
-          pricesByList,
-          variantId: variant.id,
-          productId: product?.id || null,
-          handle: product?.handle || null,
-          salesDescription:
-            (variant?.metadata as any)?.sales_description || null,
-          cost: (variant?.metadata as any)?.qb_purchase_cost || null,
-          vendorName: (variant?.metadata as any)?.qb_vendor_name || null,
-          mpn: (variant?.metadata as any)?.mpn || null,
-          chinaStock: chinaStockMap.get(inventory.id) ?? 0,
-          options: mappedOptions,
-          category_handles: Array.from(allCategoryHandles),
-          status: product?.status || "draft",
-          created_at: new Date(
-            inventory.created_at || variant.created_at
-          ).getTime(),
-          updated_at: new Date(
-            inventory.updated_at || variant.updated_at
-          ).getTime(),
-        };
-      });
-    });
+    const meiliInventoryItems = buildInventoryDocsForVariants(
+      allVariants,
+      pricesByPriceSet,
+      chinaStockMap
+    );
 
     const validItems = meiliInventoryItems.filter(
-      (item: any) => item.variantId && item.productId
+      (item) => item.variantId && item.productId
     );
     console.log(
       `🔄 [sync-inventory] Transformed ${validItems.length} valid items in RAM`
@@ -224,19 +101,35 @@ export const syncInventoryToMeiliStep = createStep(
       client,
       indexName: "inventory",
       primaryKey: "id",
-      docs: validItems,
+      docs: validItems as unknown as Record<string, unknown>[],
       settings: {
-        filterableAttributes: ["category_handles", "status", "id", "sku"],
+        filterableAttributes: [
+          "category_handles",
+          "status",
+          "id",
+          "sku",
+          "vendorName",
+          "productId",
+          "variantId",
+        ],
         sortableAttributes: [
           "title",
           "sku",
           "totalStock",
-          "price",
           "totalReserved",
+          "chinaStock",
+          "price",
           "updated_at",
           "created_at",
         ],
-        searchableAttributes: ["title", "sku", "salesDescription"],
+        searchableAttributes: [
+          "sku",
+          "title",
+          "salesDescription",
+          "purchaseDescription",
+          "mpn",
+          "vendorName",
+        ],
       },
       logger: {
         info: (m) => console.log(m),
@@ -246,7 +139,7 @@ export const syncInventoryToMeiliStep = createStep(
     });
 
     const withCategory = validItems.filter(
-      (i: any) => i.category_handles.length > 0
+      (i) => i.category_handles.length > 0
     );
 
     return new StepResponse({

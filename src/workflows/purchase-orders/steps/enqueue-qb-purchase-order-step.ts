@@ -43,13 +43,13 @@ export interface EnqueueQbPurchaseOrderStepInput {
 }
 
 export interface EnqueueQbPurchaseOrderStepOutput {
-  pipeline_id: string | null;
+  pipeline_id: string;
 }
 
 interface QbPoPayload {
   po_id: string;
   po_number: string;
-  vendor_qb_list_id: string;
+  vendor_qb_list_id: string | null;
   vendor_name: string;
   ordered_at: string | null;
   expected_at: string | null;
@@ -57,7 +57,7 @@ interface QbPoPayload {
   reference_number: string | null;
   lines: Array<{
     line_id: string;
-    qb_item_list_id: string;
+    qb_item_list_id: string | null;
     sku: string;
     description: string;
     qty_ordered: number;
@@ -71,13 +71,6 @@ export const enqueueQbPurchaseOrderStep = createStep(
     input: EnqueueQbPurchaseOrderStepInput,
     { container }
   ): Promise<StepResponse<EnqueueQbPurchaseOrderStepOutput, null>> => {
-    const hasAllQbRefs =
-      input.vendor_qb_list_id !== null &&
-      input.lines.every((l) => l.qb_item_list_id !== null);
-    if (!hasAllQbRefs) {
-      return new StepResponse({ pipeline_id: null }, null);
-    }
-
     const service = container.resolve(
       PURCHASE_ORDERS_MODULE
     ) as unknown as PurchaseOrdersModuleService;
@@ -85,7 +78,7 @@ export const enqueueQbPurchaseOrderStep = createStep(
     const payload: QbPoPayload = {
       po_id: input.po_id,
       po_number: input.po_number,
-      vendor_qb_list_id: input.vendor_qb_list_id!,
+      vendor_qb_list_id: input.vendor_qb_list_id,
       vendor_name: input.vendor_name,
       // Defensive: after MikroORM serialization these may arrive as strings
       // rather than Date objects. Normalize both paths.
@@ -99,7 +92,7 @@ export const enqueueQbPurchaseOrderStep = createStep(
       reference_number: input.reference_number,
       lines: input.lines.map((l) => ({
         line_id: l.line_id,
-        qb_item_list_id: l.qb_item_list_id!,
+        qb_item_list_id: l.qb_item_list_id,
         sku: l.sku,
         description: l.description,
         qty_ordered: l.qty_ordered,

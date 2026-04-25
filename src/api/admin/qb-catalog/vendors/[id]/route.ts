@@ -1,5 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../../../modules/quickbooks-catalog";
+import { updateSingleVendorMeiliWorkflow } from "../../../../../workflows/update-single-vendor-meili";
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const query = req.scope.resolve("query");
@@ -91,6 +92,10 @@ export const PATCH = async (
   const merged = { ...(vendor.metadata ?? {}), ...incoming };
 
   await catalog.updateQbVendors({ id, metadata: merged });
+
+  void updateSingleVendorMeiliWorkflow(req.scope)
+    .run({ input: { vendor_id: id as string } })
+    .catch((e) => console.error(`[vendor-patch] Meili sync failed for ${id}:`, e?.message));
 
   return res.json({ success: true, metadata: merged });
 };

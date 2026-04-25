@@ -25,6 +25,7 @@ export interface DailySalesResult {
   sales_q2: number;
   sales_q3: number;
   sales_q4: number;         // raw unit total, most recent 3 months
+  sales_last_24d: number;   // raw units sold in last 28 calendar days (≈24 Mon-Sat), informational
   daily_sales_est: number;
   monthly_sales_est: number;
   cv: number;
@@ -40,6 +41,8 @@ export interface SalesEngineContext {
   bizDaysByMonth: Map<string, number>;
   /** variant_id → raw units sold in the tier0 window (latest order version). */
   tier0ByVariant: Map<string, number>;
+  /** variant_id → raw units sold in the last 28 calendar days (≈4 Mon-Sat weeks). */
+  l4wByVariant: Map<string, number>;
   /** variant_id → sorted monthly history rows. */
   histByVariant: Map<string, { date: string; qty: number }[]>;
 }
@@ -99,6 +102,23 @@ export async function buildSalesEngineContext(
   );
   const tier0ByVariant = new Map(t0Res.rows.map((r) => [r.variant_id, parseFloat(r.total)]));
 
+  // ── 2b. Last-4-weeks totals (28 calendar days, Mon-Sat) ──────────────────
+  const l4wStart = new Date(Date.now() - 28 * 86400_000).toISOString().slice(0, 10);
+  const l4wRes = await db.query<{ variant_id: string; total: string }>(
+    `SELECT pii.variant_id,
+            COALESCE(SUM(pii.quantity - pii.refunded_quantity), 0)::text AS total
+     FROM pos_invoice_item pii
+     JOIN pos_invoice pi ON pi.id = pii.invoice_id
+     WHERE pi.issued_at >= $1::date AT TIME ZONE 'America/New_York'
+       AND pi.issued_at <  $2::date AT TIME ZONE 'America/New_York'
+       AND pi.status NOT IN ('voided')
+       AND pii.deleted_at IS NULL
+       AND pii.variant_id IS NOT NULL
+     GROUP BY pii.variant_id`,
+    [l4wStart, yesterday]
+  );
+  const l4wByVariant = new Map(l4wRes.rows.map((r) => [r.variant_id, parseFloat(r.total)]));
+
   // ── 3. Monthly history for ALL variants in one query ─────────────────────
   // DISTINCT ON per (variant_id, month_date) preferring medusa_orders over excel.
   const hRes = await db.query<{
@@ -130,6 +150,7 @@ export async function buildSalesEngineContext(
     tier0WindowStart,
     bizDaysByMonth,
     tier0ByVariant,
+    l4wByVariant,
     histByVariant,
   };
 }
@@ -148,6 +169,9 @@ export function calculateDailySales(
   const tier0Raw = allIds.reduce((s, id) => s + (ctx.tier0ByVariant.get(id) ?? 0), 0);
   const tier0Daily = tier0Raw / ctx.tier0BizDays;
   const tier0_30d = tier0Daily * biz; // normalized monthly rate
+
+  // ── Last 4 weeks (raw units, informational only — not used in estimate) ──
+  const sales_last_24d = allIds.reduce((s, id) => s + (ctx.l4wByVariant.get(id) ?? 0), 0);
 
   // ── Monthly history (combine primary + alts, deduplicate by month) ────────
   const combined = new Map<string, number>();
@@ -205,6 +229,7 @@ export function calculateDailySales(
     sales_q2,
     sales_q3,
     sales_q4,
+    sales_last_24d: Math.round(sales_last_24d * 100) / 100,
     daily_sales_est: Math.round(daily_sales_est * 10000) / 10000,
     monthly_sales_est: Math.round(monthly_sales_est * 100) / 100,
     cv: Math.round(cv * 10000) / 10000,

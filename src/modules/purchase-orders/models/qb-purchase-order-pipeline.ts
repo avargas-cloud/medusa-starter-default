@@ -23,7 +23,8 @@ export const QbPurchaseOrderPipeline = model.define(
   "qb_purchase_order_pipeline",
   {
     id: model.id({ prefix: "qbpopipe" }).primaryKey(),
-    seq: model.number(), // Short sequential reference id — DB BIGSERIAL
+    // seq is a DB BIGSERIAL (nextval) — not declared here so MikroORM omits it
+    // from INSERTs and lets the DB auto-generate it.
 
     purchase_order_id: model.text(),
 

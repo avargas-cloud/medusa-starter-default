@@ -54,12 +54,21 @@ export const PurchaseOrder = model.define("purchase_order", {
   total_cents: model.number().default(0),
   currency_code: model.text().default("usd"),
 
+  // Draft reference — D-{n}, assigned at creation and never overwritten.
+  // Persists after submit so staff can always say "check D-3" even after
+  // the PO becomes PO-1005.
+  draft_number: model.text().nullable(),
+
   // Free-text
   memo: model.text().nullable(),
   // Vendor's own PO reference number, if any (e.g. sales order # from vendor)
   reference_number: model.text().nullable(),
   // JSON array of Medusa order IDs linked to this PO (e.g. orders this PO fulfills)
   linked_order_ids: model.text().nullable(),
+
+  // Logistics / terms — editable at any lifecycle stage
+  shipping_method: model.text().nullable(),
+  payment_terms: model.text().nullable(),
 
   // Audit — creation
   created_by_user_id: model.text(),

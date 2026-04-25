@@ -43,6 +43,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       "country",
       "sync_status",
       "qb_list_id",
+      "terms_ref_name",
+      "metadata",
     ],
     filters: { id },
     pagination: { skip: 0, take: 1 },
@@ -77,7 +79,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     Notes: vendor.notes ?? undefined,
     VendorTaxIdent: vendor.tax_identity ?? undefined,
     IsVendorEligibleFor1099: vendor.is_vendor_eligible_for_1099 ?? undefined,
-    TermsRef: vendor.terms_ref_name ?? undefined,
+    TermsRef: (vendor.metadata as Record<string, unknown> | null)?.payment_terms as string ?? vendor.terms_ref_name ?? undefined,
     VendorTypeRef: vendor.vendor_type_ref_name ?? undefined,
     VendorAddress:
       vendor.addr1 || vendor.city || vendor.state

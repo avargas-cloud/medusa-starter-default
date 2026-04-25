@@ -15,11 +15,12 @@ export const PurchasingSnapshot = model.define("purchasing_snapshot", {
   variant_id: model.text(),
 
   // ── Daily Sales Engine output ──────────────────────────────────────────
-  tier0_30d: model.bigNumber().default(0),    // sales last 30 days (monthly equiv.)
-  sales_q4: model.bigNumber().default(0),     // avg months 10-12
-  sales_q3: model.bigNumber().default(0),     // avg months 7-9
-  sales_q2: model.bigNumber().default(0),     // avg months 4-6
-  sales_q1: model.bigNumber().default(0),     // avg months 1-3 (oldest)
+  tier0_30d: model.bigNumber().default(0),       // sales last 30 days (monthly equiv.)
+  sales_q4: model.bigNumber().default(0),        // raw units, most recent 3 months
+  sales_q3: model.bigNumber().default(0),        // raw units, months 4-6
+  sales_q2: model.bigNumber().default(0),        // raw units, months 7-9
+  sales_q1: model.bigNumber().default(0),        // raw units, oldest months
+  sales_last_24d: model.bigNumber().default(0),  // raw units, last 28 cal days (≈4 Mon-Sat wks)
   daily_sales_est: model.bigNumber().default(0),
   monthly_sales_est: model.bigNumber().default(0),
 

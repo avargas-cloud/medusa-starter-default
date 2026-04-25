@@ -280,7 +280,10 @@ async function handleProcessing(run: RunRow, catalog: any, logger: any): Promise
           await catalog.updateQbVendors({ id: prevId, ...payload });
           chunkUpdated++;
         } else {
-          await catalog.createQbVendors(payload);
+          await catalog.createQbVendors({
+            ...payload,
+            metadata: { payment_terms: payload.terms_ref_name ?? null },
+          });
           chunkCreated++;
         }
       } catch (err: any) {

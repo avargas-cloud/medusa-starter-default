@@ -107,6 +107,7 @@ export async function GET(
          COALESCE(pv.metadata->>'sales_description', '') AS sales_description,
          snap.tier0_30d,
          snap.sales_q1, snap.sales_q2, snap.sales_q3, snap.sales_q4,
+         snap.sales_last_24d,
          snap.daily_sales_est, snap.monthly_sales_est,
          snap.cv,
          snap.abc_class, snap.xyz_class, snap.abcxyz_class,

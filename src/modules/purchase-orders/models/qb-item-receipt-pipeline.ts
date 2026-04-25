@@ -25,7 +25,8 @@ export const QbItemReceiptPipeline = model.define(
   "qb_item_receipt_pipeline",
   {
     id: model.id({ prefix: "qbrcpipe" }).primaryKey(),
-    seq: model.number(), // Short sequential reference id — DB BIGSERIAL
+    // seq is a DB BIGSERIAL (nextval) — not declared here so MikroORM omits it
+    // from INSERTs and lets the DB auto-generate it.
 
     purchase_order_receipt_id: model.text(),
     purchase_order_id: model.text(), // denormalized for admin views

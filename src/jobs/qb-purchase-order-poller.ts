@@ -85,6 +85,16 @@ const extractTxnId = (data: BridgeStatus): string | null => {
   return msgs?.PurchaseOrderAddRs?.PurchaseOrderRet?.TxnID ?? null;
 };
 
+const extractRefNumber = (data: BridgeStatus): string | null => {
+  const op = data.operation;
+  if (!op) return null;
+  const msgs =
+    (op.result as any)?.QBXML?.QBXMLMsgsRs ??
+    (op.result as any)?.QBXMLMsgsRs ??
+    {};
+  return msgs?.PurchaseOrderAddRs?.PurchaseOrderRet?.RefNumber ?? null;
+};
+
 export default async function qbPurchaseOrderPoller(container: MedusaContainer) {
   const logger = container.resolve("logger") as any;
   const knex = (container as any).resolve("__pg_connection__");
@@ -176,6 +186,7 @@ export default async function qbPurchaseOrderPoller(container: MedusaContainer) 
 
       // completed
       const txnId = extractTxnId(data);
+      const refNumber = extractRefNumber(data);
       if (!txnId) {
         await knex.raw(
           `UPDATE qb_purchase_order_pipeline
@@ -195,10 +206,11 @@ export default async function qbPurchaseOrderPoller(container: MedusaContainer) 
         `UPDATE qb_purchase_order_pipeline
             SET status = 'synced',
                 qb_list_id = ?,
+                qb_txn_number = COALESCE(?, qb_txn_number),
                 synced_at = NOW(),
                 updated_at = NOW()
           WHERE id = ?`,
-        [txnId, row.id]
+        [txnId, refNumber, row.id]
       );
 
       // Back-fill QB data on the PO header

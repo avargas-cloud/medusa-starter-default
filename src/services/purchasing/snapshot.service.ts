@@ -121,11 +121,13 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
       variant_id: string;
       last_calculated_at: string;
       tier0_30d: string; sales_q1: string; sales_q2: string; sales_q3: string; sales_q4: string;
+      sales_last_24d: string;
       daily_sales_est: string; monthly_sales_est: string; cv: string;
       inv_usa: string; inv_china: string;
     }>(
       `SELECT variant_id, last_calculated_at,
               tier0_30d, sales_q1, sales_q2, sales_q3, sales_q4,
+              sales_last_24d,
               daily_sales_est, monthly_sales_est, cv, inv_usa, inv_china
        FROM purchasing_snapshot`
     );
@@ -159,6 +161,7 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
 
     type SnapRow = {
       tier0_30d: number; sales_q1: number; sales_q2: number; sales_q3: number; sales_q4: number;
+      sales_last_24d: number;
       daily_sales_est: number; monthly_sales_est: number; cv: number;
       inv_usa: number; inv_china: number;
     };
@@ -167,6 +170,7 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
         tier0_30d: parseFloat(r.tier0_30d),
         sales_q1: parseFloat(r.sales_q1), sales_q2: parseFloat(r.sales_q2),
         sales_q3: parseFloat(r.sales_q3), sales_q4: parseFloat(r.sales_q4),
+        sales_last_24d: parseFloat(r.sales_last_24d),
         daily_sales_est: parseFloat(r.daily_sales_est),
         monthly_sales_est: parseFloat(r.monthly_sales_est),
         cv: parseFloat(r.cv),
@@ -178,6 +182,7 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
     type CalcResult = {
       variant_id: string;
       tier0_30d: number; sales_q1: number; sales_q2: number; sales_q3: number; sales_q4: number;
+      sales_last_24d: number;
       daily_sales_est: number; monthly_sales_est: number; cv: number;
       revenue_12m: number;
       inv_usa: number; inv_china: number;
@@ -266,20 +271,22 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
         values.push(
           id, r.variant_id,
           r.tier0_30d, r.sales_q1, r.sales_q2, r.sales_q3, r.sales_q4,
+          r.sales_last_24d,
           r.daily_sales_est, r.monthly_sales_est, r.cv,
           pareto?.abc_class ?? null, pareto?.xyz_class ?? null, pareto?.abcxyz_class ?? null,
           r.inv_usa, r.inv_china, qty_to_transfer, qty_to_factory
         );
         placeholders.push(
-          `($${p},$${p+1},$${p+2},$${p+3},$${p+4},$${p+5},$${p+6},$${p+7},$${p+8},$${p+9},$${p+10},$${p+11},$${p+12},$${p+13},$${p+14},$${p+15},$${p+16},now(),now(),now())`
+          `($${p},$${p+1},$${p+2},$${p+3},$${p+4},$${p+5},$${p+6},$${p+7},$${p+8},$${p+9},$${p+10},$${p+11},$${p+12},$${p+13},$${p+14},$${p+15},$${p+16},$${p+17},now(),now(),now())`
         );
-        p += 17;
+        p += 18;
       }
 
       try {
         await db.query(
           `INSERT INTO purchasing_snapshot
              (id,variant_id,tier0_30d,sales_q1,sales_q2,sales_q3,sales_q4,
+              sales_last_24d,
               daily_sales_est,monthly_sales_est,cv,
               abc_class,xyz_class,abcxyz_class,
               inv_usa,inv_china,qty_to_transfer,qty_to_factory,
@@ -289,6 +296,7 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
              tier0_30d=EXCLUDED.tier0_30d, sales_q1=EXCLUDED.sales_q1,
              sales_q2=EXCLUDED.sales_q2, sales_q3=EXCLUDED.sales_q3,
              sales_q4=EXCLUDED.sales_q4,
+             sales_last_24d=EXCLUDED.sales_last_24d,
              daily_sales_est=EXCLUDED.daily_sales_est,
              monthly_sales_est=EXCLUDED.monthly_sales_est,
              cv=EXCLUDED.cv,
