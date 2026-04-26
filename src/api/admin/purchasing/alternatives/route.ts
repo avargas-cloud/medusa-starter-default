@@ -37,6 +37,8 @@ export async function GET(
       inv_usa: number;
       inv_china: number;
       alt_inv_usa: number;
+      alt_inv_usa_reserved: number;
+      alt_qty_on_po: number;
       abc_class: string | null;
       xyz_class: string | null;
     }>(
@@ -54,7 +56,8 @@ export async function GET(
       ),
       inv AS (
         SELECT pvii.variant_id, il.location_id,
-               COALESCE(il.stocked_quantity, 0) AS qty
+               COALESCE(il.stocked_quantity, 0) AS qty,
+               COALESCE(il.reserved_quantity, 0) AS reserved
         FROM inventory_level il
         JOIN inventory_item ii ON ii.id = il.inventory_item_id
         JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = ii.id
@@ -62,11 +65,32 @@ export async function GET(
           AND il.deleted_at IS NULL
           AND ii.deleted_at IS NULL
       ),
+      open_po_usa AS (
+        SELECT pol.sku_snapshot,
+               SUM(GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled))::int AS on_order
+        FROM purchase_order_line pol
+        JOIN purchase_order po ON po.id = pol.purchase_order_id AND po.deleted_at IS NULL
+        WHERE po.status IN ('submitted', 'partially_received')
+          AND pol.status IN ('open', 'partial')
+          AND pol.deleted_at IS NULL
+          AND po.stock_location_id = $1
+        GROUP BY pol.sku_snapshot
+      ),
       alt_inv AS (
         SELECT pa.primary_variant_id,
-               COALESCE(SUM(CASE WHEN inv.location_id = $1 THEN inv.qty ELSE 0 END), 0) AS alt_inv_usa
+               COALESCE(SUM(CASE WHEN inv.location_id = $1 THEN inv.qty ELSE 0 END), 0)::int AS alt_inv_usa,
+               COALESCE(SUM(CASE WHEN inv.location_id = $1 THEN inv.reserved ELSE 0 END), 0)::int AS alt_inv_usa_reserved
         FROM product_alternative pa
         JOIN inv ON inv.variant_id = pa.alt_variant_id
+        WHERE pa.is_active = true AND pa.deleted_at IS NULL
+        GROUP BY pa.primary_variant_id
+      ),
+      alt_po AS (
+        SELECT pa.primary_variant_id,
+               COALESCE(SUM(open_po_usa.on_order), 0)::int AS alt_qty_on_po
+        FROM product_alternative pa
+        JOIN product_variant pv_alt ON pv_alt.id = pa.alt_variant_id AND pv_alt.deleted_at IS NULL
+        LEFT JOIN open_po_usa ON open_po_usa.sku_snapshot = pv_alt.sku
         WHERE pa.is_active = true AND pa.deleted_at IS NULL
         GROUP BY pa.primary_variant_id
       )
@@ -79,6 +103,8 @@ export async function GET(
         COALESCE(SUM(CASE WHEN inv.location_id = $1 THEN inv.qty ELSE 0 END), 0)::int AS inv_usa,
         COALESCE(SUM(CASE WHEN inv.location_id = $2 THEN inv.qty ELSE 0 END), 0)::int AS inv_china,
         COALESCE(ai.alt_inv_usa, 0)::int AS alt_inv_usa,
+        COALESCE(ai.alt_inv_usa_reserved, 0)::int AS alt_inv_usa_reserved,
+        COALESCE(apo.alt_qty_on_po, 0)::int AS alt_qty_on_po,
         snap.abc_class,
         snap.xyz_class
       FROM primary_variants pv_ids
@@ -87,8 +113,11 @@ export async function GET(
       JOIN alt_counts ac ON ac.primary_variant_id = pv.id
       LEFT JOIN inv ON inv.variant_id = pv.id
       LEFT JOIN alt_inv ai ON ai.primary_variant_id = pv.id
+      LEFT JOIN alt_po apo ON apo.primary_variant_id = pv.id
       LEFT JOIN purchasing_snapshot snap ON snap.variant_id = pv.id
-      GROUP BY pv.id, pv.sku, p.title, pv.metadata, ac.alt_count, ai.alt_inv_usa, snap.abc_class, snap.xyz_class
+      GROUP BY pv.id, pv.sku, p.title, pv.metadata, ac.alt_count,
+               ai.alt_inv_usa, ai.alt_inv_usa_reserved, apo.alt_qty_on_po,
+               snap.abc_class, snap.xyz_class
       ORDER BY pv.sku
     `,
       [USA_LOC, CHINA_LOC]
