@@ -95,7 +95,12 @@ export const syncProductsToMeiliStep = createStep(
           "description",
           "category_handles",
         ],
-        filterableAttributes: ["category_handles", "status", "id", "variant_sku"],
+        filterableAttributes: [
+          "category_handles",
+          "status",
+          "id",
+          "variant_sku",
+        ],
         sortableAttributes: [
           "title",
           "status",

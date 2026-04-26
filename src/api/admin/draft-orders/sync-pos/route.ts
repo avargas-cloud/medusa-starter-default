@@ -1,9 +1,9 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
+import { handleDraftOrderUpdated } from "../../../../lib/quickbooks/handlers/handle-draft-order-updated";
 import { getEstimateTxnId } from "../../../../lib/quickbooks/qb-metadata-types";
 import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
-import { handleDraftOrderUpdated } from "../../../../lib/quickbooks/handlers/handle-draft-order-updated";
 import { getDbPool } from "../../../utils/db-pool";
 
 export async function POST(
@@ -346,11 +346,7 @@ export async function POST(
               expected_discount: order_discount,
             }),
           }).catch((e) => logger.warn(`Sync promotion failed: ${e.message}`));
-        } else if (
-          currentPromoCode &&
-          discount_type &&
-          discount_value > 0
-        ) {
+        } else if (currentPromoCode && discount_type && discount_value > 0) {
           // Custom promo — find-or-create canonical CPOS-PCT/FIXED via pos-discount
           const posDiscountRes = await localFetch("/admin/pos-discount", {
             method: "POST",
@@ -470,7 +466,8 @@ export async function POST(
           filters: { id: resolvedId },
         });
         const freshMeta = (freshRows?.[0] as any)?.metadata ?? {};
-        if (freshMeta.promotion_code) activePromoCode = freshMeta.promotion_code;
+        if (freshMeta.promotion_code)
+          activePromoCode = freshMeta.promotion_code;
       } catch {
         /* fall back to body value */
       }

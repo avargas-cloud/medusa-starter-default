@@ -125,7 +125,8 @@ export async function GET(
           .select("first_name", "last_name", "email", "phone", "company_name")
           .first();
         if (cust) {
-          customer_name = `${cust.first_name ?? ""} ${cust.last_name ?? ""}`.trim() || null;
+          customer_name =
+            `${cust.first_name ?? ""} ${cust.last_name ?? ""}`.trim() || null;
           customer_email = cust.email ?? null;
           customer_phone = cust.phone ?? null;
           customer_company = cust.company_name ?? null;

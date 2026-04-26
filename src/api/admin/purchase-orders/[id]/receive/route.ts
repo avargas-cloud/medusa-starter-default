@@ -58,7 +58,9 @@ export async function POST(
     userId = getActorUserId(req);
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }
@@ -76,7 +78,9 @@ export async function POST(
     .retrievePurchaseOrder(id)
     .catch(() => null)) as unknown as PoHeader | null;
   if (!po) {
-    return res.status(404).json({ error: "Purchase order not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "Purchase order not found", code: "not_found" });
   }
   if (po.status !== "submitted" && po.status !== "partially_received") {
     return res.status(409).json({
@@ -84,9 +88,14 @@ export async function POST(
       code: "not_receivable",
     });
   }
-  if (!po.vendor_qb_list_id_snapshot || !po.vendor_name_snapshot || !po.number) {
+  if (
+    !po.vendor_qb_list_id_snapshot ||
+    !po.vendor_name_snapshot ||
+    !po.number
+  ) {
     return res.status(409).json({
-      error: "Submitted PO is missing vendor snapshot / number — resubmit first.",
+      error:
+        "Submitted PO is missing vendor snapshot / number — resubmit first.",
       code: "inconsistent_po",
     });
   }
@@ -171,7 +180,8 @@ export async function POST(
 
   const receivedAt = body.received_at ? new Date(body.received_at) : new Date();
   const stockLocationId = body.stock_location_id ?? po.stock_location_id;
-  const qbMemo = body.qb_memo ?? `${po.number} bill#${body.vendor_bill_number ?? "—"}`;
+  const qbMemo =
+    body.qb_memo ?? `${po.number} bill#${body.vendor_bill_number ?? "—"}`;
 
   try {
     const { result } = await receivePurchaseOrderWorkflow(req.scope).run({
@@ -184,7 +194,9 @@ export async function POST(
         stock_location_id: stockLocationId,
         received_at: receivedAt,
         vendor_bill_number: body.vendor_bill_number ?? null,
-        vendor_bill_date: body.vendor_bill_date ? new Date(body.vendor_bill_date) : null,
+        vendor_bill_date: body.vendor_bill_date
+          ? new Date(body.vendor_bill_date)
+          : null,
         notes: body.notes ?? null,
         qb_memo: qbMemo,
         lines: workflowLines,

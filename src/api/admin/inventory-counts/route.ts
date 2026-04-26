@@ -10,12 +10,13 @@ import type {
   MedusaResponse,
 } from "@medusajs/framework/http";
 
+import { DEFAULT_QB_INVENTORY_ADJUSTMENT_ACCOUNT_LIST_ID } from "../../../modules/inventory-count/types";
+
 import { getActorUserId, UnauthenticatedError } from "./_lib/auth";
 import { buildEnrichmentMaps, decorateCount } from "./_lib/enrich";
 import { formatCountNumber, zodErrorToBody } from "./_lib/format";
 import { getInventoryCountService } from "./_lib/service-resolver";
 import { createDraftSchema, listQuerySchema } from "./_lib/validators";
-import { DEFAULT_QB_INVENTORY_ADJUSTMENT_ACCOUNT_LIST_ID } from "../../../modules/inventory-count/types";
 
 export async function GET(
   req: AuthenticatedMedusaRequest,
@@ -31,13 +32,19 @@ export async function GET(
 
   const where: Record<string, unknown> = {};
   if (filters.status) {
-    const statuses = filters.status.split(",").map((s) => s.trim()).filter(Boolean);
+    const statuses = filters.status
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     if (statuses.length === 1) where.status = statuses[0];
     else if (statuses.length > 1) where.status = statuses;
   }
-  if (filters.stock_location_id) where.stock_location_id = filters.stock_location_id;
-  if (filters.created_by_user_id) where.created_by_user_id = filters.created_by_user_id;
-  if (filters.reviewed_by_user_id) where.reviewed_by_user_id = filters.reviewed_by_user_id;
+  if (filters.stock_location_id)
+    where.stock_location_id = filters.stock_location_id;
+  if (filters.created_by_user_id)
+    where.created_by_user_id = filters.created_by_user_id;
+  if (filters.reviewed_by_user_id)
+    where.reviewed_by_user_id = filters.reviewed_by_user_id;
   if (filters.q) where.number = { $ilike: `%${filters.q}%` };
 
   const [rows, count] = await service.listAndCountInventoryCounts(where, {
@@ -66,7 +73,9 @@ export async function POST(
     userId = getActorUserId(req);
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }
@@ -96,7 +105,8 @@ export async function POST(
       sku_prefix_filter: body.sku_prefix_filter ?? null,
       memo: null,
       default_qb_account_list_id:
-        body.default_qb_account_list_id ?? DEFAULT_QB_INVENTORY_ADJUSTMENT_ACCOUNT_LIST_ID,
+        body.default_qb_account_list_id ??
+        DEFAULT_QB_INVENTORY_ADJUSTMENT_ACCOUNT_LIST_ID,
       created_by_user_id: userId,
     },
   ]);

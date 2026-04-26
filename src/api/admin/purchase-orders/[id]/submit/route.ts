@@ -29,7 +29,9 @@ export async function POST(
     userId = getActorUserId(req);
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }
@@ -37,11 +39,14 @@ export async function POST(
   const { id } = req.params as { id: string };
   const service = getPurchaseOrdersService(req);
 
-  const po = (await service
-    .retrievePurchaseOrder(id)
-    .catch(() => null)) as { id: string; status: string } | null;
+  const po = (await service.retrievePurchaseOrder(id).catch(() => null)) as {
+    id: string;
+    status: string;
+  } | null;
   if (!po) {
-    return res.status(404).json({ error: "Purchase order not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "Purchase order not found", code: "not_found" });
   }
   if (po.status !== "draft") {
     return res.status(409).json({

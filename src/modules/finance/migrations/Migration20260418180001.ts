@@ -83,6 +83,8 @@ export class Migration20260418180001 extends Migration {
       ]));
     `);
 
-    this.addSql(`ALTER TABLE customer_payment DROP COLUMN IF EXISTS card_brand;`);
+    this.addSql(
+      `ALTER TABLE customer_payment DROP COLUMN IF EXISTS card_brand;`
+    );
   }
 }

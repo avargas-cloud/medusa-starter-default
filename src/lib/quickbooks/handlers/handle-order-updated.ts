@@ -1,5 +1,7 @@
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
+import { getDbPool } from "../../../api/utils/db-pool";
+import { updateSalesOrderInQb } from "../client/sales-orders";
 import { buildQbItems, type MedusaOrderForQb } from "../order-flow-core";
 import { parseSalesRepInitials } from "../parse-sales-rep";
 import { getSoTxnId, getSoRef } from "../qb-metadata-types";
@@ -8,9 +10,7 @@ import {
   writePipelineRow,
   pollUntilQbConfirmed,
 } from "../qb-pipeline";
-import { updateSalesOrderInQb } from "../client/sales-orders";
 import { withQbSerialized } from "../qb-serializer";
-import { getDbPool } from "../../../api/utils/db-pool";
 
 /**
  * Handle Sales Order MOD (update existing QB Sales Order).
@@ -76,7 +76,9 @@ export async function handleOrderUpdated(
 
   const qbTxnId = getSoTxnId(order.metadata);
   if (!qbTxnId) {
-    logger.info(`${LOG_PREFIX} No qb_sales_order.txn_id on ${orderId} — cannot MOD (use CREATE)`);
+    logger.info(
+      `${LOG_PREFIX} No qb_sales_order.txn_id on ${orderId} — cannot MOD (use CREATE)`
+    );
     return "skipped";
   }
 
@@ -87,7 +89,9 @@ export async function handleOrderUpdated(
   if (!isCron) {
     const coalesced = await coalesceIfInFlight(orderId, null, "sales_order");
     if (coalesced) {
-      logger.info(`${LOG_PREFIX} ⏸ SO MOD in-flight for ${orderId} — save coalesced into next_payload`);
+      logger.info(
+        `${LOG_PREFIX} ⏸ SO MOD in-flight for ${orderId} — save coalesced into next_payload`
+      );
       return "coalesced";
     }
   }
@@ -108,14 +112,20 @@ export async function handleOrderUpdated(
         `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || $1::jsonb WHERE id = $2`,
         [JSON.stringify({ qb_sync_status: "pending" }), orderId]
       );
-    } catch { /* best-effort */ }
+    } catch {
+      /* best-effort */
+    }
   } catch (preErr: any) {
-    logger.warn(`${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${preErr.message}`);
+    logger.warn(
+      `${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${preErr.message}`
+    );
   }
 
   const runCallback = async (): Promise<void> => {
     // Fetch freshest order state for MOD payload.
-    const { data: [fullOrder] } = await query.graph({
+    const {
+      data: [fullOrder],
+    } = await query.graph({
       entity: "order",
       fields: [
         "*",
@@ -151,7 +161,9 @@ export async function handleOrderUpdated(
         medusaRefNumber: medusaRef,
       });
     } catch (lockErr: any) {
-      logger.warn(`${LOG_PREFIX} ⚠️ In-lock pending reset failed: ${lockErr.message}`);
+      logger.warn(
+        `${LOG_PREFIX} ⚠️ In-lock pending reset failed: ${lockErr.message}`
+      );
     }
 
     const typedOrder = fullOrder as unknown as MedusaOrderForQb;
@@ -194,7 +206,9 @@ export async function handleOrderUpdated(
             `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status":"error"}'::jsonb WHERE id = $1`,
             [orderId]
           );
-        } catch { /* best-effort */ }
+        } catch {
+          /* best-effort */
+        }
       }
     } catch (err: any) {
       logger.error(`${LOG_PREFIX} Exception during SO MOD: ${err.message}`);
@@ -212,7 +226,9 @@ export async function handleOrderUpdated(
           `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status":"error"}'::jsonb WHERE id = $1`,
           [orderId]
         );
-      } catch { /* best-effort */ }
+      } catch {
+        /* best-effort */
+      }
     }
   };
 

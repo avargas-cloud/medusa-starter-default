@@ -1,9 +1,10 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
-import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
-import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
+
 import { updateCreditMemoInQb } from "../../../../../../lib/quickbooks/client/credit-memos";
 import { getQbConfig } from "../../../../../../lib/quickbooks/qb-config";
+import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
+import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
+import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
 
 /**
  * PATCH /admin/pos/credit_memos/:id/patch-meta
@@ -33,16 +34,23 @@ export async function PATCH(
   };
 
   if (sales_rep === undefined && tax_mode === undefined) {
-    res.status(400).json({ error: "Provide at least one of: sales_rep, tax_mode" });
+    res
+      .status(400)
+      .json({ error: "Provide at least one of: sales_rep, tax_mode" });
     return;
   }
 
-  if (tax_mode !== undefined && tax_mode !== "florida" && tax_mode !== "exempt") {
+  if (
+    tax_mode !== undefined &&
+    tax_mode !== "florida" &&
+    tax_mode !== "exempt"
+  ) {
     res.status(400).json({ error: "tax_mode must be 'florida' or 'exempt'" });
     return;
   }
 
-  const creditMemoService = req.scope.resolve<CreditMemoModuleService>(CREDIT_MEMO_MODULE);
+  const creditMemoService =
+    req.scope.resolve<CreditMemoModuleService>(CREDIT_MEMO_MODULE);
   const pgConnection = req.scope.resolve("__pg_connection__") as any;
 
   const [memo] = await (creditMemoService as any)
@@ -66,7 +74,10 @@ export async function PATCH(
     const newTotal = Number(sub) + newTax + Number((memo as any).shipping ?? 0);
 
     // ── Payment guard: cannot reduce below already-applied credit ────────────
-    const cmNumber = (memo as any).credit_memo_number as string | null | undefined;
+    const cmNumber = (memo as any).credit_memo_number as
+      | string
+      | null
+      | undefined;
     if (cmNumber) {
       const payment = await pgConnection("customer_payment")
         .where({ reference: cmNumber, type: "credit_memo" })
@@ -98,7 +109,10 @@ export async function PATCH(
           .where({ id: payment.id })
           .update({
             amount: newTotal,
-            raw_amount: JSON.stringify({ value: String(newTotal), precision: 20 }),
+            raw_amount: JSON.stringify({
+              value: String(newTotal),
+              precision: 20,
+            }),
             updated_at: new Date(),
           });
       }
@@ -113,12 +127,15 @@ export async function PATCH(
   // ── QB Mod — fire-and-forget pipeline entry if this CM is synced to QB ──────
   const qbTxnId = (memo as any).qb_txn_id as string | null | undefined;
   const qbEditSeq = (memo as any).qb_edit_sequence as string | null | undefined;
-  const cmNumber = (memo as any).credit_memo_number as string | null | undefined;
+  const cmNumber = (memo as any).credit_memo_number as
+    | string
+    | null
+    | undefined;
 
   if (qbTxnId && process.env.QB_ORDER_FLOW_ENABLED === "true") {
     const salesRepRef =
       sales_rep !== undefined
-        ? (sales_rep?.name || sales_rep?.initials || undefined)
+        ? sales_rep?.name || sales_rep?.initials || undefined
         : undefined;
     const isFlorida = tax_mode === "florida";
     const isExempt = tax_mode === "exempt";
@@ -130,39 +147,46 @@ export async function PATCH(
       status: "pending",
       medusaRefNumber: cmNumber ?? null,
       qbTxnId,
-    }).then(async () => {
-      const qbConfig = isFlorida ? await getQbConfig() : null;
-      return updateCreditMemoInQb({
-        txnId: qbTxnId,
-        editSequence: qbEditSeq ?? "",
-        ...(salesRepRef !== undefined ? { salesRepRef } : {}),
-        ...(isFlorida && qbConfig ? { salesTaxCode: qbConfig.defaultSalesTaxCode } : {}),
-        ...(isExempt ? { taxExempt: true } : {}),
-      }).then((result) => {
-        const status = result.success ? "confirmed" : "failed";
-        return writePipelineRow({
+    })
+      .then(async () => {
+        const qbConfig = isFlorida ? await getQbConfig() : null;
+        return updateCreditMemoInQb({
+          txnId: qbTxnId,
+          editSequence: qbEditSeq ?? "",
+          ...(salesRepRef !== undefined ? { salesRepRef } : {}),
+          ...(isFlorida && qbConfig
+            ? { salesTaxCode: qbConfig.defaultSalesTaxCode }
+            : {}),
+          ...(isExempt ? { taxExempt: true } : {}),
+        }).then((result) => {
+          const status = result.success ? "confirmed" : "failed";
+          return writePipelineRow({
+            referenceId: id,
+            referenceType: "credit_memo",
+            step: "credit_memo_mod",
+            status,
+            medusaRefNumber: cmNumber ?? null,
+            qbTxnId,
+            bridgeOpId: result.data?.operationId ?? null,
+            error: result.error ?? null,
+          });
+        });
+      })
+      .catch((err: Error) => {
+        console.error(
+          `[patch-meta] QB credit_memo_mod pipeline error for ${id}:`,
+          err.message
+        );
+        writePipelineRow({
           referenceId: id,
           referenceType: "credit_memo",
           step: "credit_memo_mod",
-          status,
+          status: "failed",
           medusaRefNumber: cmNumber ?? null,
           qbTxnId,
-          bridgeOpId: result.data?.operationId ?? null,
-          error: result.error ?? null,
-        });
+          error: err.message,
+        }).catch(() => {});
       });
-    }).catch((err: Error) => {
-      console.error(`[patch-meta] QB credit_memo_mod pipeline error for ${id}:`, err.message);
-      writePipelineRow({
-        referenceId: id,
-        referenceType: "credit_memo",
-        step: "credit_memo_mod",
-        status: "failed",
-        medusaRefNumber: cmNumber ?? null,
-        qbTxnId,
-        error: err.message,
-      }).catch(() => {});
-    });
   }
 
   res.status(200).json({ success: true });

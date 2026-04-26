@@ -2,7 +2,10 @@ import { SubscriberArgs } from "@medusajs/framework";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { FINANCE_MODULE } from "../../../modules/finance";
-import { mergeApplyPaymentInQb, applyCreditMemoToInvoiceInQb } from "../qb-bridge-client";
+import {
+  mergeApplyPaymentInQb,
+  applyCreditMemoToInvoiceInQb,
+} from "../qb-bridge-client";
 import { withQbLockResult } from "../qb-locks";
 import { writePipelineRow, cacheEditSequence } from "../qb-pipeline";
 
@@ -183,7 +186,8 @@ export async function handlePosPaymentApplied({
       step: "apply_payment",
       status: "failed",
       medusaRefNumber: medusaPayRef,
-      error: "Timed out waiting for Invoice to sync to QB — retry after invoice is confirmed",
+      error:
+        "Timed out waiting for Invoice to sync to QB — retry after invoice is confirmed",
     }).catch(() => {});
     return;
   }
@@ -251,7 +255,7 @@ export async function handlePosPaymentApplied({
   // TxnID. Applying them requires ReceivePaymentAdd+SetCredit (a new record),
   // not ReceivePaymentMod of an existing one. All other payments use merge-apply.
   // ─────────────────────────────────────────────────────────────────────────
-  const isCreditMemoPayment = (payment as any).type === 'credit_memo';
+  const isCreditMemoPayment = (payment as any).type === "credit_memo";
 
   // Write `submitted` with bridgeOpId as soon as the op is enqueued to the bridge,
   // before polling for completion. This prevents orphaned `pending` rows if the
@@ -347,11 +351,15 @@ export async function handlePosPaymentApplied({
       }).catch(() => {});
     }
 
-    await financeService.updateCustomerPayments({
-      id: payment_id,
-      metadata: { ...(payment.metadata || {}), qb_sync_status: "synced" },
-    }).catch((err: any) =>
-      logger.warn(`${LOG_PREFIX} ⚠️ Could not update qb_sync_status to synced: ${err.message}`)
-    );
+    await financeService
+      .updateCustomerPayments({
+        id: payment_id,
+        metadata: { ...(payment.metadata || {}), qb_sync_status: "synced" },
+      })
+      .catch((err: any) =>
+        logger.warn(
+          `${LOG_PREFIX} ⚠️ Could not update qb_sync_status to synced: ${err.message}`
+        )
+      );
   });
 }

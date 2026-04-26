@@ -111,17 +111,29 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   //
   // Legacy brand values (visa/mastercard/amex/discover/capital_one) are normalized
   // to 'credit_card' and the brand is extracted into mappedCardBrand for persistence.
-  const CARD_BRAND_SET = new Set(["visa", "mastercard", "amex", "discover", "capital_one"]);
+  const CARD_BRAND_SET = new Set([
+    "visa",
+    "mastercard",
+    "amex",
+    "discover",
+    "capital_one",
+  ]);
   let mappedMethod = "other";
   let mappedCardBrand: string | null =
-    typeof card_brand === "string" && CARD_BRAND_SET.has(card_brand.toLowerCase())
+    typeof card_brand === "string" &&
+    CARD_BRAND_SET.has(card_brand.toLowerCase())
       ? card_brand.toLowerCase()
       : null;
   const m = (method || "").toLowerCase();
 
   if (m === "credit_card" || m === "debit_card") {
     mappedMethod = m;
-  } else if (m === "cash" || m === "check" || m === "zelle" || m === "credit_memo") {
+  } else if (
+    m === "cash" ||
+    m === "check" ||
+    m === "zelle" ||
+    m === "credit_memo"
+  ) {
     mappedMethod = m;
   } else if (CARD_BRAND_SET.has(m)) {
     // Legacy: caller sent a brand as the method → normalize to credit_card + brand.

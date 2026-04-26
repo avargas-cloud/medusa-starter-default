@@ -21,37 +21,34 @@ import { model } from "@medusajs/utils";
  * payload is frozen — contains vendor ref, receipt metadata, and line
  * array with sku + qty + unit cost. Retries never read from live tables.
  */
-export const QbItemReceiptPipeline = model.define(
-  "qb_item_receipt_pipeline",
-  {
-    id: model.id({ prefix: "qbrcpipe" }).primaryKey(),
-    // seq is a DB BIGSERIAL (nextval) — not declared here so MikroORM omits it
-    // from INSERTs and lets the DB auto-generate it.
+export const QbItemReceiptPipeline = model.define("qb_item_receipt_pipeline", {
+  id: model.id({ prefix: "qbrcpipe" }).primaryKey(),
+  // seq is a DB BIGSERIAL (nextval) — not declared here so MikroORM omits it
+  // from INSERTs and lets the DB auto-generate it.
 
-    purchase_order_receipt_id: model.text(),
-    purchase_order_id: model.text(), // denormalized for admin views
+  purchase_order_receipt_id: model.text(),
+  purchase_order_id: model.text(), // denormalized for admin views
 
-    status: model.text().default("waiting"),
+  status: model.text().default("waiting"),
 
-    // Bridge / QB identifiers
-    qb_operation_id: model.text().nullable(),
-    qb_list_id: model.text().nullable(), // TxnID of the ItemReceipt in QB
-    qb_txn_number: model.text().nullable(),
+  // Bridge / QB identifiers
+  qb_operation_id: model.text().nullable(),
+  qb_list_id: model.text().nullable(), // TxnID of the ItemReceipt in QB
+  qb_txn_number: model.text().nullable(),
 
-    // Frozen snapshot — single source of truth on retry
-    payload: model.json(),
+  // Frozen snapshot — single source of truth on retry
+  payload: model.json(),
 
-    last_error: model.text().nullable(),
-    retries: model.number().default(0),
-    next_retry_at: model.dateTime().nullable(),
-    synced_at: model.dateTime().nullable(),
+  last_error: model.text().nullable(),
+  retries: model.number().default(0),
+  next_retry_at: model.dateTime().nullable(),
+  synced_at: model.dateTime().nullable(),
 
-    // Void lifecycle (independent of add)
-    void_status: model.text().nullable(),
-    void_operation_id: model.text().nullable(),
-    void_synced_at: model.dateTime().nullable(),
-    void_last_error: model.text().nullable(),
-    void_retries: model.number().default(0),
-    void_next_retry_at: model.dateTime().nullable(),
-  }
-);
+  // Void lifecycle (independent of add)
+  void_status: model.text().nullable(),
+  void_operation_id: model.text().nullable(),
+  void_synced_at: model.dateTime().nullable(),
+  void_last_error: model.text().nullable(),
+  void_retries: model.number().default(0),
+  void_next_retry_at: model.dateTime().nullable(),
+});

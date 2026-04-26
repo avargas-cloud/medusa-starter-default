@@ -174,7 +174,9 @@ export class Migration20260418190000 extends Migration {
   }
 
   override async down(): Promise<void> {
-    this.addSql(`drop table if exists "qb_inventory_adjustment_pipeline" cascade;`);
+    this.addSql(
+      `drop table if exists "qb_inventory_adjustment_pipeline" cascade;`
+    );
     this.addSql(`drop table if exists "inventory_count_sequence" cascade;`);
     this.addSql(`drop table if exists "inventory_count_line" cascade;`);
     this.addSql(`drop table if exists "inventory_count" cascade;`);

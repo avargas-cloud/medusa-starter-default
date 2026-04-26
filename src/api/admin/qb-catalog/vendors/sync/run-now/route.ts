@@ -42,7 +42,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     });
     return res.json({ success: true, run: sorted[0] ?? null });
   } catch (err: any) {
-    logger.error(`[qb-vendor-sync-runner] manual run-now failed: ${err.message}`);
+    logger.error(
+      `[qb-vendor-sync-runner] manual run-now failed: ${err.message}`
+    );
     return res.status(500).json({ success: false, error: err.message });
   }
 };

@@ -1,15 +1,9 @@
 /**
- * src/api/admin/purchase-orders/[id]/close/route.ts
+ * POST /admin/purchase-orders/:id/void
  *
- * POST /admin/purchase-orders/:id/close
- *
- * Manually closes a PurchaseOrder — remaining open qty is forfeited
- * (zeroed into qty_cancelled on each line). Use when the vendor can't
- * fulfill the rest of an order and you want to stop showing it as
- * partially_received.
- *
- * Only submitted / partially_received POs can be closed. Already-closed /
- * received / voided POs are rejected.
+ * Voids a submitted or partially-received PO. Cancels all remaining open lines,
+ * marks the PO voided, and—if the PO is already synced to QB—queues a
+ * PurchaseOrderModRq with IsManuallyClosed=true to close it on the QB side.
  */
 
 import type {
@@ -18,13 +12,18 @@ import type {
 } from "@medusajs/framework/http";
 
 import { getActorUserId, UnauthenticatedError } from "../../_lib/auth";
+import { voidReceiptSchema } from "../../_lib/validators";
 import { zodErrorToBody } from "../../_lib/format";
 import { getPurchaseOrdersService } from "../../_lib/service-resolver";
-import { closeSchema } from "../../_lib/validators";
 
 interface PoHeader {
   id: string;
   status: string;
+  number: string | null;
+  qb_purchase_order_list_id: string | null;
+  qb_edit_sequence: string | null;
+  vendor_qb_list_id_snapshot: string | null;
+  vendor_name_snapshot: string | null;
 }
 
 interface PoLine {
@@ -44,19 +43,17 @@ export async function POST(
     userId = getActorUserId(req);
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
-      return res
-        .status(err.status)
-        .json({ error: err.message, code: err.code });
+      return res.status(err.status).json({ error: err.message, code: err.code });
     }
     throw err;
   }
 
   const { id } = req.params as { id: string };
-  const parsed = closeSchema.safeParse(req.body);
+  const parsed = voidReceiptSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json(zodErrorToBody(parsed.error));
   }
-  const body = parsed.data;
+  const { void_reason } = parsed.data;
 
   const service = getPurchaseOrdersService(req);
 
@@ -64,18 +61,16 @@ export async function POST(
     .retrievePurchaseOrder(id)
     .catch(() => null)) as unknown as PoHeader | null;
   if (!po) {
-    return res
-      .status(404)
-      .json({ error: "Purchase order not found", code: "not_found" });
+    return res.status(404).json({ error: "Purchase order not found", code: "not_found" });
   }
   if (po.status !== "submitted" && po.status !== "partially_received") {
     return res.status(409).json({
-      error: `Cannot close a PO in status '${po.status}'.`,
-      code: "not_closable",
+      error: `Cannot void a PO in status '${po.status}'.`,
+      code: "not_voidable",
     });
   }
 
-  // Zero out remaining qty on each line — records forfeited qty into qty_cancelled
+  // Cancel remaining open lines
   const lines = (await service.listPurchaseOrderLines(
     { purchase_order_id: id },
     { take: 1000, skip: 0 }
@@ -88,9 +83,7 @@ export async function POST(
       return {
         id: l.id,
         qty_cancelled: l.qty_cancelled + Math.max(0, remaining),
-        status: (l.qty_received > 0 ? "partial" : "cancelled") as
-          | "partial"
-          | "cancelled",
+        status: (l.qty_received > 0 ? "partial" : "cancelled") as "partial" | "cancelled",
       };
     });
 
@@ -101,12 +94,29 @@ export async function POST(
   const [updated] = await service.updatePurchaseOrders([
     {
       id,
-      status: "closed",
-      closed_at: new Date(),
-      closed_by_user_id: userId,
-      close_reason: body.close_reason,
+      status: "voided",
+      voided_at: new Date(),
+      voided_by_user_id: userId,
+      void_reason,
     },
   ]);
+
+  // If synced to QB, create a NEW pipeline row to close it (IsManuallyClosed=true)
+  if (po.qb_purchase_order_list_id) {
+    await service.createQbPurchaseOrderPipelines([{
+      purchase_order_id: id,
+      status: "waiting",
+      payload: {
+        is_void: true,
+        txn_id: po.qb_purchase_order_list_id,
+        edit_sequence: po.qb_edit_sequence ?? null,
+        po_id: id,
+        po_number: po.number,
+        vendor_qb_list_id: po.vendor_qb_list_id_snapshot,
+        vendor_name: po.vendor_name_snapshot,
+      },
+    }]);
+  }
 
   return res.json({ purchase_order: updated });
 }

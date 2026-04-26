@@ -46,7 +46,9 @@ export async function handlePosPaymentCreated({
   // Payments use reference_id (not order_id) as the pipeline key.
   const coalescedPay = await coalesceIfInFlight(null, paymentId, "payment");
   if (coalescedPay) {
-    logger.info(`${LOG_PREFIX} ⏸ Payment in-flight for ${paymentId} — coalesced as next submit`);
+    logger.info(
+      `${LOG_PREFIX} ⏸ Payment in-flight for ${paymentId} — coalesced as next submit`
+    );
     return;
   }
 
@@ -319,7 +321,9 @@ export async function handlePosPaymentCreated({
     const rawLabel = payment.metadata?.bams_card_label as string | undefined;
     const metaBrand = payment.metadata?.card_brand as string | undefined;
     const rawCardType = payment.metadata?.bams_card_type as string | undefined;
-    const rawPosMethod = payment.metadata?.pos_payment_method as string | undefined;
+    const rawPosMethod = payment.metadata?.pos_payment_method as
+      | string
+      | undefined;
 
     let resolvedQbMethod = resolveQbPaymentMethodForPayment(
       canonicalMethod,

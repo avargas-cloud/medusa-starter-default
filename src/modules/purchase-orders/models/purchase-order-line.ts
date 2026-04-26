@@ -47,4 +47,7 @@ export const PurchaseOrderLine = model.define("purchase_order_line", {
 
   // Free-text
   notes: model.text().nullable(),
+
+  // QB sync — TxnLineID assigned by QuickBooks after PurchaseOrderAdd completes
+  qb_txn_line_id: model.text().nullable(),
 });

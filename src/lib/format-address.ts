@@ -128,7 +128,8 @@ export function formatAddressLine(input?: string | null): string {
       if (/\d/.test(core)) return leading + core + trailing;
       // Strip internal dots so "S.W." still matches SW.
       const dotStripped = core.replace(/\./g, "").toUpperCase();
-      if (ABBREV.has(dotStripped)) return leading + core.toUpperCase() + trailing;
+      if (ABBREV.has(dotStripped))
+        return leading + core.toUpperCase() + trailing;
       const titled = core
         .split(/(['-])/)
         .map((p) =>

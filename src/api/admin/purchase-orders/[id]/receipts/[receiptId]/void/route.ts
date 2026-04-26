@@ -47,7 +47,9 @@ export async function POST(
     userId = getActorUserId(req);
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }
@@ -117,7 +119,8 @@ export async function POST(
 
     return res.json({ void: result });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to void receipt";
+    const message =
+      err instanceof Error ? err.message : "Failed to void receipt";
     return res.status(400).json({ error: message, code: "void_failed" });
   }
 }

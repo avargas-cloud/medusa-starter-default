@@ -34,9 +34,12 @@ function useSyncAction(
     }, RESET_DELAY_MS);
   };
 
-  useEffect(() => () => {
-    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+    },
+    []
+  );
 
   const run = async (force = false) => {
     if (resetTimerRef.current) clearTimeout(resetTimerRef.current);

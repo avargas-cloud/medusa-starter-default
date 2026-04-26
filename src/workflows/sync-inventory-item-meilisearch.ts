@@ -82,7 +82,9 @@ const syncInventoryItemToMeiliStep = createStep(
             apiKey: process.env.MEILISEARCH_API_KEY!,
           });
           try {
-            await client.index("inventory").deleteDocument(input.inventoryItemId);
+            await client
+              .index("inventory")
+              .deleteDocument(input.inventoryItemId);
             logger.info(
               `[syncInventoryItemToMeili] 🗑️  Deleted orphan inventory doc ${input.inventoryItemId}`
             );
@@ -174,9 +176,7 @@ const syncInventoryItemToMeiliStep = createStep(
       host: process.env.MEILISEARCH_HOST!,
       apiKey: process.env.MEILISEARCH_API_KEY!,
     });
-    await client
-      .index("inventory")
-      .addDocuments(docs, { primaryKey: "id" });
+    await client.index("inventory").addDocuments(docs, { primaryKey: "id" });
     logger.info(
       `[syncInventoryItemToMeili] ✅ Upserted ${docs.length} inventory docs`
     );

@@ -111,7 +111,10 @@ export const validatePoForSubmitStep = createStep(
     // For lines whose qb_item_list_id_snapshot was not set at creation time,
     // fall back to product_variant.metadata.quickbooks_id (the authoritative QB item ListID).
     const knex = container.resolve("__pg_connection__") as {
-      raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
+      raw: (
+        sql: string,
+        bindings?: unknown[]
+      ) => Promise<{ rows: Array<Record<string, unknown>> }>;
     };
 
     const variantIdsNeedingLookup = lineRows
@@ -128,7 +131,8 @@ export const validatePoForSubmitStep = createStep(
         [variantIdsNeedingLookup]
       );
       for (const row of res.rows) {
-        if (row.qb_list_id) metadataMap[row.id as string] = row.qb_list_id as string;
+        if (row.qb_list_id)
+          metadataMap[row.id as string] = row.qb_list_id as string;
       }
     }
 
@@ -149,7 +153,10 @@ export const validatePoForSubmitStep = createStep(
           `Line ${lineId} is missing variant/inventory/SKU snapshots`
         );
       }
-      const qbItemListId = (l.qb_item_list_id_snapshot as string | null) ?? metadataMap[variantId] ?? null;
+      const qbItemListId =
+        (l.qb_item_list_id_snapshot as string | null) ??
+        metadataMap[variantId] ??
+        null;
       validated.push({
         line_id: lineId,
         product_variant_id: variantId,

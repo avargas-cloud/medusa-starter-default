@@ -24,7 +24,9 @@ export async function POST(
 
   const [count] = await service.listInventoryCounts({ id }, { take: 1 });
   if (!count) {
-    return res.status(404).json({ error: "inventory_count not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "inventory_count not found", code: "not_found" });
   }
   if (count.status !== "draft") {
     return res.status(409).json({

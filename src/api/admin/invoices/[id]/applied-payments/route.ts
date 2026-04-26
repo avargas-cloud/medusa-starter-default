@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 
 export interface AppliedPaymentDto {
@@ -25,8 +26,9 @@ function toCents(val: unknown): number {
     return Number.isFinite(n) ? Math.round(n) : 0;
   }
   if (typeof val === "object") {
-    const raw = (val as { numeric_?: unknown; value?: unknown }).numeric_
-      ?? (val as { value?: unknown }).value;
+    const raw =
+      (val as { numeric_?: unknown; value?: unknown }).numeric_ ??
+      (val as { value?: unknown }).value;
     if (typeof raw === "number") return Math.round(raw);
     if (typeof raw === "string") {
       const n = Number(raw);
@@ -62,7 +64,9 @@ interface RawPaymentApplication {
   } | null;
 }
 
-export function mapAppliedPayment(app: RawPaymentApplication): AppliedPaymentDto {
+export function mapAppliedPayment(
+  app: RawPaymentApplication
+): AppliedPaymentDto {
   const payment = app.payment ?? null;
   return {
     application_id: app.id,

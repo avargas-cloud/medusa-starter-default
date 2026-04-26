@@ -34,7 +34,9 @@ export class Migration20260420164900 extends Migration {
   }
 
   override async down(): Promise<void> {
-    this.addSql(`drop index if exists "IDX_qb_vendor_pipeline_qb_operation_id";`);
+    this.addSql(
+      `drop index if exists "IDX_qb_vendor_pipeline_qb_operation_id";`
+    );
     this.addSql(`drop index if exists "IDX_qb_vendor_pipeline_vendor_id";`);
     this.addSql(`drop index if exists "IDX_qb_vendor_pipeline_status";`);
     this.addSql(`drop table if exists "qb_vendor_pipeline";`);

@@ -28,7 +28,7 @@ One row per `variant_id`. Updated by the batch cron or the per-order subscriber.
 | `inv_china` | int | Current stocked quantity, China warehouse |
 | `qty_to_transfer` | int | Recommended units to ship from China → Miami |
 | `qty_to_factory` | int | Recommended units to reorder from factory |
-| `production_days` | int | Effective production days used in factory formula |
+| `production_days` | int | Raw vendor production days (before ABC multiplier) |
 | `last_calculated_at` | timestamptz | Timestamp of last upsert |
 
 ### `purchasing_category_sku`
@@ -51,7 +51,7 @@ Promise.all([
   2. Inventory levels (Miami + China)
   3. Open PO quantities (Miami + China, status submitted/partially_received)
   4. ABC/XYZ classification from pareto-engine
-  5. Vendor production days (from qb_vendor.metadata->>'production_days')
+  5. Vendor production days (product.metadata->>'qb_vendor_list_id' → qb_vendor.qb_list_id → metadata->>'production_days')
 ])
 ```
 
@@ -87,13 +87,14 @@ qty_to_transfer = max(0, targetStock − inv_usa − onOrderUSA)
 **Factory quantity (`qty_to_factory`)**
 
 ```
-factoryMult  = { A: 1.0, B: 0.7, C: 0.5 }[abc_class] ?? 0.5
-effectiveDays = round(productionDays × factoryMult)
-production_days = effectiveDays          # stored in snapshot
+factoryMult   = { A: 1.0, B: 0.7, C: 0.5 }[abc_class] ?? 0.5
+prodDays      = qb_vendor.metadata->>'production_days'  (default 10)
+effectiveDays = round(prodDays × factoryMult)
+production_days = prodDays               # stored in snapshot — raw vendor days, NOT effectiveDays
 qty_to_factory = max(0, daily × effectiveDays − inv_china)
 ```
 
-`productionDays` is read from the linked QBW vendor's `metadata->>'production_days'` (defaults to 10 if unset).
+`prodDays` is resolved via `product.metadata->>'qb_vendor_list_id'` → `qb_vendor.qb_list_id`. The snapshot stores the **raw** vendor days so the frontend can apply the ABC multiplier itself and show the full breakdown in the tooltip. Storing effectiveDays would cause double-multiplication for B/C class.
 
 **Batch upsert**
 

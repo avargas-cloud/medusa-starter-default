@@ -90,10 +90,7 @@ export async function GET(
         }>)
       : [];
 
-  const byRecord = new Map<
-    string,
-    { requested: number; purchased: number }
-  >();
+  const byRecord = new Map<string, { requested: number; purchased: number }>();
   for (const it of items) {
     const b = byRecord.get(it.record_id) ?? { requested: 0, purchased: 0 };
     if (it.kind === "requested") b.requested += 1;
@@ -112,11 +109,18 @@ export async function GET(
   );
   const customerById = new Map<
     string,
-    { first_name?: string | null; last_name?: string | null; email?: string | null; company_name?: string | null }
+    {
+      first_name?: string | null;
+      last_name?: string | null;
+      email?: string | null;
+      company_name?: string | null;
+    }
   >();
   if (customerIds.length > 0) {
     try {
-      const customerService = req.scope.resolve(Modules.CUSTOMER) as unknown as {
+      const customerService = req.scope.resolve(
+        Modules.CUSTOMER
+      ) as unknown as {
         listCustomers: (
           filter: Record<string, unknown>,
           config?: Record<string, unknown>
@@ -184,7 +188,9 @@ export async function POST(
     userId = getActorUserId(req);
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }

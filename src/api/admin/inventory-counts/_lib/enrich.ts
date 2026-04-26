@@ -8,8 +8,8 @@
  * Called from list + detail endpoints. Single-pass batch fetch (no N+1).
  */
 
-import { Modules } from "@medusajs/utils";
 import type { AuthenticatedMedusaRequest } from "@medusajs/framework/http";
+import { Modules } from "@medusajs/utils";
 
 interface RawCount {
   stock_location_id: string;
@@ -114,7 +114,7 @@ export function decorateCount<T extends RawCount>(
     stock_location: maps.locations.get(count.stock_location_id) ?? null,
     created_by_user: maps.users.get(count.created_by_user_id) ?? null,
     reviewed_by_user: count.reviewed_by_user_id
-      ? maps.users.get(count.reviewed_by_user_id) ?? null
+      ? (maps.users.get(count.reviewed_by_user_id) ?? null)
       : null,
   };
 }

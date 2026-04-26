@@ -589,7 +589,9 @@ export async function POST(
           );
         }
       } catch (peekErr: any) {
-        logger.warn(`[post-edit-sync] Could not peek order QB state: ${peekErr.message}`);
+        logger.warn(
+          `[post-edit-sync] Could not peek order QB state: ${peekErr.message}`
+        );
       }
     }
 
@@ -748,7 +750,9 @@ export async function POST(
             [id]
           );
           const createdAt: Date | undefined = orderTimeRows[0]?.created_at;
-          const ageMs = createdAt ? Date.now() - new Date(createdAt).getTime() : Infinity;
+          const ageMs = createdAt
+            ? Date.now() - new Date(createdAt).getTime()
+            : Infinity;
           const ONE_HOUR_MS = 60 * 60 * 1000;
 
           if (ageMs < ONE_HOUR_MS) {
@@ -769,13 +773,20 @@ export async function POST(
                    WHERE o.id = $1`,
                   [id]
                 );
-                const custQbId = custRes.rows[0]?.qb_list_id as string | null | undefined;
+                const custQbId = custRes.rows[0]?.qb_list_id as
+                  | string
+                  | null
+                  | undefined;
                 qbListId = custQbId ?? undefined;
                 if (qbListId) {
-                  logger.info(`[post-edit-sync] 📋 Using customer qb_list_id=${qbListId} (not in order metadata)`);
+                  logger.info(
+                    `[post-edit-sync] 📋 Using customer qb_list_id=${qbListId} (not in order metadata)`
+                  );
                 }
               } catch (custErr: any) {
-                logger.warn(`[post-edit-sync] Could not fetch customer qb_list_id: ${custErr.message}`);
+                logger.warn(
+                  `[post-edit-sync] Could not fetch customer qb_list_id: ${custErr.message}`
+                );
               }
             }
             if (qbListId) {
@@ -785,8 +796,13 @@ export async function POST(
               const {
                 coalesceIfInFlight,
               } = require("../../../../../lib/quickbooks/qb-pipeline");
-              const createItems = buildQbItems(qbOrder!.items, qbOrder!.metadata);
-              const salesRep = parseSalesRepInitials(qbOrder?.metadata?.sales_rep);
+              const createItems = buildQbItems(
+                qbOrder!.items,
+                qbOrder!.metadata
+              );
+              const salesRep = parseSalesRepInitials(
+                qbOrder?.metadata?.sales_rep
+              );
               const friendlyRef =
                 (qbOrder?.metadata?.document_number as string) ||
                 (qbOrder?.display_id ? `S${qbOrder.display_id}` : undefined);
@@ -799,7 +815,11 @@ export async function POST(
               // if a sales_order op is already submitted/in-flight, coalesce into
               // next_payload and skip the bridge call. The consolidator will
               // re-submit via resubmitByStep after the in-flight op confirms.
-              const coalesced = await coalesceIfInFlight(id, null, "sales_order");
+              const coalesced = await coalesceIfInFlight(
+                id,
+                null,
+                "sales_order"
+              );
               if (coalesced) {
                 logger.info(
                   `[post-edit-sync] ⏸ SO CREATE coalesced — in-flight op will pick up latest state after confirm`
@@ -807,47 +827,63 @@ export async function POST(
                 results.qb_sync = "coalesced";
                 // continue past this branch
               } else {
+                try {
+                  await getDbPool().query(
+                    `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status":"pending"}'::jsonb WHERE id = $1`,
+                    [id]
+                  );
+                } catch (mErr) {}
 
-              try {
-                await getDbPool().query(
-                  `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status":"pending"}'::jsonb WHERE id = $1`,
-                  [id]
-                );
-              } catch (mErr) {}
+                try {
+                  await writePipelineRow({
+                    orderId: id,
+                    step: "sales_order",
+                    status: "pending",
+                    medusaRefNumber: friendlyRef,
+                  });
+                } catch (pErr: any) {}
 
-              try {
-                await writePipelineRow({
-                  orderId: id,
-                  step: "sales_order",
-                  status: "pending",
-                  medusaRefNumber: friendlyRef,
-                });
-              } catch (pErr: any) {}
-
-              withQbSerialized(
-                `sales_order:${id}`,
-                { orderId: id, steps: ["sales_order"] },
-                async () => {
-                  try {
-                    const soRes = await createSalesOrderInQb({
-                      customerId: qbListId,
-                      date: new Date().toISOString().split("T")[0],
-                      items: createItems,
-                      ...(salesRep ? { salesRep } : {}),
-                    });
-                    if (soRes.success) {
-                      logger.info(
-                        `[post-edit-sync] ✅ New QB SO queued opId=${soRes.data?.operationId}`
-                      );
-                      await writePipelineRow({
-                        orderId: id,
-                        step: "sales_order",
-                        status: "submitted",
-                        bridgeOpId: soRes.data?.operationId,
+                withQbSerialized(
+                  `sales_order:${id}`,
+                  { orderId: id, steps: ["sales_order"] },
+                  async () => {
+                    try {
+                      const soRes = await createSalesOrderInQb({
+                        customerId: qbListId,
+                        date: new Date().toISOString().split("T")[0],
+                        items: createItems,
+                        ...(salesRep ? { salesRep } : {}),
                       });
-                    } else {
+                      if (soRes.success) {
+                        logger.info(
+                          `[post-edit-sync] ✅ New QB SO queued opId=${soRes.data?.operationId}`
+                        );
+                        await writePipelineRow({
+                          orderId: id,
+                          step: "sales_order",
+                          status: "submitted",
+                          bridgeOpId: soRes.data?.operationId,
+                        });
+                      } else {
+                        logger.error(
+                          `[post-edit-sync] ❌ New QB SO failed: ${soRes.error}`
+                        );
+                        try {
+                          await getDbPool().query(
+                            `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status":"error"}'::jsonb WHERE id = $1`,
+                            [id]
+                          );
+                          await writePipelineRow({
+                            orderId: id,
+                            step: "sales_order",
+                            status: "failed",
+                            error: soRes.error,
+                          });
+                        } catch (e) {}
+                      }
+                    } catch (e: any) {
                       logger.error(
-                        `[post-edit-sync] ❌ New QB SO failed: ${soRes.error}`
+                        `[post-edit-sync] ❌ New QB SO exception: ${e.message}`
                       );
                       try {
                         await getDbPool().query(
@@ -858,32 +894,15 @@ export async function POST(
                           orderId: id,
                           step: "sales_order",
                           status: "failed",
-                          error: soRes.error,
+                          error: e.message,
                         });
-                      } catch (e) {}
+                      } catch (err) {}
                     }
-                  } catch (e: any) {
-                    logger.error(
-                      `[post-edit-sync] ❌ New QB SO exception: ${e.message}`
-                    );
-                    try {
-                      await getDbPool().query(
-                        `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status":"error"}'::jsonb WHERE id = $1`,
-                        [id]
-                      );
-                      await writePipelineRow({
-                        orderId: id,
-                        step: "sales_order",
-                        status: "failed",
-                        error: e.message,
-                      });
-                    } catch (err) {}
-                  }
-                },
-                { logger }
-              );
+                  },
+                  { logger }
+                );
 
-              results.qb_sync = "new_so_queued";
+                results.qb_sync = "new_so_queued";
               } // end else (not coalesced)
             } else {
               logger.warn(

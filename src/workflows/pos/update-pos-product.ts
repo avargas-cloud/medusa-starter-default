@@ -6,9 +6,10 @@ import {
 import { updateProductsWorkflow } from "@medusajs/medusa/core-flows";
 
 import { sendToQbStep } from "../qb/send-to-qb-step";
+import { syncProductToMeiliSearchWorkflow } from "../sync-product-meilisearch";
+
 import { applyShippingAttributesStep } from "./steps/apply-shipping-attributes-step";
 import { linkQbVendorStep } from "./steps/link-qb-vendor-step";
-import { syncProductToMeiliSearchWorkflow } from "../sync-product-meilisearch";
 
 /**
  * Canonical field layout (post mass-sync):
@@ -62,7 +63,9 @@ export type UpdatePosProductInput = {
   };
 };
 
-const pruneUndefined = <T extends Record<string, unknown>>(obj: T): Partial<T> =>
+const pruneUndefined = <T extends Record<string, unknown>>(
+  obj: T
+): Partial<T> =>
   Object.fromEntries(
     Object.entries(obj).filter(([, v]) => v !== undefined)
   ) as Partial<T>;

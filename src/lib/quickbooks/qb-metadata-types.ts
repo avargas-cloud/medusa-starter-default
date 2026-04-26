@@ -304,11 +304,15 @@ export function buildInvoicePatch(
   const matchIdx = opts.invoiceId
     ? existing.findIndex((e) => e.invoice_id === opts.invoiceId)
     : opts.fulfillmentId
-    ? existing.findIndex((e) => e.fulfillment_id === opts.fulfillmentId)
-    : -1;
+      ? existing.findIndex((e) => e.fulfillment_id === opts.fulfillmentId)
+      : -1;
   const merged =
     matchIdx >= 0
-      ? [...existing.slice(0, matchIdx), newEntry, ...existing.slice(matchIdx + 1)]
+      ? [
+          ...existing.slice(0, matchIdx),
+          newEntry,
+          ...existing.slice(matchIdx + 1),
+        ]
       : [...existing, newEntry];
   return {
     ...existingMeta,

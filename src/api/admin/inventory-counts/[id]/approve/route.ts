@@ -9,12 +9,13 @@
  * enqueue grouped by account.
  */
 
-import { Modules } from "@medusajs/utils";
 import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+import { Modules } from "@medusajs/utils";
 
+import { approveInventoryCountWorkflow } from "../../../../../workflows/inventory-count/approve-inventory-count";
 import {
   ManagerRoleRequiredError,
   UnauthenticatedError,
@@ -24,8 +25,6 @@ import { zodErrorToBody } from "../../_lib/format";
 import { getInventoryCountService } from "../../_lib/service-resolver";
 import type { ApprovalDecision } from "../../_lib/types";
 import { approveSchema } from "../../_lib/validators";
-
-import { approveInventoryCountWorkflow } from "../../../../../workflows/inventory-count/approve-inventory-count";
 
 interface InventoryServiceLike {
   listInventoryLevels: (
@@ -46,7 +45,9 @@ export async function POST(
       err instanceof ManagerRoleRequiredError ||
       err instanceof UnauthenticatedError
     ) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }
@@ -62,7 +63,9 @@ export async function POST(
 
   const [count] = await service.listInventoryCounts({ id }, { take: 1 });
   if (!count) {
-    return res.status(404).json({ error: "inventory_count not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "inventory_count not found", code: "not_found" });
   }
   if (count.status !== "submitted" && count.status !== "partially_applied") {
     return res.status(409).json({

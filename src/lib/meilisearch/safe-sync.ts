@@ -125,9 +125,7 @@ export async function safeSyncIndex<T extends Record<string, unknown>>(
     chunks.map((chunk) => index.addDocuments(chunk, { primaryKey }))
   );
   if (uploadTasks.length > 0) {
-    await (client as any).tasks.waitForTasks(
-      uploadTasks.map((t) => t.taskUid)
-    );
+    await (client as any).tasks.waitForTasks(uploadTasks.map((t) => t.taskUid));
   }
   logger?.info(
     `[safe-sync:${indexName}] upsert complete in ${Date.now() - t0}ms`

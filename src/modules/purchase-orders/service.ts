@@ -17,8 +17,8 @@ import { PurchaseOrder } from "./models/purchase-order";
 import { PurchaseOrderLine } from "./models/purchase-order-line";
 import { PurchaseOrderReceipt } from "./models/purchase-order-receipt";
 import { PurchaseOrderReceiptLine } from "./models/purchase-order-receipt-line";
-import { QbPurchaseOrderPipeline } from "./models/qb-purchase-order-pipeline";
 import { QbItemReceiptPipeline } from "./models/qb-item-receipt-pipeline";
+import { QbPurchaseOrderPipeline } from "./models/qb-purchase-order-pipeline";
 import { VendorBill } from "./models/vendor-bill";
 import { VendorBillLine } from "./models/vendor-bill-line";
 
@@ -58,13 +58,15 @@ class PurchaseOrdersModuleService extends MedusaService({
   }
 
   private async nextval(sequenceName: string): Promise<number> {
-    const manager = (this as unknown as {
-      __container__: {
-        manager: {
-          execute: (sql: string) => Promise<unknown>;
+    const manager = (
+      this as unknown as {
+        __container__: {
+          manager: {
+            execute: (sql: string) => Promise<unknown>;
+          };
         };
-      };
-    }).__container__.manager;
+      }
+    ).__container__.manager;
 
     const rows = (await manager.execute(
       `SELECT nextval('${sequenceName}') AS seq;`

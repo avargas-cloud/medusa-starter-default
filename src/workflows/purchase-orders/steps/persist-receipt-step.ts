@@ -115,15 +115,12 @@ export const persistReceiptStep = createStep(
       };
     });
 
-    const createdReceiptLines = await service.createPurchaseOrderReceiptLines(
-      receiptLinePayload
-    );
+    const createdReceiptLines =
+      await service.createPurchaseOrderReceiptLines(receiptLinePayload);
     const receiptLinesArr = Array.isArray(createdReceiptLines)
       ? createdReceiptLines
       : [createdReceiptLines];
-    const receiptLineIds = receiptLinesArr.map(
-      (r) => (r as { id: string }).id
-    );
+    const receiptLineIds = receiptLinesArr.map((r) => (r as { id: string }).id);
 
     // 3. Refresh affected PurchaseOrderLine counters + status
     // Read current PO lines to compute new qty_received by aggregating all

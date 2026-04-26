@@ -31,9 +31,9 @@ import type {
 } from "@medusajs/framework/http";
 import { z } from "zod";
 
+import { UNMET_DEMAND_ITEM_KINDS } from "../../../../modules/unmet-demand/types";
 import { zodErrorToBody } from "../_lib/format";
 import { getUnmetDemandService } from "../_lib/service-resolver";
-import { UNMET_DEMAND_ITEM_KINDS } from "../../../../modules/unmet-demand/types";
 
 const querySchema = z.object({
   sku: z.string().min(1).optional(),
@@ -80,13 +80,21 @@ export async function GET(
     )) as Array<{ id: string }>;
     recordIdFilter = records.map((r) => r.id);
     if (recordIdFilter.length === 0) {
-      return res.json({ items: [], count: 0, limit: q.limit, offset: q.offset });
+      return res.json({
+        items: [],
+        count: 0,
+        limit: q.limit,
+        offset: q.offset,
+      });
     }
   }
 
   const itemWhere: Record<string, unknown> = {};
   if (q.sku) {
-    const skus = q.sku.split(",").map((s) => s.trim()).filter(Boolean);
+    const skus = q.sku
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     itemWhere.sku = skus.length === 1 ? skus[0] : skus;
   }
   if (q.variant_id) itemWhere.variant_id = q.variant_id;
@@ -106,10 +114,13 @@ export async function GET(
   }>;
 
   // Aggregate by sku (primary key) — variant_id/title taken from first row seen
-  const byKey = new Map<string, StatRow & {
-    _recRequested: Set<string>;
-    _recPurchased: Set<string>;
-  }>();
+  const byKey = new Map<
+    string,
+    StatRow & {
+      _recRequested: Set<string>;
+      _recPurchased: Set<string>;
+    }
+  >();
 
   for (const it of items) {
     const key = it.sku;

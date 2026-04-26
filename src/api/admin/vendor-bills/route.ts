@@ -13,11 +13,11 @@
  *   po_id    (purchase_order.id)
  */
 
-import { z } from "zod";
 import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+import { z } from "zod";
 
 import { zodErrorToBody } from "../purchase-orders/_lib/format";
 

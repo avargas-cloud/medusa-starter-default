@@ -38,10 +38,7 @@ export async function GET(
     // poisoned via another surface.
     const minioBase = process.env.MINIO_ENDPOINT;
     if (!minioBase || !target.startsWith(minioBase.replace(/\/$/, "") + "/")) {
-      console.error(
-        "[pdf-share] blocked suspicious redirect target:",
-        target
-      );
+      console.error("[pdf-share] blocked suspicious redirect target:", target);
       res.status(500).send("Internal error");
       return;
     }

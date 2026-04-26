@@ -44,7 +44,9 @@ export async function handleSalesReceiptCreated(
   // and return — consolidator will re-submit after current op confirms.
   const coalescedSR = await coalesceIfInFlight(orderId, null, "sales_receipt");
   if (coalescedSR) {
-    logger.info(`${LOG_PREFIX} ⏸ Sales receipt in-flight for ${orderId} — coalesced as next submit`);
+    logger.info(
+      `${LOG_PREFIX} ⏸ Sales receipt in-flight for ${orderId} — coalesced as next submit`
+    );
     return;
   }
 

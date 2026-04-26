@@ -157,7 +157,7 @@ export const classifyLinesStep = createStep(
         projected_stock: projected,
         qb_account_list_id: accountListId,
         override_note:
-          action === "override" ? decision?.override_note ?? null : null,
+          action === "override" ? (decision?.override_note ?? null) : null,
       });
 
       if (action === "override") {

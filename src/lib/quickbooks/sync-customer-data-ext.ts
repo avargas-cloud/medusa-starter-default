@@ -48,16 +48,15 @@ async function enqueueDataExt(
     }),
   });
   if (!res.ok) {
-    throw new Error(
-      `Bridge enqueue failed: ${res.status} ${res.statusText}`
-    );
+    throw new Error(`Bridge enqueue failed: ${res.status} ${res.statusText}`);
   }
   const json = (await res.json()) as {
     operation_id?: string;
     operationId?: string;
   };
   const id = json.operation_id || json.operationId;
-  if (!id) throw new Error(`Bridge returned no operation id: ${JSON.stringify(json)}`);
+  if (!id)
+    throw new Error(`Bridge returned no operation id: ${JSON.stringify(json)}`);
   return id;
 }
 
@@ -70,22 +69,27 @@ interface PollResult {
 async function pollOperation(operationId: string): Promise<PollResult> {
   for (let attempt = 1; attempt <= MAX_POLL_ATTEMPTS; attempt++) {
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-    const res = await fetch(
-      `${BRIDGE_URL}/api/sync/status/${operationId}`,
-      { signal: AbortSignal.timeout(8000), headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" } }
-    );
+    const res = await fetch(`${BRIDGE_URL}/api/sync/status/${operationId}`, {
+      signal: AbortSignal.timeout(8000),
+      headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" },
+    });
     if (!res.ok) continue;
     const json = (await res.json()) as any;
     const op = json?.operation;
     if (!op) continue;
     if (op.status === "completed") {
       // Inspect QBXML response — DataExtAddRs may have statusCode != 0 for "already exists"
-      const msgs = op.result?.QBXML?.QBXMLMsgsRs || op.result?.QBXMLMsgsRs || {};
+      const msgs =
+        op.result?.QBXML?.QBXMLMsgsRs || op.result?.QBXMLMsgsRs || {};
       const rs = msgs?.DataExtAddRs || msgs?.DataExtModRs;
       const code = rs?.statusCode ?? rs?.["$"]?.statusCode;
       const msg = rs?.statusMessage ?? rs?.["$"]?.statusMessage;
       if (code && String(code) !== "0") {
-        return { status: "failed", error: msg || `QB status ${code}`, statusCode: String(code) };
+        return {
+          status: "failed",
+          error: msg || `QB status ${code}`,
+          statusCode: String(code),
+        };
       }
       return { status: "completed" };
     }
@@ -107,7 +111,8 @@ async function pollOperation(operationId: string): Promise<PollResult> {
 // 3100: record does not exist. 3200: record already exists (DataExt duplicate).
 function isAlreadyExistsError(code?: string, msg?: string): boolean {
   if (code === "3200") return true;
-  if (msg && /already exists|already been added|duplicate/i.test(msg)) return true;
+  if (msg && /already exists|already been added|duplicate/i.test(msg))
+    return true;
   return false;
 }
 
@@ -129,8 +134,15 @@ export async function syncCustomerDataExtToQb(params: {
 
   // 1. Try Add first
   try {
-    const opId = await enqueueDataExt("add", qbListId, dataExtName, dataExtValue);
-    log(`[data-ext] Add enqueued op=${opId} for ${qbListId} (${dataExtName}="${dataExtValue}")`);
+    const opId = await enqueueDataExt(
+      "add",
+      qbListId,
+      dataExtName,
+      dataExtValue
+    );
+    log(
+      `[data-ext] Add enqueued op=${opId} for ${qbListId} (${dataExtName}="${dataExtValue}")`
+    );
     const result = await pollOperation(opId);
     if (result.status === "completed") {
       return { success: true, action: "add" };
@@ -148,7 +160,12 @@ export async function syncCustomerDataExtToQb(params: {
 
   // 2. Fallback: Mod
   try {
-    const opId = await enqueueDataExt("mod", qbListId, dataExtName, dataExtValue);
+    const opId = await enqueueDataExt(
+      "mod",
+      qbListId,
+      dataExtName,
+      dataExtValue
+    );
     log(`[data-ext] Mod enqueued op=${opId} for ${qbListId}`);
     const result = await pollOperation(opId);
     if (result.status === "completed") {

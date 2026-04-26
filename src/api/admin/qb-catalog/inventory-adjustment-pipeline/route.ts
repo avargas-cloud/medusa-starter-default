@@ -42,12 +42,7 @@ interface CountRow {
   memo: string | null;
 }
 
-const ALLOWED_STATUSES = new Set([
-  "waiting",
-  "processing",
-  "synced",
-  "error",
-]);
+const ALLOWED_STATUSES = new Set(["waiting", "processing", "synced", "error"]);
 
 const ALLOWED_VOID_STATUSES = new Set([
   "waiting",
@@ -67,15 +62,20 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
   const limitParam = Number(req.query.limit ?? 50);
   const offsetParam = Number(req.query.offset ?? 0);
-  const limit = Number.isFinite(limitParam) ? Math.min(200, Math.max(1, limitParam)) : 50;
+  const limit = Number.isFinite(limitParam)
+    ? Math.min(200, Math.max(1, limitParam))
+    : 50;
   const offset = Number.isFinite(offsetParam) ? Math.max(0, offsetParam) : 0;
 
   const statusParam = req.query.status ? String(req.query.status) : "";
-  const voidStatusParam = req.query.void_status ? String(req.query.void_status) : "";
+  const voidStatusParam = req.query.void_status
+    ? String(req.query.void_status)
+    : "";
 
   const filters: Record<string, unknown> = {};
   if (ALLOWED_STATUSES.has(statusParam)) filters.status = statusParam;
-  if (ALLOWED_VOID_STATUSES.has(voidStatusParam)) filters.void_status = voidStatusParam;
+  if (ALLOWED_VOID_STATUSES.has(voidStatusParam))
+    filters.void_status = voidStatusParam;
 
   const { data: rows, metadata } = await query.graph({
     entity: "qb_inventory_adjustment_pipeline",

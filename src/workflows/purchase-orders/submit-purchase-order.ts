@@ -48,54 +48,45 @@ export const submitPurchaseOrderWorkflow = createWorkflow(
 
     const seq = allocatePoSequenceStep({ po_id: input.po_id });
 
-    const snapshotInput = transform(
-      { input, validated, seq },
-      (data) => ({
-        po_id: data.input.po_id,
-        seq: data.seq.seq,
-        number: data.seq.number,
-        submitted_by_user_id: data.input.submitted_by_user_id,
-        vendor_name: data.validated.vendor.vendor_name,
-        vendor_qb_list_id: data.validated.vendor.vendor_qb_list_id,
-      })
-    );
+    const snapshotInput = transform({ input, validated, seq }, (data) => ({
+      po_id: data.input.po_id,
+      seq: data.seq.seq,
+      number: data.seq.number,
+      submitted_by_user_id: data.input.submitted_by_user_id,
+      vendor_name: data.validated.vendor.vendor_name,
+      vendor_qb_list_id: data.validated.vendor.vendor_qb_list_id,
+    }));
 
     const frozen = freezePoSnapshotStep(snapshotInput);
 
-    const enqueueInput = transform(
-      { input, validated, frozen },
-      (data) => ({
-        po_id: data.input.po_id,
-        po_number: data.frozen.number,
-        vendor_qb_list_id: data.validated.vendor.vendor_qb_list_id,
-        vendor_name: data.validated.vendor.vendor_name,
-        ordered_at: data.validated.po.ordered_at,
-        expected_at: data.validated.po.expected_at,
-        memo: data.validated.po.memo,
-        reference_number: data.validated.po.reference_number,
-        lines: data.validated.lines.map((l) => ({
-          line_id: l.line_id,
-          qb_item_list_id: l.qb_item_list_id,
-          sku: l.sku,
-          description: l.description,
-          qty_ordered: l.qty_ordered,
-          unit_cost_cents: l.unit_cost_cents,
-        })),
-      })
-    );
+    const enqueueInput = transform({ input, validated, frozen }, (data) => ({
+      po_id: data.input.po_id,
+      po_number: data.frozen.number,
+      vendor_qb_list_id: data.validated.vendor.vendor_qb_list_id,
+      vendor_name: data.validated.vendor.vendor_name,
+      ordered_at: data.validated.po.ordered_at,
+      expected_at: data.validated.po.expected_at,
+      memo: data.validated.po.memo,
+      reference_number: data.validated.po.reference_number,
+      lines: data.validated.lines.map((l) => ({
+        line_id: l.line_id,
+        qb_item_list_id: l.qb_item_list_id,
+        sku: l.sku,
+        description: l.description,
+        qty_ordered: l.qty_ordered,
+        unit_cost_cents: l.unit_cost_cents,
+      })),
+    }));
 
     const queued = enqueueQbPurchaseOrderStep(enqueueInput);
 
-    const response = transform(
-      { input, frozen, queued },
-      (data) => ({
-        po_id: data.input.po_id,
-        number: data.frozen.number,
-        status: "submitted" as const,
-        qb_pipeline_id: data.queued.pipeline_id,
-        submitted_at: data.frozen.submitted_at,
-      })
-    );
+    const response = transform({ input, frozen, queued }, (data) => ({
+      po_id: data.input.po_id,
+      number: data.frozen.number,
+      status: "submitted" as const,
+      qb_pipeline_id: data.queued.pipeline_id,
+      submitted_at: data.frozen.submitted_at,
+    }));
 
     return new WorkflowResponse(response);
   }

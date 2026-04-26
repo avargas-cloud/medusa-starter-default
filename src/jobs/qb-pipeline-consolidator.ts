@@ -19,16 +19,14 @@ import {
   closeSalesOrderInQb,
   reopenSalesOrderInQb,
 } from "../lib/quickbooks/client/sales-orders";
-import { handleDraftOrderCreated } from "../subscribers/qb-draft-order-subscriber";
 import { handleDraftOrderUpdated } from "../lib/quickbooks/handlers/handle-draft-order-updated";
 import { handleFulfillmentCreated } from "../lib/quickbooks/handlers/handle-fulfillment-created";
 import { handleOrderPlaced } from "../lib/quickbooks/handlers/handle-order-placed";
 import { handleOrderUpdated } from "../lib/quickbooks/handlers/handle-order-updated";
 import { handlePosPaymentApplied } from "../lib/quickbooks/handlers/handle-pos-payment-applied";
 import { handleSalesReceiptCreated } from "../lib/quickbooks/handlers/handle-sales-receipt-created";
-import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types";
 import { ensureCustomerInQb } from "../lib/quickbooks/order-flow-core";
-import { syncCustomerDataExtToQb } from "../lib/quickbooks/sync-customer-data-ext";
+import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types";
 import {
   claimAndResetForResubmit,
   confirmPipelineRow,
@@ -36,6 +34,8 @@ import {
   cacheEditSequence,
   invalidateEditSequenceCache,
 } from "../lib/quickbooks/qb-pipeline";
+import { syncCustomerDataExtToQb } from "../lib/quickbooks/sync-customer-data-ext";
+import { handleDraftOrderCreated } from "../subscribers/qb-draft-order-subscriber";
 
 /**
  * Processes a single step='customer' pipeline row by calling ensureCustomerInQb.
@@ -106,7 +106,8 @@ async function processCustomerPipelineRow(
         `${LOG_PREFIX} ✅ Customer pipeline row ${row.id} confirmed — qb_list_id=${result.qbCustomerId}`
       );
     } else {
-      const errMsg = result.error ?? "ensureCustomerInQb returned no qbCustomerId";
+      const errMsg =
+        result.error ?? "ensureCustomerInQb returned no qbCustomerId";
       await pool.query(
         `UPDATE qb_order_pipeline
             SET status     = 'failed',
@@ -155,7 +156,8 @@ async function processCustomerDataExtPipelineRow(
   try {
     const customer = await customerModule.retrieveCustomer(row.customer_id);
     const meta = (customer.metadata ?? {}) as Record<string, unknown>;
-    const qbListId = typeof meta.qb_list_id === "string" ? meta.qb_list_id : null;
+    const qbListId =
+      typeof meta.qb_list_id === "string" ? meta.qb_list_id : null;
     const channel =
       typeof meta.acquisition_channel === "string"
         ? (meta.acquisition_channel as string).trim()
@@ -1086,7 +1088,9 @@ export default async function qbPipelineConsolidator(
             } else if (row.step === "sales_order" && txnId) {
               // Always persist SO TxnId — handles both fresh creation and updates.
               const existing =
-                (existingMeta.qb_sales_order as Record<string, any> | undefined) || {};
+                (existingMeta.qb_sales_order as
+                  | Record<string, any>
+                  | undefined) || {};
               patch = {
                 ...existingMeta,
                 qb_sales_order: {
@@ -1110,8 +1114,7 @@ export default async function qbPipelineConsolidator(
                 continue;
               }
               // Merge editSequence into existing qb_<step> sub-object
-              const stepKey =
-                row.step === "invoice" ? "qb_invoices" : null;
+              const stepKey = row.step === "invoice" ? "qb_invoices" : null;
               if (stepKey === null) {
                 patch = existingMeta; // nothing to merge safely
               } else {
@@ -1546,7 +1549,9 @@ export default async function qbPipelineConsolidator(
       }
     }
   } catch (wakeErr: any) {
-    logger.warn(`${LOG_PREFIX} ⚠️ Wake-dependents pass error: ${wakeErr.message}`);
+    logger.warn(
+      `${LOG_PREFIX} ⚠️ Wake-dependents pass error: ${wakeErr.message}`
+    );
   }
 
   // ── Timeout pass: pending rows stuck for >20 minutes → failed ──────────────

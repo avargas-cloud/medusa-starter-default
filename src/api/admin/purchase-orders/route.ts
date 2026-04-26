@@ -77,7 +77,9 @@ export async function POST(
     userId = getActorUserId(req);
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }
@@ -106,9 +108,22 @@ export async function POST(
       company_name: string | null;
     } | null>;
   };
-  const vendorRow = await qbCatalog.retrieveQbVendor(body.vendor_id).catch(() => null);
+  let vendorRow = await qbCatalog
+    .retrieveQbVendor(body.vendor_id)
+    .catch(() => null);
+
+  // Fallback: direct DB lookup when QB catalog service returns nothing
+  if (!vendorRow) {
+    const knex = (req.scope as any).resolve("__pg_connection__");
+    const rows = await knex.raw(
+      `SELECT qb_list_id, full_name, name, company_name FROM qb_vendor WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
+      [body.vendor_id]
+    ).then((r: any) => r.rows);
+    if (rows.length > 0) vendorRow = rows[0];
+  }
+
   const vendorNameSnapshot = vendorRow
-    ? (vendorRow.company_name ?? vendorRow.full_name ?? vendorRow.name)
+    ? (vendorRow.company_name ?? vendorRow.full_name ?? vendorRow.name ?? null)
     : null;
   const vendorQbListIdSnapshot = vendorRow?.qb_list_id ?? null;
 

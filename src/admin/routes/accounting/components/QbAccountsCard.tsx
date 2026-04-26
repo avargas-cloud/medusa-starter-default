@@ -45,7 +45,8 @@ export const QbAccountsCard = () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (typeFilter && typeFilter !== ALL_TYPES) params.set("type", typeFilter);
+      if (typeFilter && typeFilter !== ALL_TYPES)
+        params.set("type", typeFilter);
       const res = await fetch(`/admin/qb-catalog/accounts?${params}`, {
         credentials: "include",
       });
@@ -79,7 +80,8 @@ export const QbAccountsCard = () => {
         credentials: "include",
       });
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error ?? "Sync failed");
+      if (!res.ok || !data.success)
+        throw new Error(data.error ?? "Sync failed");
       toast.success("QuickBooks accounts synced", {
         description: data.message,
       });
@@ -99,15 +101,11 @@ export const QbAccountsCard = () => {
         <div>
           <Heading level="h2">QuickBooks Accounts</Heading>
           <Text className="text-ui-fg-subtle text-sm mt-1">
-            Chart of Accounts cached locally. Used to populate COGS / Income / Expense dropdowns
-            when creating products from the POS.
+            Chart of Accounts cached locally. Used to populate COGS / Income /
+            Expense dropdowns when creating products from the POS.
           </Text>
         </div>
-        <Button
-          variant="secondary"
-          onClick={handleSync}
-          isLoading={syncing}
-        >
+        <Button variant="secondary" onClick={handleSync} isLoading={syncing}>
           <ArrowPath />
           Sync from QuickBooks
         </Button>
@@ -147,21 +145,23 @@ export const QbAccountsCard = () => {
           </Text>
         )}
         {!loading && filtered.length > 0 && (
-        <Table>
-          <Table.Header>
-            <Table.Row>
-              <Table.HeaderCell>Account (FullName)</Table.HeaderCell>
-              <Table.HeaderCell>Type</Table.HeaderCell>
-              <Table.HeaderCell>ListID</Table.HeaderCell>
-              <Table.HeaderCell>Status</Table.HeaderCell>
-            </Table.Row>
-          </Table.Header>
-          <Table.Body>
-            {filtered.map((a) => (
+          <Table>
+            <Table.Header>
+              <Table.Row>
+                <Table.HeaderCell>Account (FullName)</Table.HeaderCell>
+                <Table.HeaderCell>Type</Table.HeaderCell>
+                <Table.HeaderCell>ListID</Table.HeaderCell>
+                <Table.HeaderCell>Status</Table.HeaderCell>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {filtered.map((a) => (
                 <Table.Row key={a.id}>
                   <Table.Cell>
                     <span
-                      style={{ paddingLeft: `${hierarchyLevel(a.full_name) * 16}px` }}
+                      style={{
+                        paddingLeft: `${hierarchyLevel(a.full_name) * 16}px`,
+                      }}
                       className="font-mono text-sm"
                     >
                       {a.full_name}
@@ -171,19 +171,25 @@ export const QbAccountsCard = () => {
                     <Badge size="2xsmall">{a.account_type}</Badge>
                   </Table.Cell>
                   <Table.Cell>
-                    <code className="text-xs text-ui-fg-subtle">{a.qb_list_id}</code>
+                    <code className="text-xs text-ui-fg-subtle">
+                      {a.qb_list_id}
+                    </code>
                   </Table.Cell>
                   <Table.Cell>
                     {a.is_active ? (
-                      <Badge color="green" size="2xsmall">Active</Badge>
+                      <Badge color="green" size="2xsmall">
+                        Active
+                      </Badge>
                     ) : (
-                      <Badge color="grey" size="2xsmall">Inactive</Badge>
+                      <Badge color="grey" size="2xsmall">
+                        Inactive
+                      </Badge>
                     )}
                   </Table.Cell>
                 </Table.Row>
               ))}
-          </Table.Body>
-        </Table>
+            </Table.Body>
+          </Table>
         )}
       </div>
     </Container>

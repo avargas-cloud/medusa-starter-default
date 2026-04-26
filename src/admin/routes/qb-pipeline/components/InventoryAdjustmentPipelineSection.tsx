@@ -47,18 +47,56 @@ const STATUS_FILTERS = [
 ];
 
 const StatusBadge = ({ status }: { status: AddStatus }) => {
-  if (status === "synced") return <Badge color="green" size="2xsmall">synced</Badge>;
-  if (status === "error") return <Badge color="red" size="2xsmall">error</Badge>;
-  if (status === "processing") return <Badge color="blue" size="2xsmall">processing</Badge>;
-  return <Badge color="orange" size="2xsmall">waiting</Badge>;
+  if (status === "synced")
+    return (
+      <Badge color="green" size="2xsmall">
+        synced
+      </Badge>
+    );
+  if (status === "error")
+    return (
+      <Badge color="red" size="2xsmall">
+        error
+      </Badge>
+    );
+  if (status === "processing")
+    return (
+      <Badge color="blue" size="2xsmall">
+        processing
+      </Badge>
+    );
+  return (
+    <Badge color="orange" size="2xsmall">
+      waiting
+    </Badge>
+  );
 };
 
 const VoidStatusBadge = ({ status }: { status: VoidStatus }) => {
   if (!status) return <span className="text-ui-fg-muted text-xs">—</span>;
-  if (status === "voided") return <Badge color="purple" size="2xsmall">voided</Badge>;
-  if (status === "error") return <Badge color="red" size="2xsmall">void-err</Badge>;
-  if (status === "processing") return <Badge color="blue" size="2xsmall">voiding</Badge>;
-  return <Badge color="orange" size="2xsmall">void-pending</Badge>;
+  if (status === "voided")
+    return (
+      <Badge color="purple" size="2xsmall">
+        voided
+      </Badge>
+    );
+  if (status === "error")
+    return (
+      <Badge color="red" size="2xsmall">
+        void-err
+      </Badge>
+    );
+  if (status === "processing")
+    return (
+      <Badge color="blue" size="2xsmall">
+        voiding
+      </Badge>
+    );
+  return (
+    <Badge color="orange" size="2xsmall">
+      void-pending
+    </Badge>
+  );
 };
 
 const truncate = (s: string | null, n = 16): string => {
@@ -171,11 +209,21 @@ export const InventoryAdjustmentPipelineSection = () => {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-3">
-        <Badge color="orange" size="small">Waiting: {counts.waiting}</Badge>
-        <Badge color="blue" size="small">Processing: {counts.processing}</Badge>
-        <Badge color="green" size="small">Synced: {counts.synced}</Badge>
-        <Badge color="red" size="small">Error: {counts.error}</Badge>
-        <Badge color="purple" size="small">Void: {counts.void}</Badge>
+        <Badge color="orange" size="small">
+          Waiting: {counts.waiting}
+        </Badge>
+        <Badge color="blue" size="small">
+          Processing: {counts.processing}
+        </Badge>
+        <Badge color="green" size="small">
+          Synced: {counts.synced}
+        </Badge>
+        <Badge color="red" size="small">
+          Error: {counts.error}
+        </Badge>
+        <Badge color="purple" size="small">
+          Void: {counts.void}
+        </Badge>
       </div>
 
       <Container className="p-0">
@@ -245,8 +293,12 @@ export const InventoryAdjustmentPipelineSection = () => {
                       <Table.Cell className="font-mono text-sm">
                         {r.count_number ?? truncate(r.count_id, 12)}
                       </Table.Cell>
-                      <Table.Cell><StatusBadge status={r.status} /></Table.Cell>
-                      <Table.Cell><VoidStatusBadge status={r.void_status} /></Table.Cell>
+                      <Table.Cell>
+                        <StatusBadge status={r.status} />
+                      </Table.Cell>
+                      <Table.Cell>
+                        <VoidStatusBadge status={r.void_status} />
+                      </Table.Cell>
                       <Table.Cell className="font-mono text-xs">
                         {r.qb_txn_number ?? "—"}
                       </Table.Cell>
@@ -255,7 +307,9 @@ export const InventoryAdjustmentPipelineSection = () => {
                           <Tooltip content={r.qb_list_id}>
                             <span>{truncate(r.qb_list_id, 14)}</span>
                           </Tooltip>
-                        ) : "—"}
+                        ) : (
+                          "—"
+                        )}
                       </Table.Cell>
                       <Table.Cell>{r.lines_count}</Table.Cell>
                       <Table.Cell>{r.total_delta_units}</Table.Cell>
@@ -270,7 +324,9 @@ export const InventoryAdjustmentPipelineSection = () => {
                               {error}
                             </span>
                           </Tooltip>
-                        ) : "—"}
+                        ) : (
+                          "—"
+                        )}
                       </Table.Cell>
                       <Table.Cell>
                         {canRetry && (

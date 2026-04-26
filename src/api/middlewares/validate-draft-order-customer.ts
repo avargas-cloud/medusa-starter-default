@@ -17,33 +17,32 @@ import type {
   MedusaNextFunction,
   MedusaRequest,
   MedusaResponse,
-} from "@medusajs/framework/http"
-import { Modules } from "@medusajs/utils"
+} from "@medusajs/framework/http";
+import { Modules } from "@medusajs/utils";
 
 export async function validateDraftOrderCustomer(
   req: MedusaRequest,
   res: MedusaResponse,
   next: MedusaNextFunction
 ) {
-  const body = (req.body ?? {}) as Record<string, unknown>
+  const body = (req.body ?? {}) as Record<string, unknown>;
   const customerId =
     typeof body.customer_id === "string" && body.customer_id.length > 0
       ? body.customer_id
-      : null
+      : null;
 
   if (!customerId) {
     return res.status(400).json({
-      error:
-        "customer_id is required. Please select a customer before saving.",
+      error: "customer_id is required. Please select a customer before saving.",
       code: "CUSTOMER_REQUIRED",
-    })
+    });
   }
 
   try {
-    const customerModule = req.scope.resolve(Modules.CUSTOMER)
+    const customerModule = req.scope.resolve(Modules.CUSTOMER);
     const customer = await customerModule
       .retrieveCustomer(customerId)
-      .catch(() => null)
+      .catch(() => null);
 
     if (!customer) {
       return res.status(400).json({
@@ -51,19 +50,19 @@ export async function validateDraftOrderCustomer(
           "The selected customer no longer exists. Reload the POS (F5) and reselect a customer.",
         code: "CUSTOMER_NOT_FOUND",
         customer_id: customerId,
-      })
+      });
     }
 
-    return next()
+    return next();
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = err instanceof Error ? err.message : String(err);
     console.error(
       `[validateDraftOrderCustomer] unexpected error for customer_id=${customerId}:`,
       message
-    )
+    );
     return res.status(500).json({
       error: "Failed to validate customer. Try again.",
       code: "VALIDATE_CUSTOMER_ERROR",
-    })
+    });
   }
 }

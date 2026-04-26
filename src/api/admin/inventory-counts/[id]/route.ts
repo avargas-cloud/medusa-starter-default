@@ -14,8 +14,8 @@ import type {
 import { buildEnrichmentMaps, decorateCount } from "../_lib/enrich";
 import { zodErrorToBody } from "../_lib/format";
 import { getInventoryCountService } from "../_lib/service-resolver";
-import { updateDraftSchema } from "../_lib/validators";
 import type { UpdateDraftLineInput } from "../_lib/types";
+import { updateDraftSchema } from "../_lib/validators";
 
 export async function GET(
   req: AuthenticatedMedusaRequest,
@@ -26,7 +26,9 @@ export async function GET(
 
   const [count] = await service.listInventoryCounts({ id }, { take: 1 });
   if (!count) {
-    return res.status(404).json({ error: "inventory_count not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "inventory_count not found", code: "not_found" });
   }
 
   const lines = await service.listInventoryCountLines(
@@ -41,7 +43,10 @@ export async function GET(
 }
 
 export async function PATCH(
-  req: AuthenticatedMedusaRequest<{ lines?: UpdateDraftLineInput[]; memo?: string }>,
+  req: AuthenticatedMedusaRequest<{
+    lines?: UpdateDraftLineInput[];
+    memo?: string;
+  }>,
   res: MedusaResponse
 ) {
   const { id } = req.params;
@@ -49,7 +54,9 @@ export async function PATCH(
 
   const [count] = await service.listInventoryCounts({ id }, { take: 1 });
   if (!count) {
-    return res.status(404).json({ error: "inventory_count not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "inventory_count not found", code: "not_found" });
   }
   if (count.status !== "draft") {
     return res.status(409).json({
@@ -69,7 +76,12 @@ export async function PATCH(
     if (memo !== undefined) {
       await service.updateInventoryCounts([{ id, memo }]);
     }
-    return res.json({ inventory_count_id: id, lines: [], created: 0, updated: 0 });
+    return res.json({
+      inventory_count_id: id,
+      lines: [],
+      created: 0,
+      updated: 0,
+    });
   }
 
   const existing = await service.listInventoryCountLines(
@@ -142,7 +154,9 @@ export async function DELETE(
 
   const [count] = await service.listInventoryCounts({ id }, { take: 1 });
   if (!count) {
-    return res.status(404).json({ error: "inventory_count not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "inventory_count not found", code: "not_found" });
   }
   if (count.status !== "draft") {
     return res.status(409).json({

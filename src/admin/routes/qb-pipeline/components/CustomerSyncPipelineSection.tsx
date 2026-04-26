@@ -48,12 +48,28 @@ const STATUS_FILTERS = [
 
 const StatusBadge = ({ status }: { status: string }) => {
   if (status === "confirmed")
-    return <Badge color="green" size="2xsmall">confirmed</Badge>;
+    return (
+      <Badge color="green" size="2xsmall">
+        confirmed
+      </Badge>
+    );
   if (status === "failed")
-    return <Badge color="red" size="2xsmall">failed</Badge>;
+    return (
+      <Badge color="red" size="2xsmall">
+        failed
+      </Badge>
+    );
   if (status === "submitted")
-    return <Badge color="blue" size="2xsmall">submitted</Badge>;
-  return <Badge color="orange" size="2xsmall">{status}</Badge>;
+    return (
+      <Badge color="blue" size="2xsmall">
+        submitted
+      </Badge>
+    );
+  return (
+    <Badge color="orange" size="2xsmall">
+      {status}
+    </Badge>
+  );
 };
 
 export const CustomerSyncPipelineSection = () => {
@@ -109,9 +125,15 @@ export const CustomerSyncPipelineSection = () => {
             .filter((x): x is string => typeof x === "string")
         ),
       ];
-      let customerMap = new Map<
+      const customerMap = new Map<
         string,
-        { name: string; email: string; acq: string; list_id: string | null; created_at: string | null }
+        {
+          name: string;
+          email: string;
+          acq: string;
+          list_id: string | null;
+          created_at: string | null;
+        }
       >();
       if (uniqueIds.length > 0) {
         const cRes = await fetch(
@@ -123,7 +145,10 @@ export const CustomerSyncPipelineSection = () => {
           for (const c of cData.customers ?? []) {
             const meta = (c.metadata ?? {}) as Record<string, unknown>;
             customerMap.set(c.id, {
-              name: `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() || c.email || c.id,
+              name:
+                `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() ||
+                c.email ||
+                c.id,
               email: c.email ?? "",
               acq:
                 typeof meta.acquisition_channel === "string"
@@ -131,7 +156,8 @@ export const CustomerSyncPipelineSection = () => {
                   : "",
               list_id:
                 typeof meta.qb_list_id === "string" ? meta.qb_list_id : null,
-              created_at: typeof c.created_at === "string" ? c.created_at : null,
+              created_at:
+                typeof c.created_at === "string" ? c.created_at : null,
             });
           }
         }
@@ -221,8 +247,8 @@ export const CustomerSyncPipelineSection = () => {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <Text className="text-ui-fg-subtle">
           Writes the customer's <strong>acquisition_channel</strong> to the QB
-          custom field <em>Distribution Channel</em>. Rows are enqueued when
-          a customer is created/updated with a valid channel and a qb_list_id.
+          custom field <em>Distribution Channel</em>. Rows are enqueued when a
+          customer is created/updated with a valid channel and a qb_list_id.
         </Text>
         <Button
           size="small"
@@ -290,13 +316,12 @@ export const CustomerSyncPipelineSection = () => {
             </Table.Row>
           ) : (
             filtered.map((r) => {
-              const resolved =
-                r.confirmed_at ?? r.failed_at ?? null;
+              const resolved = r.confirmed_at ?? r.failed_at ?? null;
               const isNewCustomer = (() => {
                 if (!r.customer_created_at) return false;
                 const diff = Math.abs(
                   new Date(r.created_at).getTime() -
-                  new Date(r.customer_created_at).getTime()
+                    new Date(r.customer_created_at).getTime()
                 );
                 return diff < 5 * 60 * 1000;
               })();
@@ -323,11 +348,19 @@ export const CustomerSyncPipelineSection = () => {
                     </Table.Cell>
                     <Table.Cell>
                       {isNewCustomer ? (
-                        <Badge size="2xsmall" color="green" className="whitespace-nowrap">
+                        <Badge
+                          size="2xsmall"
+                          color="green"
+                          className="whitespace-nowrap"
+                        >
                           New Customer
                         </Badge>
                       ) : (
-                        <Badge size="2xsmall" color="blue" className="whitespace-nowrap">
+                        <Badge
+                          size="2xsmall"
+                          color="blue"
+                          className="whitespace-nowrap"
+                        >
                           Edit Customer
                         </Badge>
                       )}

@@ -100,5 +100,6 @@ export const PurchaseOrder = model.define("purchase_order", {
   // QB sync — header-level PurchaseOrderAdd
   qb_purchase_order_list_id: model.text().nullable(), // TxnID
   qb_purchase_order_txn_number: model.text().nullable(),
+  qb_edit_sequence: model.text().nullable(), // required for PurchaseOrderMod
   qb_synced_at: model.dateTime().nullable(),
 });

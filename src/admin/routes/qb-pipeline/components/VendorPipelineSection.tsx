@@ -38,10 +38,22 @@ const STATUS_FILTERS = [
 
 const StatusBadge = ({ status }: { status: VendorPipelineRow["status"] }) => {
   if (status === "synced")
-    return <Badge color="green" size="2xsmall">synced</Badge>;
+    return (
+      <Badge color="green" size="2xsmall">
+        synced
+      </Badge>
+    );
   if (status === "error")
-    return <Badge color="red" size="2xsmall">error</Badge>;
-  return <Badge color="orange" size="2xsmall">waiting</Badge>;
+    return (
+      <Badge color="red" size="2xsmall">
+        error
+      </Badge>
+    );
+  return (
+    <Badge color="orange" size="2xsmall">
+      waiting
+    </Badge>
+  );
 };
 
 export const VendorPipelineSection = () => {
@@ -69,10 +81,9 @@ export const VendorPipelineSection = () => {
     try {
       const params = new URLSearchParams();
       if (status !== "__all__") params.set("status", status);
-      const res = await fetch(
-        `/admin/qb-catalog/vendor-pipeline?${params}`,
-        { credentials: "include" }
-      );
+      const res = await fetch(`/admin/qb-catalog/vendor-pipeline?${params}`, {
+        credentials: "include",
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setRows(data.rows ?? []);
@@ -138,9 +149,15 @@ export const VendorPipelineSection = () => {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-3">
-        <Badge color="orange" size="small">Waiting: {counts.waiting}</Badge>
-        <Badge color="green" size="small">Synced: {counts.synced}</Badge>
-        <Badge color="red" size="small">Error: {counts.error}</Badge>
+        <Badge color="orange" size="small">
+          Waiting: {counts.waiting}
+        </Badge>
+        <Badge color="green" size="small">
+          Synced: {counts.synced}
+        </Badge>
+        <Badge color="red" size="small">
+          Error: {counts.error}
+        </Badge>
       </div>
 
       <Container className="p-0">

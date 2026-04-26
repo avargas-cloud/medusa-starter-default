@@ -68,7 +68,8 @@ export const QbVendorsCard = () => {
         credentials: "include",
       });
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error ?? "Sync failed");
+      if (!res.ok || !data.success)
+        throw new Error(data.error ?? "Sync failed");
       toast.success("QuickBooks vendors synced", { description: data.message });
       fetchVendors();
     } catch (e) {
@@ -84,8 +85,8 @@ export const QbVendorsCard = () => {
         <div>
           <Heading level="h2">QuickBooks Vendors</Heading>
           <Text className="text-ui-fg-subtle text-sm mt-1">
-            Vendor list cached locally. Used to populate the Preferred Vendor dropdown
-            when creating products from the POS.
+            Vendor list cached locally. Used to populate the Preferred Vendor
+            dropdown when creating products from the POS.
           </Text>
         </div>
         <Button variant="secondary" onClick={handleSync} isLoading={syncing}>
@@ -116,34 +117,42 @@ export const QbVendorsCard = () => {
           </Text>
         )}
         {!loading && filtered.length > 0 && (
-        <Table>
-          <Table.Header>
-            <Table.Row>
-              <Table.HeaderCell>Vendor (FullName)</Table.HeaderCell>
-              <Table.HeaderCell>Company</Table.HeaderCell>
-              <Table.HeaderCell>ListID</Table.HeaderCell>
-              <Table.HeaderCell>Status</Table.HeaderCell>
-            </Table.Row>
-          </Table.Header>
-          <Table.Body>
-            {filtered.map((v) => (
+          <Table>
+            <Table.Header>
+              <Table.Row>
+                <Table.HeaderCell>Vendor (FullName)</Table.HeaderCell>
+                <Table.HeaderCell>Company</Table.HeaderCell>
+                <Table.HeaderCell>ListID</Table.HeaderCell>
+                <Table.HeaderCell>Status</Table.HeaderCell>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {filtered.map((v) => (
                 <Table.Row key={v.id}>
-                  <Table.Cell className="font-mono text-sm">{v.full_name}</Table.Cell>
+                  <Table.Cell className="font-mono text-sm">
+                    {v.full_name}
+                  </Table.Cell>
                   <Table.Cell>{v.company_name ?? "—"}</Table.Cell>
                   <Table.Cell>
-                    <code className="text-xs text-ui-fg-subtle">{v.qb_list_id}</code>
+                    <code className="text-xs text-ui-fg-subtle">
+                      {v.qb_list_id}
+                    </code>
                   </Table.Cell>
                   <Table.Cell>
                     {v.is_active ? (
-                      <Badge color="green" size="2xsmall">Active</Badge>
+                      <Badge color="green" size="2xsmall">
+                        Active
+                      </Badge>
                     ) : (
-                      <Badge color="grey" size="2xsmall">Inactive</Badge>
+                      <Badge color="grey" size="2xsmall">
+                        Inactive
+                      </Badge>
                     )}
                   </Table.Cell>
                 </Table.Row>
               ))}
-          </Table.Body>
-        </Table>
+            </Table.Body>
+          </Table>
         )}
       </div>
     </Container>

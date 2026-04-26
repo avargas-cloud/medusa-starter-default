@@ -33,7 +33,9 @@ export async function POST(
       err instanceof ManagerRoleRequiredError ||
       err instanceof UnauthenticatedError
     ) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }
@@ -49,7 +51,9 @@ export async function POST(
 
   const [count] = await service.listInventoryCounts({ id }, { take: 1 });
   if (!count) {
-    return res.status(404).json({ error: "inventory_count not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "inventory_count not found", code: "not_found" });
   }
   if (count.status !== "submitted") {
     return res.status(409).json({

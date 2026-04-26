@@ -21,9 +21,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     const { data: variants } = await query.graph({
       entity: "product_variant",
       fields: ["id", "product_id", "metadata"],
-      filters: bodyVariantId
-        ? { id: bodyVariantId }
-        : { product_id: id },
+      filters: bodyVariantId ? { id: bodyVariantId } : { product_id: id },
     });
 
     if (!variants || variants.length === 0) {
@@ -85,7 +83,12 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     const productId = req.params.id as string;
     void updateSingleProductWorkflow(req.scope)
       .run({ input: { productId } })
-      .catch((e) => logger.error(`[pos-product] Meili sync failed for ${productId}:`, e?.message));
+      .catch((e) =>
+        logger.error(
+          `[pos-product] Meili sync failed for ${productId}:`,
+          e?.message
+        )
+      );
 
     return res.status(200).json({
       success: true,

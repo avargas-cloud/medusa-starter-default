@@ -24,8 +24,8 @@ export async function GET(
   const skus: string[] = Array.isArray(skuParam)
     ? skuParam.map((s) => s.trim()).filter(Boolean)
     : skuParam?.trim()
-    ? [skuParam.trim()]
-    : [];
+      ? [skuParam.trim()]
+      : [];
 
   if (!skus.length) {
     return res.status(400).json({ error: "sku query param is required" });
@@ -33,11 +33,12 @@ export async function GET(
 
   const service = getPurchaseOrdersService(req);
 
-  const filter = skus.length === 1 ? { sku_snapshot: skus[0] } : { sku_snapshot: skus };
-  const lines = (await service.listPurchaseOrderLines(
-    filter,
-    { take: 5000, skip: 0 }
-  )) as Array<{
+  const filter =
+    skus.length === 1 ? { sku_snapshot: skus[0] } : { sku_snapshot: skus };
+  const lines = (await service.listPurchaseOrderLines(filter, {
+    take: 5000,
+    skip: 0,
+  })) as Array<{
     purchase_order_id: string;
     sku_snapshot: string;
     qty_ordered: number;
@@ -72,7 +73,8 @@ export async function GET(
     let onOrder = 0;
     for (const line of lines) {
       if (!activePOs.has(line.purchase_order_id)) continue;
-      if (!(ACTIVE_LINE_STATUSES as readonly string[]).includes(line.status)) continue;
+      if (!(ACTIVE_LINE_STATUSES as readonly string[]).includes(line.status))
+        continue;
       const pending = line.qty_ordered - line.qty_received - line.qty_cancelled;
       if (pending > 0) onOrder += pending;
     }
@@ -84,7 +86,8 @@ export async function GET(
   for (const s of skus) result[s] = 0;
   for (const line of lines) {
     if (!activePOs.has(line.purchase_order_id)) continue;
-    if (!(ACTIVE_LINE_STATUSES as readonly string[]).includes(line.status)) continue;
+    if (!(ACTIVE_LINE_STATUSES as readonly string[]).includes(line.status))
+      continue;
     const pending = line.qty_ordered - line.qty_received - line.qty_cancelled;
     if (pending > 0 && line.sku_snapshot && line.sku_snapshot in result) {
       result[line.sku_snapshot] = (result[line.sku_snapshot] ?? 0) + pending;

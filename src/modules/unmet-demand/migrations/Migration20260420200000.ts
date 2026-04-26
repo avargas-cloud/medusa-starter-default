@@ -36,9 +36,15 @@ export class Migration20260420200000 extends Migration {
   override async down(): Promise<void> {
     this.addSql(`drop index if exists "UQ_umdrec_seq";`);
     this.addSql(`drop index if exists "UQ_umdrec_number";`);
-    this.addSql(`alter table "unmet_demand_record" drop column if exists "year";`);
-    this.addSql(`alter table "unmet_demand_record" drop column if exists "seq";`);
-    this.addSql(`alter table "unmet_demand_record" drop column if exists "number";`);
+    this.addSql(
+      `alter table "unmet_demand_record" drop column if exists "year";`
+    );
+    this.addSql(
+      `alter table "unmet_demand_record" drop column if exists "seq";`
+    );
+    this.addSql(
+      `alter table "unmet_demand_record" drop column if exists "number";`
+    );
     this.addSql(`drop sequence if exists "custom_unmet_demand_seq";`);
   }
 }

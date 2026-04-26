@@ -42,11 +42,16 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
     const allVariantIds = Array.from(
       new Set(
-        invoices.flatMap((inv) => inv.metadata?.waiting_variant_ids ?? []) as string[]
+        invoices.flatMap(
+          (inv) => inv.metadata?.waiting_variant_ids ?? []
+        ) as string[]
       )
     );
 
-    const variantMap = new Map<string, { sku: string | null; title: string | null; has_qb_id: boolean }>();
+    const variantMap = new Map<
+      string,
+      { sku: string | null; title: string | null; has_qb_id: boolean }
+    >();
     if (allVariantIds.length > 0) {
       const vRes = await knex.raw(
         `SELECT id, sku, title, metadata FROM product_variant WHERE id = ANY(?::text[])`,

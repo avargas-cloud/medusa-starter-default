@@ -19,9 +19,7 @@ import type { MigrationInterface, QueryRunner } from "typeorm";
  *   - auth_identity.provider_metadata.email
  * These remain guarded at the application layer.
  */
-export class AddLowercaseEmailTriggers1776000000000
-  implements MigrationInterface
-{
+export class AddLowercaseEmailTriggers1776000000000 implements MigrationInterface {
   name = "AddLowercaseEmailTriggers1776000000000";
 
   public async up(queryRunner: QueryRunner): Promise<void> {

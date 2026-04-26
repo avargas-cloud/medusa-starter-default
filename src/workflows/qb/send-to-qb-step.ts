@@ -65,7 +65,7 @@ export const sendToQbStep = createStep(
           item_type: input.pipeline.item_type,
           op_action: input.action,
           op_payload: input.data,
-          qb_id: input.action === "mod" ? input.data?.ListID ?? null : null,
+          qb_id: input.action === "mod" ? (input.data?.ListID ?? null) : null,
           status: "waiting",
         });
         pipelineRowId = row.id;

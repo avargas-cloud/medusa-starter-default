@@ -6,15 +6,15 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 
+import { createSalesOrderInQb } from "../../../../../lib/quickbooks/client/sales-orders";
+import { handlePosPaymentCreated } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-created";
+import { buildQbItems } from "../../../../../lib/quickbooks/order-flow-core";
+import { parseSalesRepInitials } from "../../../../../lib/quickbooks/parse-sales-rep";
+import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
 import { recalculateOrderStatus } from "../../../../../utils/order-utils";
 import { getDbPool } from "../../../../utils/db-pool";
-import { handlePosPaymentCreated } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-created";
-import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
-import { buildQbItems } from "../../../../../lib/quickbooks/order-flow-core";
-import { createSalesOrderInQb } from "../../../../../lib/quickbooks/client/sales-orders";
-import { parseSalesRepInitials } from "../../../../../lib/quickbooks/parse-sales-rep";
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const invoiceService = req.scope.resolve(INVOICE_MODULE);
@@ -188,7 +188,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   if (invoice.order_id) {
     try {
       const orderQuery = req.scope.resolve("query");
-      const { data: [orderData] } = await (orderQuery as any).graph({
+      const {
+        data: [orderData],
+      } = await (orderQuery as any).graph({
         entity: "order",
         fields: ["metadata"],
         filters: { id: invoice.order_id },
@@ -287,8 +289,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     } else {
       await financeService.updateCustomerPayments({
         id: currentPaymentDesc.id,
-        status:
-          totalStillApplied === 0 ? "available" : "partially_applied",
+        status: totalStillApplied === 0 ? "available" : "partially_applied",
       });
     }
 
@@ -387,7 +388,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   // Fire QB ReceivePayment creation for any SR payments that were released
   // (fire & forget — does not block the void response)
-  if (process.env.QB_ORDER_FLOW_ENABLED === "true" && srPaymentsToRequeue.size > 0) {
+  if (
+    process.env.QB_ORDER_FLOW_ENABLED === "true" &&
+    srPaymentsToRequeue.size > 0
+  ) {
     for (const srPaymentId of srPaymentsToRequeue) {
       const capturedId = srPaymentId;
       setTimeout(async () => {
@@ -578,8 +582,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       const orderRow = soCheckRows[0];
       if (orderRow) {
         const hasQbDoc = !!(
-          orderRow.so_flat || orderRow.so_new ||
-          orderRow.est_flat || orderRow.est_new
+          orderRow.so_flat ||
+          orderRow.so_new ||
+          orderRow.est_flat ||
+          orderRow.est_new
         );
 
         if (!hasQbDoc) {
@@ -602,7 +608,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             const friendlyRef =
               orderRow.document_number ||
               (orderRow.display_id ? `S${orderRow.display_id}` : undefined);
-            const salesRep = parseSalesRepInitials(orderRow.sales_rep ?? undefined);
+            const salesRep = parseSalesRepInitials(
+              orderRow.sales_rep ?? undefined
+            );
 
             if (orderRow.qb_list_id) {
               const query = req.scope.resolve(ContainerRegistrationKeys.QUERY);
@@ -621,7 +629,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
               const fullOrder = orderData?.[0];
               const qbItems = buildQbItems(
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                ((fullOrder?.items ?? []).filter(Boolean) as any[]),
+                (fullOrder?.items ?? []).filter(Boolean) as any[],
                 fullOrder?.metadata ?? undefined
               );
               const qbListId = orderRow.qb_list_id as string;

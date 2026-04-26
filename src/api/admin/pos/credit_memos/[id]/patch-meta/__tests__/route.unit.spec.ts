@@ -7,37 +7,37 @@
 
 // ─── Mock external deps BEFORE importing the route ───────────────────────────
 
-jest.mock(
-  "../../../../../../../lib/quickbooks/qb-pipeline",
-  () => ({ writePipelineRow: jest.fn().mockResolvedValue("pipeline-row-id") })
-);
+jest.mock("../../../../../../../lib/quickbooks/qb-pipeline", () => ({
+  writePipelineRow: jest.fn().mockResolvedValue("pipeline-row-id"),
+}));
 
-jest.mock(
-  "../../../../../../../lib/quickbooks/client/credit-memos",
-  () => ({ updateCreditMemoInQb: jest.fn() })
-);
+jest.mock("../../../../../../../lib/quickbooks/client/credit-memos", () => ({
+  updateCreditMemoInQb: jest.fn(),
+}));
 
-jest.mock(
-  "../../../../../../../lib/quickbooks/qb-config",
-  () => ({ getQbConfig: jest.fn() })
-);
+jest.mock("../../../../../../../lib/quickbooks/qb-config", () => ({
+  getQbConfig: jest.fn(),
+}));
 
-jest.mock(
-  "../../../../../../../modules/credit_memos",
-  () => ({ CREDIT_MEMO_MODULE: "CREDIT_MEMO_MODULE" })
-);
+jest.mock("../../../../../../../modules/credit_memos", () => ({
+  CREDIT_MEMO_MODULE: "CREDIT_MEMO_MODULE",
+}));
 
 // ─── Imports (after mocks) ────────────────────────────────────────────────────
 
-import { PATCH } from "../route";
-import { writePipelineRow } from "../../../../../../../lib/quickbooks/qb-pipeline";
 import { updateCreditMemoInQb } from "../../../../../../../lib/quickbooks/client/credit-memos";
 import { getQbConfig } from "../../../../../../../lib/quickbooks/qb-config";
+import { writePipelineRow } from "../../../../../../../lib/quickbooks/qb-pipeline";
+import { PATCH } from "../route";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const mockWritePipeline = writePipelineRow as jest.MockedFunction<typeof writePipelineRow>;
-const mockUpdateCm = updateCreditMemoInQb as jest.MockedFunction<typeof updateCreditMemoInQb>;
+const mockWritePipeline = writePipelineRow as jest.MockedFunction<
+  typeof writePipelineRow
+>;
+const mockUpdateCm = updateCreditMemoInQb as jest.MockedFunction<
+  typeof updateCreditMemoInQb
+>;
 const mockGetQbConfig = getQbConfig as jest.MockedFunction<typeof getQbConfig>;
 
 function buildMemo(overrides: Record<string, unknown> = {}) {
@@ -45,7 +45,7 @@ function buildMemo(overrides: Record<string, unknown> = {}) {
     id: "cm-001",
     credit_memo_number: "CM-20001",
     status: "completed",
-    subtotal: 10000,   // cents
+    subtotal: 10000, // cents
     tax: 700,
     shipping: 0,
     total: 10700,
@@ -56,7 +56,10 @@ function buildMemo(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function buildReq(body: Record<string, unknown>, memo: Record<string, unknown>) {
+function buildReq(
+  body: Record<string, unknown>,
+  memo: Record<string, unknown>
+) {
   const creditMemoService = {
     listPosCreditMemos: jest.fn().mockResolvedValue([memo]),
     updatePosCreditMemos: jest.fn().mockResolvedValue({}),
@@ -81,13 +84,20 @@ function buildReq(body: Record<string, unknown>, memo: Record<string, unknown>) 
       }),
     },
     _service: creditMemoService,
-  } as unknown as Parameters<typeof PATCH>[0] & { _service: typeof creditMemoService };
+  } as unknown as Parameters<typeof PATCH>[0] & {
+    _service: typeof creditMemoService;
+  };
 }
 
 function buildRes() {
   const json = jest.fn();
   const status = jest.fn().mockReturnValue({ json });
-  return { status, json, _status: status, _json: json } as unknown as Parameters<typeof PATCH>[1] & {
+  return {
+    status,
+    json,
+    _status: status,
+    _json: json,
+  } as unknown as Parameters<typeof PATCH>[1] & {
     _status: jest.Mock;
     _json: jest.Mock;
   };
@@ -105,7 +115,9 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
     jest.clearAllMocks();
     process.env = { ...OLD_ENV, QB_ORDER_FLOW_ENABLED: "true" };
     mockWritePipeline.mockResolvedValue("pipeline-row-id");
-    mockGetQbConfig.mockResolvedValue({ defaultSalesTaxCode: "Sale Tax 7%" } as any);
+    mockGetQbConfig.mockResolvedValue({
+      defaultSalesTaxCode: "Sale Tax 7%",
+    } as any);
   });
 
   afterAll(() => {
@@ -129,7 +141,10 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
   });
 
   it("returns 404 when credit memo is not found", async () => {
-    const req = buildReq({ sales_rep: { initials: "AV", name: "Alex" } }, buildMemo());
+    const req = buildReq(
+      { sales_rep: { initials: "AV", name: "Alex" } },
+      buildMemo()
+    );
     (req._service as any).listPosCreditMemos.mockResolvedValue([]);
     const res = buildRes();
     await PATCH(req, res);
@@ -144,23 +159,41 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
       buildMemo()
     );
     const res = buildRes();
-    mockUpdateCm.mockResolvedValue({ success: true, data: { operationId: "op-123" } });
+    mockUpdateCm.mockResolvedValue({
+      success: true,
+      data: { operationId: "op-123" },
+    });
 
     await PATCH(req, res);
     await flushPromises();
 
     expect(res._status).toHaveBeenCalledWith(200);
     expect((req._service as any).updatePosCreditMemos).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "cm-001", sales_rep: { initials: "AV", name: "Alex Vargas" } })
+      expect.objectContaining({
+        id: "cm-001",
+        sales_rep: { initials: "AV", name: "Alex Vargas" },
+      })
     );
     expect(mockWritePipeline).toHaveBeenCalledWith(
-      expect.objectContaining({ step: "credit_memo_mod", status: "pending", referenceId: "cm-001" })
+      expect.objectContaining({
+        step: "credit_memo_mod",
+        status: "pending",
+        referenceId: "cm-001",
+      })
     );
     expect(mockUpdateCm).toHaveBeenCalledWith(
-      expect.objectContaining({ txnId: "QB-CM-TXN-001", editSequence: "1234567890", salesRepRef: "Alex Vargas" })
+      expect.objectContaining({
+        txnId: "QB-CM-TXN-001",
+        editSequence: "1234567890",
+        salesRepRef: "Alex Vargas",
+      })
     );
     expect(mockWritePipeline).toHaveBeenCalledWith(
-      expect.objectContaining({ step: "credit_memo_mod", status: "confirmed", bridgeOpId: "op-123" })
+      expect.objectContaining({
+        step: "credit_memo_mod",
+        status: "confirmed",
+        bridgeOpId: "op-123",
+      })
     );
   });
 
@@ -169,7 +202,10 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
       { sales_rep: { initials: "JD", name: "" } },
       buildMemo()
     );
-    mockUpdateCm.mockResolvedValue({ success: true, data: { operationId: "op-124" } });
+    mockUpdateCm.mockResolvedValue({
+      success: true,
+      data: { operationId: "op-124" },
+    });
     const res = buildRes();
     await PATCH(req, res);
     await flushPromises();
@@ -181,7 +217,10 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
 
   it("clears sales_rep (sets to null) without sending salesRepRef to QB", async () => {
     const req = buildReq({ sales_rep: null }, buildMemo());
-    mockUpdateCm.mockResolvedValue({ success: true, data: { operationId: "op-125" } });
+    mockUpdateCm.mockResolvedValue({
+      success: true,
+      data: { operationId: "op-125" },
+    });
     const res = buildRes();
     await PATCH(req, res);
     await flushPromises();
@@ -196,7 +235,10 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
 
   it("fires credit_memo_mod with salesTaxCode for tax_mode=florida", async () => {
     const req = buildReq({ tax_mode: "florida", subtotal: 10000 }, buildMemo());
-    mockUpdateCm.mockResolvedValue({ success: true, data: { operationId: "op-200" } });
+    mockUpdateCm.mockResolvedValue({
+      success: true,
+      data: { operationId: "op-200" },
+    });
     const res = buildRes();
     await PATCH(req, res);
     await flushPromises();
@@ -211,8 +253,14 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
   });
 
   it("fires credit_memo_mod with taxExempt=true for tax_mode=exempt", async () => {
-    const req = buildReq({ tax_mode: "exempt", subtotal: 10000 }, buildMemo({ tax: 700, total: 10700 }));
-    mockUpdateCm.mockResolvedValue({ success: true, data: { operationId: "op-201" } });
+    const req = buildReq(
+      { tax_mode: "exempt", subtotal: 10000 },
+      buildMemo({ tax: 700, total: 10700 })
+    );
+    mockUpdateCm.mockResolvedValue({
+      success: true,
+      data: { operationId: "op-201" },
+    });
     const res = buildRes();
     await PATCH(req, res);
     await flushPromises();
@@ -263,7 +311,10 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
       { sales_rep: { initials: "AV", name: "Alex" } },
       buildMemo()
     );
-    mockUpdateCm.mockResolvedValue({ success: false, error: "EditSequence stale" });
+    mockUpdateCm.mockResolvedValue({
+      success: false,
+      error: "EditSequence stale",
+    });
     const res = buildRes();
 
     await PATCH(req, res);
@@ -271,7 +322,11 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
 
     expect(res._status).toHaveBeenCalledWith(200); // HTTP response succeeds (QB is fire-and-forget)
     expect(mockWritePipeline).toHaveBeenCalledWith(
-      expect.objectContaining({ step: "credit_memo_mod", status: "failed", error: "EditSequence stale" })
+      expect.objectContaining({
+        step: "credit_memo_mod",
+        status: "failed",
+        error: "EditSequence stale",
+      })
     );
   });
 
@@ -294,7 +349,10 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
   // ── 6. Payment guard ──────────────────────────────────────────────────────
 
   it("returns 409 and does NOT fire QB pipeline when tax reduction undercuts applied credit", async () => {
-    const req = buildReq({ tax_mode: "exempt", subtotal: 10000 }, buildMemo({ tax: 700, total: 10700 }));
+    const req = buildReq(
+      { tax_mode: "exempt", subtotal: 10000 },
+      buildMemo({ tax: 700, total: 10700 })
+    );
 
     // Simulate a payment that has $8000 cents already applied
     const pgConnection = jest.fn().mockImplementation(() => ({
@@ -339,16 +397,26 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
 
   it("includes both salesRepRef and salesTaxCode when both fields are changed simultaneously", async () => {
     const req = buildReq(
-      { sales_rep: { initials: "AV", name: "Alex" }, tax_mode: "florida", subtotal: 10000 },
+      {
+        sales_rep: { initials: "AV", name: "Alex" },
+        tax_mode: "florida",
+        subtotal: 10000,
+      },
       buildMemo()
     );
-    mockUpdateCm.mockResolvedValue({ success: true, data: { operationId: "op-300" } });
+    mockUpdateCm.mockResolvedValue({
+      success: true,
+      data: { operationId: "op-300" },
+    });
     const res = buildRes();
     await PATCH(req, res);
     await flushPromises();
 
     expect(mockUpdateCm).toHaveBeenCalledWith(
-      expect.objectContaining({ salesRepRef: "Alex", salesTaxCode: "Sale Tax 7%" })
+      expect.objectContaining({
+        salesRepRef: "Alex",
+        salesTaxCode: "Sale Tax 7%",
+      })
     );
   });
 
@@ -359,7 +427,10 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
       { sales_rep: { initials: "AV", name: "Alex" } },
       buildMemo({ credit_memo_number: "CM-20099" })
     );
-    mockUpdateCm.mockResolvedValue({ success: true, data: { operationId: "op-400" } });
+    mockUpdateCm.mockResolvedValue({
+      success: true,
+      data: { operationId: "op-400" },
+    });
     const res = buildRes();
     await PATCH(req, res);
     await flushPromises();

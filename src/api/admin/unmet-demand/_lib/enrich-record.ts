@@ -41,7 +41,9 @@ export async function enrichRecord(
   const customerId = record.customer_id as string | null;
   if (customerId) {
     try {
-      const customerService = req.scope.resolve(Modules.CUSTOMER) as unknown as {
+      const customerService = req.scope.resolve(
+        Modules.CUSTOMER
+      ) as unknown as {
         retrieveCustomer: (id: string) => Promise<CustomerLite | null>;
       };
       const c = await customerService.retrieveCustomer(customerId);

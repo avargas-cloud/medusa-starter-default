@@ -41,9 +41,16 @@ export const syncCustomersToMeiliStep = createStep(
       const { data: customers } = await query.graph({
         entity: "customer",
         fields: [
-          "id", "email", "first_name", "last_name",
-          "company_name", "phone", "has_account",
-          "metadata", "created_at", "updated_at",
+          "id",
+          "email",
+          "first_name",
+          "last_name",
+          "company_name",
+          "phone",
+          "has_account",
+          "metadata",
+          "created_at",
+          "updated_at",
           "customer_groups.name",
         ],
         pagination: { take: 50000 },
@@ -55,7 +62,8 @@ export const syncCustomersToMeiliStep = createStep(
       // 3. Transform ALL documents in RAM (no I/O, pure CPU)
       const docs = customers.map((c: any) => {
         const meta = (c.metadata as Record<string, any>) ?? {};
-        const groupNames: string[] = c.customer_groups?.map((g: any) => g.name) ?? [];
+        const groupNames: string[] =
+          c.customer_groups?.map((g: any) => g.name) ?? [];
         // Source of truth for price_level = customer groups (not metadata)
         const price_level = groupNames.includes("Wholesale")
           ? "Wholesale"

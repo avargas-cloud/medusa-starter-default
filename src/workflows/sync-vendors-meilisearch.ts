@@ -41,7 +41,9 @@ export const syncVendorsToMeiliStep = createStep(
   "sync-vendors-to-meili-step",
   async (_input, { container }) => {
     if (isSyncing) {
-      console.log("⚠️ Vendor sync requested but already in progress. Skipping.");
+      console.log(
+        "⚠️ Vendor sync requested but already in progress. Skipping."
+      );
       return new StepResponse({
         success: false,
         message: "Sync already in progress",
@@ -108,7 +110,11 @@ export const syncVendorsToMeiliStep = createStep(
 
       if (vendors.length === 0) {
         console.log("ℹ️ No vendors to sync.");
-        return new StepResponse({ success: true, message: "No vendors", synced: 0 });
+        return new StepResponse({
+          success: true,
+          message: "No vendors",
+          synced: 0,
+        });
       }
 
       const documents = vendors.map(transformVendor);

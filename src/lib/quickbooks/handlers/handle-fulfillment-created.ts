@@ -42,7 +42,9 @@ export async function handleFulfillmentCreated(
   // and return — consolidator will re-submit after current op confirms.
   const coalescedInv = await coalesceIfInFlight(orderId, null, "invoice");
   if (coalescedInv) {
-    logger.info(`${LOG_PREFIX} ⏸ Invoice in-flight for ${orderId} — coalesced as next submit`);
+    logger.info(
+      `${LOG_PREFIX} ⏸ Invoice in-flight for ${orderId} — coalesced as next submit`
+    );
     return;
   }
 

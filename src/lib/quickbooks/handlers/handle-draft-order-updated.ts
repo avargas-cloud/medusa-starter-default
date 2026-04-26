@@ -1,17 +1,14 @@
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
+import { updateEstimateInQb } from "../client/estimates";
 import { buildQbItems, type MedusaOrderForQb } from "../order-flow-core";
 import { parseSalesRepInitials } from "../parse-sales-rep";
-import {
-  getEstimateTxnId,
-  getEstimateRef,
-} from "../qb-metadata-types";
+import { getEstimateTxnId, getEstimateRef } from "../qb-metadata-types";
 import {
   coalesceIfInFlight,
   writePipelineRow,
   pollUntilQbConfirmed,
 } from "../qb-pipeline";
-import { updateEstimateInQb } from "../client/estimates";
 import { withQbSerialized } from "../qb-serializer";
 
 /**
@@ -69,7 +66,9 @@ export async function handleDraftOrderUpdated(
     });
     draftOrder = results?.[0];
   } catch (fetchErr: any) {
-    logger.error(`${LOG_PREFIX} ❌ Failed to fetch draft order: ${fetchErr.message}`);
+    logger.error(
+      `${LOG_PREFIX} ❌ Failed to fetch draft order: ${fetchErr.message}`
+    );
     return "skipped";
   }
 
@@ -80,7 +79,9 @@ export async function handleDraftOrderUpdated(
 
   const qbTxnId = getEstimateTxnId(draftOrder.metadata);
   if (!qbTxnId) {
-    logger.info(`${LOG_PREFIX} No qb_estimate_txn_id on ${draftOrderId} — cannot MOD (use CREATE)`);
+    logger.info(
+      `${LOG_PREFIX} No qb_estimate_txn_id on ${draftOrderId} — cannot MOD (use CREATE)`
+    );
     return "skipped";
   }
 
@@ -93,7 +94,9 @@ export async function handleDraftOrderUpdated(
   if (!isCron) {
     const coalesced = await coalesceIfInFlight(draftOrderId, null, "estimate");
     if (coalesced) {
-      logger.info(`${LOG_PREFIX} ⏸ Estimate MOD in-flight for ${draftOrderId} — save coalesced into next_payload`);
+      logger.info(
+        `${LOG_PREFIX} ⏸ Estimate MOD in-flight for ${draftOrderId} — save coalesced into next_payload`
+      );
       return "coalesced";
     }
   }
@@ -109,13 +112,17 @@ export async function handleDraftOrderUpdated(
       medusaRefNumber: medusaRef,
     });
   } catch (preErr: any) {
-    logger.warn(`${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${preErr.message}`);
+    logger.warn(
+      `${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${preErr.message}`
+    );
   }
 
   // 3. Schedule the serialized bridge call.
   const runCallback = async (): Promise<void> => {
     // Re-fetch the freshest order state at execution time
-    const { data: [fullOrder] } = await query.graph({
+    const {
+      data: [fullOrder],
+    } = await query.graph({
       entity: "order",
       fields: [
         "*",
@@ -152,7 +159,9 @@ export async function handleDraftOrderUpdated(
         medusaRefNumber: medusaRef,
       });
     } catch (lockErr: any) {
-      logger.warn(`${LOG_PREFIX} ⚠️ In-lock pending reset failed: ${lockErr.message}`);
+      logger.warn(
+        `${LOG_PREFIX} ⚠️ In-lock pending reset failed: ${lockErr.message}`
+      );
     }
 
     const typedOrder = fullOrder as unknown as MedusaOrderForQb;

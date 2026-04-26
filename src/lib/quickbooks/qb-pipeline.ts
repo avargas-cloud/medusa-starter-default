@@ -758,7 +758,9 @@ export async function coalesceIfInFlight(
  * call the appropriate handler for this step right away).
  * Returns false if next_payload was NULL (nothing to do).
  */
-export async function claimAndResetForResubmit(rowId: string): Promise<boolean> {
+export async function claimAndResetForResubmit(
+  rowId: string
+): Promise<boolean> {
   const pool = getDbPool();
   const { rows } = await pool.query(
     `UPDATE qb_order_pipeline

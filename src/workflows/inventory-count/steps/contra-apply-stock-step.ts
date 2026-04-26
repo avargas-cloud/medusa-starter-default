@@ -52,9 +52,7 @@ export const contraApplyStockStep = createStep(
   async (
     input: ContraApplyStockStepInput,
     { container }
-  ): Promise<
-    StepResponse<ContraApplyStockStepOutput, CompensationContext>
-  > => {
+  ): Promise<StepResponse<ContraApplyStockStepOutput, CompensationContext>> => {
     const inventoryService = container.resolve(
       Modules.INVENTORY
     ) as unknown as InventoryServiceLike;

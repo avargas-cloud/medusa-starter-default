@@ -16,6 +16,7 @@ import type {
   MedusaResponse,
 } from "@medusajs/framework/http";
 
+import { voidInventoryCountWorkflow } from "../../../../../workflows/inventory-count/void-inventory-count";
 import {
   ManagerRoleRequiredError,
   UnauthenticatedError,
@@ -24,8 +25,6 @@ import {
 import { zodErrorToBody } from "../../_lib/format";
 import { getInventoryCountService } from "../../_lib/service-resolver";
 import { voidSchema } from "../../_lib/validators";
-
-import { voidInventoryCountWorkflow } from "../../../../../workflows/inventory-count/void-inventory-count";
 
 interface PipelineRowLite {
   id: string;
@@ -46,7 +45,9 @@ export async function POST(
       err instanceof ManagerRoleRequiredError ||
       err instanceof UnauthenticatedError
     ) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }

@@ -60,9 +60,10 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       retries: 0,
       next_retry_at: null,
       failed_at: null,
-      last_error: row.status === "failed_permanent"
-        ? "Manually revived from failed_permanent"
-        : "Manually re-queued",
+      last_error:
+        row.status === "failed_permanent"
+          ? "Manually revived from failed_permanent"
+          : "Manually re-queued",
     });
 
     logger.info(
@@ -72,7 +73,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
     return res.json({
       success: true,
-      message: `Re-queued ${row.sku} (${row.op_action}). ` +
+      message:
+        `Re-queued ${row.sku} (${row.op_action}). ` +
         `Pipeline worker will process within ~60s.`,
     });
   } catch (err: any) {

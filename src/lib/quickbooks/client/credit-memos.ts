@@ -1,14 +1,15 @@
 import {
+  getCachedEditSequence,
+  cacheEditSequence,
+  invalidateEditSequence,
+} from "../qb-pipeline";
+
+import {
   DRY_RUN,
   bridgeFetch,
   pollRawOperationResult,
   pollOperationResult,
 } from "./core";
-import {
-  getCachedEditSequence,
-  cacheEditSequence,
-  invalidateEditSequence,
-} from "../qb-pipeline";
 import {
   QbCreateCreditMemoPayload,
   QbUpdateCreditMemoPayload,
@@ -69,13 +70,17 @@ export async function updateCreditMemoInQb(
   }
 
   const sendMod = async (editSequence: string) => {
-    const modResp = await bridgeFetch("PUT", `/api/credit-memos/${payload.txnId}`, {
-      EditSequence: editSequence,
-      ...(payload.salesRepRef ? { salesRepRef: payload.salesRepRef } : {}),
-      ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
-      ...(payload.taxExempt === true ? { taxExempt: true } : {}),
-      ...(payload.memo ? { memo: payload.memo } : {}),
-    });
+    const modResp = await bridgeFetch(
+      "PUT",
+      `/api/credit-memos/${payload.txnId}`,
+      {
+        EditSequence: editSequence,
+        ...(payload.salesRepRef ? { salesRepRef: payload.salesRepRef } : {}),
+        ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
+        ...(payload.taxExempt === true ? { taxExempt: true } : {}),
+        ...(payload.memo ? { memo: payload.memo } : {}),
+      }
+    );
     const operationId = modResp?.operationId;
     if (!operationId)
       throw new Error("Bridge did not return operationId for credit memo mod");
@@ -86,14 +91,22 @@ export async function updateCreditMemoInQb(
     let editSequence: string;
     const cached = await getCachedEditSequence("credit_memo", payload.txnId);
     if (cached?.editSeq) {
-      console.log(`[QB] ✅ Cache hit for credit memo ${payload.txnId} — skipping GET`);
+      console.log(
+        `[QB] ✅ Cache hit for credit memo ${payload.txnId} — skipping GET`
+      );
       editSequence = cached.editSeq;
     } else {
-      console.log(`[QB] Cache miss for credit memo ${payload.txnId} — using stored EditSequence`);
+      console.log(
+        `[QB] Cache miss for credit memo ${payload.txnId} — using stored EditSequence`
+      );
       editSequence = payload.editSequence;
       if (!editSequence)
-        throw new Error(`No EditSequence available for credit memo ${payload.txnId}. Sync the CM first.`);
-      cacheEditSequence("credit_memo", payload.txnId, editSequence).catch(() => {});
+        throw new Error(
+          `No EditSequence available for credit memo ${payload.txnId}. Sync the CM first.`
+        );
+      cacheEditSequence("credit_memo", payload.txnId, editSequence).catch(
+        () => {}
+      );
     }
 
     try {
@@ -101,9 +114,13 @@ export async function updateCreditMemoInQb(
       return { success: true, data: { operationId, txnId: payload.txnId } };
     } catch (firstErr: any) {
       if (firstErr.message?.includes("3200")) {
-        console.log(`[QB] EditSequence stale for credit memo ${payload.txnId} — invalidating cache and retrying`);
+        console.log(
+          `[QB] EditSequence stale for credit memo ${payload.txnId} — invalidating cache and retrying`
+        );
         await invalidateEditSequence("credit_memo", payload.txnId);
-        throw new Error(`EditSequence stale for credit memo ${payload.txnId}. Retry or re-complete the CM.`);
+        throw new Error(
+          `EditSequence stale for credit memo ${payload.txnId}. Retry or re-complete the CM.`
+        );
       }
       throw firstErr;
     }

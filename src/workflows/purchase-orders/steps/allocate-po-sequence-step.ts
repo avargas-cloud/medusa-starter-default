@@ -32,9 +32,10 @@ export const allocatePoSequenceStep = createStep(
       PURCHASE_ORDERS_MODULE
     ) as unknown as PurchaseOrdersModuleService;
 
-    const existing = (await service.retrievePurchaseOrder(input.po_id)) as
-      | { seq?: number | null; number?: string | null }
-      | null;
+    const existing = (await service.retrievePurchaseOrder(input.po_id)) as {
+      seq?: number | null;
+      number?: string | null;
+    } | null;
 
     // Idempotent: if the PO already has a real PO-{n} number, return it as-is.
     // D-{n} draft labels do NOT count — they must be replaced with a real number.

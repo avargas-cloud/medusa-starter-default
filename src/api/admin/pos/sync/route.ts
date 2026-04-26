@@ -597,8 +597,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     activeItems
                       .filter(
                         (i: any) =>
-                          i.variant_id &&
-                          !i.variant?.metadata?.quickbooks_id
+                          i.variant_id && !i.variant?.metadata?.quickbooks_id
                       )
                       .map((i: any) => i.variant_id)
                   )
@@ -659,9 +658,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   parentOrder?.metadata || {}
                 );
 
-                const discountTotal = Number(
-                  parentOrder?.discount_total || 0
-                );
+                const discountTotal = Number(parentOrder?.discount_total || 0);
                 if (discountTotal > 0) {
                   const subtotal = Number(parentOrder?.subtotal || 0);
                   const pct =
@@ -718,7 +715,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     const idxExact = availableLines.findIndex(
                       (l) =>
                         matchesItem(l) &&
-                        (qty === 0 || Math.abs((l.Quantity ?? 0) - qty) < 0.001) &&
+                        (qty === 0 ||
+                          Math.abs((l.Quantity ?? 0) - qty) < 0.001) &&
                         (amt === 0 || Math.abs((l.Amount ?? 0) - amt) < 0.01)
                     );
                     const idx =
@@ -795,9 +793,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   txnId: freshTxnId,
                   items: qbItems,
                   ...(salesRep ? { salesRep } : {}),
-                  ...(salesTaxCode
-                    ? { salesTaxCode }
-                    : { taxExempt: true }),
+                  ...(salesTaxCode ? { salesTaxCode } : { taxExempt: true }),
                 };
 
                 const modResult = isSR
@@ -839,7 +835,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 logger.info(
                   `${LOG_PREFIX} ✅ ${isSR ? "Sales Receipt" : "Invoice"} ${freshTxnId} full sync queued (op: ${modResult.data?.operationId})`
                 );
-
               } else {
                 // ── CREATE path ── Intelligent routing: Invoice vs Sales Receipt
                 const {

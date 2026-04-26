@@ -159,12 +159,7 @@ export async function POST(
       );
       if (setResult !== "OK") {
         slug = generateShareSlug();
-        await redis.set(
-          `pdf-share:${slug}`,
-          pdfUrl,
-          "EX",
-          SHARE_TTL_SECONDS
-        );
+        await redis.set(`pdf-share:${slug}`, pdfUrl, "EX", SHARE_TTL_SECONDS);
       }
       shortUrl = `${buildPublicBaseUrl(req)}/pub/s/${slug}`;
     } catch (err) {

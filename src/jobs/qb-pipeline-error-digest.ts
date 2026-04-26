@@ -346,10 +346,7 @@ export default async function qbPipelineErrorDigest(
       rows: poErrors.map((r) => ({
         id: r.id,
         medusa_ref:
-          r.po_reference_number ??
-          r.po_number ??
-          r.purchase_order_id ??
-          "",
+          r.po_reference_number ?? r.po_number ?? r.purchase_order_id ?? "",
         qb_ref: r.qb_txn_number ?? "",
         step: "purchase_order",
         error: r.last_error,
@@ -418,9 +415,7 @@ export default async function qbPipelineErrorDigest(
       );
     }
   } catch (e: any) {
-    logger.error(
-      `[qb-pipeline-error-digest] sendMail failed: ${e.message}`
-    );
+    logger.error(`[qb-pipeline-error-digest] sendMail failed: ${e.message}`);
   }
 }
 

@@ -55,8 +55,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
   // If already synced (has a real ListID), there's nothing to re-sync.
   const hasRealListId =
-    vendor.qb_list_id &&
-    !String(vendor.qb_list_id).startsWith("pending_");
+    vendor.qb_list_id && !String(vendor.qb_list_id).startsWith("pending_");
   if (hasRealListId && vendor.sync_status === "synced") {
     return res.status(400).json({
       error: "Vendor already synced — use the Edit flow instead",
@@ -79,7 +78,11 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     Notes: vendor.notes ?? undefined,
     VendorTaxIdent: vendor.tax_identity ?? undefined,
     IsVendorEligibleFor1099: vendor.is_vendor_eligible_for_1099 ?? undefined,
-    TermsRef: (vendor.metadata as Record<string, unknown> | null)?.payment_terms as string ?? vendor.terms_ref_name ?? undefined,
+    TermsRef:
+      ((vendor.metadata as Record<string, unknown> | null)
+        ?.payment_terms as string) ??
+      vendor.terms_ref_name ??
+      undefined,
     VendorTypeRef: vendor.vendor_type_ref_name ?? undefined,
     VendorAddress:
       vendor.addr1 || vendor.city || vendor.state
@@ -129,7 +132,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         status: "waiting",
       });
     } catch (pipelineErr: any) {
-      logger.error(`[qb-vendor force-resync] pipeline insert failed (non-fatal): ${pipelineErr.message}`);
+      logger.error(
+        `[qb-vendor force-resync] pipeline insert failed (non-fatal): ${pipelineErr.message}`
+      );
     }
 
     logger.info(

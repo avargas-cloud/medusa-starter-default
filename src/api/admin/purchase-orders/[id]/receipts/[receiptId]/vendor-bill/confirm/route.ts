@@ -76,7 +76,9 @@ export async function POST(
     userId = getActorUserId(req);
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }
@@ -91,10 +93,15 @@ export async function POST(
   // 1. Validate receipt belongs to PO
   const receipt = (await service
     .retrievePurchaseOrderReceipt(receiptId)
-    .catch(() => null)) as unknown as { id: string; purchase_order_id: string } | null;
+    .catch(() => null)) as unknown as {
+    id: string;
+    purchase_order_id: string;
+  } | null;
 
   if (!receipt) {
-    return res.status(404).json({ error: "Receipt not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "Receipt not found", code: "not_found" });
   }
   if (receipt.purchase_order_id !== poId) {
     return res.status(400).json({
@@ -192,37 +199,25 @@ export async function POST(
     } else {
       // fixed: split evenly by unit count
       commissionPerUnit =
-        totalQty > 0
-          ? Math.round(bill.commission_amount_cents / totalQty)
-          : 0;
+        totalQty > 0 ? Math.round(bill.commission_amount_cents / totalQty) : 0;
     }
 
     // Freight — CBM-weighted
     let freightPerUnit = 0;
-    if (
-      bill.freight_included &&
-      totalCbm > 0 &&
-      cbm !== null
-    ) {
-      freightPerUnit = Math.round(
-        (cbm / totalCbm) * bill.freight_amount_cents
-      );
+    if (bill.freight_included && totalCbm > 0 && cbm !== null) {
+      freightPerUnit = Math.round((cbm / totalCbm) * bill.freight_amount_cents);
     }
 
     // Tariff — cost-weighted
     let tariffPerUnit = 0;
     if (bill.tariff_included && totalSubtotalCents > 0) {
       tariffPerUnit = Math.round(
-        (line.unit_cost_cents / totalSubtotalCents) *
-          bill.tariff_amount_cents
+        (line.unit_cost_cents / totalSubtotalCents) * bill.tariff_amount_cents
       );
     }
 
     const landedUnitCost =
-      line.unit_cost_cents +
-      commissionPerUnit +
-      freightPerUnit +
-      tariffPerUnit;
+      line.unit_cost_cents + commissionPerUnit + freightPerUnit + tariffPerUnit;
 
     return {
       id: line.id,
@@ -253,7 +248,10 @@ export async function POST(
 
   // 9. Update product_variant.metadata.avg_landed_cost_cents for each variant
   //    Group lines by variant and compute weighted average
-  const landedByVariant = new Map<string, { totalLanded: number; totalQty: number }>();
+  const landedByVariant = new Map<
+    string,
+    { totalLanded: number; totalQty: number }
+  >();
   for (const update of lineUpdates) {
     const line = lines.find((l) => l.id === update.id)!;
     const existing = landedByVariant.get(line.product_variant_id) ?? {
@@ -261,22 +259,25 @@ export async function POST(
       totalQty: 0,
     };
     landedByVariant.set(line.product_variant_id, {
-      totalLanded: existing.totalLanded + update.landed_unit_cost_cents * line.qty,
+      totalLanded:
+        existing.totalLanded + update.landed_unit_cost_cents * line.qty,
       totalQty: existing.totalQty + line.qty,
     });
   }
 
   await Promise.all(
-    [...landedByVariant.entries()].map(([variantId, { totalLanded, totalQty: vQty }]) => {
-      const avgLandedCost = vQty > 0 ? totalLanded / vQty : 0;
-      return knex.raw(
-        `UPDATE product_variant
+    [...landedByVariant.entries()].map(
+      ([variantId, { totalLanded, totalQty: vQty }]) => {
+        const avgLandedCost = vQty > 0 ? totalLanded / vQty : 0;
+        return knex.raw(
+          `UPDATE product_variant
          SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('avg_landed_cost_cents', $1::float),
              updated_at = NOW()
          WHERE id = $2`,
-        [avgLandedCost, variantId]
-      );
-    })
+          [avgLandedCost, variantId]
+        );
+      }
+    )
   );
 
   // 10. Return confirmed bill with updated lines

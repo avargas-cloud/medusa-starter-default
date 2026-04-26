@@ -15,7 +15,13 @@ import { useNavigate } from "react-router-dom";
 
 type SyncRun = {
   id: string;
-  status: "queued" | "fetching" | "processing" | "completed" | "failed" | "cancelled";
+  status:
+    | "queued"
+    | "fetching"
+    | "processing"
+    | "completed"
+    | "failed"
+    | "cancelled";
   total_count: number;
   processed_count: number;
   created_count: number;
@@ -192,10 +198,10 @@ const VendorsPage = () => {
   const handleCancel = async () => {
     if (!syncRun) return;
     try {
-      const res = await fetch(
-        `/admin/qb-catalog/vendors/sync/${syncRun.id}`,
-        { method: "DELETE", credentials: "include" }
-      );
+      const res = await fetch(`/admin/qb-catalog/vendors/sync/${syncRun.id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.error ?? "Cancel failed");
@@ -288,7 +294,9 @@ const VendorsPage = () => {
               disabled={meiliSyncing}
               title="Re-index every vendor into the Meilisearch vendors index"
             >
-              <ArrowPath className={meiliSyncing ? "animate-spin" : undefined} />
+              <ArrowPath
+                className={meiliSyncing ? "animate-spin" : undefined}
+              />
               {meiliSyncing ? "Refreshing Meili…" : "Sync Meilisearch"}
             </Button>
             {syncing && (
@@ -305,9 +313,7 @@ const VendorsPage = () => {
         </div>
       </div>
 
-      {syncRun && (
-        <SyncProgressPanel run={syncRun} />
-      )}
+      {syncRun && <SyncProgressPanel run={syncRun} />}
 
       <Container className="p-0">
         <div className="flex items-center gap-3 px-6 py-3 border-b border-ui-border-base">
@@ -392,9 +398,7 @@ const VendorsPage = () => {
                       <Button
                         variant="transparent"
                         size="small"
-                        onClick={() =>
-                          handleMeiliSyncSingle(v.id, v.full_name)
-                        }
+                        onClick={() => handleMeiliSyncSingle(v.id, v.full_name)}
                         title="Re-index this vendor in Meilisearch"
                       >
                         <ArrowPath />
@@ -414,36 +418,53 @@ const VendorsPage = () => {
 
 const SyncProgressPanel = ({ run }: { run: SyncRun }) => {
   const active = ACTIVE_SYNC_STATUSES.has(run.status);
-  const pct = run.total_count > 0
-    ? Math.min(100, Math.round((run.processed_count / run.total_count) * 100))
-    : run.status === "fetching" ? 5 : run.status === "queued" ? 1 : 100;
+  const pct =
+    run.total_count > 0
+      ? Math.min(100, Math.round((run.processed_count / run.total_count) * 100))
+      : run.status === "fetching"
+        ? 5
+        : run.status === "queued"
+          ? 1
+          : 100;
 
   const barColor =
-    run.status === "completed" ? "bg-ui-tag-green-bg"
-    : run.status === "failed" ? "bg-ui-tag-red-bg"
-    : run.status === "cancelled" ? "bg-ui-bg-base-pressed"
-    : "bg-ui-tag-blue-bg";
+    run.status === "completed"
+      ? "bg-ui-tag-green-bg"
+      : run.status === "failed"
+        ? "bg-ui-tag-red-bg"
+        : run.status === "cancelled"
+          ? "bg-ui-bg-base-pressed"
+          : "bg-ui-tag-blue-bg";
 
   const tone: "green" | "red" | "orange" | "blue" | "grey" =
-    run.status === "completed" ? "green"
-    : run.status === "failed" ? "red"
-    : run.status === "cancelled" ? "grey"
-    : run.status === "queued" ? "orange"
-    : "blue";
+    run.status === "completed"
+      ? "green"
+      : run.status === "failed"
+        ? "red"
+        : run.status === "cancelled"
+          ? "grey"
+          : run.status === "queued"
+            ? "orange"
+            : "blue";
 
-  const fmt = (iso: string | null): string => iso ? new Date(iso).toLocaleString() : "—";
+  const fmt = (iso: string | null): string =>
+    iso ? new Date(iso).toLocaleString() : "—";
 
   return (
     <Container className="p-4 flex flex-col gap-3">
       <div className="flex items-center gap-3">
-        <Badge color={tone} size="small">{run.status}</Badge>
+        <Badge color={tone} size="small">
+          {run.status}
+        </Badge>
         <Text className="text-ui-fg-base text-sm font-medium">
           {syncStatusLabel(run.status)}
         </Text>
         <Text className="text-ui-fg-subtle text-xs ml-auto">
           {run.total_count > 0
             ? `${run.processed_count.toLocaleString()} / ${run.total_count.toLocaleString()} vendors`
-            : active ? "Waiting for QuickBooks…" : "—"}
+            : active
+              ? "Waiting for QuickBooks…"
+              : "—"}
         </Text>
       </div>
 
@@ -457,11 +478,15 @@ const SyncProgressPanel = ({ run }: { run: SyncRun }) => {
       <div className="grid grid-cols-4 gap-4 text-xs">
         <div>
           <Text className="text-ui-fg-subtle">Created</Text>
-          <Text className="font-mono">{run.created_count.toLocaleString()}</Text>
+          <Text className="font-mono">
+            {run.created_count.toLocaleString()}
+          </Text>
         </div>
         <div>
           <Text className="text-ui-fg-subtle">Updated</Text>
-          <Text className="font-mono">{run.updated_count.toLocaleString()}</Text>
+          <Text className="font-mono">
+            {run.updated_count.toLocaleString()}
+          </Text>
         </div>
         <div>
           <Text className="text-ui-fg-subtle">Errors</Text>

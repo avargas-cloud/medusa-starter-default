@@ -25,7 +25,9 @@ export async function DELETE(
 
   const [count] = await service.listInventoryCounts({ id }, { take: 1 });
   if (!count) {
-    return res.status(404).json({ error: "inventory_count not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "inventory_count not found", code: "not_found" });
   }
   if (count.status !== "draft") {
     return res.status(409).json({
@@ -39,7 +41,9 @@ export async function DELETE(
     { take: 1 }
   );
   if (!line) {
-    return res.status(404).json({ error: "line not found", code: "line_not_found" });
+    return res
+      .status(404)
+      .json({ error: "line not found", code: "line_not_found" });
   }
 
   await service.deleteInventoryCountLines([lineId]);
@@ -51,5 +55,9 @@ export async function DELETE(
   );
   await service.updateInventoryCounts([{ id, total_lines: remaining.length }]);
 
-  return res.json({ id: lineId, deleted: true, remaining_lines: remaining.length });
+  return res.json({
+    id: lineId,
+    deleted: true,
+    remaining_lines: remaining.length,
+  });
 }

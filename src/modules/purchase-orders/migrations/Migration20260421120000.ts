@@ -22,6 +22,8 @@ export class Migration20260421120000 extends Migration {
 
   override async down(): Promise<void> {
     this.addSql(`drop index if exists "IDX_purchase_order_po_status";`);
-    this.addSql(`alter table "purchase_order" drop column if exists "po_status";`);
+    this.addSql(
+      `alter table "purchase_order" drop column if exists "po_status";`
+    );
   }
 }

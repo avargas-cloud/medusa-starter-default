@@ -7,8 +7,7 @@ import {
 
 const validate = (body: any): string | null => {
   if (!body) return "Missing body";
-  if (!body.title || typeof body.title !== "string")
-    return "title is required";
+  if (!body.title || typeof body.title !== "string") return "title is required";
   if (!["Inventory", "Service", "NonInventory"].includes(body.item_type))
     return "item_type must be Inventory | Service | NonInventory";
   if (!Array.isArray(body.category_ids) || body.category_ids.length === 0)
@@ -21,7 +20,8 @@ const validate = (body: any): string | null => {
     return "variants must contain at least 1 variant";
   for (const v of body.variants) {
     if (!v.sku) return "each variant requires a sku";
-    if (typeof v.cost !== "number") return `variant ${v.sku}: cost must be a number`;
+    if (typeof v.cost !== "number")
+      return `variant ${v.sku}: cost must be a number`;
     if (typeof v.retail_price !== "number")
       return `variant ${v.sku}: retail_price must be a number`;
   }
@@ -45,7 +45,9 @@ export const POST = async (
     });
 
     if (errors && errors.length > 0) {
-      logger.error(`[pos-products-v2] workflow errors: ${JSON.stringify(errors)}`);
+      logger.error(
+        `[pos-products-v2] workflow errors: ${JSON.stringify(errors)}`
+      );
       return res.status(500).json({
         error: errors[0]?.error?.message ?? "Workflow failed",
       });

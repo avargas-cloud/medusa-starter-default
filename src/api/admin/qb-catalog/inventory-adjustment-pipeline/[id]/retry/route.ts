@@ -40,7 +40,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   });
   const row = (rows as unknown as PipelineRowLite[])[0];
   if (!row) {
-    return res.status(404).json({ error: "Pipeline row not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "Pipeline row not found", code: "not_found" });
   }
 
   const update: Record<string, unknown> = { id };
@@ -71,6 +73,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
   await service.updateQbInventoryAdjustmentPipelines(update);
 
-  const phase = retriedAdd && retriedVoid ? "both" : retriedAdd ? "add" : "void";
+  const phase =
+    retriedAdd && retriedVoid ? "both" : retriedAdd ? "add" : "void";
   return res.json({ ok: true, retried_phase: phase });
 };

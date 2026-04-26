@@ -37,8 +37,12 @@ export async function POST(
           .where({ invoice_id: payload.invoice_id })
           .select("id", "variant_id", "sku", "quantity", "refunded_quantity");
 
-        const isUpdate =
-          !(action === "create" || id === "new" || !id || id.startsWith("new:"));
+        const isUpdate = !(
+          action === "create" ||
+          id === "new" ||
+          !id ||
+          id.startsWith("new:")
+        );
 
         const currentCmItems: Array<{ sku: string | null; quantity: number }> =
           isUpdate && id
@@ -46,7 +50,10 @@ export async function POST(
                 await creditMemoService.listPosCreditMemoItems({
                   credit_memo_id: id,
                 })
-              ).map((i: any) => ({ sku: i.sku ?? null, quantity: Number(i.quantity ?? 0) }))
+              ).map((i: any) => ({
+                sku: i.sku ?? null,
+                quantity: Number(i.quantity ?? 0),
+              }))
             : [];
 
         if (invItems.length > 0) {

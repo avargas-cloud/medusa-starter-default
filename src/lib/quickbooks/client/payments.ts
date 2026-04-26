@@ -319,7 +319,11 @@ export async function applyCreditMemoToInvoiceInQb(payload: {
     return {
       success: true,
       dryRun: true,
-      data: { operationId: "DRY_RUN", newEditSequence: null, totalAppliedCount: 1 },
+      data: {
+        operationId: "DRY_RUN",
+        newEditSequence: null,
+        totalAppliedCount: 1,
+      },
     };
   }
 
@@ -337,7 +341,9 @@ export async function applyCreditMemoToInvoiceInQb(payload: {
 
     const operationId: string = enqueueRes?.operationId;
     if (!operationId)
-      throw new Error("Bridge did not return operationId for credit-memo apply");
+      throw new Error(
+        "Bridge did not return operationId for credit-memo apply"
+      );
 
     if (payload.onQueued) {
       await payload.onQueued(operationId);

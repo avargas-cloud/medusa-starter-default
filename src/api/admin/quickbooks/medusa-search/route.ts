@@ -12,14 +12,14 @@ const VALID_TYPES: PosDocType[] = [
 ];
 
 interface SearchHit {
-  id:               string;
-  display_id:       string;
-  label:            string;
-  date:             string | null;
-  amount:           number | null;
-  customer_name:    string | null;
-  already_mapped:   boolean;
-  existing_txn_id:  string | null;
+  id: string;
+  display_id: string;
+  label: string;
+  date: string | null;
+  amount: number | null;
+  customer_name: string | null;
+  already_mapped: boolean;
+  existing_txn_id: string | null;
 }
 
 const LIMIT = 20;
@@ -48,7 +48,9 @@ export async function GET(
   const q = rawQ.trim();
 
   if (!type || !VALID_TYPES.includes(type as PosDocType)) {
-    res.status(400).json({ error: `type must be one of: ${VALID_TYPES.join(", ")}` });
+    res
+      .status(400)
+      .json({ error: `type must be one of: ${VALID_TYPES.join(", ")}` });
     return;
   }
 
@@ -72,10 +74,10 @@ async function search(
   q: string
 ): Promise<SearchHit[]> {
   if (type === "estimate") return searchOrderLike(client, q, "estimate", "E");
-  if (type === "order")    return searchOrderLike(client, q, "order", "S");
-  if (type === "invoice")  return searchInvoice(client, q);
-  if (type === "return")   return searchReturn(client, q);
-  if (type === "payment")  return searchPayment(client, q);
+  if (type === "order") return searchOrderLike(client, q, "order", "S");
+  if (type === "invoice") return searchInvoice(client, q);
+  if (type === "return") return searchReturn(client, q);
+  if (type === "payment") return searchPayment(client, q);
   return [];
 }
 
@@ -88,9 +90,8 @@ async function searchOrderLike(
   // Medusa v2 distinguishes estimates from sales orders via `is_draft_order`,
   // NOT by `status` — canceled estimates keep is_draft_order=true and
   // status='canceled', so a status-based filter leaks them into order results.
-  const statusPredicate = mode === "estimate"
-    ? `is_draft_order = TRUE`
-    : `is_draft_order = FALSE`;
+  const statusPredicate =
+    mode === "estimate" ? `is_draft_order = TRUE` : `is_draft_order = FALSE`;
 
   const params: unknown[] = [];
   let wherePattern = "";
@@ -102,12 +103,12 @@ async function searchOrderLike(
   }
 
   const { rows } = await client.query<{
-    id:              string;
+    id: string;
     document_number: string | null;
-    display_id:      number | null;
-    email:           string | null;
-    created_at:      Date;
-    qb_txn_id:       string | null;
+    display_id: number | null;
+    email: string | null;
+    created_at: Date;
+    qb_txn_id: string | null;
   }>(
     `SELECT id,
             metadata->>'document_number' AS document_number,
@@ -123,16 +124,17 @@ async function searchOrderLike(
     params
   );
 
-  return rows.map(r => {
-    const docNum  = r.document_number || (r.display_id != null ? String(r.display_id) : r.id);
+  return rows.map((r) => {
+    const docNum =
+      r.document_number || (r.display_id != null ? String(r.display_id) : r.id);
     return {
-      id:              r.id,
-      display_id:      docNum,
-      label:           docNum,
-      date:            r.created_at?.toISOString() ?? null,
-      amount:          null,
-      customer_name:   r.email,
-      already_mapped:  !!r.qb_txn_id,
+      id: r.id,
+      display_id: docNum,
+      label: docNum,
+      date: r.created_at?.toISOString() ?? null,
+      amount: null,
+      customer_name: r.email,
+      already_mapped: !!r.qb_txn_id,
       existing_txn_id: r.qb_txn_id,
     };
   });
@@ -150,11 +152,11 @@ async function searchInvoice(
   }
 
   const { rows } = await client.query<{
-    id:             string;
+    id: string;
     invoice_number: string | null;
-    total:          string | number | null;
-    created_at:     Date;
-    metadata:       Record<string, unknown> | null;
+    total: string | number | null;
+    created_at: Date;
+    metadata: Record<string, unknown> | null;
   }>(
     `SELECT id, invoice_number, total, created_at, metadata
        FROM pos_invoice
@@ -164,18 +166,18 @@ async function searchInvoice(
     params
   );
 
-  return rows.map(r => {
-    const num      = r.invoice_number ?? r.id;
-    const amount   = r.total != null ? Number(r.total) / 100 : null; // cents → dollars
-    const txnId    = (r.metadata?.qb_txn_id as string | undefined) ?? null;
+  return rows.map((r) => {
+    const num = r.invoice_number ?? r.id;
+    const amount = r.total != null ? Number(r.total) / 100 : null; // cents → dollars
+    const txnId = (r.metadata?.qb_txn_id as string | undefined) ?? null;
     return {
-      id:              r.id,
-      display_id:      num,
-      label:           num,
-      date:            r.created_at?.toISOString() ?? null,
+      id: r.id,
+      display_id: num,
+      label: num,
+      date: r.created_at?.toISOString() ?? null,
       amount,
-      customer_name:   null,
-      already_mapped:  !!txnId,
+      customer_name: null,
+      already_mapped: !!txnId,
       existing_txn_id: txnId,
     };
   });
@@ -195,11 +197,11 @@ async function searchReturn(
   }
 
   const { rows } = await client.query<{
-    id:                 string;
+    id: string;
     credit_memo_number: string | null;
-    total:              string | number | null;
-    created_at:         Date;
-    qb_txn_id:          string | null;
+    total: string | number | null;
+    created_at: Date;
+    qb_txn_id: string | null;
   }>(
     `SELECT id, credit_memo_number, total, created_at, qb_txn_id
        FROM pos_credit_memo
@@ -209,17 +211,17 @@ async function searchReturn(
     params
   );
 
-  return rows.map(r => {
-    const num      = r.credit_memo_number ?? r.id;
-    const amount   = r.total != null ? Number(r.total) / 100 : null;
+  return rows.map((r) => {
+    const num = r.credit_memo_number ?? r.id;
+    const amount = r.total != null ? Number(r.total) / 100 : null;
     return {
-      id:              r.id,
-      display_id:      num,
-      label:           num,
-      date:            r.created_at?.toISOString() ?? null,
+      id: r.id,
+      display_id: num,
+      label: num,
+      date: r.created_at?.toISOString() ?? null,
       amount,
-      customer_name:   null,
-      already_mapped:  !!r.qb_txn_id,
+      customer_name: null,
+      already_mapped: !!r.qb_txn_id,
       existing_txn_id: r.qb_txn_id,
     };
   });
@@ -237,12 +239,12 @@ async function searchPayment(
   }
 
   const { rows } = await client.query<{
-    id:         string;
+    id: string;
     display_id: number | null;
-    reference:  string | null;
-    amount:     string | number | null;
+    reference: string | null;
+    amount: string | number | null;
     created_at: Date;
-    metadata:   Record<string, unknown> | null;
+    metadata: Record<string, unknown> | null;
   }>(
     `SELECT id, display_id, reference, amount, created_at, metadata
        FROM customer_payment
@@ -252,18 +254,19 @@ async function searchPayment(
     params
   );
 
-  return rows.map(r => {
-    const num      = r.display_id != null ? String(r.display_id) : (r.reference ?? r.id);
-    const amount   = r.amount != null ? Number(r.amount) / 100 : null;
-    const txnId    = (r.metadata?.qb_txn_id as string | undefined) ?? null;
+  return rows.map((r) => {
+    const num =
+      r.display_id != null ? String(r.display_id) : (r.reference ?? r.id);
+    const amount = r.amount != null ? Number(r.amount) / 100 : null;
+    const txnId = (r.metadata?.qb_txn_id as string | undefined) ?? null;
     return {
-      id:              r.id,
-      display_id:      num,
-      label:           r.reference ? `${num} · ${r.reference}` : num,
-      date:            r.created_at?.toISOString() ?? null,
+      id: r.id,
+      display_id: num,
+      label: r.reference ? `${num} · ${r.reference}` : num,
+      date: r.created_at?.toISOString() ?? null,
       amount,
-      customer_name:   null,
-      already_mapped:  !!txnId,
+      customer_name: null,
+      already_mapped: !!txnId,
       existing_txn_id: txnId,
     };
   });

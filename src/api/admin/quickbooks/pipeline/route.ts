@@ -590,7 +590,8 @@ export async function POST(
             // confirmed estimate/sales_order row for the same order.
             let soTxnId: string | null = row.qb_txn_id ?? null;
             if (!soTxnId && row.order_id) {
-              const voidPool = require("../../../../api/utils/db-pool").getDbPool();
+              const voidPool =
+                require("../../../../api/utils/db-pool").getDbPool();
               const { rows: soRows } = await voidPool.query(
                 `SELECT qb_txn_id FROM qb_order_pipeline
                  WHERE order_id = $1
@@ -609,26 +610,42 @@ export async function POST(
               }
             }
             if (!soTxnId) {
-              logger.warn(`${LOG_PREFIX} void_sales_order: no QB TxnID for order ${row.order_id} — marking failed`);
-              const voidPool = require("../../../../api/utils/db-pool").getDbPool();
+              logger.warn(
+                `${LOG_PREFIX} void_sales_order: no QB TxnID for order ${row.order_id} — marking failed`
+              );
+              const voidPool =
+                require("../../../../api/utils/db-pool").getDbPool();
               await voidPool.query(
                 `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
-                [row.id, "Cannot retry: no confirmed estimate/sales_order TxnID found"]
+                [
+                  row.id,
+                  "Cannot retry: no confirmed estimate/sales_order TxnID found",
+                ]
               );
               break;
             }
-            const { closeSalesOrderInQb } = require("../../../../lib/quickbooks/qb-bridge-client");
-            const closeResult = await closeSalesOrderInQb(soTxnId, (m: string) => logger.info(m));
-            const voidPool2 = require("../../../../api/utils/db-pool").getDbPool();
+            const {
+              closeSalesOrderInQb,
+            } = require("../../../../lib/quickbooks/qb-bridge-client");
+            const closeResult = await closeSalesOrderInQb(
+              soTxnId,
+              (m: string) => logger.info(m)
+            );
+            const voidPool2 =
+              require("../../../../api/utils/db-pool").getDbPool();
             if (!closeResult.success) {
-              logger.error(`${LOG_PREFIX} void_sales_order failed: ${closeResult.error}`);
+              logger.error(
+                `${LOG_PREFIX} void_sales_order failed: ${closeResult.error}`
+              );
               await voidPool2.query(
                 `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW(), qb_txn_id = $3 WHERE id = $1`,
                 [row.id, closeResult.error ?? "SO close failed", soTxnId]
               );
             } else {
               const soOpId = closeResult.data?.operationId ?? null;
-              logger.info(`${LOG_PREFIX} void_sales_order queued (op: ${soOpId})`);
+              logger.info(
+                `${LOG_PREFIX} void_sales_order queued (op: ${soOpId})`
+              );
               await voidPool2.query(
                 `UPDATE qb_order_pipeline SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), qb_txn_id = $3, updated_at = NOW() WHERE id = $1`,
                 [row.id, soOpId, soTxnId]
@@ -716,12 +733,16 @@ export async function POST(
             );
             const cm = cmRows[0];
             if (!cm) {
-              logger.warn(`${LOG_PREFIX} credit_memo retry: CM not found ${row.reference_id}`);
+              logger.warn(
+                `${LOG_PREFIX} credit_memo retry: CM not found ${row.reference_id}`
+              );
               break;
             }
             let cmCustomer: any;
             try {
-              cmCustomer = await customerModule.retrieveCustomer(cm.customer_id);
+              cmCustomer = await customerModule.retrieveCustomer(
+                cm.customer_id
+              );
             } catch {
               await cmPool.query(
                 `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
@@ -753,7 +774,9 @@ export async function POST(
               // products) must NOT carry InventorySiteRef (QB error 3140).
               const isService = !item.variant_id || item.is_service === true;
               return {
-                ...(item.quickbooks_id ? { productId: item.quickbooks_id } : {}),
+                ...(item.quickbooks_id
+                  ? { productId: item.quickbooks_id }
+                  : {}),
                 productName: item.sku || item.title,
                 quantity: item.quantity,
                 price: unitPriceDollars,

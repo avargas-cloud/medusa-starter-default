@@ -1,3 +1,4 @@
+import { ArrowLeft, Trash, Plus, MagnifyingGlass } from "@medusajs/icons";
 import {
   Badge,
   Button,
@@ -7,7 +8,6 @@ import {
   Text,
   toast,
 } from "@medusajs/ui";
-import { ArrowLeft, Trash, Plus, MagnifyingGlass } from "@medusajs/icons";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -133,7 +133,9 @@ const AddAlternativeModal = ({
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        throw new Error((d as { error?: string }).error ?? `HTTP ${res.status}`);
+        throw new Error(
+          (d as { error?: string }).error ?? `HTTP ${res.status}`
+        );
       }
       toast.success("Alternative linked");
       onAdded();
@@ -245,10 +247,9 @@ const PurchasingAlternativeDetailPage = () => {
     if (!variantId) return;
     setLoading(true);
     try {
-      const res = await fetch(
-        `/admin/purchasing/alternatives/${variantId}`,
-        { credentials: "include" }
-      );
+      const res = await fetch(`/admin/purchasing/alternatives/${variantId}`, {
+        credentials: "include",
+      });
       if (res.status === 404) {
         toast.error("Variant not found");
         navigate("/purchasing-alternatives");
@@ -275,13 +276,15 @@ const PurchasingAlternativeDetailPage = () => {
   const handleRemove = async (linkId: string) => {
     setRemoving(linkId);
     try {
-      const res = await fetch(
-        `/admin/purchasing/alternatives/${linkId}`,
-        { method: "DELETE", credentials: "include" }
-      );
+      const res = await fetch(`/admin/purchasing/alternatives/${linkId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        throw new Error((d as { error?: string }).error ?? `HTTP ${res.status}`);
+        throw new Error(
+          (d as { error?: string }).error ?? `HTTP ${res.status}`
+        );
       }
       toast.success("Alternative removed");
       await fetchDetail();
@@ -311,7 +314,7 @@ const PurchasingAlternativeDetailPage = () => {
   const abcxyz =
     primary.abc_class && primary.xyz_class
       ? `${primary.abc_class}${primary.xyz_class}`
-      : primary.abc_class ?? null;
+      : (primary.abc_class ?? null);
 
   return (
     <>

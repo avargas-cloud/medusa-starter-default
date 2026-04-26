@@ -34,7 +34,10 @@ type RunRow = {
  */
 type VendorRet = Record<string, unknown> & { ListID?: string };
 
-const buildVendorPayload = (v: VendorRet, now: Date): Record<string, unknown> => {
+const buildVendorPayload = (
+  v: VendorRet,
+  now: Date
+): Record<string, unknown> => {
   const addr = (v.VendorAddress as Record<string, unknown> | undefined) ?? {};
   const prefillRaw = v.PrefillAccountRef;
   const prefill = Array.isArray(prefillRaw)
@@ -53,7 +56,8 @@ const buildVendorPayload = (v: VendorRet, now: Date): Record<string, unknown> =>
   const eligible1099 = (() => {
     const raw = v.IsVendorEligibleFor1099 as unknown;
     if (raw === true || raw === "true" || raw === 1 || raw === "1") return true;
-    if (raw === false || raw === "false" || raw === 0 || raw === "0") return false;
+    if (raw === false || raw === "false" || raw === 0 || raw === "0")
+      return false;
     return null;
   })();
 
@@ -160,7 +164,11 @@ export default async function qbVendorSyncRunner(container: MedusaContainer) {
   }
 }
 
-async function handleQueued(run: RunRow, catalog: any, logger: any): Promise<void> {
+async function handleQueued(
+  run: RunRow,
+  catalog: any,
+  logger: any
+): Promise<void> {
   const res = await fetch(`${BRIDGE_URL}/api/vendors`, { headers: HEADERS });
   const data = await res.json();
   if (!data.operationId) {
@@ -177,7 +185,11 @@ async function handleQueued(run: RunRow, catalog: any, logger: any): Promise<voi
   );
 }
 
-async function handleFetching(run: RunRow, catalog: any, logger: any): Promise<void> {
+async function handleFetching(
+  run: RunRow,
+  catalog: any,
+  logger: any
+): Promise<void> {
   // Time-out guard: if we've been in 'fetching' for more than FETCH_TIMEOUT_MINUTES, fail.
   if (run.started_at) {
     const startedMs =
@@ -228,7 +240,11 @@ async function handleFetching(run: RunRow, catalog: any, logger: any): Promise<v
   );
 }
 
-async function handleProcessing(run: RunRow, catalog: any, logger: any): Promise<void> {
+async function handleProcessing(
+  run: RunRow,
+  catalog: any,
+  logger: any
+): Promise<void> {
   const snapshot = (run.vendor_snapshot as VendorRet[] | null) ?? [];
   if (snapshot.length === 0) {
     await catalog.updateQbVendorSyncRuns({
@@ -256,10 +272,10 @@ async function handleProcessing(run: RunRow, catalog: any, logger: any): Promise
       .map((v) => v.ListID)
       .filter((id): id is string => !!id);
     const existing = chunkListIds.length
-      ? (await catalog.listQbVendors(
+      ? ((await catalog.listQbVendors(
           { qb_list_id: chunkListIds },
           { select: ["id", "qb_list_id"], take: chunkListIds.length }
-        )) as { id: string; qb_list_id: string }[]
+        )) as { id: string; qb_list_id: string }[])
       : [];
     const byListId = new Map(existing.map((v) => [v.qb_list_id, v.id]));
 
@@ -313,13 +329,13 @@ async function handleProcessing(run: RunRow, catalog: any, logger: any): Promise
 
     logger.info(
       `[qb-vendor-sync-runner] run ${run.id} chunk ${from}-${to}/${snapshot.length} ` +
-      `(created=${chunkCreated} updated=${chunkUpdated} err=${chunkErrored})`
+        `(created=${chunkCreated} updated=${chunkUpdated} err=${chunkErrored})`
     );
 
     if (isDone) {
       logger.info(
         `[qb-vendor-sync-runner] run ${run.id} → completed ` +
-        `(created=${created} updated=${updated} error=${errored})`
+          `(created=${created} updated=${updated} error=${errored})`
       );
       break;
     }

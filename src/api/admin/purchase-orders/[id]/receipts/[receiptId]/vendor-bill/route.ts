@@ -12,11 +12,11 @@
  *   → Updates draft vendor bill fields. Only allowed when status='draft'.
  */
 
-import { z } from "zod";
 import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+import { z } from "zod";
 
 import { getActorUserId, UnauthenticatedError } from "../../../../_lib/auth";
 import { zodErrorToBody } from "../../../../_lib/format";
@@ -26,14 +26,38 @@ import { getPurchaseOrdersService } from "../../../../_lib/service-resolver";
 
 const vendorBillBodySchema = z.object({
   commission_mode: z.enum(["percent", "fixed"]).default("percent"),
-  commission_rate_bps: z.number().int().min(0).max(100_000).optional().default(0),
-  commission_amount_cents: z.number().int().min(0).max(1_000_000_000).optional().default(0),
+  commission_rate_bps: z
+    .number()
+    .int()
+    .min(0)
+    .max(100_000)
+    .optional()
+    .default(0),
+  commission_amount_cents: z
+    .number()
+    .int()
+    .min(0)
+    .max(1_000_000_000)
+    .optional()
+    .default(0),
   commission_invoice_number: z.string().max(200).nullish(),
   freight_included: z.boolean().optional().default(false),
-  freight_amount_cents: z.number().int().min(0).max(1_000_000_000).optional().default(0),
+  freight_amount_cents: z
+    .number()
+    .int()
+    .min(0)
+    .max(1_000_000_000)
+    .optional()
+    .default(0),
   freight_invoice_number: z.string().max(200).nullish(),
   tariff_included: z.boolean().optional().default(false),
-  tariff_amount_cents: z.number().int().min(0).max(1_000_000_000).optional().default(0),
+  tariff_amount_cents: z
+    .number()
+    .int()
+    .min(0)
+    .max(1_000_000_000)
+    .optional()
+    .default(0),
   tariff_number: z.string().max(200).nullish(),
   notes: z.string().max(2000).nullish(),
 });
@@ -78,10 +102,13 @@ async function resolveReceiptAndBill(
   service: ReturnType<typeof getPurchaseOrdersService>,
   poId: string,
   receiptId: string
-): Promise<{
-  receipt: ReceiptHeader;
-  bill: VendorBillRow | null;
-} | { error: string; code: string; status: number }> {
+): Promise<
+  | {
+      receipt: ReceiptHeader;
+      bill: VendorBillRow | null;
+    }
+  | { error: string; code: string; status: number }
+> {
   const receipt = (await service
     .retrievePurchaseOrderReceipt(receiptId)
     .catch(() => null)) as unknown as ReceiptHeader | null;
@@ -122,12 +149,16 @@ export async function GET(
 
   const resolved = await resolveReceiptAndBill(service, id, receiptId);
   if (isErrorResult(resolved)) {
-    return res.status(resolved.status).json({ error: resolved.error, code: resolved.code });
+    return res
+      .status(resolved.status)
+      .json({ error: resolved.error, code: resolved.code });
   }
 
   const { bill } = resolved;
   if (!bill) {
-    return res.status(404).json({ error: "Vendor bill not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "Vendor bill not found", code: "not_found" });
   }
 
   // Fetch lines
@@ -150,7 +181,9 @@ export async function POST(
     userId = getActorUserId(req);
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }
@@ -167,7 +200,9 @@ export async function POST(
 
   const resolved = await resolveReceiptAndBill(service, id, receiptId);
   if (isErrorResult(resolved)) {
-    return res.status(resolved.status).json({ error: resolved.error, code: resolved.code });
+    return res
+      .status(resolved.status)
+      .json({ error: resolved.error, code: resolved.code });
   }
 
   const { bill: existing } = resolved;
@@ -264,7 +299,9 @@ export async function PATCH(
     getActorUserId(req);
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }
@@ -281,12 +318,16 @@ export async function PATCH(
 
   const resolved = await resolveReceiptAndBill(service, id, receiptId);
   if (isErrorResult(resolved)) {
-    return res.status(resolved.status).json({ error: resolved.error, code: resolved.code });
+    return res
+      .status(resolved.status)
+      .json({ error: resolved.error, code: resolved.code });
   }
 
   const { bill } = resolved;
   if (!bill) {
-    return res.status(404).json({ error: "Vendor bill not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "Vendor bill not found", code: "not_found" });
   }
   if (bill.status !== "draft") {
     return res.status(409).json({
@@ -296,19 +337,33 @@ export async function PATCH(
   }
 
   const updatePayload: Record<string, unknown> = {};
-  if (patch.commission_mode !== undefined) updatePayload.commission_mode = patch.commission_mode;
-  if (patch.commission_rate_bps !== undefined) updatePayload.commission_rate_bps = patch.commission_rate_bps;
-  if (patch.commission_amount_cents !== undefined) updatePayload.commission_amount_cents = patch.commission_amount_cents;
-  if ("commission_invoice_number" in patch) updatePayload.commission_invoice_number = patch.commission_invoice_number ?? null;
-  if (patch.freight_included !== undefined) updatePayload.freight_included = patch.freight_included;
-  if (patch.freight_amount_cents !== undefined) updatePayload.freight_amount_cents = patch.freight_amount_cents;
-  if ("freight_invoice_number" in patch) updatePayload.freight_invoice_number = patch.freight_invoice_number ?? null;
-  if (patch.tariff_included !== undefined) updatePayload.tariff_included = patch.tariff_included;
-  if (patch.tariff_amount_cents !== undefined) updatePayload.tariff_amount_cents = patch.tariff_amount_cents;
-  if ("tariff_number" in patch) updatePayload.tariff_number = patch.tariff_number ?? null;
+  if (patch.commission_mode !== undefined)
+    updatePayload.commission_mode = patch.commission_mode;
+  if (patch.commission_rate_bps !== undefined)
+    updatePayload.commission_rate_bps = patch.commission_rate_bps;
+  if (patch.commission_amount_cents !== undefined)
+    updatePayload.commission_amount_cents = patch.commission_amount_cents;
+  if ("commission_invoice_number" in patch)
+    updatePayload.commission_invoice_number =
+      patch.commission_invoice_number ?? null;
+  if (patch.freight_included !== undefined)
+    updatePayload.freight_included = patch.freight_included;
+  if (patch.freight_amount_cents !== undefined)
+    updatePayload.freight_amount_cents = patch.freight_amount_cents;
+  if ("freight_invoice_number" in patch)
+    updatePayload.freight_invoice_number = patch.freight_invoice_number ?? null;
+  if (patch.tariff_included !== undefined)
+    updatePayload.tariff_included = patch.tariff_included;
+  if (patch.tariff_amount_cents !== undefined)
+    updatePayload.tariff_amount_cents = patch.tariff_amount_cents;
+  if ("tariff_number" in patch)
+    updatePayload.tariff_number = patch.tariff_number ?? null;
   if ("notes" in patch) updatePayload.notes = patch.notes ?? null;
 
-  const updated = await service.updateVendorBills({ id: bill.id }, updatePayload);
+  const updated = await service.updateVendorBills(
+    { id: bill.id },
+    updatePayload
+  );
 
   const lines = await service.listVendorBillLines(
     { vendor_bill_id: bill.id },

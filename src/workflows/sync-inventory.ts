@@ -8,11 +8,11 @@ import { Modules } from "@medusajs/utils";
 
 const CHINA_LOCATION_ID = "sloc_01KQ14C1CFX30EDD722BF87HDM";
 
-import { safeSyncIndex } from "../lib/meilisearch/safe-sync";
 import {
   buildInventoryDocsForVariants,
   INVENTORY_DOC_FIELDS,
 } from "../lib/meilisearch/build-inventory-docs";
+import { safeSyncIndex } from "../lib/meilisearch/safe-sync";
 
 export const syncInventoryToMeiliStep = createStep(
   "sync-to-meili-step",
@@ -39,9 +39,14 @@ export const syncInventoryToMeiliStep = createStep(
           chinaStockMap.set(level.inventory_item_id, level.stocked_quantity);
         }
       }
-      console.log(`📦 [sync-inventory] Loaded ${chinaStockMap.size} China warehouse levels`);
+      console.log(
+        `📦 [sync-inventory] Loaded ${chinaStockMap.size} China warehouse levels`
+      );
     } catch (e: any) {
-      console.warn("[sync-inventory] Could not load China warehouse levels:", e.message);
+      console.warn(
+        "[sync-inventory] Could not load China warehouse levels:",
+        e.message
+      );
     }
 
     // ─── BULK: Load all price list prices into RAM once ─────────────────────

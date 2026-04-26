@@ -18,14 +18,10 @@ import { Migration } from "@medusajs/framework/mikro-orm/migrations";
 export class Migration20260418200000 extends Migration {
   override async up(): Promise<void> {
     // ── purge placeholder drafts left over from the previous schema ──────────
-    this.addSql(
-      `delete from "inventory_count" where "number" like 'DRAFT-%';`
-    );
+    this.addSql(`delete from "inventory_count" where "number" like 'DRAFT-%';`);
 
     // ── drop the obsolete per-module sequence table ──────────────────────────
-    this.addSql(
-      `drop table if exists "inventory_count_sequence" cascade;`
-    );
+    this.addSql(`drop table if exists "inventory_count_sequence" cascade;`);
 
     // ── shared postgres sequence (matches custom_estimate_seq / *_seq family)
     this.addSql(
@@ -33,12 +29,8 @@ export class Migration20260418200000 extends Migration {
     );
 
     // ── make number/year/seq nullable; drafts carry no number until submit ──
-    this.addSql(
-      `drop index if exists "UQ_inventory_count_number";`
-    );
-    this.addSql(
-      `drop index if exists "UQ_inventory_count_year_seq";`
-    );
+    this.addSql(`drop index if exists "UQ_inventory_count_number";`);
+    this.addSql(`drop index if exists "UQ_inventory_count_year_seq";`);
     this.addSql(
       `alter table "inventory_count" alter column "number" drop not null;`
     );
@@ -57,12 +49,8 @@ export class Migration20260418200000 extends Migration {
   }
 
   override async down(): Promise<void> {
-    this.addSql(
-      `drop index if exists "UQ_inventory_count_seq";`
-    );
-    this.addSql(
-      `drop index if exists "UQ_inventory_count_number";`
-    );
+    this.addSql(`drop index if exists "UQ_inventory_count_seq";`);
+    this.addSql(`drop index if exists "UQ_inventory_count_number";`);
     this.addSql(`drop sequence if exists "custom_inventory_count_seq";`);
     // Re-creating the module table on a downgrade is intentionally skipped:
     // a downgrade from this migration is not expected in production.

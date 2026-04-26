@@ -79,11 +79,7 @@ async function resolveCustomerIdsFromLinkRowIds(
   }
 }
 
-async function syncCustomer(
-  customerId: string,
-  container: any,
-  logger: any
-) {
+async function syncCustomer(customerId: string, container: any, logger: any) {
   try {
     const customerModule = container.resolve(Modules.CUSTOMER);
     const customer = await customerModule.retrieveCustomer(customerId, {
@@ -186,10 +182,7 @@ export default async function customerMeilisearchSubscriber({
     return;
   }
 
-  if (
-    event.name === "customer.created" ||
-    event.name === "customer.updated"
-  ) {
+  if (event.name === "customer.created" || event.name === "customer.updated") {
     const id = event.data?.id;
     if (typeof id === "string") {
       await syncCustomer(id, container, logger);

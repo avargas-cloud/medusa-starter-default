@@ -5,17 +5,14 @@ import {
 } from "@medusajs/framework/workflows-sdk";
 import { createProductsWorkflow } from "@medusajs/medusa/core-flows";
 
+import { updateProductAttributesWorkflow } from "../product-attributes/update-product-attributes";
 import { syncProductToMeiliSearchWorkflow } from "../sync-product-meilisearch";
 import { updateInventoryIncrementalWorkflow } from "../update-inventory-incremental";
-import { updateProductAttributesWorkflow } from "../product-attributes/update-product-attributes";
 
-import {
-  enqueueQbItemsStep,
-  QbItemType,
-} from "./steps/enqueue-qb-items-step";
-import { applyWholesalePricesStep } from "./steps/apply-wholesale-prices-step";
-import { linkQbVendorStep } from "./steps/link-qb-vendor-step";
 import { applyShippingAttributesStep } from "./steps/apply-shipping-attributes-step";
+import { applyWholesalePricesStep } from "./steps/apply-wholesale-prices-step";
+import { enqueueQbItemsStep, QbItemType } from "./steps/enqueue-qb-items-step";
+import { linkQbVendorStep } from "./steps/link-qb-vendor-step";
 
 export type CreatePosProductV2VariantInput = {
   sku: string;
@@ -112,7 +109,8 @@ export const createPosProductV2Workflow = createWorkflow(
       const optionTitle = inferredTitle;
 
       const optionValues = (() => {
-        if (i.option_values && i.option_values.length > 0) return i.option_values;
+        if (i.option_values && i.option_values.length > 0)
+          return i.option_values;
         // Dedupe values coming from variants to avoid duplicate entries when
         // multiple variants share the same option value.
         const fromVariants = i.variants
@@ -120,9 +118,7 @@ export const createPosProductV2Workflow = createWorkflow(
           .filter((x): x is string => !!x);
         if (fromVariants.length > 0) return Array.from(new Set(fromVariants));
         // Single-product fallback — synthesize one value per variant.
-        return i.variants.map(
-          (v, idx) => v.title ?? `Variant ${idx + 1}`
-        );
+        return i.variants.map((v, idx) => v.title ?? `Variant ${idx + 1}`);
       })();
 
       const variants = i.variants.map((v, idx) => {
@@ -156,8 +152,7 @@ export const createPosProductV2Workflow = createWorkflow(
               v.overrides?.cogs_account_full_name ?? null,
             qb_override_income_account:
               v.overrides?.income_account_full_name ?? null,
-            qb_override_vendor_full_name:
-              v.overrides?.vendor_full_name ?? null,
+            qb_override_vendor_full_name: v.overrides?.vendor_full_name ?? null,
             qb_override_vendor_qb_id: v.overrides?.vendor_qb_id ?? null,
           },
         };
@@ -171,13 +166,14 @@ export const createPosProductV2Workflow = createWorkflow(
       // quickly across POS-created products, so we slugify the title and append
       // a short random suffix to guarantee uniqueness without forcing the
       // cashier to invent distinct titles.
-      const slugBase = i.title
-        .toLowerCase()
-        .trim()
-        .replace(/['"]/g, "")
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 60) || "product";
+      const slugBase =
+        i.title
+          .toLowerCase()
+          .trim()
+          .replace(/['"]/g, "")
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 60) || "product";
       const suffix = Math.random().toString(36).slice(2, 6);
       const handle = `${slugBase}-${suffix}`;
 
@@ -195,9 +191,10 @@ export const createPosProductV2Workflow = createWorkflow(
           options: [{ title: optionTitle, values: optionValues }],
           variants,
           thumbnail: imageUrls[0],
-          images: imageUrls.length > 0
-            ? imageUrls.map((url) => ({ url }))
-            : undefined,
+          images:
+            imageUrls.length > 0
+              ? imageUrls.map((url) => ({ url }))
+              : undefined,
         },
       ];
     });
@@ -215,9 +212,10 @@ export const createPosProductV2Workflow = createWorkflow(
           variant_id: variants[idx]?.id,
           wholesale_price: v.wholesale_price ?? 0,
         }))
-        .filter(
-          (w) => w.variant_id && w.wholesale_price > 0
-        ) as Array<{ variant_id: string; wholesale_price: number }>;
+        .filter((w) => w.variant_id && w.wholesale_price > 0) as Array<{
+        variant_id: string;
+        wholesale_price: number;
+      }>;
     });
 
     const currencyCode = transform({ input }, (data) =>
@@ -236,7 +234,9 @@ export const createPosProductV2Workflow = createWorkflow(
         sku: v.sku,
         title: v.title ?? v.sku,
         sales_description:
-          v.sales_description ?? data.input.sales_description ?? data.input.title,
+          v.sales_description ??
+          data.input.sales_description ??
+          data.input.title,
         cost: v.cost,
         retail_price: v.retail_price,
         item_type: data.input.item_type,
@@ -276,35 +276,31 @@ export const createPosProductV2Workflow = createWorkflow(
     // Link attribute values + mark as "Variant" — mirrors the admin's
     // "Manage Product Attributes" modal (Save button). Empty attribute_value_ids
     // or no attribute_key_id = single product, we skip the call.
-    const productAttributesInput = transform(
-      { input, productRef },
-      (data) => {
-        const pa = data.input.product_attribute;
-        return {
-          productId: (data.productRef as any)?.id as string,
-          valueIds: pa?.attribute_value_ids ?? [],
-          variantKeys: pa?.attribute_key_id ? [pa.attribute_key_id] : [],
-        };
-      }
-    );
-    updateProductAttributesWorkflow.runAsStep({ input: productAttributesInput });
+    const productAttributesInput = transform({ input, productRef }, (data) => {
+      const pa = data.input.product_attribute;
+      return {
+        productId: (data.productRef as any)?.id as string,
+        valueIds: pa?.attribute_value_ids ?? [],
+        variantKeys: pa?.attribute_key_id ? [pa.attribute_key_id] : [],
+      };
+    });
+    updateProductAttributesWorkflow.runAsStep({
+      input: productAttributesInput,
+    });
 
     // Write UPS shipping attrs (lbs, inches) onto each variant's inventory_item —
     // same columns the admin "Shipping Attributes" widget uses. Values are shared
     // at the product level because variants of one product usually ship identically.
-    const shippingStepInput = transform(
-      { input, productRef },
-      (data) => {
-        const attrs = data.input.shipping_attributes ?? {};
-        return {
-          product_id: (data.productRef as any)?.id as string,
-          weight_lbs: attrs.weight_lbs ?? null,
-          length_in: attrs.length_in ?? null,
-          width_in: attrs.width_in ?? null,
-          height_in: attrs.height_in ?? null,
-        };
-      }
-    );
+    const shippingStepInput = transform({ input, productRef }, (data) => {
+      const attrs = data.input.shipping_attributes ?? {};
+      return {
+        product_id: (data.productRef as any)?.id as string,
+        weight_lbs: attrs.weight_lbs ?? null,
+        length_in: attrs.length_in ?? null,
+        width_in: attrs.width_in ?? null,
+        height_in: attrs.height_in ?? null,
+      };
+    });
     applyShippingAttributesStep(shippingStepInput);
 
     // Meilisearch indexes must reflect the new product immediately so the cashier

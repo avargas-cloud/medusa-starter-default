@@ -13,7 +13,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const query = req.scope.resolve("query");
 
   const type = req.query.type ? String(req.query.type) : undefined;
-  const search = req.query.search ? String(req.query.search).toLowerCase() : undefined;
+  const search = req.query.search
+    ? String(req.query.search).toLowerCase()
+    : undefined;
   const activeOnly = req.query.active !== "false";
 
   const filters: any = {};
@@ -38,11 +40,15 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   });
 
   const filtered = search
-    ? data.filter((a: any) => (a.full_name ?? "").toLowerCase().includes(search))
+    ? data.filter((a: any) =>
+        (a.full_name ?? "").toLowerCase().includes(search)
+      )
     : data;
 
   return res.json({
-    accounts: filtered.sort((a: any, b: any) => a.full_name.localeCompare(b.full_name)),
+    accounts: filtered.sort((a: any, b: any) =>
+      a.full_name.localeCompare(b.full_name)
+    ),
     count: filtered.length,
     module: QUICKBOOKS_CATALOG_MODULE,
   });

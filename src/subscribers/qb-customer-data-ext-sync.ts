@@ -27,7 +27,8 @@ async function enqueueIfNeeded(
   try {
     const customer = await customerModule.retrieveCustomer(customerId);
     const meta = (customer.metadata ?? {}) as Record<string, unknown>;
-    const qbListId = typeof meta.qb_list_id === "string" ? meta.qb_list_id : null;
+    const qbListId =
+      typeof meta.qb_list_id === "string" ? meta.qb_list_id : null;
     const channel =
       typeof meta.acquisition_channel === "string"
         ? (meta.acquisition_channel as string).trim()

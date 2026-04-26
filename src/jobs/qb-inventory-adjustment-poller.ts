@@ -116,16 +116,14 @@ function extractTxnId(data: BridgeStatusResponse): string | null {
   const op = data.operation;
   if (!op) return null;
   if (op.txnId) return op.txnId;
-  const msgs =
-    op.result?.QBXML?.QBXMLMsgsRs ?? op.result?.QBXMLMsgsRs ?? {};
+  const msgs = op.result?.QBXML?.QBXMLMsgsRs ?? op.result?.QBXMLMsgsRs ?? {};
   return msgs?.InventoryAdjustmentAddRs?.InventoryAdjustmentRet?.TxnID ?? null;
 }
 
 function extractTxnNumber(data: BridgeStatusResponse): string | null {
   const op = data.operation;
   if (op?.refNumber) return op.refNumber;
-  const msgs =
-    op?.result?.QBXML?.QBXMLMsgsRs ?? op?.result?.QBXMLMsgsRs ?? {};
+  const msgs = op?.result?.QBXML?.QBXMLMsgsRs ?? op?.result?.QBXMLMsgsRs ?? {};
   return (
     msgs?.InventoryAdjustmentAddRs?.InventoryAdjustmentRet?.TxnNumber ?? null
   );
@@ -188,10 +186,9 @@ async function postVoidToBridge(args: {
 async function fetchBridgeStatus(
   operationId: string
 ): Promise<BridgeStatusResponse> {
-  const res = await fetch(
-    `${BRIDGE_URL}/api/sync/status/${operationId}`,
-    { headers: COMMON_HEADERS }
-  );
+  const res = await fetch(`${BRIDGE_URL}/api/sync/status/${operationId}`, {
+    headers: COMMON_HEADERS,
+  });
   if (!res.ok) {
     throw new Error(`Bridge status ${res.status}`);
   }
@@ -235,7 +232,9 @@ export default async function qbInventoryAdjustmentPoller(
     if (r.status === "waiting") return true;
     if (r.status === "processing") return true;
     if (r.status === "error" && (r.retries ?? 0) < MAX_RETRIES) {
-      const next = r.next_retry_at ? new Date(r.next_retry_at).toISOString() : null;
+      const next = r.next_retry_at
+        ? new Date(r.next_retry_at).toISOString()
+        : null;
       return !next || next <= nowIso;
     }
     return false;
@@ -321,7 +320,11 @@ export default async function qbInventoryAdjustmentPoller(
 
       // ─── SEND PHASE ────────────────────────────────────────────────────────
       const payload = row.payload;
-      if (!payload || !Array.isArray(payload.lines) || payload.lines.length === 0) {
+      if (
+        !payload ||
+        !Array.isArray(payload.lines) ||
+        payload.lines.length === 0
+      ) {
         await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
           id: row.id,
           status: "error",
@@ -345,11 +348,16 @@ export default async function qbInventoryAdjustmentPoller(
         filters: { sku: skus, status: "synced" } as any,
         pagination: { skip: 0, take: skus.length },
       });
-      for (const r of itemRows as Array<{ sku: string; qb_list_id: string | null }>) {
+      for (const r of itemRows as Array<{
+        sku: string;
+        qb_list_id: string | null;
+      }>) {
         if (r.qb_list_id) qbListIdsBySku.set(r.sku, r.qb_list_id);
       }
 
-      const stillMissing = payload.lines.filter((l) => !qbListIdsBySku.has(l.sku));
+      const stillMissing = payload.lines.filter(
+        (l) => !qbListIdsBySku.has(l.sku)
+      );
       if (stillMissing.length > 0) {
         const { data: variantRows } = await query.graph({
           entity: "product_variant",
@@ -370,7 +378,10 @@ export default async function qbInventoryAdjustmentPoller(
 
       const missing = payload.lines.filter((l) => !qbListIdsBySku.has(l.sku));
       if (missing.length > 0) {
-        const skuList = missing.map((m) => m.sku).slice(0, 10).join(", ");
+        const skuList = missing
+          .map((m) => m.sku)
+          .slice(0, 10)
+          .join(", ");
         await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
           id: row.id,
           status: "error",
@@ -389,7 +400,9 @@ export default async function qbInventoryAdjustmentPoller(
       });
 
       if (!enqueued.success || !enqueued.operationId) {
-        throw new Error(enqueued.error ?? "Bridge enqueue failed without operationId");
+        throw new Error(
+          enqueued.error ?? "Bridge enqueue failed without operationId"
+        );
       }
 
       await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
@@ -408,9 +421,7 @@ export default async function qbInventoryAdjustmentPoller(
         next_retry_at: nextBackoffDate((row.retries ?? 0) + 1),
       });
       errored++;
-      logger.warn(
-        `[qb-inv-adj-poller] row ${row.id} failed: ${err.message}`
-      );
+      logger.warn(`[qb-inv-adj-poller] row ${row.id} failed: ${err.message}`);
     }
   }
 

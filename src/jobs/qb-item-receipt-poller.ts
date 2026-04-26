@@ -33,8 +33,7 @@ const FIRST_ERROR_BACKOFF_MIN = 2;
 
 const backoffMs = (retryNum: number): number =>
   (RETRY_BACKOFF_MIN[Math.min(retryNum, RETRY_BACKOFF_MIN.length - 1)] ??
-    FIRST_ERROR_BACKOFF_MIN) *
-  60_000;
+    FIRST_ERROR_BACKOFF_MIN) * 60_000;
 
 type BridgeStatus = {
   operation?: {
@@ -47,15 +46,12 @@ type BridgeStatus = {
 };
 
 const pollBridge = async (operationId: string): Promise<BridgeStatus> => {
-  const res = await fetch(
-    `${bridgeUrl()}/api/sync/status/${operationId}`,
-    {
-      headers: {
-        "x-api-key": apiKey(),
-        "bypass-tunnel-reminder": "true",
-      },
-    }
-  );
+  const res = await fetch(`${bridgeUrl()}/api/sync/status/${operationId}`, {
+    headers: {
+      "x-api-key": apiKey(),
+      "bypass-tunnel-reminder": "true",
+    },
+  });
   if (!res.ok) throw new Error(`Bridge HTTP ${res.status}`);
   return (await res.json()) as BridgeStatus;
 };
@@ -72,9 +68,11 @@ const submitAddToBridge = async (
     },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error(`Bridge HTTP ${res.status} — ${await res.text()}`);
+  if (!res.ok)
+    throw new Error(`Bridge HTTP ${res.status} — ${await res.text()}`);
   const json = (await res.json()) as { operationId?: string; error?: string };
-  if (!json.operationId) throw new Error(json.error ?? "Bridge returned no operationId");
+  if (!json.operationId)
+    throw new Error(json.error ?? "Bridge returned no operationId");
   return json.operationId;
 };
 
@@ -86,9 +84,11 @@ const submitVoidToBridge = async (txnId: string): Promise<string> => {
       "bypass-tunnel-reminder": "true",
     },
   });
-  if (!res.ok) throw new Error(`Bridge HTTP ${res.status} — ${await res.text()}`);
+  if (!res.ok)
+    throw new Error(`Bridge HTTP ${res.status} — ${await res.text()}`);
   const json = (await res.json()) as { operationId?: string; error?: string };
-  if (!json.operationId) throw new Error(json.error ?? "Bridge returned no operationId");
+  if (!json.operationId)
+    throw new Error(json.error ?? "Bridge returned no operationId");
   return json.operationId;
 };
 
@@ -119,23 +119,29 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
   let voidResolved = 0;
 
   // ── Phase A: Submit unsubmitted add rows ─────────────────────────────────
-  const unsubmitted: any[] = await knex.raw(
-    `SELECT id, purchase_order_receipt_id, purchase_order_id, payload
+  const unsubmitted: any[] = await knex
+    .raw(
+      `SELECT id, purchase_order_receipt_id, purchase_order_id, payload
        FROM qb_item_receipt_pipeline
       WHERE status = 'waiting'
         AND qb_operation_id IS NULL
         AND deleted_at IS NULL
       LIMIT ?`,
-    [MAX_ROWS_PER_TICK]
-  ).then((r: any) => r.rows);
+      [MAX_ROWS_PER_TICK]
+    )
+    .then((r: any) => r.rows);
 
   if (unsubmitted.length > 0) {
-    logger.info(`${TAG} phase A: submitting ${unsubmitted.length} unsubmitted rows`);
+    logger.info(
+      `${TAG} phase A: submitting ${unsubmitted.length} unsubmitted rows`
+    );
   }
 
   for (const row of unsubmitted) {
     try {
-      const operationId = await submitAddToBridge(row.payload as Record<string, unknown>);
+      const operationId = await submitAddToBridge(
+        row.payload as Record<string, unknown>
+      );
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
             SET qb_operation_id = ?, updated_at = NOW()
@@ -159,15 +165,17 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
   }
 
   // ── Phase B: Poll submitted add rows ─────────────────────────────────────
-  const polling: any[] = await knex.raw(
-    `SELECT id, purchase_order_receipt_id, purchase_order_id, qb_operation_id
+  const polling: any[] = await knex
+    .raw(
+      `SELECT id, purchase_order_receipt_id, purchase_order_id, qb_operation_id
        FROM qb_item_receipt_pipeline
       WHERE status = 'waiting'
         AND qb_operation_id IS NOT NULL
         AND deleted_at IS NULL
       LIMIT ?`,
-    [MAX_ROWS_PER_TICK]
-  ).then((r: any) => r.rows);
+      [MAX_ROWS_PER_TICK]
+    )
+    .then((r: any) => r.rows);
 
   if (polling.length > 0) {
     logger.info(`${TAG} phase B: polling ${polling.length} submitted rows`);
@@ -178,7 +186,8 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       const data = await pollBridge(row.qb_operation_id);
       const opStatus = data.operation?.status;
 
-      if (!opStatus || opStatus === "queued" || opStatus === "processing") continue;
+      if (!opStatus || opStatus === "queued" || opStatus === "processing")
+        continue;
 
       if (opStatus === "failed") {
         const errMsg = data.operation?.error ?? "Bridge returned failed";
@@ -242,15 +251,17 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
   }
 
   // ── Phase C: Retry error rows ─────────────────────────────────────────────
-  const errorRows: any[] = await knex.raw(
-    `SELECT id, purchase_order_receipt_id, payload, retries, last_error
+  const errorRows: any[] = await knex
+    .raw(
+      `SELECT id, purchase_order_receipt_id, payload, retries, last_error
        FROM qb_item_receipt_pipeline
       WHERE status = 'error'
         AND (next_retry_at IS NULL OR next_retry_at <= NOW())
         AND deleted_at IS NULL
       LIMIT ?`,
-    [MAX_ROWS_PER_TICK]
-  ).then((r: any) => r.rows);
+      [MAX_ROWS_PER_TICK]
+    )
+    .then((r: any) => r.rows);
 
   if (errorRows.length > 0) {
     logger.info(`${TAG} phase C: retrying ${errorRows.length} error rows`);
@@ -277,7 +288,9 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     }
 
     try {
-      const operationId = await submitAddToBridge(row.payload as Record<string, unknown>);
+      const operationId = await submitAddToBridge(
+        row.payload as Record<string, unknown>
+      );
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
             SET status = 'waiting',
@@ -301,21 +314,25 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
           WHERE id = ?`,
         [newRetries, err.message, delay, row.id]
       );
-      logger.warn(`${TAG} retry ${newRetries}/${MAX_RETRIES} failed for row ${row.id}: ${err.message}`);
+      logger.warn(
+        `${TAG} retry ${newRetries}/${MAX_RETRIES} failed for row ${row.id}: ${err.message}`
+      );
     }
   }
 
   // ── Phase D: Submit pending void rows ─────────────────────────────────────
-  const voidPending: any[] = await knex.raw(
-    `SELECT id, purchase_order_receipt_id, qb_list_id
+  const voidPending: any[] = await knex
+    .raw(
+      `SELECT id, purchase_order_receipt_id, qb_list_id
        FROM qb_item_receipt_pipeline
       WHERE void_status = 'waiting'
         AND void_operation_id IS NULL
         AND qb_list_id IS NOT NULL
         AND deleted_at IS NULL
       LIMIT ?`,
-    [MAX_ROWS_PER_TICK]
-  ).then((r: any) => r.rows);
+      [MAX_ROWS_PER_TICK]
+    )
+    .then((r: any) => r.rows);
 
   if (voidPending.length > 0) {
     logger.info(`${TAG} phase D: submitting ${voidPending.length} void rows`);
@@ -341,27 +358,32 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
           WHERE id = ?`,
         [err.message, row.id]
       );
-      logger.error(`${TAG} void submit failed for row ${row.id}: ${err.message}`);
+      logger.error(
+        `${TAG} void submit failed for row ${row.id}: ${err.message}`
+      );
     }
   }
 
   // ── Phase E: Poll submitted void rows ─────────────────────────────────────
-  const voidPolling: any[] = await knex.raw(
-    `SELECT id, purchase_order_receipt_id, void_operation_id
+  const voidPolling: any[] = await knex
+    .raw(
+      `SELECT id, purchase_order_receipt_id, void_operation_id
        FROM qb_item_receipt_pipeline
       WHERE void_status = 'waiting'
         AND void_operation_id IS NOT NULL
         AND deleted_at IS NULL
       LIMIT ?`,
-    [MAX_ROWS_PER_TICK]
-  ).then((r: any) => r.rows);
+      [MAX_ROWS_PER_TICK]
+    )
+    .then((r: any) => r.rows);
 
   for (const row of voidPolling) {
     try {
       const data = await pollBridge(row.void_operation_id);
       const opStatus = data.operation?.status;
 
-      if (!opStatus || opStatus === "queued" || opStatus === "processing") continue;
+      if (!opStatus || opStatus === "queued" || opStatus === "processing")
+        continue;
 
       if (opStatus === "failed") {
         await knex.raw(
@@ -398,15 +420,22 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       );
 
       voidResolved++;
-      logger.info(`${TAG} receipt ${row.purchase_order_receipt_id} voided in QB`);
+      logger.info(
+        `${TAG} receipt ${row.purchase_order_receipt_id} voided in QB`
+      );
     } catch (err: any) {
       logger.warn(`${TAG} void poll failed for row ${row.id}: ${err.message}`);
     }
   }
 
   if (
-    submitted || resolved || toError || retried || permaFailed ||
-    voidSubmitted || voidResolved
+    submitted ||
+    resolved ||
+    toError ||
+    retried ||
+    permaFailed ||
+    voidSubmitted ||
+    voidResolved
   ) {
     logger.info(
       `${TAG} tick: submitted=${submitted} resolved=${resolved} →error=${toError} ` +

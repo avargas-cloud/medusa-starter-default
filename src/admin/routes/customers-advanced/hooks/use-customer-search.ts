@@ -100,7 +100,9 @@ export const useCustomerSearch = ({
         hits: searchResults.hits as MeiliCustomer[],
         totalHits:
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (searchResults as any).totalHits || searchResults.estimatedTotalHits || 0,
+          (searchResults as any).totalHits ||
+          searchResults.estimatedTotalHits ||
+          0,
         processingTime: searchResults.processingTimeMs,
       };
     },

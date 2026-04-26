@@ -54,8 +54,7 @@ const extractListId = (data: BridgeStatusResponse): string | null => {
   if (!op) return null;
   if (op.listId) return op.listId;
   if (op.txnId) return op.txnId;
-  const msgs =
-    op.result?.QBXML?.QBXMLMsgsRs ?? op.result?.QBXMLMsgsRs ?? {};
+  const msgs = op.result?.QBXML?.QBXMLMsgsRs ?? op.result?.QBXMLMsgsRs ?? {};
   return (
     msgs?.ItemInventoryAddRs?.ItemInventoryRet?.ListID ??
     msgs?.ItemServiceAddRs?.ItemServiceRet?.ListID ??
@@ -70,8 +69,7 @@ const extractListId = (data: BridgeStatusResponse): string | null => {
 const extractEditSequence = (data: BridgeStatusResponse): string | null => {
   const op = data.operation;
   if (op?.editSequence) return op.editSequence;
-  const msgs =
-    op?.result?.QBXML?.QBXMLMsgsRs ?? op?.result?.QBXMLMsgsRs ?? {};
+  const msgs = op?.result?.QBXML?.QBXMLMsgsRs ?? op?.result?.QBXMLMsgsRs ?? {};
   return (
     msgs?.ItemInventoryAddRs?.ItemInventoryRet?.EditSequence ??
     msgs?.ItemServiceAddRs?.ItemServiceRet?.EditSequence ??
@@ -240,8 +238,8 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
             // Don't increment retries here — we haven't re-emitted yet, the
             // failure happened on the original op. Phase B will retry it.
             next_retry_at: new Date(
-            Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000
-          ),
+              Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000
+            ),
           });
           failedToError++;
           continue;
@@ -258,8 +256,8 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
             status: "error",
             last_error: "Completed but no ListID in response",
             next_retry_at: new Date(
-            Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000
-          ),
+              Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000
+            ),
           });
           failedToError++;
           continue;
@@ -379,7 +377,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
       const log = (msg: string) =>
         logger.info(`[qb-item-pipeline-poller] ${row.sku}: ${msg}`);
 
-      let payload: Record<string, unknown> = { ...(row.op_payload ?? {}) };
+      const payload: Record<string, unknown> = { ...(row.op_payload ?? {}) };
 
       // EditSequence auto-fallback (free retry, doesn't consume counter).
       if (
@@ -387,7 +385,9 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
         row.qb_id &&
         isEditSequenceError(row.last_error)
       ) {
-        log("EditSequence error detected — fetching fresh sequence via ItemQuery");
+        log(
+          "EditSequence error detected — fetching fresh sequence via ItemQuery"
+        );
         const freshSeq = await fetchEditSequenceFromBridge(row.qb_id, log);
         if (freshSeq) {
           payload.EditSequence = freshSeq;

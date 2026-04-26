@@ -60,7 +60,12 @@ export const submitSchema = z.object({});
 export const receiveLineSchema = z.object({
   po_line_id: z.string().min(1),
   qty_received_now: z.number().int().positive().max(1_000_000),
-  unit_cost_cents_override: z.number().int().min(0).max(1_000_000_000).nullish(),
+  unit_cost_cents_override: z
+    .number()
+    .int()
+    .min(0)
+    .max(1_000_000_000)
+    .nullish(),
 });
 
 export const receiveSchema = z.object({
@@ -70,7 +75,10 @@ export const receiveSchema = z.object({
   vendor_bill_date: z.string().datetime().nullish(),
   notes: z.string().max(2000).nullish(),
   qb_memo: z.string().max(200).nullish(),
-  lines: z.array(receiveLineSchema).min(1, "at least one line is required").max(500),
+  lines: z
+    .array(receiveLineSchema)
+    .min(1, "at least one line is required")
+    .max(500),
 });
 
 export const closeSchema = z.object({

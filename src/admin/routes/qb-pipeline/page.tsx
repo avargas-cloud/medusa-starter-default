@@ -4,6 +4,7 @@ import { Heading, Tabs, Text } from "@medusajs/ui";
 
 import { BridgeStatus } from "../qb-sync/components/BridgeStatus";
 import { PipelineTable } from "../qb-sync/components/PipelineTable";
+
 import { CustomerSyncPipelineSection } from "./components/CustomerSyncPipelineSection";
 import { InventoryAdjustmentPipelineSection } from "./components/InventoryAdjustmentPipelineSection";
 import { ItemPipelineSection } from "./components/ItemPipelineSection";

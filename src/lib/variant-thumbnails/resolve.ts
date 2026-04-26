@@ -1,23 +1,23 @@
 export interface VariantImageShape {
-  id: string
-  url: string
+  id: string;
+  url: string;
 }
 
 export interface VariantShape {
-  id: string
-  thumbnail: string | null
-  images: VariantImageShape[]
+  id: string;
+  thumbnail: string | null;
+  images: VariantImageShape[];
 }
 
 export interface ProductShape {
-  id: string
-  thumbnail: string | null
-  variants: VariantShape[]
+  id: string;
+  thumbnail: string | null;
+  variants: VariantShape[];
 }
 
 export interface VariantThumbnailUpdate {
-  variantId: string
-  thumbnail: string
+  variantId: string;
+  thumbnail: string;
 }
 
 /**
@@ -39,30 +39,30 @@ export interface VariantThumbnailUpdate {
 export function resolveVariantThumbnails(
   product: ProductShape
 ): VariantThumbnailUpdate[] {
-  const { variants } = product
+  const { variants } = product;
 
-  if (variants.length <= 1) return []
+  if (variants.length <= 1) return [];
 
-  const imageShareCount = new Map<string, number>()
+  const imageShareCount = new Map<string, number>();
   for (const variant of variants) {
     for (const img of variant.images) {
-      imageShareCount.set(img.id, (imageShareCount.get(img.id) ?? 0) + 1)
+      imageShareCount.set(img.id, (imageShareCount.get(img.id) ?? 0) + 1);
     }
   }
 
-  const updates: VariantThumbnailUpdate[] = []
+  const updates: VariantThumbnailUpdate[] = [];
 
   for (const variant of variants) {
     const firstUniqueImage = variant.images.find(
       (img) => (imageShareCount.get(img.id) ?? 0) === 1
-    )
+    );
 
-    if (!firstUniqueImage) continue
-    if (firstUniqueImage.url === product.thumbnail) continue
-    if (firstUniqueImage.url === variant.thumbnail) continue
+    if (!firstUniqueImage) continue;
+    if (firstUniqueImage.url === product.thumbnail) continue;
+    if (firstUniqueImage.url === variant.thumbnail) continue;
 
-    updates.push({ variantId: variant.id, thumbnail: firstUniqueImage.url })
+    updates.push({ variantId: variant.id, thumbnail: firstUniqueImage.url });
   }
 
-  return updates
+  return updates;
 }

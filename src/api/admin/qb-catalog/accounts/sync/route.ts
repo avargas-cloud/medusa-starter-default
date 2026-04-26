@@ -68,7 +68,14 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     // 4. Load existing rows to detect upserts
     const { data: existing } = await query.graph({
       entity: "qb_account",
-      fields: ["id", "qb_list_id", "full_name", "name", "account_type", "is_active"],
+      fields: [
+        "id",
+        "qb_list_id",
+        "full_name",
+        "name",
+        "account_type",
+        "is_active",
+      ],
       pagination: { skip: 0, take: 5000 },
     });
     const byListId = new Map(existing.map((a: any) => [a.qb_list_id, a]));

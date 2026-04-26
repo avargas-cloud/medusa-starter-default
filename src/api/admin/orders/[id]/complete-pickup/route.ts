@@ -23,11 +23,7 @@ import { getDbPool } from "../../../../utils/db-pool";
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const { id: orderId } = req.params as { id: string };
-  const {
-    invoice_id,
-    location_id,
-    picked_up_by,
-  } = req.body as {
+  const { invoice_id, location_id, picked_up_by } = req.body as {
     invoice_id: string;
     location_id: string;
     picked_up_by?: string;
@@ -158,8 +154,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     // ── Step 5: Create fulfillment via native workflow ──────────────────────
-    const { createOrderFulfillmentWorkflow, markOrderFulfillmentAsDeliveredWorkflow } =
-      await import("@medusajs/core-flows");
+    const {
+      createOrderFulfillmentWorkflow,
+      markOrderFulfillmentAsDeliveredWorkflow,
+    } = await import("@medusajs/core-flows");
 
     const fulfillResult = await createOrderFulfillmentWorkflow(req.scope).run({
       input: {
@@ -193,7 +191,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     });
 
     // ── Step 7: Update order.metadata ──────────────────────────────────────
-    const existingMetadata = (orderData.metadata ?? {}) as Record<string, unknown>;
+    const existingMetadata = (orderData.metadata ?? {}) as Record<
+      string,
+      unknown
+    >;
     const pickedUpAt = new Date().toISOString();
     const nextMetadata: Record<string, unknown> = {
       ...existingMetadata,

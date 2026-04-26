@@ -183,15 +183,69 @@ const DEFAULT_VALUES = [
   // Customer Defaults — Acquisition Channel
   // Mirrors QuickBooks custom field "Distribution Channel" (DataExt, OwnerID=0).
   // Values must match QB exactly — se copian literal sin normalización.
-  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Sign", sort_order: 1 },
-  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Online Search", sort_order: 2 },
-  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Online E-Commerce", sort_order: 3 },
-  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Referred", sort_order: 4 },
-  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Field Visit", sort_order: 5 },
-  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Email Marketing", sort_order: 6 },
-  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Facebook", sort_order: 7 },
-  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Instagram", sort_order: 8 },
-  { context: "Customer Defaults", field_name: "Acquisition Channel", data_scope: "customers", value: "Ebay", sort_order: 9 },
+  {
+    context: "Customer Defaults",
+    field_name: "Acquisition Channel",
+    data_scope: "customers",
+    value: "Sign",
+    sort_order: 1,
+  },
+  {
+    context: "Customer Defaults",
+    field_name: "Acquisition Channel",
+    data_scope: "customers",
+    value: "Online Search",
+    sort_order: 2,
+  },
+  {
+    context: "Customer Defaults",
+    field_name: "Acquisition Channel",
+    data_scope: "customers",
+    value: "Online E-Commerce",
+    sort_order: 3,
+  },
+  {
+    context: "Customer Defaults",
+    field_name: "Acquisition Channel",
+    data_scope: "customers",
+    value: "Referred",
+    sort_order: 4,
+  },
+  {
+    context: "Customer Defaults",
+    field_name: "Acquisition Channel",
+    data_scope: "customers",
+    value: "Field Visit",
+    sort_order: 5,
+  },
+  {
+    context: "Customer Defaults",
+    field_name: "Acquisition Channel",
+    data_scope: "customers",
+    value: "Email Marketing",
+    sort_order: 6,
+  },
+  {
+    context: "Customer Defaults",
+    field_name: "Acquisition Channel",
+    data_scope: "customers",
+    value: "Facebook",
+    sort_order: 7,
+  },
+  {
+    context: "Customer Defaults",
+    field_name: "Acquisition Channel",
+    data_scope: "customers",
+    value: "Instagram",
+    sort_order: 8,
+  },
+  {
+    context: "Customer Defaults",
+    field_name: "Acquisition Channel",
+    data_scope: "customers",
+    value: "Ebay",
+    sort_order: 9,
+  },
 
   // Templates Footer
   {
@@ -492,8 +546,15 @@ export async function ensureTable(client: Client) {
   // Migration: seed Shipping Method options (idempotent)
   try {
     const shippingMethods = [
-      'UPS Ground', 'UPS 2nd Day Air', 'UPS Next Day Air', 'UPS DDP',
-      'UPS Fast Service', 'Ocean Freight', 'FedEx International', 'DHL Express', 'Pickup',
+      "UPS Ground",
+      "UPS 2nd Day Air",
+      "UPS Next Day Air",
+      "UPS DDP",
+      "UPS Fast Service",
+      "Ocean Freight",
+      "FedEx International",
+      "DHL Express",
+      "Pickup",
     ];
     for (let i = 0; i < shippingMethods.length; i++) {
       await client.query(

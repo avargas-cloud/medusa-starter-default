@@ -1,12 +1,5 @@
 import { ArrowLeft } from "@medusajs/icons";
-import {
-  Badge,
-  Button,
-  Container,
-  Heading,
-  Text,
-  toast,
-} from "@medusajs/ui";
+import { Badge, Button, Container, Heading, Text, toast } from "@medusajs/ui";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 

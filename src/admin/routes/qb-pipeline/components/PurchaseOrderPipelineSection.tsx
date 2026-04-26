@@ -1,230 +1,488 @@
 import { ArrowPath } from "@medusajs/icons";
+import { Badge, Button, Container, Heading, Text } from "@medusajs/ui";
 import {
-  Badge,
-  Button,
-  Container,
-  Input,
-  Select,
-  Table,
-  Text,
-  toast,
-} from "@medusajs/ui";
-import { useEffect, useMemo, useState } from "react";
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
-type PoRow = {
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type PoStatus = "waiting" | "error" | "synced" | "failed_permanent";
+type PoStep = "purchase_order" | "void_purchase_order" | "mod_purchase_order";
+
+interface PoRow {
   id: string;
   seq: number | null;
   purchase_order_id: string;
   po_number: string | null;
   draft_number: string | null;
   vendor_name: string | null;
-  status: "waiting" | "processing" | "synced" | "error";
+  status: PoStatus;
+  step: PoStep;
   qb_operation_id: string | null;
   qb_list_id: string | null;
   qb_txn_number: string | null;
   last_error: string | null;
   retries: number;
-  next_retry_at: string | null;
   synced_at: string | null;
   created_at: string;
+  updated_at: string | null;
+}
+
+interface Counts {
+  waiting: number;
+  error: number;
+  synced: number;
+  failed_permanent: number;
+}
+
+// ─── Config ───────────────────────────────────────────────────────────────────
+
+const STEP_ICON: Record<PoStep, string> = {
+  purchase_order: "🛒",
+  void_purchase_order: "🚫",
+  mod_purchase_order: "✏️",
 };
 
-type Counts = { waiting: number; processing: number; synced: number; error: number };
-
-const STATUS_FILTERS = [
-  { label: "All", value: "__all__" },
-  { label: "Waiting", value: "waiting" },
-  { label: "Processing", value: "processing" },
-  { label: "Synced", value: "synced" },
-  { label: "Error", value: "error" },
-];
-
-const StatusBadge = ({ status }: { status: PoRow["status"] }) => {
-  if (status === "synced")   return <Badge color="green"  size="2xsmall">synced</Badge>;
-  if (status === "error")    return <Badge color="red"    size="2xsmall">error</Badge>;
-  if (status === "processing") return <Badge color="blue" size="2xsmall">processing</Badge>;
-  return <Badge color="orange" size="2xsmall">waiting</Badge>;
+const STEP_LABEL: Record<PoStep, string> = {
+  purchase_order: "Purchase Order",
+  void_purchase_order: "Void PO",
+  mod_purchase_order: "Modify PO",
 };
 
-const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : "—");
+type BadgeColor = "orange" | "blue" | "green" | "red" | "grey";
+
+function StatusBadge({ status }: { status: PoStatus }) {
+  const map: Record<PoStatus, { color: BadgeColor; label: string }> = {
+    waiting: { color: "orange", label: "Waiting" },
+    error: { color: "red", label: "Error" },
+    synced: { color: "green", label: "Synced" },
+    failed_permanent: { color: "red", label: "Failed" },
+  };
+  const s = map[status] ?? { color: "grey" as BadgeColor, label: status };
+  return (
+    <Badge color={s.color} size="xsmall">
+      {s.label}
+    </Badge>
+  );
+}
+
+// < 24 h → time only; ≥ 24 h → "Mar 28 / 10:32 AM"
+function formatDate(iso: string | null): ReactNode {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const tz = "America/New_York";
+  const timeStr = d.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: tz,
+  });
+  const dateStr = d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: tz,
+  });
+  const todayStr = new Date().toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: tz,
+  });
+  if (dateStr === todayStr) return timeStr;
+  return (
+    <span className="flex flex-col leading-tight">
+      <span>{dateStr}</span>
+      <span className="text-[10px] opacity-60">{timeStr}</span>
+    </span>
+  );
+}
+
+// ─── Row ──────────────────────────────────────────────────────────────────────
+
+function PipelinePoRow({
+  row,
+  onRetry,
+  onMarkFixed,
+  retrying,
+  markingFixed,
+}: {
+  row: PoRow;
+  onRetry: (id: string) => void;
+  onMarkFixed: (id: string) => void;
+  retrying: boolean;
+  markingFixed: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const step = (row.step ?? "purchase_order") as PoStep;
+  const icon = STEP_ICON[step] ?? "📎";
+  const label = STEP_LABEL[step] ?? step;
+  const poRef = row.po_number ?? row.draft_number ?? "—";
+
+  const updatedAt =
+    row.status === "synced" ? row.synced_at : (row.updated_at ?? null);
+
+  return (
+    <>
+      <tr
+        className={`border-b border-ui-border-base text-xs transition-colors ${
+          row.status === "error" || row.status === "failed_permanent"
+            ? "bg-red-50/5"
+            : row.status === "waiting"
+              ? "bg-yellow-50/5"
+              : ""
+        }`}
+      >
+        {/* Seq */}
+        <td className="px-3 py-2 whitespace-nowrap">
+          <span className="font-mono text-[11px] text-ui-fg-muted">
+            #{row.seq ?? "—"}
+          </span>
+        </td>
+
+        {/* Step */}
+        <td className="px-3 py-2 whitespace-nowrap">
+          <span className="flex items-center gap-1.5">
+            <span>{icon}</span>
+            <span className="font-medium text-ui-fg-base">{label}</span>
+          </span>
+        </td>
+
+        {/* PO # */}
+        <td className="px-3 py-2 whitespace-nowrap">
+          <span className="font-mono font-semibold text-ui-fg-base">
+            {poRef}
+          </span>
+        </td>
+
+        {/* QB Ref # */}
+        <td className="px-3 py-2 whitespace-nowrap">
+          {row.qb_txn_number ? (
+            <span className="font-mono text-xs text-violet-600 font-semibold">
+              {row.qb_txn_number}
+            </span>
+          ) : row.status === "synced" ? (
+            <span className="text-ui-fg-muted text-[10px]">—</span>
+          ) : (
+            <span className="text-ui-fg-muted text-[10px]">pending…</span>
+          )}
+        </td>
+
+        {/* Vendor */}
+        <td className="px-3 py-2 text-ui-fg-subtle max-w-[180px] truncate">
+          {row.vendor_name ?? "—"}
+        </td>
+
+        {/* Status */}
+        <td className="px-3 py-2 whitespace-nowrap">
+          <StatusBadge status={row.status} />
+        </td>
+
+        {/* QB ListID */}
+        <td className="px-3 py-2 font-mono text-[11px] text-ui-fg-subtle">
+          {row.qb_list_id ? (
+            <span className="text-green-700 font-semibold">{row.qb_list_id}</span>
+          ) : row.qb_operation_id ? (
+            <span className="text-blue-600">op:{row.qb_operation_id.slice(-6)}</span>
+          ) : (
+            <span className="text-ui-fg-muted">—</span>
+          )}
+        </td>
+
+        {/* Retries */}
+        <td className="px-3 py-2 text-center text-ui-fg-muted">
+          {row.retries > 0 ? (
+            <span className="text-orange-600 font-semibold">{row.retries}</span>
+          ) : (
+            "0"
+          )}
+        </td>
+
+        {/* Created */}
+        <td className="px-3 py-2 text-ui-fg-muted">{formatDate(row.created_at)}</td>
+
+        {/* Updated */}
+        <td className="px-3 py-2">
+          {updatedAt ? (
+            <span
+              className={
+                row.status === "synced"
+                  ? "text-green-500"
+                  : row.status === "error" || row.status === "failed_permanent"
+                    ? "text-red-400"
+                    : "text-ui-fg-subtle"
+              }
+            >
+              {formatDate(updatedAt)}
+            </span>
+          ) : (
+            <span className="text-ui-fg-muted">—</span>
+          )}
+        </td>
+
+        {/* Actions */}
+        <td className="px-3 py-2">
+          <div className="flex items-center gap-1">
+            {row.last_error && (
+              <button
+                onClick={() => setExpanded((v) => !v)}
+                className="text-[10px] text-red-600 hover:underline"
+              >
+                {expanded ? "▲ hide" : "▼ error"}
+              </button>
+            )}
+            {(row.status === "error" || row.status === "waiting") && (
+              <button
+                onClick={() => onRetry(row.id)}
+                disabled={retrying}
+                className="ml-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-ui-button-neutral hover:bg-ui-button-neutral-hover text-ui-fg-base border border-ui-border-base disabled:opacity-50"
+              >
+                {retrying ? "…" : "↺ Retry"}
+              </button>
+            )}
+            {(row.status === "error" || row.status === "failed_permanent") && (
+              <button
+                onClick={() => {
+                  if (
+                    confirm(
+                      "Mark as Fixed? Use only if you resolved this manually in QuickBooks Desktop."
+                    )
+                  ) {
+                    onMarkFixed(row.id);
+                  }
+                }}
+                disabled={markingFixed}
+                className="ml-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-ui-button-neutral hover:bg-ui-button-neutral-hover text-ui-fg-base border border-ui-border-base disabled:opacity-50"
+              >
+                {markingFixed ? "…" : "Mark Fixed"}
+              </button>
+            )}
+          </div>
+        </td>
+      </tr>
+
+      {expanded && row.last_error && (
+        <tr className="bg-red-50/5 border-b border-ui-border-base">
+          <td colSpan={11} className="px-4 py-2">
+            <pre className="text-[10px] text-red-400 whitespace-pre-wrap break-all font-mono">
+              {row.last_error}
+            </pre>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export const PurchaseOrderPipelineSection = () => {
-  const [rows, setRows]       = useState<PoRow[]>([]);
-  const [counts, setCounts]   = useState<Counts>({ waiting: 0, processing: 0, synced: 0, error: 0 });
-  const [loading, setLoading] = useState(true);
-  const [status, setStatus]   = useState("__all__");
-  const [search, setSearch]   = useState("");
-  const [retrying, setRetrying] = useState<Set<string>>(new Set());
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [rows, setRows] = useState<PoRow[]>([]);
+  const [counts, setCounts] = useState<Counts>({
+    waiting: 0,
+    error: 0,
+    synced: 0,
+    failed_permanent: 0,
+  });
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [markingFixedId, setMarkingFixedId] = useState<string | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const toggleExpand = (id: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+  const fetchRows = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true);
+      try {
+        const params = new URLSearchParams();
+        if (statusFilter !== "all") params.set("status", statusFilter);
+        if (search.trim()) params.set("search", search.trim());
+        const res = await fetch(
+          `/admin/purchase-orders/qb-pipeline?${params}`,
+          { credentials: "include" }
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const allRows: PoRow[] = data.rows ?? [];
+        setRows(allRows);
+        const c: Counts = {
+          waiting: 0,
+          error: 0,
+          synced: 0,
+          failed_permanent: 0,
+        };
+        for (const r of allRows) {
+          if (r.status in c) c[r.status as keyof Counts]++;
+        }
+        setCounts(c);
+        setTotal(allRows.length);
+      } catch {
+        /* non-blocking */
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [statusFilter, search]
+  );
 
-  const fetchRows = async () => {
-    setLoading(true);
+  useEffect(() => {
+    fetchRows();
+  }, [fetchRows]);
+
+  // Auto-refresh while waiting rows exist
+  useEffect(() => {
+    const hasPending = counts.waiting > 0;
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (hasPending) {
+      intervalRef.current = setInterval(() => fetchRows(true), 10_000);
+    }
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [counts.waiting, fetchRows]);
+
+  const handleRetry = async (id: string) => {
+    setRetryingId(id);
     try {
-      const params = new URLSearchParams();
-      if (status !== "__all__") params.set("status", status);
-      if (search.trim()) params.set("search", search.trim());
-      const res = await fetch(`/admin/purchase-orders/qb-pipeline?${params}`, {
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await fetch(
+        `/admin/purchase-orders/qb-pipeline/${id}/retry`,
+        { method: "POST", credentials: "include" }
+      );
       const data = await res.json();
-      setRows(data.rows ?? []);
-      setCounts(data.counts ?? { waiting: 0, processing: 0, synced: 0, error: 0 });
-    } catch (e) {
-      toast.error("Failed to load PO pipeline", { description: (e as Error).message });
+      if (!res.ok || !data.success)
+        throw new Error(data.error ?? "Retry failed");
+      await fetchRows(true);
+    } catch {
+      /* non-blocking */
     } finally {
-      setLoading(false);
+      setRetryingId(null);
     }
   };
 
-  useEffect(() => { fetchRows(); }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    const t = setInterval(fetchRows, 15000);
-    return () => clearInterval(t);
-  }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const filtered = useMemo(() => {
-    if (!search.trim()) return rows;
-    const s = search.toLowerCase();
-    return rows.filter((r) =>
-      [r.po_number, r.draft_number, r.vendor_name, r.qb_list_id, r.qb_txn_number, r.last_error]
-        .filter(Boolean).join(" ").toLowerCase().includes(s)
-    );
-  }, [rows, search]);
-
-  const retry = async (row: PoRow) => {
-    setRetrying((prev) => new Set(prev).add(row.id));
+  const handleMarkFixed = async (id: string) => {
+    setMarkingFixedId(id);
     try {
-      const res = await fetch(`/admin/purchase-orders/qb-pipeline/${row.id}/retry`, {
+      await fetch(`/admin/purchase-orders/qb-pipeline/${id}/mark-fixed`, {
         method: "POST",
         credentials: "include",
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error ?? "Retry failed");
-      toast.success("Re-queued", { description: data.message });
-      fetchRows();
-    } catch (e) {
-      toast.error("Retry failed", { description: (e as Error).message });
+      await fetchRows(true);
+    } catch {
+      /* non-blocking */
     } finally {
-      setRetrying((prev) => { const next = new Set(prev); next.delete(row.id); return next; });
+      setMarkingFixedId(null);
     }
   };
 
+  const hasPending = counts.waiting > 0;
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex gap-3">
-        <Badge color="orange" size="small">Waiting: {counts.waiting}</Badge>
-        <Badge color="blue"   size="small">Processing: {counts.processing}</Badge>
-        <Badge color="green"  size="small">Synced: {counts.synced}</Badge>
-        <Badge color="red"    size="small">Error: {counts.error}</Badge>
+      {/* Status badges */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {counts.waiting > 0 && (
+          <Badge color="orange" size="small">Waiting: {counts.waiting}</Badge>
+        )}
+        {counts.error > 0 && (
+          <Badge color="red" size="small">Error: {counts.error}</Badge>
+        )}
+        {counts.synced > 0 && (
+          <Badge color="green" size="small">Synced: {counts.synced}</Badge>
+        )}
+        {counts.failed_permanent > 0 && (
+          <Badge color="red" size="small">Failed: {counts.failed_permanent}</Badge>
+        )}
       </div>
 
       <Container className="p-0">
-        <div className="flex items-center gap-3 px-6 py-3 border-b border-ui-border-base">
-          <Select value={status} onValueChange={setStatus}>
-            <Select.Trigger className="max-w-xs"><Select.Value /></Select.Trigger>
-            <Select.Content>
-              {STATUS_FILTERS.map((f) => (
-                <Select.Item key={f.value} value={f.value}>{f.label}</Select.Item>
-              ))}
-            </Select.Content>
-          </Select>
-          <Input
-            placeholder="Search PO / vendor / QB ref / error…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="max-w-md"
-          />
-          <Button variant="secondary" onClick={fetchRows} isLoading={loading}>
-            <ArrowPath /> Refresh
-          </Button>
-          <Text className="text-ui-fg-subtle text-sm ml-auto">{filtered.length} rows</Text>
+        {/* Toolbar */}
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-ui-border-base">
+          <Heading level="h3" className="text-sm font-medium flex items-center gap-2">
+            🏭 QB Purchase Pipeline
+            {hasPending && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-normal text-blue-600 animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block" />
+                Live
+              </span>
+            )}
+          </Heading>
+          <div className="flex items-center gap-2 ml-auto">
+            <input
+              type="text"
+              placeholder="Search PO / vendor / QB ref / error…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base w-52 placeholder:text-ui-fg-muted"
+            />
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base"
+            >
+              <option value="all">All Statuses</option>
+              <option value="waiting">Waiting</option>
+              <option value="error">Error</option>
+              <option value="synced">Synced</option>
+              <option value="failed_permanent">Failed</option>
+            </select>
+            <Button
+              variant="secondary"
+              size="small"
+              onClick={() => fetchRows()}
+              isLoading={loading}
+            >
+              <ArrowPath className="mr-1" />
+              Refresh
+            </Button>
+            <Text className="text-ui-fg-subtle text-xs ml-1">
+              {total} row{total !== 1 ? "s" : ""}
+            </Text>
+          </div>
         </div>
 
-        {loading && rows.length === 0 && (
-          <Text className="text-ui-fg-subtle py-6 px-6">Loading…</Text>
-        )}
-        {!loading && filtered.length === 0 && (
-          <Text className="text-ui-fg-subtle py-6 px-6">No rows match.</Text>
-        )}
-        {filtered.length > 0 && (
-          <div className="max-h-[calc(100vh-380px)] overflow-y-auto">
-            <Table>
-              <Table.Header>
-                <Table.Row>
-                  <Table.HeaderCell>#</Table.HeaderCell>
-                  <Table.HeaderCell>PO</Table.HeaderCell>
-                  <Table.HeaderCell>Vendor</Table.HeaderCell>
-                  <Table.HeaderCell>Status</Table.HeaderCell>
-                  <Table.HeaderCell>QB ListID</Table.HeaderCell>
-                  <Table.HeaderCell>QB Txn #</Table.HeaderCell>
-                  <Table.HeaderCell>Retries</Table.HeaderCell>
-                  <Table.HeaderCell>Created</Table.HeaderCell>
-                  <Table.HeaderCell>Synced</Table.HeaderCell>
-                  <Table.HeaderCell>Error</Table.HeaderCell>
-                  <Table.HeaderCell>Actions</Table.HeaderCell>
-                </Table.Row>
-              </Table.Header>
-              <Table.Body>
-                {filtered.map((r) => (
-                  <>
-                    <Table.Row key={r.id}>
-                      <Table.Cell className="font-mono text-sm text-ui-fg-subtle">
-                        {r.seq != null ? `#${r.seq}` : "—"}
-                      </Table.Cell>
-                      <Table.Cell className="font-medium text-sm">
-                        {r.po_number ?? "—"}
-                      </Table.Cell>
-                      <Table.Cell className="text-sm">{r.vendor_name ?? "—"}</Table.Cell>
-                      <Table.Cell><StatusBadge status={r.status} /></Table.Cell>
-                      <Table.Cell className="font-mono text-xs">{r.qb_list_id ?? "—"}</Table.Cell>
-                      <Table.Cell className="font-mono text-xs">{r.qb_txn_number ?? "—"}</Table.Cell>
-                      <Table.Cell>{r.retries}</Table.Cell>
-                      <Table.Cell className="text-ui-fg-subtle text-xs">{fmt(r.created_at)}</Table.Cell>
-                      <Table.Cell className="text-ui-fg-subtle text-xs">{fmt(r.synced_at)}</Table.Cell>
-                      <Table.Cell>
-                        {r.last_error ? (
-                          <button
-                            onClick={() => toggleExpand(r.id)}
-                            className="text-xs text-ui-fg-error hover:underline whitespace-nowrap"
-                          >
-                            {expanded.has(r.id) ? "▲ hide" : "▼ error"}
-                          </button>
-                        ) : "—"}
-                      </Table.Cell>
-                      <Table.Cell>
-                        {r.status === "error" && (
-                          <Button
-                            size="small"
-                            variant="secondary"
-                            onClick={() => retry(r)}
-                            isLoading={retrying.has(r.id)}
-                          >
-                            <ArrowPath /> Retry
-                          </Button>
-                        )}
-                      </Table.Cell>
-                    </Table.Row>
-                    {expanded.has(r.id) && r.last_error && (
-                      <tr key={`${r.id}-err`} className="bg-red-50/10">
-                        <td colSpan={11} className="px-6 py-2">
-                          <p className="text-xs text-ui-fg-error font-mono break-words whitespace-pre-wrap">
-                            {r.last_error}
-                          </p>
-                        </td>
-                      </tr>
-                    )}
-                  </>
+        {/* Table */}
+        {rows.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 text-center">
+            <Text className="text-sm text-ui-fg-subtle">No PO pipeline operations found.</Text>
+            <Text className="text-xs text-ui-fg-muted mt-1">
+              Operations appear here when purchase orders sync to QuickBooks.
+            </Text>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded">
+            <table className="w-full text-xs">
+              <thead className="bg-ui-bg-subtle border-b border-ui-border-base">
+                <tr>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle w-10">#</th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Step</th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">PO #</th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">QB Ref #</th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Vendor</th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Status</th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">QB ListID</th>
+                  <th className="px-3 py-2 text-center font-semibold text-ui-fg-subtle">Retries</th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Created</th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Updated</th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <PipelinePoRow
+                    key={row.id}
+                    row={row}
+                    onRetry={handleRetry}
+                    onMarkFixed={handleMarkFixed}
+                    retrying={retryingId === row.id}
+                    markingFixed={markingFixedId === row.id}
+                  />
                 ))}
-              </Table.Body>
-            </Table>
+              </tbody>
+            </table>
           </div>
         )}
       </Container>

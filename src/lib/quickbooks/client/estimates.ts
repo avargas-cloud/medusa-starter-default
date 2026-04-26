@@ -130,8 +130,11 @@ export async function updateEstimateInQb(
 
       // Sort ascending by TxnLineID (numeric) so the queue matches QB line order.
       // Duplicate products (same QB ListID) are supported via arrays.
-      const sortedLines = [...linesArr].sort(
-        (a, b) => compareTxnLineIds(String(a?.TxnLineID ?? ""), String(b?.TxnLineID ?? ""))
+      const sortedLines = [...linesArr].sort((a, b) =>
+        compareTxnLineIds(
+          String(a?.TxnLineID ?? ""),
+          String(b?.TxnLineID ?? "")
+        )
       );
       for (const line of sortedLines) {
         const productId = line?.ItemRef?.ListID;

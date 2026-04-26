@@ -86,77 +86,68 @@ export const receivePurchaseOrderWorkflow = createWorkflow(
 
     const stock = applyReceiptStockStep(stockInput);
 
-    const persistInput = transform(
-      { input, seq, stock },
-      (data) => ({
-        po_id: data.input.po_id,
-        receipt_seq: data.seq.seq,
-        receipt_number: data.seq.number,
-        received_by_user_id: data.input.received_by_user_id,
-        stock_location_id: data.input.stock_location_id,
-        received_at: data.input.received_at,
-        vendor_bill_number: data.input.vendor_bill_number,
-        vendor_bill_date: data.input.vendor_bill_date,
-        notes: data.input.notes,
-        applied: data.stock.applied,
-        lines: data.input.lines.map((l) => ({
-          po_line_id: l.po_line_id,
-          product_variant_id: l.product_variant_id,
-          inventory_item_id: l.inventory_item_id,
-          sku_snapshot: l.sku_snapshot,
-          description_snapshot: l.description_snapshot,
-          qb_item_list_id_snapshot: l.qb_item_list_id_snapshot,
-          qty_received_now: l.qty_received_now,
-          unit_cost_cents_override: l.unit_cost_cents_override,
-        })),
-      })
-    );
+    const persistInput = transform({ input, seq, stock }, (data) => ({
+      po_id: data.input.po_id,
+      receipt_seq: data.seq.seq,
+      receipt_number: data.seq.number,
+      received_by_user_id: data.input.received_by_user_id,
+      stock_location_id: data.input.stock_location_id,
+      received_at: data.input.received_at,
+      vendor_bill_number: data.input.vendor_bill_number,
+      vendor_bill_date: data.input.vendor_bill_date,
+      notes: data.input.notes,
+      applied: data.stock.applied,
+      lines: data.input.lines.map((l) => ({
+        po_line_id: l.po_line_id,
+        product_variant_id: l.product_variant_id,
+        inventory_item_id: l.inventory_item_id,
+        sku_snapshot: l.sku_snapshot,
+        description_snapshot: l.description_snapshot,
+        qb_item_list_id_snapshot: l.qb_item_list_id_snapshot,
+        qty_received_now: l.qty_received_now,
+        unit_cost_cents_override: l.unit_cost_cents_override,
+      })),
+    }));
 
     const persisted = persistReceiptStep(persistInput);
 
-    const enqueueInput = transform(
-      { input, seq, persisted },
-      (data) => {
-        // Build receipt_line_id → po_line_id map for enqueue payload
-        const receiptLinesForQb = data.input.lines.map((l, i) => ({
-          receipt_line_id: data.persisted.receipt_line_ids[i] as string,
-          po_line_id: l.po_line_id,
-          qb_item_list_id: l.qb_item_list_id_snapshot ?? "",
-          sku: l.sku_snapshot,
-          description: l.description_snapshot,
-          qty_received_now: l.qty_received_now,
-          unit_cost_cents: l.unit_cost_cents_effective,
-        }));
+    const enqueueInput = transform({ input, seq, persisted }, (data) => {
+      // Build receipt_line_id → po_line_id map for enqueue payload
+      const receiptLinesForQb = data.input.lines.map((l, i) => ({
+        receipt_line_id: data.persisted.receipt_line_ids[i] as string,
+        po_line_id: l.po_line_id,
+        qb_item_list_id: l.qb_item_list_id_snapshot ?? "",
+        sku: l.sku_snapshot,
+        description: l.description_snapshot,
+        qty_received_now: l.qty_received_now,
+        unit_cost_cents: l.unit_cost_cents_effective,
+      }));
 
-        return {
-          po_id: data.input.po_id,
-          po_number: data.input.po_number,
-          receipt_id: data.persisted.receipt_id,
-          receipt_number: data.seq.number,
-          vendor_qb_list_id: data.input.vendor_qb_list_id,
-          vendor_name: data.input.vendor_name,
-          received_at: data.input.received_at,
-          vendor_bill_number: data.input.vendor_bill_number,
-          vendor_bill_date: data.input.vendor_bill_date,
-          memo: data.input.qb_memo,
-          lines: receiptLinesForQb,
-        };
-      }
-    );
+      return {
+        po_id: data.input.po_id,
+        po_number: data.input.po_number,
+        receipt_id: data.persisted.receipt_id,
+        receipt_number: data.seq.number,
+        vendor_qb_list_id: data.input.vendor_qb_list_id,
+        vendor_name: data.input.vendor_name,
+        received_at: data.input.received_at,
+        vendor_bill_number: data.input.vendor_bill_number,
+        vendor_bill_date: data.input.vendor_bill_date,
+        memo: data.input.qb_memo,
+        lines: receiptLinesForQb,
+      };
+    });
 
     const queued = enqueueQbItemReceiptStep(enqueueInput);
 
-    const response = transform(
-      { seq, persisted, queued },
-      (data) => ({
-        receipt_id: data.persisted.receipt_id,
-        receipt_number: data.seq.number,
-        po_status_after: data.persisted.po_status_after,
-        total_units_received: data.persisted.total_units_received,
-        total_units_ordered: data.persisted.total_units_ordered,
-        qb_pipeline_id: data.queued.pipeline_id,
-      })
-    );
+    const response = transform({ seq, persisted, queued }, (data) => ({
+      receipt_id: data.persisted.receipt_id,
+      receipt_number: data.seq.number,
+      po_status_after: data.persisted.po_status_after,
+      total_units_received: data.persisted.total_units_received,
+      total_units_ordered: data.persisted.total_units_ordered,
+      qb_pipeline_id: data.queued.pipeline_id,
+    }));
 
     return new WorkflowResponse(response);
   }

@@ -29,13 +29,29 @@ export async function listReceiptsCrossPo(
     take: params.limit,
     skip: params.offset,
     order: { received_at: "DESC" },
-  })) as Array<Record<string, unknown> & { id: string; purchase_order_id: string; seq: number | null }>;
+  })) as Array<
+    Record<string, unknown> & {
+      id: string;
+      purchase_order_id: string;
+      seq: number | null;
+    }
+  >;
 
   // Apply date filters client-side (Medusa service layer doesn't support range filters)
   const filtered = allReceipts.filter((r) => {
     const receivedAt = r.received_at ? new Date(r.received_at as string) : null;
-    if (params.date_from && receivedAt && receivedAt < new Date(params.date_from)) return false;
-    if (params.date_to && receivedAt && receivedAt > new Date(params.date_to + "T23:59:59Z")) return false;
+    if (
+      params.date_from &&
+      receivedAt &&
+      receivedAt < new Date(params.date_from)
+    )
+      return false;
+    if (
+      params.date_to &&
+      receivedAt &&
+      receivedAt > new Date(params.date_to + "T23:59:59Z")
+    )
+      return false;
     return true;
   });
 
@@ -48,7 +64,12 @@ export async function listReceiptsCrossPo(
   const allLines = (await service.listPurchaseOrderReceiptLines(
     { purchase_order_receipt_id: receiptIds },
     { take: 50000, skip: 0 }
-  )) as Array<Record<string, unknown> & { purchase_order_receipt_id: string; qty_received_now: number }>;
+  )) as Array<
+    Record<string, unknown> & {
+      purchase_order_receipt_id: string;
+      qty_received_now: number;
+    }
+  >;
 
   const linesByReceipt = new Map<string, typeof allLines>();
   for (const l of allLines) {
@@ -62,14 +83,24 @@ export async function listReceiptsCrossPo(
   const parentPos = (await service.listPurchaseOrders(
     { id: poIds },
     { take: poIds.length, skip: 0 }
-  )) as Array<Record<string, unknown> & { id: string; number: string | null; seq: number | null; vendor_name_snapshot: string | null }>;
+  )) as Array<
+    Record<string, unknown> & {
+      id: string;
+      number: string | null;
+      seq: number | null;
+      vendor_name_snapshot: string | null;
+    }
+  >;
 
   const poById = new Map(parentPos.map((po) => [po.id, po]));
 
   const receipts = filtered.map((r) => {
     const lines = linesByReceipt.get(r.id) ?? [];
     const po = poById.get(r.purchase_order_id);
-    const totalUnitsReceived = lines.reduce((sum, l) => sum + (l.qty_received_now ?? 0), 0);
+    const totalUnitsReceived = lines.reduce(
+      (sum, l) => sum + (l.qty_received_now ?? 0),
+      0
+    );
 
     return {
       ...r,

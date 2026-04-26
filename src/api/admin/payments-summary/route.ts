@@ -16,9 +16,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const { from, to } = req.query as { from?: string; to?: string };
 
   if (!from || !to) {
-    return res
-      .status(400)
-      .json({ error: "Query params 'from' and 'to' are required (ISO strings)" });
+    return res.status(400).json({
+      error: "Query params 'from' and 'to' are required (ISO strings)",
+    });
   }
 
   try {
@@ -54,7 +54,10 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     );
 
     const days: PaymentSummaryDay[] = (result.rows as any[]).map((r) => ({
-      date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date),
+      date:
+        r.date instanceof Date
+          ? r.date.toISOString().slice(0, 10)
+          : String(r.date),
       amount: Number(r.net_amount),
       count: Number(r.count),
     }));

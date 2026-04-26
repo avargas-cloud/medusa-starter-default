@@ -1,11 +1,11 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 
-import { getQbConfig } from "../../../../../lib/quickbooks/qb-config";
 import { updateInvoiceInQb } from "../../../../../lib/quickbooks/client/invoices";
-import { QbSyncLogger } from "../../../../../lib/quickbooks/qb-sync-logger";
+import { getQbConfig } from "../../../../../lib/quickbooks/qb-config";
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
-import { INVOICE_MODULE } from "../../../../../modules/invoices";
+import { QbSyncLogger } from "../../../../../lib/quickbooks/qb-sync-logger";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
+import { INVOICE_MODULE } from "../../../../../modules/invoices";
 
 /**
  * POST /admin/invoices/:id/update-tax
@@ -82,8 +82,7 @@ export async function POST(
   const subtotal = getNum(invoice.subtotal);
   const shipping = getNum(invoice.shipping);
 
-  const newTax =
-    taxMode === "florida" ? Math.round(subtotal * 0.07) : 0;
+  const newTax = taxMode === "florida" ? Math.round(subtotal * 0.07) : 0;
   const newTotal = subtotal + shipping + newTax;
   const newUntaxedTotal = subtotal + shipping;
 
@@ -163,12 +162,17 @@ export async function POST(
       }
     } catch (err: any) {
       // Non-blocking — log but don't fail the request
-      console.error("[update-tax] payment_application adjustment failed:", err.message);
+      console.error(
+        "[update-tax] payment_application adjustment failed:",
+        err.message
+      );
     }
   }
 
   // ── 7. QB MOD — tracked in qb_sync_log, runs in background ───────────────
-  const txnId = (meta.qb_invoice_txn_id ?? meta.qb_txn_id) as string | undefined;
+  const txnId = (meta.qb_invoice_txn_id ?? meta.qb_txn_id) as
+    | string
+    | undefined;
 
   if (txnId && process.env.QB_ORDER_FLOW_ENABLED === "true") {
     // Start log entry synchronously so the row is visible immediately in the UI
@@ -200,12 +204,18 @@ export async function POST(
               taxMode === "florida" ? qbConfig.defaultSalesTaxCode : undefined,
             taxExempt: taxMode === "exempt" ? (true as const) : undefined,
           };
-          return updateInvoiceInQb(payload).then((result) => ({ logId, result }));
+          return updateInvoiceInQb(payload).then((result) => ({
+            logId,
+            result,
+          }));
         });
       })
       .then(({ logId, result }) => {
         if (!result.success) {
-          console.error(`[update-tax] QB Invoice MOD failed for ${txnId}:`, result.error);
+          console.error(
+            `[update-tax] QB Invoice MOD failed for ${txnId}:`,
+            result.error
+          );
           writePipelineRow({
             orderId: invoice.order_id ?? null,
             referenceId: id,
@@ -222,7 +232,9 @@ export async function POST(
           });
         }
         const opId = result.data?.operationId;
-        console.log(`[update-tax] ✅ QB Invoice MOD queued for ${txnId} (op: ${opId})`);
+        console.log(
+          `[update-tax] ✅ QB Invoice MOD queued for ${txnId} (op: ${opId})`
+        );
         if (opId) QbSyncLogger.setOperationId(logId, opId).catch(() => {});
         writePipelineRow({
           orderId: invoice.order_id ?? null,
@@ -243,7 +255,10 @@ export async function POST(
         });
       })
       .catch((err: Error) => {
-        console.error(`[update-tax] QB MOD pipeline error for ${txnId}:`, err.message);
+        console.error(
+          `[update-tax] QB MOD pipeline error for ${txnId}:`,
+          err.message
+        );
       });
   }
 

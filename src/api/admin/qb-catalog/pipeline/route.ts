@@ -46,7 +46,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   });
 
   const filtered = search
-    ? (data as any[]).filter((r) => (r.sku ?? "").toLowerCase().includes(search))
+    ? (data as any[]).filter((r) =>
+        (r.sku ?? "").toLowerCase().includes(search)
+      )
     : data;
 
   const counts = {

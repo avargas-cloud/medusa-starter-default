@@ -32,7 +32,7 @@ export const VendorBill = model.define("vendor_bill", {
 
   // Commission (sourcing agent fee)
   commission_mode: model.text().default("percent"), // percent | fixed
-  commission_rate_bps: model.number().default(0),    // 1500 = 15.00%
+  commission_rate_bps: model.number().default(0), // 1500 = 15.00%
   commission_amount_cents: model.number().default(0), // used when mode=fixed
   commission_invoice_number: model.text().nullable(),
 

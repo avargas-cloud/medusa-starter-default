@@ -208,7 +208,10 @@ export async function POST(
 
           const variants: any[] = variantIds.length
             ? await productModule
-                .listProductVariants({ id: variantIds }, { select: ["id", "metadata"] })
+                .listProductVariants(
+                  { id: variantIds },
+                  { select: ["id", "metadata"] }
+                )
                 .catch(() => [])
             : [];
           const variantMetaMap = new Map<string, any>(
@@ -224,7 +227,9 @@ export async function POST(
           ]);
           const qbItems = creditMemo.items.map((item: any) => {
             const unitPriceDollars = (item.unit_price || 0) / 100;
-            const meta = item.variant_id ? variantMetaMap.get(item.variant_id) : null;
+            const meta = item.variant_id
+              ? variantMetaMap.get(item.variant_id)
+              : null;
             const qbListId = meta?.quickbooks_id as string | undefined;
             const isService = !!(
               !item.variant_id ||
@@ -271,7 +276,8 @@ export async function POST(
               isTaxExempt =
                 flag === true ||
                 (typeof flag === "string" &&
-                  (flag.toLowerCase() === "yes" || flag.toLowerCase() === "true"));
+                  (flag.toLowerCase() === "yes" ||
+                    flag.toLowerCase() === "true"));
             }
           } catch (teErr: any) {
             logger.warn(
@@ -302,8 +308,12 @@ export async function POST(
           logger.info(
             `[credit_memos complete] Mirroring Credit Memo to QB for customer ${qbCustomerId}...`
           );
-          const cmSalesRep = (creditMemo as any).sales_rep as { initials?: string; name?: string } | null | undefined;
-          const salesRepRef = cmSalesRep?.name || cmSalesRep?.initials || undefined;
+          const cmSalesRep = (creditMemo as any).sales_rep as
+            | { initials?: string; name?: string }
+            | null
+            | undefined;
+          const salesRepRef =
+            cmSalesRep?.name || cmSalesRep?.initials || undefined;
 
           const cmResult = await createCreditMemoInQb({
             customerId: qbCustomerId,

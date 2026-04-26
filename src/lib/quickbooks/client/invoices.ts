@@ -1,4 +1,8 @@
-import { getCachedEditSequence, cacheEditSequence, invalidateEditSequence } from "../qb-pipeline";
+import {
+  getCachedEditSequence,
+  cacheEditSequence,
+  invalidateEditSequence,
+} from "../qb-pipeline";
 
 import {
   DRY_RUN,
@@ -118,10 +122,14 @@ export async function fetchInvoiceLinesFromQb(
       ItemListID: l.ItemRef?.ListID,
       ItemFullName: l.ItemRef?.FullName,
       Quantity:
-        l.Quantity !== undefined && l.Quantity !== "" ? Number(l.Quantity) : undefined,
+        l.Quantity !== undefined && l.Quantity !== ""
+          ? Number(l.Quantity)
+          : undefined,
       Rate: l.Rate !== undefined && l.Rate !== "" ? Number(l.Rate) : undefined,
       Amount:
-        l.Amount !== undefined && l.Amount !== "" ? Number(l.Amount) : undefined,
+        l.Amount !== undefined && l.Amount !== ""
+          ? Number(l.Amount)
+          : undefined,
       Desc: l.Desc,
       hasSite: !!(l.InventorySiteRef && l.InventorySiteRef.ListID),
     }));
@@ -158,7 +166,9 @@ export async function updateInvoiceInQb(
     });
     const operationId = modResp?.operationId;
     if (!operationId)
-      throw new Error("Bridge did not return operationId for invoice update (mod)");
+      throw new Error(
+        "Bridge did not return operationId for invoice update (mod)"
+      );
     return operationId;
   };
 
@@ -167,10 +177,14 @@ export async function updateInvoiceInQb(
     let editSequence: string;
     const cached = await getCachedEditSequence("invoice", payload.txnId);
     if (cached?.editSeq) {
-      console.log(`[QB] ✅ Cache hit for invoice ${payload.txnId} — skipping GET round-trip`);
+      console.log(
+        `[QB] ✅ Cache hit for invoice ${payload.txnId} — skipping GET round-trip`
+      );
       editSequence = cached.editSeq;
     } else {
-      console.log(`[QB] Cache miss for invoice ${payload.txnId} — querying QB for EditSequence`);
+      console.log(
+        `[QB] Cache miss for invoice ${payload.txnId} — querying QB for EditSequence`
+      );
       editSequence = await fetchFreshInvoiceEditSequence(payload.txnId);
       cacheEditSequence("invoice", payload.txnId, editSequence).catch(() => {});
     }
@@ -191,10 +205,14 @@ export async function updateInvoiceInQb(
         await invalidateEditSequence("invoice", payload.txnId);
 
         const freshEditSeq = await fetchFreshInvoiceEditSequence(payload.txnId);
-        cacheEditSequence("invoice", payload.txnId, freshEditSeq).catch(() => {});
+        cacheEditSequence("invoice", payload.txnId, freshEditSeq).catch(
+          () => {}
+        );
 
         operationId = await sendMod(freshEditSeq);
-        console.log(`[QB] Invoice mod retry queued. OperationID: ${operationId}`);
+        console.log(
+          `[QB] Invoice mod retry queued. OperationID: ${operationId}`
+        );
         pollResult = await pollOperationResult(operationId);
       } else {
         throw pollErr;
@@ -202,7 +220,11 @@ export async function updateInvoiceInQb(
     }
 
     if (pollResult.editSequence) {
-      cacheEditSequence("invoice", payload.txnId, pollResult.editSequence).catch(() => {});
+      cacheEditSequence(
+        "invoice",
+        payload.txnId,
+        pollResult.editSequence
+      ).catch(() => {});
     }
 
     console.log(`[QB] ✅ Invoice updated. OperationID: ${operationId}`);

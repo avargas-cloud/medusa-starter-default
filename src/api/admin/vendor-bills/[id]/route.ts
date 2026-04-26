@@ -109,7 +109,9 @@ export async function GET(
 
   const header = (headerResult.rows[0] ?? null) as VendorBillDetailRow | null;
   if (!header) {
-    return res.status(404).json({ error: "Vendor bill not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "Vendor bill not found", code: "not_found" });
   }
 
   // Fetch lines

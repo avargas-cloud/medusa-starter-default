@@ -8,11 +8,11 @@
  * before they hit Approve.
  */
 
-import { Modules } from "@medusajs/utils";
 import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+import { Modules } from "@medusajs/utils";
 
 import {
   ManagerRoleRequiredError,
@@ -40,7 +40,9 @@ export async function GET(
       err instanceof ManagerRoleRequiredError ||
       err instanceof UnauthenticatedError
     ) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }
@@ -50,7 +52,9 @@ export async function GET(
 
   const [count] = await service.listInventoryCounts({ id }, { take: 1 });
   if (!count) {
-    return res.status(404).json({ error: "inventory_count not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "inventory_count not found", code: "not_found" });
   }
   if (count.status !== "submitted" && count.status !== "partially_applied") {
     return res.status(409).json({

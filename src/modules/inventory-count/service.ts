@@ -25,13 +25,15 @@ class InventoryCountModuleService extends MedusaService({
    * (see SequenceManagerCard).
    */
   async getNextSequence(): Promise<number> {
-    const manager = (this as unknown as {
-      __container__: {
-        manager: {
-          execute: (sql: string) => Promise<unknown>;
+    const manager = (
+      this as unknown as {
+        __container__: {
+          manager: {
+            execute: (sql: string) => Promise<unknown>;
+          };
         };
-      };
-    }).__container__.manager;
+      }
+    ).__container__.manager;
 
     const rows = (await manager.execute(
       `SELECT nextval('custom_inventory_count_seq') AS seq;`

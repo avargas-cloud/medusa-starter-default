@@ -49,7 +49,9 @@ export async function handleOrderPlaced(
   if (!isCron) {
     const coalesced = await coalesceIfInFlight(orderId, null, "sales_order");
     if (coalesced) {
-      logger.info(`${LOG_PREFIX} ⏸ Sales order in-flight for ${orderId} — coalesced as next submit`);
+      logger.info(
+        `${LOG_PREFIX} ⏸ Sales order in-flight for ${orderId} — coalesced as next submit`
+      );
       return;
     }
   }
@@ -101,13 +103,19 @@ export async function handleOrderPlaced(
     // We do this unconditionally — before any 1h-delay / qb_skip branching — so it
     // happens even for orders that never generate a Sales Order in QB.
     {
-      const customerListId = order.customer?.metadata?.qb_list_id as string | undefined;
+      const customerListId = order.customer?.metadata?.qb_list_id as
+        | string
+        | undefined;
       if (customerListId && !order.metadata?.qb_list_id) {
         try {
           await mergeOrderMetadata(orderId, { qb_list_id: customerListId });
-          logger.info(`${LOG_PREFIX} 📋 Propagated qb_list_id=${customerListId} from customer to order`);
+          logger.info(
+            `${LOG_PREFIX} 📋 Propagated qb_list_id=${customerListId} from customer to order`
+          );
         } catch (metaErr: any) {
-          logger.warn(`${LOG_PREFIX} ⚠️ Could not propagate qb_list_id: ${metaErr.message}`);
+          logger.warn(
+            `${LOG_PREFIX} ⚠️ Could not propagate qb_list_id: ${metaErr.message}`
+          );
         }
       }
     }
@@ -237,8 +245,8 @@ export async function handleOrderPlaced(
     // consolidator will create the customer and wake this row automatically.
     if (
       order.customer_id &&
-      !(order.metadata?.qb_list_id) &&
-      !(customer?.metadata?.qb_list_id)
+      !order.metadata?.qb_list_id &&
+      !customer?.metadata?.qb_list_id
     ) {
       const check = await requireQbCustomer({
         customerId: order.customer_id,

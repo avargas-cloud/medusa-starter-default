@@ -45,11 +45,22 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const invoices = await invoiceService.listPosInvoices(filters, config);
 
   // Enrich with customer data in a single batch query
-  const customerIds = [...new Set(invoices.map((i: any) => i.customer_id).filter(Boolean))];
+  const customerIds = [
+    ...new Set(invoices.map((i: any) => i.customer_id).filter(Boolean)),
+  ];
   const customers = customerIds.length
     ? await customerModule.listCustomers(
         { id: customerIds },
-        { select: ["id", "first_name", "last_name", "email", "phone", "company_name"] }
+        {
+          select: [
+            "id",
+            "first_name",
+            "last_name",
+            "email",
+            "phone",
+            "company_name",
+          ],
+        }
       )
     : [];
   const customerMap = Object.fromEntries(customers.map((c: any) => [c.id, c]));
@@ -83,8 +94,7 @@ interface CreateInvoiceBody {
   tax: number; // cents
   total: number; // cents
   amount_paid: number; // cents
-  payment_method:
-    // Canonical values — new callers should send these.
+  payment_method: // Canonical values — new callers should send these.
     | "credit_card"
     | "debit_card"
     | "cash"
@@ -105,7 +115,13 @@ interface CreateInvoiceBody {
    * Card network when payment_method is a card. Optional — null for cash/check/zelle/ach
    * or for debit-only transactions where the brand is intentionally not recorded.
    */
-  card_brand?: "visa" | "mastercard" | "amex" | "discover" | "capital_one" | null;
+  card_brand?:
+    | "visa"
+    | "mastercard"
+    | "amex"
+    | "discover"
+    | "capital_one"
+    | null;
   notes?: string;
   created_by?: string;
   shipping_address?: {
@@ -148,17 +164,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   // Runs BEFORE nextval() so we don't burn invoice/SR sequence numbers on retries.
   if (body.terminal_payment_id) {
     try {
-      const existingApplications = await financeService.listPaymentApplications({
-        payment_id: body.terminal_payment_id,
-      });
+      const existingApplications = await financeService.listPaymentApplications(
+        {
+          payment_id: body.terminal_payment_id,
+        }
+      );
       if (existingApplications.length > 0) {
         const existingInvoiceId = (existingApplications[0] as any).invoice_id;
-        const existingInvoice = await invoiceService.retrievePosInvoice(
-          existingInvoiceId
-        );
+        const existingInvoice =
+          await invoiceService.retrievePosInvoice(existingInvoiceId);
         console.warn(
           `[invoice] Idempotent short-circuit: terminal_payment ${body.terminal_payment_id} ` +
-          `already applied to invoice ${existingInvoiceId}. Returning existing.`
+            `already applied to invoice ${existingInvoiceId}. Returning existing.`
         );
         return res.status(200).json({
           invoice: existingInvoice,
@@ -244,7 +261,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   //   - 'debit_card' is already canonical → pass through, card_brand stays as caller sent
   //   - 'credit' = store credit (legacy meaning preserved — NOT a credit card)
   //   - 'credit_memo' = store credit consumption (alias for 'credit' in some old flows)
-  const CARD_BRANDS = new Set(["visa", "mastercard", "amex", "discover", "capital_one"]);
+  const CARD_BRANDS = new Set([
+    "visa",
+    "mastercard",
+    "amex",
+    "discover",
+    "capital_one",
+  ]);
   let normalizedPaymentMethod: string = body.payment_method;
   let normalizedCardBrand: string | null = body.card_brand ?? null;
   if (CARD_BRANDS.has(body.payment_method)) {
@@ -659,7 +682,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           select: ["id", "metadata"],
         })) as any;
         const existingMeta = currentOrder?.metadata ?? {};
-        const currentDepositDollars = Number(existingMeta.referential_deposit ?? 0);
+        const currentDepositDollars = Number(
+          existingMeta.referential_deposit ?? 0
+        );
         const incrementDollars = body.amount_paid / 100;
         const newDepositDollars = Number(
           (currentDepositDollars + incrementDollars).toFixed(2)
@@ -845,142 +870,164 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   // Use direct background execution (Event Loop) to guarantee 100% reliable QuickBooks Syncing,
   // thereby bypassing the Medusa v2 BullMQ Outbox which silently drops multiple sequential events.
   // Skipped when the QB items gate fired above — the waiting-gate poller will dispatch later.
-  if (!waitingForQbItems) setTimeout(async () => {
-    try {
-      const container = req.scope;
-      const orderModule = container.resolve(Modules.ORDER);
-      const customerModule = container.resolve(Modules.CUSTOMER);
-      const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
+  if (!waitingForQbItems)
+    setTimeout(async () => {
+      try {
+        const container = req.scope;
+        const orderModule = container.resolve(Modules.ORDER);
+        const customerModule = container.resolve(Modules.CUSTOMER);
+        const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
 
-      // 1. Process Order Document (Invoice or Sales Receipt)
-      if (body.is_sales_receipt) {
-        console.log(
-          `DIRECT EXEC: Triggering pos.sales_receipt.created directly for order ${body.order_id}.`
-        );
-        await handleSalesReceiptCreated(
-          {
-            order_id: body.order_id,
-            invoice_id: (invoice as any).id,
-            items: body.items,
-            fulfillment_id: body.fulfillment_id,
-            // Use resolvedPaymentMethod — when a Dejavoo terminal_payment_id is
-            // present, this is the detected card type (e.g. 'mastercard') read
-            // from the terminal payment's metadata, not the stale body field.
-            payment_method: resolvedPaymentMethod,
-            payment_id: paymentIdToEmit,
-          },
-          orderModule,
-          customerModule,
-          container,
-          logger
-        );
-      } else {
-        console.log(
-          `DIRECT EXEC: Triggering pos.invoice.created directly for order ${body.order_id} to bypass BullMQ drops.`
-        );
-        await handleFulfillmentCreated(
-          {
-            order_id: body.order_id,
-            invoice_id: (invoice as any).id,
-            items: body.items,
-            fulfillment_id: body.fulfillment_id,
-          },
-          orderModule,
-          customerModule,
-          container,
-          logger
-        );
-      }
-
-      // Wait 250ms to ensure sequential QB database writing
-      await new Promise((r) => setTimeout(r, 250));
-
-      // 2. Process Payment Creation
-      if (paymentIdToEmit) {
-        await handlePosPaymentCreated({
-          event: { name: "pos.payment.created", data: { id: paymentIdToEmit } },
-          container,
-        } as any);
-        console.log("DIRECT EXEC: pos.payment.created executed successfully!");
-      }
-
-      // Wait 250ms again
-      await new Promise((r) => setTimeout(r, 250));
-
-      // 3. Process Applications — run in parallel so multiple payments don't
-      //    block each other (each may poll the bridge for up to 400s).
-      if (applicationsToEmit.length > 0) {
+        // 1. Process Order Document (Invoice or Sales Receipt)
         if (body.is_sales_receipt) {
           console.log(
-            "DIRECT EXEC: Skipping pos.payment.applied emit because this is a Sales Receipt."
+            `DIRECT EXEC: Triggering pos.sales_receipt.created directly for order ${body.order_id}.`
+          );
+          await handleSalesReceiptCreated(
+            {
+              order_id: body.order_id,
+              invoice_id: (invoice as any).id,
+              items: body.items,
+              fulfillment_id: body.fulfillment_id,
+              // Use resolvedPaymentMethod — when a Dejavoo terminal_payment_id is
+              // present, this is the detected card type (e.g. 'mastercard') read
+              // from the terminal payment's metadata, not the stale body field.
+              payment_method: resolvedPaymentMethod,
+              payment_id: paymentIdToEmit,
+            },
+            orderModule,
+            customerModule,
+            container,
+            logger
           );
         } else {
-          // Guard: only run apply_payment immediately if the new payment is already
-          // confirmed in QB. When handlePosPaymentCreated short-circuits (idempotency —
-          // finance/payments/route.ts already started it), the payment is still being
-          // processed asynchronously. Running apply_payment now would poll for 400s and
-          // fail. The upfront `apply_payment` waiting row already has depends_on pointing
-          // to the payment row, so wakeDependentsOfConfirmed will trigger it correctly
-          // once the payment confirms.
-          let paymentReadyForDirectApply = !paymentIdToEmit; // true when no payment step needed
-          if (paymentIdToEmit) {
-            try {
-              const finSvcCheck = container.resolve(FINANCE_MODULE) as any;
-              const [freshPay] = await finSvcCheck.listCustomerPayments({ id: paymentIdToEmit });
-              paymentReadyForDirectApply =
-                freshPay?.metadata?.qb_sync_status === "synced";
-            } catch {
-              paymentReadyForDirectApply = false;
-            }
-          }
+          console.log(
+            `DIRECT EXEC: Triggering pos.invoice.created directly for order ${body.order_id} to bypass BullMQ drops.`
+          );
+          await handleFulfillmentCreated(
+            {
+              order_id: body.order_id,
+              invoice_id: (invoice as any).id,
+              items: body.items,
+              fulfillment_id: body.fulfillment_id,
+            },
+            orderModule,
+            customerModule,
+            container,
+            logger
+          );
+        }
 
-          if (!paymentReadyForDirectApply) {
+        // Wait 250ms to ensure sequential QB database writing
+        await new Promise((r) => setTimeout(r, 250));
+
+        // 2. Process Payment Creation
+        if (paymentIdToEmit) {
+          await handlePosPaymentCreated({
+            event: {
+              name: "pos.payment.created",
+              data: { id: paymentIdToEmit },
+            },
+            container,
+          } as any);
+          console.log(
+            "DIRECT EXEC: pos.payment.created executed successfully!"
+          );
+        }
+
+        // Wait 250ms again
+        await new Promise((r) => setTimeout(r, 250));
+
+        // 3. Process Applications — run in parallel so multiple payments don't
+        //    block each other (each may poll the bridge for up to 400s).
+        if (applicationsToEmit.length > 0) {
+          if (body.is_sales_receipt) {
             console.log(
-              "DIRECT EXEC: Payment not yet confirmed in QB — apply_payment deferred to waiting gate (depends_on payment row)"
+              "DIRECT EXEC: Skipping pos.payment.applied emit because this is a Sales Receipt."
             );
           } else {
-            await Promise.all(
-              applicationsToEmit.map(async (appPayload) => {
-                await handlePosPaymentApplied({
-                  event: { name: "pos.payment.applied", data: appPayload },
-                  container,
-                } as any);
-                console.log(
-                  `DIRECT EXEC: pos.payment.applied executed for Payment ${appPayload.payment_id}!`
-                );
-              })
-            );
+            // Guard: only run apply_payment immediately if the new payment is already
+            // confirmed in QB. When handlePosPaymentCreated short-circuits (idempotency —
+            // finance/payments/route.ts already started it), the payment is still being
+            // processed asynchronously. Running apply_payment now would poll for 400s and
+            // fail. The upfront `apply_payment` waiting row already has depends_on pointing
+            // to the payment row, so wakeDependentsOfConfirmed will trigger it correctly
+            // once the payment confirms.
+            let paymentReadyForDirectApply = !paymentIdToEmit; // true when no payment step needed
+            if (paymentIdToEmit) {
+              try {
+                const finSvcCheck = container.resolve(FINANCE_MODULE) as any;
+                const [freshPay] = await finSvcCheck.listCustomerPayments({
+                  id: paymentIdToEmit,
+                });
+                paymentReadyForDirectApply =
+                  freshPay?.metadata?.qb_sync_status === "synced";
+              } catch {
+                paymentReadyForDirectApply = false;
+              }
+            }
+
+            if (!paymentReadyForDirectApply) {
+              console.log(
+                "DIRECT EXEC: Payment not yet confirmed in QB — apply_payment deferred to waiting gate (depends_on payment row)"
+              );
+            } else {
+              await Promise.all(
+                applicationsToEmit.map(async (appPayload) => {
+                  await handlePosPaymentApplied({
+                    event: { name: "pos.payment.applied", data: appPayload },
+                    container,
+                  } as any);
+                  console.log(
+                    `DIRECT EXEC: pos.payment.applied executed for Payment ${appPayload.payment_id}!`
+                  );
+                })
+              );
+            }
           }
         }
+      } catch (execErr: any) {
+        console.error("DIRECT EXEC ERROR:", execErr);
       }
-    } catch (execErr: any) {
-      console.error("DIRECT EXEC ERROR:", execErr);
-    }
-  }, 100);
+    }, 100);
 
   // Auto-update order.metadata.order_status based on delivery type + fulfillment result.
   // Priority: Voided (no-op) > shipping → "Ready to Ship" > fulfilled pickup → "Fulfilled" > default "Approved".
   // Non-fatal: invoice already committed; a status-write failure never blocks the 201 response.
   try {
     const PICKUP_KEYWORDS = [
-      "pickup", "pick up", "pick-up", "store pickup", "local pickup", "in-store", "miami",
+      "pickup",
+      "pick up",
+      "pick-up",
+      "store pickup",
+      "local pickup",
+      "in-store",
+      "miami",
     ];
     const orderModForStatus = req.scope.resolve(Modules.ORDER);
-    const orderForStatus = (await orderModForStatus.retrieveOrder(body.order_id, {
-      select: ["id", "fulfillment_status", "metadata"],
-      relations: ["shipping_methods"],
-    })) as any;
+    const orderForStatus = (await orderModForStatus.retrieveOrder(
+      body.order_id,
+      {
+        select: ["id", "fulfillment_status", "metadata"],
+        relations: ["shipping_methods"],
+      }
+    )) as any;
 
-    const existingOrderStatus: string | undefined = orderForStatus?.metadata?.order_status;
+    const existingOrderStatus: string | undefined =
+      orderForStatus?.metadata?.order_status;
     if (existingOrderStatus !== "Voided") {
-      const shippingMethods: Array<{ name?: string }> = orderForStatus?.shipping_methods ?? [];
+      const shippingMethods: Array<{ name?: string }> =
+        orderForStatus?.shipping_methods ?? [];
       const isPickup =
         shippingMethods.length > 0 &&
         shippingMethods.some((m) =>
-          PICKUP_KEYWORDS.some((kw) => (m?.name ?? "").toLowerCase().includes(kw))
+          PICKUP_KEYWORDS.some((kw) =>
+            (m?.name ?? "").toLowerCase().includes(kw)
+          )
         );
       const isShipping = shippingMethods.length > 0 && !isPickup;
-      const fulfillmentStatus: string = orderForStatus?.fulfillment_status ?? "";
+      const fulfillmentStatus: string =
+        orderForStatus?.fulfillment_status ?? "";
 
       let derivedOrderStatus: string;
       if (isShipping) {

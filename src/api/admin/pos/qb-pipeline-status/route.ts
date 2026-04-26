@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+
 import {
   getPrimaryPipelineRow,
   type PrimaryPipelineRow,
@@ -51,7 +52,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       step: steps,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "pipeline lookup failed";
+    const message =
+      err instanceof Error ? err.message : "pipeline lookup failed";
     return res.status(500).json({ error: message });
   }
 

@@ -105,7 +105,8 @@ export const enqueueQbAdjustmentsStep = createStep(
       });
     }
 
-    const created = await service.createQbInventoryAdjustmentPipelines(toCreate);
+    const created =
+      await service.createQbInventoryAdjustmentPipelines(toCreate);
     const createdArr = Array.isArray(created) ? created : [created];
 
     for (let i = 0; i < createdArr.length; i++) {

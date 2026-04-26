@@ -13,8 +13,8 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
-import { Modules } from "@medusajs/utils";
 import type { IUserModuleService } from "@medusajs/framework/types";
+import { Modules } from "@medusajs/utils";
 
 import { getActorUserId, UnauthenticatedError } from "../_lib/auth";
 import { zodErrorToBody } from "../_lib/format";
@@ -42,23 +42,17 @@ interface QbCatalogServiceLike {
   retrieveQbVendor: (id: string) => Promise<QbVendorLike | null>;
 }
 
-interface ProductVariantLike {
-  id: string;
-  metadata?: Record<string, unknown> | null;
-  product?: { thumbnail?: string | null } | null;
-}
 
-interface ProductModuleLike {
-  listProductVariants: (
-    where: Record<string, unknown>,
-    config?: { relations?: string[] }
-  ) => Promise<ProductVariantLike[]>;
-}
 
 async function resolveUserBrief(
   req: AuthenticatedMedusaRequest,
   userId: string | null | undefined
-): Promise<{ id: string; first_name: string | null; last_name: string | null; email: string | null } | null> {
+): Promise<{
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+} | null> {
   if (!userId) return null;
   try {
     const userModule = req.scope.resolve(Modules.USER) as IUserModuleService;
@@ -86,6 +80,18 @@ interface PoHeader {
   stock_location_id: string;
   vendor_id: string;
   cancelled_at?: Date | string | null;
+  number?: string | null;
+  draft_number?: string | null;
+  vendor_name_snapshot?: string | null;
+  vendor_qb_list_id_snapshot?: string | null;
+  ordered_at?: Date | string | null;
+  expected_at?: Date | string | null;
+  memo?: string | null;
+  reference_number?: string | null;
+  qb_purchase_order_list_id?: string | null;
+  qb_edit_sequence?: string | null;
+  qb_purchase_order_txn_number?: string | null;
+  qb_synced_at?: Date | string | null;
 }
 
 async function loadPo(
@@ -106,7 +112,9 @@ export async function GET(
 
   const po = await loadPo(service, id);
   if (!po) {
-    return res.status(404).json({ error: "Purchase order not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "Purchase order not found", code: "not_found" });
   }
 
   const lines = (await service.listPurchaseOrderLines(
@@ -126,7 +134,9 @@ export async function GET(
       ? ((await service.listPurchaseOrderReceiptLines(
           { purchase_order_receipt_id: receiptIds },
           { take: 10000, skip: 0 }
-        )) as Array<Record<string, unknown> & { purchase_order_receipt_id: string }>)
+        )) as Array<
+          Record<string, unknown> & { purchase_order_receipt_id: string }
+        >)
       : [];
 
   const linesByReceipt = new Map<string, Array<Record<string, unknown>>>();
@@ -160,14 +170,18 @@ export async function GET(
   );
   const submitter = await resolveUserBrief(
     req,
-    (po as unknown as { submitted_by_user_id?: string | null }).submitted_by_user_id
+    (po as unknown as { submitted_by_user_id?: string | null })
+      .submitted_by_user_id
   );
 
   // Line thumbnails — batched variant lookup
   const variantIds = Array.from(
     new Set(
       lines
-        .map((l) => (l as { product_variant_id?: string | null }).product_variant_id)
+        .map(
+          (l) =>
+            (l as { product_variant_id?: string | null }).product_variant_id
+        )
         .filter((v): v is string => !!v)
     )
   );
@@ -175,36 +189,46 @@ export async function GET(
   const mpnByVariantId = new Map<string, string | null>();
   if (variantIds.length > 0) {
     try {
-      const productModule = req.scope.resolve(
-        Modules.PRODUCT
-      ) as unknown as ProductModuleLike;
-      const variants = await productModule.listProductVariants(
-        { id: variantIds },
-        { relations: ["product"] }
-      );
-      for (const v of variants) {
-        thumbnailByVariantId.set(v.id, v.product?.thumbnail ?? null);
-        const mpn = v.metadata?.mpn;
-        mpnByVariantId.set(v.id, typeof mpn === "string" ? mpn : null);
+      // Raw SQL — Medusa v2's listProductVariants doesn't reliably hydrate metadata
+      const knex = (req.scope as any).resolve("__pg_connection__");
+      const rows: Array<{ id: string; thumbnail: string | null; mpn: string | null }> =
+        await knex.raw(
+          `SELECT pv.id,
+                  p.thumbnail,
+                  pv.metadata->>'mpn' AS mpn
+             FROM product_variant pv
+             LEFT JOIN product p ON p.id = pv.product_id
+            WHERE pv.id = ANY(?)`,
+          [variantIds]
+        ).then((r: any) => r.rows);
+      for (const row of rows) {
+        thumbnailByVariantId.set(row.id, row.thumbnail ?? null);
+        mpnByVariantId.set(row.id, row.mpn ?? null);
       }
     } catch {
-      // Silent — thumbnails are decorative; missing thumbnails fall back to a placeholder.
+      // Non-fatal — thumbnail and MPN are display-only
     }
   }
 
   const decoratedLines = lines.map((l) => {
-    const vid = (l as { product_variant_id?: string | null }).product_variant_id;
+    const vid = (l as { product_variant_id?: string | null })
+      .product_variant_id;
     return {
       ...l,
-      thumbnail: vid ? thumbnailByVariantId.get(vid) ?? null : null,
-      mpn: vid ? mpnByVariantId.get(vid) ?? null : null,
+      thumbnail: vid ? (thumbnailByVariantId.get(vid) ?? null) : null,
+      mpn: vid ? (mpnByVariantId.get(vid) ?? null) : null,
     };
   });
 
-  const rawLinkedIds = (po as unknown as { linked_order_ids?: string | null }).linked_order_ids;
+  const rawLinkedIds = (po as unknown as { linked_order_ids?: string | null })
+    .linked_order_ids;
   const linked_order_ids: string[] = (() => {
     if (!rawLinkedIds) return [];
-    try { return JSON.parse(rawLinkedIds) as string[]; } catch { return []; }
+    try {
+      return JSON.parse(rawLinkedIds) as string[];
+    } catch {
+      return [];
+    }
   })();
 
   return res.json({
@@ -228,7 +252,9 @@ export async function PATCH(
     getActorUserId(req);
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }
@@ -244,16 +270,27 @@ export async function PATCH(
 
   const existing = await loadPo(service, id);
   if (!existing) {
-    return res.status(404).json({ error: "Purchase order not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "Purchase order not found", code: "not_found" });
   }
 
-  // `po_status`, `shipping_method`, and `payment_terms` are coordination/info
-  // fields editable at any lifecycle stage. All other fields require status='draft'.
-  const { po_status: bodyPoStatus, shipping_method: bodyShippingMethod, payment_terms: bodyPaymentTerms, ...bodyRest } = body;
-  const hasNonStatusChanges = Object.values(bodyRest).some((v) => v !== undefined);
-  if (hasNonStatusChanges && existing.status !== "draft") {
+  // Terminal states (received, closed, cancelled, voided) are fully frozen.
+  // Draft, submitted, and partially_received allow full edits (submitted/partial
+  // require a supervisor PIN on the frontend; backend trusts the caller).
+  const TERMINAL_STATUSES = ["received", "closed", "cancelled", "voided"];
+  const {
+    po_status: bodyPoStatus,
+    shipping_method: bodyShippingMethod,
+    payment_terms: bodyPaymentTerms,
+    ...bodyRest
+  } = body;
+  const hasNonStatusChanges = Object.values(bodyRest).some(
+    (v) => v !== undefined
+  );
+  if (hasNonStatusChanges && TERMINAL_STATUSES.includes(existing.status)) {
     return res.status(409).json({
-      error: `Cannot edit a PO in status '${existing.status}'. Only drafts are mutable (po_status, shipping_method, and payment_terms are always editable).`,
+      error: `Cannot edit a PO in status '${existing.status}'. Terminal POs are frozen.`,
       code: "not_editable",
     });
   }
@@ -265,9 +302,13 @@ export async function PATCH(
   if (body.stock_location_id !== undefined)
     headerUpdate.stock_location_id = body.stock_location_id;
   if (body.ordered_at !== undefined)
-    headerUpdate.ordered_at = body.ordered_at ? new Date(body.ordered_at) : null;
+    headerUpdate.ordered_at = body.ordered_at
+      ? new Date(body.ordered_at)
+      : null;
   if (body.expected_at !== undefined)
-    headerUpdate.expected_at = body.expected_at ? new Date(body.expected_at) : null;
+    headerUpdate.expected_at = body.expected_at
+      ? new Date(body.expected_at)
+      : null;
   if (body.memo !== undefined) headerUpdate.memo = body.memo ?? null;
   if (body.reference_number !== undefined)
     headerUpdate.reference_number = body.reference_number ?? null;
@@ -295,10 +336,14 @@ export async function PATCH(
 
     const normalized = body.lines.map(normalizeLine);
     const totals = computeTotals(normalized, {
-      shipping_cents: body.shipping_cents ?? (existing as { shipping_cents?: number }).shipping_cents,
-      tax_cents: body.tax_cents ?? (existing as { tax_cents?: number }).tax_cents,
+      shipping_cents:
+        body.shipping_cents ??
+        (existing as { shipping_cents?: number }).shipping_cents,
+      tax_cents:
+        body.tax_cents ?? (existing as { tax_cents?: number }).tax_cents,
       other_fees_cents:
-        body.other_fees_cents ?? (existing as { other_fees_cents?: number }).other_fees_cents,
+        body.other_fees_cents ??
+        (existing as { other_fees_cents?: number }).other_fees_cents,
     });
 
     if (normalized.length > 0) {
@@ -362,6 +407,90 @@ export async function PATCH(
   }
 
   const [updated] = await service.updatePurchaseOrders([headerUpdate]);
+
+  // If the PO is submitted/partially_received and already synced to QB,
+  // queue a MOD operation so QuickBooks reflects the changes.
+  // Use `existing` (pre-update full fetch) for QB fields — updatePurchaseOrders()
+  // returns a partial object that does not hydrate qb_purchase_order_list_id.
+  const EDITABLE_SYNCED_STATUSES = ["submitted", "partially_received"];
+  if (
+    EDITABLE_SYNCED_STATUSES.includes(existing.status) &&
+    existing.qb_purchase_order_list_id
+  ) {
+    try {
+      // Fetch fresh lines (with their qb_txn_line_id if available)
+      const freshLines = (await service.listPurchaseOrderLines(
+        { purchase_order_id: id },
+        { take: 1000, skip: 0, order: { line_order: "ASC", created_at: "ASC" } }
+      )) as Array<{
+        id: string;
+        sku_snapshot: string;
+        description_snapshot: string;
+        qty_ordered: number;
+        unit_cost_cents: number;
+        qb_item_list_id_snapshot: string | null;
+        qb_txn_line_id: string | null;
+      }>;
+
+      const modPayload = {
+        is_mod: true,
+        txn_id: existing.qb_purchase_order_list_id,
+        edit_sequence: existing.qb_edit_sequence ?? undefined,
+        po_id: id,
+        po_number: existing.number ?? undefined,
+        vendor_qb_list_id: existing.vendor_qb_list_id_snapshot ?? null,
+        vendor_name: existing.vendor_name_snapshot ?? existing.vendor_id,
+        ordered_at: existing.ordered_at
+          ? new Date(
+              existing.ordered_at as unknown as string | Date
+            ).toISOString()
+          : null,
+        expected_at: existing.expected_at
+          ? new Date(
+              existing.expected_at as unknown as string | Date
+            ).toISOString()
+          : null,
+        memo: existing.memo ?? null,
+        reference_number: existing.reference_number ?? null,
+        lines: freshLines.map((l) => ({
+          line_id: l.id,
+          qb_txn_line_id: l.qb_txn_line_id ?? null,
+          qb_item_list_id: l.qb_item_list_id_snapshot,
+          sku: l.sku_snapshot,
+          description: l.description_snapshot,
+          qty_ordered: l.qty_ordered,
+          unit_cost_cents: l.unit_cost_cents,
+        })),
+      };
+
+      // Reset existing pipeline row to waiting, or create one if this PO has never been queued.
+      // Medusa enforces uniqueness at service level (no DB constraint), so we use raw UPDATE first.
+      const knex = (req.scope as any).resolve("__pg_connection__");
+      const updated = await knex.raw(
+        `UPDATE qb_purchase_order_pipeline
+            SET status          = 'waiting',
+                qb_operation_id = NULL,
+                payload         = ?,
+                retries         = 0,
+                last_error      = NULL,
+                next_retry_at   = NULL,
+                synced_at       = NULL,
+                updated_at      = NOW()
+          WHERE purchase_order_id = ?
+            AND deleted_at IS NULL`,
+        [JSON.stringify(modPayload), id]
+      );
+      if ((updated.rowCount ?? 0) === 0) {
+        await service.createQbPurchaseOrderPipelines([
+          { purchase_order_id: id, status: "waiting", payload: modPayload },
+        ]);
+      }
+    } catch (qbErr) {
+      // Non-fatal: the local save succeeded; QB MOD will be retried next session
+      console.error("[po-patch] Failed to enqueue QB MOD:", qbErr);
+    }
+  }
+
   return res.json({ purchase_order: updated });
 }
 
@@ -374,7 +503,9 @@ export async function DELETE(
     userId = getActorUserId(req);
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }
@@ -384,7 +515,9 @@ export async function DELETE(
 
   const existing = await loadPo(service, id);
   if (!existing) {
-    return res.status(404).json({ error: "Purchase order not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "Purchase order not found", code: "not_found" });
   }
   if (existing.status !== "draft") {
     return res.status(409).json({

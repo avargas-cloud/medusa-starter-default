@@ -50,18 +50,42 @@ const STATUS_FILTERS = [
 
 const StatusBadge = ({ status }: { status: PipelineRow["status"] }) => {
   if (status === "synced")
-    return <Badge color="green" size="2xsmall">synced</Badge>;
+    return (
+      <Badge color="green" size="2xsmall">
+        synced
+      </Badge>
+    );
   if (status === "failed_permanent")
-    return <Badge color="red" size="2xsmall">failed permanent</Badge>;
+    return (
+      <Badge color="red" size="2xsmall">
+        failed permanent
+      </Badge>
+    );
   if (status === "error")
-    return <Badge color="red" size="2xsmall">error</Badge>;
-  return <Badge color="orange" size="2xsmall">waiting</Badge>;
+    return (
+      <Badge color="red" size="2xsmall">
+        error
+      </Badge>
+    );
+  return (
+    <Badge color="orange" size="2xsmall">
+      waiting
+    </Badge>
+  );
 };
 
 const ActionBadge = ({ action }: { action: "add" | "mod" | null }) => {
   if (action === "mod")
-    return <Badge color="blue" size="2xsmall">mod</Badge>;
-  return <Badge color="grey" size="2xsmall">add</Badge>;
+    return (
+      <Badge color="blue" size="2xsmall">
+        mod
+      </Badge>
+    );
+  return (
+    <Badge color="grey" size="2xsmall">
+      add
+    </Badge>
+  );
 };
 
 export const ItemPipelineSection = () => {

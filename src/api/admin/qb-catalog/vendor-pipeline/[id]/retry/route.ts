@@ -59,7 +59,10 @@ const buildPayload = (v: VendorRow, opType: string) => ({
   Notes: v.notes ?? undefined,
   VendorTaxIdent: v.tax_identity ?? undefined,
   IsVendorEligibleFor1099: v.is_vendor_eligible_for_1099 ?? undefined,
-  TermsRef: (v.metadata as Record<string, unknown> | null)?.payment_terms as string ?? v.terms_ref_name ?? undefined,
+  TermsRef:
+    ((v.metadata as Record<string, unknown> | null)?.payment_terms as string) ??
+    v.terms_ref_name ??
+    undefined,
   VendorTypeRef: v.vendor_type_ref_name ?? undefined,
   VendorAddress:
     v.addr1 || v.city || v.state

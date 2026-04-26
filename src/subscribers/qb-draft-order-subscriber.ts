@@ -103,7 +103,11 @@ export async function handleDraftOrderCreated(
   // exists (guard below), so coalescing is a no-op there and we fall through normally.
   if (!isCron) {
     try {
-      const coalesced = await coalesceIfInFlight(draftOrderId, null, "estimate");
+      const coalesced = await coalesceIfInFlight(
+        draftOrderId,
+        null,
+        "estimate"
+      );
       if (coalesced) {
         logger.info(
           `${LOG_PREFIX} ⏸ Estimate in-flight for ${draftOrderId} — coalesced as next submit`

@@ -30,16 +30,27 @@ export async function GET(
     const pgConnection = req.scope.resolve("__pg_connection__") as any;
 
     // Enrich with customer data in a single batch query
-    const customerIds = [...new Set(
-      creditMemos.map((m: any) => m.customer_id).filter(Boolean)
-    )];
+    const customerIds = [
+      ...new Set(creditMemos.map((m: any) => m.customer_id).filter(Boolean)),
+    ];
     const customers = customerIds.length
       ? await customerModule.listCustomers(
           { id: customerIds },
-          { select: ["id", "first_name", "last_name", "email", "phone", "company_name"] }
+          {
+            select: [
+              "id",
+              "first_name",
+              "last_name",
+              "email",
+              "phone",
+              "company_name",
+            ],
+          }
         )
       : [];
-    const customerMap = Object.fromEntries(customers.map((c: any) => [c.id, c]));
+    const customerMap = Object.fromEntries(
+      customers.map((c: any) => [c.id, c])
+    );
 
     // Batch-fetch available credit per credit memo (accounts for partial applications)
     const cmNumbers = creditMemos
@@ -75,9 +86,7 @@ export async function GET(
     }
 
     // Batch-fetch real QB reference numbers from the pipeline
-    const txnIds = creditMemos
-      .map((m: any) => m.qb_txn_id)
-      .filter(Boolean);
+    const txnIds = creditMemos.map((m: any) => m.qb_txn_id).filter(Boolean);
     const pipelineRows = txnIds.length
       ? await pgConnection("qb_order_pipeline")
           .whereIn("qb_txn_id", txnIds)
@@ -92,9 +101,10 @@ export async function GET(
     const enriched = creditMemos.map((m: any) => ({
       ...m,
       customer: customerMap[m.customer_id] ?? null,
-      credit_available: m.credit_memo_number != null
-        ? (creditAvailMap[m.credit_memo_number] ?? null)
-        : null,
+      credit_available:
+        m.credit_memo_number != null
+          ? (creditAvailMap[m.credit_memo_number] ?? null)
+          : null,
       qb_ref_number: m.qb_txn_id ? (qbRefMap[m.qb_txn_id] ?? null) : null,
     }));
 

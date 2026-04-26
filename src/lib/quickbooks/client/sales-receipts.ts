@@ -1,4 +1,8 @@
-import { getCachedEditSequence, cacheEditSequence, invalidateEditSequence } from "../qb-pipeline";
+import {
+  getCachedEditSequence,
+  cacheEditSequence,
+  invalidateEditSequence,
+} from "../qb-pipeline";
 
 import {
   DRY_RUN,
@@ -71,7 +75,9 @@ async function fetchFreshEditSequence(txnId: string): Promise<string> {
   const queryResp = await bridgeFetch("GET", `/api/sales-receipts/${txnId}`);
   const queryOpId = queryResp?.operationId;
   if (!queryOpId)
-    throw new Error("Bridge did not return operationId for sales receipt query");
+    throw new Error(
+      "Bridge did not return operationId for sales receipt query"
+    );
 
   const rawResult = await pollRawOperationResult(queryOpId);
   const srRet =
@@ -81,7 +87,9 @@ async function fetchFreshEditSequence(txnId: string): Promise<string> {
     rawResult?.SalesReceiptQueryRs?.SalesReceiptRet;
 
   if (!srRet?.EditSequence)
-    throw new Error("Could not extract EditSequence from sales receipt query result");
+    throw new Error(
+      "Could not extract EditSequence from sales receipt query result"
+    );
 
   return srRet.EditSequence as string;
 }
@@ -109,7 +117,9 @@ export async function fetchSalesReceiptLinesFromQb(
   const queryResp = await bridgeFetch("GET", `/api/sales-receipts/${txnId}`);
   const queryOpId = queryResp?.operationId;
   if (!queryOpId)
-    throw new Error("Bridge did not return operationId for sales receipt query");
+    throw new Error(
+      "Bridge did not return operationId for sales receipt query"
+    );
 
   const rawResult = await pollRawOperationResult(queryOpId);
   const srRet =
@@ -119,7 +129,9 @@ export async function fetchSalesReceiptLinesFromQb(
     rawResult?.SalesReceiptQueryRs?.SalesReceiptRet;
 
   if (!srRet?.EditSequence)
-    throw new Error("Could not extract EditSequence from sales receipt query result");
+    throw new Error(
+      "Could not extract EditSequence from sales receipt query result"
+    );
 
   const rawLines = srRet.SalesReceiptLineRet
     ? Array.isArray(srRet.SalesReceiptLineRet)
@@ -134,10 +146,14 @@ export async function fetchSalesReceiptLinesFromQb(
       ItemListID: l.ItemRef?.ListID,
       ItemFullName: l.ItemRef?.FullName,
       Quantity:
-        l.Quantity !== undefined && l.Quantity !== "" ? Number(l.Quantity) : undefined,
+        l.Quantity !== undefined && l.Quantity !== ""
+          ? Number(l.Quantity)
+          : undefined,
       Rate: l.Rate !== undefined && l.Rate !== "" ? Number(l.Rate) : undefined,
       Amount:
-        l.Amount !== undefined && l.Amount !== "" ? Number(l.Amount) : undefined,
+        l.Amount !== undefined && l.Amount !== ""
+          ? Number(l.Amount)
+          : undefined,
       Desc: l.Desc,
       hasSite: !!(l.InventorySiteRef && l.InventorySiteRef.ListID),
     }));
@@ -197,7 +213,9 @@ export async function updateSalesReceiptInQb(
     );
     const operationId = modResp?.operationId;
     if (!operationId)
-      throw new Error("Bridge did not return operationId for sales receipt update (mod)");
+      throw new Error(
+        "Bridge did not return operationId for sales receipt update (mod)"
+      );
     if (options?.onSubmit) {
       try {
         await options.onSubmit(operationId);
@@ -213,12 +231,18 @@ export async function updateSalesReceiptInQb(
     let editSequence: string;
     const cached = await getCachedEditSequence("sales_receipt", payload.txnId);
     if (cached?.editSeq) {
-      console.log(`[QB] ✅ Cache hit for sales receipt ${payload.txnId} — skipping GET round-trip`);
+      console.log(
+        `[QB] ✅ Cache hit for sales receipt ${payload.txnId} — skipping GET round-trip`
+      );
       editSequence = cached.editSeq;
     } else {
-      console.log(`[QB] Cache miss for sales receipt ${payload.txnId} — querying QB for EditSequence`);
+      console.log(
+        `[QB] Cache miss for sales receipt ${payload.txnId} — querying QB for EditSequence`
+      );
       editSequence = await fetchFreshEditSequence(payload.txnId);
-      cacheEditSequence("sales_receipt", payload.txnId, editSequence).catch(() => {});
+      cacheEditSequence("sales_receipt", payload.txnId, editSequence).catch(
+        () => {}
+      );
     }
 
     // ── Step 2: send mod and poll ─────────────────────────────────────────
@@ -248,10 +272,14 @@ export async function updateSalesReceiptInQb(
         await invalidateEditSequence("sales_receipt", payload.txnId);
 
         const freshEditSeq = await fetchFreshEditSequence(payload.txnId);
-        cacheEditSequence("sales_receipt", payload.txnId, freshEditSeq).catch(() => {});
+        cacheEditSequence("sales_receipt", payload.txnId, freshEditSeq).catch(
+          () => {}
+        );
 
         operationId = await sendMod(freshEditSeq);
-        console.log(`[QB] Sales Receipt mod retry queued. OperationID: ${operationId}`);
+        console.log(
+          `[QB] Sales Receipt mod retry queued. OperationID: ${operationId}`
+        );
         pollResult = await pollOperationResult(operationId);
       } else {
         throw pollErr;
@@ -259,7 +287,11 @@ export async function updateSalesReceiptInQb(
     }
 
     if (pollResult.editSequence) {
-      cacheEditSequence("sales_receipt", payload.txnId, pollResult.editSequence).catch(() => {});
+      cacheEditSequence(
+        "sales_receipt",
+        payload.txnId,
+        pollResult.editSequence
+      ).catch(() => {});
     }
 
     console.log(`[QB] ✅ Sales Receipt updated. OperationID: ${operationId}`);

@@ -1,7 +1,13 @@
-import { AuthenticatedMedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import {
+  AuthenticatedMedusaRequest,
+  MedusaResponse,
+} from "@medusajs/framework/http";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
-export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) {
+export async function GET(
+  req: AuthenticatedMedusaRequest,
+  res: MedusaResponse
+) {
   const { variant_id } = req.query as Record<string, string>;
 
   if (!variant_id) {

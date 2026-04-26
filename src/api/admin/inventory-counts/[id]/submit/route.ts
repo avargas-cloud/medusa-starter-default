@@ -13,11 +13,11 @@
  * approve/reject can move it forward.
  */
 
-import { Modules } from "@medusajs/utils";
 import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+import { Modules } from "@medusajs/utils";
 
 import { zodErrorToBody } from "../../_lib/format";
 import { getInventoryCountService } from "../../_lib/service-resolver";
@@ -27,12 +27,14 @@ interface InventoryService {
   listInventoryLevels: (
     filters: Record<string, unknown>,
     options?: { take?: number }
-  ) => Promise<Array<{
-    inventory_item_id: string;
-    location_id: string;
-    stocked_quantity: number;
-    reserved_quantity: number;
-  }>>;
+  ) => Promise<
+    Array<{
+      inventory_item_id: string;
+      location_id: string;
+      stocked_quantity: number;
+      reserved_quantity: number;
+    }>
+  >;
 }
 
 export async function POST(
@@ -50,7 +52,9 @@ export async function POST(
 
   const [count] = await service.listInventoryCounts({ id }, { take: 1 });
   if (!count) {
-    return res.status(404).json({ error: "inventory_count not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "inventory_count not found", code: "not_found" });
   }
   if (count.status !== "draft") {
     return res.status(409).json({
@@ -92,8 +96,12 @@ export async function POST(
   }
 
   // 1. Snapshot live stock for each line (for the configured location)
-  const inventoryService = req.scope.resolve(Modules.INVENTORY) as InventoryService;
-  const inventoryItemIds = Array.from(new Set(lines.map((l) => l.inventory_item_id)));
+  const inventoryService = req.scope.resolve(
+    Modules.INVENTORY
+  ) as InventoryService;
+  const inventoryItemIds = Array.from(
+    new Set(lines.map((l) => l.inventory_item_id))
+  );
 
   const levels = await inventoryService.listInventoryLevels(
     {

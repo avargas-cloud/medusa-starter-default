@@ -7,8 +7,8 @@
 
 import { MedusaService } from "@medusajs/utils";
 
-import { UnmetDemandRecord } from "./models/unmet-demand-record";
 import { UnmetDemandItem } from "./models/unmet-demand-item";
+import { UnmetDemandRecord } from "./models/unmet-demand-record";
 
 class UnmetDemandModuleService extends MedusaService({
   UnmetDemandRecord,
@@ -25,9 +25,7 @@ class UnmetDemandModuleService extends MedusaService({
 
     const row = rows[0];
     if (!row) {
-      throw new Error(
-        "custom_unmet_demand_seq nextval returned no row"
-      );
+      throw new Error("custom_unmet_demand_seq nextval returned no row");
     }
 
     return Number(row.seq);

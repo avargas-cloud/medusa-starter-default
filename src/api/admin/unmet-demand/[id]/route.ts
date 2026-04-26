@@ -29,7 +29,9 @@ export async function GET(
     .retrieveUnmetDemandRecord(id)
     .catch(() => null)) as Record<string, unknown> | null;
   if (!record) {
-    return res.status(404).json({ error: "Record not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "Record not found", code: "not_found" });
   }
 
   const items = (await service.listUnmetDemandItems(
@@ -60,7 +62,9 @@ export async function PATCH(
     getActorUserId(req);
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }
@@ -78,12 +82,15 @@ export async function PATCH(
     .retrieveUnmetDemandRecord(id)
     .catch(() => null)) as Record<string, unknown> | null;
   if (!existing) {
-    return res.status(404).json({ error: "Record not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "Record not found", code: "not_found" });
   }
 
   // Header patch
   const headerUpdate: Record<string, unknown> = { id };
-  if (body.customer_id !== undefined) headerUpdate.customer_id = body.customer_id;
+  if (body.customer_id !== undefined)
+    headerUpdate.customer_id = body.customer_id;
   if (body.price_tier !== undefined) headerUpdate.price_tier = body.price_tier;
   if (body.notes !== undefined) headerUpdate.notes = body.notes ?? null;
 
@@ -156,7 +163,9 @@ export async function DELETE(
     getActorUserId(req);
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     throw err;
   }
@@ -168,7 +177,9 @@ export async function DELETE(
     .retrieveUnmetDemandRecord(id)
     .catch(() => null)) as Record<string, unknown> | null;
   if (!existing) {
-    return res.status(404).json({ error: "Record not found", code: "not_found" });
+    return res
+      .status(404)
+      .json({ error: "Record not found", code: "not_found" });
   }
 
   // Hard-delete items first (required because of the FK), then the header.

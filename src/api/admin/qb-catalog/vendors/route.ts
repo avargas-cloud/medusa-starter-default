@@ -83,7 +83,9 @@ export const POST = async (
       tax_identity: body.tax_identity ?? null,
       is_vendor_eligible_for_1099: body.is_vendor_eligible_for_1099 ?? null,
       terms_ref_name: body.terms_ref_name ?? null,
-      metadata: body.terms_ref_name ? { payment_terms: body.terms_ref_name } : null,
+      metadata: body.terms_ref_name
+        ? { payment_terms: body.terms_ref_name }
+        : null,
       vendor_type_ref_name: body.vendor_type_ref_name ?? null,
       sync_status: "waiting",
       last_synced_at: new Date(),
@@ -98,7 +100,9 @@ export const POST = async (
         status: "waiting",
       });
     } catch (pipelineErr: any) {
-      logger.error(`[qb-catalog vendor create] pipeline insert failed (non-fatal): ${pipelineErr.message}`);
+      logger.error(
+        `[qb-catalog vendor create] pipeline insert failed (non-fatal): ${pipelineErr.message}`
+      );
     }
 
     const bridgePayload = {
@@ -161,7 +165,10 @@ export const POST = async (
       logger.info(
         `[qb-catalog vendor create] "${name}" queued op=${data.operationId}`
       );
-      return res.json({ success: true, vendor: { ...local, qb_operation_id: data.operationId } });
+      return res.json({
+        success: true,
+        vendor: { ...local, qb_operation_id: data.operationId },
+      });
     } catch (err: any) {
       await catalog.updateQbVendors({
         id: local.id,
@@ -198,7 +205,9 @@ export const POST = async (
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const query = req.scope.resolve("query");
 
-  const search = req.query.search ? String(req.query.search).toLowerCase() : undefined;
+  const search = req.query.search
+    ? String(req.query.search).toLowerCase()
+    : undefined;
   const activeOnly = req.query.active !== "false";
   const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 100;
 
@@ -233,26 +242,30 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   });
 
   const vendorScore = (v: any): number => {
-    if (!search) return 0
-    const name = (v.full_name ?? '').toLowerCase()
-    const company = (v.company_name ?? '').toLowerCase()
-    const contact = [v.contact, v.first_name, v.last_name].filter(Boolean).join(' ').toLowerCase()
-    const secondary = [v.phone, v.email].filter(Boolean).join(' ').toLowerCase()
-    if (name.includes(search)) return 4
-    if (company.includes(search)) return 3
-    if (contact.includes(search)) return 2
-    if (secondary.includes(search)) return 1
-    return 0
-  }
+    if (!search) return 0;
+    const name = (v.full_name ?? "").toLowerCase();
+    const company = (v.company_name ?? "").toLowerCase();
+    const contact = [v.contact, v.first_name, v.last_name]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    const secondary = [v.phone, v.email]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    if (name.includes(search)) return 4;
+    if (company.includes(search)) return 3;
+    if (contact.includes(search)) return 2;
+    if (secondary.includes(search)) return 1;
+    return 0;
+  };
 
-  const filtered = search
-    ? data.filter((v: any) => vendorScore(v) > 0)
-    : data;
+  const filtered = search ? data.filter((v: any) => vendorScore(v) > 0) : data;
 
   const sorted = filtered.sort((a: any, b: any) => {
-    const scoreDiff = vendorScore(b) - vendorScore(a)
-    if (scoreDiff !== 0) return scoreDiff
-    return a.full_name.localeCompare(b.full_name)
+    const scoreDiff = vendorScore(b) - vendorScore(a);
+    if (scoreDiff !== 0) return scoreDiff;
+    return a.full_name.localeCompare(b.full_name);
   });
   const sliced = sorted.slice(0, limit);
 

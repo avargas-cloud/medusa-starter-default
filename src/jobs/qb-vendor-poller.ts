@@ -23,14 +23,14 @@ const extractListId = (data: BridgeStatusResponse): string | null => {
   const op = data.operation;
   if (!op) return null;
   if (op.listId) return op.listId;
-  const msgs =
-    op.result?.QBXML?.QBXMLMsgsRs ?? op.result?.QBXMLMsgsRs ?? {};
+  const msgs = op.result?.QBXML?.QBXMLMsgsRs ?? op.result?.QBXMLMsgsRs ?? {};
   return msgs?.VendorAddRs?.VendorRet?.ListID ?? null;
 };
 
 const computeNextRetry = (attemptsSoFar: number): Date => {
   const idx = Math.min(attemptsSoFar, BACKOFF_MINUTES.length - 1);
-  const minutes = BACKOFF_MINUTES[idx] ?? BACKOFF_MINUTES[BACKOFF_MINUTES.length - 1] ?? 8;
+  const minutes =
+    BACKOFF_MINUTES[idx] ?? BACKOFF_MINUTES[BACKOFF_MINUTES.length - 1] ?? 8;
   return new Date(Date.now() + minutes * 60 * 1000);
 };
 
@@ -142,9 +142,10 @@ export default async function qbVendorPoller(container: MedusaContainer) {
 
   const dueForRetry = (errored as VendorRow[]).filter((row) => {
     if (!row.next_retry_at) return true;
-    const due = row.next_retry_at instanceof Date
-      ? row.next_retry_at
-      : new Date(row.next_retry_at);
+    const due =
+      row.next_retry_at instanceof Date
+        ? row.next_retry_at
+        : new Date(row.next_retry_at);
     return due.getTime() <= now.getTime();
   });
 
@@ -157,7 +158,7 @@ export default async function qbVendorPoller(container: MedusaContainer) {
 
   logger.info(
     `[qb-vendor-poller] processing ${pending.length} rows ` +
-    `(${(waiting as any[]).length} waiting + ${dueForRetry.length} due-for-retry)`
+      `(${(waiting as any[]).length} waiting + ${dueForRetry.length} due-for-retry)`
   );
 
   let resolved = 0;
