@@ -17,9 +17,11 @@ export async function GET(
   req: AuthenticatedMedusaRequest,
   res: MedusaResponse
 ) {
-  const q       = ((req.query as Record<string, string>).q ?? "").trim();
+  const q = ((req.query as Record<string, string>).q ?? "").trim();
   const exclude = ((req.query as Record<string, string>).exclude ?? "")
-    .split(",").map((s) => s.trim()).filter(Boolean);
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 
   if (q.length < 2) {
     return res.json({ variants: [] });
@@ -32,9 +34,10 @@ export async function GET(
       apiKey: process.env.MEILISEARCH_API_KEY!,
     });
 
-    const filter = exclude.length > 0
-      ? exclude.map((id) => `variantId != "${id}"`).join(" AND ")
-      : undefined;
+    const filter =
+      exclude.length > 0
+        ? exclude.map((id) => `variantId != "${id}"`).join(" AND ")
+        : undefined;
 
     const results = await client.index("inventory").search<{
       variantId: string;
@@ -48,10 +51,10 @@ export async function GET(
     });
 
     const variants = results.hits.map((h) => ({
-      id:            h.variantId,
-      sku:           h.sku,
+      id: h.variantId,
+      sku: h.sku,
       product_title: h.title,
-      inv_usa:       h.totalStock ?? 0,
+      inv_usa: h.totalStock ?? 0,
     }));
 
     return res.json({ variants });

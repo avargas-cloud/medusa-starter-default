@@ -5,6 +5,7 @@
  */
 
 import type { MedusaContainer } from "@medusajs/framework/types";
+
 import { runPurchasingSnapshot } from "../services/purchasing/snapshot.service";
 
 export const config = {
@@ -12,7 +13,9 @@ export const config = {
   schedule: "0 0 * * *",
 };
 
-export default async function purchasingSnapshotCron(_container: MedusaContainer) {
+export default async function purchasingSnapshotCron(
+  _container: MedusaContainer
+) {
   const logger = console;
   logger.info("[purchasing-cron] Starting daily snapshot...");
 
@@ -22,6 +25,8 @@ export default async function purchasingSnapshotCron(_container: MedusaContainer
       `[purchasing-cron] ✓ Snapshot complete — ${result.processed} variants, ${result.errors} errors, ${result.durationMs}ms`
     );
   } catch (e) {
-    logger.error(`[purchasing-cron] ✗ Snapshot failed: ${(e as Error).message}`);
+    logger.error(
+      `[purchasing-cron] ✗ Snapshot failed: ${(e as Error).message}`
+    );
   }
 }

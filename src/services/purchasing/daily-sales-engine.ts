@@ -17,15 +17,16 @@
  */
 
 import { Client } from "pg";
+
 import type { PurchasingConfig } from "./purchasing-config.service";
 
 export interface DailySalesResult {
-  tier0_30d: number;        // normalized monthly rate (daily × biz_per_month)
-  sales_q1: number;         // raw unit total, oldest months
+  tier0_30d: number; // normalized monthly rate (daily × biz_per_month)
+  sales_q1: number; // raw unit total, oldest months
   sales_q2: number;
   sales_q3: number;
-  sales_q4: number;         // raw unit total, most recent 3 months
-  sales_last_24d: number;   // raw units sold in last 28 calendar days (≈24 Mon-Sat), informational
+  sales_q4: number; // raw unit total, most recent 3 months
+  sales_last_24d: number; // raw units sold in last 28 calendar days (≈24 Mon-Sat), informational
   daily_sales_est: number;
   monthly_sales_est: number;
   cv: number;
@@ -52,18 +53,24 @@ export async function buildSalesEngineContext(
   db: Client
 ): Promise<SalesEngineContext> {
   // ── Tier0 window dates ────────────────────────────────────────────────────
-  const nowET = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  const nowET = new Date().toLocaleDateString("en-CA", {
+    timeZone: "America/New_York",
+  });
   const [y, m] = nowET.split("-").map(Number);
   const isApril2026 = y === 2026 && m === 4;
   const GOLIVE = "2026-04-14";
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400_000)
+    .toISOString()
+    .slice(0, 10);
   const tier0WindowStart = isApril2026 ? GOLIVE : thirtyDaysAgo;
   const yesterday = new Date(Date.now() - 86400_000).toISOString().slice(0, 10);
 
   // ── 1. Business days: tier0 window + per calendar month ──────────────────
-  const bizRes = await db.query<
-    { type: string; month_date: string | null; biz_days: string }
-  >(
+  const bizRes = await db.query<{
+    type: string;
+    month_date: string | null;
+    biz_days: string;
+  }>(
     `SELECT 'tier0' AS type, NULL AS month_date,
             COUNT(CASE WHEN EXTRACT(DOW FROM d) != 0 THEN 1 END)::text AS biz_days
      FROM generate_series($1::date, $2::date, '1 day'::interval) AS d(d)
@@ -100,10 +107,14 @@ export async function buildSalesEngineContext(
      GROUP BY pii.variant_id`,
     [tier0WindowStart]
   );
-  const tier0ByVariant = new Map(t0Res.rows.map((r) => [r.variant_id, parseFloat(r.total)]));
+  const tier0ByVariant = new Map(
+    t0Res.rows.map((r) => [r.variant_id, parseFloat(r.total)])
+  );
 
   // ── 2b. Last-4-weeks totals (28 calendar days, Mon-Sat) ──────────────────
-  const l4wStart = new Date(Date.now() - 28 * 86400_000).toISOString().slice(0, 10);
+  const l4wStart = new Date(Date.now() - 28 * 86400_000)
+    .toISOString()
+    .slice(0, 10);
   const l4wRes = await db.query<{ variant_id: string; total: string }>(
     `SELECT pii.variant_id,
             COALESCE(SUM(pii.quantity - pii.refunded_quantity), 0)::text AS total
@@ -117,12 +128,16 @@ export async function buildSalesEngineContext(
      GROUP BY pii.variant_id`,
     [l4wStart, yesterday]
   );
-  const l4wByVariant = new Map(l4wRes.rows.map((r) => [r.variant_id, parseFloat(r.total)]));
+  const l4wByVariant = new Map(
+    l4wRes.rows.map((r) => [r.variant_id, parseFloat(r.total)])
+  );
 
   // ── 3. Monthly history for ALL variants in one query ─────────────────────
   // DISTINCT ON per (variant_id, month_date) preferring medusa_orders over excel.
   const hRes = await db.query<{
-    variant_id: string; month_date: string; qty_sold: string;
+    variant_id: string;
+    month_date: string;
+    qty_sold: string;
   }>(
     `SELECT DISTINCT ON (variant_id, month_date)
        variant_id,
@@ -137,7 +152,10 @@ export async function buildSalesEngineContext(
   const histByVariant = new Map<string, { date: string; qty: number }[]>();
   for (const row of hRes.rows) {
     const list = histByVariant.get(row.variant_id) ?? [];
-    list.push({ date: row.month_date.slice(0, 10), qty: parseFloat(row.qty_sold) });
+    list.push({
+      date: row.month_date.slice(0, 10),
+      qty: parseFloat(row.qty_sold),
+    });
     histByVariant.set(row.variant_id, list);
   }
   // Sort each list ascending by date (should already be, but ensure)
@@ -166,12 +184,18 @@ export function calculateDailySales(
   const biz = cfg.business_days_per_month;
 
   // ── Tier0 ────────────────────────────────────────────────────────────────
-  const tier0Raw = allIds.reduce((s, id) => s + (ctx.tier0ByVariant.get(id) ?? 0), 0);
+  const tier0Raw = allIds.reduce(
+    (s, id) => s + (ctx.tier0ByVariant.get(id) ?? 0),
+    0
+  );
   const tier0Daily = tier0Raw / ctx.tier0BizDays;
   const tier0_30d = tier0Daily * biz; // normalized monthly rate
 
   // ── Last 4 weeks (raw units, informational only — not used in estimate) ──
-  const sales_last_24d = allIds.reduce((s, id) => s + (ctx.l4wByVariant.get(id) ?? 0), 0);
+  const sales_last_24d = allIds.reduce(
+    (s, id) => s + (ctx.l4wByVariant.get(id) ?? 0),
+    0
+  );
 
   // ── Monthly history (combine primary + alts, deduplicate by month) ────────
   const combined = new Map<string, number>();
@@ -187,7 +211,10 @@ export function calculateDailySales(
   const sum = (arr: { date: string; qty: number }[]) =>
     arr.reduce((s, m) => s + m.qty, 0);
   const bizFor = (slice: { date: string; qty: number }[]) =>
-    Math.max(1, slice.reduce((s, m) => s + (ctx.bizDaysByMonth.get(m.date) ?? biz), 0));
+    Math.max(
+      1,
+      slice.reduce((s, m) => s + (ctx.bizDaysByMonth.get(m.date) ?? biz), 0)
+    );
 
   const q4m = months.slice(-3);
   const q3m = months.slice(-6, -3);
@@ -216,7 +243,8 @@ export function calculateDailySales(
 
   // ── CV (for XYZ classification) ───────────────────────────────────────────
   const qtys = months.map((m) => m.qty);
-  const mean = qtys.length > 0 ? qtys.reduce((s, v) => s + v, 0) / qtys.length : 0;
+  const mean =
+    qtys.length > 0 ? qtys.reduce((s, v) => s + v, 0) / qtys.length : 0;
   const variance =
     qtys.length > 1
       ? qtys.reduce((s, v) => s + (v - mean) ** 2, 0) / qtys.length

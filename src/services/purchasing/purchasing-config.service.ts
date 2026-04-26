@@ -19,24 +19,26 @@ export interface PurchasingConfig {
 }
 
 const DEFAULTS: PurchasingConfig = {
-  weight_tier0_30d: 0.30,
+  weight_tier0_30d: 0.3,
   weight_q4: 0.25,
-  weight_q3: 0.20,
+  weight_q3: 0.2,
   weight_q2: 0.15,
-  weight_q1: 0.10,
+  weight_q1: 0.1,
   tendency_adj: 0.05,
   business_days_per_month: 26,
-  pareto_a_threshold: 0.80,
+  pareto_a_threshold: 0.8,
   pareto_b_threshold: 0.95,
-  xyz_x_threshold: 0.50,
-  xyz_y_threshold: 1.00,
+  xyz_x_threshold: 0.5,
+  xyz_y_threshold: 1.0,
   transit_air_days: 12,
   buffer_air_days: 15,
   transit_sea_days: 90,
   buffer_sea_days: 45,
 };
 
-export async function loadPurchasingConfig(db: Client): Promise<PurchasingConfig> {
+export async function loadPurchasingConfig(
+  db: Client
+): Promise<PurchasingConfig> {
   const res = await db.query<{ key: string; value: string }>(
     `SELECT key, value FROM purchasing_config`
   );

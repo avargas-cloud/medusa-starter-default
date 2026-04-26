@@ -8,8 +8,8 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
-import { Client } from "pg";
 import * as dotenv from "dotenv";
+import { Client } from "pg";
 
 dotenv.config();
 
@@ -41,7 +41,9 @@ export async function GET(
     );
 
     if (!row.rows.length) {
-      return res.status(404).json({ error: "Snapshot not found for this variant" });
+      return res
+        .status(404)
+        .json({ error: "Snapshot not found for this variant" });
     }
 
     // Monthly sales history for the sparkline chart

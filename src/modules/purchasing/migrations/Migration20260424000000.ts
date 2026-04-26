@@ -29,8 +29,12 @@ export class Migration20260424000000 extends Migration {
         constraint "product_alternative_pair_uq" unique ("primary_variant_id", "alt_variant_id")
       );
     `);
-    this.addSql(`create index if not exists "idx_palt_primary" on "product_alternative" ("primary_variant_id") where "deleted_at" is null;`);
-    this.addSql(`create index if not exists "idx_palt_alt"     on "product_alternative" ("alt_variant_id")     where "deleted_at" is null;`);
+    this.addSql(
+      `create index if not exists "idx_palt_primary" on "product_alternative" ("primary_variant_id") where "deleted_at" is null;`
+    );
+    this.addSql(
+      `create index if not exists "idx_palt_alt"     on "product_alternative" ("alt_variant_id")     where "deleted_at" is null;`
+    );
 
     // ── purchasing_config ──────────────────────────────────────────────────
     this.addSql(`
@@ -92,9 +96,15 @@ export class Migration20260424000000 extends Migration {
         constraint "purchasing_snapshot_pkey" primary key ("id")
       );
     `);
-    this.addSql(`create unique index if not exists "UQ_snapshot_variant" on "purchasing_snapshot" ("variant_id");`);
-    this.addSql(`create index if not exists "idx_snapshot_abc"    on "purchasing_snapshot" ("abc_class");`);
-    this.addSql(`create index if not exists "idx_snapshot_abcxyz" on "purchasing_snapshot" ("abcxyz_class");`);
+    this.addSql(
+      `create unique index if not exists "UQ_snapshot_variant" on "purchasing_snapshot" ("variant_id");`
+    );
+    this.addSql(
+      `create index if not exists "idx_snapshot_abc"    on "purchasing_snapshot" ("abc_class");`
+    );
+    this.addSql(
+      `create index if not exists "idx_snapshot_abcxyz" on "purchasing_snapshot" ("abcxyz_class");`
+    );
 
     // ── purchasing_sales_history ───────────────────────────────────────────
     this.addSql(`
@@ -113,8 +123,12 @@ export class Migration20260424000000 extends Migration {
           unique ("variant_id", "month_date", "source")
       );
     `);
-    this.addSql(`create index if not exists "idx_psh_variant_month" on "purchasing_sales_history" ("variant_id", "month_date");`);
-    this.addSql(`create index if not exists "idx_psh_source"        on "purchasing_sales_history" ("source");`);
+    this.addSql(
+      `create index if not exists "idx_psh_variant_month" on "purchasing_sales_history" ("variant_id", "month_date");`
+    );
+    this.addSql(
+      `create index if not exists "idx_psh_source"        on "purchasing_sales_history" ("source");`
+    );
   }
 
   override async down(): Promise<void> {

@@ -42,9 +42,9 @@ export function runParetoEngine(
     if (totalRevenue > 0) {
       cumulative += v.revenue_12m / totalRevenue;
     }
-    if (cumulative - v.revenue_12m / totalRevenue < cfg.pareto_a_threshold) {
+    if (cumulative <= cfg.pareto_a_threshold) {
       abcMap.set(v.variant_id, "A");
-    } else if (cumulative - v.revenue_12m / totalRevenue < cfg.pareto_b_threshold) {
+    } else if (cumulative <= cfg.pareto_b_threshold) {
       abcMap.set(v.variant_id, "B");
     } else {
       abcMap.set(v.variant_id, "C");
@@ -54,8 +54,7 @@ export function runParetoEngine(
   return variants.map((v) => {
     const abc = abcMap.get(v.variant_id) ?? "C";
     const xyz: "X" | "Y" | "Z" =
-      v.cv < cfg.xyz_x_threshold ? "X" :
-      v.cv < cfg.xyz_y_threshold ? "Y" : "Z";
+      v.cv < cfg.xyz_x_threshold ? "X" : v.cv < cfg.xyz_y_threshold ? "Y" : "Z";
     return {
       variant_id: v.variant_id,
       abc_class: abc,

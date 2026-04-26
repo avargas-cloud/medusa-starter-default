@@ -1,4 +1,5 @@
 import { Module } from "@medusajs/utils";
+
 import PurchasingModuleService from "./service";
 
 export const PURCHASING_MODULE = "purchasing";

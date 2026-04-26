@@ -12,19 +12,14 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
-import { Client } from "pg";
-import * as dotenv from "dotenv";
 
-dotenv.config();
+import { withDb } from "../_lib/db";
 
-const USA_LOC   = process.env.ECOPOWERTECH_MIAMI_LOCATION_ID  ?? "sloc_01KFS2AV3TAKR141KC2D6JCGTR";
-const CHINA_LOC = process.env.CHINA_WAREHOUSE_LOCATION_ID     ?? "sloc_01KQ14C1CFX30EDD722BF87HDM";
-
-async function getDb() {
-  const db = new Client({ connectionString: process.env.DATABASE_URL });
-  await db.connect();
-  return db;
-}
+const USA_LOC =
+  process.env.ECOPOWERTECH_MIAMI_LOCATION_ID ??
+  "sloc_01KFS2AV3TAKR141KC2D6JCGTR";
+const CHINA_LOC =
+  process.env.CHINA_WAREHOUSE_LOCATION_ID ?? "sloc_01KQ14C1CFX30EDD722BF87HDM";
 
 // ── GET — master list ────────────────────────────────────────────────────────
 
@@ -32,8 +27,7 @@ export async function GET(
   _req: AuthenticatedMedusaRequest,
   res: MedusaResponse
 ) {
-  const db = await getDb();
-  try {
+  return withDb(async (db) => {
     const rows = await db.query<{
       primary_variant_id: string;
       sku: string;
@@ -44,7 +38,8 @@ export async function GET(
       alt_inv_usa: number;
       abc_class: string | null;
       xyz_class: string | null;
-    }>(`
+    }>(
+      `
       WITH primary_variants AS (
         SELECT DISTINCT primary_variant_id
         FROM product_alternative
@@ -93,12 +88,12 @@ export async function GET(
       LEFT JOIN purchasing_snapshot snap ON snap.variant_id = pv.id
       GROUP BY pv.id, pv.sku, p.title, ac.alt_count, ai.alt_inv_usa, snap.abc_class, snap.xyz_class
       ORDER BY pv.sku
-    `, [USA_LOC, CHINA_LOC]);
+    `,
+      [USA_LOC, CHINA_LOC]
+    );
 
     return res.json({ alternatives: rows.rows, count: rows.rowCount });
-  } finally {
-    await db.end();
-  }
+  });
 }
 
 // ── POST — create link ───────────────────────────────────────────────────────
@@ -116,35 +111,41 @@ export async function POST(
   const { primary_variant_id, alt_variant_id, priority = 1 } = body;
 
   if (!primary_variant_id || !alt_variant_id) {
-    return res.status(400).json({ error: "primary_variant_id and alt_variant_id are required" });
+    return res
+      .status(400)
+      .json({ error: "primary_variant_id and alt_variant_id are required" });
   }
   if (primary_variant_id === alt_variant_id) {
-    return res.status(400).json({ error: "A variant cannot be its own alternative" });
+    return res
+      .status(400)
+      .json({ error: "A variant cannot be its own alternative" });
   }
 
-  const db = await getDb();
-  try {
+  return withDb(async (db) => {
     // Verify both variants exist
     const check = await db.query<{ id: string }>(
       `SELECT id FROM product_variant WHERE id = ANY($1::text[]) AND deleted_at IS NULL`,
       [[primary_variant_id, alt_variant_id]]
     );
     if (check.rowCount !== 2) {
-      return res.status(404).json({ error: "One or both variant IDs not found" });
+      return res
+        .status(404)
+        .json({ error: "One or both variant IDs not found" });
     }
 
     const id = `palt_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
-    await db.query(`
+    await db.query(
+      `
       INSERT INTO product_alternative
         (id, primary_variant_id, alt_variant_id, priority, is_active, created_at, updated_at)
       VALUES ($1, $2, $3, $4, true, now(), now())
       ON CONFLICT (primary_variant_id, alt_variant_id)
       DO UPDATE SET priority = EXCLUDED.priority, is_active = true, updated_at = now()
-    `, [id, primary_variant_id, alt_variant_id, priority]);
+    `,
+      [id, primary_variant_id, alt_variant_id, priority]
+    );
 
     return res.status(201).json({ ok: true });
-  } finally {
-    await db.end();
-  }
+  });
 }

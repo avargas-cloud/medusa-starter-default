@@ -15,22 +15,22 @@ export const PurchasingSnapshot = model.define("purchasing_snapshot", {
   variant_id: model.text(),
 
   // ── Daily Sales Engine output ──────────────────────────────────────────
-  tier0_30d: model.bigNumber().default(0),       // sales last 30 days (monthly equiv.)
-  sales_q4: model.bigNumber().default(0),        // raw units, most recent 3 months
-  sales_q3: model.bigNumber().default(0),        // raw units, months 4-6
-  sales_q2: model.bigNumber().default(0),        // raw units, months 7-9
-  sales_q1: model.bigNumber().default(0),        // raw units, oldest months
-  sales_last_24d: model.bigNumber().default(0),  // raw units, last 28 cal days (≈4 Mon-Sat wks)
+  tier0_30d: model.bigNumber().default(0), // sales last 30 days (monthly equiv.)
+  sales_q4: model.bigNumber().default(0), // raw units, most recent 3 months
+  sales_q3: model.bigNumber().default(0), // raw units, months 4-6
+  sales_q2: model.bigNumber().default(0), // raw units, months 7-9
+  sales_q1: model.bigNumber().default(0), // raw units, oldest months
+  sales_last_24d: model.bigNumber().default(0), // raw units, last 28 cal days (≈4 Mon-Sat wks)
   daily_sales_est: model.bigNumber().default(0),
   monthly_sales_est: model.bigNumber().default(0),
 
   // ── ABC-XYZ Engine output ──────────────────────────────────────────────
-  cv: model.bigNumber().default(0),           // coefficient of variation
+  cv: model.bigNumber().default(0), // coefficient of variation
   weighted_revenue: model.bigNumber().default(0),
   pareto_rank: model.number().nullable(),
-  abc_class: model.text().nullable(),         // 'A' | 'B' | 'C'
-  xyz_class: model.text().nullable(),         // 'X' | 'Y' | 'Z'
-  abcxyz_class: model.text().nullable(),      // 'AX' | 'AZ' | 'BX' etc.
+  abc_class: model.text().nullable(), // 'A' | 'B' | 'C'
+  xyz_class: model.text().nullable(), // 'X' | 'Y' | 'Z'
+  abcxyz_class: model.text().nullable(), // 'AX' | 'AZ' | 'BX' etc.
 
   // ── Inventory snapshot (at time of calculation) ───────────────────────
   inv_usa: model.number().default(0),
@@ -41,7 +41,7 @@ export const PurchasingSnapshot = model.define("purchasing_snapshot", {
 
   // ── Reorder recommendation ────────────────────────────────────────────
   qty_to_transfer: model.number().default(0), // order to Veetech (China → USA)
-  qty_to_factory: model.number().default(0),  // order to factory (new production)
+  qty_to_factory: model.number().default(0), // order to factory (new production)
 
   last_calculated_at: model.dateTime().nullable(),
 });

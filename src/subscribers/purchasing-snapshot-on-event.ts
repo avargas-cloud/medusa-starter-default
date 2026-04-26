@@ -12,8 +12,9 @@
  */
 
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
-import { Client } from "pg";
 import * as dotenv from "dotenv";
+import { Client } from "pg";
+
 import { recalculateForVariants } from "../services/purchasing/snapshot.service";
 
 dotenv.config();
@@ -29,7 +30,7 @@ async function getVariantIdsForOrder(orderId: string): Promise<string[]> {
        WHERE oi.order_id = $1 AND oli.variant_id IS NOT NULL`,
       [orderId]
     );
-    return res.rows.map(r => r.variant_id);
+    return res.rows.map((r) => r.variant_id);
   } finally {
     await db.end();
   }
@@ -46,9 +47,13 @@ export default async function purchasingSnapshotOnEvent({
     if (variantIds.length === 0) return;
 
     await recalculateForVariants(variantIds);
-    console.log(`[purchasing-snapshot] Recalculated ${variantIds.length} variant(s) for order ${orderId}`);
+    console.log(
+      `[purchasing-snapshot] Recalculated ${variantIds.length} variant(s) for order ${orderId}`
+    );
   } catch (e) {
-    console.error(`[purchasing-snapshot] Subscriber error: ${(e as Error).message}`);
+    console.error(
+      `[purchasing-snapshot] Subscriber error: ${(e as Error).message}`
+    );
   }
 }
 

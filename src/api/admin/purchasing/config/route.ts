@@ -8,8 +8,8 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
-import { Client } from "pg";
 import * as dotenv from "dotenv";
+import { Client } from "pg";
 
 dotenv.config();
 
@@ -25,9 +25,11 @@ export async function GET(
 ) {
   const db = await getDb();
   try {
-    const rows = await db.query<{ key: string; value: string; description: string | null }>(
-      `SELECT key, value, description FROM purchasing_config ORDER BY key`
-    );
+    const rows = await db.query<{
+      key: string;
+      value: string;
+      description: string | null;
+    }>(`SELECT key, value, description FROM purchasing_config ORDER BY key`);
     return res.json({ config: rows.rows });
   } finally {
     await db.end();
@@ -41,7 +43,9 @@ export async function PUT(
   const updates = req.body as Array<{ key: string; value: string | number }>;
 
   if (!Array.isArray(updates) || updates.length === 0) {
-    return res.status(400).json({ error: "Body must be a non-empty array of { key, value } pairs" });
+    return res.status(400).json({
+      error: "Body must be a non-empty array of { key, value } pairs",
+    });
   }
 
   const db = await getDb();
@@ -52,9 +56,11 @@ export async function PUT(
         [key, String(value)]
       );
     }
-    const rows = await db.query<{ key: string; value: string; description: string | null }>(
-      `SELECT key, value, description FROM purchasing_config ORDER BY key`
-    );
+    const rows = await db.query<{
+      key: string;
+      value: string;
+      description: string | null;
+    }>(`SELECT key, value, description FROM purchasing_config ORDER BY key`);
     return res.json({ ok: true, config: rows.rows });
   } finally {
     await db.end();
