@@ -1,7 +1,15 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
 
-type PosDocType = "estimate" | "order" | "invoice" | "return" | "payment";
+type PosDocType =
+  | "estimate"
+  | "order"
+  | "invoice"
+  | "return"
+  | "payment"
+  | "purchase_order"
+  | "inventory_adjustment"
+  | "item_receipt";
 
 const VALID_TYPES: PosDocType[] = [
   "estimate",
@@ -9,6 +17,9 @@ const VALID_TYPES: PosDocType[] = [
   "invoice",
   "return",
   "payment",
+  "purchase_order",
+  "inventory_adjustment",
+  "item_receipt",
 ];
 
 interface SearchHit {
@@ -73,11 +84,14 @@ async function search(
   type: PosDocType,
   q: string
 ): Promise<SearchHit[]> {
-  if (type === "estimate") return searchOrderLike(client, q, "estimate", "E");
-  if (type === "order") return searchOrderLike(client, q, "order", "S");
-  if (type === "invoice") return searchInvoice(client, q);
-  if (type === "return") return searchReturn(client, q);
-  if (type === "payment") return searchPayment(client, q);
+  if (type === "estimate")            return searchOrderLike(client, q, "estimate", "E");
+  if (type === "order")               return searchOrderLike(client, q, "order", "S");
+  if (type === "invoice")             return searchInvoice(client, q);
+  if (type === "return")              return searchReturn(client, q);
+  if (type === "payment")             return searchPayment(client, q);
+  if (type === "purchase_order")      return searchPurchaseOrder(client, q);
+  if (type === "inventory_adjustment") return searchInventoryAdjustment(client, q);
+  if (type === "item_receipt")        return searchItemReceipt(client, q);
   return [];
 }
 
@@ -270,4 +284,151 @@ async function searchPayment(
       existing_txn_id: txnId,
     };
   });
+}
+
+async function searchPurchaseOrder(
+  client: InstanceType<typeof Client>,
+  q: string
+): Promise<SearchHit[]> {
+  const params: unknown[] = [];
+  let whereFilter = "";
+  if (q) {
+    const upper = q.toUpperCase();
+    params.push(`${upper}%`);
+    whereFilter = `AND po.number ILIKE $1`;
+  }
+
+  const { rows } = await client.query<{
+    po_id: string;
+    po_number: string | null;
+    vendor_name: string | null;
+    total_cents: number | null;
+    submitted_at: Date | null;
+    qb_list_id: string | null;
+    qb_txn_number: string | null;
+  }>(
+    `SELECT po.id        AS po_id,
+            po.number    AS po_number,
+            po.vendor_name_snapshot AS vendor_name,
+            po.total_cents,
+            po.submitted_at,
+            pipe.qb_list_id,
+            pipe.qb_txn_number
+       FROM purchase_order po
+       LEFT JOIN qb_purchase_order_pipeline pipe
+              ON pipe.purchase_order_id = po.id
+             AND pipe.deleted_at IS NULL
+      WHERE po.deleted_at IS NULL
+        AND po.status != 'draft'
+        ${whereFilter}
+      ORDER BY po.submitted_at DESC NULLS LAST
+      LIMIT ${LIMIT}`,
+    params
+  );
+
+  return rows.map((r) => ({
+    id:              r.po_id,
+    display_id:      r.po_number ?? r.po_id,
+    label:           r.po_number ?? r.po_id,
+    date:            r.submitted_at?.toISOString() ?? null,
+    amount:          r.total_cents != null ? r.total_cents / 100 : null,
+    customer_name:   r.vendor_name,
+    already_mapped:  !!r.qb_list_id,
+    existing_txn_id: r.qb_list_id,
+  }));
+}
+
+async function searchInventoryAdjustment(
+  client: InstanceType<typeof Client>,
+  q: string
+): Promise<SearchHit[]> {
+  const params: unknown[] = [];
+  let whereFilter = "";
+  if (q) {
+    params.push(`${q}%`);
+    whereFilter = `AND ic.number ILIKE $1`;
+  }
+
+  const { rows } = await client.query<{
+    ic_id: string;
+    ic_number: string | null;
+    ic_memo: string | null;
+    submitted_at: Date | null;
+    qb_list_id: string | null;
+    qb_txn_number: string | null;
+  }>(
+    `SELECT ic.id          AS ic_id,
+            ic.number      AS ic_number,
+            ic.memo        AS ic_memo,
+            ic.submitted_at,
+            pipe.qb_list_id,
+            pipe.qb_txn_number
+       FROM inventory_count ic
+       LEFT JOIN qb_inventory_adjustment_pipeline pipe
+              ON pipe.inventory_count_id = ic.id
+             AND pipe.deleted_at IS NULL
+      WHERE ic.deleted_at IS NULL
+        ${whereFilter}
+      ORDER BY ic.submitted_at DESC NULLS LAST
+      LIMIT ${LIMIT}`,
+    params
+  );
+
+  return rows.map((r) => ({
+    id:              r.ic_id,
+    display_id:      r.ic_number ?? r.ic_id,
+    label:           r.ic_memo ? `${r.ic_number} · ${r.ic_memo}` : (r.ic_number ?? r.ic_id),
+    date:            r.submitted_at?.toISOString() ?? null,
+    amount:          null,
+    customer_name:   r.ic_memo,
+    already_mapped:  !!r.qb_list_id,
+    existing_txn_id: r.qb_list_id,
+  }));
+}
+
+async function searchItemReceipt(
+  client: InstanceType<typeof Client>,
+  q: string
+): Promise<SearchHit[]> {
+  const params: unknown[] = [];
+  let whereFilter = "";
+  if (q) {
+    const upper = q.toUpperCase();
+    params.push(`${upper}%`);
+    whereFilter = `AND por.number ILIKE $1`;
+  }
+
+  const { rows } = await client.query<{
+    por_id: string;
+    por_number: string | null;
+    vendor_name: string | null;
+    received_at: Date | null;
+    qb_item_receipt_list_id: string | null;
+    qb_item_receipt_txn_number: string | null;
+  }>(
+    `SELECT por.id          AS por_id,
+            por.number      AS por_number,
+            po.vendor_name_snapshot AS vendor_name,
+            por.received_at,
+            por.qb_item_receipt_list_id,
+            por.qb_item_receipt_txn_number
+       FROM purchase_order_receipt por
+       LEFT JOIN purchase_order po ON po.id = por.purchase_order_id
+      WHERE por.deleted_at IS NULL
+        ${whereFilter}
+      ORDER BY por.received_at DESC NULLS LAST
+      LIMIT ${LIMIT}`,
+    params
+  );
+
+  return rows.map((r) => ({
+    id:              r.por_id,
+    display_id:      r.por_number ?? r.por_id,
+    label:           r.por_number ?? r.por_id,
+    date:            r.received_at?.toISOString() ?? null,
+    amount:          null,
+    customer_name:   r.vendor_name,
+    already_mapped:  !!r.qb_item_receipt_list_id,
+    existing_txn_id: r.qb_item_receipt_list_id,
+  }));
 }

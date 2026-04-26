@@ -5,7 +5,15 @@ import { Client } from "pg";
 import { FINANCE_MODULE } from "../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../modules/invoices";
 
-type PosDocType = "estimate" | "order" | "invoice" | "return" | "payment";
+type PosDocType =
+  | "estimate"
+  | "order"
+  | "invoice"
+  | "return"
+  | "payment"
+  | "purchase_order"
+  | "inventory_adjustment"
+  | "item_receipt";
 
 const VALID_TYPES: PosDocType[] = [
   "estimate",
@@ -13,6 +21,9 @@ const VALID_TYPES: PosDocType[] = [
   "invoice",
   "return",
   "payment",
+  "purchase_order",
+  "inventory_adjustment",
+  "item_receipt",
 ];
 
 // ─── Friendly ID resolver ─────────────────────────────────────────────────────
@@ -94,6 +105,32 @@ async function resolveId(
     const { rows } = await client.query(
       `SELECT id FROM customer_payment WHERE reference = $1 LIMIT 1`,
       [id]
+    );
+    return rows[0]?.id ?? null;
+  }
+
+  if (type === "purchase_order") {
+    const upper = id.toUpperCase();
+    const { rows } = await client.query(
+      `SELECT id FROM purchase_order WHERE number ILIKE $1 AND deleted_at IS NULL LIMIT 1`,
+      [upper]
+    );
+    return rows[0]?.id ?? null;
+  }
+
+  if (type === "inventory_adjustment") {
+    const { rows } = await client.query(
+      `SELECT id FROM inventory_count WHERE number ILIKE $1 AND deleted_at IS NULL LIMIT 1`,
+      [id]
+    );
+    return rows[0]?.id ?? null;
+  }
+
+  if (type === "item_receipt") {
+    const upper = id.toUpperCase();
+    const { rows } = await client.query(
+      `SELECT id FROM purchase_order_receipt WHERE number ILIKE $1 AND deleted_at IS NULL LIMIT 1`,
+      [upper]
     );
     return rows[0]?.id ?? null;
   }
@@ -312,6 +349,100 @@ export async function GET(
       };
     }
 
+    // ── purchase_order ────────────────────────────────────────────────────
+    if (type === "purchase_order") {
+      const { rows: poRows } = await client.query(
+        `SELECT po.id, po.number, po.vendor_name_snapshot, po.status,
+                pipe.qb_list_id, pipe.qb_txn_number, pipe.status AS pipe_status
+           FROM purchase_order po
+           LEFT JOIN qb_purchase_order_pipeline pipe
+                  ON pipe.purchase_order_id = po.id AND pipe.deleted_at IS NULL
+          WHERE po.id = $1 AND po.deleted_at IS NULL LIMIT 1`,
+        [internalId]
+      );
+      if (!poRows.length) {
+        res.status(404).json({ error: `Purchase Order ${internalId} not found` });
+        return;
+      }
+      const po = poRows[0];
+      entity_metadata = {
+        qb_txn_id:       po.qb_list_id ?? null,
+        qb_ref_number:   po.qb_txn_number ?? null,
+        qb_sync_status:  po.pipe_status ?? null,
+        qb_edit_sequence: null,
+      };
+      display_info = {
+        number:      po.number ?? null,
+        vendor:      po.vendor_name_snapshot ?? null,
+        status:      po.status ?? null,
+        pipe_status: po.pipe_status ?? null,
+      };
+    }
+
+    // ── inventory_adjustment ──────────────────────────────────────────────
+    if (type === "inventory_adjustment") {
+      const { rows: icRows } = await client.query(
+        `SELECT ic.id, ic.number, ic.memo, ic.status,
+                pipe.qb_list_id, pipe.qb_txn_number, pipe.status AS pipe_status
+           FROM inventory_count ic
+           LEFT JOIN qb_inventory_adjustment_pipeline pipe
+                  ON pipe.inventory_count_id = ic.id AND pipe.deleted_at IS NULL
+          WHERE ic.id = $1 AND ic.deleted_at IS NULL LIMIT 1`,
+        [internalId]
+      );
+      if (!icRows.length) {
+        res.status(404).json({ error: `Inventory Count ${internalId} not found` });
+        return;
+      }
+      const ic = icRows[0];
+      entity_metadata = {
+        qb_txn_id:       ic.qb_list_id ?? null,
+        qb_ref_number:   ic.qb_txn_number ?? null,
+        qb_sync_status:  ic.pipe_status ?? null,
+        qb_edit_sequence: null,
+      };
+      display_info = {
+        number:      ic.number ?? null,
+        memo:        ic.memo ?? null,
+        status:      ic.status ?? null,
+        pipe_status: ic.pipe_status ?? null,
+      };
+    }
+
+    // ── item_receipt (purchase_order_receipt) ─────────────────────────────
+    if (type === "item_receipt") {
+      const { rows: porRows } = await client.query(
+        `SELECT por.id, por.number, por.status,
+                po.number AS po_number, po.vendor_name_snapshot,
+                por.qb_item_receipt_list_id, por.qb_item_receipt_txn_number,
+                por.qb_synced_at,
+                pipe.status AS pipe_status
+           FROM purchase_order_receipt por
+           LEFT JOIN purchase_order po ON po.id = por.purchase_order_id
+           LEFT JOIN qb_item_receipt_pipeline pipe
+                  ON pipe.purchase_order_receipt_id = por.id AND pipe.deleted_at IS NULL
+          WHERE por.id = $1 AND por.deleted_at IS NULL LIMIT 1`,
+        [internalId]
+      );
+      if (!porRows.length) {
+        res.status(404).json({ error: `Item Receipt ${internalId} not found` });
+        return;
+      }
+      const por = porRows[0];
+      entity_metadata = {
+        qb_txn_id:       por.qb_item_receipt_list_id ?? null,
+        qb_ref_number:   por.qb_item_receipt_txn_number ?? null,
+        qb_sync_status:  por.pipe_status ?? null,
+        qb_edit_sequence: null,
+      };
+      display_info = {
+        number:     por.number ?? null,
+        po_number:  por.po_number ?? null,
+        vendor:     por.vendor_name_snapshot ?? null,
+        status:     por.status ?? null,
+      };
+    }
+
     // ── Extract QB fields ─────────────────────────────────────────────────
     let qbFields: {
       qb_txn_id: string | null;
@@ -325,26 +456,90 @@ export async function GET(
     qbFields = extractQbFields(entity_metadata, type as PosDocType);
 
     // ── Pipeline rows ─────────────────────────────────────────────────────
-    const stepFilter: Record<PosDocType, string> = {
+    // New types (purchase_order, inventory_adjustment, item_receipt) query
+    // their own pipeline tables — handled inline, skip qb_order_pipeline.
+    const isNewType =
+      type === "purchase_order" ||
+      type === "inventory_adjustment" ||
+      type === "item_receipt";
+
+    let pipelineRows: Array<{
+      id: string;
+      step: string;
+      status: string;
+      qb_txn_id: string | null;
+      qb_ref_number: string | null;
+      error: string | null;
+      created_at: string;
+      updated_at: string | null;
+      confirmed_at: string | null;
+      failed_at: string | null;
+    }> = [];
+
+    if (isNewType) {
+      if (type === "purchase_order") {
+        const { rows } = await client.query(
+          `SELECT id,
+                  CASE WHEN (payload->>'is_void')::boolean = true THEN 'void_purchase_order'
+                       WHEN (payload->>'is_mod')::boolean  = true THEN 'mod_purchase_order'
+                       ELSE 'purchase_order' END AS step,
+                  status, qb_list_id AS qb_txn_id, qb_txn_number AS qb_ref_number,
+                  last_error AS error, created_at, updated_at, NULL AS confirmed_at, NULL AS failed_at
+             FROM qb_purchase_order_pipeline
+            WHERE purchase_order_id = $1 AND deleted_at IS NULL
+            ORDER BY created_at DESC LIMIT 10`,
+          [internalId]
+        );
+        pipelineRows = rows;
+      } else if (type === "inventory_adjustment") {
+        const { rows } = await client.query(
+          `SELECT id, 'inventory_adjustment' AS step, status,
+                  qb_list_id AS qb_txn_id, qb_txn_number AS qb_ref_number,
+                  last_error AS error, created_at, updated_at, NULL AS confirmed_at, NULL AS failed_at
+             FROM qb_inventory_adjustment_pipeline
+            WHERE inventory_count_id = $1 AND deleted_at IS NULL
+            ORDER BY created_at DESC LIMIT 10`,
+          [internalId]
+        );
+        pipelineRows = rows;
+      } else if (type === "item_receipt") {
+        const { rows } = await client.query(
+          `SELECT id, 'item_receipt' AS step, status,
+                  qb_list_id AS qb_txn_id, qb_txn_number AS qb_ref_number,
+                  last_error AS error, created_at, updated_at, NULL AS confirmed_at, NULL AS failed_at
+             FROM qb_item_receipt_pipeline
+            WHERE purchase_order_receipt_id = $1 AND deleted_at IS NULL
+            ORDER BY created_at DESC LIMIT 10`,
+          [internalId]
+        );
+        pipelineRows = rows;
+      }
+    } else {
+    const stepFilter: Record<
+      Exclude<PosDocType, "purchase_order" | "inventory_adjustment" | "item_receipt">,
+      string
+    > = {
       estimate: "step = 'estimate'",
-      order: "step = 'sales_order'",
-      invoice: "step = 'invoice'",
-      return: "step = 'credit_memo'",
-      payment: "step IN ('payment', 'apply_payment')",
+      order:    "step = 'sales_order'",
+      invoice:  "step = 'invoice'",
+      return:   "step = 'credit_memo'",
+      payment:  "step IN ('payment', 'apply_payment')",
     };
 
-    const { rows: pipelineRows } = await client.query(
+    const { rows } = await client.query(
       `
             SELECT id, step, status, qb_txn_id, qb_ref_number, error,
                    created_at, updated_at, confirmed_at, failed_at
             FROM qb_order_pipeline
             WHERE (order_id = $1 OR reference_id = $1)
-              AND ${stepFilter[type as PosDocType]}
+              AND ${stepFilter[type as keyof typeof stepFilter]}
             ORDER BY created_at DESC
             LIMIT 10
         `,
       [internalId]
     );
+    pipelineRows = rows;
+    }
 
     res.json({
       type,
@@ -564,13 +759,89 @@ export async function PUT(
       });
     }
 
+    // ── purchase_order (pipeline row) ─────────────────────────────────────
+    if (type === "purchase_order") {
+      const updates: string[] = ["updated_at = NOW()"];
+      const vals: unknown[] = [internalId];
+      let idx = 2;
+      if (qb_txn_id !== undefined)      { updates.push(`qb_list_id = $${idx++}`);    vals.push(qb_txn_id); }
+      if (qb_ref_number !== undefined)  { updates.push(`qb_txn_number = $${idx++}`); vals.push(qb_ref_number); }
+      if (qb_txn_id || qb_ref_number)  { updates.push(`status = 'synced'`, `synced_at = NOW()`); }
+
+      await client.query(
+        `UPDATE qb_purchase_order_pipeline SET ${updates.join(", ")}
+          WHERE purchase_order_id = $1 AND deleted_at IS NULL`,
+        vals
+      );
+      res.json({ success: true, updated: { type, id, qb_txn_id, qb_ref_number, note: AUDIT_NOTE } });
+      return;
+    }
+
+    // ── inventory_adjustment (pipeline row) ────────────────────────────────
+    if (type === "inventory_adjustment") {
+      const updates: string[] = ["updated_at = NOW()"];
+      const vals: unknown[] = [internalId];
+      let idx = 2;
+      if (qb_txn_id !== undefined)     { updates.push(`qb_list_id = $${idx++}`);    vals.push(qb_txn_id); }
+      if (qb_ref_number !== undefined) { updates.push(`qb_txn_number = $${idx++}`); vals.push(qb_ref_number); }
+      if (qb_txn_id || qb_ref_number) { updates.push(`status = 'synced'`, `synced_at = NOW()`); }
+
+      await client.query(
+        `UPDATE qb_inventory_adjustment_pipeline SET ${updates.join(", ")}
+          WHERE inventory_count_id = $1 AND deleted_at IS NULL`,
+        vals
+      );
+      res.json({ success: true, updated: { type, id, qb_txn_id, qb_ref_number, note: AUDIT_NOTE } });
+      return;
+    }
+
+    // ── item_receipt (purchase_order_receipt + pipeline row) ───────────────
+    if (type === "item_receipt") {
+      await client.query("BEGIN");
+      try {
+        if (qb_txn_id !== undefined || qb_ref_number !== undefined) {
+          const colUpdates: string[] = ["updated_at = NOW()"];
+          const vals: unknown[] = [internalId];
+          let idx = 2;
+          if (qb_txn_id !== undefined)     { colUpdates.push(`qb_item_receipt_list_id = $${idx++}`);    vals.push(qb_txn_id); }
+          if (qb_ref_number !== undefined) { colUpdates.push(`qb_item_receipt_txn_number = $${idx++}`); vals.push(qb_ref_number); }
+          if (qb_txn_id || qb_ref_number) { colUpdates.push(`qb_synced_at = NOW()`); }
+          await client.query(
+            `UPDATE purchase_order_receipt SET ${colUpdates.join(", ")} WHERE id = $1`,
+            vals
+          );
+
+          const pipeUpdates: string[] = ["updated_at = NOW()"];
+          const pVals: unknown[] = [internalId];
+          let pIdx = 2;
+          if (qb_txn_id !== undefined)     { pipeUpdates.push(`qb_list_id = $${pIdx++}`);    pVals.push(qb_txn_id); }
+          if (qb_ref_number !== undefined) { pipeUpdates.push(`qb_txn_number = $${pIdx++}`); pVals.push(qb_ref_number); }
+          if (qb_txn_id || qb_ref_number) { pipeUpdates.push(`status = 'synced'`, `synced_at = NOW()`); }
+          await client.query(
+            `UPDATE qb_item_receipt_pipeline SET ${pipeUpdates.join(", ")}
+              WHERE purchase_order_receipt_id = $1 AND deleted_at IS NULL`,
+            pVals
+          );
+        }
+        await client.query("COMMIT");
+      } catch (e) {
+        await client.query("ROLLBACK");
+        throw e;
+      }
+      res.json({ success: true, updated: { type, id, qb_txn_id, qb_ref_number, note: AUDIT_NOTE } });
+      return;
+    }
+
     // ── Update pipeline rows ──────────────────────────────────────────────
-    const stepFilter: Record<PosDocType, string> = {
+    const stepFilter: Record<
+      Exclude<PosDocType, "purchase_order" | "inventory_adjustment" | "item_receipt">,
+      string
+    > = {
       estimate: "step = 'estimate'",
-      order: "step = 'sales_order'",
-      invoice: "step = 'invoice'",
-      return: "step = 'credit_memo'",
-      payment: "step IN ('payment', 'apply_payment')",
+      order:    "step = 'sales_order'",
+      invoice:  "step = 'invoice'",
+      return:   "step = 'credit_memo'",
+      payment:  "step IN ('payment', 'apply_payment')",
     };
 
     const pipelineUpdates: string[] = [`error = $2`, `updated_at = NOW()`];
@@ -591,7 +862,7 @@ export async function PUT(
             UPDATE qb_order_pipeline
             SET ${pipelineUpdates.join(", ")}
             WHERE (order_id = $1 OR reference_id = $1)
-              AND ${stepFilter[type as PosDocType]}
+              AND ${stepFilter[type as keyof typeof stepFilter]}
               AND status NOT IN ('waiting')
         `,
       pipelineValues

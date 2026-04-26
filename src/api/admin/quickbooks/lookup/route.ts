@@ -13,7 +13,8 @@ type QbDocType =
   | "SalesReceipt"
   | "CreditMemo"
   | "Check"
-  | "ReceivePayment";
+  | "ReceivePayment"
+  | "PurchaseOrder";
 
 interface DocTypeConfig {
   queryElement: string;
@@ -56,6 +57,11 @@ const DOC_TYPE_CONFIG: Record<QbDocType, DocTypeConfig> = {
     queryElement: "ReceivePaymentQueryRq",
     retElement: "ReceivePaymentRet",
     rsElement: "ReceivePaymentQueryRs",
+  },
+  PurchaseOrder: {
+    queryElement: "PurchaseOrderQueryRq",
+    retElement: "PurchaseOrderRet",
+    rsElement: "PurchaseOrderQueryRs",
   },
 };
 
