@@ -3,8 +3,7 @@ import {
   Badge,
   Button,
   Container,
-  Input,
-  Select,
+  Heading,
   Table,
   Text,
   toast,
@@ -243,180 +242,187 @@ export const CustomerSyncPipelineSection = () => {
   };
 
   return (
-    <Container className="flex flex-col gap-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <Text className="text-ui-fg-subtle">
-          Writes the customer's <strong>acquisition_channel</strong> to the QB
-          custom field <em>Distribution Channel</em>. Rows are enqueued when a
-          customer is created/updated with a valid channel and a qb_list_id.
-        </Text>
-        <Button
-          size="small"
-          variant="secondary"
-          onClick={fetchRows}
-          disabled={loading}
-        >
-          <ArrowPath /> Refresh
-        </Button>
-      </div>
+    <Container>
+      <div className="p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <Heading level="h3" className="text-sm font-medium flex items-center gap-2">
+              👥 QB Customer Sync
+              {(counts.pending > 0 || counts.submitted > 0) && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-normal text-blue-600 animate-pulse">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block" />
+                  Live
+                </span>
+              )}
+            </Heading>
+            <Text className="text-xs text-ui-fg-subtle mt-0.5">
+              Writes acquisition_channel to QB custom field Distribution Channel — auto-refreshes every 10 s
+            </Text>
+          </div>
+          <Button size="small" variant="secondary" onClick={fetchRows} isLoading={loading}>
+            <ArrowPath className="mr-1" /> Refresh
+          </Button>
+        </div>
 
-      <div className="flex gap-2 text-xs">
-        <Badge color="orange">Pending {counts.pending}</Badge>
-        <Badge color="blue">Submitted {counts.submitted}</Badge>
-        <Badge color="green">Confirmed {counts.confirmed}</Badge>
-        <Badge color="red">Failed {counts.failed}</Badge>
-      </div>
-
-      <div className="flex gap-2 items-center flex-wrap">
-        <Select value={status} onValueChange={setStatus}>
-          <Select.Trigger className="w-40">
-            <Select.Value placeholder="Status" />
-          </Select.Trigger>
-          <Select.Content>
-            {STATUS_FILTERS.map((s) => (
-              <Select.Item key={s.value} value={s.value}>
-                {s.label}
-              </Select.Item>
-            ))}
-          </Select.Content>
-        </Select>
-        <Input
-          placeholder="Search customer / email / channel / QB ListID..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-80"
-        />
-        <Text className="text-ui-fg-subtle ml-auto text-xs">
-          {filtered.length} row{filtered.length === 1 ? "" : "s"}
-        </Text>
-      </div>
-
-      <Table>
-        <Table.Header>
-          <Table.Row>
-            <Table.HeaderCell>#</Table.HeaderCell>
-            <Table.HeaderCell>Customer</Table.HeaderCell>
-            <Table.HeaderCell>Type</Table.HeaderCell>
-            <Table.HeaderCell>Status</Table.HeaderCell>
-            <Table.HeaderCell>QB ListID</Table.HeaderCell>
-            <Table.HeaderCell>Retries</Table.HeaderCell>
-            <Table.HeaderCell>Created</Table.HeaderCell>
-            <Table.HeaderCell>Resolved</Table.HeaderCell>
-            <Table.HeaderCell>Actions</Table.HeaderCell>
-          </Table.Row>
-        </Table.Header>
-        <Table.Body>
-          {filtered.length === 0 ? (
-            <Table.Row>
-              <Table.Cell>
-                <Text className="text-ui-fg-subtle py-6 text-center">
-                  {loading ? "Loading..." : "No rows."}
-                </Text>
-              </Table.Cell>
-            </Table.Row>
-          ) : (
-            filtered.map((r) => {
-              const resolved = r.confirmed_at ?? r.failed_at ?? null;
-              const isNewCustomer = (() => {
-                if (!r.customer_created_at) return false;
-                const diff = Math.abs(
-                  new Date(r.created_at).getTime() -
-                    new Date(r.customer_created_at).getTime()
-                );
-                return diff < 5 * 60 * 1000;
-              })();
-              const isExpanded = expanded.has(r.id);
-              const toggleExpand = () =>
-                setExpanded((s) => {
-                  const n = new Set(s);
-                  n.has(r.id) ? n.delete(r.id) : n.add(r.id);
-                  return n;
-                });
-              return (
-                <Fragment key={r.id}>
-                  <Table.Row>
-                    <Table.Cell className="font-mono text-sm text-ui-fg-subtle">
-                      #{r.display_seq}
-                    </Table.Cell>
-                    <Table.Cell>
-                      <div className="flex flex-col">
-                        <span className="font-medium">{r.customer_name}</span>
-                        <span className="text-ui-fg-subtle text-xs">
-                          {r.customer_email}
-                        </span>
-                      </div>
-                    </Table.Cell>
-                    <Table.Cell>
-                      {isNewCustomer ? (
-                        <Badge
-                          size="2xsmall"
-                          color="green"
-                          className="whitespace-nowrap"
-                        >
-                          New Customer
-                        </Badge>
-                      ) : (
-                        <Badge
-                          size="2xsmall"
-                          color="blue"
-                          className="whitespace-nowrap"
-                        >
-                          Edit Customer
-                        </Badge>
-                      )}
-                    </Table.Cell>
-                    <Table.Cell>
-                      <StatusBadge status={r.status} />
-                    </Table.Cell>
-                    <Table.Cell className="font-mono text-xs">
-                      {r.qb_list_id ?? "—"}
-                    </Table.Cell>
-                    <Table.Cell>{r.retry_count}</Table.Cell>
-                    <Table.Cell className="text-xs">
-                      {new Date(r.created_at).toLocaleString()}
-                    </Table.Cell>
-                    <Table.Cell className="text-xs">
-                      {resolved ? new Date(resolved).toLocaleString() : "—"}
-                    </Table.Cell>
-                    <Table.Cell>
-                      <div className="flex items-center gap-1">
-                        {r.error ? (
-                          <button
-                            type="button"
-                            onClick={toggleExpand}
-                            className="text-[10px] text-ui-fg-error hover:underline whitespace-nowrap"
-                          >
-                            {isExpanded ? "▲ hide" : "▼ error"}
-                          </button>
-                        ) : null}
-                        {r.status === "failed" ? (
-                          <Button
-                            size="small"
-                            variant="secondary"
-                            onClick={() => retry(r.id)}
-                            disabled={retrying.has(r.id)}
-                          >
-                            <ArrowPath /> Retry
-                          </Button>
-                        ) : null}
-                      </div>
-                    </Table.Cell>
-                  </Table.Row>
-                  {isExpanded && r.error ? (
-                    <tr className="bg-ui-bg-subtle border-b border-ui-border-base">
-                      <td colSpan={9} className="px-4 py-2">
-                        <pre className="text-[11px] text-ui-fg-error whitespace-pre-wrap break-all font-mono">
-                          {r.error}
-                        </pre>
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
-              );
-            })
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          {counts.pending > 0 && <Badge color="orange" size="xsmall">Pending {counts.pending}</Badge>}
+          {counts.submitted > 0 && <Badge color="blue" size="xsmall">Submitted {counts.submitted}</Badge>}
+          {counts.confirmed > 0 && <Badge color="green" size="xsmall">Confirmed {counts.confirmed}</Badge>}
+          {counts.failed > 0 && <Badge color="red" size="xsmall">Failed {counts.failed}</Badge>}
+          {counts.pending === 0 && counts.submitted === 0 && counts.confirmed === 0 && counts.failed === 0 && (
+            <span className="text-xs text-ui-fg-muted">No operations recorded yet</span>
           )}
-        </Table.Body>
-      </Table>
+        </div>
+
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base"
+          >
+            {STATUS_FILTERS.map((s) => (
+              <option key={s.value} value={s.value}>{s.label}</option>
+            ))}
+          </select>
+          <input
+            type="text"
+            placeholder="Search customer / email / channel / QB ListID..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base w-72 placeholder:text-ui-fg-muted"
+          />
+          <span className="text-xs text-ui-fg-muted ml-auto">
+            {filtered.length} total operation{filtered.length !== 1 ? "s" : ""}
+          </span>
+        </div>
+
+        {loading && rows.length === 0 && (
+          <Text className="text-ui-fg-subtle py-6 text-center">Loading…</Text>
+        )}
+        {!loading && filtered.length === 0 && (
+          <Text className="text-ui-fg-subtle py-6 text-center">No rows match.</Text>
+        )}
+        {filtered.length > 0 && (
+          <div className="max-h-[calc(100vh-380px)] overflow-y-auto">
+            <Table>
+              <Table.Header>
+                <Table.Row>
+                  <Table.HeaderCell>#</Table.HeaderCell>
+                  <Table.HeaderCell>Customer</Table.HeaderCell>
+                  <Table.HeaderCell>Type</Table.HeaderCell>
+                  <Table.HeaderCell>Status</Table.HeaderCell>
+                  <Table.HeaderCell>QB ListID</Table.HeaderCell>
+                  <Table.HeaderCell>Retries</Table.HeaderCell>
+                  <Table.HeaderCell>Created</Table.HeaderCell>
+                  <Table.HeaderCell>Resolved</Table.HeaderCell>
+                  <Table.HeaderCell>Actions</Table.HeaderCell>
+                </Table.Row>
+              </Table.Header>
+              <Table.Body>
+                {filtered.map((r) => {
+                  const resolved = r.confirmed_at ?? r.failed_at ?? null;
+                  const isNewCustomer = (() => {
+                    if (!r.customer_created_at) return false;
+                    const diff = Math.abs(
+                      new Date(r.created_at).getTime() -
+                        new Date(r.customer_created_at).getTime()
+                    );
+                    return diff < 5 * 60 * 1000;
+                  })();
+                  const isExpanded = expanded.has(r.id);
+                  const toggleExpand = () =>
+                    setExpanded((s) => {
+                      const n = new Set(s);
+                      n.has(r.id) ? n.delete(r.id) : n.add(r.id);
+                      return n;
+                    });
+                  return (
+                    <Fragment key={r.id}>
+                      <Table.Row>
+                        <Table.Cell className="font-mono text-sm text-ui-fg-subtle">
+                          #{r.display_seq}
+                        </Table.Cell>
+                        <Table.Cell>
+                          <div className="flex flex-col">
+                            <span className="font-medium">{r.customer_name}</span>
+                            <span className="text-ui-fg-subtle text-xs">
+                              {r.customer_email}
+                            </span>
+                          </div>
+                        </Table.Cell>
+                        <Table.Cell>
+                          {isNewCustomer ? (
+                            <Badge
+                              size="2xsmall"
+                              color="green"
+                              className="whitespace-nowrap"
+                            >
+                              New Customer
+                            </Badge>
+                          ) : (
+                            <Badge
+                              size="2xsmall"
+                              color="blue"
+                              className="whitespace-nowrap"
+                            >
+                              Edit Customer
+                            </Badge>
+                          )}
+                        </Table.Cell>
+                        <Table.Cell>
+                          <StatusBadge status={r.status} />
+                        </Table.Cell>
+                        <Table.Cell className="font-mono text-xs">
+                          {r.qb_list_id ?? "—"}
+                        </Table.Cell>
+                        <Table.Cell>{r.retry_count}</Table.Cell>
+                        <Table.Cell className="text-xs">
+                          {new Date(r.created_at).toLocaleString()}
+                        </Table.Cell>
+                        <Table.Cell className="text-xs">
+                          {resolved ? new Date(resolved).toLocaleString() : "—"}
+                        </Table.Cell>
+                        <Table.Cell>
+                          <div className="flex items-center gap-1">
+                            {r.error ? (
+                              <button
+                                type="button"
+                                onClick={toggleExpand}
+                                className="text-[10px] text-ui-fg-error hover:underline whitespace-nowrap"
+                              >
+                                {isExpanded ? "▲ hide" : "▼ error"}
+                              </button>
+                            ) : null}
+                            {r.status === "failed" ? (
+                              <Button
+                                size="small"
+                                variant="secondary"
+                                onClick={() => retry(r.id)}
+                                disabled={retrying.has(r.id)}
+                              >
+                                <ArrowPath /> Retry
+                              </Button>
+                            ) : null}
+                          </div>
+                        </Table.Cell>
+                      </Table.Row>
+                      {isExpanded && r.error ? (
+                        <tr className="bg-ui-bg-subtle border-b border-ui-border-base">
+                          <td colSpan={9} className="px-4 py-2">
+                            <pre className="text-[11px] text-ui-fg-error whitespace-pre-wrap break-all font-mono">
+                              {r.error}
+                            </pre>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
+              </Table.Body>
+            </Table>
+          </div>
+        )}
+      </div>
     </Container>
   );
 };

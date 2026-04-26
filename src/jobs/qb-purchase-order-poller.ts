@@ -138,12 +138,13 @@ const extractPoRet = (data: BridgeStatus): any => {
     (op.result as any)?.QBXML?.QBXMLMsgsRs ??
     (op.result as any)?.QBXMLMsgsRs ??
     {};
-  return (
+  const ret =
     msgs?.PurchaseOrderAddRs?.PurchaseOrderRet ??
     msgs?.PurchaseOrderModRs?.PurchaseOrderRet ??
     msgs?.PurchaseOrderQueryRs?.PurchaseOrderRet ??
-    null
-  );
+    null;
+  // QB query responses may return an array when multiple POs match
+  return Array.isArray(ret) ? (ret[0] ?? null) : ret;
 };
 
 const extractTxnId = (data: BridgeStatus): string | null => {
@@ -290,9 +291,9 @@ export default async function qbPurchaseOrderPoller(
         const errMsg = data.operation?.error ?? "Bridge returned failed";
         const pl = row.payload as Record<string, unknown>;
 
-        // Stale/missing EditSequence (QB status 3100 or message text) → re-query QB, then retry mod
+        // Stale/missing EditSequence (QB status 3100 or message text) → re-query QB, then retry mod/void
         const isEditSeqErr = /editsequence|edit.?sequence|3100/i.test(errMsg);
-        if (pl.is_mod && isEditSeqErr) {
+        if ((pl.is_mod || pl.is_void) && isEditSeqErr) {
           const freshPl = { ...pl, is_query: true, edit_sequence: undefined };
           await knex.raw(
             `UPDATE qb_purchase_order_pipeline
@@ -378,8 +379,8 @@ export default async function qbPurchaseOrderPoller(
         }
       }
 
-      // Query-before-mod: reset this row to a pending mod with the fresh EditSequence
-      if (pl.is_query && pl.is_mod) {
+      // Query-before-mod/void: reset this row to a pending mod or void with the fresh EditSequence
+      if (pl.is_query && (pl.is_mod || pl.is_void)) {
         if (!editSequence) {
           logger.warn(
             `${TAG} row ${row.id}: query completed but no EditSequence in response — marking error`
@@ -409,7 +410,7 @@ export default async function qbPurchaseOrderPoller(
             [JSON.stringify(modPl), row.id]
           );
           logger.info(
-            `${TAG} row ${row.id}: got EditSequence ${editSequence} from QB, reset to mod`
+            `${TAG} row ${row.id}: got EditSequence ${editSequence} from QB, reset to ${pl.is_void ? "void" : "mod"}`
           );
           submitted++; // count as progress
         }

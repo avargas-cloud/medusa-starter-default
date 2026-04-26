@@ -3,8 +3,7 @@ import {
   Badge,
   Button,
   Container,
-  Input,
-  Select,
+  Heading,
   Table,
   Text,
   toast,
@@ -147,52 +146,67 @@ export const VendorPipelineSection = () => {
     iso ? new Date(iso).toLocaleString() : "—";
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex gap-3">
-        <Badge color="orange" size="small">
-          Waiting: {counts.waiting}
-        </Badge>
-        <Badge color="green" size="small">
-          Synced: {counts.synced}
-        </Badge>
-        <Badge color="red" size="small">
-          Error: {counts.error}
-        </Badge>
-      </div>
+    <Container>
+      <div className="p-4">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <Heading level="h3" className="text-sm font-medium flex items-center gap-2">
+              🏢 QB Vendor Pipeline
+              {counts.waiting > 0 && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-normal text-blue-600 animate-pulse">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block" />
+                  Live
+                </span>
+              )}
+            </Heading>
+            <Text className="text-xs text-ui-fg-subtle mt-0.5">
+              Real-time queue of QuickBooks vendor sync operations — auto-refreshes every 15 s
+            </Text>
+          </div>
+          <Button variant="secondary" size="small" onClick={fetchRows} isLoading={loading}>
+            <ArrowPath className="mr-1" /> Refresh
+          </Button>
+        </div>
 
-      <Container className="p-0">
-        <div className="flex items-center gap-3 px-6 py-3 border-b border-ui-border-base">
-          <Select value={status} onValueChange={setStatus}>
-            <Select.Trigger className="max-w-xs">
-              <Select.Value />
-            </Select.Trigger>
-            <Select.Content>
-              {STATUS_FILTERS.map((f) => (
-                <Select.Item key={f.value} value={f.value}>
-                  {f.label}
-                </Select.Item>
-              ))}
-            </Select.Content>
-          </Select>
-          <Input
+        {/* Summary badges */}
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          {counts.waiting > 0 && <Badge color="orange" size="xsmall">Waiting {counts.waiting}</Badge>}
+          {counts.synced > 0 && <Badge color="green" size="xsmall">Synced {counts.synced}</Badge>}
+          {counts.error > 0 && <Badge color="red" size="xsmall">Error {counts.error}</Badge>}
+          {counts.waiting === 0 && counts.error === 0 && counts.synced === 0 && (
+            <span className="text-xs text-ui-fg-muted">No operations recorded yet</span>
+          )}
+        </div>
+
+        {/* Filters */}
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base"
+          >
+            {STATUS_FILTERS.map((f) => (
+              <option key={f.value} value={f.value}>{f.label}</option>
+            ))}
+          </select>
+          <input
+            type="text"
             placeholder="Search vendor / ListID / error…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="max-w-md"
+            className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base w-52 placeholder:text-ui-fg-muted"
           />
-          <Button variant="secondary" onClick={fetchRows} isLoading={loading}>
-            <ArrowPath /> Refresh
-          </Button>
-          <Text className="text-ui-fg-subtle text-sm ml-auto">
-            {filtered.length} rows
-          </Text>
+          <span className="text-xs text-ui-fg-muted ml-auto">
+            {filtered.length} total operation{filtered.length !== 1 ? "s" : ""}
+          </span>
         </div>
 
         {loading && rows.length === 0 && (
-          <Text className="text-ui-fg-subtle py-6 px-6">Loading…</Text>
+          <Text className="text-ui-fg-subtle py-6 text-center">Loading…</Text>
         )}
         {!loading && filtered.length === 0 && (
-          <Text className="text-ui-fg-subtle py-6 px-6">No rows match.</Text>
+          <Text className="text-ui-fg-subtle py-6 text-center">No rows match.</Text>
         )}
         {filtered.length > 0 && (
           <div className="max-h-[calc(100vh-380px)] overflow-y-auto">
@@ -277,7 +291,7 @@ export const VendorPipelineSection = () => {
             </Table>
           </div>
         )}
-      </Container>
-    </div>
+      </div>
+    </Container>
   );
 };

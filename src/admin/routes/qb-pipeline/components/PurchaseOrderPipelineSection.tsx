@@ -70,7 +70,6 @@ function StatusBadge({ status }: { status: PoStatus }) {
   );
 }
 
-// < 24 h → time only; ≥ 24 h → "Mar 28 / 10:32 AM"
 function formatDate(iso: string | null): ReactNode {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -117,12 +116,8 @@ function PipelinePoRow({
 }) {
   const [expanded, setExpanded] = useState(false);
   const step = (row.step ?? "purchase_order") as PoStep;
-  const icon = STEP_ICON[step] ?? "📎";
-  const label = STEP_LABEL[step] ?? step;
-  const poRef = row.po_number ?? row.draft_number ?? "—";
 
-  const updatedAt =
-    row.status === "synced" ? row.synced_at : (row.updated_at ?? null);
+  const updatedAt = row.status === "synced" ? row.synced_at : (row.updated_at ?? null);
 
   return (
     <>
@@ -145,15 +140,15 @@ function PipelinePoRow({
         {/* Step */}
         <td className="px-3 py-2 whitespace-nowrap">
           <span className="flex items-center gap-1.5">
-            <span>{icon}</span>
-            <span className="font-medium text-ui-fg-base">{label}</span>
+            <span>{STEP_ICON[step] ?? "📎"}</span>
+            <span className="font-medium text-ui-fg-base">{STEP_LABEL[step] ?? step}</span>
           </span>
         </td>
 
         {/* PO # */}
         <td className="px-3 py-2 whitespace-nowrap">
           <span className="font-mono font-semibold text-ui-fg-base">
-            {poRef}
+            {row.po_number ?? row.draft_number ?? "—"}
           </span>
         </td>
 
@@ -164,7 +159,7 @@ function PipelinePoRow({
               {row.qb_txn_number}
             </span>
           ) : row.status === "synced" ? (
-            <span className="text-ui-fg-muted text-[10px]">—</span>
+            <span className="text-ui-fg-muted">—</span>
           ) : (
             <span className="text-ui-fg-muted text-[10px]">pending…</span>
           )}
@@ -180,7 +175,7 @@ function PipelinePoRow({
           <StatusBadge status={row.status} />
         </td>
 
-        {/* QB ListID */}
+        {/* QB ListID / Op */}
         <td className="px-3 py-2 font-mono text-[11px] text-ui-fg-subtle">
           {row.qb_list_id ? (
             <span className="text-green-700 font-semibold">{row.qb_list_id}</span>
@@ -239,7 +234,7 @@ function PipelinePoRow({
                 disabled={retrying}
                 className="ml-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-ui-button-neutral hover:bg-ui-button-neutral-hover text-ui-fg-base border border-ui-border-base disabled:opacity-50"
               >
-                {retrying ? "…" : "↺ Retry"}
+                {retrying ? "…" : "Retry"}
               </button>
             )}
             {(row.status === "error" || row.status === "failed_permanent") && (
@@ -289,7 +284,7 @@ export const PurchaseOrderPipelineSection = () => {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState("all");
-  const [search, setSearch] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [markingFixedId, setMarkingFixedId] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -300,7 +295,7 @@ export const PurchaseOrderPipelineSection = () => {
       try {
         const params = new URLSearchParams();
         if (statusFilter !== "all") params.set("status", statusFilter);
-        if (search.trim()) params.set("search", search.trim());
+        if (searchQuery.trim()) params.set("search", searchQuery.trim());
         const res = await fetch(
           `/admin/purchase-orders/qb-pipeline?${params}`,
           { credentials: "include" }
@@ -309,12 +304,7 @@ export const PurchaseOrderPipelineSection = () => {
         const data = await res.json();
         const allRows: PoRow[] = data.rows ?? [];
         setRows(allRows);
-        const c: Counts = {
-          waiting: 0,
-          error: 0,
-          synced: 0,
-          failed_permanent: 0,
-        };
+        const c: Counts = { waiting: 0, error: 0, synced: 0, failed_permanent: 0 };
         for (const r of allRows) {
           if (r.status in c) c[r.status as keyof Counts]++;
         }
@@ -326,18 +316,16 @@ export const PurchaseOrderPipelineSection = () => {
         if (!silent) setLoading(false);
       }
     },
-    [statusFilter, search]
+    [statusFilter, searchQuery]
   );
 
   useEffect(() => {
     fetchRows();
   }, [fetchRows]);
 
-  // Auto-refresh while waiting rows exist
   useEffect(() => {
-    const hasPending = counts.waiting > 0;
     if (intervalRef.current) clearInterval(intervalRef.current);
-    if (hasPending) {
+    if (counts.waiting > 0) {
       intervalRef.current = setInterval(() => fetchRows(true), 10_000);
     }
     return () => {
@@ -353,9 +341,7 @@ export const PurchaseOrderPipelineSection = () => {
         { method: "POST", credentials: "include" }
       );
       const data = await res.json();
-      if (!res.ok || !data.success)
-        throw new Error(data.error ?? "Retry failed");
-      await fetchRows(true);
+      if (res.ok && data.success) await fetchRows(true);
     } catch {
       /* non-blocking */
     } finally {
@@ -381,79 +367,99 @@ export const PurchaseOrderPipelineSection = () => {
   const hasPending = counts.waiting > 0;
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Status badges */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {counts.waiting > 0 && (
-          <Badge color="orange" size="small">Waiting: {counts.waiting}</Badge>
-        )}
-        {counts.error > 0 && (
-          <Badge color="red" size="small">Error: {counts.error}</Badge>
-        )}
-        {counts.synced > 0 && (
-          <Badge color="green" size="small">Synced: {counts.synced}</Badge>
-        )}
-        {counts.failed_permanent > 0 && (
-          <Badge color="red" size="small">Failed: {counts.failed_permanent}</Badge>
-        )}
-      </div>
-
-      <Container className="p-0">
-        {/* Toolbar */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-ui-border-base">
-          <Heading level="h3" className="text-sm font-medium flex items-center gap-2">
-            🏭 QB Purchase Pipeline
-            {hasPending && (
-              <span className="inline-flex items-center gap-1 text-[10px] font-normal text-blue-600 animate-pulse">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block" />
-                Live
-              </span>
-            )}
-          </Heading>
-          <div className="flex items-center gap-2 ml-auto">
-            <input
-              type="text"
-              placeholder="Search PO / vendor / QB ref / error…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base w-52 placeholder:text-ui-fg-muted"
-            />
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base"
+    <Container>
+      <div className="p-4">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <Heading
+              level="h3"
+              className="text-sm font-medium flex items-center gap-2"
             >
-              <option value="all">All Statuses</option>
-              <option value="waiting">Waiting</option>
-              <option value="error">Error</option>
-              <option value="synced">Synced</option>
-              <option value="failed_permanent">Failed</option>
-            </select>
-            <Button
-              variant="secondary"
-              size="small"
-              onClick={() => fetchRows()}
-              isLoading={loading}
-            >
-              <ArrowPath className="mr-1" />
-              Refresh
-            </Button>
-            <Text className="text-ui-fg-subtle text-xs ml-1">
-              {total} row{total !== 1 ? "s" : ""}
+              🏭 QB Purchase Pipeline
+              {hasPending && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-normal text-blue-600 animate-pulse">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block" />
+                  Live
+                </span>
+              )}
+            </Heading>
+            <Text className="text-xs text-ui-fg-subtle mt-0.5">
+              Real-time queue of QuickBooks purchase order operations — auto-refreshes
+              while active
             </Text>
           </div>
+          <Button
+            variant="secondary"
+            size="small"
+            onClick={() => fetchRows()}
+            isLoading={loading}
+          >
+            <ArrowPath className="mr-1" />
+            Refresh
+          </Button>
+        </div>
+
+        {/* Summary badges */}
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          {(
+            [
+              { key: "waiting", label: "Waiting", color: "orange" },
+              { key: "error", label: "Error", color: "red" },
+              { key: "synced", label: "Synced", color: "green" },
+              { key: "failed_permanent", label: "Failed", color: "red" },
+            ] as { key: keyof Counts; label: string; color: BadgeColor }[]
+          ).map(({ key, label, color }) => {
+            const count = counts[key] ?? 0;
+            if (count === 0) return null;
+            return (
+              <Badge key={key} color={color} size="xsmall">
+                {label} {count}
+              </Badge>
+            );
+          })}
+          {Object.values(counts).every((v) => v === 0) && (
+            <span className="text-xs text-ui-fg-muted">No operations recorded yet</span>
+          )}
+        </div>
+
+        {/* Filters */}
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <input
+            type="text"
+            placeholder="Search PO / vendor / QB ref / error…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base w-52 placeholder:text-ui-fg-muted"
+          />
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base"
+          >
+            <option value="all">All Statuses</option>
+            <option value="waiting">Waiting</option>
+            <option value="error">Error</option>
+            <option value="synced">Synced</option>
+            <option value="failed_permanent">Failed</option>
+          </select>
+          <span className="text-xs text-ui-fg-muted ml-auto">
+            {total} total operation{total !== 1 ? "s" : ""}
+          </span>
         </div>
 
         {/* Table */}
         {rows.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
-            <Text className="text-sm text-ui-fg-subtle">No PO pipeline operations found.</Text>
+            <Text className="text-sm text-ui-fg-subtle">
+              No PO pipeline operations found.
+            </Text>
             <Text className="text-xs text-ui-fg-muted mt-1">
               Operations appear here when purchase orders sync to QuickBooks.
             </Text>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded">
+          <div className="overflow-x-auto rounded border border-ui-border-base">
             <table className="w-full text-xs">
               <thead className="bg-ui-bg-subtle border-b border-ui-border-base">
                 <tr>
@@ -485,7 +491,7 @@ export const PurchaseOrderPipelineSection = () => {
             </table>
           </div>
         )}
-      </Container>
-    </div>
+      </div>
+    </Container>
   );
 };
