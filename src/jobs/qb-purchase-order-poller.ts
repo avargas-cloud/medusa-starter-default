@@ -237,6 +237,28 @@ export default async function qbPurchaseOrderPoller(
       } else if (pl.is_mod) {
         operationId = await submitModToBridge(pl);
       } else {
+        // Guard: if the PO already has a QB TxnID in our DB, a previous attempt
+        // succeeded but the pipeline row was never marked synced. Mark it now
+        // instead of creating a duplicate PO in QB.
+        const existing = await knex
+          .raw(
+            `SELECT qb_purchase_order_list_id FROM purchase_order WHERE id = ? LIMIT 1`,
+            [row.purchase_order_id]
+          )
+          .then((r: any) => r.rows[0]);
+        if (existing?.qb_purchase_order_list_id) {
+          await knex.raw(
+            `UPDATE qb_purchase_order_pipeline
+                SET status = 'synced', qb_list_id = ?, synced_at = NOW(), updated_at = NOW()
+              WHERE id = ?`,
+            [existing.qb_purchase_order_list_id, row.id]
+          );
+          resolved++;
+          logger.info(
+            `${TAG} row ${row.id}: PO already in QB (${existing.qb_purchase_order_list_id}), marked synced without re-create`
+          );
+          continue;
+        }
         operationId = await submitToBridge(pl);
       }
 
@@ -487,6 +509,28 @@ export default async function qbPurchaseOrderPoller(
       } else if (pl.is_mod) {
         operationId = await submitModToBridge(pl);
       } else {
+        // Guard: skip re-create if PO already landed in QB on a previous attempt.
+        // Same pattern as the sales pipeline (MOD-first / check txn_id before create).
+        const existing = await knex
+          .raw(
+            `SELECT qb_purchase_order_list_id FROM purchase_order WHERE id = ? LIMIT 1`,
+            [row.purchase_order_id]
+          )
+          .then((r: any) => r.rows[0]);
+        if (existing?.qb_purchase_order_list_id) {
+          await knex.raw(
+            `UPDATE qb_purchase_order_pipeline
+                SET status = 'synced', qb_list_id = ?, last_error = NULL,
+                    next_retry_at = NULL, synced_at = NOW(), updated_at = NOW()
+              WHERE id = ?`,
+            [existing.qb_purchase_order_list_id, row.id]
+          );
+          resolved++;
+          logger.info(
+            `${TAG} row ${row.id}: PO already in QB on retry (${existing.qb_purchase_order_list_id}), skipped re-create`
+          );
+          continue;
+        }
         operationId = await submitToBridge(pl);
       }
       await knex.raw(

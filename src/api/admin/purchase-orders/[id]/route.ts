@@ -173,6 +173,10 @@ export async function GET(
     (po as unknown as { submitted_by_user_id?: string | null })
       .submitted_by_user_id
   );
+  const voider = await resolveUserBrief(
+    req,
+    (po as unknown as { voided_by_user_id?: string | null }).voided_by_user_id
+  );
 
   // Line thumbnails — batched variant lookup
   const variantIds = Array.from(
@@ -240,6 +244,7 @@ export async function GET(
       vendor,
       creator,
       submitter,
+      voider,
     },
   });
 }
