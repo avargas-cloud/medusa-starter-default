@@ -94,11 +94,14 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
          GROUP BY pol.sku_snapshot`
       ),
       db.query<{ variant_id: string; production_days: string }>(
-        `SELECT lnk.product_variant_id AS variant_id,
+        `SELECT pv.id AS variant_id,
                 COALESCE((qv.metadata->>'production_days')::int, 10) AS production_days
-         FROM quickbooks_catalog_qb_vendor_product_product_variant lnk
-         JOIN qb_vendor qv ON qv.id = lnk.qb_vendor_id
-         WHERE lnk.deleted_at IS NULL`
+         FROM product_variant pv
+         JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
+         JOIN qb_vendor qv ON qv.qb_list_id = (p.metadata->>'qb_vendor_list_id')
+           AND qv.deleted_at IS NULL
+         WHERE pv.deleted_at IS NULL
+           AND p.metadata->>'qb_vendor_list_id' IS NOT NULL`
       ),
     ]);
 
@@ -486,11 +489,15 @@ export async function recalculateForVariants(
           [allIds, USA_LOC, CHINA_LOC]
         ),
         db.query<{ variant_id: string; production_days: string }>(
-          `SELECT lnk.product_variant_id AS variant_id,
+          `SELECT pv.id AS variant_id,
                 COALESCE((qv.metadata->>'production_days')::int, 10) AS production_days
-         FROM quickbooks_catalog_qb_vendor_product_product_variant lnk
-         JOIN qb_vendor qv ON qv.id = lnk.qb_vendor_id
-         WHERE lnk.product_variant_id = ANY($1::text[]) AND lnk.deleted_at IS NULL`,
+         FROM product_variant pv
+         JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
+         JOIN qb_vendor qv ON qv.qb_list_id = (p.metadata->>'qb_vendor_list_id')
+           AND qv.deleted_at IS NULL
+         WHERE pv.deleted_at IS NULL
+           AND p.metadata->>'qb_vendor_list_id' IS NOT NULL
+           AND pv.id = ANY($1::text[])`,
           [allIds]
         ),
         db.query<{ variant_id: string; abc_class: string | null }>(
