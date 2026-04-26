@@ -403,18 +403,38 @@ export default async function qbPurchaseOrderPoller(
 
       // Query-before-mod/void: reset this row to a pending mod or void with the fresh EditSequence
       if (pl.is_query && (pl.is_mod || pl.is_void)) {
-        if (!editSequence) {
-          logger.warn(
-            `${TAG} row ${row.id}: query completed but no EditSequence in response — marking error`
+        const poRet = extractPoRet(data);
+        const isManuallyClosed = poRet?.IsManuallyClosed === 'true';
+
+        // PO already closed in QB — void is a no-op, mark synced instead of error
+        if (pl.is_void && isManuallyClosed) {
+          await knex.raw(
+            `UPDATE qb_purchase_order_pipeline
+                SET status = 'synced', last_error = NULL, next_retry_at = NULL,
+                    synced_at = NOW(), updated_at = NOW()
+              WHERE id = ?`,
+            [row.id]
           );
+          resolved++;
+          logger.info(
+            `${TAG} row ${row.id}: PO already closed in QB (IsManuallyClosed) — void is a no-op, marked synced`
+          );
+          continue;
+        }
+
+        if (!editSequence) {
+          const reason = !poRet
+            ? `PO not found in QB (TxnID: ${String(pl.txn_id ?? 'unknown')}) — may have been deleted`
+            : `QB returned PO but no EditSequence — cannot ${pl.is_void ? 'void' : 'mod'}`;
+          logger.warn(`${TAG} row ${row.id}: ${reason}`);
           await knex.raw(
             `UPDATE qb_purchase_order_pipeline
                 SET status = 'error',
-                    last_error = 'QB query returned no EditSequence',
+                    last_error = ?,
                     next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
                     updated_at = NOW()
               WHERE id = ?`,
-            [row.id]
+            [reason, row.id]
           );
           toError++;
         } else {
