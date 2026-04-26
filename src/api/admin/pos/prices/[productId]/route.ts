@@ -6,6 +6,7 @@ const WHOLESALE_PRICE_LIST_ID = "plist_01KFTSDZZNTQRSYNMB4YST1HYA";
 interface PriceUpdateBody {
   retail_price: number;
   wholesale_price: number;
+  variant_id?: string;
 }
 
 /** Update amount + raw_amount (Medusa v2 stores both) via Knex */
@@ -27,7 +28,7 @@ async function updatePriceById(
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   const logger = req.scope.resolve("logger");
   const productId = req.params.productId;
-  const { retail_price, wholesale_price } = req.body as PriceUpdateBody;
+  const { retail_price, wholesale_price, variant_id: bodyVariantId } = req.body as PriceUpdateBody;
 
   if (typeof retail_price !== "number" || typeof wholesale_price !== "number") {
     return res
@@ -48,11 +49,16 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   const query = req.scope.resolve(ContainerRegistrationKeys.QUERY);
 
   try {
-    // 1. Get variant + price_set via Medusa graph
+    // 1. Get variant + price_set via Medusa graph.
+    // Prefer the explicit variant_id from the body; fall back to first variant for backward compat.
+    const variantFilters = bodyVariantId
+      ? { id: bodyVariantId }
+      : { product_id: productId };
+
     const { data: variants } = await query.graph({
       entity: "product_variant",
       fields: ["id", "price_set.id"],
-      filters: { product_id: productId },
+      filters: variantFilters,
     });
 
     if (!variants || variants.length === 0) {
@@ -63,10 +69,15 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
     const variant = variants[0] as {
       id: string;
-      price_set: { id: string } | null;
+      price_set: { id: string } | { id: string }[] | null;
     };
     const variant_id = variant.id;
-    const price_set_id = variant.price_set?.id;
+    // The graph may return an array when multiple price_sets are linked (data corruption).
+    // Normalize to a single id, preferring the first non-empty one.
+    const rawPriceSet = variant.price_set;
+    const price_set_id = Array.isArray(rawPriceSet)
+      ? rawPriceSet[0]?.id
+      : rawPriceSet?.id;
 
     if (!price_set_id) {
       return res

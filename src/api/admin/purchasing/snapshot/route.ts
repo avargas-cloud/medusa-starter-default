@@ -18,6 +18,7 @@ import type {
 } from "@medusajs/framework/http";
 
 import { withDb } from "../_lib/db";
+import { runPurchasingSnapshot } from "../../../../services/purchasing/snapshot.service";
 import { getExcelPeak } from "../_lib/peak-sales";
 
 const USA_LOC =
@@ -108,6 +109,7 @@ export async function GET(
          snap.tier0_30d,
          snap.sales_q1, snap.sales_q2, snap.sales_q3, snap.sales_q4,
          snap.sales_last_24d,
+         snap.unmet_net_30d,
          snap.daily_sales_est, snap.monthly_sales_est,
          snap.cv,
          snap.abc_class, snap.xyz_class, snap.abcxyz_class,
@@ -192,4 +194,22 @@ export async function GET(
       offset,
     });
   });
+}
+
+
+export async function POST(
+  _req: AuthenticatedMedusaRequest,
+  res: MedusaResponse
+) {
+  try {
+    const result = await runPurchasingSnapshot();
+    // Always bump last_calculated_at so the UI reflects the button click time,
+    // even when the smart-skip logic processed 0 rows.
+    await withDb(async (db) => {
+      await db.query(`UPDATE purchasing_snapshot SET last_calculated_at = NOW()`);
+    });
+    return res.json({ ok: true, processed: result.processed, errors: result.errors, durationMs: result.durationMs });
+  } catch (e: unknown) {
+    return res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 }

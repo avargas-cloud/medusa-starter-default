@@ -14,6 +14,7 @@
 export interface MeiliInventoryDoc {
   id: string;
   sku: string;
+  sku_plain: string;
   title: string;
   thumbnail: string | null;
   totalStock: number | null;
@@ -92,6 +93,7 @@ export function buildInventoryDocsForVariants(
       docs.push({
         id: variant.id,
         sku: variant.sku,
+        sku_plain: (variant.sku as string).replace(/-/g, ""),
         title: product?.title || "Untitled",
         thumbnail: resolvedThumbnail,
         totalStock: null,
@@ -126,6 +128,7 @@ export function buildInventoryDocsForVariants(
       docs.push({
         id: inventory.id,
         sku: inventory.sku || variant.sku || "",
+        sku_plain: (inventory.sku || variant.sku || "").replace(/-/g, ""),
         title: inventory.title || product?.title || "Untitled",
         thumbnail: resolvedThumbnail,
         totalStock: inventory.stocked_quantity || 0,

@@ -30,6 +30,7 @@ export interface DailySalesResult {
   daily_sales_est: number;
   monthly_sales_est: number;
   cv: number;
+  unmet_net_30d: number; // requested − purchased (net unsatisfied demand in tier0 window)
 }
 
 /** Bulk context — loaded ONCE per snapshot run, shared across all variants. */
@@ -46,6 +47,10 @@ export interface SalesEngineContext {
   l4wByVariant: Map<string, number>;
   /** variant_id → sorted monthly history rows. */
   histByVariant: Map<string, { date: string; qty: number }[]>;
+  /** variant_id → units customers requested but couldn't get in tier0 window. */
+  unmetRequestedByVariant: Map<string, number>;
+  /** variant_id → units sold as forced alternatives in tier0 window. */
+  unmetPurchasedByVariant: Map<string, number>;
 }
 
 /** Call once per run — loads all bulk data needed by every variant. */
@@ -132,6 +137,30 @@ export async function buildSalesEngineContext(
     l4wRes.rows.map((r) => [r.variant_id, parseFloat(r.total)])
   );
 
+  // ── 2c. Unmet demand (requested & purchased forced alternatives) ──────────
+  const unmetRes = await db.query<{
+    variant_id: string;
+    kind: string;
+    total: string;
+  }>(
+    `SELECT udi.variant_id, udi.kind, SUM(udi.quantity)::text AS total
+     FROM unmet_demand_item udi
+     JOIN unmet_demand_record udr ON udr.id = udi.record_id
+     WHERE udi.variant_id IS NOT NULL
+       AND udr.created_at >= $1::date
+     GROUP BY udi.variant_id, udi.kind`,
+    [tier0WindowStart]
+  );
+  const unmetRequestedByVariant = new Map<string, number>();
+  const unmetPurchasedByVariant = new Map<string, number>();
+  for (const row of unmetRes.rows) {
+    if (row.kind === "requested") {
+      unmetRequestedByVariant.set(row.variant_id, parseFloat(row.total));
+    } else {
+      unmetPurchasedByVariant.set(row.variant_id, parseFloat(row.total));
+    }
+  }
+
   // ── 3. Monthly history for ALL variants in one query ─────────────────────
   // DISTINCT ON per (variant_id, month_date) preferring medusa_orders over excel.
   const hRes = await db.query<{
@@ -170,6 +199,8 @@ export async function buildSalesEngineContext(
     tier0ByVariant,
     l4wByVariant,
     histByVariant,
+    unmetRequestedByVariant,
+    unmetPurchasedByVariant,
   };
 }
 
@@ -184,10 +215,20 @@ export function calculateDailySales(
   const biz = cfg.business_days_per_month;
 
   // ── Tier0 ────────────────────────────────────────────────────────────────
-  const tier0Raw = allIds.reduce(
+  const tier0Invoiced = allIds.reduce(
     (s, id) => s + (ctx.tier0ByVariant.get(id) ?? 0),
     0
   );
+  const unmetRequested = allIds.reduce(
+    (s, id) => s + (ctx.unmetRequestedByVariant.get(id) ?? 0),
+    0
+  );
+  const unmetPurchased = allIds.reduce(
+    (s, id) => s + (ctx.unmetPurchasedByVariant.get(id) ?? 0),
+    0
+  );
+  // True demand = invoiced sales + what customers wanted but couldn't get − forced alternative sales
+  const tier0Raw = Math.max(0, tier0Invoiced + unmetRequested - unmetPurchased);
   const tier0Daily = tier0Raw / ctx.tier0BizDays;
   const tier0_30d = tier0Daily * biz; // normalized monthly rate
 
@@ -261,5 +302,6 @@ export function calculateDailySales(
     daily_sales_est: Math.round(daily_sales_est * 10000) / 10000,
     monthly_sales_est: Math.round(monthly_sales_est * 100) / 100,
     cv: Math.round(cv * 10000) / 10000,
+    unmet_net_30d: Math.round((unmetRequested - unmetPurchased) * 100) / 100,
   };
 }

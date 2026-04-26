@@ -17,6 +17,7 @@ export interface PurchasingAnalysisSettings {
   inv_days_a: number;
   inv_days_other: number;
   china_to_usa_days: number;
+  china_to_usa_channels_days: number;
 }
 
 const DEFAULTS: PurchasingAnalysisSettings = {
@@ -24,6 +25,7 @@ const DEFAULTS: PurchasingAnalysisSettings = {
   inv_days_a: 30,
   inv_days_other: 15,
   china_to_usa_days: 27,
+  china_to_usa_channels_days: 15,
 };
 
 async function loadSettings(): Promise<PurchasingAnalysisSettings> {
@@ -70,6 +72,10 @@ export async function PUT(
       typeof body.china_to_usa_days === "number"
         ? body.china_to_usa_days
         : current.china_to_usa_days,
+    china_to_usa_channels_days:
+      typeof body.china_to_usa_channels_days === "number"
+        ? body.china_to_usa_channels_days
+        : current.china_to_usa_channels_days,
   };
 
   return withDb(async (db) => {

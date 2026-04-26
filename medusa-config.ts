@@ -456,6 +456,8 @@ module.exports = defineConfig({
                 "variant_sku",
                 "status",
                 "metadata",
+                "description",
+                "category_handles",
                 "updated_at",
                 "created_at",
               ],
@@ -465,6 +467,14 @@ module.exports = defineConfig({
                 "created_at",
                 "updated_at",
                 "status",
+              ],
+              filterableAttributes: [
+                "status",
+                "id",
+                "variant_sku",
+                "category_handles",
+                "metadata_category",
+                "metadata_material",
               ],
             },
             primaryKey: "id",
@@ -485,6 +495,8 @@ module.exports = defineConfig({
                 metadata: product.metadata || {},
                 metadata_material: product.metadata?.material || null,
                 metadata_category: product.metadata?.category || null,
+                category_handles:
+                  product.categories?.map((c: any) => c.handle).filter(Boolean) || [],
                 // ✅ CRITICAL: Timestamps for O(1) sync staleness detection
                 updated_at: new Date(product.updated_at).getTime(),
                 created_at: new Date(product.created_at).getTime(),

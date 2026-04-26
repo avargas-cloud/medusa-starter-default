@@ -21,6 +21,7 @@ export const PurchasingSnapshot = model.define("purchasing_snapshot", {
   sales_q2: model.bigNumber().default(0), // raw units, months 7-9
   sales_q1: model.bigNumber().default(0), // raw units, oldest months
   sales_last_24d: model.bigNumber().default(0), // raw units, last 28 cal days (≈4 Mon-Sat wks)
+  unmet_net_30d: model.bigNumber().default(0), // net unsatisfied demand in tier0 window
   daily_sales_est: model.bigNumber().default(0),
   monthly_sales_est: model.bigNumber().default(0),
 

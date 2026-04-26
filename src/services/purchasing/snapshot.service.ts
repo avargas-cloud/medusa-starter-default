@@ -158,6 +158,7 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
       sales_q3: string;
       sales_q4: string;
       sales_last_24d: string;
+      unmet_net_30d: string;
       daily_sales_est: string;
       monthly_sales_est: string;
       cv: string;
@@ -166,7 +167,7 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
     }>(
       `SELECT variant_id, last_calculated_at,
               tier0_30d, sales_q1, sales_q2, sales_q3, sales_q4,
-              sales_last_24d,
+              sales_last_24d, unmet_net_30d,
               daily_sales_est, monthly_sales_est, cv, inv_usa, inv_china
        FROM purchasing_snapshot`
     );
@@ -213,6 +214,7 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
       sales_q3: number;
       sales_q4: number;
       sales_last_24d: number;
+      unmet_net_30d: number;
       daily_sales_est: number;
       monthly_sales_est: number;
       cv: number;
@@ -229,6 +231,7 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
           sales_q3: parseFloat(r.sales_q3),
           sales_q4: parseFloat(r.sales_q4),
           sales_last_24d: parseFloat(r.sales_last_24d),
+          unmet_net_30d: parseFloat(r.unmet_net_30d ?? "0"),
           daily_sales_est: parseFloat(r.daily_sales_est),
           monthly_sales_est: parseFloat(r.monthly_sales_est),
           cv: parseFloat(r.cv),
@@ -247,6 +250,7 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
       sales_q3: number;
       sales_q4: number;
       sales_last_24d: number;
+      unmet_net_30d: number;
       daily_sales_est: number;
       monthly_sales_est: number;
       cv: number;
@@ -294,7 +298,8 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
             approxEq(cur.sales_q4, sales.sales_q4) &&
             approxEq(cur.daily_sales_est, sales.daily_sales_est) &&
             approxEq(cur.inv_usa, inv.usa) &&
-            approxEq(cur.inv_china, inv.china)
+            approxEq(cur.inv_china, inv.china) &&
+            approxEq(cur.unmet_net_30d, sales.unmet_net_30d)
           ) {
             skipped++;
             continue;
@@ -371,6 +376,7 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
           r.sales_q3,
           r.sales_q4,
           r.sales_last_24d,
+          r.unmet_net_30d ?? 0,
           r.daily_sales_est,
           r.monthly_sales_est,
           r.cv,
@@ -384,16 +390,16 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
           prodDays
         );
         placeholders.push(
-          `($${p},$${p + 1},$${p + 2},$${p + 3},$${p + 4},$${p + 5},$${p + 6},$${p + 7},$${p + 8},$${p + 9},$${p + 10},$${p + 11},$${p + 12},$${p + 13},$${p + 14},$${p + 15},$${p + 16},$${p + 17},$${p + 18},now(),now(),now())`
+          `($${p},$${p + 1},$${p + 2},$${p + 3},$${p + 4},$${p + 5},$${p + 6},$${p + 7},$${p + 8},$${p + 9},$${p + 10},$${p + 11},$${p + 12},$${p + 13},$${p + 14},$${p + 15},$${p + 16},$${p + 17},$${p + 18},$${p + 19},now(),now(),now())`
         );
-        p += 19;
+        p += 20;
       }
 
       try {
         await db.query(
           `INSERT INTO purchasing_snapshot
              (id,variant_id,tier0_30d,sales_q1,sales_q2,sales_q3,sales_q4,
-              sales_last_24d,
+              sales_last_24d,unmet_net_30d,
               daily_sales_est,monthly_sales_est,cv,
               abc_class,xyz_class,abcxyz_class,
               inv_usa,inv_china,qty_to_transfer,qty_to_factory,production_days,
@@ -404,6 +410,7 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
              sales_q2=EXCLUDED.sales_q2, sales_q3=EXCLUDED.sales_q3,
              sales_q4=EXCLUDED.sales_q4,
              sales_last_24d=EXCLUDED.sales_last_24d,
+             unmet_net_30d=EXCLUDED.unmet_net_30d,
              daily_sales_est=EXCLUDED.daily_sales_est,
              monthly_sales_est=EXCLUDED.monthly_sales_est,
              cv=EXCLUDED.cv,
@@ -576,6 +583,7 @@ export async function recalculateForVariants(
                daily_sales_est=$7, monthly_sales_est=$8, cv=$9,
                inv_usa=$10, inv_china=$11,
                qty_to_transfer=$12, qty_to_factory=$13, production_days=$14,
+               unmet_net_30d=$15,
                last_calculated_at=now(), updated_at=now()
            WHERE variant_id=$1`,
           [
@@ -593,6 +601,7 @@ export async function recalculateForVariants(
             qty_to_transfer,
             qty_to_factory,
             prodDays,
+            sales.unmet_net_30d ?? 0,
           ]
         );
       } catch (e) {

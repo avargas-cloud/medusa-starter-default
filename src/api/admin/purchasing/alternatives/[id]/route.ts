@@ -88,6 +88,14 @@ export async function GET(
       qty_to_factory: number;
       production_days: number;
       is_sourced_via_agent: boolean;
+      tier0_30d: string | null;
+      sales_q1: string | null;
+      sales_q2: string | null;
+      sales_q3: string | null;
+      sales_q4: string | null;
+      cv: string | null;
+      unmet_net_30d: string | null;
+      last_calculated_at: string | null;
     }>(
       `
       SELECT
@@ -107,6 +115,14 @@ export async function GET(
         COALESCE(snap.sales_last_24d, 0) AS sales_last_24d,
         COALESCE(snap.qty_to_factory, 0)::int AS qty_to_factory,
         COALESCE(snap.production_days, 10)::int AS production_days,
+        snap.tier0_30d,
+        snap.sales_q1,
+        snap.sales_q2,
+        snap.sales_q3,
+        snap.sales_q4,
+        snap.cv,
+        snap.unmet_net_30d,
+        snap.last_calculated_at,
         COALESCE((p.metadata->>'is_sourced_via_agent')::boolean, false) AS is_sourced_via_agent,
         COALESCE(open_po_usa.on_order, 0)::int AS qty_on_po,
         COALESCE(open_po_china.on_order, 0)::int AS qty_on_po_china,
@@ -162,6 +178,8 @@ export async function GET(
       GROUP BY pa.id, pa.priority, pv.id, pv.sku, p.title, pv.metadata,
                snap.abc_class, snap.xyz_class, snap.daily_sales_est, snap.monthly_sales_est,
                snap.sales_last_24d, snap.qty_to_factory, snap.production_days, p.metadata,
+               snap.tier0_30d, snap.sales_q1, snap.sales_q2, snap.sales_q3, snap.sales_q4,
+               snap.cv, snap.unmet_net_30d, snap.last_calculated_at,
                open_po_usa.on_order, open_po_china.on_order, max_day.max_daily_sales
       ORDER BY pa.priority ASC, pv.sku
     `,

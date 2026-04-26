@@ -129,6 +129,7 @@ export const syncInventoryToMeiliStep = createStep(
         ],
         searchableAttributes: [
           "sku",
+          "sku_plain",
           "title",
           "salesDescription",
           "purchaseDescription",

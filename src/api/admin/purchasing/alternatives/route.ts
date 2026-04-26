@@ -32,6 +32,7 @@ export async function GET(
       primary_variant_id: string;
       sku: string;
       product_title: string;
+      sales_description: string;
       alt_count: number;
       inv_usa: number;
       inv_china: number;
@@ -73,6 +74,7 @@ export async function GET(
         pv.id                           AS primary_variant_id,
         pv.sku,
         p.title                         AS product_title,
+        COALESCE(pv.metadata->>'sales_description', '') AS sales_description,
         ac.alt_count::int,
         COALESCE(SUM(CASE WHEN inv.location_id = $1 THEN inv.qty ELSE 0 END), 0)::int AS inv_usa,
         COALESCE(SUM(CASE WHEN inv.location_id = $2 THEN inv.qty ELSE 0 END), 0)::int AS inv_china,
@@ -86,7 +88,7 @@ export async function GET(
       LEFT JOIN inv ON inv.variant_id = pv.id
       LEFT JOIN alt_inv ai ON ai.primary_variant_id = pv.id
       LEFT JOIN purchasing_snapshot snap ON snap.variant_id = pv.id
-      GROUP BY pv.id, pv.sku, p.title, ac.alt_count, ai.alt_inv_usa, snap.abc_class, snap.xyz_class
+      GROUP BY pv.id, pv.sku, p.title, pv.metadata, ac.alt_count, ai.alt_inv_usa, snap.abc_class, snap.xyz_class
       ORDER BY pv.sku
     `,
       [USA_LOC, CHINA_LOC]
@@ -131,6 +133,61 @@ export async function POST(
       return res
         .status(404)
         .json({ error: "One or both variant IDs not found" });
+    }
+
+    // Guard: the proposed primary cannot itself be an alt of another product.
+    // This prevents ambiguous chains (A→B→C) where B is both alt and primary.
+    const primaryIsAlt = await db.query<{
+      owner_sku: string;
+      owner_title: string;
+      owner_variant_id: string;
+    }>(
+      `
+      SELECT
+        pv_owner.id    AS owner_variant_id,
+        pv_owner.sku   AS owner_sku,
+        p_owner.title  AS owner_title
+      FROM product_alternative pa
+      JOIN product_variant pv_owner ON pv_owner.id = pa.primary_variant_id AND pv_owner.deleted_at IS NULL
+      JOIN product p_owner          ON p_owner.id  = pv_owner.product_id   AND p_owner.deleted_at IS NULL
+      WHERE pa.alt_variant_id = $1 AND pa.is_active = true AND pa.deleted_at IS NULL
+      LIMIT 1
+      `,
+      [primary_variant_id]
+    );
+    if ((primaryIsAlt.rowCount ?? 0) > 0) {
+      const owner = primaryIsAlt.rows[0]!;
+      return res.status(409).json({
+        error: "already_an_alternative",
+        message: `This product is already an alternative of "${owner.owner_sku}". A product that belongs to another product's alternative set cannot be registered as a primary.`,
+        owner: {
+          variant_id: owner.owner_variant_id,
+          sku: owner.owner_sku,
+          title: owner.owner_title,
+        },
+      });
+    }
+
+    // Guard: the proposed alt cannot already have its own alternatives registered.
+    // Adding an alt that is itself a primary creates the same chain problem.
+    const altHasOwnAlts = await db.query<{ alt_sku: string; n: string }>(
+      `
+      SELECT pv.sku AS alt_sku, COUNT(*) AS n
+      FROM product_alternative pa
+      JOIN product_variant pv ON pv.id = pa.primary_variant_id AND pv.deleted_at IS NULL
+      WHERE pa.primary_variant_id = $1 AND pa.is_active = true AND pa.deleted_at IS NULL
+      GROUP BY pv.sku
+      `,
+      [alt_variant_id]
+    );
+    if ((altHasOwnAlts.rowCount ?? 0) > 0) {
+      const { alt_sku, n } = altHasOwnAlts.rows[0]!;
+      return res.status(409).json({
+        error: "alt_has_own_alternatives",
+        message: `"${alt_sku}" is already registered as a primary with ${n} alternative(s) of its own. Clean up those links first, or add its alternatives directly to the current primary instead.`,
+        alt_sku,
+        own_alt_count: parseInt(n, 10),
+      });
     }
 
     const id = `palt_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;

@@ -24,6 +24,7 @@ export interface MonthlySalesRow {
   variant_id: string;
   sku: string;
   product_title: string;
+  sales_description: string;
   total_12m: number;
   revenue_12m: number;
   avg_daily: number;
@@ -58,6 +59,7 @@ function makeEmptyRow(variantId: string, monthCount: number): MonthlySalesRow {
     variant_id: variantId,
     sku: variantId,
     product_title: "",
+    sales_description: "",
     total_12m: 0,
     revenue_12m: 0,
     avg_daily: 0,
@@ -99,6 +101,7 @@ export async function GET(
       variant_id: string;
       sku: string;
       product_title: string;
+      sales_description: string;
       month: string;
       units: string;
       revenue: string;
@@ -106,11 +109,12 @@ export async function GET(
       `
       SELECT
         psh.variant_id,
-        COALESCE(pv.sku, psh.variant_id)          AS sku,
-        COALESCE(p.title, pv.sku, psh.variant_id) AS product_title,
-        TO_CHAR(psh.month_date, 'YYYY-MM')         AS month,
-        psh.qty_sold::int                          AS units,
-        psh.revenue::numeric                       AS revenue
+        COALESCE(pv.sku, psh.variant_id)                        AS sku,
+        COALESCE(p.title, pv.sku, psh.variant_id)               AS product_title,
+        COALESCE(pv.metadata->>'sales_description', '')          AS sales_description,
+        TO_CHAR(psh.month_date, 'YYYY-MM')                       AS month,
+        psh.qty_sold::int                                        AS units,
+        psh.revenue::numeric                                     AS revenue
       FROM purchasing_sales_history psh
       LEFT JOIN product_variant pv ON pv.id = psh.variant_id AND pv.deleted_at IS NULL
       LEFT JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
@@ -132,6 +136,7 @@ export async function GET(
       if (r.sku && r.sku !== r.variant_id) row.sku = r.sku;
       if (r.product_title && r.product_title !== r.variant_id)
         row.product_title = r.product_title;
+      if (r.sales_description) row.sales_description = r.sales_description;
 
       const idx = months.indexOf(r.month);
       if (idx !== -1) {

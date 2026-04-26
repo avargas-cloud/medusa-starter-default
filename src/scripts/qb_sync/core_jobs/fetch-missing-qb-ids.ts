@@ -1,5 +1,6 @@
 import { ExecArgs } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
+import { fetchQbBulkItems } from "../lib/fetch-qb-bulk-items";
 
 /**
  * Script para Consultar QuickBooks y Actualizar quickbooks_id
@@ -9,17 +10,11 @@ import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
  * el metadata de las variantes en Medusa.
  *
  * MODO DRY-RUN (Por defecto):
- *   DRY_RUN=true npx medusa exec ./src/scripts/fetch-missing-qb-ids.ts
+ *   DRY_RUN=true yarn medusa exec src/scripts/qb_sync/core_jobs/fetch-missing-qb-ids.ts
  *
  * MODO EJECUCIÓN REAL:
- *   DRY_RUN=false npx medusa exec ./src/scripts/fetch-missing-qb-ids.ts
+ *   DRY_RUN=false yarn medusa exec src/scripts/qb_sync/core_jobs/fetch-missing-qb-ids.ts
  */
-
-// Config - QuickBooks Bridge
-const BRIDGE_URL = "https://qb.eptbridge.com";
-const API_KEY = "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
-const POLL_INTERVAL_MS = 30000; // 30 seconds
-const MAX_POLL_ATTEMPTS = 20; // 10 minutes max
 
 export default async function fetchMissingQbIds({ container }: ExecArgs) {
   const isDryRun = process.env.DRY_RUN !== "false";
@@ -67,92 +62,18 @@ export default async function fetchMissingQbIds({ container }: ExecArgs) {
     // Paso 2: Consultar QuickBooks Bridge
     logger.info("\n📡 Consultando QuickBooks Bridge...\n");
 
-    const initRes = await fetch(`${BRIDGE_URL}/api/products`, {
-      headers: { "x-api-key": API_KEY },
+    const { items: qbItems, totalFetched } = await fetchQbBulkItems({
+      logger: (msg) => logger.info(`   ${msg}`),
     });
+    logger.info(`   ✅ ${totalFetched} productos obtenidos de QuickBooks`);
 
-    if (!initRes.ok) {
-      logger.error(`❌ Bridge Error: ${initRes.status} ${initRes.statusText}`);
-      return;
-    }
+    const qbData = qbItems.map((i) => ({
+      ListID: i.ListID,
+      Name: i.Name,
+      MPN: i.ManufacturerPartNumber,
+    }));
 
-    const initJson: any = await initRes.json();
-    const operationId = initJson.operationId;
-    logger.info(`   ✅ Operación iniciada: ${operationId}`);
-
-    // Paso 3: Polling Loop
-    let qbData: any[] = [];
-    let attempts = 0;
-
-    logger.info("\n⏳ Esperando respuesta de QuickBooks...\n");
-
-    while (attempts < MAX_POLL_ATTEMPTS) {
-      attempts++;
-      logger.info(
-        `   Intento ${attempts}/${MAX_POLL_ATTEMPTS}... (Esperando Web Connector sync - cada 2 min)`
-      );
-
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-
-      const statusRes = await fetch(
-        `${BRIDGE_URL}/api/sync/status/${operationId}`,
-        {
-          headers: { "x-api-key": API_KEY },
-        }
-      );
-
-      if (!statusRes.ok) {
-        logger.warn(`   ⚠️  Bridge Status Error: ${statusRes.status}`);
-        continue;
-      }
-
-      const statusJson: any = await statusRes.json();
-
-      if (statusJson.success && statusJson.operation) {
-        if (statusJson.operation.status === "completed") {
-          // Parse XML Response
-          const rawXml = statusJson.operation.qbxmlResponse;
-          if (rawXml) {
-            logger.info("\n📦 Respuesta recibida. Parseando XML...\n");
-
-            const itemBlocks =
-              rawXml.match(/<Item[a-zA-Z]+Ret>[\s\S]*?<\/Item[a-zA-Z]+Ret>/g) ||
-              [];
-
-            qbData = itemBlocks
-              .map((block: string) => {
-                const listId = block.match(/<ListID>([^<]+)<\/ListID>/)?.[1];
-                const name = block.match(/<Name>([^<]+)<\/Name>/)?.[1];
-                const mpn = block.match(
-                  /<ManufacturerPartNumber>([^<]+)<\/ManufacturerPartNumber>/
-                )?.[1];
-
-                return {
-                  ListID: listId,
-                  Name: name,
-                  MPN: mpn,
-                };
-              })
-              .filter((i: any) => i.ListID);
-
-            logger.info(
-              `   ✅ ${qbData.length} productos encontrados en QuickBooks`
-            );
-          }
-          break;
-        } else if (statusJson.operation.status === "failed") {
-          logger.error(
-            `\n❌ Operación fallida: ${statusJson.operation.message}`
-          );
-          return;
-        }
-      }
-    }
-
-    if (!qbData || qbData.length === 0) {
-      logger.warn("\n⚠️  Timeout o respuesta vacía de QuickBooks");
-      return;
-    }
+    // Paso 3 (obsoleto): el polling ahora lo maneja fetchQbBulkItems internamente.
 
     // Paso 4: Matching SKU con QuickBooks Name
     logger.info("\n🔄 Buscando coincidencias SKU ↔ QuickBooks...\n");
