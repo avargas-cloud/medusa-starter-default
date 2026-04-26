@@ -423,20 +423,37 @@ export default async function qbPurchaseOrderPoller(
         }
 
         if (!editSequence) {
-          const reason = !poRet
-            ? `PO not found in QB (TxnID: ${String(pl.txn_id ?? 'unknown')}) — may have been deleted`
-            : `QB returned PO but no EditSequence — cannot ${pl.is_void ? 'void' : 'mod'}`;
-          logger.warn(`${TAG} row ${row.id}: ${reason}`);
-          await knex.raw(
-            `UPDATE qb_purchase_order_pipeline
-                SET status = 'error',
-                    last_error = ?,
-                    next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
-                    updated_at = NOW()
-              WHERE id = ?`,
-            [reason, row.id]
-          );
-          toError++;
+          if (!poRet) {
+            // PO genuinely not in QB — cannot void/mod something that doesn't exist
+            const reason = `PO not found in QB (TxnID: ${String(pl.txn_id ?? 'unknown')}) — may have been deleted`;
+            logger.warn(`${TAG} row ${row.id}: ${reason}`);
+            await knex.raw(
+              `UPDATE qb_purchase_order_pipeline
+                  SET status = 'error',
+                      last_error = ?,
+                      next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
+                      updated_at = NOW()
+                WHERE id = ?`,
+              [reason, row.id]
+            );
+            toError++;
+          } else {
+            // PO exists in QB but EditSequence missing from response — re-query to get it
+            const requeuePl = { ...pl, is_query: true, edit_sequence: undefined };
+            await knex.raw(
+              `UPDATE qb_purchase_order_pipeline
+                  SET status = 'waiting',
+                      qb_operation_id = NULL,
+                      payload = ?,
+                      updated_at = NOW()
+                WHERE id = ?`,
+              [JSON.stringify(requeuePl), row.id]
+            );
+            submitted++;
+            logger.info(
+              `${TAG} row ${row.id}: PO found in QB but no EditSequence — re-queuing query`
+            );
+          }
         } else {
           const modPl = { ...pl, is_query: false, edit_sequence: editSequence };
           await knex.raw(
