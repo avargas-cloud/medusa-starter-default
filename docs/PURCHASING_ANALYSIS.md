@@ -340,17 +340,75 @@ buffer_air_days    = 7
 
 ## 8. UI (store-pos `/purchasing-analysis`)
 
-Five tabs, all driven by snapshot data:
+Five tabs sharing the same data layer. Quick reference:
 
-| Tab | What it shows | Backed by |
-|-----|---------------|-----------|
-| Analysis | Full grid: SKU, class, sales/day, sales/mo, inv USA, inv China, days of cover, qty to transfer, qty to factory | `/admin/purchasing/snapshot` |
-| Urgent | Filtered Analysis — stock negative or coverage < lead time. Toggles "consider alternative supply" | same |
-| 12-Month Sales | Per-SKU month-by-month grid; primaries with their alts nested | `/admin/purchasing/monthly-sales` |
-| 80-20 Pareto | Combined `Class` badge (AX/AY/AZ…), `Sales (12m)` informational column, `Weighted $/mo` ranking column with rich tooltip, cumulative bars | same as 12-Month Sales |
-| Alternatives | Primary ↔ alt management (admin) | `/admin/purchasing/alternatives` |
+| Tab | Backed by |
+|-----|-----------|
+| Analysis | `/admin/purchasing/snapshot` |
+| Urgent | `/admin/purchasing/snapshot` (filtered client-side) |
+| 12-Month Sales | `/admin/purchasing/monthly-sales` |
+| 80-20 Pareto | `/admin/purchasing/monthly-sales` |
+| Alternatives | `/admin/purchasing/alternatives` |
 
-### `WeightedTooltip` — the centrepiece of the Pareto tab
+### 8.1 Analysis tab — the day-to-day grid
+
+The full snapshot grid for the purchasing team. Every row is one primary variant with alts nested under it (chevron expands).
+
+**Columns** (`AnalysisGrid.tsx`, `MainRow.tsx`):
+
+| Column | Source | Notes |
+|--------|--------|-------|
+| SKU + Product | snapshot | chevron expands alts; class badge inline |
+| Class | `abcxyz_class` | colour-coded by ABC × XYZ matrix |
+| Sales / day | `daily_sales_est` | tendency-adjusted via `(1 + tendency_adj)` |
+| Sales / month | `monthly_sales_est` | `daily_sales_est × 26 biz days` |
+| MAX Daily | `max_daily_sales` | peak-day in the last window — informational |
+| Inv USA | `inv_usa - inv_usa_reserved` | net stocked. Hover: stocked / reserved / net breakdown (`InventoryCellWithTooltip`) |
+| On PO | `qty_on_po` | open POs feeding USA |
+| Days Inv | `(net + PO) / daily_sales` | colour-coded red/amber/green vs lead time. With "Consider Alts" toggle includes alt supply (`DaysInvCellWithTooltip:17-26`) |
+| Transfer Est / 4W / Max | derived | suggested USA reorder under three demand assumptions; tooltips break down the math (`TransferCell`, `FactoryCellWithTooltip`) |
+| China WH / China PO | `inv_china`, `qty_on_po_china` | factory pipeline |
+| Factory | `qty_to_factory` | suggested factory reorder; effective lead = `production_days × ABC factor` |
+
+**Toolbar** (`AnalysisToolbar.tsx:44-193`):
+
+* Text search across SKU + product title.
+* ABC class pills: All / A / B / C.
+* **Tendency slider** (−50% to +200%) — adjusts `daily_sales_est` via `(1 + tendency / 100) / (1 + base_tendency / 100)`. Lets the buyer model "what if demand drops 20%".
+* **Días A / Días B-C** — separate inventory-day targets per class (e.g., A = 30 days, B/C = 60). Drives the Transfer Est calculation.
+* **Transit days**: "China → USA" (default 27d), "China → USA (Canales)" for EAP\*  products (15d). Drives Days Inv colour thresholds.
+* Sort dropdown (any column, asc/desc).
+* "Recalculate" button → POSTs `/admin/purchasing/recalculate`.
+* "Edit list" button — visible only when a category is selected; opens manage modals.
+
+**Row expansion**: alts fetched lazily on first expand from `/admin/purchasing/alternatives/:variantId`, then rendered as nested `AltSubRow` components.
+
+### 8.2 Urgent tab — same grid, filtered
+
+Not a separate component. It's the Analysis grid with `activeTab === 'urgent'` (`page.tsx:252-268`). A row qualifies as urgent when either:
+
+* **Negative net stock** — `currentNet + altAvailable < 0` (can't fulfil existing allocations even with alts), or
+* **Low coverage** — `(stock + PO + altSupply) / daily_sales < leadTime` (won't make it to the next ship).
+
+A "**Consider Alternative Supply**" toggle in the toolbar shows in this tab only. When ON, alt inventory + alt POs join the Days Inv and Transfer math, often kicking rows out of the urgent list because the alt covers the gap.
+
+### 8.3 12-Month Sales tab
+
+Per-SKU calendar grid (`SalesTab.tsx`):
+
+```
+SKU  Product  | Apr 25 May 25 Jun 25 ... Mar 26 |  Total 12m  Avg / day
+```
+
+* 12 month columns (auto-derived from history; format "MMM 'YY").
+* `Total 12m` and `Avg / day` columns at the right.
+* Free-text search filters SKU + product title; if any **alt** matches, the parent row auto-expands.
+* Alt nesting: chevron on rows with alts → renders `AltSalesRow` per alt with its own monthly units, total and daily avg.
+* Sort: click any month or summary column to toggle asc/desc; default = `Total 12m desc`.
+
+This tab is the one to use when verifying "is the engine seeing the same monthly sales I see in QB?".
+
+### 8.4 80-20 Pareto tab — `WeightedTooltip` is the centrepiece
 
 Hovering the `Weighted $` cell opens a popover that breaks down the Pareto metric per tier:
 
@@ -393,6 +451,22 @@ Shown only while `tier0_meta.in_fallback_mode === true`:
 ```
 
 Once the Medusa live window has 24 biz days, the banner disappears automatically.
+
+### 8.5 Alternatives tab — admin management
+
+This tab is for buyers/admins maintaining the `product_alternative` table. Driven by `AlternativesTab.tsx`:
+
+**Per primary row**: SKU · product · alt count · Inv USA · Alt Inv USA (highlighted sky-blue when > 0) · China WH · Class badge.
+
+**Actions**:
+
+* **Add Primary** (`AddPrimaryModal:282`) — promotes a variant into being a primary that will gather alts.
+* **Manage Alts** (`+` button → `ManageAltsModal`) — opens a search modal (MeiliSearch-backed via `/admin/purchasing/variants/search`); pick alt variants and set their priority order. Confirming POSTs to `/admin/purchasing/alternatives`.
+* **Delete link** — trash icon on each alt row in the expanded view; calls `DELETE /admin/purchasing/alternatives/:linkId`. Decrements `alt_count` immediately and removes the row from the detail list.
+
+**Search**: filters on primary SKU + product title only (alts inside an expanded primary aren't search-targets here — use the 12-Month Sales tab if you need that).
+
+**Effects on the rest of the system**: every change here invalidates the bundle aggregation in the engine. The next snapshot run picks up the new primary↔alt graph; the API's per-row `data_source` recomputes from the fresh links.
 
 ### Variant `available_since` widget (Medusa admin)
 
