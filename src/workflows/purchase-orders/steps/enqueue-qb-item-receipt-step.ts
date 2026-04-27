@@ -19,6 +19,7 @@ export interface EnqueueQbItemReceiptStepInputLine {
   receipt_line_id: string;
   po_line_id: string;
   qb_item_list_id: string;
+  qb_po_txn_line_id: string | null;
   sku: string;
   description: string;
   qty_received_now: number;
@@ -32,6 +33,8 @@ export interface EnqueueQbItemReceiptStepInput {
   receipt_number: string;
   vendor_qb_list_id: string;
   vendor_name: string;
+  qb_po_list_id: string | null;
+  inventory_site_list_id: string | null;
   received_at: Date;
   vendor_bill_number: string | null;
   vendor_bill_date: Date | null;
@@ -50,6 +53,8 @@ interface QbItemReceiptPayload {
   receipt_number: string;
   vendor_qb_list_id: string;
   vendor_name: string;
+  qb_po_list_id: string | null;
+  inventory_site_list_id: string | null;
   received_at: string;
   vendor_bill_number: string | null;
   vendor_bill_date: string | null;
@@ -58,6 +63,7 @@ interface QbItemReceiptPayload {
     receipt_line_id: string;
     po_line_id: string;
     qb_item_list_id: string;
+    qb_po_txn_line_id: string | null;
     sku: string;
     description: string;
     qty_received_now: number;
@@ -82,6 +88,8 @@ export const enqueueQbItemReceiptStep = createStep(
       receipt_number: input.receipt_number,
       vendor_qb_list_id: input.vendor_qb_list_id,
       vendor_name: input.vendor_name,
+      qb_po_list_id: input.qb_po_list_id,
+      inventory_site_list_id: input.inventory_site_list_id,
       received_at: new Date(
         input.received_at as unknown as string | Date
       ).toISOString(),
@@ -96,6 +104,7 @@ export const enqueueQbItemReceiptStep = createStep(
         receipt_line_id: l.receipt_line_id,
         po_line_id: l.po_line_id,
         qb_item_list_id: l.qb_item_list_id,
+        qb_po_txn_line_id: l.qb_po_txn_line_id,
         sku: l.sku,
         description: l.description,
         qty_received_now: l.qty_received_now,

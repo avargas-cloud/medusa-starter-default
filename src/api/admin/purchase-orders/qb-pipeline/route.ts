@@ -1,6 +1,18 @@
 /**
- * GET  /admin/purchase-orders/qb-pipeline — list qb_purchase_order_pipeline rows
- * POST /admin/purchase-orders/qb-pipeline/:id/retry — re-queue a failed entry
+ * GET /admin/purchase-orders/qb-pipeline
+ *
+ * Returns a unified feed of QuickBooks Purchase-side pipeline operations:
+ *   - qb_purchase_order_pipeline rows  → PO add / mod / void
+ *   - qb_item_receipt_pipeline rows    → ItemReceipt add  (always one row)
+ *                                        ItemReceipt delete (extra row
+ *                                        emitted when void_status IS NOT NULL;
+ *                                        ItemReceipts only support hard delete
+ *                                        in QB Desktop — there is no void).
+ *
+ * The frontend renders both kinds in the same table. To keep React keys
+ * unique, void/delete rows for ItemReceipts use the composite id
+ * `<pipeline_id>__void`. Retry / mark-fixed routes parse this suffix to
+ * decide which table + columns to update.
  */
 
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
@@ -12,55 +24,108 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   try {
     const { status, search } = req.query as Record<string, string | undefined>;
 
-    const conditions: string[] = ["pipe.deleted_at IS NULL"];
+    const sql = `
+      SELECT * FROM (
+        -- ── Purchase Order pipeline ──────────────────────────────────────
+        SELECT
+          pipe.id                                        AS id,
+          pipe.seq                                       AS seq,
+          pipe.purchase_order_id                         AS parent_id,
+          po.number                                      AS po_number,
+          po.draft_number                                AS draft_number,
+          NULL::text                                     AS receipt_number,
+          pipe.status                                    AS status,
+          pipe.qb_operation_id                           AS qb_operation_id,
+          pipe.qb_list_id                                AS qb_list_id,
+          pipe.qb_txn_number                             AS qb_txn_number,
+          pipe.last_error                                AS last_error,
+          pipe.retries                                   AS retries,
+          pipe.next_retry_at                             AS next_retry_at,
+          pipe.synced_at                                 AS synced_at,
+          pipe.created_at                                AS created_at,
+          pipe.updated_at                                AS updated_at,
+          COALESCE(po.vendor_name_snapshot, po.vendor_id) AS vendor_name,
+          CASE
+            WHEN (pipe.payload->>'is_void')::boolean = true THEN 'void_purchase_order'
+            WHEN (pipe.payload->>'is_mod')::boolean  = true THEN 'mod_purchase_order'
+            ELSE 'purchase_order'
+          END                                            AS step
+        FROM qb_purchase_order_pipeline pipe
+        LEFT JOIN purchase_order po ON po.id = pipe.purchase_order_id
+        WHERE pipe.deleted_at IS NULL
+
+        UNION ALL
+
+        -- ── ItemReceipt ADD pipeline (always emit one row) ───────────────
+        SELECT
+          qbp.id                                         AS id,
+          NULL::int                                      AS seq,
+          qbp.purchase_order_id                          AS parent_id,
+          po.number                                      AS po_number,
+          NULL::text                                     AS draft_number,
+          por.number                                     AS receipt_number,
+          qbp.status                                     AS status,
+          qbp.qb_operation_id                            AS qb_operation_id,
+          qbp.qb_list_id                                 AS qb_list_id,
+          NULL::text                                     AS qb_txn_number,
+          qbp.last_error                                 AS last_error,
+          qbp.retries                                    AS retries,
+          qbp.next_retry_at                              AS next_retry_at,
+          qbp.synced_at                                  AS synced_at,
+          qbp.created_at                                 AS created_at,
+          qbp.updated_at                                 AS updated_at,
+          COALESCE(po.vendor_name_snapshot, po.vendor_id) AS vendor_name,
+          'add_item_receipt'                             AS step
+        FROM qb_item_receipt_pipeline qbp
+        LEFT JOIN purchase_order_receipt por ON por.id = qbp.purchase_order_receipt_id
+        LEFT JOIN purchase_order po ON po.id = qbp.purchase_order_id
+        WHERE qbp.deleted_at IS NULL
+
+        UNION ALL
+
+        -- ── ItemReceipt VOID/DELETE pipeline (only when void_status is set)
+        SELECT
+          qbp.id || '__void'                             AS id,
+          NULL::int                                      AS seq,
+          qbp.purchase_order_id                          AS parent_id,
+          po.number                                      AS po_number,
+          NULL::text                                     AS draft_number,
+          por.number                                     AS receipt_number,
+          qbp.void_status                                AS status,
+          qbp.void_operation_id                          AS qb_operation_id,
+          qbp.qb_list_id                                 AS qb_list_id,
+          NULL::text                                     AS qb_txn_number,
+          qbp.void_last_error                            AS last_error,
+          COALESCE(qbp.void_retries, 0)                  AS retries,
+          qbp.void_next_retry_at                         AS next_retry_at,
+          qbp.void_synced_at                             AS synced_at,
+          qbp.created_at                                 AS created_at,
+          qbp.updated_at                                 AS updated_at,
+          COALESCE(po.vendor_name_snapshot, po.vendor_id) AS vendor_name,
+          'delete_item_receipt'                          AS step
+        FROM qb_item_receipt_pipeline qbp
+        LEFT JOIN purchase_order_receipt por ON por.id = qbp.purchase_order_receipt_id
+        LEFT JOIN purchase_order po ON po.id = qbp.purchase_order_id
+        WHERE qbp.deleted_at IS NULL
+          AND qbp.void_status IS NOT NULL
+      ) feed
+      ${status && status !== "__all__" ? "WHERE status = $1" : ""}
+      ORDER BY created_at DESC, id DESC
+      LIMIT 200
+    `;
+
     const values: unknown[] = [];
-    let p = 1;
+    if (status && status !== "__all__") values.push(status);
 
-    if (status && status !== "__all__") {
-      conditions.push(`pipe.status = $${p++}`);
-      values.push(status);
-    }
+    const { rows } = await client.query(sql, values);
 
-    const where = `WHERE ${conditions.join(" AND ")}`;
-
-    const { rows } = await client.query(
-      `SELECT
-       pipe.id,
-       pipe.seq,
-       pipe.purchase_order_id,
-       po.number      AS po_number,
-       po.draft_number,
-       pipe.status,
-       pipe.qb_operation_id,
-       pipe.qb_list_id,
-       pipe.qb_txn_number,
-       pipe.last_error,
-       pipe.retries,
-       pipe.next_retry_at,
-       pipe.synced_at,
-       pipe.created_at,
-       pipe.updated_at,
-       COALESCE(po.vendor_name_snapshot, po.vendor_id) AS vendor_name,
-       CASE
-         WHEN (pipe.payload->>'is_void')::boolean = true  THEN 'void_purchase_order'
-         WHEN (pipe.payload->>'is_mod')::boolean  = true  THEN 'mod_purchase_order'
-         ELSE 'purchase_order'
-       END AS step
-     FROM qb_purchase_order_pipeline pipe
-     LEFT JOIN purchase_order po ON po.id = pipe.purchase_order_id
-     ${where}
-     ORDER BY pipe.seq DESC
-     LIMIT 200`,
-      values
-    );
-
-    // Filter by search client-side is fine for small datasets; do it in SQL for correctness
     const searchLower = search?.toLowerCase();
     const filtered = searchLower
       ? rows.filter((r) =>
           [
             r.po_number,
             r.draft_number,
+            r.receipt_number,
             r.vendor_name,
             r.qb_list_id,
             r.last_error,
@@ -78,6 +143,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       processing: 0,
       synced: 0,
       error: 0,
+      failed_permanent: 0,
     };
     for (const r of rows) {
       const s = r.status as string;

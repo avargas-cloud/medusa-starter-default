@@ -89,12 +89,23 @@ export const closeSchema = z.object({
     .max(500),
 });
 
+// Used by the PO-level void route (`/admin/purchase-orders/:id/void`).
+// Receipt-level void no longer exists — receipts only support hard delete.
 export const voidReceiptSchema = z.object({
   void_reason: z
     .string()
     .trim()
     .min(3, "void_reason must be at least 3 characters")
     .max(500),
+});
+
+export const deleteReceiptSchema = z.object({
+  delete_reason: z
+    .string()
+    .trim()
+    .min(3, "delete_reason must be at least 3 characters")
+    .max(500)
+    .optional(),
 });
 
 export const listQuerySchema = z.object({
@@ -116,6 +127,7 @@ export type ReceiveInput = z.infer<typeof receiveSchema>;
 export type ReceiveLineInput = z.infer<typeof receiveLineSchema>;
 export type CloseInput = z.infer<typeof closeSchema>;
 export type VoidReceiptInput = z.infer<typeof voidReceiptSchema>;
+export type DeleteReceiptInput = z.infer<typeof deleteReceiptSchema>;
 export type ListQuery = z.infer<typeof listQuerySchema>;
 
 export const ALLOWED_STATUS_VALUES = PURCHASE_ORDER_STATUSES;

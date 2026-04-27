@@ -37,8 +37,10 @@ export async function listReceiptsCrossPo(
     }
   >;
 
-  // Apply date filters client-side (Medusa service layer doesn't support range filters)
+  // Apply date filters client-side (Medusa service layer doesn't support range filters).
+  // Also filter out tombstoned receipts (status='deleted' = pending QB DELETE sync).
   const filtered = allReceipts.filter((r) => {
+    if ((r as { status?: string }).status === "deleted") return false;
     const receivedAt = r.received_at ? new Date(r.received_at as string) : null;
     if (
       params.date_from &&

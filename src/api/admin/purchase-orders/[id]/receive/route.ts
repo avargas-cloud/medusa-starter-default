@@ -32,6 +32,7 @@ interface PoHeader {
   vendor_id: string;
   vendor_name_snapshot: string | null;
   vendor_qb_list_id_snapshot: string | null;
+  qb_purchase_order_list_id: string | null;
 }
 
 interface PoLine {
@@ -42,6 +43,7 @@ interface PoLine {
   sku_snapshot: string;
   description_snapshot: string;
   qb_item_list_id_snapshot: string | null;
+  qb_txn_line_id: string | null;
   qty_ordered: number;
   qty_received: number;
   qty_cancelled: number;
@@ -124,6 +126,7 @@ export async function POST(
     sku_snapshot: string;
     description_snapshot: string;
     qb_item_list_id_snapshot: string | null;
+    qb_po_txn_line_id: string | null;
     qty_received_now: number;
     unit_cost_cents_effective: number;
     unit_cost_cents_override: number | null;
@@ -172,6 +175,7 @@ export async function POST(
       sku_snapshot: po_line.sku_snapshot,
       description_snapshot: po_line.description_snapshot,
       qb_item_list_id_snapshot: po_line.qb_item_list_id_snapshot,
+      qb_po_txn_line_id: po_line.qb_txn_line_id ?? null,
       qty_received_now: req_line.qty_received_now,
       unit_cost_cents_effective: effective,
       unit_cost_cents_override: override,
@@ -190,6 +194,8 @@ export async function POST(
         po_number: po.number,
         vendor_qb_list_id: po.vendor_qb_list_id_snapshot,
         vendor_name: po.vendor_name_snapshot,
+        qb_po_list_id: po.qb_purchase_order_list_id ?? null,
+        qb_inventory_site_list_id: null,
         received_by_user_id: userId,
         stock_location_id: stockLocationId,
         received_at: receivedAt,

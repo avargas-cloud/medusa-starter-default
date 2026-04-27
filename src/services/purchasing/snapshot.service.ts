@@ -74,7 +74,8 @@ export async function runPurchasingSnapshot(
     const engineCtx = await buildSalesEngineContext(db);
 
     // ── 2. Variants, alt relationships, inventory, open POs, vendor prod days ─
-    const [varRes, altRes, invRes, poRes, vendorRes] = await Promise.all([
+    const [varRes, altRes, invRes, poRes, vendorRes, sourcedRes] =
+      await Promise.all([
       db.query<{ id: string; sku: string }>(
         `SELECT id, sku FROM product_variant WHERE deleted_at IS NULL ORDER BY sku`
       ),
@@ -94,15 +95,21 @@ export async function runPurchasingSnapshot(
          GROUP BY pvii.variant_id`,
         [USA_LOC, CHINA_LOC]
       ),
-      db.query<{ sku: string; on_order: string }>(
+      db.query<{ sku: string; on_order_usa: string; on_order_china: string }>(
         `SELECT pol.sku_snapshot AS sku,
-                SUM(GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)) AS on_order
+                SUM(CASE WHEN po.stock_location_id = $1
+                         THEN GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)
+                         ELSE 0 END) AS on_order_usa,
+                SUM(CASE WHEN po.stock_location_id = $2
+                         THEN GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)
+                         ELSE 0 END) AS on_order_china
          FROM purchase_order_line pol
          JOIN purchase_order po ON po.id = pol.purchase_order_id AND po.deleted_at IS NULL
          WHERE po.status IN ('submitted', 'partially_received')
            AND pol.status IN ('open', 'partial')
            AND pol.deleted_at IS NULL
-         GROUP BY pol.sku_snapshot`
+         GROUP BY pol.sku_snapshot`,
+        [USA_LOC, CHINA_LOC]
       ),
       db.query<{ variant_id: string; production_days: string }>(
         `SELECT pv.id AS variant_id,
@@ -114,7 +121,21 @@ export async function runPurchasingSnapshot(
          WHERE pv.deleted_at IS NULL
            AND p.metadata->>'qb_vendor_list_id' IS NOT NULL`
       ),
+      // Variants whose product is sourced from China (via Veetech agent).
+      // Non-sourced variants skip ALL China-supply calc (inv, alt inv, PO, alt PO,
+      // qty_to_factory) — they have no China supply chain to consider.
+      db.query<{ variant_id: string }>(
+        `SELECT pv.id AS variant_id
+         FROM product_variant pv
+         JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
+         WHERE pv.deleted_at IS NULL
+           AND COALESCE((p.metadata->>'is_sourced_via_agent')::boolean, false) = true`
+      ),
     ]);
+
+    const sourcedFromChina = new Set(
+      sourcedRes.rows.map((r) => r.variant_id)
+    );
 
     const allVariants = varRes.rows;
 
@@ -135,9 +156,12 @@ export async function runPurchasingSnapshot(
     );
     const skuByVariant = new Map(varRes.rows.map((r) => [r.id, r.sku]));
 
-    // sku → open PO quantity
-    const poBySkuMap = new Map(
-      poRes.rows.map((r) => [r.sku, Number(r.on_order)])
+    // sku → open PO quantity, split by destination location
+    const poUsaBySku = new Map(
+      poRes.rows.map((r) => [r.sku, Number(r.on_order_usa)])
+    );
+    const poChinaBySku = new Map(
+      poRes.rows.map((r) => [r.sku, Number(r.on_order_china)])
     );
 
     // variant_id → production days from vendor metadata (fallback 10 days)
@@ -180,11 +204,15 @@ export async function runPurchasingSnapshot(
       cv: string;
       inv_usa: string;
       inv_china: string;
+      inv_china_alt: string;
+      qty_on_po_china: string;
+      qty_on_po_china_alt: string;
     }>(
       `SELECT variant_id, last_calculated_at,
               tier0_30d, sales_q1, sales_q2, sales_q3, sales_q4,
               sales_last_24d, unmet_net_30d,
-              daily_sales_est, monthly_sales_est, cv, inv_usa, inv_china
+              daily_sales_est, monthly_sales_est, cv, inv_usa, inv_china,
+              inv_china_alt, qty_on_po_china, qty_on_po_china_alt
        FROM purchasing_snapshot`
     );
 
@@ -236,6 +264,9 @@ export async function runPurchasingSnapshot(
       cv: number;
       inv_usa: number;
       inv_china: number;
+      inv_china_alt: number;
+      qty_on_po_china: number;
+      qty_on_po_china_alt: number;
     };
     const currentSnap = new Map<string, SnapRow>(
       snapRes.rows.map((r) => [
@@ -253,6 +284,9 @@ export async function runPurchasingSnapshot(
           cv: parseFloat(r.cv),
           inv_usa: parseFloat(r.inv_usa),
           inv_china: parseFloat(r.inv_china),
+          inv_china_alt: parseFloat(r.inv_china_alt ?? "0"),
+          qty_on_po_china: parseFloat(r.qty_on_po_china ?? "0"),
+          qty_on_po_china_alt: parseFloat(r.qty_on_po_china_alt ?? "0"),
         },
       ])
     );
@@ -274,6 +308,9 @@ export async function runPurchasingSnapshot(
       revenue_12m: number;
       inv_usa: number;
       inv_china: number;
+      inv_china_alt: number;
+      qty_on_po_china: number;
+      qty_on_po_china_alt: number;
       first_sale_date: string | null;
     };
 
@@ -298,6 +335,27 @@ export async function runPurchasingSnapshot(
         const sales = calculateDailySales(v.id, alts, cfg, engineCtx);
         const inv = invByVariant.get(v.id) ?? { usa: 0, china: 0 };
 
+        // China supply only matters when product is sourced from China.
+        // Non-sourced products skip alt/PO lookups entirely (88% of catalog).
+        const isSourcedChina = sourcedFromChina.has(v.id);
+        const invChinaOwn = isSourcedChina ? inv.china : 0;
+        const invChinaAlt = isSourcedChina
+          ? alts.reduce(
+              (s, id) => s + (invByVariant.get(id)?.china ?? 0),
+              0
+            )
+          : 0;
+        const ownSku = skuByVariant.get(v.id) ?? "";
+        const onPoChina = isSourcedChina
+          ? (poChinaBySku.get(ownSku) ?? 0)
+          : 0;
+        const onPoChinaAlt = isSourcedChina
+          ? alts.reduce((s, id) => {
+              const altSku = skuByVariant.get(id);
+              return s + (altSku ? (poChinaBySku.get(altSku) ?? 0) : 0);
+            }, 0)
+          : 0;
+
         // Revenue: sum primary + alts
         const revenue_12m = [v.id, ...alts].reduce(
           (s, id) => s + (revByVariant.get(id) ?? 0),
@@ -316,7 +374,10 @@ export async function runPurchasingSnapshot(
             approxEq(cur.sales_q4, sales.sales_q4) &&
             approxEq(cur.daily_sales_est, sales.daily_sales_est) &&
             approxEq(cur.inv_usa, inv.usa) &&
-            approxEq(cur.inv_china, inv.china) &&
+            approxEq(cur.inv_china, invChinaOwn) &&
+            approxEq(cur.inv_china_alt, invChinaAlt) &&
+            approxEq(cur.qty_on_po_china, onPoChina) &&
+            approxEq(cur.qty_on_po_china_alt, onPoChinaAlt) &&
             approxEq(cur.unmet_net_30d, sales.unmet_net_30d)
           ) {
             skipped++;
@@ -329,7 +390,10 @@ export async function runPurchasingSnapshot(
           ...sales,
           revenue_12m,
           inv_usa: inv.usa,
-          inv_china: inv.china,
+          inv_china: invChinaOwn,
+          inv_china_alt: invChinaAlt,
+          qty_on_po_china: onPoChina,
+          qty_on_po_china_alt: onPoChinaAlt,
         });
       } catch (e) {
         errors++;
@@ -384,7 +448,7 @@ export async function runPurchasingSnapshot(
           0
         );
         const sku = skuByVariant.get(r.variant_id) ?? "";
-        const onOrder = poBySkuMap.get(sku) ?? 0;
+        const onPoUsa = poUsaBySku.get(sku) ?? 0;
 
         const abcClass = pareto?.abc_class ?? "C";
         const factoryMult =
@@ -395,13 +459,25 @@ export async function runPurchasingSnapshot(
         const qty_to_transfer = Math.max(
           0,
           Math.round(
-            r.daily_sales_est * leadAir - r.inv_usa - altInvUsa - onOrder
+            r.daily_sales_est * leadAir - r.inv_usa - altInvUsa - onPoUsa
           )
         );
-        const qty_to_factory = Math.max(
-          0,
-          Math.round(r.daily_sales_est * effectiveDays - r.inv_china)
-        );
+        // Factory order only applies to China-sourced products. For non-sourced
+        // ones, all China supply fields are already 0 (zeroed in the calc loop)
+        // and qty_to_factory is forced to 0 — no factory PO ever generated.
+        const isSourcedChina = sourcedFromChina.has(r.variant_id);
+        const supplyChina = isSourcedChina
+          ? r.inv_china +
+            r.inv_china_alt +
+            r.qty_on_po_china +
+            r.qty_on_po_china_alt
+          : 0;
+        const qty_to_factory = isSourcedChina
+          ? Math.max(
+              0,
+              Math.round(r.daily_sales_est * effectiveDays - supplyChina)
+            )
+          : 0;
         const id = `psnap_${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
 
         values.push(
@@ -424,12 +500,15 @@ export async function runPurchasingSnapshot(
           pareto?.abcxyz_class ?? null,
           r.inv_usa,
           r.inv_china,
+          r.inv_china_alt,
+          r.qty_on_po_china,
+          r.qty_on_po_china_alt,
           qty_to_transfer,
           qty_to_factory,
           prodDays,
           r.first_sale_date
         );
-        const cols = 23;
+        const cols = 26;
         const ph = Array.from({ length: cols }, (_, k) => `$${p + k}`).join(",");
         placeholders.push(`(${ph},now(),now(),now())`);
         p += cols;
@@ -443,7 +522,9 @@ export async function runPurchasingSnapshot(
               daily_sales_est,monthly_sales_est,cv,
               weighted_revenue,pareto_rank,
               abc_class,xyz_class,abcxyz_class,
-              inv_usa,inv_china,qty_to_transfer,qty_to_factory,production_days,
+              inv_usa,inv_china,inv_china_alt,
+              qty_on_po_china,qty_on_po_china_alt,
+              qty_to_transfer,qty_to_factory,production_days,
               first_sale_date,
               last_calculated_at,created_at,updated_at)
            VALUES ${placeholders.join(",")}
@@ -461,6 +542,9 @@ export async function runPurchasingSnapshot(
              abc_class=EXCLUDED.abc_class, xyz_class=EXCLUDED.xyz_class,
              abcxyz_class=EXCLUDED.abcxyz_class,
              inv_usa=EXCLUDED.inv_usa, inv_china=EXCLUDED.inv_china,
+             inv_china_alt=EXCLUDED.inv_china_alt,
+             qty_on_po_china=EXCLUDED.qty_on_po_china,
+             qty_on_po_china_alt=EXCLUDED.qty_on_po_china_alt,
              qty_to_transfer=EXCLUDED.qty_to_transfer,
              qty_to_factory=EXCLUDED.qty_to_factory,
              production_days=EXCLUDED.production_days,
@@ -526,7 +610,7 @@ export async function recalculateForVariants(
       ...new Set(skuRes.rows.map((r) => r.sku).filter(Boolean)),
     ];
 
-    const [invRes, vendorPartialRes, snapPartialRes, poPartialRes] =
+    const [invRes, vendorPartialRes, snapPartialRes, poPartialRes, sourcedPartialRes] =
       await Promise.all([
         db.query<{ variant_id: string; inv_usa: string; inv_china: string }>(
           `SELECT pvii.variant_id,
@@ -556,9 +640,18 @@ export async function recalculateForVariants(
           `SELECT variant_id, abc_class FROM purchasing_snapshot WHERE variant_id = ANY($1::text[])`,
           [variantIds]
         ),
-        db.query<{ sku: string; on_order: string }>(
+        db.query<{
+          sku: string;
+          on_order_usa: string;
+          on_order_china: string;
+        }>(
           `SELECT pol.sku_snapshot AS sku,
-                SUM(GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)) AS on_order
+                SUM(CASE WHEN po.stock_location_id = $2
+                         THEN GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)
+                         ELSE 0 END) AS on_order_usa,
+                SUM(CASE WHEN po.stock_location_id = $3
+                         THEN GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)
+                         ELSE 0 END) AS on_order_china
          FROM purchase_order_line pol
          JOIN purchase_order po ON po.id = pol.purchase_order_id AND po.deleted_at IS NULL
          WHERE po.status IN ('submitted', 'partially_received')
@@ -566,9 +659,21 @@ export async function recalculateForVariants(
            AND pol.deleted_at IS NULL
            AND pol.sku_snapshot = ANY($1::text[])
          GROUP BY pol.sku_snapshot`,
-          [skusForPo]
+          [skusForPo, USA_LOC, CHINA_LOC]
+        ),
+        db.query<{ variant_id: string }>(
+          `SELECT pv.id AS variant_id
+           FROM product_variant pv
+           JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
+           WHERE pv.deleted_at IS NULL
+             AND pv.id = ANY($1::text[])
+             AND COALESCE((p.metadata->>'is_sourced_via_agent')::boolean, false) = true`,
+          [allIds]
         ),
       ]);
+    const sourcedFromChinaPartial = new Set(
+      sourcedPartialRes.rows.map((r) => r.variant_id)
+    );
 
     const invByVariant = new Map(
       invRes.rows.map((r) => [
@@ -585,8 +690,11 @@ export async function recalculateForVariants(
     const abcClassPartial = new Map(
       snapPartialRes.rows.map((r) => [r.variant_id, r.abc_class])
     );
-    const poBySkuMap = new Map(
-      poPartialRes.rows.map((r) => [r.sku, Number(r.on_order)])
+    const poUsaBySku = new Map(
+      poPartialRes.rows.map((r) => [r.sku, Number(r.on_order_usa)])
+    );
+    const poChinaBySku = new Map(
+      poPartialRes.rows.map((r) => [r.sku, Number(r.on_order_china)])
     );
 
     const leadAirPartial = cfg.transit_air_days + cfg.buffer_air_days;
@@ -596,9 +704,18 @@ export async function recalculateForVariants(
         const alts = altsByPrimary.get(variantId) ?? [];
         const sales = calculateDailySales(variantId, alts, cfg, engineCtx);
         const inv = invByVariant.get(variantId) ?? { usa: 0, china: 0 };
+        const isSourcedChina = sourcedFromChinaPartial.has(variantId);
         let altInvUsa = 0;
-        for (const altId of alts)
+        let altInvChina = 0;
+        let altPoChina = 0;
+        for (const altId of alts) {
           altInvUsa += invByVariant.get(altId)?.usa ?? 0;
+          if (isSourcedChina) {
+            altInvChina += invByVariant.get(altId)?.china ?? 0;
+            const altSku = skuByVariant.get(altId);
+            if (altSku) altPoChina += poChinaBySku.get(altSku) ?? 0;
+          }
+        }
 
         const abcClass = abcClassPartial.get(variantId) ?? "C";
         const factoryMult =
@@ -607,20 +724,27 @@ export async function recalculateForVariants(
         const effectiveDays = Math.round(prodDays * factoryMult);
 
         const sku = skuByVariant.get(variantId) ?? "";
-        const onOrder = poBySkuMap.get(sku) ?? 0;
+        const onPoUsa = poUsaBySku.get(sku) ?? 0;
+        const onPoChina = isSourcedChina ? (poChinaBySku.get(sku) ?? 0) : 0;
+        const invChinaOwn = isSourcedChina ? inv.china : 0;
         const qty_to_transfer = Math.max(
           0,
           Math.round(
             sales.daily_sales_est * leadAirPartial -
               inv.usa -
               altInvUsa -
-              onOrder
+              onPoUsa
           )
         );
-        const qty_to_factory = Math.max(
-          0,
-          Math.round(sales.daily_sales_est * effectiveDays - inv.china)
-        );
+        const supplyChina = isSourcedChina
+          ? invChinaOwn + altInvChina + onPoChina + altPoChina
+          : 0;
+        const qty_to_factory = isSourcedChina
+          ? Math.max(
+              0,
+              Math.round(sales.daily_sales_est * effectiveDays - supplyChina)
+            )
+          : 0;
 
         // Pareto rank/class are NOT updated here — they depend on global ranking
         // and must be recomputed by a full runPurchasingSnapshot pass.
@@ -628,10 +752,11 @@ export async function recalculateForVariants(
           `UPDATE purchasing_snapshot
            SET tier0_30d=$2, sales_q1=$3, sales_q2=$4, sales_q3=$5, sales_q4=$6,
                daily_sales_est=$7, monthly_sales_est=$8, cv=$9,
-               inv_usa=$10, inv_china=$11,
-               qty_to_transfer=$12, qty_to_factory=$13, production_days=$14,
-               unmet_net_30d=$15, weighted_revenue=$16,
-               first_sale_date=$17,
+               inv_usa=$10, inv_china=$11, inv_china_alt=$12,
+               qty_on_po_china=$13, qty_on_po_china_alt=$14,
+               qty_to_transfer=$15, qty_to_factory=$16, production_days=$17,
+               unmet_net_30d=$18, weighted_revenue=$19,
+               first_sale_date=$20,
                last_calculated_at=now(), updated_at=now()
            WHERE variant_id=$1`,
           [
@@ -645,7 +770,10 @@ export async function recalculateForVariants(
             sales.monthly_sales_est,
             sales.cv,
             inv.usa,
-            inv.china,
+            invChinaOwn,
+            altInvChina,
+            onPoChina,
+            altPoChina,
             qty_to_transfer,
             qty_to_factory,
             prodDays,

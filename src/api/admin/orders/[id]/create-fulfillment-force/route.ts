@@ -35,11 +35,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     location_id,
     invoice_id,
     no_notification = true,
+    mark_as_delivered = false,
   } = req.body as {
     items: { id: string; quantity: number }[];
     location_id: string;
     invoice_id?: string;
     no_notification?: boolean;
+    mark_as_delivered?: boolean;
   };
 
   if (!items?.length || !location_id) {
@@ -204,26 +206,19 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     // Call the native workflow — should succeed now that reservations exist
-    const result = await createOrderFulfillmentWorkflow(req.scope)
-      .run({
-        input: {
-          order_id: orderId,
-          items,
-          location_id,
-          no_notification,
-          created_by: ((req as any).auth_context?.actor_id ?? "") as string,
-        },
-      })
-      .catch((err) => {
-        require("fs").writeFileSync(
-          "/home/alejo/webapps/ecopowertech-workspace/tmp-strategy1-error.txt",
-          err.message + "\n" + err.stack
-        );
-        throw err;
-      });
+    const result = await createOrderFulfillmentWorkflow(req.scope).run({
+      input: {
+        order_id: orderId,
+        items,
+        location_id,
+        no_notification,
+        created_by: ((req as any).auth_context?.actor_id ?? "") as string,
+      },
+    });
 
     // ── fulfilled_quantity fix (Strategy 1) ──────────────────────────
-    // Only safely increment the items that were just fulfilled
+    // Patch the versioned junction so order.fulfillment_status reflects reality.
+    // order_item.id is the junction PK, item_id is the FK to order_line_item.
     if (dbUrl && items.length > 0) {
       const pool = getDbPool();
       try {
@@ -231,8 +226,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           await pool.query(
             `UPDATE order_item
                          SET fulfilled_quantity = LEAST(quantity, COALESCE(fulfilled_quantity, 0) + $1::numeric)
-                         WHERE id = $2`,
-            [item.quantity, item.id]
+                         WHERE item_id = $2 AND order_id = $3`,
+            [item.quantity, item.id, orderId]
           );
         }
         console.log(
@@ -246,6 +241,38 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     const returnedFulfillment = (result.result as any) ?? { id: "ok" };
+
+    // ── Atomic mark-as-delivered ─────────────────────────────────────
+    // Run in-process so there's no HTTP race with Medusa's commit window.
+    // Used by the POS CompleteOrderModal (local-pickup) to close the loop
+    // in a single round-trip — replaces the prior pattern that called
+    // /admin/orders/:id/fulfillments/:id/mark-as-delivered separately and
+    // silently ignored 404s during the Medusa commit window.
+    if (
+      mark_as_delivered &&
+      returnedFulfillment.id &&
+      returnedFulfillment.id !== "ok"
+    ) {
+      try {
+        const { markOrderFulfillmentAsDeliveredWorkflow } =
+          await import("@medusajs/core-flows");
+        await markOrderFulfillmentAsDeliveredWorkflow(req.scope).run({
+          input: { orderId, fulfillmentId: returnedFulfillment.id },
+        });
+        console.log(
+          `[create-fulfillment-force] ✅ Marked fulfillment ${returnedFulfillment.id} as delivered (Strategy 1)`
+        );
+      } catch (deliverErr: any) {
+        // Fatal: caller asked for atomic create+deliver. Surface the error.
+        console.error(
+          `[create-fulfillment-force] ❌ mark-as-delivered failed: ${deliverErr?.message}`
+        );
+        return res.status(500).json({
+          message: `Fulfillment created (${returnedFulfillment.id}) but mark-as-delivered failed: ${deliverErr?.message}`,
+          fulfillment: returnedFulfillment,
+        });
+      }
+    }
 
     if (invoice_id && returnedFulfillment.id !== "ok") {
       await bindFulfillmentToInvoice(returnedFulfillment.id, invoice_id);
@@ -379,7 +406,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       }
     }
 
-    // Register fulfillment against the order
+    // Register fulfillment against the order — link row in `order_fulfillment`
+    // MUST exist or the fulfillment is invisible to Medusa's order query and
+    // POS shows it as Pending forever. Two-layer protection:
+    //   1. Native registerFulfillment (Medusa-managed, preferred)
+    //   2. Fallback: insert link row via SQL with a Medusa-style ULID
+    //   3. Both fail → delete orphan fulfillment + throw, so caller knows.
+    let linkOk = false;
     try {
       await orderModule.registerFulfillment({
         order_id: orderId,
@@ -390,17 +423,50 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           quantity: i.quantity,
         })),
       });
+      linkOk = true;
       console.log(
         `[create-fulfillment-force] ✅ Fulfillment registered against order`
       );
     } catch (regErr: any) {
       console.warn(
-        `[create-fulfillment-force] registerFulfillment warning: ${regErr?.message?.slice(0, 100)}`
+        `[create-fulfillment-force] registerFulfillment failed (${regErr?.message?.slice(0, 100)}) — using SQL fallback to insert link row`
       );
+      try {
+        const { ulid } = await import("ulid");
+        const linkId = `ordful_${ulid()}`;
+        const fallbackPool = getDbPool();
+        await fallbackPool.query(
+          `INSERT INTO order_fulfillment (id, order_id, fulfillment_id, created_at, updated_at)
+           VALUES ($1, $2, $3, NOW(), NOW())
+           ON CONFLICT DO NOTHING`,
+          [linkId, orderId, fulfillment.id]
+        );
+        linkOk = true;
+        console.log(
+          `[create-fulfillment-force] ✅ SQL fallback inserted link ${linkId}`
+        );
+      } catch (linkErr: any) {
+        console.error(
+          `[create-fulfillment-force] ❌ Link fallback also failed: ${linkErr?.message}`
+        );
+      }
+    }
+
+    if (!linkOk) {
+      // Best-effort: delete the orphan fulfillment so we don't leave dangling
+      // state that the next "Mark as Picked Up" or pickup flow has to mop up.
+      try {
+        await fulfillmentModule.softDeleteFulfillments([fulfillment.id]);
+      } catch {
+        /* swallow */
+      }
+      return res.status(500).json({
+        message: `Fulfillment ${fulfillment.id} created but could not be linked to order ${orderId}; orphan deleted to keep state consistent.`,
+      });
     }
 
     // ── fulfilled_quantity fix (Strategy 2 only) ──────────────────────────
-    // Only safely increment the items that were just fulfilled
+    // order_item.id is the junction PK, item_id is the FK to order_line_item.
     if (dbUrl && items.length > 0) {
       const pool2 = getDbPool();
       try {
@@ -408,8 +474,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           await pool2.query(
             `UPDATE order_item
                          SET fulfilled_quantity = LEAST(quantity, COALESCE(fulfilled_quantity, 0) + $1::numeric)
-                         WHERE id = $2`,
-            [item.quantity, item.id]
+                         WHERE item_id = $2 AND order_id = $3`,
+            [item.quantity, item.id, orderId]
           );
         }
         console.log(
@@ -419,6 +485,28 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         console.warn(
           `[create-fulfillment-force] fulfilled_quantity patch failed (non-fatal): ${sqlErr?.message}`
         );
+      }
+    }
+
+    // ── Atomic mark-as-delivered (Strategy 2) ────────────────────────
+    if (mark_as_delivered && fulfillment?.id) {
+      try {
+        const { markOrderFulfillmentAsDeliveredWorkflow } =
+          await import("@medusajs/core-flows");
+        await markOrderFulfillmentAsDeliveredWorkflow(req.scope).run({
+          input: { orderId, fulfillmentId: fulfillment.id },
+        });
+        console.log(
+          `[create-fulfillment-force] ✅ Marked fulfillment ${fulfillment.id} as delivered (Strategy 2)`
+        );
+      } catch (deliverErr: any) {
+        console.error(
+          `[create-fulfillment-force] ❌ mark-as-delivered failed: ${deliverErr?.message}`
+        );
+        return res.status(500).json({
+          message: `Fulfillment created (${fulfillment.id}) but mark-as-delivered failed: ${deliverErr?.message}`,
+          fulfillment,
+        });
       }
     }
 

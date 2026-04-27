@@ -49,7 +49,8 @@ export async function GET(
       SELECT id, l1_name, l1_image_url FROM l2
     ),
     invoice_items AS (
-      SELECT pii.variant_id, pii.quantity, pii.total
+      -- Sales line items (positive sign)
+      SELECT pii.variant_id, pii.quantity AS quantity, pii.total AS total
       FROM pos_invoice_item pii
       JOIN pos_invoice pi ON pi.id = pii.invoice_id
       WHERE pi.status IN ('issued', 'partial', 'paid')
@@ -57,20 +58,32 @@ export async function GET(
         AND pi.created_at <= ?
         AND pii.variant_id IS NOT NULL
         AND pii.unit_price > 0
+      UNION ALL
+      -- Credit memo line items (negative sign — completed returns within range)
+      SELECT pcmi.variant_id, -pcmi.quantity AS quantity, -pcmi.line_total AS total
+      FROM pos_credit_memo_item pcmi
+      JOIN pos_credit_memo pcm ON pcm.id = pcmi.credit_memo_id
+      WHERE pcm.status = 'completed'
+        AND pcm.created_at >= ?
+        AND pcm.created_at <= ?
+        AND pcmi.variant_id IS NOT NULL
+        AND pcm.deleted_at IS NULL
+        AND pcmi.deleted_at IS NULL
     ),
     item_with_category AS (
       SELECT
         ii.quantity,
         ii.total,
         -- Prefer product.metadata->>'main_category' when set and maps to an L1;
-        -- fall back to alphabetical MIN to avoid double-counting multi-category products.
-        COALESCE(main_cat.name, MIN(cm.l1_name)) AS l1_category,
+        -- fall back to alphabetical MIN of joined categories;
+        -- finally label as "Uncategorized" so products without any L1 link still surface.
+        COALESCE(main_cat.name, MIN(cm.l1_name), 'Uncategorized') AS l1_category,
         COALESCE(main_cat.image_url, MIN(cm.l1_image_url)) AS l1_image_url
       FROM invoice_items ii
       JOIN product_variant pv ON pv.id = ii.variant_id
       JOIN product p ON p.id = pv.product_id
-      JOIN product_category_product pcp ON pcp.product_id = pv.product_id
-      JOIN cat_map cm ON cm.id = pcp.product_category_id
+      LEFT JOIN product_category_product pcp ON pcp.product_id = pv.product_id
+      LEFT JOIN cat_map cm ON cm.id = pcp.product_category_id
       LEFT JOIN l1 main_cat ON LOWER(main_cat.name) = LOWER(p.metadata->>'main_category')
       GROUP BY ii.variant_id, ii.quantity, ii.total, main_cat.name, main_cat.image_url
     )
@@ -82,11 +95,12 @@ export async function GET(
     FROM item_with_category
     WHERE l1_category IS NOT NULL
     GROUP BY l1_category
+    HAVING SUM(quantity) <> 0 OR SUM(total) <> 0
     ORDER BY revenue DESC;
   `;
 
   try {
-    const result = await pg.raw(sql, [from, to]);
+    const result = await pg.raw(sql, [from, to, from, to]);
     const categories = (result.rows ?? []).map((row: any) => ({
       name: row.name,
       qty: Number(row.qty),

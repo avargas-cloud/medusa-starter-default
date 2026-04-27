@@ -122,10 +122,13 @@ export async function GET(
     { take: 1000, skip: 0, order: { line_order: "ASC", created_at: "ASC" } }
   )) as Array<Record<string, unknown>>;
 
-  const receipts = (await service.listPurchaseOrderReceipts(
+  const receiptsRaw = (await service.listPurchaseOrderReceipts(
     { purchase_order_id: id },
     { take: 1000, skip: 0, order: { received_at: "DESC" } }
-  )) as Array<Record<string, unknown> & { id: string }>;
+  )) as Array<Record<string, unknown> & { id: string; status?: string }>;
+  // Tombstoned receipts (status='deleted') are pending QB DELETE sync — hide
+  // from UI so the user perceives the delete as instant.
+  const receipts = receiptsRaw.filter((r) => r.status !== "deleted");
 
   // Fetch receipt lines for all receipts in one batched call
   const receiptIds = receipts.map((r) => r.id);
@@ -146,10 +149,46 @@ export async function GET(
     linesByReceipt.set(rl.purchase_order_receipt_id, arr);
   }
 
-  const decoratedReceipts = receipts.map((r) => ({
-    ...r,
-    lines: linesByReceipt.get(r.id) ?? [],
-  }));
+  // Hydrate received_by + voided_by user briefs so the Activity timeline can
+  // render names instead of opaque user_ids. Batched: collect unique IDs first,
+  // resolve once, then attach by ID.
+  const receiptUserIds = Array.from(
+    new Set(
+      receipts.flatMap((r) => {
+        const ids: string[] = [];
+        const recv = (r as { received_by_user_id?: string | null })
+          .received_by_user_id;
+        const vd = (r as { voided_by_user_id?: string | null })
+          .voided_by_user_id;
+        if (recv) ids.push(recv);
+        if (vd) ids.push(vd);
+        return ids;
+      })
+    )
+  );
+  const userBriefById = new Map<
+    string,
+    Awaited<ReturnType<typeof resolveUserBrief>>
+  >();
+  await Promise.all(
+    receiptUserIds.map(async (uid) => {
+      const brief = await resolveUserBrief(req, uid);
+      userBriefById.set(uid, brief);
+    })
+  );
+
+  const decoratedReceipts = receipts.map((r) => {
+    const recvId = (r as { received_by_user_id?: string | null })
+      .received_by_user_id;
+    const voidId = (r as { voided_by_user_id?: string | null })
+      .voided_by_user_id;
+    return {
+      ...r,
+      lines: linesByReceipt.get(r.id) ?? [],
+      received_by_user: recvId ? (userBriefById.get(recvId) ?? null) : null,
+      voided_by_user: voidId ? (userBriefById.get(voidId) ?? null) : null,
+    };
+  });
 
   // ── Hydrations for the editor: vendor contact, creator/actor users,
   //    product variant thumbnails so refresh shows everything the picker did.

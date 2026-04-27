@@ -11,14 +11,20 @@ import {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type PoStatus = "waiting" | "error" | "synced" | "failed_permanent";
-type PoStep = "purchase_order" | "void_purchase_order" | "mod_purchase_order";
+type PoStep =
+  | "purchase_order"
+  | "void_purchase_order"
+  | "mod_purchase_order"
+  | "add_item_receipt"
+  | "delete_item_receipt";
 
 interface PoRow {
   id: string;
   seq: number | null;
-  purchase_order_id: string;
+  parent_id: string;
   po_number: string | null;
   draft_number: string | null;
+  receipt_number: string | null;
   vendor_name: string | null;
   status: PoStatus;
   step: PoStep;
@@ -45,12 +51,16 @@ const STEP_ICON: Record<PoStep, string> = {
   purchase_order: "🛒",
   void_purchase_order: "🚫",
   mod_purchase_order: "✏️",
+  add_item_receipt: "📦",
+  delete_item_receipt: "🗑️",
 };
 
 const STEP_LABEL: Record<PoStep, string> = {
   purchase_order: "Purchase Order",
   void_purchase_order: "Void PO",
   mod_purchase_order: "Modify PO",
+  add_item_receipt: "Item Receipt",
+  delete_item_receipt: "Delete Receipt",
 };
 
 type BadgeColor = "orange" | "blue" | "green" | "red" | "grey";
@@ -145,10 +155,17 @@ function PipelinePoRow({
           </span>
         </td>
 
-        {/* PO # */}
+        {/* PO # / Receipt # */}
         <td className="px-3 py-2 whitespace-nowrap">
-          <span className="font-mono font-semibold text-ui-fg-base">
-            {row.po_number ?? row.draft_number ?? "—"}
+          <span className="flex flex-col leading-tight">
+            <span className="font-mono font-semibold text-ui-fg-base">
+              {row.po_number ?? row.draft_number ?? "—"}
+            </span>
+            {row.receipt_number && (
+              <span className="font-mono text-[10px] text-emerald-600 font-semibold">
+                {row.receipt_number}
+              </span>
+            )}
           </span>
         </td>
 
@@ -376,7 +393,7 @@ export const PurchaseOrderPipelineSection = () => {
               level="h3"
               className="text-sm font-medium flex items-center gap-2"
             >
-              🏭 QB Purchase Pipeline
+              🏭 QB Purchase + Receipts Pipeline
               {hasPending && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-normal text-blue-600 animate-pulse">
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block" />
@@ -385,8 +402,8 @@ export const PurchaseOrderPipelineSection = () => {
               )}
             </Heading>
             <Text className="text-xs text-ui-fg-subtle mt-0.5">
-              Real-time queue of QuickBooks purchase order operations — auto-refreshes
-              while active
+              Real-time queue of QuickBooks purchase order + item-receipt operations
+              (add / mod / void / delete) — auto-refreshes while active
             </Text>
           </div>
           <Button
@@ -427,7 +444,7 @@ export const PurchaseOrderPipelineSection = () => {
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <input
             type="text"
-            placeholder="Search PO / vendor / QB ref / error…"
+            placeholder="Search PO / receipt / vendor / QB ref / error…"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base w-52 placeholder:text-ui-fg-muted"
@@ -452,10 +469,10 @@ export const PurchaseOrderPipelineSection = () => {
         {rows.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
             <Text className="text-sm text-ui-fg-subtle">
-              No PO pipeline operations found.
+              No pipeline operations found.
             </Text>
             <Text className="text-xs text-ui-fg-muted mt-1">
-              Operations appear here when purchase orders sync to QuickBooks.
+              Operations appear here when POs or item receipts sync to QuickBooks.
             </Text>
           </div>
         ) : (
@@ -465,7 +482,7 @@ export const PurchaseOrderPipelineSection = () => {
                 <tr>
                   <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle w-10">#</th>
                   <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Step</th>
-                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">PO #</th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">PO # / Receipt #</th>
                   <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">QB Ref #</th>
                   <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Vendor</th>
                   <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Status</th>

@@ -63,7 +63,13 @@ export async function POST(
   if (!po) {
     return res.status(404).json({ error: "Purchase order not found", code: "not_found" });
   }
-  if (po.status !== "submitted" && po.status !== "partially_received") {
+  // Void allowed on submitted, partially_received, AND received POs.
+  // For received POs the line cancellation loop is a no-op (all lines are
+  // already 'complete'), but the PO header is still marked voided + queued
+  // to QB. If the user also wants inventory back, they must delete the
+  // underlying receipts first.
+  const VOIDABLE = ["submitted", "partially_received", "received"];
+  if (!VOIDABLE.includes(po.status)) {
     return res.status(409).json({
       error: `Cannot void a PO in status '${po.status}'.`,
       code: "not_voidable",

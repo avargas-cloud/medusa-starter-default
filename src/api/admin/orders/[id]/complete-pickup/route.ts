@@ -42,6 +42,66 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const pool = getDbPool();
 
   try {
+    // ── Step 0: Short-circuit if the invoice already has a live fulfillment ─
+    // Cobro/checkout often creates the fulfillment up-front, so by the time
+    // the cashier clicks "Mark as Picked Up" the order is already fulfilled
+    // (reservations consumed + soft-deleted). Re-running create-fulfillment
+    // would crash with "No stock reservation found". Just mark delivered.
+    const invoiceRow = await pool.query<{ fulfillment_id: string | null }>(
+      `SELECT fulfillment_id FROM pos_invoice WHERE id = $1 LIMIT 1`,
+      [invoice_id]
+    );
+    const existingFulId = invoiceRow.rows[0]?.fulfillment_id;
+    if (existingFulId) {
+      const fulRow = await pool.query<{
+        canceled_at: Date | null;
+        delivered_at: Date | null;
+      }>(
+        `SELECT canceled_at, delivered_at FROM fulfillment WHERE id = $1 LIMIT 1`,
+        [existingFulId]
+      );
+      const ful = fulRow.rows[0];
+      if (ful && !ful.canceled_at) {
+        const { markOrderFulfillmentAsDeliveredWorkflow } =
+          await import("@medusajs/core-flows");
+        if (!ful.delivered_at) {
+          await markOrderFulfillmentAsDeliveredWorkflow(req.scope).run({
+            input: { orderId, fulfillmentId: existingFulId },
+          });
+        }
+
+        const orderModule = req.scope.resolve(Modules.ORDER) as any;
+        const orderData = await orderModule.retrieveOrder(orderId);
+        const existingMetadata = (orderData?.metadata ?? {}) as Record<
+          string,
+          unknown
+        >;
+        const pickedUpAt = new Date().toISOString();
+        const nextMetadata: Record<string, unknown> = {
+          ...existingMetadata,
+          picked_up_at: pickedUpAt,
+          picked_up_by: picked_up_by ?? existingMetadata.picked_up_by ?? null,
+        };
+        delete nextMetadata.pickup_pending;
+        delete nextMetadata.pickup_pending_invoice_id;
+        try {
+          await orderModule.updateOrders([
+            { id: orderId, metadata: nextMetadata },
+          ]);
+        } catch (metaErr: any) {
+          console.warn(
+            `[complete-pickup] metadata update warning: ${metaErr?.message}`
+          );
+        }
+
+        return res.status(200).json({
+          fulfillment_id: existingFulId,
+          picked_up_at: pickedUpAt,
+          picked_up_by: nextMetadata.picked_up_by ?? null,
+        });
+      }
+    }
+
     // ── Step 1: Load invoice items ──────────────────────────────────────────
     const invItemsRes = await pool.query<{
       variant_id: string | null;
@@ -175,13 +235,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       throw new Error("Fulfillment creation returned no id");
     }
 
-    // Patch fulfilled_quantity so order.fulfillment_status reflects reality
+    // Patch fulfilled_quantity so order.fulfillment_status reflects reality.
+    // order_item is a versioned junction; item_id (not id) is the line-item FK.
     for (const item of fulfillmentItems) {
       await pool.query(
         `UPDATE order_item
             SET fulfilled_quantity = LEAST(quantity, COALESCE(fulfilled_quantity, 0) + $1::numeric)
-          WHERE id = $2`,
-        [item.quantity, item.id]
+          WHERE item_id = $2 AND order_id = $3`,
+        [item.quantity, item.id, orderId]
       );
     }
 

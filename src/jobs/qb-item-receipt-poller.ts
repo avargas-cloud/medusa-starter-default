@@ -14,11 +14,17 @@
  * Phase C — Retry: status='error', next_retry_at <= now
  *   → re-submit, reset to waiting.
  *
- * Phase D — Submit void: void_status='waiting', void_operation_id IS NULL
- *   → DELETE /api/item-receipts/:txnId → store void operationId.
+ * Phase D — Submit delete: void_status='waiting', void_operation_id IS NULL
+ *   → DELETE /api/item-receipts/:txnId (TxnDelRq, hard delete in QB) → store
+ *     operationId.
  *
- * Phase E — Poll void: void_status='waiting', void_operation_id IS NOT NULL
- *   → if completed, mark void_status='synced'; update receipt status='voided'.
+ * Phase E — Poll delete: void_status='waiting', void_operation_id IS NOT NULL
+ *   → if completed, hard-delete the receipt row (CASCADE wipes lines +
+ *     vendor_bill + pipeline row).
+ *
+ * Note: the schema column `void_status` is kept for backwards compat but
+ * represents the delete lifecycle. ItemReceipts in QB Desktop don't support
+ * a meaningful void (would leave a $0 voided record), so we always delete.
  */
 
 import { MedusaContainer } from "@medusajs/framework/types";
@@ -76,7 +82,10 @@ const submitAddToBridge = async (
   return json.operationId;
 };
 
-const submitVoidToBridge = async (txnId: string): Promise<string> => {
+const submitDeleteToBridge = async (txnId: string): Promise<string> => {
+  // ItemReceipts only support hard delete in QB Desktop (TxnDelRq). Void
+  // would leave a $0 voided record which is meaningless for inventory
+  // receipts, so we never void — always delete.
   const res = await fetch(`${bridgeUrl()}/api/item-receipts/${txnId}`, {
     method: "DELETE",
     headers: {
@@ -320,27 +329,33 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     }
   }
 
-  // ── Phase D: Submit pending void rows ─────────────────────────────────────
-  const voidPending: any[] = await knex
+  // ── Phase D: Submit pending delete rows ───────────────────────────────────
+  // ItemReceipts only support hard delete (TxnDel). The pipeline column is
+  // historically named void_status but represents the delete lifecycle.
+  const deletePending: any[] = await knex
     .raw(
-      `SELECT id, purchase_order_receipt_id, qb_list_id
-       FROM qb_item_receipt_pipeline
-      WHERE void_status = 'waiting'
-        AND void_operation_id IS NULL
-        AND qb_list_id IS NOT NULL
-        AND deleted_at IS NULL
-      LIMIT ?`,
+      `SELECT qbp.id,
+              qbp.purchase_order_receipt_id,
+              qbp.qb_list_id
+         FROM qb_item_receipt_pipeline qbp
+        WHERE qbp.void_status = 'waiting'
+          AND qbp.void_operation_id IS NULL
+          AND qbp.qb_list_id IS NOT NULL
+          AND qbp.deleted_at IS NULL
+        LIMIT ?`,
       [MAX_ROWS_PER_TICK]
     )
     .then((r: any) => r.rows);
 
-  if (voidPending.length > 0) {
-    logger.info(`${TAG} phase D: submitting ${voidPending.length} void rows`);
+  if (deletePending.length > 0) {
+    logger.info(
+      `${TAG} phase D: submitting ${deletePending.length} delete rows`
+    );
   }
 
-  for (const row of voidPending) {
+  for (const row of deletePending) {
     try {
-      const operationId = await submitVoidToBridge(row.qb_list_id);
+      const operationId = await submitDeleteToBridge(row.qb_list_id);
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
             SET void_operation_id = ?, updated_at = NOW()
@@ -398,31 +413,17 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
         continue;
       }
 
-      // Void completed
+      // Delete completed in QB. Hard-delete the receipt row now — CASCADE
+      // wipes receipt_lines + vendor_bill + this pipeline row itself.
       await knex.raw(
-        `UPDATE qb_item_receipt_pipeline
-            SET void_status = 'synced',
-                void_synced_at = NOW(),
-                updated_at = NOW()
-          WHERE id = ?`,
-        [row.id]
-      );
-
-      // Mark receipt as voided in QB sync state
-      await knex.raw(
-        `UPDATE purchase_order_receipt
-            SET qb_item_receipt_list_id = NULL,
-                qb_synced_at = NOW(),
-                status = 'voided',
-                updated_at = NOW()
-          WHERE id = ?`,
+        `DELETE FROM purchase_order_receipt WHERE id = ?`,
         [row.purchase_order_receipt_id]
+      );
+      logger.info(
+        `${TAG} receipt ${row.purchase_order_receipt_id} hard-deleted in QB + DB`
       );
 
       voidResolved++;
-      logger.info(
-        `${TAG} receipt ${row.purchase_order_receipt_id} voided in QB`
-      );
     } catch (err: any) {
       logger.warn(`${TAG} void poll failed for row ${row.id}: ${err.message}`);
     }

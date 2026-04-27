@@ -37,6 +37,7 @@ export interface ReceivePurchaseOrderWorkflowInputLine {
   sku_snapshot: string;
   description_snapshot: string;
   qb_item_list_id_snapshot: string | null;
+  qb_po_txn_line_id: string | null;
   qty_received_now: number;
   // effective unit cost: override if provided, otherwise PO line cost
   unit_cost_cents_effective: number;
@@ -48,6 +49,8 @@ export interface ReceivePurchaseOrderWorkflowInput {
   po_number: string;
   vendor_qb_list_id: string;
   vendor_name: string;
+  qb_po_list_id: string | null;
+  qb_inventory_site_list_id: string | null;
   received_by_user_id: string;
   stock_location_id: string;
   received_at: Date;
@@ -117,6 +120,7 @@ export const receivePurchaseOrderWorkflow = createWorkflow(
         receipt_line_id: data.persisted.receipt_line_ids[i] as string,
         po_line_id: l.po_line_id,
         qb_item_list_id: l.qb_item_list_id_snapshot ?? "",
+        qb_po_txn_line_id: l.qb_po_txn_line_id,
         sku: l.sku_snapshot,
         description: l.description_snapshot,
         qty_received_now: l.qty_received_now,
@@ -130,6 +134,8 @@ export const receivePurchaseOrderWorkflow = createWorkflow(
         receipt_number: data.seq.number,
         vendor_qb_list_id: data.input.vendor_qb_list_id,
         vendor_name: data.input.vendor_name,
+        qb_po_list_id: data.input.qb_po_list_id,
+        inventory_site_list_id: data.input.qb_inventory_site_list_id,
         received_at: data.input.received_at,
         vendor_bill_number: data.input.vendor_bill_number,
         vendor_bill_date: data.input.vendor_bill_date,

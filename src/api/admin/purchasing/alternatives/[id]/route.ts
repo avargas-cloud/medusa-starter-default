@@ -84,6 +84,8 @@ export async function GET(
       sales_last_24d: string | null;
       qty_on_po: number;
       qty_on_po_china: number;
+      qty_on_po_china_alt: number;
+      inv_china_alt: number;
       max_daily_sales: number;
       qty_to_factory: number;
       production_days: number;
@@ -115,6 +117,8 @@ export async function GET(
         snap.monthly_sales_est,
         COALESCE(snap.sales_last_24d, 0) AS sales_last_24d,
         COALESCE(snap.qty_to_factory, 0)::int AS qty_to_factory,
+        COALESCE(snap.inv_china_alt, 0)::int AS inv_china_alt,
+        COALESCE(snap.qty_on_po_china_alt, 0)::int AS qty_on_po_china_alt,
         COALESCE(snap.production_days, 10)::int AS production_days,
         snap.tier0_30d,
         snap.sales_q1,
@@ -182,6 +186,7 @@ export async function GET(
                snap.sales_last_24d, snap.qty_to_factory, snap.production_days, p.metadata,
                snap.tier0_30d, snap.sales_q1, snap.sales_q2, snap.sales_q3, snap.sales_q4,
                snap.cv, snap.unmet_net_30d, snap.first_sale_date, snap.last_calculated_at,
+               snap.inv_china_alt, snap.qty_on_po_china_alt,
                open_po_usa.on_order, open_po_china.on_order, max_day.max_daily_sales
       ORDER BY pa.priority ASC, pv.sku
     `,

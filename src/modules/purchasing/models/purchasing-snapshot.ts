@@ -37,9 +37,11 @@ export const PurchasingSnapshot = model.define("purchasing_snapshot", {
   // ── Inventory snapshot (at time of calculation) ───────────────────────
   inv_usa: model.number().default(0),
   inv_china: model.number().default(0),
+  inv_china_alt: model.number().default(0), // sum of inv_china across alternatives
   qty_on_so: model.number().default(0),
   qty_on_po_usa: model.number().default(0),
   qty_on_po_china: model.number().default(0),
+  qty_on_po_china_alt: model.number().default(0), // sum of factory POs across alternatives
 
   // ── Reorder recommendation ────────────────────────────────────────────
   qty_to_transfer: model.number().default(0), // order to Veetech (China → USA)
