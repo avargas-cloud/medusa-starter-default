@@ -1,6 +1,7 @@
 {
     "build": {},
     "deploy": {
+        "startCommand": "cd .medusa/server && npm start",
         "healthcheckPath": "/health",
         "healthcheckTimeout": 900
     }

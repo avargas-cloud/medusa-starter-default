@@ -1,28 +1,24 @@
 #!/usr/bin/env node
 /**
  * post-build.js
- * Runs after `medusa build` on Railway (via "build": "medusa build && node scripts/post-build.js").
+ * Runs after `medusa build` (via "build": "medusa build && node scripts/post-build.js").
  *
  * PURPOSE:
- * `medusa build` generates .medusa/server/ with a FRESH npm install that
- * overwrites our patched node_modules. This script:
- *
- *   1. Copies our patches/ directory into .medusa/server/patches/
+ *   1. Copies patches/ into .medusa/server/patches/
  *   2. Injects "postinstall": "npx --yes patch-package" into .medusa/server/package.json
+ *   3. Runs `npm install --omit=dev --legacy-peer-deps` inside .medusa/server/
+ *      so node_modules is baked into the build image. The postinstall hook
+ *      from step 2 fires here and applies the patches.
  *
- * The actual patch-package execution happens LATER, when Railway runs:
- *   cd .medusa/server && npm install --omit=dev --legacy-peer-deps
- *
- * That npm install triggers the postinstall hook, which runs patch-package
- * AFTER node_modules are fully installed — which is the only valid timing.
- *
- * NOTE: Do NOT run patch-package here directly. .medusa/server/node_modules
- * does not exist at this point (npm install hasn't run yet), so patch-package
- * would fail with "package not present at node_modules/...".
+ * Why install during build (not deploy):
+ *   Railway's deploy phase used to run `npm install` on every deploy (~7 min,
+ *   2000+ packages). Doing it during the build means node_modules ships with
+ *   the image and the deploy start command becomes just `npm start`.
  */
 
 const fs = require("fs");
 const path = require("path");
+const { execSync } = require("child_process");
 
 const SERVER_DIR = path.resolve(__dirname, "../.medusa/server");
 const PATCHES_SRC = path.resolve(__dirname, "../patches");
@@ -53,17 +49,66 @@ console.log("✅  patches/ copied.");
 // of .medusa/server — npx downloads and runs it on-demand.
 if (fs.existsSync(PKG_JSON)) {
   const pkg = JSON.parse(fs.readFileSync(PKG_JSON, "utf8"));
+  let dirty = false;
+
+  // 3a. Inject postinstall hook for patch-package
   pkg.scripts = pkg.scripts ?? {};
   const POSTINSTALL_CMD = "npx --yes patch-package";
   if (pkg.scripts.postinstall !== POSTINSTALL_CMD) {
     pkg.scripts.postinstall = POSTINSTALL_CMD;
-    fs.writeFileSync(PKG_JSON, JSON.stringify(pkg, null, 2));
+    dirty = true;
     console.log("✅  Injected postinstall='npx --yes patch-package' into .medusa/server/package.json");
+  }
+
+  // 3b. Strip the root-level "npm: DO NOT USE NPM" guard from engines so that
+  //     `npm install` actually works inside .medusa/server (we use npm there
+  //     because that's what Railway's deploy phase historically used, and the
+  //     install runs against this package.json — yarn would re-resolve from
+  //     the wrong workspace root).
+  if (pkg.engines && typeof pkg.engines.npm === "string" && pkg.engines.npm.includes("DO NOT USE")) {
+    delete pkg.engines.npm;
+    dirty = true;
+    console.log("✅  Stripped 'engines.npm' guard from .medusa/server/package.json");
+  }
+
+  if (dirty) {
+    fs.writeFileSync(PKG_JSON, JSON.stringify(pkg, null, 2));
   } else {
-    console.log("ℹ️   postinstall hook already correct in .medusa/server/package.json");
+    console.log("ℹ️   .medusa/server/package.json already correct.");
   }
 } else {
-  console.warn("⚠️  .medusa/server/package.json not found — postinstall hook not injected.");
+  console.warn("⚠️  .medusa/server/package.json not found — skipping injection.");
 }
 
-console.log("✅  post-build.js complete. Patches will be applied during 'npm install' on deploy.");
+// ─── 4. Run yarn install inside .medusa/server so node_modules is baked into image ─
+// Skip when SKIP_MEDUSA_SERVER_INSTALL=1 (useful for local quick rebuilds where the
+// dev runs from /app/node_modules and doesn't need .medusa/server/node_modules).
+if (process.env.SKIP_MEDUSA_SERVER_INSTALL === "1") {
+  console.log("⏭️   SKIP_MEDUSA_SERVER_INSTALL=1 — skipping yarn install in .medusa/server.");
+} else {
+  // medusa build emits a yarn.lock alongside package.json. We use yarn for
+  // consistency with the rest of the project (npm has historically caused
+  // issues here). Remove any package-lock.json that a previous npm run left.
+  const PKG_LOCK = path.join(SERVER_DIR, "package-lock.json");
+  if (fs.existsSync(PKG_LOCK)) {
+    fs.rmSync(PKG_LOCK);
+    console.log("🧹  Removed stale package-lock.json from .medusa/server.");
+  }
+
+  console.log("📦  Running 'yarn install --production --frozen-lockfile' in .medusa/server …");
+  const installStart = Date.now();
+  try {
+    execSync("yarn install --production --frozen-lockfile --ignore-engines", {
+      cwd: SERVER_DIR,
+      stdio: "inherit",
+      env: { ...process.env, NODE_ENV: "production" },
+    });
+    const elapsed = ((Date.now() - installStart) / 1000).toFixed(1);
+    console.log(`✅  yarn install complete in ${elapsed}s — node_modules baked into image.`);
+  } catch (err) {
+    console.error("❌  yarn install in .medusa/server failed:", err.message);
+    process.exit(1);
+  }
+}
+
+console.log("✅  post-build.js complete.");
