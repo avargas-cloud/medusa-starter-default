@@ -165,7 +165,33 @@ export async function POST(
       promotionCode = promoCode;
       promotionId = promotion.id;
 
-      // 4. Cancel any pending edits (clean slate)
+      // 4a. Force-cancel ANY pre-existing pending order_change rows (zombies
+      //     from previous failed runs would block beginDraftOrderEditWorkflow).
+      //     SQL is the only reliable kill switch — cancelDraftOrderEditWorkflow
+      //     can silently no-op on a half-broken edit, leaving it stuck.
+      const dbUrl = process.env.DATABASE_URL;
+      if (dbUrl) {
+        try {
+          const zPool = getDbPool();
+          const zRes = await zPool.query(
+            `UPDATE order_change SET status = 'canceled', canceled_at = NOW(), updated_at = NOW()
+                         WHERE order_id = $1 AND status = 'pending' AND deleted_at IS NULL
+                         RETURNING id`,
+            [id]
+          );
+          if ((zRes.rowCount ?? 0) > 0) {
+            logger.warn(
+              `[apply-discount-force] Force-cancelled ${zRes.rowCount} zombie order_change row(s) for ${id}`
+            );
+          }
+        } catch (e: any) {
+          logger.warn(
+            `[apply-discount-force] Zombie cancel failed (non-fatal): ${e.message}`
+          );
+        }
+      }
+
+      // 4b. Defensive workflow cancel (in case the SQL above missed an edge case)
       try {
         await cancelDraftOrderEditWorkflow(req.scope).run({
           input: { order_id: id },
@@ -179,19 +205,55 @@ export async function POST(
         input: { order_id: id },
       });
 
-      // 6. Mechanically remove old POS-DISC adjustments and `order_promotion` links so they don't stack
-      const dbUrl = process.env.DATABASE_URL;
+      // 6a. SNAPSHOT existing adjustments / promo links / tax lines so we can
+      //     ROLL BACK if the promotion workflow fails between wipe and confirm.
+      //     Without this, a workflow failure leaves the order with ZERO
+      //     adjustments — the exact bug fixed here (orphaned discount state).
+      const snapshot = {
+        adjustments: [] as any[],
+        promoLinks: [] as any[],
+        taxLines: [] as any[],
+      };
+      if (dbUrl) {
+        const snapPool = getDbPool();
+        try {
+          const adjRes = await snapPool.query(
+            `SELECT id, description, promotion_id, code, amount, raw_amount, provider_id, created_at, updated_at, item_id, deleted_at, is_tax_inclusive, version
+                         FROM order_line_item_adjustment
+                         WHERE item_id IN (SELECT item_id FROM order_item WHERE order_id = $1)`,
+            [id]
+          );
+          snapshot.adjustments = adjRes.rows;
+          const promoRes = await snapPool.query(
+            `SELECT order_id, promotion_id, id, created_at, updated_at, deleted_at
+                         FROM order_promotion WHERE order_id = $1`,
+            [id]
+          );
+          snapshot.promoLinks = promoRes.rows;
+          const taxRes = await snapPool.query(
+            `SELECT id, description, tax_rate_id, code, rate, raw_rate, provider_id, created_at, updated_at, item_id, deleted_at
+                         FROM order_line_item_tax_line
+                         WHERE item_id IN (SELECT item_id FROM order_item WHERE order_id = $1)`,
+            [id]
+          );
+          snapshot.taxLines = taxRes.rows;
+          logger.info(
+            `[apply-discount-force] Snapshot: ${snapshot.adjustments.length} adj, ${snapshot.promoLinks.length} promo, ${snapshot.taxLines.length} tax`
+          );
+        } catch (e: any) {
+          logger.warn(
+            `[apply-discount-force] Snapshot failed (rollback unavailable): ${e.message}`
+          );
+        }
+      }
 
-      /* --- NATIVE MIGRATION: 
-               We continue using the fast SQL cleanup here just for purging old data 
-               so the edit is a clean slate before the workflow runs. 
-               This avoids workflow errors trying to cancel non-existent things.
-            */
+      // 6b. Mechanically remove old POS-DISC adjustments and `order_promotion`
+      //     links so they don't stack with the freshly applied promotion.
       if (dbUrl) {
         const pool = getDbPool();
         try {
           const delAdj = await pool.query(
-            `DELETE FROM order_line_item_adjustment 
+            `DELETE FROM order_line_item_adjustment
                          WHERE item_id IN (SELECT item_id FROM order_item WHERE order_id = $1)`,
             [id]
           );
@@ -204,7 +266,7 @@ export async function POST(
           // 5% × (items $52.98 + tax $3.52) = $2.82 instead of 5% × $52.98 = $2.65.
           // post-edit-sync will re-inject tax lines with the correct rate after confirmation.
           const delTax = await pool.query(
-            `DELETE FROM order_line_item_tax_line 
+            `DELETE FROM order_line_item_tax_line
                          WHERE item_id IN (SELECT item_id FROM order_item WHERE order_id = $1)`,
             [id]
           );
@@ -216,35 +278,121 @@ export async function POST(
         }
       }
 
-      // 7. Apply the new promotion (now passes because is_draft_order=true)
-      await addDraftOrderPromotionWorkflow(req.scope).run({
-        input: { order_id: id, promo_codes: [promoCode] },
-      });
-      logger.info(
-        `[apply-discount-force] Applied promotion ${promoCode} to order ${id}`
-      );
+      // 7-9. Apply promotion + override + confirm. If ANY step throws we
+      //      restore the snapshot so the order doesn't end up with zero
+      //      adjustments + a stranded `order_change` (the orphaned-discount bug).
+      try {
+        // 7. Apply the new promotion (now passes because is_draft_order=true)
+        await addDraftOrderPromotionWorkflow(req.scope).run({
+          input: { order_id: id, promo_codes: [promoCode] },
+        });
+        logger.info(
+          `[apply-discount-force] Applied promotion ${promoCode} to order ${id}`
+        );
 
-      // 8. Override the JSON payload natively BEFORE confirm
-      // This is the EXACT same magic trick we did for Estimates
-      const pctVal = discount_type === "percent" ? discount_value / 100 : null;
-      logger.info(
-        `[apply-discount-force] Running posOverrideAdjustmentsWorkflow for native fractional calculation`
-      );
-      await posOverrideAdjustmentsWorkflow(req.scope).run({
-        input: {
-          order_id: id,
-          promotion_code: promoCode,
-          pct_discount: pctVal, // (Fixed discounts are currently handled natively by Medusa spreading mechanism, only percent needs the item-level rewrite)
-        },
-      });
+        // 8. Override the JSON payload natively BEFORE confirm
+        // This is the EXACT same magic trick we did for Estimates
+        const pctVal =
+          discount_type === "percent" ? discount_value / 100 : null;
+        logger.info(
+          `[apply-discount-force] Running posOverrideAdjustmentsWorkflow for native fractional calculation`
+        );
+        await posOverrideAdjustmentsWorkflow(req.scope).run({
+          input: {
+            order_id: id,
+            promotion_code: promoCode,
+            pct_discount: pctVal, // (Fixed discounts are currently handled natively by Medusa spreading mechanism, only percent needs the item-level rewrite)
+          },
+        });
 
-      // 9. Confirm the edit
-      await confirmDraftOrderEditWorkflow(req.scope).run({
-        input: { order_id: id, confirmed_by: "pos-system" },
-      });
-      logger.info(
-        `[apply-discount-force] Confirmed order edit via native workflow`
-      );
+        // 9. Confirm the edit
+        await confirmDraftOrderEditWorkflow(req.scope).run({
+          input: { order_id: id, confirmed_by: "pos-system" },
+        });
+        logger.info(
+          `[apply-discount-force] Confirmed order edit via native workflow`
+        );
+      } catch (workflowErr: any) {
+        logger.error(
+          `[apply-discount-force] Workflow failed: ${workflowErr?.message}. ROLLING BACK from snapshot.`
+        );
+        if (dbUrl) {
+          const rbPool = getDbPool();
+          try {
+            // Cancel the pending edit so it doesn't block subsequent runs.
+            await rbPool.query(
+              `UPDATE order_change SET status = 'canceled', canceled_at = NOW(), updated_at = NOW()
+                             WHERE order_id = $1 AND status = 'pending' AND deleted_at IS NULL`,
+              [id]
+            );
+            for (const r of snapshot.adjustments) {
+              await rbPool.query(
+                `INSERT INTO order_line_item_adjustment (id, description, promotion_id, code, amount, raw_amount, provider_id, created_at, updated_at, item_id, deleted_at, is_tax_inclusive, version)
+                                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+                                 ON CONFLICT (id) DO NOTHING`,
+                [
+                  r.id,
+                  r.description,
+                  r.promotion_id,
+                  r.code,
+                  r.amount,
+                  r.raw_amount,
+                  r.provider_id,
+                  r.created_at,
+                  r.updated_at,
+                  r.item_id,
+                  r.deleted_at,
+                  r.is_tax_inclusive,
+                  r.version,
+                ]
+              );
+            }
+            for (const r of snapshot.promoLinks) {
+              await rbPool.query(
+                `INSERT INTO order_promotion (order_id, promotion_id, id, created_at, updated_at, deleted_at)
+                                 VALUES ($1,$2,$3,$4,$5,$6)
+                                 ON CONFLICT (order_id, promotion_id) DO NOTHING`,
+                [
+                  r.order_id,
+                  r.promotion_id,
+                  r.id,
+                  r.created_at,
+                  r.updated_at,
+                  r.deleted_at,
+                ]
+              );
+            }
+            for (const r of snapshot.taxLines) {
+              await rbPool.query(
+                `INSERT INTO order_line_item_tax_line (id, description, tax_rate_id, code, rate, raw_rate, provider_id, created_at, updated_at, item_id, deleted_at)
+                                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                                 ON CONFLICT (id) DO NOTHING`,
+                [
+                  r.id,
+                  r.description,
+                  r.tax_rate_id,
+                  r.code,
+                  r.rate,
+                  r.raw_rate,
+                  r.provider_id,
+                  r.created_at,
+                  r.updated_at,
+                  r.item_id,
+                  r.deleted_at,
+                ]
+              );
+            }
+            logger.warn(
+              `[apply-discount-force] ROLLBACK OK: restored ${snapshot.adjustments.length} adj, ${snapshot.promoLinks.length} promo, ${snapshot.taxLines.length} tax`
+            );
+          } catch (rbErr: any) {
+            logger.error(
+              `[apply-discount-force] ROLLBACK FAILED: ${rbErr?.message}`
+            );
+          }
+        }
+        throw workflowErr;
+      }
 
       // 10. Insert FL tax lines at the statutory rate (7%) directly via SQL.
       // updateOrderTaxLinesWorkflow would fail because tax_region.provider_id=null → AwilixError.

@@ -328,7 +328,7 @@ export async function POST(
   if (dbUrl) {
     const pool = getDbPool();
     try {
-      // 1. Delete soft-deleted adjustments
+      // 1a. Delete soft-deleted adjustments
       const adjDel = await pool.query(
         `DELETE FROM order_line_item_adjustment
                  WHERE deleted_at IS NOT NULL
@@ -337,6 +337,19 @@ export async function POST(
       );
       logger.info(
         `[post-edit-sync] 🧹 Hard-deleted ${adjDel.rowCount ?? 0} stale adjustment row(s)`
+      );
+
+      // 1b. Delete adjustments stuck at old order_item versions. Medusa joins
+      //     adjustments → order_item by version, so a mismatch makes them
+      //     invisible (and inflates `discount_total = 0` on the live order).
+      const adjVerDel = await pool.query(
+        `DELETE FROM order_line_item_adjustment
+                 WHERE item_id IN (SELECT DISTINCT item_id FROM order_item WHERE order_id = $1)
+                   AND version != (SELECT MAX(version) FROM order_item WHERE order_id = $2)`,
+        [id, id]
+      );
+      logger.info(
+        `[post-edit-sync] 🧹 Hard-deleted ${adjVerDel.rowCount ?? 0} adjustment(s) at stale versions`
       );
 
       // 2. Delete old order_change_action rows (keep only latest order_change)
@@ -403,13 +416,31 @@ export async function POST(
 
   if (reconDiscountAmt !== undefined && reconDiscountAmt >= 0) {
     try {
+      // Fetch adjustments alongside discount_total — Medusa v2's decorateCartTotals
+      // returns 0 when adjustments aren't eagerly loaded into the response, which
+      // would mask a real discount and skip the delete-on-zero branch below.
       const recheckRes = await fetch(
-        `${base}/admin/orders/${id}?fields=discount_total`,
+        `${base}/admin/orders/${id}?fields=discount_total,metadata,+items.adjustments.*`,
         { headers: authHeaders }
       );
       if (recheckRes.ok) {
         const { order: recheckOrder } = await recheckRes.json();
-        const medusaDiscount = Number(recheckOrder?.discount_total ?? 0);
+        // Authoritative discount = sum of live adjustments. Falls back to
+        // Medusa's `discount_total` if items aren't returned for any reason.
+        const liveAdjSum: number = Array.isArray(recheckOrder?.items)
+          ? recheckOrder.items.reduce(
+              (s: number, it: any) =>
+                s +
+                ((it?.adjustments ?? []) as any[])
+                  .filter((a: any) => !a?.tax_line_id)
+                  .reduce((a: number, b: any) => a + Number(b?.amount ?? 0), 0),
+              0
+            )
+          : 0;
+        const medusaDiscount =
+          liveAdjSum > 0
+            ? liveAdjSum
+            : Number(recheckOrder?.discount_total ?? 0);
         const posDiscount = Number(reconDiscountAmt);
         logger.info(
           `[post-edit-sync] CALCULATED DISCOUNT = $${medusaDiscount.toFixed(2)} | POS ORDER DISCOUNT = $${posDiscount.toFixed(2)}`
@@ -432,7 +463,7 @@ export async function POST(
               if (posDiscount === 0) {
                 // FULL DELETE OF ADJUSTMENTS TO REMOVE DISCOUNT
                 await discPool.query(
-                  `DELETE FROM order_line_item_adjustment 
+                  `DELETE FROM order_line_item_adjustment
                                      WHERE item_id IN (SELECT oi.item_id FROM order_item oi WHERE oi.order_id = $1)`,
                   [id]
                 );
@@ -461,6 +492,80 @@ export async function POST(
                   `[post-edit-sync] ✅ Forced discount: ${adjs.length} adjustments corrected to sum $${posDiscount}`
                 );
                 results.discount_forced = posDiscount;
+              }
+            } else if (posDiscount > 0) {
+              // SAFETY NET: zero adjustments but POS reports a non-zero discount.
+              // This means apply-discount-force failed silently (orphaned-discount bug).
+              // Recreate adjustments here so Medusa's `total` = computed_total again.
+              logger.warn(
+                `[post-edit-sync] ⚠️ ORPHANED-DISCOUNT RECOVERY: 0 adjustments but posDiscount=$${posDiscount}. Creating fallback prorrated adjustments.`
+              );
+              const linesRes = await discPool.query<{
+                item_id: string;
+                line_subtotal: string;
+              }>(
+                `SELECT oi.item_id, (oi.quantity * oli.unit_price)::text AS line_subtotal
+                                 FROM order_item oi
+                                 JOIN order_line_item oli ON oli.id = oi.item_id
+                                 WHERE oi.order_id = $1 AND oi.deleted_at IS NULL`,
+                [id]
+              );
+              const lines = linesRes.rows;
+              const totalSub = lines.reduce(
+                (s, r) => s + Number(r.line_subtotal),
+                0
+              );
+              if (lines.length > 0 && totalSub > 0) {
+                const promoCode =
+                  (recheckOrder?.metadata?.promotion_code as
+                    | string
+                    | undefined) ??
+                  `CPOS-FALLBACK-${Math.round(posDiscount * 100)}`;
+                const promoLookup = await discPool.query<{ id: string }>(
+                  `SELECT id FROM promotion WHERE code = $1 LIMIT 1`,
+                  [promoCode]
+                );
+                const promoId: string | null =
+                  promoLookup.rows[0]?.id ?? null;
+
+                for (const ln of lines) {
+                  const proportion = Number(ln.line_subtotal) / totalSub;
+                  const adjAmt = Number(
+                    (proportion * posDiscount).toFixed(6)
+                  );
+                  const rawAmt = JSON.stringify({
+                    value: String(adjAmt),
+                    precision: 20,
+                  });
+                  const adjId = `adj_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+                  await discPool.query(
+                    `INSERT INTO order_line_item_adjustment
+                                         (id, item_id, code, amount, raw_amount, promotion_id, description, is_tax_inclusive, version, created_at, updated_at)
+                                     VALUES ($1, $2, $3, $4, $5, $6, $7, false, 1, NOW(), NOW())`,
+                    [
+                      adjId,
+                      ln.item_id,
+                      promoCode,
+                      adjAmt,
+                      rawAmt,
+                      promoId,
+                      "POS Discount (recovered)",
+                    ]
+                  );
+                }
+                if (promoId) {
+                  const linkId = `ordpr_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+                  await discPool.query(
+                    `INSERT INTO order_promotion (id, order_id, promotion_id, created_at, updated_at)
+                                     VALUES ($1, $2, $3, NOW(), NOW())
+                                     ON CONFLICT (order_id, promotion_id) DO NOTHING`,
+                    [linkId, id, promoId]
+                  );
+                }
+                logger.info(
+                  `[post-edit-sync] ✅ Recovery created ${lines.length} prorrated adjustments summing $${posDiscount} (promo=${promoCode})`
+                );
+                results.discount_recovered = posDiscount;
               }
             }
 

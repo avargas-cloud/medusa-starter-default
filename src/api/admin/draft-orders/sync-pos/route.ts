@@ -492,6 +492,17 @@ export async function POST(
         [resolvedId, resolvedId]
       );
 
+      // d2. Delete adjustments stuck at old order_item versions. Without this,
+      //     Medusa's join `adjustment.version = order_item.version` returns
+      //     nothing and `discount_total` reports as 0 on the live order even
+      //     though adjustments physically exist (orphaned-version bug).
+      const adjVerDel = await pool.query(
+        `DELETE FROM order_line_item_adjustment
+                 WHERE item_id IN (SELECT DISTINCT item_id FROM order_item WHERE order_id = $1)
+                   AND version != (SELECT MAX(version) FROM order_item WHERE order_id = $2)`,
+        [resolvedId, resolvedId]
+      );
+
       // e. Delete old order_change_action rows (keep only the latest order_change)
       const ocaDel = await pool.query(
         `DELETE FROM order_change_action
@@ -517,7 +528,7 @@ export async function POST(
       );
 
       logger.info(
-        `[sync-pos] 🧹 Cleanup: adj_stale=${adjDel.rowCount ?? 0}, adj_dup=${adjDupDel.rowCount ?? 0}, adj_old_promo=${adjOldPromoDel.rowCount ?? 0}, order_item_old=${oiDel.rowCount ?? 0}, order_change_action=${ocaDel.rowCount ?? 0}, order_change=${ocDel.rowCount ?? 0}, order_summary=${osDel.rowCount ?? 0}`
+        `[sync-pos] 🧹 Cleanup: adj_stale=${adjDel.rowCount ?? 0}, adj_dup=${adjDupDel.rowCount ?? 0}, adj_old_promo=${adjOldPromoDel.rowCount ?? 0}, adj_old_version=${adjVerDel.rowCount ?? 0}, order_item_old=${oiDel.rowCount ?? 0}, order_change_action=${ocaDel.rowCount ?? 0}, order_change=${ocDel.rowCount ?? 0}, order_summary=${osDel.rowCount ?? 0}`
       );
     } catch (cleanupErr: any) {
       logger.warn(`[sync-pos] 🧹 Cleanup non-fatal: ${cleanupErr.message}`);
