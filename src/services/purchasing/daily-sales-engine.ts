@@ -11,9 +11,9 @@
  *   daily_est   = weighted average × (1 + tendency_adj)
  *
  * Tier0 source:
- *   • LIVE mode (default, Mon-Sat days since 2026-04-14 ≥ 24):
- *     tier0 = last 30 calendar days from pos_invoice (returns netted at sale date).
- *   • FALLBACK mode (< 24 biz days since go-live):
+ *   • LIVE mode (default, Mon-Sat days since 2026-04-14 ≥ 26):
+ *     tier0 = last 26 Mon-Sat days from pos_invoice (returns netted at sale date).
+ *   • FALLBACK mode (< 26 biz days since go-live):
  *     tier0 = previous full calendar month from purchasing_sales_history.
  *     Q4..Q1 history shifts back one month to avoid double-counting that month.
  *
@@ -131,7 +131,7 @@ export async function buildSalesEngineContext(
   // Three modes:
   //   • april2026_combined: SUM(excel for Apr 1-13 from history) + (pos for Apr 14-today).
   //   • fallback_prev_month: previous full calendar month from history (DISTINCT ON).
-  //   • live_window: pos_invoice last 30 days (returns netted at sale date).
+  //   • live_window: pos_invoice last 26 Mon-Sat days (returns netted at sale date).
   // Revenue is NET of returns: in pos_invoice we scale total by (qty - refunded)/qty.
   let t0Rows: { variant_id: string; total: string; revenue: string }[];
   if (tier0Source === "april2026_combined") {

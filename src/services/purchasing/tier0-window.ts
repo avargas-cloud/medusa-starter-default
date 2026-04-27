@@ -3,13 +3,18 @@
  * Used by the engine AND by the API route, so the FE can label quarters
  * with the actual months the engine used.
  *
- * In fallback mode (Medusa <24 biz days post-go-live), tier0 = previous
+ * In fallback mode (Medusa < TIER0_MIN_BIZDAYS post-go-live), tier0 = previous
  * full calendar month from purchasing_sales_history. Q4..Q1 then shift
  * back one month to avoid double-counting that month.
  */
 
 export const MEDUSA_GOLIVE_ISO = "2026-04-14";
-export const TIER0_MIN_BIZDAYS = 24;
+/** Length of the LIVE tier0 window in Mon-Sat days. */
+export const TIER0_LIVE_BIZDAYS = 26;
+/** Min Mon-Sat days post-go-live before LIVE tier0 mode kicks in.
+ *  Must equal TIER0_LIVE_BIZDAYS — otherwise the live window would dip into
+ *  pre-go-live territory where Medusa has no pos_invoice rows. */
+export const TIER0_MIN_BIZDAYS = TIER0_LIVE_BIZDAYS;
 
 /** Mon–Sat days in [startISO, endISO). */
 export function countMonSatBetween(startISO: string, endISO: string): number {
@@ -107,16 +112,18 @@ export function computeTier0Meta(todayET: string): Tier0Meta {
     };
   }
 
-  const window_start = new Date(Date.now() - 30 * 86400_000)
-    .toISOString()
-    .slice(0, 10);
+  // LIVE mode = exactly the last TIER0_LIVE_BIZDAYS Mon-Sat days ending at
+  // yesterday (window_end is exclusive). Walk backwards from yesterday,
+  // counting non-Sundays, until we have TIER0_LIVE_BIZDAYS of them — that day
+  // becomes window_start. Always lands on a non-Sunday.
+  const window_start = liveWindowStartISO(todayET, TIER0_LIVE_BIZDAYS);
   return {
     in_fallback_mode: false,
     source: "live_window",
     window_start,
     window_end: todayET,
     biz_days: countMonSatBetween(window_start, todayET),
-    label: "Últimos 30 días",
+    label: `Últimos ${TIER0_LIVE_BIZDAYS} días háb.`,
     quarter_offsets: {
       q4: [3, 1],
       q3: [6, 4],
@@ -124,4 +131,21 @@ export function computeTier0Meta(todayET: string): Tier0Meta {
       q1: [12, 10],
     },
   };
+}
+
+/** Walk back from `todayET - 1` until we've counted `bizDays` Mon-Sat days.
+ *  Returns the YYYY-MM-DD of the inclusive window start (always Mon-Sat). */
+function liveWindowStartISO(todayET: string, bizDays: number): string {
+  const today = new Date(todayET + "T00:00:00Z");
+  const cur = new Date(today);
+  cur.setUTCDate(cur.getUTCDate() - 1); // yesterday (inclusive)
+  let counted = 0;
+  while (counted < bizDays) {
+    if (cur.getUTCDay() !== 0) {
+      counted++;
+      if (counted === bizDays) break;
+    }
+    cur.setUTCDate(cur.getUTCDate() - 1);
+  }
+  return cur.toISOString().slice(0, 10);
 }

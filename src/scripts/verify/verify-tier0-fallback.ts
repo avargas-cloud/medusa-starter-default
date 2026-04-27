@@ -4,10 +4,10 @@
  * Verifies the tier0 fallback logic in daily-sales-engine.
  *
  * What it checks:
- *   1. With "today" before 2026-04-14 + 24 biz days → context reports
+ *   1. With "today" before 2026-04-14 + TIER0_MIN_BIZDAYS biz days → context reports
  *      tier0Source = 'fallback_prev_month' and the window is the previous calendar month.
  *   2. With "today" past the threshold → context reports 'live_window' and the
- *      window is the last 30 calendar days.
+ *      window is the last TIER0_LIVE_BIZDAYS Mon-Sat days.
  *   3. Spot-checks: the fallback tier0 query returns rows from
  *      purchasing_sales_history for the previous month (real DB hit).
  *   4. Q4..Q1 history has dropped the fallback month when in fallback mode.
