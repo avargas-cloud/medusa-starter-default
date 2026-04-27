@@ -24,6 +24,7 @@ export const PurchasingSnapshot = model.define("purchasing_snapshot", {
   unmet_net_30d: model.bigNumber().default(0), // net unsatisfied demand in tier0 window
   daily_sales_est: model.bigNumber().default(0),
   monthly_sales_est: model.bigNumber().default(0),
+  first_sale_date: model.dateTime().nullable(), // earliest sale across primary+alts; null = never sold
 
   // ── ABC-XYZ Engine output ──────────────────────────────────────────────
   cv: model.bigNumber().default(0), // coefficient of variation

@@ -48,7 +48,18 @@ function approxEq(a: number, b: number, eps = 0.001): boolean {
   return Math.abs(a - b) <= eps;
 }
 
-export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
+export interface SnapshotRunOptions {
+  /**
+   * Bypass smart-skip logic and recompute every variant. Use after algorithm
+   * changes (e.g. ABC threshold/grouping changes) so existing rows align
+   * with the new calculation.
+   */
+  force?: boolean;
+}
+
+export async function runPurchasingSnapshot(
+  opts: SnapshotRunOptions = {}
+): Promise<SnapshotRunResult> {
   const start = Date.now();
   const db = new Client({ connectionString: process.env.DATABASE_URL });
   await db.connect();
@@ -108,10 +119,12 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
     const allVariants = varRes.rows;
 
     const altsByPrimary = new Map<string, string[]>();
+    const altSet = new Set<string>();
     for (const row of altRes.rows) {
       const list = altsByPrimary.get(row.primary_variant_id) ?? [];
       list.push(row.alt_variant_id);
       altsByPrimary.set(row.primary_variant_id, list);
+      altSet.add(row.alt_variant_id);
     }
 
     const invByVariant = new Map(
@@ -133,6 +146,8 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
     );
 
     // ── 3. Revenue 12m per variant (bulk) ──────────────────────────────────
+    // qty_sold > 0 mirrors /admin/purchasing/monthly-sales so the Pareto tab
+    // and the snapshot rank from the same revenue universe.
     const revRes = await db.query<{
       variant_id: string;
       total_revenue: string;
@@ -140,6 +155,7 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
       `SELECT variant_id, COALESCE(SUM(revenue), 0)::text AS total_revenue
        FROM purchasing_sales_history
        WHERE month_date >= (NOW() - INTERVAL '12 months')::date
+         AND qty_sold > 0
        GROUP BY variant_id`
     );
     const revByVariant = new Map(
@@ -193,7 +209,7 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
 
     // For same-day runs: find which variant_ids have new/changed orders since last run
     let changedVariantIds: Set<string> | null = null;
-    if (isSameDayRun && minLastCalc) {
+    if (isSameDayRun && minLastCalc && !opts.force) {
       const changedRes = await db.query<{ variant_id: string }>(
         `SELECT DISTINCT pii.variant_id
          FROM pos_invoice_item pii
@@ -254,9 +270,11 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
       daily_sales_est: number;
       monthly_sales_est: number;
       cv: number;
+      weighted_revenue: number;
       revenue_12m: number;
       inv_usa: number;
       inv_china: number;
+      first_sale_date: string | null;
     };
 
     const results: CalcResult[] = [];
@@ -287,7 +305,7 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
         );
 
         // Secondary skip: new-day run but values unchanged (e.g. zero-sales variant)
-        if (changedVariantIds === null) {
+        if (changedVariantIds === null && !opts.force) {
           const cur = currentSnap.get(v.id);
           if (
             cur &&
@@ -322,13 +340,32 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
     }
 
     // ── 6. Run Pareto engine ───────────────────────────────────────────────
-    const paretoInput: VariantForPareto[] = results.map((r) => ({
-      variant_id: r.variant_id,
-      revenue_12m: r.revenue_12m,
-      cv: r.cv,
-    }));
+    // Only primaries are ranked — alts inherit a fixed "B" fallback so they
+    // don't compete in the cumulative-revenue ladder. This matches the
+    // /80-20 Pareto tab, which is the source of truth.
+    const paretoInput: VariantForPareto[] = results
+      .filter((r) => !altSet.has(r.variant_id))
+      .map((r) => ({
+        variant_id: r.variant_id,
+        revenue: r.weighted_revenue,
+        cv: r.cv,
+      }));
     const paretoResults = runParetoEngine(paretoInput, cfg);
     const paretoMap = new Map(paretoResults.map((p) => [p.variant_id, p]));
+
+    function classFor(variantId: string, cv: number) {
+      if (altSet.has(variantId)) {
+        const xyz: "X" | "Y" | "Z" =
+          cv < cfg.xyz_x_threshold ? "X" : cv < cfg.xyz_y_threshold ? "Y" : "Z";
+        return {
+          abc_class: "B" as const,
+          xyz_class: xyz,
+          abcxyz_class: `B${xyz}`,
+          pareto_rank: null as number | null,
+        };
+      }
+      return paretoMap.get(variantId) ?? null;
+    }
 
     // ── 7. Batch upsert changed rows ───────────────────────────────────────
     const leadAir = cfg.transit_air_days + cfg.buffer_air_days;
@@ -340,7 +377,7 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
       let p = 1;
 
       for (const r of batch) {
-        const pareto = paretoMap.get(r.variant_id);
+        const pareto = classFor(r.variant_id, r.cv);
         const alts = altsByPrimary.get(r.variant_id) ?? [];
         const altInvUsa = alts.reduce(
           (s, id) => s + (invByVariant.get(id)?.usa ?? 0),
@@ -380,6 +417,8 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
           r.daily_sales_est,
           r.monthly_sales_est,
           r.cv,
+          r.weighted_revenue,
+          pareto?.pareto_rank ?? null,
           pareto?.abc_class ?? null,
           pareto?.xyz_class ?? null,
           pareto?.abcxyz_class ?? null,
@@ -387,12 +426,13 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
           r.inv_china,
           qty_to_transfer,
           qty_to_factory,
-          prodDays
+          prodDays,
+          r.first_sale_date
         );
-        placeholders.push(
-          `($${p},$${p + 1},$${p + 2},$${p + 3},$${p + 4},$${p + 5},$${p + 6},$${p + 7},$${p + 8},$${p + 9},$${p + 10},$${p + 11},$${p + 12},$${p + 13},$${p + 14},$${p + 15},$${p + 16},$${p + 17},$${p + 18},$${p + 19},now(),now(),now())`
-        );
-        p += 20;
+        const cols = 23;
+        const ph = Array.from({ length: cols }, (_, k) => `$${p + k}`).join(",");
+        placeholders.push(`(${ph},now(),now(),now())`);
+        p += cols;
       }
 
       try {
@@ -401,8 +441,10 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
              (id,variant_id,tier0_30d,sales_q1,sales_q2,sales_q3,sales_q4,
               sales_last_24d,unmet_net_30d,
               daily_sales_est,monthly_sales_est,cv,
+              weighted_revenue,pareto_rank,
               abc_class,xyz_class,abcxyz_class,
               inv_usa,inv_china,qty_to_transfer,qty_to_factory,production_days,
+              first_sale_date,
               last_calculated_at,created_at,updated_at)
            VALUES ${placeholders.join(",")}
            ON CONFLICT (variant_id) DO UPDATE SET
@@ -414,12 +456,15 @@ export async function runPurchasingSnapshot(): Promise<SnapshotRunResult> {
              daily_sales_est=EXCLUDED.daily_sales_est,
              monthly_sales_est=EXCLUDED.monthly_sales_est,
              cv=EXCLUDED.cv,
+             weighted_revenue=EXCLUDED.weighted_revenue,
+             pareto_rank=EXCLUDED.pareto_rank,
              abc_class=EXCLUDED.abc_class, xyz_class=EXCLUDED.xyz_class,
              abcxyz_class=EXCLUDED.abcxyz_class,
              inv_usa=EXCLUDED.inv_usa, inv_china=EXCLUDED.inv_china,
              qty_to_transfer=EXCLUDED.qty_to_transfer,
              qty_to_factory=EXCLUDED.qty_to_factory,
              production_days=EXCLUDED.production_days,
+             first_sale_date=EXCLUDED.first_sale_date,
              last_calculated_at=now(), updated_at=now()`,
           values
         );
@@ -577,13 +622,16 @@ export async function recalculateForVariants(
           Math.round(sales.daily_sales_est * effectiveDays - inv.china)
         );
 
+        // Pareto rank/class are NOT updated here — they depend on global ranking
+        // and must be recomputed by a full runPurchasingSnapshot pass.
         await db.query(
           `UPDATE purchasing_snapshot
            SET tier0_30d=$2, sales_q1=$3, sales_q2=$4, sales_q3=$5, sales_q4=$6,
                daily_sales_est=$7, monthly_sales_est=$8, cv=$9,
                inv_usa=$10, inv_china=$11,
                qty_to_transfer=$12, qty_to_factory=$13, production_days=$14,
-               unmet_net_30d=$15,
+               unmet_net_30d=$15, weighted_revenue=$16,
+               first_sale_date=$17,
                last_calculated_at=now(), updated_at=now()
            WHERE variant_id=$1`,
           [
@@ -602,6 +650,8 @@ export async function recalculateForVariants(
             qty_to_factory,
             prodDays,
             sales.unmet_net_30d ?? 0,
+            sales.weighted_revenue,
+            sales.first_sale_date,
           ]
         );
       } catch (e) {

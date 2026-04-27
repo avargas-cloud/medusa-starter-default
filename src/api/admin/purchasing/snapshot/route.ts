@@ -18,7 +18,9 @@ import type {
 } from "@medusajs/framework/http";
 
 import { withDb } from "../_lib/db";
+import { checkMissingSalesData } from "../../../../services/purchasing/missing-month-check";
 import { runPurchasingSnapshot } from "../../../../services/purchasing/snapshot.service";
+import { computeTier0Meta } from "../../../../services/purchasing/tier0-window";
 import { getExcelPeak } from "../_lib/peak-sales";
 
 const USA_LOC =
@@ -115,6 +117,7 @@ export async function GET(
          snap.abc_class, snap.xyz_class, snap.abcxyz_class,
          snap.inv_usa, snap.inv_china,
          snap.qty_to_transfer, snap.qty_to_factory, snap.production_days,
+         snap.first_sale_date,
          snap.last_calculated_at,
          COALESCE((p.metadata->>'is_sourced_via_agent')::boolean, false) AS is_sourced_via_agent,
          COALESCE(open_po_usa.on_order, 0)::int AS qty_on_po,
@@ -187,22 +190,33 @@ export async function GET(
       return { ...row, max_daily_sales: Math.max(medusaMax, peak[sku] ?? 0) };
     });
 
+    const warnings = await checkMissingSalesData(db);
+    const todayET = new Date().toLocaleDateString("en-CA", {
+      timeZone: "America/New_York",
+    });
+    const tier0 = computeTier0Meta(todayET);
+
     return res.json({
       snapshot,
       count: parseInt(countRes.rows[0]?.total ?? "0", 10),
       limit,
       offset,
+      warnings,
+      tier0,
     });
   });
 }
 
 
 export async function POST(
-  _req: AuthenticatedMedusaRequest,
+  req: AuthenticatedMedusaRequest,
   res: MedusaResponse
 ) {
   try {
-    const result = await runPurchasingSnapshot();
+    const force =
+      (req.query as Record<string, string>)?.force === "true" ||
+      (req.query as Record<string, string>)?.force === "1";
+    const result = await runPurchasingSnapshot({ force });
     // Always bump last_calculated_at so the UI reflects the button click time,
     // even when the smart-skip logic processed 0 rows.
     await withDb(async (db) => {

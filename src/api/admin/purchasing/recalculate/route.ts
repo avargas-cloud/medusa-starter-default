@@ -14,11 +14,14 @@ import { Client } from "pg";
 import { runPurchasingSnapshot } from "../../../../services/purchasing/snapshot.service";
 
 export async function POST(
-  _req: AuthenticatedMedusaRequest,
+  req: AuthenticatedMedusaRequest,
   res: MedusaResponse
 ) {
   try {
-    const result = await runPurchasingSnapshot();
+    const force =
+      (req.query as Record<string, string>)?.force === "true" ||
+      (req.query as Record<string, string>)?.force === "1";
+    const result = await runPurchasingSnapshot({ force });
 
     // Always bump last_calculated_at so the UI reflects the button click time,
     // even when the smart-skip logic processed 0 rows.

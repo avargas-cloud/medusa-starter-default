@@ -18,7 +18,7 @@ export async function GET(
     ContainerRegistrationKeys.PG_CONNECTION
   ) as any;
 
-  const [invoicedResult, allocatedResult, poResult] = await Promise.all([
+  const [invoicedResult, returnsResult, allocatedResult, poResult] = await Promise.all([
     pgConnection.raw(
       `
       SELECT
@@ -34,6 +34,30 @@ export async function GET(
       LEFT JOIN customer c ON c.id = i.customer_id
       WHERE i.deleted_at IS NULL
       ORDER BY i.created_at DESC
+      LIMIT 200
+      `,
+      [variant_id]
+    ),
+
+    pgConnection.raw(
+      `
+      SELECT
+        cm.id              AS credit_memo_id,
+        cm.credit_memo_number,
+        cm.created_at,
+        cm.invoice_id,
+        cm.order_id,
+        cmi.quantity,
+        TRIM(CONCAT(c.first_name, ' ', c.last_name)) AS customer_name,
+        COALESCE(c.email, '') AS customer_email
+      FROM pos_credit_memo cm
+      JOIN pos_credit_memo_item cmi
+        ON cmi.credit_memo_id = cm.id AND cmi.variant_id = ?
+      LEFT JOIN customer c ON c.id = cm.customer_id
+      WHERE cm.deleted_at IS NULL
+        AND cm.voided_at IS NULL
+        AND cmi.deleted_at IS NULL
+      ORDER BY cm.created_at DESC
       LIMIT 200
       `,
       [variant_id]
@@ -87,6 +111,7 @@ export async function GET(
 
   return res.json({
     invoiced: invoicedResult.rows,
+    returns: returnsResult.rows,
     allocated: allocatedResult.rows,
     purchase_orders: poResult.rows,
   });
