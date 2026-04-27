@@ -1683,6 +1683,13 @@
     teeny-request "^8.0.0"
     uuid "^8.0.0"
 
+"@googleapis/gmail@^16.1.1":
+  version "16.1.1"
+  resolved "https://registry.yarnpkg.com/@googleapis/gmail/-/gmail-16.1.1.tgz#3cf1b4e90ea27649a569e42feabf9133dd801d0d"
+  integrity sha512-XFMMJvhpEoKzwBOHYrcbBu/jHS+8Aer5YmbMUsrZeJgXAbTD6K7K6+/1RJczXIqDoBzVDdECm4WtjAcvEHPLVg==
+  dependencies:
+    googleapis-common "^8.0.0"
+
 "@graphql-codegen/core@^4.0.2":
   version "4.0.2"
   resolved "https://registry.yarnpkg.com/@graphql-codegen/core/-/core-4.0.2.tgz#7e6ec266276f54bbf02f60599d9e518f4a59d85e"
@@ -9791,7 +9798,7 @@ globby@11.1.0, globby@^11.0.1, globby@^11.1.0:
     merge2 "^1.4.1"
     slash "^3.0.0"
 
-google-auth-library@^10.1.0, google-auth-library@^10.2.0:
+google-auth-library@^10.1.0, google-auth-library@^10.6.2:
   version "10.6.2"
   resolved "https://registry.yarnpkg.com/google-auth-library/-/google-auth-library-10.6.2.tgz#44557c536aec626b7cda48a85b5d026e2c9b74c4"
   integrity sha512-e27Z6EThmVNNvtYASwQxose/G57rkRuaRbQyxM2bvYLLX/GqWZ5chWq2EBoUchJbCc57eC9ArzO5wMsEmWftCw==
@@ -9861,14 +9868,6 @@ googleapis-common@^8.0.0:
     google-auth-library "^10.1.0"
     qs "^6.7.0"
     url-template "^2.0.8"
-
-googleapis@^171.4.0:
-  version "171.4.0"
-  resolved "https://registry.yarnpkg.com/googleapis/-/googleapis-171.4.0.tgz#aa7b76dcc60ead18ffac2e1909a3e7e053589cf1"
-  integrity sha512-xybFL2SmmUgIifgsbsRQYRdNrSAYwxWZDmkZTGjUIaRnX5jPqR8el/cEvo6rCqh7iaZx6MfEPS/lrDgZ0bymkg==
-  dependencies:
-    google-auth-library "^10.2.0"
-    googleapis-common "^8.0.0"
 
 gopd@^1.0.1, gopd@^1.2.0:
   version "1.2.0"

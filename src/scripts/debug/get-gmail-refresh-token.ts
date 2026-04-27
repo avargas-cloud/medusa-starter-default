@@ -8,7 +8,7 @@
  *   GMAIL_CLIENT_ID=xxx GMAIL_CLIENT_SECRET=xxx npx ts-node src/scripts/debug/get-gmail-refresh-token.ts
  */
 
-import { google } from "googleapis";
+import { auth as gauth } from "@googleapis/gmail";
 import * as http from "http";
 
 const CLIENT_ID = process.env.GMAIL_CLIENT_ID ?? "";
@@ -25,7 +25,7 @@ const PORT = 8765;
 const REDIRECT_URI = `http://localhost:${PORT}`;
 const SCOPES = ["https://www.googleapis.com/auth/gmail.insert"];
 
-const oauth2Client = new google.auth.OAuth2(
+const oauth2Client = new gauth.OAuth2(
   CLIENT_ID,
   CLIENT_SECRET,
   REDIRECT_URI

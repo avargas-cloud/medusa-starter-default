@@ -16,7 +16,7 @@
  *   Add client ID with scope: https://www.googleapis.com/auth/gmail.insert
  */
 
-import { google } from "googleapis";
+import { auth as gauth, gmail as gmailClient } from "@googleapis/gmail";
 
 export interface GmailInsertOptions {
   from: string;
@@ -113,14 +113,14 @@ export async function insertIntoGmailSent(
       private_key: string;
     };
 
-    const auth = new google.auth.JWT({
+    const authClient = new gauth.JWT({
       email: key.client_email,
       key: key.private_key,
       scopes: ["https://www.googleapis.com/auth/gmail.insert"],
       subject: senderEmail,
     });
 
-    const gmail = google.gmail({ version: "v1", auth });
+    const gmail = gmailClient({ version: "v1", auth: authClient });
     const raw = base64url(buildMimeMessage(opts));
 
     await gmail.users.messages.insert({
