@@ -1,0 +1,139 @@
+# =============================================================================
+# .railwayignore — files NOT uploaded to Railway build context
+#
+# Files stay tracked in git for local use, but Railpack skips them when
+# building on Railway. Goal: shrink the image so the registry push succeeds.
+#
+# Required for build (do NOT add here):
+#   src/**, patches/*.patch, scripts/post-build.js, scripts/run-custom-migrations.js,
+#   package.json, yarn.lock, tsconfig*.json, medusa-config.ts, instrumentation.{js,ts},
+#   public/**, mise.toml, .npmrc, railway.json
+#
+# Patterns use gitignore semantics. Leading `/` anchors at the build-context
+# root so we don't accidentally match files deep inside src/.
+# =============================================================================
+
+# ── Big binaries that have no business in the build (62 MB) ─────────────────
+/gh_tool/
+*.tar.gz
+*.deb
+
+# ── One-off data exports / dumps (root level) ───────────────────────────────
+/customers_export.json
+/customers_export_corrected.json
+/customers_export.csv
+/customers_import_template.csv
+/quickbooks_import_template.csv
+/duplicate_customers_report.csv
+/emails_to_fix_v2.csv
+/invalid_emails.txt
+/all_skus.csv
+/medusa_products_missing_in_qb.csv
+/Clientes_Duplicados_QB.xlsx
+*.xlsx
+
+# ── Migration / sync backups (root level) ───────────────────────────────────
+/category-id-migration-backup-*.json
+/fix-shipping-price-type.sql
+/migrate-thumbnails.sql
+
+# ── Reports & debug JSON dumps (root level) ─────────────────────────────────
+/qb_audit_report.json
+/qb_customer_dataext_output.json
+/qb_debug.json
+/qb_price_sync_output_*.json
+/attribute-matching-report.json
+/classify-qb-variants-report.json
+/inventory-activation-report.json
+/minio-reorganization-plan.json
+/orphaned-variants-audit.json
+/orphaned-variants-report.json
+/product-attribute-linking-final-report.json
+/product-attribute-linking-report.json
+/variant-linking-report.json
+/variant-linking-v3-report.json
+/wc-product-dimensions.json
+
+# ── Logs at the build-context root only (do NOT use bare *.log — it would
+#    match src/**/*.log too if any existed) ────────────────────────────────
+/*.log
+
+# ── Documentation (not needed at runtime) ───────────────────────────────────
+/docs/
+/docs_legacy/
+/CLAUDE.md
+/CUSTOMER_IMPORT_PLAN.md
+/DO_NOT_USE_NPM.txt
+/README.md
+
+# ── Patch backups (we only need *.patch files) ──────────────────────────────
+/patches/BACKUPS/
+
+# ── Local dev / test / debug scripts at root ────────────────────────────────
+/check-ful.js
+/db_debug.js
+/fix_tax.js
+/getOrder.js
+/patch-estimate.js
+/purge-payments.js
+/query_db.js
+/repair-invoices.js
+/test_add_shipping.js
+/test-apps.js
+/test-db.js
+/test-db2.js
+/test-draft-math.js
+/test-full-reset.sh
+/test-invoice.js
+/test-invs.js
+/test_medusa_tax_api.js
+/test_order.js
+/test-order-query.js
+/test-tax-math.js
+/test-auth-methods.sh
+/test-reset.sh
+/fix-typescript.sh
+/fix-typescript-batch.sh
+/typescript-errors-plan.sh
+/clear-pricing-cache.sh
+/create-admin.sh
+/deep-clean.sh
+/diagnose-shipping.sh
+/setup.sh
+/show-meili-logs.sh
+/time-startup.sh
+/verify-address-defaults.sh
+/dev
+/dev.sh
+/docker-compose.yml
+/jest.config.js
+
+# ── Editor / IDE ────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.cursor/
+
+# ── OS / VCS / CI metadata ──────────────────────────────────────────────────
+.git/
+.github/
+.DS_Store
+
+# ── Already-ignored runtime/build artifacts (defensive) ─────────────────────
+node_modules/
+.medusa/
+.cache/
+coverage/
+dist/
+build/
+/uploads/
+.data/
+.vercel/
+.env
+.env.*
+!.env.example
+yarn-error.log
+package-lock.json
+pnpm-lock.yaml
+
+# ── Reference uploads (large media reference dump) ─────────────────────────
+/_reference_upload/
