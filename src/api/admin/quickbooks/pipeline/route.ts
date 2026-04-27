@@ -6,6 +6,7 @@ import {
   bridgeFetch,
   pollOperationResult,
 } from "../../../../lib/quickbooks/client/core";
+import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
 import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
 
 /**
@@ -690,7 +691,7 @@ export async function POST(
             const cmPool = require("../../../../api/utils/db-pool").getDbPool();
             const { rows: cmRows } = await cmPool.query(
               `SELECT cm.id, cm.credit_memo_number, cm.customer_id, cm.invoice_id,
-                      cm.completed_at,
+                      cm.completed_at, cm.sales_rep,
                       cm.discount, cm.shipping, cm.shipping_option_name,
                       -- Tax-exempt logic:
                       --   invoice_id set → from parent pos_invoice (tax=0 & subtotal>0 => exempt)
@@ -785,6 +786,7 @@ export async function POST(
                 ...(isService ? { noSite: true } : {}),
               };
             });
+            const cmSalesRepRef = parseSalesRepInitials(cm.sales_rep);
             const cmResult = await createCreditMemoInQb({
               customerId: custResult.qbCustomerId,
               date: cm.completed_at
@@ -793,6 +795,7 @@ export async function POST(
               memo: `POS Return ${cm.credit_memo_number || ""}`.trim(),
               items: qbItems,
               ...(cm.is_tax_exempt === true ? { taxExempt: true } : {}),
+              ...(cmSalesRepRef ? { salesRepRef: cmSalesRepRef } : {}),
             });
             if (cmResult.success && cmResult.data?.operationId) {
               await cmPool.query(

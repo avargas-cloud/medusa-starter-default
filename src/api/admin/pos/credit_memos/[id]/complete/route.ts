@@ -4,6 +4,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 
 import { createCreditMemoInQb } from "../../../../../../lib/quickbooks/client";
+import { parseSalesRepInitials } from "../../../../../../lib/quickbooks/parse-sales-rep";
 import {
   buildQbOrderDiscountLines,
   buildShippingQbItem,
@@ -308,12 +309,9 @@ export async function POST(
           logger.info(
             `[credit_memos complete] Mirroring Credit Memo to QB for customer ${qbCustomerId}...`
           );
-          const cmSalesRep = (creditMemo as any).sales_rep as
-            | { initials?: string; name?: string }
-            | null
-            | undefined;
-          const salesRepRef =
-            cmSalesRep?.name || cmSalesRep?.initials || undefined;
+          const salesRepRef = parseSalesRepInitials(
+            (creditMemo as any).sales_rep
+          );
 
           const cmResult = await createCreditMemoInQb({
             customerId: qbCustomerId,

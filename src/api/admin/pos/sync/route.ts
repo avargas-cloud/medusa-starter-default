@@ -1247,6 +1247,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const {
           createCreditMemoInQb,
         } = require("../../../../lib/quickbooks/client");
+        const cmSalesRepRef = parseSalesRepInitials(
+          (creditMemo as any).sales_rep
+        );
         const cmResult = await createCreditMemoInQb({
           customerId: custResult.qbCustomerId,
           date: creditMemo.completed_at
@@ -1254,6 +1257,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             : new Date().toISOString().split("T")[0],
           memo: `Medusa POS Credit Memo`,
           items: qbItems,
+          ...(cmSalesRepRef ? { salesRepRef: cmSalesRepRef } : {}),
         });
 
         if (!cmResult.success) {

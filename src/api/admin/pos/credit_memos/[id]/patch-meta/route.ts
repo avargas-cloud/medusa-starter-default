@@ -1,6 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { updateCreditMemoInQb } from "../../../../../../lib/quickbooks/client/credit-memos";
+import { parseSalesRepInitials } from "../../../../../../lib/quickbooks/parse-sales-rep";
 import { getQbConfig } from "../../../../../../lib/quickbooks/qb-config";
 import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
@@ -134,9 +135,7 @@ export async function PATCH(
 
   if (qbTxnId && process.env.QB_ORDER_FLOW_ENABLED === "true") {
     const salesRepRef =
-      sales_rep !== undefined
-        ? sales_rep?.name || sales_rep?.initials || undefined
-        : undefined;
+      sales_rep !== undefined ? parseSalesRepInitials(sales_rep) : undefined;
     const isFlorida = tax_mode === "florida";
     const isExempt = tax_mode === "exempt";
 

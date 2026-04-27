@@ -185,7 +185,7 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
       expect.objectContaining({
         txnId: "QB-CM-TXN-001",
         editSequence: "1234567890",
-        salesRepRef: "Alex Vargas",
+        salesRepRef: "AV",
       })
     );
     expect(mockWritePipeline).toHaveBeenCalledWith(
