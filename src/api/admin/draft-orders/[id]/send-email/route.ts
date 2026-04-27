@@ -1058,18 +1058,52 @@ export async function POST(
     }
   }
 
-  // Always send from the verified Resend domain address.
-  // Never use the agent's personal email as From — it may not be a verified Resend sender.
-  // senderEmail is stored only as metadata (sent_by), not used as the From address.
-  const senderAddr = process.env.RESEND_FROM ?? "estimates@ecopowertech.com";
-  const fromEmail = `EcoPowerTech <${senderAddr}>`;
+  // Resolve the admin agent's identity (used for From, Reply-To, and metadata).
+  // Sending From the agent's @ecopowertech.com address keeps the customer's reply
+  // routed to the right person (Resend has the domain verified, so any user at the
+  // domain is an allowed sender). Falls back to a generic address only if the user
+  // is somehow not on the @ecopowertech.com domain.
+  let senderEmailAddr: string | undefined;
+  let senderName: string | undefined;
+  try {
+    const base = `http://localhost:${process.env.PORT ?? 9000}`;
+    const meRes = await fetch(`${base}/admin/users/me`, {
+      headers: {
+        Cookie: req.headers["cookie"] ?? "",
+        Authorization: req.headers["authorization"] ?? "",
+      },
+    });
+    if (meRes.ok) {
+      const { user: me } = await meRes.json();
+      senderEmailAddr =
+        typeof me?.email === "string" ? me.email.trim().toLowerCase() : undefined;
+      senderName =
+        `${me?.first_name ?? ""} ${me?.last_name ?? ""}`.trim() ||
+        senderEmailAddr ||
+        undefined;
+    }
+  } catch {
+    /* best-effort — fall through to generic sender */
+  }
+
+  const fallbackAddr = process.env.RESEND_FROM ?? "estimates@ecopowertech.com";
+  const useUserAsFrom =
+    !!senderEmailAddr && senderEmailAddr.endsWith("@ecopowertech.com");
+  const fromAddr = useUserAsFrom ? senderEmailAddr! : fallbackAddr;
+  const fromDisplay = senderName ?? "EcoPowerTech";
+  const fromEmail = `${fromDisplay} <${fromAddr}>`;
+  // Always set Reply-To to the user's address when available so customer replies
+  // reach the agent directly (matters most when From had to fall back).
+  const replyToAddr = senderEmailAddr;
+
   console.log(
-    `[send-email] Sending from: ${fromEmail} → to: ${toEmails.join(", ")} | pdf: ${!!attachments}`
+    `[send-email] Sending from: ${fromEmail}${replyToAddr ? ` (reply-to ${replyToAddr})` : ""} → to: ${toEmails.join(", ")} | pdf: ${!!attachments}`
   );
   try {
     await sendMail({
       to: toEmails,
       from: fromEmail,
+      ...(replyToAddr ? { replyTo: replyToAddr } : {}),
       subject: emailSubject,
       html: finalHtml,
       ...(ccEmails.length > 0 ? { cc: ccEmails } : {}),
@@ -1089,22 +1123,7 @@ export async function POST(
       Authorization: req.headers["authorization"] ?? "",
       "Content-Type": "application/json",
     };
-    // Resolve the name of the admin user who sent the estimate
-    let senderName: string | undefined;
-    try {
-      const meRes = await fetch(`${base}/admin/users/me`, {
-        headers: metaHeaders,
-      });
-      if (meRes.ok) {
-        const { user: me } = await meRes.json();
-        senderName =
-          `${me?.first_name ?? ""} ${me?.last_name ?? ""}`.trim() ||
-          me?.email ||
-          undefined;
-      }
-    } catch {
-      /* best-effort */
-    }
+    // senderName already resolved above (during From/Reply-To setup) — reuse it.
 
     // Read current metadata, merge, then PATCH
     const curRes = await fetch(
