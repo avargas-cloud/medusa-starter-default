@@ -109,7 +109,7 @@ export function buildInventoryDocsForVariants(
         salesDescription: (vmeta.sales_description as string) || null,
         purchaseDescription: (vmeta.purchase_description as string) || null,
         quickbooks_id: (vmeta.quickbooks_id as string) || null,
-        cost: (vmeta.qb_purchase_cost as number) || null,
+        cost: (vmeta.qb_avg_cost as number) || null,
         vendorName: (vmeta.qb_vendor_name as string) || null,
         mpn: (vmeta.mpn as string) || null,
         chinaStock: 0,
@@ -144,7 +144,7 @@ export function buildInventoryDocsForVariants(
         salesDescription: (vmeta.sales_description as string) || null,
         purchaseDescription: (vmeta.purchase_description as string) || null,
         quickbooks_id: (vmeta.quickbooks_id as string) || null,
-        cost: (vmeta.qb_purchase_cost as number) || null,
+        cost: (vmeta.qb_avg_cost as number) || null,
         vendorName: (vmeta.qb_vendor_name as string) || null,
         mpn: (vmeta.mpn as string) || null,
         chinaStock: chinaStockMap.get(inventory.id) ?? 0,
@@ -194,4 +194,5 @@ export const INVENTORY_DOC_FIELDS = [
   "inventory_items.inventory.reserved_quantity",
   "options.value",
   "options.option.title",
+  "metadata",
 ] as const;
