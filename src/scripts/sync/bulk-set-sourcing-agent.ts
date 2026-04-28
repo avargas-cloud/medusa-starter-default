@@ -4,7 +4,7 @@
  * Sets metadata.is_sourced_via_agent = true on every product
  * that has at least one variant whose SKU starts with one of
  * the known agent-sourced prefixes:
- *   ESP, EPS, EAP, ECT, ENE, EMS, ECL, EBU
+ *   ESP, EPS, EAP, ECT, ENE, EMS, ECL, EBU, EMO, EIN
  *
  * Only the `product` table is touched — not `product_variant`.
  * Products already carrying the flag are skipped.
@@ -23,7 +23,7 @@ dotenv.config()
 
 const APPLY = process.env.APPLY === 'true'
 
-const SKU_PREFIXES = ['ESP', 'EPS', 'EAP', 'ECT', 'ENE', 'EMS', 'ECL', 'EBU']
+const SKU_PREFIXES = ['ESP', 'EPS', 'EAP', 'ECT', 'ENE', 'EMS', 'ECL', 'EBU', 'EMO', 'EIN']
 
 /** Build a WHERE clause that matches SKUs starting with any of the prefixes. */
 function buildPrefixConditions(prefixes: string[]): { clause: string; params: string[] } {

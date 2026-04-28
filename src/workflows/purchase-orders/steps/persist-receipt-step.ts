@@ -140,7 +140,11 @@ export const persistReceiptStep = createStep(
       receiptDeltasByLineId.set(l.po_line_id, prev + l.qty_received_now);
     }
 
-    const lineUpdates: Array<Record<string, unknown>> = [];
+    const lineUpdates: Array<{
+      id: string;
+      qty_received: number;
+      status: "open" | "partial" | "complete";
+    }> = [];
     let totalOrdered = 0;
     let totalReceivedAfter = 0;
 
@@ -165,21 +169,49 @@ export const persistReceiptStep = createStep(
       totalReceivedAfter += newReceived;
     }
 
-    if (lineUpdates.length > 0) {
-      await service.updatePurchaseOrderLines(lineUpdates);
-    }
-
     // 4. Update PO header counters + status
     const newPoStatus: "partially_received" | "received" =
       totalReceivedAfter >= totalOrdered ? "received" : "partially_received";
 
-    await service.updatePurchaseOrders([
-      {
-        id: input.po_id,
-        status: newPoStatus,
-        total_units_received: totalReceivedAfter,
-      },
-    ]);
+    // Use raw SQL (knex) instead of service.updateXxx — eliminates any
+    // MikroORM identity-map / change-detection ambiguity. Same pattern as
+    // qb-purchase-order-poller.ts:374 and qb-item-receipt-poller.ts:234.
+    // Production incident 2026-04-27: PO-1006 / RCP-1001 had receipt rows
+    // committed but counters silently never persisted via service.updateXxx.
+    const knex = (
+      container as unknown as {
+        resolve: (k: string) => {
+          raw: (sql: string, b?: unknown[]) => Promise<{ rowCount?: number }>;
+        };
+      }
+    ).resolve("__pg_connection__");
+
+    for (const lu of lineUpdates) {
+      const r = await knex.raw(
+        `UPDATE purchase_order_line
+            SET qty_received = ?, status = ?, updated_at = NOW()
+          WHERE id = ? AND deleted_at IS NULL`,
+        [lu.qty_received, lu.status, lu.id]
+      );
+      if (r.rowCount !== 1) {
+        throw new Error(
+          `persist-receipt-step: failed to update PO line ${String(lu.id)} (rowCount=${r.rowCount ?? 0}). ` +
+            `Aborting workflow to surface counter drift.`
+        );
+      }
+    }
+
+    const headerR = await knex.raw(
+      `UPDATE purchase_order
+          SET status = ?, total_units_received = ?, updated_at = NOW()
+        WHERE id = ? AND deleted_at IS NULL`,
+      [newPoStatus, totalReceivedAfter, input.po_id]
+    );
+    if (headerR.rowCount !== 1) {
+      throw new Error(
+        `persist-receipt-step: failed to update PO header ${input.po_id} (rowCount=${headerR.rowCount ?? 0}).`
+      );
+    }
 
     return new StepResponse(
       {

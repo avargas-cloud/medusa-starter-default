@@ -44,6 +44,13 @@ export interface DeletePoReceiptWorkflowInput {
   stock_location_id: string;
   lines_to_reverse: DeletePoReceiptWorkflowInputLine[];
   was_already_voided: boolean;
+  /**
+   * Header-level QB TxnID copied straight from the receipt at route time.
+   * The persist step uses this to decide Path A vs Path B without re-reading
+   * the receipt (avoids a category of bugs where the second retrieve returns
+   * a stripped row missing this field).
+   */
+  qb_item_receipt_list_id: string | null;
 }
 
 export interface DeletePoReceiptWorkflowOutput {
@@ -72,6 +79,7 @@ export const deletePurchaseOrderReceiptWorkflow = createWorkflow(
       delete_reason: data.input.delete_reason,
       reversed: data.reversed.reversed,
       was_already_voided: data.input.was_already_voided,
+      qb_item_receipt_list_id: data.input.qb_item_receipt_list_id,
     }));
 
     const persisted = persistDeleteReceiptStep(persistInput);

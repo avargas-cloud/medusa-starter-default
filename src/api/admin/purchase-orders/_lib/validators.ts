@@ -108,6 +108,26 @@ export const deleteReceiptSchema = z.object({
     .optional(),
 });
 
+export const updateReceiptLineQtySchema = z.object({
+  receipt_line_id: z.string().min(1),
+  new_qty: z.number().int().min(0),
+});
+
+export const updateReceiptSchema = z
+  .object({
+    vendor_bill_number: z.string().trim().max(100).nullable().optional(),
+    line_qty_changes: z.array(updateReceiptLineQtySchema).optional(),
+  })
+  .refine(
+    (v) =>
+      v.vendor_bill_number !== undefined ||
+      (v.line_qty_changes?.length ?? 0) > 0,
+    {
+      message:
+        "Provide vendor_bill_number or at least one line_qty_changes entry",
+    }
+  );
+
 export const listQuerySchema = z.object({
   status: z.string().optional(), // CSV of PURCHASE_ORDER_STATUSES entries
   vendor_id: z.string().optional(),
@@ -128,6 +148,8 @@ export type ReceiveLineInput = z.infer<typeof receiveLineSchema>;
 export type CloseInput = z.infer<typeof closeSchema>;
 export type VoidReceiptInput = z.infer<typeof voidReceiptSchema>;
 export type DeleteReceiptInput = z.infer<typeof deleteReceiptSchema>;
+export type UpdateReceiptInput = z.infer<typeof updateReceiptSchema>;
+export type UpdateReceiptLineQty = z.infer<typeof updateReceiptLineQtySchema>;
 export type ListQuery = z.infer<typeof listQuerySchema>;
 
 export const ALLOWED_STATUS_VALUES = PURCHASE_ORDER_STATUSES;

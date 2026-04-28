@@ -215,14 +215,27 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
 
       const txnId = extractTxnId(data);
       if (!txnId) {
+        // Race-condition guard: bridge sometimes flips to status='completed'
+        // momentarily before its result/error fields are populated. If we
+        // see "completed" with neither a txnId nor an error message, keep
+        // polling on the next tick instead of marking the row failed.
+        if (!data.operation?.error) {
+          logger.info(
+            `${TAG} row ${row.id}: bridge status='${opStatus}' but no txnId/error yet — polling again next tick`
+          );
+          continue;
+        }
         await knex.raw(
           `UPDATE qb_item_receipt_pipeline
               SET status = 'error',
-                  last_error = 'Completed but no TxnID in response',
+                  last_error = ?,
                   next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
                   updated_at = NOW()
             WHERE id = ?`,
-          [row.id]
+          [
+            `Completed but no TxnID in response: ${data.operation.error}`,
+            row.id,
+          ]
         );
         toError++;
         continue;
@@ -358,7 +371,9 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       const operationId = await submitDeleteToBridge(row.qb_list_id);
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
-            SET void_operation_id = ?, updated_at = NOW()
+            SET void_operation_id = ?,
+                void_status = 'processing',
+                updated_at = NOW()
           WHERE id = ?`,
         [operationId, row.id]
       );
@@ -384,7 +399,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     .raw(
       `SELECT id, purchase_order_receipt_id, void_operation_id
        FROM qb_item_receipt_pipeline
-      WHERE void_status = 'waiting'
+      WHERE void_status = 'processing'
         AND void_operation_id IS NOT NULL
         AND deleted_at IS NULL
       LIMIT ?`,
@@ -413,14 +428,22 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
         continue;
       }
 
-      // Delete completed in QB. Hard-delete the receipt row now — CASCADE
-      // wipes receipt_lines + vendor_bill + this pipeline row itself.
+      // Delete completed in QB. Mark the pipeline row as voided so the
+      // create + delete history stays visible in the QB Pipeline UI. The
+      // receipt itself remains tombstoned (status='deleted') and is already
+      // filtered out of receipt list queries.
       await knex.raw(
-        `DELETE FROM purchase_order_receipt WHERE id = ?`,
-        [row.purchase_order_receipt_id]
+        `UPDATE qb_item_receipt_pipeline
+            SET void_status = 'voided',
+                void_synced_at = NOW(),
+                void_last_error = NULL,
+                void_next_retry_at = NULL,
+                updated_at = NOW()
+          WHERE id = ?`,
+        [row.id]
       );
       logger.info(
-        `${TAG} receipt ${row.purchase_order_receipt_id} hard-deleted in QB + DB`
+        `${TAG} receipt ${row.purchase_order_receipt_id} delete confirmed in QB; pipeline row ${row.id} marked voided (audit trail preserved)`
       );
 
       voidResolved++;

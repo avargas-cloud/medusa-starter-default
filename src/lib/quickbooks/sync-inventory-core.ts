@@ -481,6 +481,30 @@ export async function syncInventoryCore(
     }
     log(`Skipped (No Inv Item):  ${stats.skippedNoInventoryItem}`);
 
+    // Detailed list of every SKU whose stock changed
+    if (preview.length > 0) {
+      const heading = dryRun
+        ? `\n📝 ADJUSTMENTS THAT WOULD APPLY (${preview.length}):`
+        : `\n📝 ADJUSTMENTS APPLIED (${preview.length}):`;
+      log(heading);
+      // Sort by absolute delta desc so the biggest swings show first
+      const sorted = [...preview].sort(
+        (a, b) => Math.abs(b.delta) - Math.abs(a.delta),
+      );
+      const MAX_ROWS = 500;
+      sorted.slice(0, MAX_ROWS).forEach((p) => {
+        const arrow = p.delta > 0 ? "▲" : "▼";
+        const sign = p.delta > 0 ? "+" : "";
+        const flag = p.isAnomaly ? "  ⚠️" : "";
+        log(
+          `   ${arrow} ${p.sku}: ${p.currentStock} → ${p.newStock} (${sign}${p.delta})${flag}`,
+        );
+      });
+      if (sorted.length > MAX_ROWS) {
+        log(`   ... and ${sorted.length - MAX_ROWS} more`);
+      }
+    }
+
     if (anomalies.length > 0) {
       log(
         `\n⚠️  ANOMALIES (${anomalies.length}) — review before syncing live:`

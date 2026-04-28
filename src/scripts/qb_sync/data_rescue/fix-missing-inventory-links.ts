@@ -26,6 +26,7 @@ const SERVICE_EXACT = new Set([
   "Short-BiPin Socket", "3% Merchant Fee", "LiftRental", "H&P", "Programming",
   "INSTALL", "Lamp-Assembly", "Inspection-Request", "Services", "Notes",
   "Charge", "RetroFit-Plate", "Custom-Mirror", "Box",
+  "Adjustment", "test-product4",
 ]);
 
 function isService(sku: string): boolean {
@@ -37,6 +38,7 @@ export default async function fixMissingInventoryLinks({ container }: ExecArgs) 
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
   const query = container.resolve(ContainerRegistrationKeys.QUERY);
   const inventoryService = container.resolve(Modules.INVENTORY);
+  const stockLocationService = container.resolve(Modules.STOCK_LOCATION);
   const remoteLink = container.resolve("remoteLink");
 
   const DRY_RUN = !process.argv.includes("--run");
@@ -109,7 +111,17 @@ export default async function fixMissingInventoryLinks({ container }: ExecArgs) 
     }
   }
 
-  // ── Fix physical products: create + link inventory item ─────────────────────
+  // ── Fetch all active stock locations once ───────────────────────────────────
+  const stockLocations = await stockLocationService.listStockLocations({});
+  if (stockLocations.length === 0) {
+    logger.error("\n❌ No stock locations found — cannot initialize inventory levels.");
+    return;
+  }
+  logger.info(
+    `\n📍 Will initialize inventory levels (qty=0) at ${stockLocations.length} location(s): ${stockLocations.map((l: any) => l.name).join(", ")}`,
+  );
+
+  // ── Fix physical products: create + link inventory item + init levels ───────
   logger.info("\n🔨 Creating inventory items and linking physical products...");
   let fixed = 0;
   let errors = 0;
@@ -127,13 +139,22 @@ export default async function fixMissingInventoryLinks({ container }: ExecArgs) 
         [Modules.INVENTORY]: { inventory_item_id: inventoryItem.id },
       });
 
+      // Initialize inventory levels at every stock location with qty=0
+      await inventoryService.createInventoryLevels(
+        stockLocations.map((loc: any) => ({
+          inventory_item_id: inventoryItem.id,
+          location_id: loc.id,
+          stocked_quantity: 0,
+        })),
+      );
+
       // Ensure manage_inventory is true
       await productService.updateProductVariants(variant.id, {
         manage_inventory: true,
       });
 
       fixed++;
-      logger.info(`   ✅ ${variant.sku}  → ${inventoryItem.id}`);
+      logger.info(`   ✅ ${variant.sku}  → ${inventoryItem.id}  (levels: ${stockLocations.length})`);
     } catch (err: any) {
       errors++;
       logger.error(`   ❌ ${variant.sku}: ${err.message}`);

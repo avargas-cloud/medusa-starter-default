@@ -40,6 +40,8 @@ export interface PersistDeleteReceiptStepInput {
   delete_reason: string;
   reversed: ReceiptReversedDelta[];
   was_already_voided: boolean;
+  /** Authoritative QB TxnID from the route's receipt fetch. Source of truth. */
+  qb_item_receipt_list_id: string | null;
 }
 
 export interface PersistDeleteReceiptStepOutput {
@@ -48,12 +50,6 @@ export interface PersistDeleteReceiptStepOutput {
   qb_delete_queued: boolean;
   po_status_after: "submitted" | "partially_received" | "received";
   total_units_received: number;
-}
-
-interface ReceiptHeaderRow {
-  id: string;
-  status: string;
-  qb_item_receipt_list_id: string | null;
 }
 
 export const persistDeleteReceiptStep = createStep(
@@ -66,10 +62,19 @@ export const persistDeleteReceiptStep = createStep(
       PURCHASE_ORDERS_MODULE
     ) as unknown as PurchaseOrdersModuleService;
 
-    const receipt = (await service.retrievePurchaseOrderReceipt(
-      input.receipt_id
-    )) as unknown as ReceiptHeaderRow;
-    const isQbSynced = !!receipt.qb_item_receipt_list_id;
+    const logger = (container as any).resolve("logger") as
+      | { info?: (msg: string) => void }
+      | undefined;
+
+    // Source of truth for the Path A vs Path B branch: the route handler
+    // passes the freshly-read qb_item_receipt_list_id. We DO NOT re-read
+    // the receipt here to avoid Mikro-ORM strip-on-relation surprises that
+    // historically dropped the field and caused QB-synced receipts to
+    // hard-delete via Path A (incident 2026-04-27 RCP-1004).
+    const isQbSynced = !!input.qb_item_receipt_list_id;
+    logger?.info?.(
+      `[persist-delete-receipt] receipt=${input.receipt_id} isQbSynced=${isQbSynced} qb_list_id=${input.qb_item_receipt_list_id ?? "null"}`
+    );
 
     let totalReceivedAfter = 0;
     let newPoStatus: "submitted" | "partially_received" | "received" =
@@ -92,7 +97,11 @@ export const persistDeleteReceiptStep = createStep(
         qty_received: number;
       }>;
 
-      const lineUpdates: Array<Record<string, unknown>> = [];
+      const lineUpdates: Array<{
+        id: string;
+        qty_received: number;
+        status: "open" | "partial" | "complete";
+      }> = [];
       let totalOrdered = 0;
 
       for (const pol of poLines) {
@@ -116,10 +125,6 @@ export const persistDeleteReceiptStep = createStep(
         totalReceivedAfter += newReceived;
       }
 
-      if (lineUpdates.length > 0) {
-        await service.updatePurchaseOrderLines(lineUpdates);
-      }
-
       newPoStatus =
         totalReceivedAfter === 0
           ? "submitted"
@@ -127,13 +132,44 @@ export const persistDeleteReceiptStep = createStep(
             ? "received"
             : "partially_received";
 
-      await service.updatePurchaseOrders([
-        {
-          id: input.po_id,
-          status: newPoStatus,
-          total_units_received: totalReceivedAfter,
-        },
-      ]);
+      // Raw SQL — see persist-receipt-step.ts for rationale (production
+      // incident 2026-04-27, silent service.updateXxx no-op).
+      const knex = (
+        container as unknown as {
+          resolve: (k: string) => {
+            raw: (
+              sql: string,
+              b?: unknown[]
+            ) => Promise<{ rowCount?: number }>;
+          };
+        }
+      ).resolve("__pg_connection__");
+
+      for (const lu of lineUpdates) {
+        const r = await knex.raw(
+          `UPDATE purchase_order_line
+              SET qty_received = ?, status = ?, updated_at = NOW()
+            WHERE id = ? AND deleted_at IS NULL`,
+          [lu.qty_received, lu.status, lu.id]
+        );
+        if (r.rowCount !== 1) {
+          throw new Error(
+            `persist-delete-receipt-step: failed to update PO line ${lu.id} (rowCount=${r.rowCount ?? 0}).`
+          );
+        }
+      }
+
+      const headerR = await knex.raw(
+        `UPDATE purchase_order
+            SET status = ?, total_units_received = ?, updated_at = NOW()
+          WHERE id = ? AND deleted_at IS NULL`,
+        [newPoStatus, totalReceivedAfter, input.po_id]
+      );
+      if (headerR.rowCount !== 1) {
+        throw new Error(
+          `persist-delete-receipt-step: failed to update PO header ${input.po_id} (rowCount=${headerR.rowCount ?? 0}).`
+        );
+      }
     } else {
       // Already voided: PO header counters are already correct. Just read them
       // back so the response is accurate.
@@ -202,9 +238,11 @@ export const persistDeleteReceiptStep = createStep(
 
     let qbDeleteQueued = false;
     const pipelineUpdates: Array<Record<string, unknown>> = [];
+    let hasUsablePipelineRow = false;
     for (const p of pipelineRows) {
       if (!p.qb_list_id) continue; // shouldn't happen since isQbSynced=true
-      if (p.void_status === "synced") continue; // already QB-deleted
+      hasUsablePipelineRow = true;
+      if (p.void_status === "voided") continue; // already QB-deleted
       pipelineUpdates.push({
         id: p.id,
         void_status: "waiting",
@@ -216,6 +254,31 @@ export const persistDeleteReceiptStep = createStep(
     }
     if (pipelineUpdates.length > 0) {
       await service.updateQbItemReceiptPipelines(pipelineUpdates);
+    }
+
+    // Legacy fallback: receipt was QB-synced (header has qb_item_receipt_list_id)
+    // but no pipeline row exists yet (e.g., created before the pipeline workflow
+    // shipped, or row was previously hard-deleted out from under us). Seed a
+    // synthetic pipeline row in 'synced' state with void_status='waiting' so
+    // the poller's Phase D fires TxnDel against this list_id.
+    if (!hasUsablePipelineRow && input.qb_item_receipt_list_id) {
+      const created = await service.createQbItemReceiptPipelines([
+        {
+          purchase_order_receipt_id: input.receipt_id,
+          purchase_order_id: input.po_id,
+          status: "synced",
+          qb_list_id: input.qb_item_receipt_list_id,
+          synced_at: new Date(),
+          payload: {
+            legacy_seed: true,
+            seeded_for: "delete-receipt",
+            seeded_at: new Date().toISOString(),
+          },
+          void_status: "waiting",
+          void_retries: 0,
+        },
+      ]);
+      qbDeleteQueued = Array.isArray(created) ? created.length > 0 : !!created;
     }
 
     return new StepResponse(

@@ -1,11 +1,11 @@
 /**
  * GET /admin/customer-payments/:id — get a single payment with applications + customer
- * PATCH /admin/customer-payments/:id — update method / pos_payment_method / reference
+ * PATCH /admin/customer-payments/:id — update method / card_brand / pos_payment_method / reference
  */
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 
-import { QB_PAYMENT_METHOD_NAMES } from "../../../../lib/quickbooks/order-flow-core";
+import { resolveQbPaymentMethodForPayment } from "../../../../lib/quickbooks/payment-method-sanitizer";
 import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../modules/invoices";
@@ -124,6 +124,16 @@ const VALID_METHODS = [
   "stripe",
   "authorize_net",
   "other",
+  "credit_card",
+  "debit_card",
+];
+
+const VALID_CARD_BRANDS = [
+  "visa",
+  "mastercard",
+  "amex",
+  "discover",
+  "capital_one",
 ];
 
 // QB FullName map is imported from lib/quickbooks/order-flow-core — single
@@ -132,9 +142,10 @@ const VALID_METHODS = [
 
 export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
   const id = req.params.id!;
-  const { method, pos_payment_method, reference } = req.body as {
+  const { method, pos_payment_method, card_brand, reference } = req.body as {
     method?: string;
     pos_payment_method?: string;
+    card_brand?: string | null;
     reference?: string;
   };
   const financeService = req.scope.resolve(FINANCE_MODULE);
@@ -149,11 +160,21 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
     if (method && !VALID_METHODS.includes(method)) {
       return res.status(400).json({ error: `Invalid method: ${method}` });
     }
+    if (
+      card_brand !== undefined &&
+      card_brand !== null &&
+      !VALID_CARD_BRANDS.includes(card_brand)
+    ) {
+      return res
+        .status(400)
+        .json({ error: `Invalid card_brand: ${card_brand}` });
+    }
 
     const meta = (payment.metadata as Record<string, any>) ?? {};
     const fields: Record<string, any> = {};
     if (method) fields.method = method;
     if (reference !== undefined) fields.reference = reference;
+    if (card_brand !== undefined) fields.card_brand = card_brand;
     if (pos_payment_method !== undefined) {
       fields.metadata = { ...meta, pos_payment_method };
     }
@@ -167,6 +188,8 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
       pos_payment_method !== undefined &&
       pos_payment_method !== meta.pos_payment_method
     ) {
+      // continue to propagate granular pos_payment_method below
+      // (PosInvoice's payment_method column stores the granular value)
       (async () => {
         try {
           const invoiceService = req.scope.resolve(INVOICE_MODULE);
@@ -221,13 +244,25 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
     }
 
     // ── QB re-sync: update PaymentMethodRef in QuickBooks ────────────────
-    // Only attempt if the payment method actually changed and QB sync is possible.
-    if (
+    // Trigger when method, card_brand, or pos_payment_method changed. The
+    // canonical resolver derives the QB FullName from (method, card_brand):
+    //   credit_card → brand (Visa, Capital One, …); else → method (Check, Debit Card, …)
+    const methodChanged =
+      method !== undefined && method !== (payment as any).method;
+    const brandChanged =
+      card_brand !== undefined && card_brand !== (payment as any).card_brand;
+    const posMethodChanged =
       pos_payment_method !== undefined &&
-      pos_payment_method !== meta.pos_payment_method
-    ) {
+      pos_payment_method !== meta.pos_payment_method;
+
+    if (methodChanged || brandChanged || posMethodChanged) {
+      const finalMethod = method ?? (payment as any).method;
+      const finalBrand =
+        card_brand !== undefined ? card_brand : (payment as any).card_brand;
       const qbMethodName =
-        QB_PAYMENT_METHOD_NAMES[pos_payment_method] ?? pos_payment_method;
+        resolveQbPaymentMethodForPayment(finalMethod, finalBrand) ??
+        pos_payment_method ??
+        finalMethod;
       // Two markers tag a payment as SR-embedded:
       //   - is_sales_receipt_payment=true → manual Complete Order SR flow.
       //   - qb_source='sales_receipt'   → Dejavoo terminal-linked SR flow.

@@ -118,6 +118,48 @@ export async function POST(
   )) as unknown as PoLine[];
   const byId = new Map(poLines.map((l) => [l.id, l]));
 
+  // Defense in depth: cross-check denormalized po_line.qty_received against
+  // SUM(receipt_line.qty_received_now) over all non-voided/non-deleted
+  // receipts. Counter drift (production incident 2026-04-27) lets stale
+  // counters re-open already-received lines for double-receive.
+  const knex = (req.scope as unknown as {
+    resolve: (k: string) => {
+      raw: (sql: string, b?: unknown[]) => Promise<{ rows: unknown[] }>;
+    };
+  }).resolve("__pg_connection__");
+  const actualReceivedRows = (
+    await knex.raw(
+      `SELECT prl.purchase_order_line_id AS id,
+              COALESCE(SUM(prl.qty_received_now), 0)::int AS actual_received
+         FROM purchase_order_receipt_line prl
+         JOIN purchase_order_receipt pr ON pr.id = prl.purchase_order_receipt_id
+        WHERE prl.purchase_order_line_id = ANY (?::text[])
+          AND prl.deleted_at IS NULL
+          AND pr.deleted_at IS NULL
+          AND pr.status NOT IN ('voided','deleted')
+        GROUP BY prl.purchase_order_line_id`,
+      [uniqueLineIds]
+    )
+  ).rows as Array<{ id: string; actual_received: number }>;
+  const actualByLineId = new Map(
+    actualReceivedRows.map((r) => [r.id, r.actual_received])
+  );
+
+  // Reject if every requested line is fully received per actual receipts
+  const allFullyReceived = body.lines.every((rl) => {
+    const pl = byId.get(rl.po_line_id);
+    if (!pl) return false;
+    const actual = actualByLineId.get(rl.po_line_id) ?? pl.qty_received;
+    return pl.qty_ordered - actual - pl.qty_cancelled <= 0;
+  });
+  if (allFullyReceived) {
+    return res.status(409).json({
+      error:
+        "Every requested line is already fully received. Refresh the PO — its counters may be stale.",
+      code: "po_already_complete",
+    });
+  }
+
   // Validate every requested line
   const workflowLines: Array<{
     po_line_id: string;
@@ -152,8 +194,12 @@ export async function POST(
         code: "line_cancelled",
       });
     }
+    // Use MAX(stored, actual) so stale denormalized counters can never
+    // permit double-receive: we always trust the higher of the two truths.
+    const actualReceived = actualByLineId.get(po_line.id) ?? po_line.qty_received;
+    const effectiveReceived = Math.max(po_line.qty_received, actualReceived);
     const remaining =
-      po_line.qty_ordered - po_line.qty_received - po_line.qty_cancelled;
+      po_line.qty_ordered - effectiveReceived - po_line.qty_cancelled;
     if (req_line.qty_received_now > remaining) {
       return res.status(400).json({
         error: `qty_received_now (${req_line.qty_received_now}) exceeds remaining (${remaining}) on line ${req_line.po_line_id}`,
