@@ -14,9 +14,7 @@ import { Modules } from "@medusajs/utils";
 import { MeiliSearch } from "meilisearch";
 
 const CUSTOMER_IDS = [
-  "cus_5fa4c8007bb9474780da3ecf80",  // STIGMA WOOD CORP. (new, created via DB insert)
-  "cus_01KG0R9EF8M8VW51K83CHC9RK7",  // Llonart Homes LLC (email changed to dup_)
-  "cus_01KPRR37YYFKD30XH71QZ0R4HB",  // Marc Winkler / Flash Landscape (pending QB ID)
+  "cus_01KQA4QMDM4Z3S9JNAK789AAGZ",  // FLORIDA CONVERSION LLC (SR 27925 backfill)
 ];
 
 export default async function meiliSyncSpecificCustomers({ container }: ExecArgs) {
