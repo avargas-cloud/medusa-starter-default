@@ -151,7 +151,7 @@ export async function POST(
   await Promise.all(
     uniqueVariantIds.map(async (variantId) => {
       const result = await knex.raw(
-        `SELECT metadata FROM product_variant WHERE id = $1 AND deleted_at IS NULL`,
+        `SELECT metadata FROM product_variant WHERE id = ? AND deleted_at IS NULL`,
         [variantId]
       );
       const row = (result.rows[0] ?? null) as VariantMetadataRow | null;
@@ -271,9 +271,9 @@ export async function POST(
         const avgLandedCost = vQty > 0 ? totalLanded / vQty : 0;
         return knex.raw(
           `UPDATE product_variant
-         SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('avg_landed_cost_cents', $1::float),
+         SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('avg_landed_cost_cents', ?::float),
              updated_at = NOW()
-         WHERE id = $2`,
+         WHERE id = ?`,
           [avgLandedCost, variantId]
         );
       }

@@ -20,9 +20,11 @@ type KnexInstance = {
 
 interface VendorBillDetailRow {
   id: string;
+  number: string | null;
   purchase_order_id: string;
   purchase_order_receipt_id: string;
   status: string;
+  reference_id: string | null;
   commission_mode: string;
   commission_rate_bps: number;
   commission_amount_cents: number;
@@ -41,7 +43,8 @@ interface VendorBillDetailRow {
   po_number: string | null;
   receipt_number: string | null;
   vendor_name: string | null;
-  received_at: string | null;
+  receipt_received_at: string | null;
+  ship_to_location_name: string | null;
 }
 
 interface VendorBillLineRow {
@@ -50,6 +53,7 @@ interface VendorBillLineRow {
   receipt_line_id: string;
   product_variant_id: string;
   sku: string;
+  mpn: string | null;
   description: string;
   qty: number;
   unit_cost_cents: number;
@@ -76,9 +80,11 @@ export async function GET(
   const headerResult = await knex.raw(
     `SELECT
        vb.id,
+       vb.number,
        vb.purchase_order_id,
        vb.purchase_order_receipt_id,
        vb.status,
+       vb.reference_id,
        vb.commission_mode,
        vb.commission_rate_bps,
        vb.commission_amount_cents,
@@ -96,14 +102,17 @@ export async function GET(
        vb.updated_at,
        po."number"                         AS po_number,
        por."number"                        AS receipt_number,
-       po.vendor_name_snapshot              AS vendor_name,
-       por.received_at
+       po.vendor_name_snapshot             AS vendor_name,
+       por.received_at                     AS receipt_received_at,
+       sl.name                             AS ship_to_location_name
      FROM vendor_bill vb
      LEFT JOIN purchase_order po
        ON po.id = vb.purchase_order_id AND po.deleted_at IS NULL
      LEFT JOIN purchase_order_receipt por
        ON por.id = vb.purchase_order_receipt_id AND por.deleted_at IS NULL
-     WHERE vb.id = $1 AND vb.deleted_at IS NULL`,
+     LEFT JOIN stock_location sl
+       ON sl.id = por.stock_location_id AND sl.deleted_at IS NULL
+     WHERE vb.id = ? AND vb.deleted_at IS NULL`,
     [id]
   );
 
@@ -122,6 +131,7 @@ export async function GET(
        receipt_line_id,
        product_variant_id,
        sku,
+       mpn,
        description,
        qty,
        unit_cost_cents,
@@ -131,12 +141,17 @@ export async function GET(
        tariff_per_unit_cents,
        landed_unit_cost_cents
      FROM vendor_bill_line
-     WHERE vendor_bill_id = $1 AND deleted_at IS NULL
+     WHERE vendor_bill_id = ? AND deleted_at IS NULL
      ORDER BY created_at ASC`,
     [id]
   );
 
   const lines = linesResult.rows as VendorBillLineRow[];
 
-  return res.json({ vendor_bill: { ...header, lines } });
+  const total_landed_cents = lines.reduce(
+    (s, l) => s + l.landed_unit_cost_cents * l.qty,
+    0
+  );
+
+  return res.json({ vendor_bill: { ...header, total_landed_cents, lines } });
 }

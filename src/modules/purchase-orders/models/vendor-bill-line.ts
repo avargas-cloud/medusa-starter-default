@@ -27,6 +27,9 @@ export const VendorBillLine = model.define("vendor_bill_line", {
   qty: model.number(),
   unit_cost_cents: model.number(),
 
+  // MPN snapshot (copied from product_variant.metadata.mpn at bill creation)
+  mpn: model.text().nullable(),
+
   // CBM — decimal stored as JS number (see note above)
   cbm_per_unit: model.number().nullable(),
 

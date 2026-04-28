@@ -38,6 +38,7 @@ type KnexInstance = {
 
 interface VendorBillListRow {
   id: string;
+  number: string | null;
   purchase_order_id: string;
   purchase_order_receipt_id: string;
   status: string;
@@ -73,17 +74,16 @@ export async function GET(
     req.scope as unknown as { resolve: (k: string) => unknown }
   ).resolve("__pg_connection__") as KnexInstance;
 
-  // Build WHERE clauses
+  // Build WHERE clauses — use ? (Knex binding placeholder, not pg $n)
   const whereClauses: string[] = [`vb.deleted_at IS NULL`];
   const bindings: unknown[] = [];
-  let paramIdx = 1;
 
   if (status) {
-    whereClauses.push(`vb.status = $${paramIdx++}`);
+    whereClauses.push(`vb.status = ?`);
     bindings.push(status);
   }
   if (po_id) {
-    whereClauses.push(`vb.purchase_order_id = $${paramIdx++}`);
+    whereClauses.push(`vb.purchase_order_id = ?`);
     bindings.push(po_id);
   }
 
@@ -96,14 +96,11 @@ export async function GET(
   );
   const count = Number((countResult.rows[0] as { total: string }).total);
 
-  // Data query — join receipt + PO for display fields; aggregate line totals
-  const dataBindings = [...bindings, limit, offset];
-  const limitParam = paramIdx++;
-  const offsetParam = paramIdx++;
-
+  // Data query — LIMIT/OFFSET interpolated directly (validated numbers, safe)
   const dataResult = await knex.raw(
     `SELECT
        vb.id,
+       vb.number,
        vb.purchase_order_id,
        vb.purchase_order_receipt_id,
        vb.status,
@@ -135,8 +132,8 @@ export async function GET(
      ) agg ON TRUE
      WHERE ${whereStr}
      ORDER BY vb.created_at DESC
-     LIMIT $${limitParam} OFFSET $${offsetParam}`,
-    dataBindings
+     LIMIT ${limit} OFFSET ${offset}`,
+    bindings
   );
 
   const rows = (dataResult.rows as VendorBillListRow[]).map((r) => ({

@@ -23,6 +23,9 @@ import { model } from "@medusajs/utils";
 export const VendorBill = model.define("vendor_bill", {
   id: model.id({ prefix: "vb" }).primaryKey(),
 
+  // Sequential human-readable ID assigned at creation (VB-XXXX)
+  number: model.text().nullable(),
+
   // One-to-one with receipt (enforced by UNIQUE index in migration)
   purchase_order_receipt_id: model.text(),
   purchase_order_id: model.text(),
@@ -45,6 +48,9 @@ export const VendorBill = model.define("vendor_bill", {
   tariff_included: model.boolean().default(false),
   tariff_amount_cents: model.number().default(0),
   tariff_number: model.text().nullable(),
+
+  // Vendor's own reference / PI number for this shipment
+  reference_id: model.text().nullable(),
 
   // Free-text notes
   notes: model.text().nullable(),

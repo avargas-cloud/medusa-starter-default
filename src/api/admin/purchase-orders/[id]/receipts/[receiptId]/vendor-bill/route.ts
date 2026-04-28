@@ -22,6 +22,16 @@ import { getActorUserId, UnauthenticatedError } from "../../../../_lib/auth";
 import { zodErrorToBody } from "../../../../_lib/format";
 import { getPurchaseOrdersService } from "../../../../_lib/service-resolver";
 
+type KnexInstance = {
+  raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+};
+
+function resolveKnex(req: AuthenticatedMedusaRequest): KnexInstance {
+  return (req.scope as unknown as { resolve: (k: string) => unknown }).resolve(
+    "__pg_connection__"
+  ) as KnexInstance;
+}
+
 // ── Zod schemas ───────────────────────────────────────────────────────────────
 
 const vendorBillBodySchema = z.object({
@@ -41,6 +51,7 @@ const vendorBillBodySchema = z.object({
     .optional()
     .default(0),
   commission_invoice_number: z.string().max(200).nullish(),
+  reference_id: z.string().max(200).nullish(),
   freight_included: z.boolean().optional().default(false),
   freight_amount_cents: z
     .number()
@@ -227,6 +238,32 @@ export async function POST(
     });
   }
 
+  // Fetch MPN + CBM from product_variant.metadata for each unique variant
+  const knex = resolveKnex(req);
+  const uniqueVariantIds = [
+    ...new Set(receiptLines.map((rl) => rl.product_variant_id)),
+  ];
+  const variantMeta = new Map<string, { mpn: string | null; cbm: number | null }>();
+  await Promise.all(
+    uniqueVariantIds.map(async (variantId) => {
+      const result = await knex.raw(
+        `SELECT metadata FROM product_variant WHERE id = ? AND deleted_at IS NULL`,
+        [variantId]
+      );
+      const row = (result.rows[0] ?? null) as
+        | { metadata: Record<string, unknown> | null }
+        | null;
+      const mpn =
+        typeof row?.metadata?.mpn === "string" ? row.metadata.mpn : null;
+      const cbmRaw =
+        row?.metadata?.cbm !== undefined && row.metadata.cbm !== null
+          ? Number(row.metadata.cbm)
+          : null;
+      const cbm = cbmRaw !== null && !isNaN(cbmRaw) ? cbmRaw : null;
+      variantMeta.set(variantId, { mpn, cbm });
+    })
+  );
+
   // For each line, resolve unit cost (override → PO line fallback)
   const resolvedLines = await Promise.all(
     receiptLines.map(async (rl) => {
@@ -237,14 +274,19 @@ export async function POST(
           .catch(() => null)) as unknown as PoLine | null;
         unitCost = poLine?.unit_cost_cents ?? 0;
       }
+      const meta = variantMeta.get(rl.product_variant_id) ?? {
+        mpn: null,
+        cbm: null,
+      };
       return {
         receipt_line_id: rl.id,
         product_variant_id: rl.product_variant_id,
         sku: rl.sku_snapshot,
+        mpn: meta.mpn,
         description: rl.description_snapshot,
         qty: rl.qty_received_now,
         unit_cost_cents: unitCost,
-        cbm_per_unit: null,
+        cbm_per_unit: meta.cbm,
         commission_per_unit_cents: 0,
         freight_per_unit_cents: 0,
         tariff_per_unit_cents: 0,
@@ -253,11 +295,19 @@ export async function POST(
     })
   );
 
+  // Assign sequential VB-XXXX number
+  const seqResult = await knex.raw(
+    `SELECT nextval('custom_vendor_bill_seq') AS seq`
+  );
+  const vbNumber = `VB-${(seqResult.rows[0] as { seq: string | number }).seq}`;
+
   // Create vendor bill header
   const newBill = (await service.createVendorBills({
     purchase_order_receipt_id: receiptId,
     purchase_order_id: id,
+    number: vbNumber,
     status: "draft",
+    reference_id: body.reference_id ?? null,
     commission_mode: body.commission_mode,
     commission_rate_bps: body.commission_rate_bps,
     commission_amount_cents: body.commission_amount_cents,
@@ -337,6 +387,8 @@ export async function PATCH(
   }
 
   const updatePayload: Record<string, unknown> = {};
+  if ("reference_id" in patch)
+    updatePayload.reference_id = patch.reference_id ?? null;
   if (patch.commission_mode !== undefined)
     updatePayload.commission_mode = patch.commission_mode;
   if (patch.commission_rate_bps !== undefined)
