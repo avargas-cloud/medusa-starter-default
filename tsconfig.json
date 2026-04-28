@@ -48,6 +48,8 @@
     "src/scripts",
     "**/*.md",
     "check_*.ts",
-    "test-*.ts"
+    "test-*.ts",
+    "**/*.spec.ts",
+    "**/__tests__/**"
   ]
 }
