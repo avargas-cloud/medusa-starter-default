@@ -9,7 +9,9 @@ type PosDocType =
   | "payment"
   | "purchase_order"
   | "inventory_adjustment"
-  | "item_receipt";
+  | "item_receipt"
+  | "customer"
+  | "variant";
 
 const VALID_TYPES: PosDocType[] = [
   "estimate",
@@ -20,6 +22,8 @@ const VALID_TYPES: PosDocType[] = [
   "purchase_order",
   "inventory_adjustment",
   "item_receipt",
+  "customer",
+  "variant",
 ];
 
 interface SearchHit {
@@ -92,7 +96,108 @@ async function search(
   if (type === "purchase_order")      return searchPurchaseOrder(client, q);
   if (type === "inventory_adjustment") return searchInventoryAdjustment(client, q);
   if (type === "item_receipt")        return searchItemReceipt(client, q);
+  if (type === "customer")            return searchCustomer(client, q);
+  if (type === "variant")             return searchVariant(client, q);
   return [];
+}
+
+async function searchCustomer(
+  client: InstanceType<typeof Client>,
+  q: string
+): Promise<SearchHit[]> {
+  const params: unknown[] = [];
+  let wherePattern = "";
+  if (q) {
+    params.push(`%${q}%`);
+    wherePattern = `AND (
+      email ILIKE $1
+      OR company_name ILIKE $1
+      OR (COALESCE(first_name,'')||' '||COALESCE(last_name,'')) ILIKE $1
+    )`;
+  }
+
+  const { rows } = await client.query<{
+    id: string;
+    email: string | null;
+    company_name: string | null;
+    first_name: string | null;
+    last_name: string | null;
+    qb_list_id: string | null;
+    created_at: Date;
+  }>(
+    `SELECT id, email, company_name, first_name, last_name,
+            metadata->>'qb_list_id' AS qb_list_id,
+            created_at
+       FROM customer
+      WHERE deleted_at IS NULL
+      ${wherePattern}
+      ORDER BY created_at DESC
+      LIMIT ${LIMIT}`,
+    params
+  );
+
+  return rows.map((r) => {
+    const fullName = [r.first_name, r.last_name].filter(Boolean).join(" ").trim();
+    const display = r.company_name || fullName || r.email || r.id;
+    return {
+      id: r.id,
+      display_id: display,
+      label: display,
+      date: r.created_at?.toISOString() ?? null,
+      amount: null,
+      customer_name: r.email,
+      already_mapped: !!r.qb_list_id,
+      existing_txn_id: r.qb_list_id,
+    };
+  });
+}
+
+async function searchVariant(
+  client: InstanceType<typeof Client>,
+  q: string
+): Promise<SearchHit[]> {
+  const params: unknown[] = [];
+  let wherePattern = "";
+  if (q) {
+    params.push(`%${q}%`);
+    wherePattern = `AND (
+      pv.sku ILIKE $1 OR pv.title ILIKE $1 OR p.title ILIKE $1
+    )`;
+  }
+
+  const { rows } = await client.query<{
+    id: string;
+    sku: string | null;
+    variant_title: string | null;
+    product_title: string | null;
+    quickbooks_id: string | null;
+    created_at: Date;
+  }>(
+    `SELECT pv.id,
+            pv.sku,
+            pv.title AS variant_title,
+            p.title AS product_title,
+            pv.metadata->>'quickbooks_id' AS quickbooks_id,
+            pv.created_at
+       FROM product_variant pv
+       JOIN product p ON p.id = pv.product_id
+      WHERE pv.deleted_at IS NULL
+      ${wherePattern}
+      ORDER BY pv.created_at DESC
+      LIMIT ${LIMIT}`,
+    params
+  );
+
+  return rows.map((r) => ({
+    id: r.id,
+    display_id: r.sku || r.id,
+    label: r.sku || r.id,
+    date: r.created_at?.toISOString() ?? null,
+    amount: null,
+    customer_name: r.product_title || r.variant_title,
+    already_mapped: !!r.quickbooks_id,
+    existing_txn_id: r.quickbooks_id,
+  }));
 }
 
 async function searchOrderLike(

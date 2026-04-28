@@ -1,4 +1,5 @@
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
+import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../modules/quickbooks-catalog";
 
@@ -58,10 +59,42 @@ export const sendToQbStep = createStep(
 
     let pipelineRowId: string | null = null;
     if (catalog && input.pipeline) {
+      // Defensive SKU resolution: callers occasionally pass an empty/undefined
+      // sku (e.g. admin partial updates that don't echo the SKU field). The
+      // pipeline row is the only audit trail for the operation, so an empty
+      // sku breaks observability. Hydrate from the variant when missing.
+      let resolvedSku = (input.pipeline.sku ?? "").trim();
+      if (!resolvedSku) {
+        try {
+          const query = container.resolve(ContainerRegistrationKeys.QUERY);
+          const { data: variants } = await query.graph({
+            entity: "product_variant",
+            fields: ["sku"],
+            filters: { id: input.pipeline.variant_id },
+            pagination: { skip: 0, take: 1 },
+          });
+          const fetched = (variants as Array<{ sku: string | null }>)[0]?.sku;
+          if (fetched && fetched.trim()) {
+            resolvedSku = fetched.trim();
+            logger.warn(
+              `[sendToQbStep] empty sku in input — resolved "${resolvedSku}" from variant ${input.pipeline.variant_id}`
+            );
+          } else {
+            logger.warn(
+              `[sendToQbStep] empty sku in input AND variant ${input.pipeline.variant_id} has no sku either`
+            );
+          }
+        } catch (lookupErr: any) {
+          logger.warn(
+            `[sendToQbStep] sku lookup failed for variant ${input.pipeline.variant_id}: ${lookupErr.message}`
+          );
+        }
+      }
+
       try {
         const row = await catalog.createQbItemPipelines({
           variant_id: input.pipeline.variant_id,
-          sku: input.pipeline.sku,
+          sku: resolvedSku,
           item_type: input.pipeline.item_type,
           op_action: input.action,
           op_payload: input.data,
@@ -73,7 +106,7 @@ export const sendToQbStep = createStep(
         // A failed pipeline insert must not block the bridge call — but log it
         // loudly so we know the audit trail is missing.
         logger.error(
-          `[sendToQbStep] failed to insert qb_item_pipeline row for ${input.pipeline.sku}: ${e.message}`
+          `[sendToQbStep] failed to insert qb_item_pipeline row for ${resolvedSku || input.pipeline.variant_id}: ${e.message}`
         );
       }
     }

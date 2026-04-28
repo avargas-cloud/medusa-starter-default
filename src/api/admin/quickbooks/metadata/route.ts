@@ -13,7 +13,9 @@ type PosDocType =
   | "payment"
   | "purchase_order"
   | "inventory_adjustment"
-  | "item_receipt";
+  | "item_receipt"
+  | "customer"
+  | "variant";
 
 const VALID_TYPES: PosDocType[] = [
   "estimate",
@@ -24,6 +26,8 @@ const VALID_TYPES: PosDocType[] = [
   "purchase_order",
   "inventory_adjustment",
   "item_receipt",
+  "customer",
+  "variant",
 ];
 
 // ─── Friendly ID resolver ─────────────────────────────────────────────────────
@@ -131,6 +135,26 @@ async function resolveId(
     const { rows } = await client.query(
       `SELECT id FROM purchase_order_receipt WHERE number ILIKE $1 AND deleted_at IS NULL LIMIT 1`,
       [upper]
+    );
+    return rows[0]?.id ?? null;
+  }
+
+  if (type === "customer") {
+    // Customer IDs are always cust_... — accept as-is. Also accept email lookup.
+    if (id.startsWith("cust_")) return id;
+    const { rows } = await client.query(
+      `SELECT id FROM customer WHERE email = $1 AND deleted_at IS NULL LIMIT 1`,
+      [id.toLowerCase()]
+    );
+    return rows[0]?.id ?? null;
+  }
+
+  if (type === "variant") {
+    // Variant IDs are variant_... — accept as-is. Also accept SKU lookup.
+    if (id.startsWith("variant_")) return id;
+    const { rows } = await client.query(
+      `SELECT id FROM product_variant WHERE sku = $1 AND deleted_at IS NULL LIMIT 1`,
+      [id]
     );
     return rows[0]?.id ?? null;
   }
@@ -264,6 +288,83 @@ export async function GET(
       return;
     }
     const internalId = resolvedId;
+
+    // ── customer / variant: simple metadata-only lookup (no pipeline) ─────
+    if (type === "customer") {
+      const { rows } = await client.query<{
+        id: string;
+        email: string | null;
+        company_name: string | null;
+        first_name: string | null;
+        last_name: string | null;
+        qb_list_id: string | null;
+      }>(
+        `SELECT id, email, company_name, first_name, last_name,
+                metadata->>'qb_list_id' AS qb_list_id
+           FROM customer WHERE id = $1 LIMIT 1`,
+        [internalId]
+      );
+      const c = rows[0];
+      if (!c) {
+        res.status(404).json({ error: `Customer ${internalId} not found` });
+        return;
+      }
+      res.json({
+        type,
+        id: internalId,
+        qb_txn_id: c.qb_list_id ?? null,
+        qb_ref_number: null,
+        qb_sync_status: null,
+        qb_edit_sequence: null,
+        qb_is_sales_receipt: null,
+        display_info: {
+          email: c.email,
+          company_name: c.company_name,
+          first_name: c.first_name,
+          last_name: c.last_name,
+        },
+        pipeline_rows: [],
+      });
+      return;
+    }
+
+    if (type === "variant") {
+      const { rows } = await client.query<{
+        id: string;
+        sku: string | null;
+        title: string | null;
+        product_title: string | null;
+        quickbooks_id: string | null;
+      }>(
+        `SELECT pv.id, pv.sku, pv.title, p.title AS product_title,
+                pv.metadata->>'quickbooks_id' AS quickbooks_id
+           FROM product_variant pv
+           JOIN product p ON p.id = pv.product_id
+          WHERE pv.id = $1 LIMIT 1`,
+        [internalId]
+      );
+      const v = rows[0];
+      if (!v) {
+        res.status(404).json({ error: `Variant ${internalId} not found` });
+        return;
+      }
+      res.json({
+        type,
+        id: internalId,
+        qb_txn_id: v.quickbooks_id ?? null,
+        qb_ref_number: null,
+        qb_sync_status: null,
+        qb_edit_sequence: null,
+        qb_is_sales_receipt: null,
+        display_info: {
+          sku: v.sku,
+          title: v.title,
+          product_title: v.product_title,
+        },
+        pipeline_rows: [],
+      });
+      return;
+    }
 
     let entity_metadata: Record<string, unknown> | null = null;
     let display_info: Record<string, unknown> = {};
@@ -516,7 +617,10 @@ export async function GET(
       }
     } else {
     const stepFilter: Record<
-      Exclude<PosDocType, "purchase_order" | "inventory_adjustment" | "item_receipt">,
+      Exclude<
+        PosDocType,
+        "purchase_order" | "inventory_adjustment" | "item_receipt" | "customer" | "variant"
+      >,
       string
     > = {
       estimate: "step = 'estimate'",
@@ -612,6 +716,48 @@ export async function PUT(
     const internalId = await resolveId(client, type as PosDocType, id);
     if (!internalId) {
       res.status(404).json({ error: `${type} "${id}" not found` });
+      return;
+    }
+
+    // ── customer: write metadata.qb_list_id ───────────────────────────────
+    if (type === "customer") {
+      const customerModule = req.scope.resolve(Modules.CUSTOMER);
+      const customer = await customerModule
+        .retrieveCustomer(internalId)
+        .catch(() => null);
+      if (!customer) {
+        res.status(404).json({ error: `Customer ${internalId} not found` });
+        return;
+      }
+      const existingMeta = { ...((customer as any).metadata ?? {}) };
+      if (qb_txn_id !== undefined) existingMeta.qb_list_id = qb_txn_id;
+      existingMeta.qb_manually_mapped_at = now;
+      existingMeta.qb_manually_mapped_note = AUDIT_NOTE;
+
+      await customerModule.updateCustomers(internalId, { metadata: existingMeta });
+      res.json({ success: true, type, id: internalId });
+      return;
+    }
+
+    // ── variant: write metadata.quickbooks_id ─────────────────────────────
+    if (type === "variant") {
+      const productModule = req.scope.resolve(Modules.PRODUCT);
+      const variant = await productModule
+        .retrieveProductVariant(internalId)
+        .catch(() => null);
+      if (!variant) {
+        res.status(404).json({ error: `Variant ${internalId} not found` });
+        return;
+      }
+      const existingMeta = { ...((variant as any).metadata ?? {}) };
+      if (qb_txn_id !== undefined) existingMeta.quickbooks_id = qb_txn_id;
+      existingMeta.qb_manually_mapped_at = now;
+      existingMeta.qb_manually_mapped_note = AUDIT_NOTE;
+
+      await productModule.updateProductVariants(internalId, {
+        metadata: existingMeta,
+      });
+      res.json({ success: true, type, id: internalId });
       return;
     }
 
@@ -834,7 +980,10 @@ export async function PUT(
 
     // ── Update pipeline rows ──────────────────────────────────────────────
     const stepFilter: Record<
-      Exclude<PosDocType, "purchase_order" | "inventory_adjustment" | "item_receipt">,
+      Exclude<
+        PosDocType,
+        "purchase_order" | "inventory_adjustment" | "item_receipt" | "customer" | "variant"
+      >,
       string
     > = {
       estimate: "step = 'estimate'",
