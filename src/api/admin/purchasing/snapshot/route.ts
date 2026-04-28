@@ -124,6 +124,8 @@ export async function GET(
          COALESCE(open_po_usa.on_order, 0)::int AS qty_on_po,
          COALESCE(open_po_china.on_order, 0)::int AS qty_on_po_china,
          COALESCE(max_day.max_daily_sales, 0)::int AS max_daily_sales,
+         COALESCE(max_day_alt.max_daily_sales_alt, 0)::int AS max_daily_sales_alt,
+         COALESCE(alt_sku_list.alt_skus, ARRAY[]::text[]) AS alt_skus,
          COALESCE(res_usa.inv_usa_reserved, 0)::int AS inv_usa_reserved,
          COALESCE(alt_inv_usa.inv_usa_alt, 0)::int AS inv_usa_alt,
          COALESCE(alt_inv_usa.inv_usa_alt_reserved, 0)::int AS inv_usa_alt_reserved,
@@ -171,6 +173,33 @@ export async function GET(
          GROUP BY pii.variant_id
        ) max_day ON max_day.variant_id = snap.variant_id
        LEFT JOIN (
+         SELECT pa_inner.primary_variant_id,
+                MAX(day_qty)::int AS max_daily_sales_alt
+         FROM (
+           SELECT pa.primary_variant_id,
+                  pii2.variant_id,
+                  DATE(pi.issued_at AT TIME ZONE 'America/New_York') AS sale_day,
+                  SUM(pii2.quantity - pii2.refunded_quantity)::int AS day_qty
+           FROM product_alternative pa
+           JOIN pos_invoice_item pii2 ON pii2.variant_id = pa.alt_variant_id
+           JOIN pos_invoice pi ON pi.id = pii2.invoice_id
+           WHERE pa.is_active = true AND pa.deleted_at IS NULL
+             AND pi.issued_at >= NOW() - INTERVAL '12 months'
+             AND pi.status NOT IN ('voided')
+             AND pii2.deleted_at IS NULL
+           GROUP BY pa.primary_variant_id, pii2.variant_id, DATE(pi.issued_at AT TIME ZONE 'America/New_York')
+         ) pa_inner
+         GROUP BY pa_inner.primary_variant_id
+       ) max_day_alt ON max_day_alt.primary_variant_id = snap.variant_id
+       LEFT JOIN (
+         SELECT pa.primary_variant_id,
+                ARRAY_AGG(pv_alt.sku) AS alt_skus
+         FROM product_alternative pa
+         JOIN product_variant pv_alt ON pv_alt.id = pa.alt_variant_id AND pv_alt.deleted_at IS NULL
+         WHERE pa.is_active = true AND pa.deleted_at IS NULL
+         GROUP BY pa.primary_variant_id
+       ) alt_sku_list ON alt_sku_list.primary_variant_id = snap.variant_id
+       LEFT JOIN (
          SELECT pvii.variant_id,
                 COALESCE(SUM(il.reserved_quantity), 0)::int AS inv_usa_reserved
          FROM product_variant_inventory_item pvii
@@ -213,10 +242,28 @@ export async function GET(
     const peak = getExcelPeak();
     const snapshot = rows.rows.map((r) => {
       const row = r as Record<string, unknown>;
-      const medusaMax =
+      const ownMedusa =
         typeof row.max_daily_sales === "number" ? row.max_daily_sales : 0;
+      const altMedusa =
+        typeof row.max_daily_sales_alt === "number"
+          ? row.max_daily_sales_alt
+          : 0;
       const sku = typeof row.sku === "string" ? row.sku : "";
-      return { ...row, max_daily_sales: Math.max(medusaMax, peak[sku] ?? 0) };
+      const altSkus = Array.isArray(row.alt_skus)
+        ? (row.alt_skus as string[])
+        : [];
+      const ownExcel = peak[sku] ?? 0;
+      const altExcel = altSkus.reduce(
+        (m, s) => Math.max(m, peak[s] ?? 0),
+        0
+      );
+      const finalMax = Math.max(ownMedusa, altMedusa, ownExcel, altExcel);
+      // strip helper fields used only for the MaxDaily roll-up
+      const { max_daily_sales_alt: _altMedusa, alt_skus: _altSkus, ...rest } =
+        row;
+      void _altMedusa;
+      void _altSkus;
+      return { ...rest, max_daily_sales: finalMax };
     });
 
     const warnings = await checkMissingSalesData(db);
