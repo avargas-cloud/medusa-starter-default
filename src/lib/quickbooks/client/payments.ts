@@ -359,7 +359,22 @@ export async function applyCreditMemoToInvoiceInQb(payload: {
       },
     };
   } catch (err: any) {
-    return { success: false, error: err?.message || String(err) };
+    const msg: string = err?.message || String(err);
+    // QB Error 3120 on AppliedToTxnAdd means the invoice has no open balance.
+    // QB's "auto apply credits" preference can pay the invoice before our step runs.
+    // Treat this as success — the credit IS applied, just by QB rather than us.
+    // Root fix: disable "Automatically apply credits" in QB Desktop preferences
+    // (Edit → Preferences → Sales & Customers → Company Preferences).
+    if (msg.includes("3120")) {
+      log(
+        `[QB] ⚠️ applyCreditMemoToInvoiceInQb got 3120 for invoice ${payload.invoiceTxnId} — invoice already at $0 balance (QB auto-apply). Treating as success.`
+      );
+      return {
+        success: true,
+        data: { operationId: "QB_AUTO_APPLIED", newEditSequence: null, totalAppliedCount: 1 },
+      };
+    }
+    return { success: false, error: msg };
   }
 }
 

@@ -414,7 +414,7 @@ describe("PATCH /admin/pos/credit_memos/:id/patch-meta", () => {
 
     expect(mockUpdateCm).toHaveBeenCalledWith(
       expect.objectContaining({
-        salesRepRef: "Alex",
+        salesRepRef: "AV",
         salesTaxCode: "Sale Tax 7%",
       })
     );

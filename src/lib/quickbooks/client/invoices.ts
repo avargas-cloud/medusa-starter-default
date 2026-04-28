@@ -290,3 +290,56 @@ export async function voidInvoiceInQb(
     return { success: false, error: err.message };
   }
 }
+
+export interface InvoiceLinkedEntry {
+  txnId: string;
+  txnType: string;
+  amount: number;
+  refNumber?: string;
+}
+
+/**
+ * Queries a QB Invoice with IncludeLinkedTxns=true and returns its balance +
+ * all linked transactions. Used to detect credits that QB auto-applied when
+ * the invoice was created (QB's "Automatically apply credits" preference).
+ */
+export async function fetchInvoiceLinkedCredits(txnId: string): Promise<{
+  balanceRemaining: number;
+  linkedEntries: InvoiceLinkedEntry[];
+}> {
+  const res = await bridgeFetch("GET", `/api/invoices/${txnId}?linkedTxns=true`);
+  const operationId: string = res?.operationId;
+  if (!operationId)
+    throw new Error("Bridge did not return operationId for invoice linkedTxns query");
+
+  const raw = await pollRawOperationResult(operationId);
+  const invRet =
+    raw?.QBXML?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet ??
+    raw?.QBXMLMsgsRs?.InvoiceQueryRs?.InvoiceRet ??
+    raw?.InvoiceRet ??
+    raw?.InvoiceQueryRs?.InvoiceRet;
+
+  if (!invRet)
+    throw new Error(`QB returned no InvoiceRet for TxnID=${txnId} (linkedTxns query)`);
+
+  const balanceRemaining =
+    parseFloat(String(invRet.BalanceRemaining ?? invRet.Subtotal ?? "0")) || 0;
+
+  const rawLinked = invRet.LinkedTxn;
+  const linkedArr: any[] = rawLinked
+    ? Array.isArray(rawLinked)
+      ? rawLinked
+      : [rawLinked]
+    : [];
+
+  const linkedEntries: InvoiceLinkedEntry[] = linkedArr
+    .map((l: any) => ({
+      txnId: String(l?.TxnID || ""),
+      txnType: String(l?.TxnType || ""),
+      amount: parseFloat(String(l?.Amount ?? "0")) || 0,
+      refNumber: l?.RefNumber ? String(l.RefNumber) : undefined,
+    }))
+    .filter((l) => l.txnId);
+
+  return { balanceRemaining, linkedEntries };
+}

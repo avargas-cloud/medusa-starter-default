@@ -58,10 +58,10 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          SELECT
            received_at::date AS d,
            CASE WHEN status = 'refunded' AND qb->>'check_txn_id' IS NOT NULL
-                THEN -amount ELSE 0 END AS net_amount,
+                THEN -COALESCE((metadata->>'refund_amount')::numeric, amount) ELSE 0 END AS net_amount,
            0                            AS gross_payments,
            CASE WHEN status = 'refunded' AND qb->>'check_txn_id' IS NOT NULL
-                THEN amount ELSE 0 END  AS refunds,
+                THEN COALESCE((metadata->>'refund_amount')::numeric, amount) ELSE 0 END  AS refunds,
            0                            AS payment_count
          FROM customer_payment
          WHERE deleted_at IS NULL
