@@ -1,6 +1,7 @@
 /**
  * GET /admin/purchase-orders/on-order?sku=XXX
  * GET /admin/purchase-orders/on-order?sku[]=XXX&sku[]=YYY  (multi-SKU)
+ * Optional: &stock_location_id=sloc_... to scope PIO to a single warehouse.
  *
  * Single SKU:  { on_order: number }
  * Multi SKU:   { on_order: Record<string, number> }
@@ -31,6 +32,8 @@ export async function GET(
     return res.status(400).json({ error: "sku query param is required" });
   }
 
+  const stockLocationId = (req.query["stock_location_id"] as string | undefined)?.trim() || null;
+
   const service = getPurchaseOrdersService(req);
 
   const filter =
@@ -57,8 +60,10 @@ export async function GET(
   const poIds = [...new Set(lines.map((l) => l.purchase_order_id))];
   const activePOs = new Set<string>();
   try {
+    const poFilter: Record<string, unknown> = { id: poIds, status: ACTIVE_STATUSES };
+    if (stockLocationId) poFilter.stock_location_id = stockLocationId;
     const pos = (await service.listPurchaseOrders(
-      { id: poIds, status: ACTIVE_STATUSES },
+      poFilter,
       { take: 1000, skip: 0 }
     )) as Array<{ id: string }>;
     for (const po of pos) activePOs.add(po.id);
