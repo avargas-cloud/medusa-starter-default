@@ -124,7 +124,10 @@ export async function GET(
          COALESCE(open_po_usa.on_order, 0)::int AS qty_on_po,
          COALESCE(open_po_china.on_order, 0)::int AS qty_on_po_china,
          COALESCE(max_day.max_daily_sales, 0)::int AS max_daily_sales,
-         COALESCE(res_usa.inv_usa_reserved, 0)::int AS inv_usa_reserved
+         COALESCE(res_usa.inv_usa_reserved, 0)::int AS inv_usa_reserved,
+         COALESCE(alt_inv_usa.inv_usa_alt, 0)::int AS inv_usa_alt,
+         COALESCE(alt_inv_usa.inv_usa_alt_reserved, 0)::int AS inv_usa_alt_reserved,
+         COALESCE(alt_po_usa.qty_on_po_alt, 0)::int AS qty_on_po_alt
        FROM purchasing_snapshot snap
        JOIN product_variant pv ON pv.id = snap.variant_id AND pv.deleted_at IS NULL
        JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
@@ -176,6 +179,31 @@ export async function GET(
            AND il.location_id = $${usaLocIdx} AND il.deleted_at IS NULL
          GROUP BY pvii.variant_id
        ) res_usa ON res_usa.variant_id = snap.variant_id
+       LEFT JOIN (
+         SELECT pa.primary_variant_id,
+                COALESCE(SUM(il.stocked_quantity), 0)::int  AS inv_usa_alt,
+                COALESCE(SUM(il.reserved_quantity), 0)::int AS inv_usa_alt_reserved
+         FROM product_alternative pa
+         JOIN product_variant_inventory_item pvii ON pvii.variant_id = pa.alt_variant_id
+         JOIN inventory_item ii ON ii.id = pvii.inventory_item_id AND ii.deleted_at IS NULL
+         JOIN inventory_level il ON il.inventory_item_id = ii.id
+           AND il.location_id = $${usaLocIdx} AND il.deleted_at IS NULL
+         WHERE pa.is_active = true AND pa.deleted_at IS NULL
+         GROUP BY pa.primary_variant_id
+       ) alt_inv_usa ON alt_inv_usa.primary_variant_id = snap.variant_id
+       LEFT JOIN (
+         SELECT pa.primary_variant_id,
+                COALESCE(SUM(GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)), 0)::int AS qty_on_po_alt
+         FROM product_alternative pa
+         JOIN product_variant pv_alt ON pv_alt.id = pa.alt_variant_id AND pv_alt.deleted_at IS NULL
+         JOIN purchase_order_line pol ON pol.sku_snapshot = pv_alt.sku AND pol.deleted_at IS NULL
+         JOIN purchase_order po ON po.id = pol.purchase_order_id AND po.deleted_at IS NULL
+         WHERE pa.is_active = true AND pa.deleted_at IS NULL
+           AND po.status IN ('submitted', 'partially_received')
+           AND pol.status IN ('open', 'partial')
+           AND po.stock_location_id = $${usaLocIdx}
+         GROUP BY pa.primary_variant_id
+       ) alt_po_usa ON alt_po_usa.primary_variant_id = snap.variant_id
        WHERE ${where}
        ORDER BY snap.abc_class NULLS LAST, snap.daily_sales_est DESC
        LIMIT $${limitIdx} OFFSET $${offsetIdx}`,

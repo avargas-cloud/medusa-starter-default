@@ -197,6 +197,46 @@ export async function POST(
       });
     }
 
+    // Guard: the proposed alt cannot already be linked as an alt of a different
+    // primary. Sharing the same alt across multiple primaries is forbidden — each
+    // alt belongs to exactly one primary group.
+    const altAlreadyLinked = await db.query<{
+      owner_variant_id: string;
+      owner_sku: string;
+      owner_title: string;
+      alt_sku: string;
+    }>(
+      `
+      SELECT
+        pv_owner.id   AS owner_variant_id,
+        pv_owner.sku  AS owner_sku,
+        p_owner.title AS owner_title,
+        pv_alt.sku    AS alt_sku
+      FROM product_alternative pa
+      JOIN product_variant pv_owner ON pv_owner.id = pa.primary_variant_id AND pv_owner.deleted_at IS NULL
+      JOIN product p_owner          ON p_owner.id  = pv_owner.product_id   AND p_owner.deleted_at IS NULL
+      JOIN product_variant pv_alt   ON pv_alt.id   = pa.alt_variant_id     AND pv_alt.deleted_at IS NULL
+      WHERE pa.alt_variant_id = $1
+        AND pa.primary_variant_id <> $2
+        AND pa.is_active = true
+        AND pa.deleted_at IS NULL
+      LIMIT 1
+      `,
+      [alt_variant_id, primary_variant_id]
+    );
+    if ((altAlreadyLinked.rowCount ?? 0) > 0) {
+      const owner = altAlreadyLinked.rows[0]!;
+      return res.status(409).json({
+        error: "alt_already_linked",
+        message: `"${owner.alt_sku}" is already an alternative of "${owner.owner_sku}". Each alternative can only belong to one primary — remove it from "${owner.owner_sku}" first or merge that primary into this one.`,
+        owner: {
+          variant_id: owner.owner_variant_id,
+          sku: owner.owner_sku,
+          title: owner.owner_title,
+        },
+      });
+    }
+
     // Guard: the proposed alt cannot already have its own alternatives registered.
     // Adding an alt that is itself a primary creates the same chain problem.
     const altHasOwnAlts = await db.query<{ alt_sku: string; n: string }>(

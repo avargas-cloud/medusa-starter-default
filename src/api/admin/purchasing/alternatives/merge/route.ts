@@ -57,6 +57,20 @@ export async function POST(
       ...bAlts.rows.map((r) => r.alt_variant_id),
     ].filter((id) => id !== primary_variant_id);
 
+    if (toAdd.length > 0) {
+      // Deactivate any existing links where these variants are currently alts of
+      // OTHER primaries — alts must belong to exactly one primary group.
+      await db.query(
+        `UPDATE product_alternative
+         SET is_active = false, updated_at = now()
+         WHERE alt_variant_id = ANY($1::text[])
+           AND primary_variant_id <> $2
+           AND is_active = true
+           AND deleted_at IS NULL`,
+        [toAdd, primary_variant_id]
+      );
+    }
+
     for (const alt_variant_id of toAdd) {
       const id = `palt_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
       await db.query(
