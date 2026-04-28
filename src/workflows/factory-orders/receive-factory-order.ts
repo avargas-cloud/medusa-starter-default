@@ -1,8 +1,9 @@
 /**
  * Records a physical reception against a submitted FactoryOrder:
- *   1. allocateFoReceiptSequenceStep  — reserves FRCP-{seq}
- *   2. applyFoReceiptStockStep        — +qty on inventory_levels at China Warehouse (compensable)
- *   3. persistFoReceiptStep           — creates Receipt+Lines, refreshes FO counters
+ *   1. allocateFoReceiptSequenceStep       — reserves FRCP-{seq}
+ *   2. applyFoReceiptStockStep             — +qty on inventory_levels at China Warehouse (compensable)
+ *   3. persistFoReceiptStep                — creates Receipt+Lines, refreshes FO counters
+ *   4. syncReceiptInventoryMeiliStep       — refreshes MeiliSearch inventory docs for affected items
  *
  * No QB enqueue step — factory orders are Medusa-only.
  */
@@ -16,6 +17,7 @@ import {
 import { allocateFoReceiptSequenceStep } from "./steps/allocate-fo-receipt-sequence-step";
 import { applyFoReceiptStockStep } from "./steps/apply-fo-receipt-stock-step";
 import { persistFoReceiptStep } from "./steps/persist-fo-receipt-step";
+import { syncReceiptInventoryMeiliStep } from "../shared/steps/sync-receipt-inventory-meili-step";
 
 export interface ReceiveFactoryOrderWorkflowInputLine {
   fo_line_id: string;
@@ -85,6 +87,11 @@ export const receiveFactoryOrderWorkflow = createWorkflow(
     }));
 
     const persisted = persistFoReceiptStep(persistInput);
+
+    const meiliInput = transform({ input }, (data) => ({
+      inventory_item_ids: data.input.lines.map((l) => l.inventory_item_id),
+    }));
+    syncReceiptInventoryMeiliStep(meiliInput);
 
     const response = transform({ seq, persisted }, (data) => ({
       receipt_id: data.persisted.receipt_id,

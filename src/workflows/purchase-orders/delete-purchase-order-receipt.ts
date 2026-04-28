@@ -28,6 +28,7 @@ import {
 
 import { contraApplyReceiptStockStep } from "./steps/contra-apply-receipt-stock-step";
 import { persistDeleteReceiptStep } from "./steps/persist-delete-receipt-step";
+import { syncReceiptInventoryMeiliStep } from "../shared/steps/sync-receipt-inventory-meili-step";
 
 export interface DeletePoReceiptWorkflowInputLine {
   receipt_line_id: string;
@@ -83,6 +84,11 @@ export const deletePurchaseOrderReceiptWorkflow = createWorkflow(
     }));
 
     const persisted = persistDeleteReceiptStep(persistInput);
+
+    const meiliInput = transform({ input }, (data) => ({
+      inventory_item_ids: data.input.lines_to_reverse.map((l) => l.inventory_item_id),
+    }));
+    syncReceiptInventoryMeiliStep(meiliInput);
 
     const response = transform({ reversed, persisted }, (data) => ({
       receipt_id: data.persisted.receipt_id,

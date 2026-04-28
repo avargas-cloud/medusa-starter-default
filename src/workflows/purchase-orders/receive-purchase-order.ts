@@ -29,6 +29,7 @@ import { allocateReceiptSequenceStep } from "./steps/allocate-receipt-sequence-s
 import { applyReceiptStockStep } from "./steps/apply-receipt-stock-step";
 import { enqueueQbItemReceiptStep } from "./steps/enqueue-qb-item-receipt-step";
 import { persistReceiptStep } from "./steps/persist-receipt-step";
+import { syncReceiptInventoryMeiliStep } from "../shared/steps/sync-receipt-inventory-meili-step";
 
 export interface ReceivePurchaseOrderWorkflowInputLine {
   po_line_id: string;
@@ -145,6 +146,11 @@ export const receivePurchaseOrderWorkflow = createWorkflow(
     });
 
     const queued = enqueueQbItemReceiptStep(enqueueInput);
+
+    const meiliInput = transform({ input }, (data) => ({
+      inventory_item_ids: data.input.lines.map((l) => l.inventory_item_id),
+    }));
+    syncReceiptInventoryMeiliStep(meiliInput);
 
     const response = transform({ seq, persisted, queued }, (data) => ({
       receipt_id: data.persisted.receipt_id,

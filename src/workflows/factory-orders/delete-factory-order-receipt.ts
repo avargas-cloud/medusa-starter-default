@@ -1,7 +1,8 @@
 /**
  * Hard-deletes a FactoryOrderReceipt:
- *   1. contraApplyFoReceiptStockStep  — reverses the stock movement (compensable)
- *   2. persistDeleteFoReceiptStep     — recomputes FO counters + hard-deletes the receipt row
+ *   1. contraApplyFoReceiptStockStep    — reverses the stock movement (compensable)
+ *   2. persistDeleteFoReceiptStep       — recomputes FO counters + hard-deletes the receipt row
+ *   3. syncReceiptInventoryMeiliStep    — refreshes MeiliSearch inventory docs for affected items
  *
  * Unlike purchase-orders, there is no QB Path B — all deletes are hard-deletes
  * (no QB sync tombstoning required).
@@ -15,6 +16,7 @@ import {
 
 import { contraApplyFoReceiptStockStep } from "./steps/contra-apply-fo-receipt-stock-step";
 import { persistDeleteFoReceiptStep } from "./steps/persist-delete-fo-receipt-step";
+import { syncReceiptInventoryMeiliStep } from "../shared/steps/sync-receipt-inventory-meili-step";
 
 export interface DeleteFoReceiptWorkflowInputLine {
   receipt_line_id: string;
@@ -61,6 +63,11 @@ export const deleteFactoryOrderReceiptWorkflow = createWorkflow(
     }));
 
     const persisted = persistDeleteFoReceiptStep(persistInput);
+
+    const meiliInput = transform({ input }, (data) => ({
+      inventory_item_ids: data.input.lines_to_reverse.map((l) => l.inventory_item_id),
+    }));
+    syncReceiptInventoryMeiliStep(meiliInput);
 
     const response = transform({ reversed, persisted }, (data) => ({
       receipt_id: data.persisted.receipt_id,
