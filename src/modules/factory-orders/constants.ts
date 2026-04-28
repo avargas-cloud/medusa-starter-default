@@ -1,0 +1,2 @@
+export const FACTORY_ORDER_STOCK_LOCATION_ID =
+  "sloc_01KQ14C1CFX30EDD722BF87HDM"; // China Warehouse
