@@ -298,9 +298,11 @@ export async function GET(
         first_name: string | null;
         last_name: string | null;
         qb_list_id: string | null;
+        qb_edit_sequence: string | null;
       }>(
         `SELECT id, email, company_name, first_name, last_name,
-                metadata->>'qb_list_id' AS qb_list_id
+                metadata->>'qb_list_id' AS qb_list_id,
+                metadata->>'qb_edit_sequence' AS qb_edit_sequence
            FROM customer WHERE id = $1 LIMIT 1`,
         [internalId]
       );
@@ -315,7 +317,7 @@ export async function GET(
         qb_txn_id: c.qb_list_id ?? null,
         qb_ref_number: null,
         qb_sync_status: null,
-        qb_edit_sequence: null,
+        qb_edit_sequence: c.qb_edit_sequence ?? null,
         qb_is_sales_receipt: null,
         display_info: {
           email: c.email,
@@ -731,6 +733,7 @@ export async function PUT(
       }
       const existingMeta = { ...((customer as any).metadata ?? {}) };
       if (qb_txn_id !== undefined) existingMeta.qb_list_id = qb_txn_id;
+      if (qb_edit_sequence !== undefined) existingMeta.qb_edit_sequence = qb_edit_sequence;
       existingMeta.qb_manually_mapped_at = now;
       existingMeta.qb_manually_mapped_note = AUDIT_NOTE;
 

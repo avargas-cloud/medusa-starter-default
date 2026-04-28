@@ -39,6 +39,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         "order",
         "invoice",
         "purchase_order",
+        "factory_order",
         "return",
         "statement",
         "payment",
@@ -71,6 +72,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         | "order"
         | "invoice"
         | "purchase_order"
+        | "factory_order"
         | "return"
         | "statement"
         | "payment";

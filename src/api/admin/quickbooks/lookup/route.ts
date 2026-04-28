@@ -219,6 +219,21 @@ export async function POST(
   }
 }
 
+// ─── Helpers ───────────────────────────────────────────────────────────────
+
+function extractDistributionChannel(qb: Record<string, unknown>): string | null {
+  const raw = qb?.DataExtRet;
+  if (!raw) return null;
+  const list = Array.isArray(raw) ? raw : [raw];
+  for (const d of list as Record<string, unknown>[]) {
+    if (d?.DataExtName === "Distribution Channel") {
+      const v = ((d.DataExtValue as string) || "").trim();
+      return v || null;
+    }
+  }
+  return null;
+}
+
 // ─── Bridge helpers ────────────────────────────────────────────────────────
 
 async function runDirectQuery(qbxml: string): Promise<Record<string, unknown>> {
@@ -365,6 +380,11 @@ async function handleCustomerLookup(
       companyName: d.CompanyName || null,
       email: d.Email || null,
       phone: d.Phone || null,
+      firstName: d.FirstName || null,
+      lastName: d.LastName || null,
+      customerType: (d.CustomerTypeRef?.FullName as string) || null,
+      priceLevel: (d.PriceLevelRef?.FullName as string) || null,
+      acquisitionChannel: extractDistributionChannel(d),
       isActive: d.IsActive !== "false",
     }));
 
