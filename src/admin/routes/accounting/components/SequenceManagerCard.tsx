@@ -22,6 +22,9 @@ type SequencesData = {
   custom_unmet_demand_seq: number | null;
   custom_purchase_order_seq: number | null;
   custom_po_receipt_seq: number | null;
+  custom_factory_order_seq: number | null;
+  custom_fo_receipt_seq: number | null;
+  custom_vendor_bill_seq: number | null;
 };
 
 const SEQUENCE_LABELS: Record<keyof SequencesData, string> = {
@@ -36,6 +39,9 @@ const SEQUENCE_LABELS: Record<keyof SequencesData, string> = {
   custom_unmet_demand_seq: "Unmet Demand",
   custom_purchase_order_seq: "Purchase Orders",
   custom_po_receipt_seq: "PO Receipts",
+  custom_factory_order_seq: "Factory Orders",
+  custom_fo_receipt_seq: "FO Receipts",
+  custom_vendor_bill_seq: "Vendor Bills",
 };
 
 export function SequenceManagerCard() {

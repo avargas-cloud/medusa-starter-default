@@ -12,6 +12,9 @@ const VALID_SEQUENCES = [
   "custom_unmet_demand_seq",
   "custom_purchase_order_seq",
   "custom_po_receipt_seq",
+  "custom_factory_order_seq",
+  "custom_fo_receipt_seq",
+  "custom_vendor_bill_seq",
 ];
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {

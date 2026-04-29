@@ -295,6 +295,9 @@ module.exports = defineConfig({
       resolve: "./src/modules/purchase-orders",
     },
     {
+      resolve: "./src/modules/landing-costs",
+    },
+    {
       resolve: "./src/modules/factory-orders",
     },
     {

@@ -1,10 +1,14 @@
 /**
  * src/api/admin/vendor-bills/[id]/route.ts
  *
- * GET /admin/vendor-bills/:id
+ * GET    /admin/vendor-bills/:id
+ *   Returns the full vendor bill detail with all lines plus PO / receipt
+ *   display fields: po_number, receipt_number, vendor_name, receipt.received_at.
  *
- * Returns the full vendor bill detail with all lines plus PO / receipt
- * display fields: po_number, receipt_number, vendor_name, receipt.received_at.
+ * DELETE /admin/vendor-bills/:id
+ *   Hard-deletes a DRAFT vendor bill (and its lines via cascade). Confirmed
+ *   bills cannot be deleted because they have already mutated
+ *   product_variant.metadata.avg_landed_cost_cents.
  */
 
 import type {
@@ -17,6 +21,12 @@ import type {
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
 };
+
+function resolveKnex(req: AuthenticatedMedusaRequest): KnexInstance {
+  return (req.scope as unknown as { resolve: (k: string) => unknown }).resolve(
+    "__pg_connection__"
+  ) as KnexInstance;
+}
 
 interface VendorBillDetailRow {
   id: string;
@@ -64,19 +74,15 @@ interface VendorBillLineRow {
   landed_unit_cost_cents: number;
 }
 
-// ── GET handler ──────────────────────────────────────────────────────────────
+// ── GET ──────────────────────────────────────────────────────────────────────
 
 export async function GET(
   req: AuthenticatedMedusaRequest,
   res: MedusaResponse
 ) {
   const { id } = req.params as { id: string };
+  const knex = resolveKnex(req);
 
-  const knex = (
-    req.scope as unknown as { resolve: (k: string) => unknown }
-  ).resolve("__pg_connection__") as KnexInstance;
-
-  // Fetch header with PO + receipt join
   const headerResult = await knex.raw(
     `SELECT
        vb.id,
@@ -123,7 +129,6 @@ export async function GET(
       .json({ error: "Vendor bill not found", code: "not_found" });
   }
 
-  // Fetch lines
   const linesResult = await knex.raw(
     `SELECT
        id,
@@ -154,4 +159,39 @@ export async function GET(
   );
 
   return res.json({ vendor_bill: { ...header, total_landed_cents, lines } });
+}
+
+// ── DELETE — hard delete, draft only ─────────────────────────────────────────
+
+export async function DELETE(
+  req: AuthenticatedMedusaRequest,
+  res: MedusaResponse
+) {
+  const { id } = req.params as { id: string };
+  const knex = resolveKnex(req);
+
+  const lookup = (await knex.raw(
+    `SELECT id, status FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
+    [id]
+  )) as { rows: Array<{ id: string; status: string }> };
+
+  const existing = lookup.rows[0] ?? null;
+  if (!existing) {
+    return res
+      .status(404)
+      .json({ error: "Vendor bill not found", code: "not_found" });
+  }
+
+  if (existing.status !== "draft") {
+    return res.status(409).json({
+      error:
+        "Only draft vendor bills can be deleted — confirmed bills have already affected variant landed-cost averages.",
+      code: "not_draft",
+    });
+  }
+
+  // FK on vendor_bill_line cascades — both rows + lines are removed.
+  await knex.raw(`DELETE FROM vendor_bill WHERE id = ?`, [id]);
+
+  return res.json({ id, deleted: true, hard: true });
 }
