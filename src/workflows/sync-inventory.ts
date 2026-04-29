@@ -36,7 +36,11 @@ export const syncInventoryToMeiliStep = createStep(
       );
       for (const level of chinaLevels) {
         if (level.inventory_item_id && level.stocked_quantity != null) {
-          chinaStockMap.set(level.inventory_item_id, level.stocked_quantity);
+          const available = Math.max(
+            0,
+            (level.stocked_quantity ?? 0) - (level.reserved_quantity ?? 0)
+          );
+          chinaStockMap.set(level.inventory_item_id, available);
         }
       }
       console.log(
