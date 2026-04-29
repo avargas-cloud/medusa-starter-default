@@ -28,7 +28,8 @@ export interface MeiliInventoryDoc {
   salesDescription: string | null;
   purchaseDescription: string | null;
   quickbooks_id: string | null;
-  cost: number | null;          // qb_avg_cost — QB reference cost, used for PO ordering
+  purchaseCost: number | null;   // qb_purchase_cost — fixed purchase price on the QB item
+  cost: number | null;          // qb_avg_cost — QB running average cost
   avg_landed_cost: number | null; // avg_landed_cost_cents — our AVCO, used for profit calcs
   vendorName: string | null;
   mpn: string | null;
@@ -110,6 +111,7 @@ export function buildInventoryDocsForVariants(
         salesDescription: (vmeta.sales_description as string) || null,
         purchaseDescription: (vmeta.purchase_description as string) || null,
         quickbooks_id: (vmeta.quickbooks_id as string) || null,
+        purchaseCost: (vmeta.qb_purchase_cost as number) || null,
         cost: (vmeta.qb_avg_cost as number) || null,
         avg_landed_cost: (vmeta.avg_landed_cost_cents as number) || null,
         vendorName: (vmeta.qb_vendor_name as string) || null,
@@ -146,6 +148,7 @@ export function buildInventoryDocsForVariants(
         salesDescription: (vmeta.sales_description as string) || null,
         purchaseDescription: (vmeta.purchase_description as string) || null,
         quickbooks_id: (vmeta.quickbooks_id as string) || null,
+        purchaseCost: (vmeta.qb_purchase_cost as number) || null,
         cost: (vmeta.qb_avg_cost as number) || null,
         avg_landed_cost: (vmeta.avg_landed_cost_cents as number) || null,
         vendorName: (vmeta.qb_vendor_name as string) || null,
