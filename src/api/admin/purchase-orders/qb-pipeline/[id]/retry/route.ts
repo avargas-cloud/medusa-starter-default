@@ -98,21 +98,24 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   const row = rows[0];
   if (!row) return res.status(404).json({ error: "Pipeline entry not found" });
-  if (row.status !== "error") {
+  const retryableStatuses = ["error", "waiting", "submitted"];
+  if (!retryableStatuses.includes(row.status)) {
     return res
       .status(409)
       .json({ error: `Cannot retry entry with status '${row.status}'` });
   }
 
-  // If the row is a mod with missing/stale EditSequence, convert to query-first flow
+  // For mod/void: always re-query QB to get a fresh EditSequence (stale seq is the most common failure).
   const pl = (row.payload ?? {}) as Record<string, unknown>;
-  const isEditSeqErr = /editsequence|edit.?sequence|3100/i.test(
+  const isEditSeqErr = /editsequence|edit.?sequence|3[12]00/i.test(
     row.last_error ?? ""
   );
   const needsQuery = (pl.is_mod || pl.is_void) && (!pl.edit_sequence || isEditSeqErr);
+  // Strip _query_attempts so the re-queued query gets fresh retries.
+  const { _query_attempts: _removed, ...plClean } = pl as Record<string, unknown>;
   const newPayload = needsQuery
-    ? { ...pl, is_query: true, edit_sequence: undefined }
-    : pl;
+    ? { ...plClean, is_query: true, edit_sequence: undefined }
+    : plClean;
 
   await knex.raw(
     `UPDATE qb_purchase_order_pipeline

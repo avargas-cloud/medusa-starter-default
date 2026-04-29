@@ -339,10 +339,31 @@ export async function PATCH(
     });
   }
 
+  // If vendor is changing, refresh name/QB snapshots from the catalog
+  let vendorSnapshot: { name: string; qb_list_id: string | null } | null = null;
+  if (body.vendor_id !== undefined) {
+    try {
+      const qbCatalog = req.scope.resolve(
+        "quickbooks_catalog"
+      ) as unknown as QbCatalogServiceLike;
+      const v = await qbCatalog.retrieveQbVendor(body.vendor_id);
+      vendorSnapshot = {
+        name: v?.full_name ?? v?.name ?? body.vendor_id,
+        qb_list_id: v?.qb_list_id ?? null,
+      };
+    } catch {
+      vendorSnapshot = { name: body.vendor_id, qb_list_id: null };
+    }
+  }
+
   // Header patch
   const headerUpdate: Record<string, unknown> = { id };
   if (bodyPoStatus !== undefined) headerUpdate.po_status = bodyPoStatus ?? null;
-  if (body.vendor_id !== undefined) headerUpdate.vendor_id = body.vendor_id;
+  if (body.vendor_id !== undefined) {
+    headerUpdate.vendor_id = body.vendor_id;
+    headerUpdate.vendor_name_snapshot = vendorSnapshot?.name ?? body.vendor_id;
+    headerUpdate.vendor_qb_list_id_snapshot = vendorSnapshot?.qb_list_id ?? null;
+  }
   if (body.stock_location_id !== undefined)
     headerUpdate.stock_location_id = body.stock_location_id;
   if (body.ordered_at !== undefined)
@@ -370,6 +391,19 @@ export async function PATCH(
   // so removed items vanish from the PO entirely). MedusaService's deleteXXX
   // already does a hard delete (softDeleteXXX is a separate method).
   if (body.lines !== undefined) {
+    // Guard: cannot replace lines if any active receipts exist on this PO.
+    const existingReceipts = (await service.listPurchaseOrderReceipts(
+      { purchase_order_id: id },
+      { take: 100, skip: 0 }
+    )) as Array<{ status: string }>;
+    const activeReceipts = existingReceipts.filter((r) => r.status !== "deleted");
+    if (activeReceipts.length > 0) {
+      return res.status(409).json({
+        error: `Cannot modify lines: this PO has ${activeReceipts.length} active receipt(s). Delete all receipts from this PO first, then retry.`,
+        code: "has_receipts",
+      });
+    }
+
     const oldLines = (await service.listPurchaseOrderLines(
       { purchase_order_id: id },
       { take: 1000, skip: 0 }
@@ -482,8 +516,14 @@ export async function PATCH(
         edit_sequence: existing.qb_edit_sequence ?? undefined,
         po_id: id,
         po_number: existing.number ?? undefined,
-        vendor_qb_list_id: existing.vendor_qb_list_id_snapshot ?? null,
-        vendor_name: existing.vendor_name_snapshot ?? existing.vendor_id,
+        vendor_qb_list_id:
+          body.vendor_id !== undefined
+            ? (vendorSnapshot?.qb_list_id ?? null)
+            : (existing.vendor_qb_list_id_snapshot ?? null),
+        vendor_name:
+          body.vendor_id !== undefined
+            ? (vendorSnapshot?.name ?? body.vendor_id)
+            : (existing.vendor_name_snapshot ?? existing.vendor_id),
         ordered_at: existing.ordered_at
           ? new Date(
               existing.ordered_at as unknown as string | Date

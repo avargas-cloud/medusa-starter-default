@@ -37,6 +37,7 @@ interface TransferRow {
   vendor_id: string | null;
   vendor_name_snapshot: string | null;
   linked_purchase_order_id: string | null;
+  linked_po_number: string | null;
   reference_number: string | null;
   tracking_number: string | null;
   shipper: string | null;
@@ -76,6 +77,7 @@ export async function GET(
   const knex = resolveKnex(req);
 
   const rawStatus = (req.query as Record<string, string>).status ?? null;
+  const linkedPoId = (req.query as Record<string, string>).linked_po_id ?? null;
   const limit = Math.min(
     parseInt((req.query as Record<string, string>).limit ?? "200", 10),
     500
@@ -103,6 +105,11 @@ export async function GET(
     }
   }
 
+  if (linkedPoId) {
+    whereClause += ` AND it.linked_purchase_order_id = ?`;
+    bindings.push(linkedPoId);
+  }
+
   const countResult = await knex.raw(
     `SELECT COUNT(*)::int AS total FROM inventory_transfer it ${whereClause}`,
     bindings
@@ -111,8 +118,9 @@ export async function GET(
 
   bindings.push(limit, offset);
   const dataResult = await knex.raw(
-    `SELECT it.*
+    `SELECT it.*, po.number AS linked_po_number
      FROM inventory_transfer it
+     LEFT JOIN purchase_order po ON po.id = it.linked_purchase_order_id AND po.deleted_at IS NULL
      ${whereClause}
      ORDER BY it.created_at DESC
      LIMIT ? OFFSET ?`,

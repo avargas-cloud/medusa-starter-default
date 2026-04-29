@@ -10,7 +10,7 @@ import {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type PoStatus = "waiting" | "error" | "synced" | "failed_permanent";
+type PoStatus = "waiting" | "submitted" | "error" | "synced" | "failed_permanent";
 type PoStep =
   | "purchase_order"
   | "void_purchase_order"
@@ -40,6 +40,7 @@ interface PoRow {
 
 interface Counts {
   waiting: number;
+  submitted: number;
   error: number;
   synced: number;
   failed_permanent: number;
@@ -68,6 +69,7 @@ type BadgeColor = "orange" | "blue" | "green" | "red" | "grey";
 function StatusBadge({ status }: { status: PoStatus }) {
   const map: Record<PoStatus, { color: BadgeColor; label: string }> = {
     waiting: { color: "orange", label: "Waiting" },
+    submitted: { color: "blue", label: "Submitted" },
     error: { color: "red", label: "Error" },
     synced: { color: "green", label: "Synced" },
     failed_permanent: { color: "red", label: "Failed" },
@@ -135,9 +137,11 @@ function PipelinePoRow({
         className={`border-b border-ui-border-base text-xs transition-colors ${
           row.status === "error" || row.status === "failed_permanent"
             ? "bg-red-50/5"
-            : row.status === "waiting"
-              ? "bg-yellow-50/5"
-              : ""
+            : row.status === "submitted"
+              ? "bg-blue-50/5"
+              : row.status === "waiting"
+                ? "bg-yellow-50/5"
+                : ""
         }`}
       >
         {/* Seq */}
@@ -224,7 +228,9 @@ function PipelinePoRow({
                   ? "text-green-500"
                   : row.status === "error" || row.status === "failed_permanent"
                     ? "text-red-400"
-                    : "text-ui-fg-subtle"
+                    : row.status === "submitted"
+                      ? "text-blue-400"
+                      : "text-ui-fg-subtle"
               }
             >
               {formatDate(updatedAt)}
@@ -294,6 +300,7 @@ export const PurchaseOrderPipelineSection = () => {
   const [rows, setRows] = useState<PoRow[]>([]);
   const [counts, setCounts] = useState<Counts>({
     waiting: 0,
+    submitted: 0,
     error: 0,
     synced: 0,
     failed_permanent: 0,
@@ -321,7 +328,7 @@ export const PurchaseOrderPipelineSection = () => {
         const data = await res.json();
         const allRows: PoRow[] = data.rows ?? [];
         setRows(allRows);
-        const c: Counts = { waiting: 0, error: 0, synced: 0, failed_permanent: 0 };
+        const c: Counts = { waiting: 0, submitted: 0, error: 0, synced: 0, failed_permanent: 0 };
         for (const r of allRows) {
           if (r.status in c) c[r.status as keyof Counts]++;
         }
@@ -342,7 +349,7 @@ export const PurchaseOrderPipelineSection = () => {
 
   useEffect(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
-    if (counts.waiting > 0) {
+    if (counts.waiting > 0 || counts.submitted > 0) {
       intervalRef.current = setInterval(() => fetchRows(true), 10_000);
     }
     return () => {
@@ -381,7 +388,7 @@ export const PurchaseOrderPipelineSection = () => {
     }
   };
 
-  const hasPending = counts.waiting > 0;
+  const hasPending = counts.waiting > 0 || counts.submitted > 0;
 
   return (
     <Container>
@@ -422,6 +429,7 @@ export const PurchaseOrderPipelineSection = () => {
           {(
             [
               { key: "waiting", label: "Waiting", color: "orange" },
+              { key: "submitted", label: "Submitted", color: "blue" },
               { key: "error", label: "Error", color: "red" },
               { key: "synced", label: "Synced", color: "green" },
               { key: "failed_permanent", label: "Failed", color: "red" },
@@ -456,6 +464,7 @@ export const PurchaseOrderPipelineSection = () => {
           >
             <option value="all">All Statuses</option>
             <option value="waiting">Waiting</option>
+            <option value="submitted">Submitted</option>
             <option value="error">Error</option>
             <option value="synced">Synced</option>
             <option value="failed_permanent">Failed</option>

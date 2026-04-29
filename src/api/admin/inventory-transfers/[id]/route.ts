@@ -121,19 +121,23 @@ export async function PATCH(
   const knex = resolveKnex(req);
 
   const lookup = await knex.raw(
-    `SELECT id, status FROM inventory_transfer WHERE id = ? AND deleted_at IS NULL`,
+    `SELECT id, status, linked_purchase_order_id FROM inventory_transfer WHERE id = ? AND deleted_at IS NULL`,
     [id]
   );
-  const existing = (lookup.rows[0] ?? null) as { id: string; status: string } | null;
+  const existing = (lookup.rows[0] ?? null) as {
+    id: string;
+    status: string;
+    linked_purchase_order_id: string | null;
+  } | null;
   if (!existing) {
     return res
       .status(404)
       .json({ error: "Inventory transfer not found", code: "not_found" });
   }
-  if (existing.status !== "draft") {
+  if (existing.status === "received" || existing.status === "voided") {
     return res.status(409).json({
-      error: "Only draft transfers can be edited",
-      code: "not_draft",
+      error: "Received or voided transfers cannot be edited",
+      code: "not_editable",
     });
   }
 
@@ -146,6 +150,7 @@ export async function PATCH(
     shipper?: string | null;
     notes?: string | null;
     expected_arrival_at?: string | null;
+    shipped_at?: string | null;
     lines?: TransferLineInput[];
   };
 
@@ -165,6 +170,8 @@ export async function PATCH(
   if (body.notes !== undefined) updates.notes = body.notes;
   if (body.expected_arrival_at !== undefined)
     updates.expected_arrival_at = body.expected_arrival_at;
+  if (body.shipped_at !== undefined)
+    updates.shipped_at = body.shipped_at;
 
   const setClauses = Object.keys(updates)
     .map((k) => `"${k}" = ?`)
@@ -178,7 +185,27 @@ export async function PATCH(
 
   // Full replace of lines if provided
   if (body.lines !== undefined) {
-    // Soft-delete existing lines
+    // Block if linked PO has already received any items
+    if (existing.linked_purchase_order_id) {
+      const rcvCheck = await knex.raw(
+        `SELECT COUNT(*) AS cnt FROM purchase_order_line
+         WHERE purchase_order_id = ? AND qty_received > 0 AND deleted_at IS NULL`,
+        [existing.linked_purchase_order_id]
+      );
+      const received = parseInt(
+        String((rcvCheck.rows[0] as { cnt: string }).cnt),
+        10
+      );
+      if (received > 0) {
+        return res.status(409).json({
+          error:
+            `Cannot update lines: ${received} line(s) have already been received on the linked Purchase Order. Delete the associated receipt(s) from the PO first, then retry.`,
+          code: "po_partially_received",
+        });
+      }
+    }
+
+    // Soft-delete existing IT lines
     await knex.raw(
       `UPDATE inventory_transfer_line SET deleted_at = ? WHERE transfer_id = ? AND deleted_at IS NULL`,
       [now, id]
@@ -199,7 +226,7 @@ export async function PATCH(
       );
     }
 
-    // Recompute totals
+    // Recompute IT totals
     const totalLines = body.lines.length;
     const totalUnits = body.lines.reduce((s, l) => s + l.qty, 0);
     const subtotalCents = body.lines.reduce(
@@ -210,6 +237,47 @@ export async function PATCH(
       `UPDATE inventory_transfer SET total_lines = ?, total_units = ?, subtotal_cents = ?, updated_at = ? WHERE id = ?`,
       [totalLines, totalUnits, subtotalCents, now, id]
     );
+
+    // Sync linked PO lines
+    if (existing.linked_purchase_order_id) {
+      const poId = existing.linked_purchase_order_id;
+
+      await knex.raw(
+        `UPDATE purchase_order_line SET deleted_at = ? WHERE purchase_order_id = ? AND deleted_at IS NULL`,
+        [now, poId]
+      );
+
+      let poSubtotal = 0;
+      let poUnits = 0;
+      for (let i = 0; i < body.lines.length; i++) {
+        const line = body.lines[i]!;
+        const polId = generateEntityId("", "pol");
+        const totalCents = line.qty * (line.unit_cost_cents ?? 0);
+        poSubtotal += totalCents;
+        poUnits += line.qty;
+        await knex.raw(
+          `INSERT INTO purchase_order_line (
+            id, purchase_order_id, product_variant_id, inventory_item_id,
+            sku_snapshot, description_snapshot,
+            qty_ordered, qty_received, qty_cancelled,
+            unit_cost_cents, tax_cents, total_cents,
+            status, line_order, created_at, updated_at
+          ) VALUES (?, ?, ?, '', ?, ?, ?, 0, 0, ?, 0, ?, 'open', ?, ?, ?)`,
+          [
+            polId, poId, line.product_variant_id,
+            line.sku, line.description ?? "",
+            line.qty,
+            line.unit_cost_cents ?? 0, totalCents,
+            i, now, now,
+          ]
+        );
+      }
+
+      await knex.raw(
+        `UPDATE purchase_order SET total_lines = ?, total_units_ordered = ?, subtotal_cents = ?, updated_at = ? WHERE id = ?`,
+        [body.lines.length, poUnits, poSubtotal, now, poId]
+      );
+    }
   }
 
   // Fetch updated transfer + lines

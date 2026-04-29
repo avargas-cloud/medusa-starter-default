@@ -140,6 +140,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
     const counts: Record<string, number> = {
       waiting: 0,
+      submitted: 0,
       processing: 0,
       synced: 0,
       error: 0,

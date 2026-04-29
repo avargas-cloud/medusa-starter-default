@@ -264,7 +264,7 @@ export default async function qbPurchaseOrderPoller(
 
       await knex.raw(
         `UPDATE qb_purchase_order_pipeline
-            SET qb_operation_id = ?, updated_at = NOW()
+            SET status = 'submitted', qb_operation_id = ?, updated_at = NOW()
           WHERE id = ?`,
         [operationId, row.id]
       );
@@ -284,13 +284,12 @@ export default async function qbPurchaseOrderPoller(
     }
   }
 
-  // ── Phase B: Poll submitted waiting rows ─────────────────────────────────
+  // ── Phase B: Poll submitted rows ─────────────────────────────────────────
   const polling: any[] = await knex
     .raw(
       `SELECT id, purchase_order_id, qb_operation_id, qb_list_id, payload
        FROM qb_purchase_order_pipeline
-      WHERE status = 'waiting'
-        AND qb_operation_id IS NOT NULL
+      WHERE status = 'submitted'
         AND deleted_at IS NULL
       LIMIT ?`,
       [MAX_ROWS_PER_TICK]
@@ -313,9 +312,9 @@ export default async function qbPurchaseOrderPoller(
         const errMsg = data.operation?.error ?? "Bridge returned failed";
         const pl = row.payload as Record<string, unknown>;
 
-        // Stale/missing EditSequence (QB status 3100 or message text) → re-query QB, then retry mod/void
-        const isEditSeqErr = /editsequence|edit.?sequence|3100/i.test(errMsg);
-        if ((pl.is_mod || pl.is_void) && isEditSeqErr) {
+        // Stale/missing EditSequence (QB status 3100/3200 or message text) → re-query QB, then retry mod/void
+        const isEditSeqErr = /editsequence|edit.?sequence|3[12]00/i.test(errMsg);
+        if ((pl.is_mod || pl.is_void) && !pl.is_query && isEditSeqErr) {
           const freshPl = { ...pl, is_query: true, edit_sequence: undefined };
           await knex.raw(
             `UPDATE qb_purchase_order_pipeline
@@ -359,6 +358,22 @@ export default async function qbPurchaseOrderPoller(
         (pl.is_query ? (pl.txn_id as string | null) : null) ??
         (pl.is_mod ? (row.qb_list_id as string | null) : null);
       if (!txnId) {
+        // Bridge result may have been stripped after a restart — re-query QB to recover.
+        if ((pl.is_mod || pl.is_void) && !pl.is_query && pl.txn_id) {
+          const freshPl = { ...pl, is_query: true, edit_sequence: undefined };
+          await knex.raw(
+            `UPDATE qb_purchase_order_pipeline
+                SET status = 'waiting',
+                    qb_operation_id = NULL,
+                    payload = ?,
+                    next_retry_at = NULL,
+                    updated_at = NOW()
+              WHERE id = ?`,
+            [JSON.stringify(freshPl), row.id]
+          );
+          logger.warn(`${TAG} row ${row.id}: completed but no TxnID → re-querying QB for current state`);
+          continue;
+        }
         await knex.raw(
           `UPDATE qb_purchase_order_pipeline
               SET status = 'error',
@@ -426,7 +441,23 @@ export default async function qbPurchaseOrderPoller(
 
         if (!editSequence) {
           if (!poRet) {
-            // PO genuinely not in QB — cannot void/mod something that doesn't exist
+            // poRet is null either because the PO was deleted from QB, or because the bridge
+            // restarted and stripped the result. Re-queue up to 3 times before giving up.
+            const queryAttempts = ((pl._query_attempts as number) ?? 0) + 1;
+            if (queryAttempts <= 3) {
+              const requeuePl = { ...pl, is_query: true, edit_sequence: undefined, _query_attempts: queryAttempts };
+              await knex.raw(
+                `UPDATE qb_purchase_order_pipeline
+                    SET status = 'waiting',
+                        qb_operation_id = NULL,
+                        payload = ?,
+                        updated_at = NOW()
+                  WHERE id = ?`,
+                [JSON.stringify(requeuePl), row.id]
+              );
+              logger.warn(`${TAG} row ${row.id}: no poRet in query response (attempt ${queryAttempts}/3) — re-querying QB`);
+              continue;
+            }
             const reason = `PO not found in QB (TxnID: ${String(pl.txn_id ?? 'unknown')}) — may have been deleted`;
             logger.warn(`${TAG} row ${row.id}: ${reason}`);
             await knex.raw(
@@ -518,6 +549,27 @@ export default async function qbPurchaseOrderPoller(
 
   for (const row of errorRows) {
     const newRetries = (row.retries ?? 0) + 1;
+    const pl = row.payload as Record<string, unknown>;
+
+    // EditSequence errors get a free re-query without burning a retry slot.
+    const isEditSeqErrC = /editsequence|edit.?sequence|3[12]00/i.test(row.last_error ?? "");
+    if ((pl.is_mod || pl.is_void) && !pl.is_query && isEditSeqErrC) {
+      const freshPl = { ...pl, is_query: true, edit_sequence: undefined };
+      await knex.raw(
+        `UPDATE qb_purchase_order_pipeline
+            SET status = 'waiting',
+                qb_operation_id = NULL,
+                payload = ?,
+                next_retry_at = NULL,
+                updated_at = NOW()
+          WHERE id = ?`,
+        [JSON.stringify(freshPl), row.id]
+      );
+      logger.warn(`${TAG} row ${row.id}: EditSequence error → re-queuing as query (free retry)`);
+      retried++;
+      continue;
+    }
+
     const exhausted = newRetries >= MAX_RETRIES;
 
     if (exhausted) {
@@ -537,7 +589,6 @@ export default async function qbPurchaseOrderPoller(
     }
 
     try {
-      const pl = row.payload as Record<string, unknown>;
       let operationId: string;
       if (pl.is_void && !pl.is_query) {
         operationId = pl.edit_sequence
@@ -574,7 +625,7 @@ export default async function qbPurchaseOrderPoller(
       }
       await knex.raw(
         `UPDATE qb_purchase_order_pipeline
-            SET status = 'waiting',
+            SET status = 'submitted',
                 qb_operation_id = ?,
                 retries = ?,
                 last_error = NULL,
