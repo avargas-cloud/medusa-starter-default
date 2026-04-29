@@ -1,19 +1,13 @@
 /**
- * src/api/admin/purchase-orders/[id]/receipts/[receiptId]/vendor-bill/confirm/route.ts
- *
  * POST /admin/purchase-orders/:id/receipts/:receiptId/vendor-bill/confirm
  *
- * Confirms a draft vendor bill and calculates per-unit landed costs:
- *   1. Fetches vendor_bill_lines
- *   2. Reads cbm from product_variant.metadata for each variant
- *   3. Distributes commission / freight / tariff to each line
- *   4. Updates vendor_bill_line rows with calculated breakdowns
- *   5. Sets vendor_bill.status = 'confirmed'
- *   6. Updates product_variant.metadata.avg_landed_cost_cents for each variant
- *
- * Freight is distributed proportionally by CBM (volume).
- * Tariff is distributed proportionally by cost (value).
- * Commission (percent) is per-unit cost × rate; (fixed) is split evenly by qty.
+ * Confirms a draft vendor bill:
+ *   1. Distributes commission / freight / tariff to each line (same as before)
+ *   2. Assigns the sequential VB-XXXX number (drafts have no number until confirm)
+ *   3. Updates product_variant.metadata.avg_landed_cost_cents using QB-style AVCO:
+ *        new_avg = (Q_before × old_avg + received_qty × landed_cost) / Q_on_hand
+ *      where Q_before = Q_on_hand - received_qty (inventory before this receipt)
+ *   4. Writes one vendor_bill_cost_log row per variant for audit + cancel reversal
  */
 
 import type {
@@ -51,9 +45,7 @@ interface VariantMetadataRow {
   metadata: Record<string, unknown> | null;
 }
 
-// ── Knex type (resolved from container) ──────────────────────────────────────
-// We access pg directly because product_variant lives in a different Medusa
-// module and there is no cross-module service available here.
+// ── Knex type ─────────────────────────────────────────────────────────────────
 
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -89,6 +81,7 @@ export async function POST(
   };
 
   const service = getPurchaseOrdersService(req);
+  const knex = resolveKnex(req);
 
   // 1. Validate receipt belongs to PO
   const receipt = (await service
@@ -99,9 +92,7 @@ export async function POST(
   } | null;
 
   if (!receipt) {
-    return res
-      .status(404)
-      .json({ error: "Receipt not found", code: "not_found" });
+    return res.status(404).json({ error: "Receipt not found", code: "not_found" });
   }
   if (receipt.purchase_order_id !== poId) {
     return res.status(400).json({
@@ -144,7 +135,6 @@ export async function POST(
   }
 
   // 4. Fetch CBM from product_variant.metadata for each unique variant
-  const knex = resolveKnex(req);
   const uniqueVariantIds = [...new Set(lines.map((l) => l.product_variant_id))];
 
   const cbmByVariantId = new Map<string, number | null>();
@@ -163,21 +153,19 @@ export async function POST(
     })
   );
 
-  // 5. Compute aggregates for distribution
+  // 5. Compute aggregates for cost distribution
   let totalCbm = 0;
   let totalSubtotalCents = 0;
   let totalQty = 0;
 
   for (const line of lines) {
     const cbm = cbmByVariantId.get(line.product_variant_id) ?? null;
-    if (cbm !== null) {
-      totalCbm += cbm * line.qty;
-    }
+    if (cbm !== null) totalCbm += cbm * line.qty;
     totalSubtotalCents += line.unit_cost_cents * line.qty;
     totalQty += line.qty;
   }
 
-  // 6. Calculate per-unit cost components for each line
+  // 6. Calculate per-unit cost components
   type LineUpdate = {
     id: string;
     cbm_per_unit: number | null;
@@ -190,25 +178,21 @@ export async function POST(
   const lineUpdates: LineUpdate[] = lines.map((line) => {
     const cbm = cbmByVariantId.get(line.product_variant_id) ?? null;
 
-    // Commission
     let commissionPerUnit: number;
     if (bill.commission_mode === "percent") {
       commissionPerUnit = Math.round(
         (line.unit_cost_cents * bill.commission_rate_bps) / 10_000
       );
     } else {
-      // fixed: split evenly by unit count
       commissionPerUnit =
         totalQty > 0 ? Math.round(bill.commission_amount_cents / totalQty) : 0;
     }
 
-    // Freight — CBM-weighted
     let freightPerUnit = 0;
     if (bill.freight_included && totalCbm > 0 && cbm !== null) {
       freightPerUnit = Math.round((cbm / totalCbm) * bill.freight_amount_cents);
     }
 
-    // Tariff — cost-weighted
     let tariffPerUnit = 0;
     if (bill.tariff_included && totalSubtotalCents > 0) {
       tariffPerUnit = Math.round(
@@ -216,16 +200,14 @@ export async function POST(
       );
     }
 
-    const landedUnitCost =
-      line.unit_cost_cents + commissionPerUnit + freightPerUnit + tariffPerUnit;
-
     return {
       id: line.id,
       cbm_per_unit: cbm,
       commission_per_unit_cents: commissionPerUnit,
       freight_per_unit_cents: freightPerUnit,
       tariff_per_unit_cents: tariffPerUnit,
-      landed_unit_cost_cents: landedUnitCost,
+      landed_unit_cost_cents:
+        line.unit_cost_cents + commissionPerUnit + freightPerUnit + tariffPerUnit,
     };
   });
 
@@ -236,55 +218,98 @@ export async function POST(
     )
   );
 
-  // 8. Mark bill as confirmed
+  // 8. Assign sequential VB-XXXX number (drafts have no number until confirm)
+  const seqResult = await knex.raw(
+    `SELECT nextval('custom_vendor_bill_seq') AS seq`
+  );
+  const vbNumber = `VB-${(seqResult.rows[0] as { seq: string | number }).seq}`;
+
+  // 9. Mark bill as confirmed with sequential number
   await service.updateVendorBills(
     { id: bill.id },
     {
+      number: vbNumber,
       status: "confirmed",
       confirmed_at: new Date(),
       confirmed_by_user_id: userId,
     }
   );
 
-  // 9. Update product_variant.metadata.avg_landed_cost_cents for each variant
-  //    Group lines by variant and compute weighted average
+  // 10. AVCO: update avg_landed_cost_cents per variant using QB weighted-average formula
+  //     new_avg = (Q_before × old_avg + received_qty × batch_landed) / Q_on_hand
+  //     where Q_before = Q_on_hand - received_qty (inventory before this receipt)
+
+  // Aggregate by variant: totalLanded and totalQty across all lines for this bill
   const landedByVariant = new Map<
     string,
     { totalLanded: number; totalQty: number }
   >();
   for (const update of lineUpdates) {
     const line = lines.find((l) => l.id === update.id)!;
-    const existing = landedByVariant.get(line.product_variant_id) ?? {
+    const prev = landedByVariant.get(line.product_variant_id) ?? {
       totalLanded: 0,
       totalQty: 0,
     };
     landedByVariant.set(line.product_variant_id, {
-      totalLanded:
-        existing.totalLanded + update.landed_unit_cost_cents * line.qty,
-      totalQty: existing.totalQty + line.qty,
+      totalLanded: prev.totalLanded + update.landed_unit_cost_cents * line.qty,
+      totalQty: prev.totalQty + line.qty,
     });
   }
 
   await Promise.all(
-    [...landedByVariant.entries()].map(
-      ([variantId, { totalLanded, totalQty: vQty }]) => {
-        const avgLandedCost = vQty > 0 ? totalLanded / vQty : 0;
-        return knex.raw(
-          `UPDATE product_variant
-         SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('avg_landed_cost_cents', ?::float),
+    [...landedByVariant.entries()].map(async ([variantId, { totalLanded, totalQty: receivedQty }]) => {
+      const batchLandedPerUnit = receivedQty > 0 ? totalLanded / receivedQty : 0;
+
+      // Current stocked_quantity across all locations (already includes this receipt)
+      const qResult = await knex.raw(
+        `SELECT COALESCE(SUM(il.stocked_quantity)::int, 0) AS qty
+         FROM inventory_level il
+         JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = il.inventory_item_id
+         WHERE pvii.variant_id = ? AND il.deleted_at IS NULL`,
+        [variantId]
+      );
+      const qOnHand: number = (qResult.rows[0] as { qty: number } | undefined)?.qty ?? 0;
+
+      // Read current avg (prev avg before this bill)
+      const metaResult = await knex.raw(
+        `SELECT metadata FROM product_variant WHERE id = ? AND deleted_at IS NULL`,
+        [variantId]
+      );
+      const meta = (metaResult.rows[0] as VariantMetadataRow | undefined)?.metadata;
+      const prevAvg = Number(meta?.avg_landed_cost_cents ?? 0) || 0;
+
+      // Q_before = inventory that existed before this receipt was stocked
+      const qBefore = Math.max(0, qOnHand - receivedQty);
+
+      // QB AVCO formula
+      const newAvg =
+        qOnHand > 0
+          ? (qBefore * prevAvg + receivedQty * batchLandedPerUnit) / qOnHand
+          : batchLandedPerUnit;
+
+      // Persist new running average
+      await knex.raw(
+        `UPDATE product_variant
+         SET metadata = COALESCE(metadata, '{}'::jsonb)
+           || jsonb_build_object('avg_landed_cost_cents', ?::float),
              updated_at = NOW()
          WHERE id = ?`,
-          [avgLandedCost, variantId]
-        );
-      }
-    )
+        [newAvg, variantId]
+      );
+
+      // Write cost log row — used for cancel reversal and audit trail
+      await knex.raw(
+        `INSERT INTO vendor_bill_cost_log
+           (vendor_bill_id, product_variant_id, received_qty, landed_unit_cost_cents,
+            prev_qty_on_hand, prev_avg_cost_cents, new_avg_cost_cents)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [bill.id, variantId, receivedQty, batchLandedPerUnit, qBefore, prevAvg, newAvg]
+      );
+    })
   );
 
-  // 10. Return confirmed bill with updated lines
-  const confirmedBill = await service.listVendorBills(
-    { id: bill.id },
-    { take: 1 }
-  );
+  // 11. Return confirmed bill with updated lines
+  const confirmedBill = await service.listVendorBills({ id: bill.id }, { take: 1 });
   const confirmedLines = await service.listVendorBillLines(
     { vendor_bill_id: bill.id },
     { take: 1000 }

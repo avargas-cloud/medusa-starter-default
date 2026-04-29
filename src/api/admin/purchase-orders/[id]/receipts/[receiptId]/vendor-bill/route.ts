@@ -295,17 +295,11 @@ export async function POST(
     })
   );
 
-  // Assign sequential VB-XXXX number
-  const seqResult = await knex.raw(
-    `SELECT nextval('custom_vendor_bill_seq') AS seq`
-  );
-  const vbNumber = `VB-${(seqResult.rows[0] as { seq: string | number }).seq}`;
-
-  // Create vendor bill header
+  // Create vendor bill header — number assigned at confirm, not at draft creation
   const newBill = (await service.createVendorBills({
     purchase_order_receipt_id: receiptId,
     purchase_order_id: id,
-    number: vbNumber,
+    number: null,
     status: "draft",
     reference_id: body.reference_id ?? null,
     commission_mode: body.commission_mode,

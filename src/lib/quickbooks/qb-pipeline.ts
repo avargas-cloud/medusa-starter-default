@@ -22,7 +22,8 @@ export type PipelineStep =
   | "payment_method_change"
   | "transfer_customer"
   | "so_close"
-  | "so_reopen";
+  | "so_reopen"
+  | "vendor_bill_void";
 
 export type PipelineStatus =
   | "pending"

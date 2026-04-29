@@ -28,7 +28,8 @@ export interface MeiliInventoryDoc {
   salesDescription: string | null;
   purchaseDescription: string | null;
   quickbooks_id: string | null;
-  cost: number | null;
+  cost: number | null;          // qb_avg_cost — QB reference cost, used for PO ordering
+  avg_landed_cost: number | null; // avg_landed_cost_cents — our AVCO, used for profit calcs
   vendorName: string | null;
   mpn: string | null;
   chinaStock: number;
@@ -110,6 +111,7 @@ export function buildInventoryDocsForVariants(
         purchaseDescription: (vmeta.purchase_description as string) || null,
         quickbooks_id: (vmeta.quickbooks_id as string) || null,
         cost: (vmeta.qb_avg_cost as number) || null,
+        avg_landed_cost: (vmeta.avg_landed_cost_cents as number) || null,
         vendorName: (vmeta.qb_vendor_name as string) || null,
         mpn: (vmeta.mpn as string) || null,
         chinaStock: 0,
@@ -145,6 +147,7 @@ export function buildInventoryDocsForVariants(
         purchaseDescription: (vmeta.purchase_description as string) || null,
         quickbooks_id: (vmeta.quickbooks_id as string) || null,
         cost: (vmeta.qb_avg_cost as number) || null,
+        avg_landed_cost: (vmeta.avg_landed_cost_cents as number) || null,
         vendorName: (vmeta.qb_vendor_name as string) || null,
         mpn: (vmeta.mpn as string) || null,
         chinaStock: chinaStockMap.get(inventory.id) ?? 0,
