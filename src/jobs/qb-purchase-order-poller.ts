@@ -287,7 +287,7 @@ export default async function qbPurchaseOrderPoller(
   // ── Phase B: Poll submitted waiting rows ─────────────────────────────────
   const polling: any[] = await knex
     .raw(
-      `SELECT id, purchase_order_id, qb_operation_id, payload
+      `SELECT id, purchase_order_id, qb_operation_id, qb_list_id, payload
        FROM qb_purchase_order_pipeline
       WHERE status = 'waiting'
         AND qb_operation_id IS NOT NULL
@@ -352,10 +352,12 @@ export default async function qbPurchaseOrderPoller(
       const refNumber = extractRefNumber(data);
       const editSequence = extractEditSequence(data);
       const txnLineIds = extractTxnLineIds(data);
-      // For query ops the TxnID is already known from the payload; don't require it from QB response
+      // For query ops the TxnID is already known from the payload; don't require it from QB response.
+      // For MOD ops the PO already exists in QB — fall back to the row's stored qb_list_id.
       const txnId =
         extractTxnId(data) ??
-        (pl.is_query ? (pl.txn_id as string | null) : null);
+        (pl.is_query ? (pl.txn_id as string | null) : null) ??
+        (pl.is_mod ? (row.qb_list_id as string | null) : null);
       if (!txnId) {
         await knex.raw(
           `UPDATE qb_purchase_order_pipeline

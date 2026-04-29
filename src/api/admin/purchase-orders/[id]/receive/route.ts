@@ -19,6 +19,7 @@ import type {
 } from "@medusajs/framework/http";
 
 import { receivePurchaseOrderWorkflow } from "../../../../../workflows/purchase-orders/receive-purchase-order";
+import { onPoReceiveApplied } from "../../../../../lib/inventory-transfer-link";
 import { getActorUserId, UnauthenticatedError } from "../../_lib/auth";
 import { zodErrorToBody } from "../../_lib/format";
 import { getPurchaseOrdersService } from "../../_lib/service-resolver";
@@ -254,6 +255,17 @@ export async function POST(
         lines: workflowLines,
       },
     });
+
+    // Transfer-to-USA accounting: deduct from China stock + track IT line qty
+    await onPoReceiveApplied(
+      knex,
+      id,
+      workflowLines.map((l) => ({
+        inventory_item_id: l.inventory_item_id,
+        product_variant_id: l.product_variant_id,
+        qty: l.qty_received_now,
+      }))
+    );
 
     return res.json({ receipt: result });
   } catch (err) {

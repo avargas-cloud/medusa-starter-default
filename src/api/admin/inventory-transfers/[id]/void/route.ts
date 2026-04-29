@@ -60,10 +60,11 @@ export async function POST(
       .status(404)
       .json({ error: "Inventory transfer not found", code: "not_found" });
   }
-  if (transfer.status !== "confirmed") {
+  const VOIDABLE_STATUSES = ["confirmed", "shipped"];
+  if (!VOIDABLE_STATUSES.includes(transfer.status)) {
     return res.status(409).json({
-      error: `Only confirmed transfers can be voided (current status: ${transfer.status})`,
-      code: "not_confirmed",
+      error: `Only confirmed or shipped transfers can be voided (current status: ${transfer.status})`,
+      code: "not_voidable",
     });
   }
 

@@ -25,6 +25,7 @@ import type {
 
 import { deletePurchaseOrderReceiptWorkflow } from "../../../../../../workflows/purchase-orders/delete-purchase-order-receipt";
 import { updatePurchaseOrderReceiptWorkflow } from "../../../../../../workflows/purchase-orders/update-purchase-order-receipt";
+import { onPoReceiveReversed } from "../../../../../../lib/inventory-transfer-link";
 import { getActorUserId, UnauthenticatedError } from "../../../_lib/auth";
 import { zodErrorToBody } from "../../../_lib/format";
 import { getPurchaseOrdersService } from "../../../_lib/service-resolver";
@@ -45,6 +46,7 @@ interface ReceiptHeader {
 interface ReceiptLine {
   id: string;
   purchase_order_line_id: string;
+  product_variant_id: string;
   inventory_item_id: string;
   qty_received_now: number;
   stock_applied: boolean;
@@ -109,20 +111,30 @@ export async function DELETE(
     inventory_item_id: string;
     qty_applied: number;
   }> = [];
+  // Parallel list for Transfer-to-USA China stock restoration
+  let transferLines: Array<{
+    inventory_item_id: string;
+    product_variant_id: string;
+    qty: number;
+  }> = [];
 
   if (!wasAlreadyVoided) {
     const rawLines = (await service.listPurchaseOrderReceiptLines(
       { purchase_order_receipt_id: receiptId },
       { take: 1000 }
     )) as unknown as ReceiptLine[];
-    linesToReverse = rawLines
-      .filter((l) => l.stock_applied && l.qty_received_now > 0)
-      .map((l) => ({
-        receipt_line_id: l.id,
-        po_line_id: l.purchase_order_line_id,
-        inventory_item_id: l.inventory_item_id,
-        qty_applied: l.qty_received_now,
-      }));
+    const applied = rawLines.filter((l) => l.stock_applied && l.qty_received_now > 0);
+    linesToReverse = applied.map((l) => ({
+      receipt_line_id: l.id,
+      po_line_id: l.purchase_order_line_id,
+      inventory_item_id: l.inventory_item_id,
+      qty_applied: l.qty_received_now,
+    }));
+    transferLines = applied.map((l) => ({
+      inventory_item_id: l.inventory_item_id,
+      product_variant_id: l.product_variant_id,
+      qty: l.qty_received_now,
+    }));
 
     if (linesToReverse.length === 0) {
       return res.status(409).json({
@@ -131,6 +143,12 @@ export async function DELETE(
       });
     }
   }
+
+  const knex = (req.scope as unknown as {
+    resolve: (k: string) => {
+      raw: (sql: string, b?: unknown[]) => Promise<{ rows: unknown[] }>;
+    };
+  }).resolve("__pg_connection__");
 
   try {
     const { result } = await deletePurchaseOrderReceiptWorkflow(req.scope).run(
@@ -147,6 +165,11 @@ export async function DELETE(
         },
       }
     );
+
+    // Transfer-to-USA accounting: restore China stock + revert IT line qty
+    if (!wasAlreadyVoided && transferLines.length > 0) {
+      await onPoReceiveReversed(knex, id, transferLines);
+    }
 
     return res.json({ delete: result });
   } catch (err) {

@@ -6,11 +6,13 @@
  *   - per-line qty_received_now — re-balances inventory + PO line counters.
  *
  * Pipeline:
- *   1. adjustReceiptStockStep    — applies +/- deltas on inventory_levels
- *                                  (compensable; reverses on later failure).
- *   2. persistUpdateReceiptStep  — writes receipt header (vendor_bill_number),
- *                                  receipt lines (qty_received_now), recomputes
- *                                  PO line + header counters.
+ *   1. adjustReceiptStockStep          — applies +/- deltas on inventory_levels
+ *                                        (compensable; reverses on later failure).
+ *   2. persistUpdateReceiptStep        — writes receipt header (vendor_bill_number),
+ *                                        receipt lines (qty_received_now), recomputes
+ *                                        PO line + header counters.
+ *   3. syncReceiptInventoryMeiliStep   — re-syncs affected inventory items to Meili
+ *                                        so chinaStock/totalStock stay current.
  *
  * The route handler is responsible for:
  *   - rejecting if status is not 'applied' (synced/voided/pending blocked).
@@ -27,6 +29,7 @@ import {
 
 import { adjustReceiptStockStep } from "./steps/adjust-receipt-stock-step";
 import { persistUpdateReceiptStep } from "./steps/persist-update-receipt-step";
+import { syncReceiptInventoryMeiliStep } from "../shared/steps/sync-receipt-inventory-meili-step";
 
 export interface UpdatePoReceiptWorkflowInputLine {
   receipt_line_id: string;
@@ -86,6 +89,13 @@ export const updatePurchaseOrderReceiptWorkflow = createWorkflow(
     }));
 
     const persisted = persistUpdateReceiptStep(persistInput);
+
+    const meiliInput = transform({ input }, (data) => ({
+      inventory_item_ids: [
+        ...new Set(data.input.line_changes.map((l) => l.inventory_item_id)),
+      ],
+    }));
+    syncReceiptInventoryMeiliStep(meiliInput);
 
     const response = transform({ adjusted, persisted }, (data) => ({
       receipt_id: data.persisted.receipt_id,

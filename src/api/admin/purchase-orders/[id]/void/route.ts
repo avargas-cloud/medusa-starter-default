@@ -11,6 +11,7 @@ import type {
   MedusaResponse,
 } from "@medusajs/framework/http";
 
+import { onPoVoided } from "../../../../../lib/inventory-transfer-link";
 import { getActorUserId, UnauthenticatedError } from "../../_lib/auth";
 import { voidReceiptSchema } from "../../_lib/validators";
 import { zodErrorToBody } from "../../_lib/format";
@@ -56,6 +57,11 @@ export async function POST(
   const { void_reason } = parsed.data;
 
   const service = getPurchaseOrdersService(req);
+  const knex = (req.scope as unknown as {
+    resolve: (k: string) => {
+      raw: (sql: string, b?: unknown[]) => Promise<{ rows: unknown[] }>;
+    };
+  }).resolve("__pg_connection__");
 
   const po = (await service
     .retrievePurchaseOrder(id)
@@ -123,6 +129,9 @@ export async function POST(
       },
     }]);
   }
+
+  // Transfer-to-USA accounting: void the linked IT (goods return to China)
+  await onPoVoided(knex, id, userId);
 
   return res.json({ purchase_order: updated });
 }

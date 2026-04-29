@@ -29,11 +29,7 @@ import { loadPurchasingConfig } from "./purchasing-config.service";
 
 dotenv.config();
 
-const USA_LOC =
-  process.env.ECOPOWERTECH_MIAMI_LOCATION_ID ??
-  "sloc_01KFS2AV3TAKR141KC2D6JCGTR";
-const CHINA_LOC =
-  process.env.CHINA_WAREHOUSE_LOCATION_ID ?? "sloc_01KQ14C1CFX30EDD722BF87HDM";
+import { USA_LOC, CHINA_LOC } from "../../lib/locations";
 
 export interface SnapshotRunResult {
   processed: number;
@@ -74,7 +70,7 @@ export async function runPurchasingSnapshot(
     const engineCtx = await buildSalesEngineContext(db);
 
     // ── 2. Variants, alt relationships, inventory, open POs, vendor prod days ─
-    const [varRes, altRes, invRes, poRes, vendorRes, sourcedRes] =
+    const [varRes, altRes, invRes, poRes, vendorRes, sourcedRes, chinaShippedRes] =
       await Promise.all([
       db.query<{ id: string; sku: string }>(
         `SELECT id, sku FROM product_variant WHERE deleted_at IS NULL ORDER BY sku`
@@ -131,10 +127,27 @@ export async function runPurchasingSnapshot(
          WHERE pv.deleted_at IS NULL
            AND COALESCE((p.metadata->>'is_sourced_via_agent')::boolean, false) = true`
       ),
+      // Units currently in transit from China (IT.status='shipped', not yet received).
+      // inv_china_available = stocked_quantity - china_shipped
+      db.query<{ variant_id: string; china_shipped: string }>(
+        `SELECT itl.product_variant_id AS variant_id,
+                SUM(GREATEST(0, itl.qty - COALESCE(itl.qty_received, 0))) AS china_shipped
+           FROM inventory_transfer_line itl
+           JOIN inventory_transfer it ON it.id = itl.transfer_id AND it.deleted_at IS NULL
+          WHERE it.status = 'shipped'
+            AND it.origin_country = 'CN'
+            AND itl.deleted_at IS NULL
+          GROUP BY itl.product_variant_id`
+      ),
     ]);
 
     const sourcedFromChina = new Set(
       sourcedRes.rows.map((r) => r.variant_id)
+    );
+
+    // variant_id → units currently in transit from China (shipped IT lines)
+    const chinaShippedByVariant = new Map(
+      chinaShippedRes.rows.map((r) => [r.variant_id, Number(r.china_shipped)])
     );
 
     const allVariants = varRes.rows;
@@ -338,7 +351,11 @@ export async function runPurchasingSnapshot(
         // China supply only matters when product is sourced from China.
         // Non-sourced products skip alt/PO lookups entirely (88% of catalog).
         const isSourcedChina = sourcedFromChina.has(v.id);
-        const invChinaOwn = isSourcedChina ? inv.china : 0;
+        // Subtract in-transit units so inv_china reflects what's actually available
+        const chinaShipped = isSourcedChina
+          ? (chinaShippedByVariant.get(v.id) ?? 0)
+          : 0;
+        const invChinaOwn = isSourcedChina ? Math.max(0, inv.china - chinaShipped) : 0;
         const invChinaAlt = isSourcedChina
           ? alts.reduce(
               (s, id) => s + (invByVariant.get(id)?.china ?? 0),
