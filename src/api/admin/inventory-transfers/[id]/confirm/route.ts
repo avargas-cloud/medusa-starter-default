@@ -113,7 +113,47 @@ export async function POST(
     });
   }
 
-  // 4. Allocate PO sequence via service
+  // 4. Resolve QB vendor list ID — required by the receive route guard
+  // (`Submitted PO is missing vendor snapshot / number — resubmit first.`)
+  let vendorQbListId: string | null = null;
+  if (transfer.vendor_id) {
+    const qbv = await knex.raw(
+      `SELECT qb_list_id FROM qb_vendor WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
+      [transfer.vendor_id]
+    );
+    vendorQbListId =
+      (qbv.rows[0] as { qb_list_id: string | null } | undefined)?.qb_list_id ??
+      null;
+  }
+
+  // 5. Resolve inventory_item_id per variant — IT lines don't capture it
+  // and PO line + receive workflow both require it for stock adjust.
+  const variantIds = activeLines.map((l) => l.product_variant_id);
+  const variantToItem = new Map<string, string>();
+  if (variantIds.length > 0) {
+    const placeholders = variantIds.map(() => "?").join(",");
+    const itemRes = await knex.raw(
+      `SELECT variant_id, inventory_item_id
+         FROM product_variant_inventory_item
+        WHERE variant_id IN (${placeholders})`,
+      variantIds
+    );
+    for (const row of itemRes.rows as Array<{
+      variant_id: string;
+      inventory_item_id: string;
+    }>) {
+      variantToItem.set(row.variant_id, row.inventory_item_id);
+    }
+  }
+  const missing = variantIds.filter((v) => !variantToItem.has(v));
+  if (missing.length > 0) {
+    return res.status(400).json({
+      error: `Missing inventory_item link for variants: ${missing.join(", ")}`,
+      code: "missing_inventory_item",
+    });
+  }
+
+  // 6. Allocate PO sequence via service
   const poService = (
     req.scope as unknown as { resolve: (k: string) => unknown }
   ).resolve(PURCHASE_ORDERS_MODULE) as PurchaseOrdersService;
@@ -125,11 +165,11 @@ export async function POST(
 
   const poMemo = `Transfer ${transfer.number ?? id} from China`;
 
-  // 5. Insert PurchaseOrder header
+  // 7. Insert PurchaseOrder header
   await knex.raw(
     `INSERT INTO purchase_order (
       id, number, seq, status,
-      vendor_id, vendor_name_snapshot,
+      vendor_id, vendor_name_snapshot, vendor_qb_list_id_snapshot,
       stock_location_id,
       memo,
       submitted_at, submitted_by_user_id,
@@ -139,7 +179,7 @@ export async function POST(
       created_at, updated_at
     ) VALUES (
       ?, ?, ?, 'submitted',
-      ?, ?,
+      ?, ?, ?,
       ?,
       ?,
       NOW(), ?,
@@ -151,6 +191,7 @@ export async function POST(
     [
       poId, poNumber, poSeq,
       transfer.vendor_id ?? null, transfer.vendor_name_snapshot ?? null,
+      vendorQbListId,
       transfer.destination_location_id,
       poMemo,
       userId,
@@ -170,6 +211,7 @@ export async function POST(
     poSubtotalCents += totalCents;
     poTotalUnits += line.qty;
 
+    const lineInventoryItemId = variantToItem.get(line.product_variant_id)!;
     await knex.raw(
       `INSERT INTO purchase_order_line (
         id, purchase_order_id, product_variant_id, inventory_item_id,
@@ -179,7 +221,7 @@ export async function POST(
         status, line_order,
         created_at, updated_at
       ) VALUES (
-        ?, ?, ?, '',
+        ?, ?, ?, ?,
         ?, ?,
         ?, 0, 0,
         ?, 0, ?,
@@ -187,7 +229,7 @@ export async function POST(
         ?, ?
       )`,
       [
-        polId, poId, line.product_variant_id,
+        polId, poId, line.product_variant_id, lineInventoryItemId,
         line.sku, line.description,
         line.qty,
         line.unit_cost_cents, totalCents,
