@@ -19,6 +19,11 @@
 import { MedusaContainer } from "@medusajs/framework/types";
 import { pollBridgeStatus } from "../lib/quickbooks/bridge-fetch";
 import {
+  bridgeFetch,
+  POLL_INTERVAL_MS,
+  MAX_POLL_ATTEMPTS,
+} from "../lib/quickbooks/client/core";
+import {
   markStaleRowsAsFailed,
   STANDARD_STALE_CONFIG,
 } from "../lib/quickbooks/stale-row-cleanup";
@@ -190,6 +195,79 @@ const extractTxnLineIds = (data: BridgeStatus): string[] => {
   return arr.map((l: any) => l.TxnLineID ?? "").filter(Boolean);
 };
 
+/**
+ * Fallback PO lookup by RefNumber via /api/sync/direct-query.
+ *
+ * Why: the regular /api/purchase-orders/query endpoint searches by TxnID, which
+ * can fail spuriously after a bridge restart or when the local QB cache is
+ * stale, even though the PO still exists in QuickBooks. Querying by RefNumber
+ * (the human-visible "P.O. No.") is a more robust way to recover the current
+ * TxnID + EditSequence and avoid escalating recoverable conditions to
+ * `failed_permanent`.
+ *
+ * Returns null if the bridge can't reach QB or the PO truly doesn't exist.
+ * Throws on bridge errors so the caller can decide whether to retry later.
+ */
+const lookupPoByRefNumber = async (
+  refNumber: string
+): Promise<{ txnId: string; editSequence: string } | null> => {
+  const qbxml = [
+    `<?xml version="1.0" encoding="utf-8"?>`,
+    `<?qbxml version="10.0"?>`,
+    `<QBXML><QBXMLMsgsRq onError="stopOnError">`,
+    `<PurchaseOrderQueryRq requestID="1">`,
+    `<RefNumber>${refNumber}</RefNumber>`,
+    `</PurchaseOrderQueryRq>`,
+    `</QBXMLMsgsRq></QBXML>`,
+  ].join("");
+
+  const enqueueRes = (await bridgeFetch("POST", "/api/sync/direct-query", {
+    qbxml,
+  })) as { operationId?: string; operation_id?: string };
+  const operationId = enqueueRes?.operationId || enqueueRes?.operation_id;
+  if (!operationId) throw new Error("Bridge did not return operationId");
+
+  for (let attempt = 1; attempt <= MAX_POLL_ATTEMPTS; attempt++) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    const statusRes = (await bridgeFetch(
+      "GET",
+      `/api/sync/status/${operationId}`
+    )) as {
+      operation?: { status?: string; result?: unknown; error?: string };
+    };
+    const op = statusRes?.operation;
+    if (!op) continue;
+    if (op.status === "completed") {
+      const result = op.result as Record<string, unknown>;
+      const msgs: any =
+        (result as any)?.QBXML?.QBXMLMsgsRs ??
+        (result as any)?.QBXMLMsgsRs ??
+        result;
+      const retRaw =
+        msgs?.PurchaseOrderQueryRs?.PurchaseOrderRet ??
+        (result as any)?.PurchaseOrderRet ??
+        null;
+      if (!retRaw) return null;
+      const doc = (Array.isArray(retRaw) ? retRaw[0] : retRaw) as Record<
+        string,
+        string
+      >;
+      const txnId = doc?.TxnID || "";
+      const editSequence = doc?.EditSequence || "";
+      if (!txnId || !editSequence) return null;
+      return { txnId, editSequence };
+    }
+    if (op.status === "failed") {
+      throw new Error(
+        `Bridge direct-query failed: ${op.error || "Unknown error"}`
+      );
+    }
+  }
+  throw new Error(
+    "Bridge direct-query timed out — QuickBooks Desktop may be offline or QBWC not connected"
+  );
+};
+
 export default async function qbPurchaseOrderPoller(
   container: MedusaContainer
 ) {
@@ -357,7 +435,7 @@ export default async function qbPurchaseOrderPoller(
         const pl = row.payload as Record<string, unknown>;
 
         // Stale/missing EditSequence (QB status 3100/3200 or message text) → re-query QB, then retry mod/void
-        const isEditSeqErr = /editsequence|edit.?sequence|3[12]00/i.test(errMsg);
+        const isEditSeqErr = /editsequence|edit.?sequence|3[12]00|po not found in qb|may have been deleted/i.test(errMsg);
         if ((pl.is_mod || pl.is_void) && !pl.is_query && isEditSeqErr) {
           const freshPl = { ...pl, is_query: true, edit_sequence: undefined };
           await knex.raw(
@@ -502,6 +580,82 @@ export default async function qbPurchaseOrderPoller(
               logger.warn(`${TAG} row ${row.id}: no poRet in query response (attempt ${queryAttempts}/3) — re-querying QB`);
               continue;
             }
+
+            // RefNumber fallback: TxnID-based query keeps failing — try by RefNumber via direct-query.
+            // The PO may simply have a stale cached entry on the bridge side, or someone re-saved
+            // it in QB Desktop (which leaves the TxnID intact but the bridge sometimes can't find
+            // it via the targeted endpoint). RefNumber lookup tends to work in those cases.
+            const refRecoveryAttempts =
+              ((pl._refnumber_recovery_attempts as number) ?? 0) + 1;
+            if (refRecoveryAttempts <= 1) {
+              const poRow = (await knex
+                .raw(
+                  `SELECT qb_purchase_order_txn_number, qb_purchase_order_list_id
+                     FROM purchase_order
+                    WHERE id = ?
+                    LIMIT 1`,
+                  [row.purchase_order_id]
+                )
+                .then((r: any) => r.rows[0])) as
+                | {
+                    qb_purchase_order_txn_number: string | null;
+                    qb_purchase_order_list_id: string | null;
+                  }
+                | undefined;
+              const refNumber = poRow?.qb_purchase_order_txn_number;
+              if (refNumber) {
+                try {
+                  const fresh = await lookupPoByRefNumber(refNumber);
+                  if (fresh) {
+                    await knex.raw(
+                      `UPDATE purchase_order
+                          SET qb_purchase_order_list_id = ?,
+                              qb_edit_sequence = ?,
+                              qb_synced_at = NOW(),
+                              updated_at = NOW()
+                        WHERE id = ?`,
+                      [fresh.txnId, fresh.editSequence, row.purchase_order_id]
+                    );
+                    const recoveredPl = {
+                      ...pl,
+                      is_query: false,
+                      edit_sequence: fresh.editSequence,
+                      txn_id: fresh.txnId,
+                      _query_attempts: 0,
+                      _refnumber_recovery_attempts: refRecoveryAttempts,
+                    };
+                    await knex.raw(
+                      `UPDATE qb_purchase_order_pipeline
+                          SET status = 'waiting',
+                              qb_operation_id = NULL,
+                              payload = ?,
+                              last_error = NULL,
+                              next_retry_at = NULL,
+                              updated_at = NOW()
+                        WHERE id = ?`,
+                      [JSON.stringify(recoveredPl), row.id]
+                    );
+                    submitted++;
+                    logger.warn(
+                      `${TAG} row ${row.id}: TxnID query failed, RefNumber=${refNumber} fallback found PO → recovered TxnID=${fresh.txnId} EditSeq=${fresh.editSequence}`
+                    );
+                    continue;
+                  }
+                  logger.warn(
+                    `${TAG} row ${row.id}: RefNumber=${refNumber} fallback also returned no PO`
+                  );
+                } catch (lookupErr) {
+                  logger.warn(
+                    `${TAG} row ${row.id}: RefNumber fallback threw: ${
+                      lookupErr instanceof Error
+                        ? lookupErr.message
+                        : String(lookupErr)
+                    }`
+                  );
+                }
+              }
+            }
+
             const reason = `PO not found in QB (TxnID: ${String(pl.txn_id ?? 'unknown')}) — may have been deleted`;
             logger.warn(`${TAG} row ${row.id}: ${reason}`);
             await knex.raw(
@@ -596,7 +750,7 @@ export default async function qbPurchaseOrderPoller(
     const pl = row.payload as Record<string, unknown>;
 
     // EditSequence errors get a free re-query without burning a retry slot.
-    const isEditSeqErrC = /editsequence|edit.?sequence|3[12]00/i.test(row.last_error ?? "");
+    const isEditSeqErrC = /editsequence|edit.?sequence|3[12]00|po not found in qb|may have been deleted/i.test(row.last_error ?? "");
     if ((pl.is_mod || pl.is_void) && !pl.is_query && isEditSeqErrC) {
       const freshPl = { ...pl, is_query: true, edit_sequence: undefined };
       await knex.raw(
