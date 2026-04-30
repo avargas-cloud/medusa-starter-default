@@ -1,7 +1,8 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
-import { handleDraftOrderUpdated } from "../../../../lib/quickbooks/handlers/handle-draft-order-updated";
+// 1.5.4: handleDraftOrderUpdated import removed — sync-pos now enqueues
+// 'pending' rows; consolidator processes via the same handler.
 import { getEstimateTxnId } from "../../../../lib/quickbooks/qb-metadata-types";
 import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
 import { getDbPool } from "../../../utils/db-pool";
@@ -407,9 +408,15 @@ export async function POST(
             //   - coalesceIfInFlight (rapid sequential saves → next_payload)
             //   - writePipelineRow(pending) (pre-flight + in-lock idempotent reset)
             //   - withQbSerialized (per-order single-writer guarantee)
-            //   - updateEstimateInQb + pollUntilQbConfirmed
-            //   - writePipelineRow(submitted/failed)
-            await handleDraftOrderUpdated(resolvedId, req.scope, logger);
+            // 1.5.4: enqueue 'pending' for consolidator pick-up.
+            await writePipelineRow({
+              orderId: resolvedId,
+              step: "estimate",
+              status: "pending",
+            });
+            logger.info(
+              `[sync-pos] 📥 Enqueued estimate for ${resolvedId} (modified)`
+            );
           } catch (qbErr: any) {
             logger.error(
               `[sync-pos] Failed to queue QB sync for modified estimate: ${qbErr.message}`

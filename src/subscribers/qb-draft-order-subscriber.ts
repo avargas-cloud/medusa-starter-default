@@ -73,7 +73,41 @@ async function qbDraftOrderSubscriber({
 
   try {
     if (event.name === "draft_order.created") {
-      await handleDraftOrderCreated(event.data, container, logger);
+      // 1.5.4: pipeline-only flow. Subscriber just enqueues; the consolidator
+      // picks up the row via pending-dispatch and runs handleDraftOrderCreated
+      // (still defined below — kept for cron/admin invocations) to do the
+      // actual customer-dep wiring + bridge submission.
+      const draftOrderId = (event.data as any).id;
+      const query = container.resolve(ContainerRegistrationKeys.QUERY);
+      let isPos = false;
+      let friendlyRef: string | null = null;
+      try {
+        const { data: rows } = await query.graph({
+          entity: "order",
+          fields: ["id", "sales_channel_id", "metadata", "display_id"],
+          filters: { id: draftOrderId },
+        });
+        const draft = rows?.[0];
+        if (draft) {
+          isPos = isPosOrder(draft);
+          friendlyRef =
+            (draft.metadata?.document_number as string | undefined) ||
+            (draft.display_id ? `E${draft.display_id}` : null);
+        }
+      } catch (fetchErr: any) {
+        logger.warn(
+          `${LOG_PREFIX} ⚠️ Could not fetch draft order for POS check: ${fetchErr.message}`
+        );
+      }
+      await writePipelineRow({
+        orderId: draftOrderId,
+        step: "estimate",
+        status: isPos ? "waiting" : "pending",
+        medusaRefNumber: friendlyRef,
+      });
+      logger.info(
+        `${LOG_PREFIX} 📥 Enqueued estimate row for ${draftOrderId} (${isPos ? "POS waiting" : "pending"})`
+      );
     }
   } catch (err: any) {
     // QB failures must NEVER block the Medusa flow

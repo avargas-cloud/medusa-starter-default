@@ -14,7 +14,8 @@ import {
 import { withQbSerialized } from "../../../../lib/quickbooks/qb-serializer";
 import { FINANCE_MODULE } from "../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../modules/invoices";
-import { handleDraftOrderCreated } from "../../../../subscribers/qb-draft-order-subscriber";
+// 1.5.4: handleDraftOrderCreated import removed — pos/sync now enqueues
+// 'pending' rows for the consolidator's pending-dispatch pass.
 
 const LOG_PREFIX = "[POST /admin/pos/sync]";
 
@@ -248,9 +249,17 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
               } else {
                 // ── CREATE path ──
                 logger.info(
-                  `${LOG_PREFIX} No estimate in QB yet — dispatching CREATE`
+                  `${LOG_PREFIX} No estimate in QB yet — enqueuing for consolidator`
                 );
-                await handleDraftOrderCreated({ id }, req.scope, logger, true);
+                // 1.5.4: enqueue 'pending' for consolidator pending-dispatch.
+                const {
+                  writePipelineRow: enqueue,
+                } = require("../../../../lib/quickbooks/qb-pipeline");
+                await enqueue({
+                  orderId: id,
+                  step: "estimate",
+                  status: "pending",
+                });
               }
             } catch (bgErr: any) {
               logger.error(

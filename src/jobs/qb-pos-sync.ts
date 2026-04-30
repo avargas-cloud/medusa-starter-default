@@ -12,7 +12,8 @@ import {
 } from "../lib/quickbooks/qb-metadata-types";
 import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger";
 import { FINANCE_MODULE } from "../modules/finance";
-import { handleDraftOrderCreated } from "../subscribers/qb-draft-order-subscriber";
+// 1.5.4: handleDraftOrderCreated import removed — POS wake-up now flips
+// pipeline row status 'waiting'→'pending' instead of calling the handler.
 
 const LOG_PREFIX = "[QB-POS-SYNC]";
 const POS_CHANNEL_ID = process.env.POS_SALES_CHANNEL_ID ?? "";
@@ -178,13 +179,16 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
       }
 
       logger.info(
-        `${LOG_PREFIX} Processing delayed Estimate for draft order: ${row.id} (pipeline: ${latestPipelineStatus ?? "none"})`
+        `${LOG_PREFIX} Waking POS estimate for draft order: ${row.id} (pipeline: ${latestPipelineStatus ?? "none"})`
       );
-      await handleDraftOrderCreated(
-        { id: row.id }, // mock event payload
-        container,
-        logger,
-        true // isCron flag
+      // 1.5.4: instead of calling handler directly, transition 'waiting' →
+      // 'pending'. The consolidator's pending-dispatch pass picks it up next
+      // tick and processes via the same handler — single path.
+      await client.query(
+        `UPDATE qb_order_pipeline
+            SET status = 'pending', updated_at = NOW()
+          WHERE order_id = $1 AND step = 'estimate' AND status = 'waiting'`,
+        [row.id]
       );
       processedDrafts++;
     }

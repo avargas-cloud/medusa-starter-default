@@ -805,17 +805,19 @@ export async function POST(
         // + pollUntilQbConfirmed). Prevents duplicate pipeline rows on rapid saves
         // and avoids duplicate bridge calls by coalescing into next_payload.
         try {
-          if (isEstimateOnly) {
-            const {
-              handleDraftOrderUpdated,
-            } = require("../../../../../lib/quickbooks/handlers/handle-draft-order-updated");
-            await handleDraftOrderUpdated(id, req.scope, logger);
-          } else {
-            const {
-              handleOrderUpdated,
-            } = require("../../../../../lib/quickbooks/handlers/handle-order-updated");
-            await handleOrderUpdated(id, req.scope, logger);
-          }
+          // 1.5.4: pipeline-only — enqueue 'pending' instead of direct handler call.
+          // Consolidator picks up next tick and runs the same handlers.
+          const {
+            writePipelineRow,
+          } = require("../../../../../lib/quickbooks/qb-pipeline");
+          await writePipelineRow({
+            orderId: id,
+            step: isEstimateOnly ? "estimate" : "sales_order",
+            status: "pending",
+          });
+          logger.info(
+            `[post-edit-sync] 📥 Enqueued ${isEstimateOnly ? "estimate" : "sales_order"} for ${id}`
+          );
         } catch (modErr: any) {
           logger.error(
             `[post-edit-sync] ❌ Failed to schedule ${docTypeStr} MOD: ${modErr.message}`

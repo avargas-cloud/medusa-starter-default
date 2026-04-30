@@ -432,39 +432,20 @@ export async function POST(
             // If the estimate already exists in QB (row has qb_txn_id), use the MOD path
             // to avoid creating a duplicate QB Estimate. Fall back to CREATE only if
             // the Estimate never made it to QB (no txn_id) OR the MOD handler reports
-            // that metadata has no txn_id.
-            if (row.qb_txn_id) {
-              const {
-                handleDraftOrderUpdated,
-              } = require("../../../../lib/quickbooks/handlers/handle-draft-order-updated");
-              const outcome = await handleDraftOrderUpdated(
-                row.order_id,
-                req.scope,
-                logger,
-                { isCron: true, awaitSerialized: true }
-              );
-              if (outcome === "skipped") {
-                const {
-                  handleDraftOrderCreated,
-                } = require("../../../../subscribers/qb-draft-order-subscriber");
-                await handleDraftOrderCreated(
-                  { id: row.order_id },
-                  req.scope,
-                  logger,
-                  true
-                );
-              }
-            } else {
-              const {
-                handleDraftOrderCreated,
-              } = require("../../../../subscribers/qb-draft-order-subscriber");
-              await handleDraftOrderCreated(
-                { id: row.order_id },
-                req.scope,
-                logger,
-                true
-              );
-            }
+            // 1.5.4: pipeline-only retry — enqueue 'pending' instead of
+            // calling handlers directly. Consolidator's pending-dispatch pass
+            // picks it up and runs MOD-first → CREATE-fallback via case "estimate".
+            const {
+              writePipelineRow: enqueueEst,
+            } = require("../../../../lib/quickbooks/qb-pipeline");
+            await enqueueEst({
+              orderId: row.order_id,
+              step: "estimate",
+              status: "pending",
+            });
+            logger.info(
+              `[qb-pipeline-retry] 📥 Re-enqueued estimate for ${row.order_id}`
+            );
             break;
           }
           case "sales_order": {
