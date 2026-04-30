@@ -324,7 +324,7 @@ export async function resubmitByStep(
           event: {
             name: "pos.payment.created",
             data: {
-              payment_id: row.reference_id,
+              id: row.reference_id,
               order_id: row.order_id,
             },
           },

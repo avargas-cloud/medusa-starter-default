@@ -215,13 +215,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         : Date.now();
       const ageMs = Date.now() - createdAt;
       const ONE_HOUR_MS = 60 * 60 * 1000;
-      // Also check the pipeline table — SO may be pending/submitted but not yet confirmed
-      // in metadata (race condition where invoice arrives before SO bridge confirms).
+      // Also check the pipeline table — SO may have already been submitted to the QB bridge.
+      // Only downgrade if the SO crossed the submission boundary (status=submitted/confirmed).
+      // A 'pending' or 'waiting' SO row hasn't reached QB yet and will be safely skipped
+      // by skipSalesOrderPipelineRow() below — do NOT let it force an Invoice path.
       let hasPendingSoInPipeline = false;
       try {
         const pbPool = req.scope.resolve("__pg_connection__") as any;
         const pbCheck = await pbPool.raw(
-          `SELECT id FROM qb_order_pipeline WHERE order_id = ? AND step = 'sales_order' AND status NOT IN ('failed','skipped','manual') LIMIT 1`,
+          `SELECT id FROM qb_order_pipeline WHERE order_id = ? AND step = 'sales_order' AND status IN ('submitted','confirmed') LIMIT 1`,
           [body.order_id]
         );
         hasPendingSoInPipeline = (pbCheck.rows?.length ?? 0) > 0;
@@ -811,9 +813,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         });
 
         // 2. Payment row — waiting (only for non-credit new payments)
-        let paymentPipelineRowId: string | null = null;
         if (paymentIdToEmit) {
-          paymentPipelineRowId = await writePipelineRow({
+          await writePipelineRow({
             orderId: body.order_id,
             referenceId: paymentIdToEmit,
             referenceType: "customer_payment",
@@ -824,11 +825,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
 
         // 3. Apply-payment row — one per application.
-        // When a payment step exists, apply_payment must wait for the payment to
-        // be confirmed in QB before running — otherwise the bridge has no TxnID to
-        // apply. Depend on paymentPipelineRowId when this application's payment is
-        // the newly-created one; fall back to invoicePipelineRowId for pre-existing
-        // credit/CM payments that are already in QB.
+        // Apply Payment must always wait for the Invoice to be confirmed in QB first —
+        // QB Desktop cannot apply a payment to an invoice that doesn't exist yet.
+        // The Payment row confirms faster than the Invoice in practice, so by the time
+        // the Invoice is confirmed the Payment TxnID is already available.
         for (const app of applicationsToEmit) {
           const applyPayRef = app.payment_id;
           // Use nextPayNum only for the newly-created payment; look up others
@@ -852,12 +852,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             referenceType: "customer_payment",
             step: "apply_payment",
             status: "waiting",
-            dependsOn:
-              paymentIdToEmit &&
-              app.payment_id === paymentIdToEmit &&
-              paymentPipelineRowId
-                ? paymentPipelineRowId
-                : invoicePipelineRowId,
+            dependsOn: invoicePipelineRowId,
             medusaRefNumber: applyMedusaRef,
           });
         }
