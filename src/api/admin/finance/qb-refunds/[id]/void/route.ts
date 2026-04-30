@@ -1,6 +1,5 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
-import { voidCheckInQb } from "../../../../../../lib/quickbooks/client/checks";
 import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
 
@@ -8,8 +7,12 @@ import { FINANCE_MODULE } from "../../../../../../modules/finance";
  * POST /admin/finance/qb-refunds/:id/void
  *
  * Voids a pending refund:
- *  - If the QB Write Check has been confirmed (qb.status === 'yes'), voids it in QB.
+ *  - If the QB Write Check has been confirmed (qb.status === 'yes'), enqueues
+ *    a void_check pipeline row; the consolidator will call QB.
  *  - Always marks the CustomerPayment status as 'voided'.
+ *
+ * Section 1.5.14: enqueue-only — no direct bridge call. UI should poll the
+ * pipeline row for confirmation.
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   const id = req.params.id as string;
@@ -35,27 +38,18 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   const qb = payment.qb as Record<string, any> | null;
   const checkTxnId = qb?.check_txn_id as string | undefined;
 
-  // If the check was confirmed in QB, void it there first
+  let queued = false;
   if (qb?.status === "yes" && checkTxnId) {
-    const result = await voidCheckInQb(checkTxnId);
-
-    if (!result.success) {
-      return res.status(500).json({
-        error: `Failed to void check in QuickBooks: ${result.error}`,
-      });
-    }
-
     await writePipelineRow({
       referenceId: id,
       referenceType: "customer_payment",
       step: "void_check",
-      status: "submitted",
-      bridgeOpId: result.data?.operationId ?? null,
+      status: "pending",
       qbTxnId: checkTxnId,
-    }).catch(() => {});
+    });
+    queued = true;
   }
 
-  // Mark CustomerPayment as voided
   await financeService.updateCustomerPayments(
     { id },
     {
@@ -64,9 +58,10 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     }
   );
 
-  return res.json({
+  return res.status(queued ? 202 : 200).json({
     success: true,
     voided: true,
+    queued,
     check_txn_id: checkTxnId ?? null,
   });
 };

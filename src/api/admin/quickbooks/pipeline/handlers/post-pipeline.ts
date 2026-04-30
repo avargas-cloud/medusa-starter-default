@@ -400,6 +400,91 @@ export async function POST(
             }
             break;
           }
+          case "void_invoice":
+          case "void_sales_receipt": {
+            if (!row.qb_txn_id) {
+              logger.warn(
+                `${LOG_PREFIX} ${row.step}: no QB TxnID — marking failed`
+              );
+              const voidPool =
+                require("../../../../../api/utils/db-pool").getDbPool();
+              await voidPool.query(
+                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                [row.id, "Cannot retry: missing qb_txn_id"]
+              );
+              break;
+            }
+            const {
+              voidInvoiceInQb,
+              voidSalesReceiptInQb,
+            } = require("../../../../../lib/quickbooks/qb-bridge-client");
+            const voidResult =
+              row.step === "void_sales_receipt"
+                ? await voidSalesReceiptInQb(row.qb_txn_id, (m: string) =>
+                    logger.info(m)
+                  )
+                : await voidInvoiceInQb(row.qb_txn_id, (m: string) =>
+                    logger.info(m)
+                  );
+            const voidPool2 =
+              require("../../../../../api/utils/db-pool").getDbPool();
+            if (!voidResult.success) {
+              logger.error(
+                `${LOG_PREFIX} ${row.step} failed: ${voidResult.error}`
+              );
+              await voidPool2.query(
+                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                [row.id, voidResult.error ?? `${row.step} failed`]
+              );
+            } else {
+              const voidOpId = voidResult.data?.operationId ?? null;
+              logger.info(
+                `${LOG_PREFIX} ${row.step} queued (op: ${voidOpId})`
+              );
+              await voidPool2.query(
+                `UPDATE qb_order_pipeline SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                [row.id, voidOpId]
+              );
+            }
+            break;
+          }
+          case "void_check": {
+            if (!row.qb_txn_id) {
+              logger.warn(
+                `${LOG_PREFIX} void_check: no QB TxnID — marking failed`
+              );
+              const vcPool =
+                require("../../../../../api/utils/db-pool").getDbPool();
+              await vcPool.query(
+                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                [row.id, "Cannot retry: missing qb_txn_id"]
+              );
+              break;
+            }
+            const {
+              voidCheckInQb,
+            } = require("../../../../../lib/quickbooks/client/checks");
+            const checkResult = await voidCheckInQb(row.qb_txn_id);
+            const vcPool2 =
+              require("../../../../../api/utils/db-pool").getDbPool();
+            if (!checkResult.success) {
+              logger.error(
+                `${LOG_PREFIX} void_check failed: ${checkResult.error}`
+              );
+              await vcPool2.query(
+                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                [row.id, checkResult.error ?? "void_check failed"]
+              );
+            } else {
+              const opId = checkResult.data?.operationId ?? null;
+              logger.info(`${LOG_PREFIX} void_check queued (op: ${opId})`);
+              await vcPool2.query(
+                `UPDATE qb_order_pipeline SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW() WHERE id = $1`,
+                [row.id, opId]
+              );
+            }
+            break;
+          }
           case "write_check": {
             // write_check retries require user to re-select the bank account.
             // Reset CustomerPayment.qb to null so it reappears in /accounting as "Pending QB".

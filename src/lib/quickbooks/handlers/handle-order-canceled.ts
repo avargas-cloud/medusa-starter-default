@@ -1,5 +1,4 @@
 import { getDbPool } from "../../../api/utils/db-pool";
-import { closeSalesOrderInQb, voidInvoiceInQb } from "../qb-bridge-client";
 import {
   getSoTxnId,
   getSoRef,
@@ -148,11 +147,9 @@ export async function handleOrderCanceled(
     logger.warn(`${LOG_PREFIX} ⚠️ Could not start sync log: ${logErr.message}`);
   }
 
-  let invoiceOpId: string | undefined;
-  let soOpId: string | undefined;
-  let errorMsg: string | undefined;
-
-  // soMedusaRef declared above (before the early-exit block)
+  // Section 1.5.14: enqueue-only. Consolidator (resubmit-by-step) picks up
+  // pending rows and calls the bridge.
+  let enqueuedSteps: string[] = [];
 
   if (invoiceTxnId) {
     // Guard: if there's already a voided Sales Receipt pos_invoice for this order,
@@ -182,145 +179,40 @@ export async function handleOrderCanceled(
     }
 
     if (!skipInvoiceVoid) {
-      logger.info(`${LOG_PREFIX} Voiding QB Invoice ${invoiceTxnId}...`);
-      try {
-        await writePipelineRow({
-          orderId: orderId,
-          step: "void_invoice",
-          status: "pending",
-          qbTxnId: invoiceTxnId,
-          qbRefNumber: invoiceRef ?? null,
-          medusaRefNumber: invoiceRef ?? null,
-        });
-      } catch (pErr: any) {
-        logger.warn(
-          `${LOG_PREFIX} Could not write pre-flight pipeline row: ${pErr.message}`
-        );
-      }
-
-      const result = await voidInvoiceInQb(invoiceTxnId, (msg) =>
-        logger.info(msg)
-      );
-      if (!result.success) {
-        logger.error(
-          `${LOG_PREFIX} ⚠️ Failed to void invoice: ${result.error}`
-        );
-        errorMsg = `Invoice void failed: ${result.error}`;
-        try {
-          await writePipelineRow({
-            orderId: orderId,
-            step: "void_invoice",
-            status: "failed",
-            qbTxnId: invoiceTxnId,
-            qbRefNumber: invoiceRef ?? null,
-            medusaRefNumber: invoiceRef ?? null,
-            error: result.error ?? "Invoice void failed",
-          });
-        } catch (pErr: any) {
-          logger.warn(
-            `${LOG_PREFIX} Could not write pipeline row: ${pErr.message}`
-          );
-        }
-      } else {
-        invoiceOpId = result.data?.operationId;
-        logger.info(
-          `${LOG_PREFIX} ✅ Invoice void queued (op: ${invoiceOpId})`
-        );
-        try {
-          await writePipelineRow({
-            orderId: orderId,
-            step: "void_invoice",
-            status: "submitted",
-            bridgeOpId: invoiceOpId ?? null,
-            qbTxnId: invoiceTxnId,
-            qbRefNumber: invoiceRef ?? null,
-            medusaRefNumber: invoiceRef ?? null,
-          });
-        } catch (pErr: any) {
-          logger.warn(
-            `${LOG_PREFIX} Could not write pipeline row: ${pErr.message}`
-          );
-        }
-      }
-    } // end if (!skipInvoiceVoid)
+      await writePipelineRow({
+        orderId: orderId,
+        step: "void_invoice",
+        status: "pending",
+        qbTxnId: invoiceTxnId,
+        qbRefNumber: invoiceRef ?? null,
+        medusaRefNumber: invoiceRef ?? null,
+      });
+      enqueuedSteps.push("void_invoice");
+      logger.info(`${LOG_PREFIX} ✅ void_invoice enqueued (txn=${invoiceTxnId})`);
+    }
   }
 
   if (soTxnId) {
-    logger.info(`${LOG_PREFIX} Closing QB SO ${soTxnId}...`);
-    try {
-      await writePipelineRow({
-        orderId: orderId,
-        step: "void_sales_order",
-        status: "pending",
-        qbTxnId: soTxnId,
-        qbRefNumber: soRef ?? null,
-        medusaRefNumber: soMedusaRef,
-      });
-    } catch (pErr: any) {
-      logger.warn(
-        `${LOG_PREFIX} Could not write pre-flight pipeline row: ${pErr.message}`
-      );
-    }
-
-    const result = await closeSalesOrderInQb(soTxnId, (msg: string) =>
-      logger.info(msg)
-    );
-    if (!result.success) {
-      logger.error(`${LOG_PREFIX} ⚠️ Failed to close SO: ${result.error}`);
-      errorMsg = errorMsg
-        ? `${errorMsg}; SO close failed: ${result.error}`
-        : `SO close failed: ${result.error}`;
-      try {
-        await writePipelineRow({
-          orderId: orderId,
-          step: "void_sales_order",
-          status: "failed",
-          qbTxnId: soTxnId,
-          qbRefNumber: soRef ?? null,
-          medusaRefNumber: soMedusaRef,
-          error: result.error ?? "SO close failed",
-        });
-      } catch (pErr: any) {
-        logger.warn(
-          `${LOG_PREFIX} Could not write pipeline row: ${pErr.message}`
-        );
-      }
-    } else {
-      soOpId = result.data?.operationId;
-      logger.info(`${LOG_PREFIX} ✅ SO close queued (op: ${soOpId})`);
-      try {
-        await writePipelineRow({
-          orderId: orderId,
-          step: "void_sales_order",
-          status: "submitted",
-          bridgeOpId: soOpId ?? null,
-          qbTxnId: soTxnId,
-          qbRefNumber: soRef ?? null,
-          medusaRefNumber: soMedusaRef,
-        });
-      } catch (pErr: any) {
-        logger.warn(
-          `${LOG_PREFIX} Could not write pipeline row: ${pErr.message}`
-        );
-      }
-    }
+    await writePipelineRow({
+      orderId: orderId,
+      step: "void_sales_order",
+      status: "pending",
+      qbTxnId: soTxnId,
+      qbRefNumber: soRef ?? null,
+      medusaRefNumber: soMedusaRef,
+    });
+    enqueuedSteps.push("void_sales_order");
+    logger.info(`${LOG_PREFIX} ✅ void_sales_order enqueued (txn=${soTxnId})`);
   }
 
   if (logId) {
     try {
-      if (errorMsg) {
-        await QbSyncLogger.fail(logId, errorMsg, {
-          message: `Failed to cancel ${docLabel} for Order #${order.display_id ?? orderId}`,
-        });
-      } else {
-        const finalRef = soRef ?? invoiceRef;
-        await QbSyncLogger.complete(logId, {
-          qbTxnId: soTxnId ?? invoiceTxnId,
-          qbRefNumber: finalRef,
-          qbOperationId: soOpId ?? invoiceOpId,
-          message: `${docLabel} closed/voided for Order #${order.display_id ?? orderId}`,
-        });
-      }
+      const finalRef = soRef ?? invoiceRef;
+      await QbSyncLogger.complete(logId, {
+        qbTxnId: soTxnId ?? invoiceTxnId,
+        qbRefNumber: finalRef,
+        message: `${docLabel} void enqueued (${enqueuedSteps.join(", ")}) for Order #${order.display_id ?? orderId} — consolidator will submit`,
+      });
     } catch (logErr: any) {
       logger.warn(
         `${LOG_PREFIX} ⚠️ Could not finalize sync log: ${logErr.message}`

@@ -15,6 +15,9 @@ import {
   closeSalesOrderInQb,
   reopenSalesOrderInQb,
 } from "../client/sales-orders";
+import { voidInvoiceInQb } from "../client/invoices";
+import { voidSalesReceiptInQb } from "../client/sales-receipts";
+import { voidCheckInQb } from "../client/checks";
 import { handleDraftOrderUpdated } from "../handlers/handle-draft-order-updated";
 import { handleFulfillmentCreated } from "../handlers/handle-fulfillment-created";
 import { handleOrderPlaced } from "../handlers/handle-order-placed";
@@ -281,6 +284,7 @@ export async function resubmitByStep(
         const modPayload = (cm.payload ?? {}) as {
           salesRepRef?: string;
           salesTaxCode?: string;
+          qbTaxItemListid?: string;
           taxExempt?: boolean;
           memo?: string;
         };
@@ -289,6 +293,7 @@ export async function resubmitByStep(
           editSequence: cm.qb_edit_sequence,
           salesRepRef: modPayload.salesRepRef,
           salesTaxCode: modPayload.salesTaxCode,
+          qbTaxItemListid: modPayload.qbTaxItemListid,
           taxExempt: modPayload.taxExempt,
           memo: modPayload.memo,
         });
@@ -410,6 +415,79 @@ export async function resubmitByStep(
           await failPipelineRow(
             row.id,
             vcResult.error ?? "voidCreditMemoInQb failed"
+          );
+        }
+        break;
+      }
+
+      case "void_invoice":
+      case "void_sales_receipt": {
+        if (!row.qb_txn_id) {
+          await failPipelineRow(
+            row.id,
+            `${row.step}: missing qb_txn_id — cannot void`
+          );
+          break;
+        }
+        const voidResult =
+          row.step === "void_sales_receipt"
+            ? await voidSalesReceiptInQb(row.qb_txn_id, (m: string) =>
+                logger.info(m)
+              )
+            : await voidInvoiceInQb(row.qb_txn_id, (m: string) =>
+                logger.info(m)
+              );
+        if (voidResult.success && voidResult.data?.operationId) {
+          const voidPool = getDbPool();
+          await voidPool.query(
+            `UPDATE qb_order_pipeline
+                  SET status = 'submitted',
+                      bridge_op_id = $2,
+                      submitted_at = NOW(),
+                      updated_at = NOW()
+                WHERE id = $1`,
+            [row.id, voidResult.data.operationId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ ${row.step} ${row.id} submitted op=${voidResult.data.operationId}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            voidResult.error ??
+              `${row.step === "void_sales_receipt" ? "voidSalesReceiptInQb" : "voidInvoiceInQb"} failed`
+          );
+        }
+        break;
+      }
+
+      case "void_check": {
+        if (!row.qb_txn_id) {
+          await failPipelineRow(
+            row.id,
+            "void_check: missing qb_txn_id — cannot void"
+          );
+          break;
+        }
+        const checkResult = await voidCheckInQb(row.qb_txn_id);
+        if (checkResult.success && checkResult.data?.operationId) {
+          const checkPool = getDbPool();
+          await checkPool.query(
+            `UPDATE qb_order_pipeline
+                  SET status = 'submitted',
+                      bridge_op_id = $2,
+                      submitted_at = NOW(),
+                      updated_at = NOW()
+                WHERE id = $1`,
+            [row.id, checkResult.data.operationId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ void_check ${row.id} submitted op=${checkResult.data.operationId}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            checkResult.error ?? "voidCheckInQb failed"
           );
         }
         break;

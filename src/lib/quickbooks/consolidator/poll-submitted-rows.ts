@@ -235,6 +235,66 @@ export async function pollSubmittedRows(
           }
         }
 
+        // Section 1.5.14: void_invoice / void_sales_receipt confirmed → mark
+        // pos_invoice.metadata.qb_sync_status='voided_in_qb' so UI badge flips.
+        if (
+          (row.step === "void_invoice" ||
+            row.step === "void_sales_receipt") &&
+          row.reference_id
+        ) {
+          try {
+            await pool.query(
+              `UPDATE pos_invoice
+                             SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
+                             WHERE id = $1`,
+              [
+                row.reference_id,
+                JSON.stringify({ qb_sync_status: "voided_in_qb" }),
+              ]
+            );
+            logger.info(
+              `${LOG_PREFIX} ✅ Synced pos_invoice ${row.reference_id} → qb_sync_status='voided_in_qb' (${row.step})`
+            );
+          } catch (posInvErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Could not update pos_invoice voided metadata: ${posInvErr.message}`
+            );
+          }
+          if (row.order_id) {
+            try {
+              await pool.query(
+                `UPDATE "order"
+                                 SET metadata = metadata || '{"qb_sync_status":"voided"}'::jsonb
+                                 WHERE id = $1`,
+                [row.order_id]
+              );
+            } catch (ordErr: any) {
+              logger.warn(
+                `${LOG_PREFIX} ⚠️ Could not stamp order qb_sync_status='voided' on ${row.order_id}: ${ordErr.message}`
+              );
+            }
+          }
+        }
+
+        // Section 1.5.14: void_check confirmed → mark customer_payment qb.status='voided'.
+        if (row.step === "void_check" && row.reference_id) {
+          try {
+            await pool.query(
+              `UPDATE customer_payment
+                             SET qb = COALESCE(qb, '{}'::jsonb) || '{"status":"voided"}'::jsonb
+                             WHERE id = $1`,
+              [row.reference_id]
+            );
+            logger.info(
+              `${LOG_PREFIX} ✅ Synced customer_payment ${row.reference_id} → qb.status='voided' (void_check)`
+            );
+          } catch (cpErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Could not update customer_payment voided metadata: ${cpErr.message}`
+            );
+          }
+        }
+
         if (txnId && row.step === "credit_memo" && row.reference_id) {
           try {
             await pool.query(
