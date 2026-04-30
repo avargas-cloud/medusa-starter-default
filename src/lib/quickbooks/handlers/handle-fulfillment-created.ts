@@ -396,6 +396,13 @@ export async function handleFulfillmentCreated(
     );
   }
 
+  // Read the persisted QB SalesTaxItem ListID from order metadata. When
+  // present, the bridge emits ItemSalesTaxRef.ListID; the legacy FullName
+  // (salesTaxCode) is kept as fallback during backfill.
+  const qbTaxItemListid = order.metadata?.qb_tax_item_listid as
+    | string
+    | undefined;
+
   const result = await processInvoiceInQb({
     orderId,
     orderDisplayId: order.display_id,
@@ -405,6 +412,7 @@ export async function handleFulfillmentCreated(
     paymentAmount: getFloat(fulfillmentAmount),
     prebuiltItems,
     salesTaxCode,
+    qbTaxItemListid,
     salesRep: parseSalesRepInitials(order.metadata?.sales_rep),
     memo,
     onSubmitted: async (operationId) => {

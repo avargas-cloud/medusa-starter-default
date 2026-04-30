@@ -4,6 +4,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { parseSalesRepInitials } from "../../../../../../lib/quickbooks/parse-sales-rep";
 import { getQbConfig } from "../../../../../../lib/quickbooks/qb-config";
 import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
+import { resolveTaxListid } from "../../../../../../lib/quickbooks/resolve-tax-listid";
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
 
@@ -121,6 +122,18 @@ export async function PATCH(
 
     update.tax = newTax;
     update.total = newTotal;
+
+    // Persist the QB SalesTaxItem ListID alongside the tax math so the QB
+    // pipeline reads it directly instead of re-deriving from tax.
+    const qbConfigForListid = await getQbConfig().catch(() => null);
+    const qbTaxItemListid = qbConfigForListid
+      ? resolveTaxListid(tax_mode as "florida" | "exempt", qbConfigForListid)
+      : null;
+    if (qbTaxItemListid) {
+      const prevMeta: Record<string, unknown> =
+        (memo as any).metadata ?? {};
+      update.metadata = { ...prevMeta, qb_tax_item_listid: qbTaxItemListid };
+    }
   }
 
   await (creditMemoService as any).updatePosCreditMemos({ id, ...update });

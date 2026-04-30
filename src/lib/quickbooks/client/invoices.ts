@@ -159,6 +159,9 @@ export async function updateInvoiceInQb(
       EditSequence: editSequence,
       ...(payload.salesRep ? { salesRepRef: payload.salesRep } : {}),
       ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
+      ...(payload.qbTaxItemListid
+        ? { qbTaxItemListid: payload.qbTaxItemListid }
+        : {}),
       ...(payload.taxExempt === true ? { taxExempt: true } : {}),
       ...(payload.items && payload.items.length > 0
         ? { items: payload.items }

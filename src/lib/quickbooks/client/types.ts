@@ -61,6 +61,8 @@ export interface QbCreateSalesOrderPayload {
   refNumber?: string;
   taxExempt?: boolean;
   salesTaxCode?: string;
+  /** QB SalesTaxItem ListID — when present, bridge emits ItemSalesTaxRef.ListID instead of FullName. */
+  qbTaxItemListid?: string;
   salesRep?: string;
 }
 
@@ -71,6 +73,8 @@ export interface QbUpdateSalesOrderPayload {
   items: QbOrderItem[];
   memo?: string;
   salesTaxCode?: string;
+  /** QB SalesTaxItem ListID — when present, bridge emits ItemSalesTaxRef.ListID instead of FullName. */
+  qbTaxItemListid?: string;
   taxExempt?: boolean;
   salesRep?: string;
 }
@@ -83,6 +87,8 @@ export interface QbConvertEstimatePayload {
   memo?: string;
   taxExempt?: boolean;
   salesTaxCode?: string;
+  /** QB SalesTaxItem ListID — when present, bridge emits ItemSalesTaxRef.ListID instead of FullName. */
+  qbTaxItemListid?: string;
 }
 
 export interface QbReceivePaymentPayload {
@@ -106,6 +112,8 @@ export interface QbCreateInvoicePayload {
   items?: QbOrderItem[];
   taxExempt?: boolean;
   salesTaxCode?: string;
+  /** QB SalesTaxItem ListID — when present, bridge emits ItemSalesTaxRef.ListID instead of FullName. */
+  qbTaxItemListid?: string;
   salesRep?: string;
 }
 
@@ -117,6 +125,8 @@ export interface QbCreateCreditMemoPayload {
   items?: QbOrderItem[];
   taxExempt?: boolean;
   salesTaxCode?: string;
+  /** QB SalesTaxItem ListID — when present, bridge emits ItemSalesTaxRef.ListID instead of FullName. */
+  qbTaxItemListid?: string;
   salesRepRef?: string;
 }
 
@@ -125,6 +135,8 @@ export interface QbUpdateCreditMemoPayload {
   editSequence: string;
   salesRepRef?: string;
   salesTaxCode?: string;
+  /** QB SalesTaxItem ListID — when present, bridge emits ItemSalesTaxRef.ListID instead of FullName. */
+  qbTaxItemListid?: string;
   taxExempt?: boolean;
   memo?: string;
 }
@@ -133,6 +145,8 @@ export interface QbUpdateInvoicePayload {
   txnId: string;
   salesRep?: string;
   salesTaxCode?: string;
+  /** QB SalesTaxItem ListID — when present, bridge emits ItemSalesTaxRef.ListID instead of FullName. */
+  qbTaxItemListid?: string;
   taxExempt?: boolean;
   items?: QbOrderItem[];
 }
@@ -141,6 +155,8 @@ export interface QbUpdateSalesReceiptPayload {
   txnId: string;
   salesRep?: string;
   salesTaxCode?: string;
+  /** QB SalesTaxItem ListID — when present, bridge emits ItemSalesTaxRef.ListID instead of FullName. */
+  qbTaxItemListid?: string;
   taxExempt?: boolean;
   paymentMethod?: string; // QB FullName (e.g., 'Visa', 'MasterCard', 'Cash')
   items?: QbOrderItem[];
@@ -155,6 +171,8 @@ export interface QbCreateEstimatePayload {
   refNumber?: string;
   taxExempt?: boolean;
   salesTaxCode?: string;
+  /** QB SalesTaxItem ListID — when present, bridge emits ItemSalesTaxRef.ListID instead of FullName. */
+  qbTaxItemListid?: string;
   salesRep?: string;
 }
 
@@ -164,6 +182,8 @@ export interface QbUpdateEstimatePayload {
   memo?: string;
   taxExempt?: boolean;
   salesTaxCode?: string;
+  /** QB SalesTaxItem ListID — when present, bridge emits ItemSalesTaxRef.ListID instead of FullName. */
+  qbTaxItemListid?: string;
   isActive?: boolean;
   salesRep?: string;
 }
@@ -175,6 +195,8 @@ export interface QbCreateSalesReceiptPayload {
   paymentMethod?: string;
   salesRep?: string;
   salesTaxCode?: string;
+  /** QB SalesTaxItem ListID — when present, bridge emits ItemSalesTaxRef.ListID instead of FullName. */
+  qbTaxItemListid?: string;
   date?: string;
   memo?: string;
 }

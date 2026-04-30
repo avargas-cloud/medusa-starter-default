@@ -12,6 +12,10 @@ export interface QbOrderConfig {
   shippingItemId: string;
   defaultSalesTaxCode: string;
   exemptSalesTaxCode: string;
+  /** ListID of the QB SalesTaxItem used when a doc is taxable (Florida 7%). */
+  taxItemListidTaxed?: string;
+  /** ListID of the QB SalesTaxItem used when a doc is tax-exempt. */
+  taxItemListidExempt?: string;
 }
 
 /**
@@ -39,6 +43,8 @@ export async function getQbConfig(): Promise<QbOrderConfig> {
         row.exempt_sales_tax_code ||
         process.env.QB_EXEMPT_SALES_TAX_CODE ||
         "Exempt",
+      taxItemListidTaxed: process.env.QB_TAX_ITEM_LISTID_TAXED || undefined,
+      taxItemListidExempt: process.env.QB_TAX_ITEM_LISTID_EXEMPT || undefined,
     };
   } catch {
     return {
@@ -47,6 +53,8 @@ export async function getQbConfig(): Promise<QbOrderConfig> {
         process.env.QB_DEFAULT_SALES_TAX_CODE || "Sale Tax 7%",
       exemptSalesTaxCode:
         process.env.QB_EXEMPT_SALES_TAX_CODE || "Exempt",
+      taxItemListidTaxed: process.env.QB_TAX_ITEM_LISTID_TAXED || undefined,
+      taxItemListidExempt: process.env.QB_TAX_ITEM_LISTID_EXEMPT || undefined,
     };
   } finally {
     await client.end();

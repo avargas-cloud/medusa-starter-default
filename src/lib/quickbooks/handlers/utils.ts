@@ -22,9 +22,15 @@ export const processingOrders = new Set<string>();
 export function getQbConfig(): {
   shippingItemId: string;
   defaultSalesTaxCode: string;
+  exemptSalesTaxCode: string;
+  taxItemListidTaxed?: string;
+  taxItemListidExempt?: string;
 } {
   return {
     shippingItemId: process.env.QB_SHIPPING_ITEM_ID || "800006A3-1395258131",
     defaultSalesTaxCode: process.env.QB_DEFAULT_SALES_TAX_CODE || "Sale Tax 7%",
+    exemptSalesTaxCode: process.env.QB_EXEMPT_SALES_TAX_CODE || "Exempt",
+    taxItemListidTaxed: process.env.QB_TAX_ITEM_LISTID_TAXED || undefined,
+    taxItemListidExempt: process.env.QB_TAX_ITEM_LISTID_EXEMPT || undefined,
   };
 }

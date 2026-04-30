@@ -30,6 +30,7 @@ const PosCreditMemo = model.define("pos_credit_memo", {
   void_reason: model.text().nullable(),
   notes: model.text().nullable(),
   created_by: model.text().nullable(), // admin user
+  metadata: model.json().nullable(), // Extensibility (qb_tax_item_listid, future QB refs, etc.)
 
   items: model.hasMany(() => PosCreditMemoItem, { mappedBy: "credit_memo" }),
 });

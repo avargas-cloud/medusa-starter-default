@@ -3,6 +3,9 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
 import { Pool } from "pg";
 
+import { getQbConfig } from "../../../../../lib/quickbooks/qb-config";
+import { resolveTaxListid } from "../../../../../lib/quickbooks/resolve-tax-listid";
+
 // Lazy DB pool singleton for idempotent tax line cleanup.
 // Uses the same DATABASE_URL as the rest of the backend.
 let _taxCleanupPool: Pool | null = null;
@@ -408,7 +411,14 @@ export async function POST(
 
   try {
     // Save tax_mode via the REST admin API — proven reliable for metadata persistence
-    await saveOrderMeta(req, id, { tax_mode: mode });
+    // Also persist the QB SalesTaxItem ListID — the QB pipeline reads this directly
+    // from the document instead of re-deriving from order.tax_total.
+    const qbConfig = await getQbConfig();
+    const qbTaxItemListid = resolveTaxListid(mode, qbConfig);
+    await saveOrderMeta(req, id, {
+      tax_mode: mode,
+      ...(qbTaxItemListid ? { qb_tax_item_listid: qbTaxItemListid } : {}),
+    });
     res.status(200).json({ success: true, mode });
   } catch (e: any) {
     console.error("[compute-tax POST]", e?.message);

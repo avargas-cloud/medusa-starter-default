@@ -219,6 +219,9 @@ export async function updateSalesOrderInQb(
         memo: payload.memo,
         ...(payload.taxExempt === true ? { taxExempt: true } : {}),
         ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
+        ...(payload.qbTaxItemListid
+          ? { qbTaxItemListid: payload.qbTaxItemListid }
+          : {}),
         ...(payload.salesRep ? { salesRepRef: payload.salesRep } : {}),
       }
     );

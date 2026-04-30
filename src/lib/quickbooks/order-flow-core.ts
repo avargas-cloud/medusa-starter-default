@@ -528,6 +528,7 @@ export async function processOrderInQb(
   options?: {
     prebuiltItems?: QbOrderItem[];
     salesTaxCode?: string;
+    qbTaxItemListid?: string;
     memo?: string;
     salesRep?: string;
     onSubmitted?: (operationId: string) => Promise<void>;
@@ -618,6 +619,7 @@ export async function processOrderInQb(
         items: soItems,
         taxExempt,
         salesTaxCode: options?.salesTaxCode,
+        qbTaxItemListid: options?.qbTaxItemListid,
         memo: options?.memo
           ? `${options.memo} — from Estimate ${order.metadata?.original_estimate_number || order.metadata?.qb_estimate_ref || estimateTxnId}`
           : `Order ${order.metadata?.document_number || order.display_id || order.id} — from Estimate ${order.metadata?.original_estimate_number || order.metadata?.qb_estimate_ref || estimateTxnId}`,
@@ -630,6 +632,7 @@ export async function processOrderInQb(
         items: soItems,
         taxExempt,
         salesTaxCode: options?.salesTaxCode,
+        qbTaxItemListid: options?.qbTaxItemListid,
         salesRep: options?.salesRep,
         memo:
           options?.memo ||
@@ -843,6 +846,7 @@ export async function processInvoiceInQb(invoice: {
   paymentAmount?: number;
   prebuiltItems?: QbOrderItem[]; // Used if no qbSoTxnId
   salesTaxCode?: string; // Used if no qbSoTxnId
+  qbTaxItemListid?: string; // QB SalesTaxItem ListID — preferred over salesTaxCode
   salesRep?: string;
   refNumber?: string; // Custom Invoice Number
   memo?: string;
@@ -885,6 +889,7 @@ export async function processInvoiceInQb(invoice: {
     LinkToTxnID: invoice.qbSoTxnId,
     items: invoice.prebuiltItems,
     salesTaxCode: invoice.salesTaxCode,
+    qbTaxItemListid: invoice.qbTaxItemListid,
     salesRep: invoice.salesRep,
     memo:
       invoice.memo || `Invoice ${invoice.orderDisplayId || invoice.orderId}`,
@@ -1019,6 +1024,7 @@ export async function processSalesReceiptInQb(receipt: {
   prebuiltItems?: QbOrderItem[];
   onSubmitted?: (operationId: string) => Promise<void>; // Persist bridge_op_id before polling
   salesTaxCode?: string;
+  qbTaxItemListid?: string;
   salesRep?: string;
   refNumber?: string;
   memo?: string;
@@ -1056,6 +1062,7 @@ export async function processSalesReceiptInQb(receipt: {
     date: getDateString(),
     items: receipt.prebuiltItems || [],
     salesTaxCode: receipt.salesTaxCode,
+    qbTaxItemListid: receipt.qbTaxItemListid,
     salesRep: receipt.salesRep,
     paymentMethod: mapPaymentMethodToQb(receipt.paymentMethod),
     memo:
@@ -1140,6 +1147,7 @@ export async function processEstimateInQb(draft: {
   date?: string;
   taxExempt?: boolean;
   salesTaxCode?: string;
+  qbTaxItemListid?: string;
   salesRep?: string;
   onSubmitted?: (operationId: string) => Promise<void>;
 }): Promise<{
@@ -1183,6 +1191,9 @@ export async function processEstimateInQb(draft: {
     memo: draft.memo || `E${draft.draftOrderId}`,
     ...(draft.taxExempt === true ? { taxExempt: true } : {}),
     ...(draft.salesTaxCode ? { salesTaxCode: draft.salesTaxCode } : {}),
+    ...(draft.qbTaxItemListid
+      ? { qbTaxItemListid: draft.qbTaxItemListid }
+      : {}),
     ...(draft.salesRep ? { salesRep: draft.salesRep } : {}),
   });
 
@@ -1262,6 +1273,7 @@ export async function processUpdateEstimateInQb(draft: {
   memo?: string;
   taxExempt?: boolean; // true if Medusa order has no tax (tax_total === 0)
   salesTaxCode?: string; // QB sales tax code name — overrides customer default
+  qbTaxItemListid?: string; // QB SalesTaxItem ListID — preferred over salesTaxCode
   salesRep?: string; // QB sales rep initials (e.g. "AVP", "AG")
 }): Promise<{
   enabled: boolean;
@@ -1303,6 +1315,9 @@ export async function processUpdateEstimateInQb(draft: {
     memo: draft.memo,
     ...(draft.taxExempt === true ? { taxExempt: true } : {}),
     ...(draft.salesTaxCode ? { salesTaxCode: draft.salesTaxCode } : {}),
+    ...(draft.qbTaxItemListid
+      ? { qbTaxItemListid: draft.qbTaxItemListid }
+      : {}),
     ...(draft.salesRep ? { salesRep: draft.salesRep } : {}),
   });
 

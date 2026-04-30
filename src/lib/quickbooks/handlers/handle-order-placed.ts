@@ -303,8 +303,14 @@ export async function handleOrderPlaced(
 
     const hasTax = order.tax_total && order.tax_total > 0;
     const salesTaxCode = hasTax ? qbConfig.defaultSalesTaxCode : undefined;
+    // Read the persisted QB SalesTaxItem ListID from order metadata. When
+    // present, the bridge emits ItemSalesTaxRef.ListID and ignores the
+    // legacy FullName-based salesTaxCode (kept as fallback for backfill gap).
+    const qbTaxItemListid = order.metadata?.qb_tax_item_listid as
+      | string
+      | undefined;
     logger.info(
-      `${LOG_PREFIX} tax_total=${order.tax_total} → salesTaxCode=${salesTaxCode ?? "Exempt (none passed)"}`
+      `${LOG_PREFIX} tax_total=${order.tax_total} → salesTaxCode=${salesTaxCode ?? "Exempt (none passed)"} qbTaxItemListid=${qbTaxItemListid ?? "(none, fallback to FullName)"}`
     );
 
     const orderWithCustomer = { ...order, customer, items: activeItems };
@@ -352,6 +358,7 @@ export async function handleOrderPlaced(
     const result = await processOrderInQb(orderWithCustomer, customerModule, {
       prebuiltItems: qbItems,
       salesTaxCode,
+      qbTaxItemListid,
       memo: soMemo,
       salesRep: parseSalesRepInitials(order.metadata?.sales_rep),
       onSubmitted: async (operationId) => {

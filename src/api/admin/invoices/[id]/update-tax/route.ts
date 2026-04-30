@@ -3,6 +3,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { updateInvoiceInQb } from "../../../../../lib/quickbooks/client/invoices";
 import { getQbConfig } from "../../../../../lib/quickbooks/qb-config";
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
+import { resolveTaxListid } from "../../../../../lib/quickbooks/resolve-tax-listid";
 import { QbSyncLogger } from "../../../../../lib/quickbooks/qb-sync-logger";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
@@ -102,6 +103,15 @@ export async function POST(
     newBalanceDue <= 0 ? "paid" : totalPaid > 0 ? "partial" : invoice.status;
 
   // ── 5. Update pos_invoice ──────────────────────────────────────────────────
+  // Persist the QB SalesTaxItem ListID alongside the tax math so the QB
+  // pipeline reads it directly instead of re-deriving from tax_total.
+  const qbConfigForListid = await getQbConfig().catch(() => null);
+  const qbTaxItemListid = qbConfigForListid
+    ? resolveTaxListid(taxMode, qbConfigForListid)
+    : null;
+  const mergedMetadata = qbTaxItemListid
+    ? { ...meta, qb_tax_item_listid: qbTaxItemListid }
+    : meta;
   await invoiceService.updatePosInvoices({
     id,
     total: newTotal,
@@ -110,6 +120,7 @@ export async function POST(
     balance_due: newBalanceDue,
     amount_paid: newAmountPaid,
     status: newStatus,
+    ...(qbTaxItemListid ? { metadata: mergedMetadata } : {}),
   });
 
   // ── 6. Adjust payment_application when total decreases ────────────────────

@@ -77,6 +77,9 @@ export async function updateCreditMemoInQb(
         EditSequence: editSequence,
         ...(payload.salesRepRef ? { salesRepRef: payload.salesRepRef } : {}),
         ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
+        ...(payload.qbTaxItemListid
+          ? { qbTaxItemListid: payload.qbTaxItemListid }
+          : {}),
         ...(payload.taxExempt === true ? { taxExempt: true } : {}),
         ...(payload.memo ? { memo: payload.memo } : {}),
       }

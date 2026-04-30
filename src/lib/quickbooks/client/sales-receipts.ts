@@ -40,6 +40,9 @@ export async function createSalesReceiptInQb(
       salesRepRef: payload.salesRep,
       memo: payload.memo,
       salesTaxCode: payload.salesTaxCode,
+      ...(payload.qbTaxItemListid
+        ? { qbTaxItemListid: payload.qbTaxItemListid }
+        : {}),
       items: payload.items.map((item) => ({
         productId: item.productId,
         productName: item.productName,
@@ -202,6 +205,9 @@ export async function updateSalesReceiptInQb(
         EditSequence: editSequence,
         ...(payload.salesRep ? { salesRepRef: payload.salesRep } : {}),
         ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
+        ...(payload.qbTaxItemListid
+          ? { qbTaxItemListid: payload.qbTaxItemListid }
+          : {}),
         ...(payload.taxExempt === true ? { taxExempt: true } : {}),
         ...(payload.paymentMethod
           ? { PaymentMethod: payload.paymentMethod }
