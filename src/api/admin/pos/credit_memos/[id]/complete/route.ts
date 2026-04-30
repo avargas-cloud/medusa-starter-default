@@ -388,9 +388,16 @@ export async function POST(
           const newRefunded = prevRefunded + cmTotal;
           const newRefShip =
             Number(invoice.refunded_shipping ?? 0) + cmShipping;
+          // Only flip invoice status when the cashier explicitly chose
+          // "refund" (cash/card back). For "store_credit" the invoice stays
+          // paid — the customer received a credit, not a refund. Per canonical
+          // CM flow: status flips to refunded only via explicit refund path.
           const invoiceTotal = Number(invoice.total ?? 0);
-          const newStatus =
-            newRefunded >= invoiceTotal - 1 ? "refunded" : "partially_refunded";
+          const newStatus = isRefund
+            ? newRefunded >= invoiceTotal - 1
+              ? "refunded"
+              : "partially_refunded"
+            : invoice.status;
 
           await invoiceService.updatePosInvoices({
             id: invoice.id,
