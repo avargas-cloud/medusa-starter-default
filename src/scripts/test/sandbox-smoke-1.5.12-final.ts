@@ -148,7 +148,9 @@ function testConsolidatorDispatchCoverage() {
   setSection("B — Consolidator pending-dispatch coverage");
   console.log(`\n=== ${currentSection} ===`);
 
-  const cons = read("jobs/qb-pipeline-consolidator.ts");
+  // Post-1.5.13: consolidator was split into focused modules.
+  // Pending-dispatch SQL now lives in consolidator/dispatch-pass.ts.
+  const cons = read("lib/quickbooks/consolidator/dispatch-pass.ts");
   const REQUIRED_STEPS = [
     "estimate",
     "sales_order",
@@ -177,7 +179,8 @@ function testConsolidatorCases() {
   setSection("C — resubmitByStep cases");
   console.log(`\n=== ${currentSection} ===`);
 
-  const cons = read("jobs/qb-pipeline-consolidator.ts");
+  // Post-1.5.13: switch cases moved to consolidator/resubmit-by-step.ts.
+  const cons = read("lib/quickbooks/consolidator/resubmit-by-step.ts");
   const REQUIRED_CASES = [
     "estimate",
     "sales_order",
@@ -306,9 +309,8 @@ async function testRetryResilience(client: Client) {
   console.log(`\n=== ${currentSection} ===`);
 
   // Test stale-row cleanup helper still works
-  const { markStaleRowsAsFailed, STANDARD_STALE_CONFIG } = await import(
-    "../../lib/quickbooks/stale-row-cleanup"
-  );
+  const staleMod = require("../../lib/quickbooks/stale-row-cleanup");
+  const { markStaleRowsAsFailed, STANDARD_STALE_CONFIG } = staleMod;
   const knex = (await import("knex")).default({
     client: "pg",
     connection: SANDBOX_DB,
@@ -356,9 +358,8 @@ async function testRetryResilience(client: Client) {
   await knex.destroy();
 
   // Test bridge fetch helper expired logic
-  const { pollBridgeStatus, BridgeFetchError } = await import(
-    "../../lib/quickbooks/bridge-fetch"
-  );
+  const bridgeMod = require("../../lib/quickbooks/bridge-fetch");
+  const { pollBridgeStatus, BridgeFetchError } = bridgeMod;
   // Spawn mock 404 server
   const http = await import("http");
   const server = http.createServer((_, res) => {

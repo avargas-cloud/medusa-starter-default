@@ -135,6 +135,17 @@ function testConsolidatorSubmitHandlers() {
       `resubmit-by-step.ts: invokes ${fn} (consolidator path)`
     );
   }
+
+  // Critical: dispatch-pass SQL must include new steps so consolidator picks
+  // them up — otherwise pending rows go nowhere and the migration silently
+  // breaks the void flow.
+  const dispatch = read("lib/quickbooks/consolidator/dispatch-pass.ts");
+  for (const step of REQUIRED_CASES) {
+    assert(
+      new RegExp(`step IN \\([^)]*'${step}'[^)]*\\)`).test(dispatch),
+      `dispatch-pass.ts: pending-dispatch SQL includes '${step}'`
+    );
+  }
 }
 
 // ─── C) Post-confirm metadata sync for void steps ───────────────────────────
