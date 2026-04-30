@@ -16,9 +16,12 @@ module.exports = defineConfig({
     databaseUrl: process.env.DATABASE_URL,
     databaseDriverOptions: {
       connection: {
-        ssl: {
-          rejectUnauthorized: false,
-        },
+        // Local sandbox Postgres (postgres:17-alpine) has SSL disabled.
+        // Production (Railway) requires SSL — `rejectUnauthorized: false`
+        // accepts Railway's self-signed cert.
+        ssl: /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL ?? "")
+          ? false
+          : { rejectUnauthorized: false },
       },
       pool: {
         // min: 0 → Knex won't keep idle connections alive.
