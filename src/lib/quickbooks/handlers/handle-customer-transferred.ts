@@ -1,4 +1,5 @@
-import { transferDocumentCustomer } from "../client/transfer";
+// 1.5.3: removed direct call to transferDocumentCustomer.
+// Handler now only enqueues 'pending' rows; consolidator submits to bridge.
 import { getSoTxnId, getLatestInvoiceTxnId } from "../qb-metadata-types";
 import { writePipelineRow } from "../qb-pipeline";
 
@@ -123,23 +124,8 @@ export async function handleCustomerTransferred(
     });
 
   for (const doc of docs) {
-    // Pre-flight: visible in dashboard immediately
-    await writePipelineRow({
-      orderId,
-      referenceId: doc.txnId,
-      referenceType: doc.refType,
-      step: "transfer_customer",
-      status: "pending",
-      payload: {
-        docType: doc.docType,
-        txnId: doc.txnId,
-        newCustomerId: newQbCustomerId,
-      },
-    }).catch((e: any) =>
-      logger.warn(
-        `${LOG_PREFIX} ⚠️ Could not write pending pipeline row: ${e.message}`
-      )
-    );
+    // 1.5.3: pre-flight removed — we enqueue once below after editSeq
+    // validation, with the full payload the consolidator needs.
 
     if (!doc.editSeq) {
       const errMsg = `Missing editSequence for ${doc.docType} ${doc.txnId} — cannot transfer without it`;
@@ -155,53 +141,31 @@ export async function handleCustomerTransferred(
       continue;
     }
 
-    // Submit to bridge
-    const result = await transferDocumentCustomer(
-      doc.docType,
-      doc.txnId,
-      doc.editSeq,
-      newQbCustomerId,
-      (msg) => logger.info(msg)
-    );
-
-    if (!result.success || !result.data?.operationId) {
-      const errMsg =
-        result.error ??
-        `Bridge did not return operationId for ${doc.docType} transfer`;
-      logger.error(
-        `${LOG_PREFIX} ❌ Bridge call failed for ${doc.docType} ${doc.txnId}: ${errMsg}`
-      );
-      await writePipelineRow({
-        orderId,
-        referenceId: doc.txnId,
-        referenceType: doc.refType,
-        step: "transfer_customer",
-        status: "failed",
-        error: errMsg,
-      }).catch(() => {});
-      continue;
-    }
-
+    // 1.5.3: enqueue 'pending' row with all data the consolidator needs.
+    // The pending-dispatch pass will pick this up next tick, call
+    // transferDocumentCustomer, and transition the row to 'submitted' with
+    // bridge_op_id. Phase B confirmation writes the new EditSequence back
+    // to order metadata (existing logic at lines ~897-952 of consolidator).
     await writePipelineRow({
       orderId,
       referenceId: doc.txnId,
       referenceType: doc.refType,
       step: "transfer_customer",
-      status: "submitted",
-      bridgeOpId: result.data.operationId,
+      status: "pending",
       payload: {
         docType: doc.docType,
         txnId: doc.txnId,
+        editSequence: doc.editSeq,
         newCustomerId: newQbCustomerId,
       },
     }).catch((e: any) =>
       logger.warn(
-        `${LOG_PREFIX} ⚠️ Could not write submitted pipeline row: ${e.message}`
+        `${LOG_PREFIX} ⚠️ Could not write pending pipeline row: ${e.message}`
       )
     );
 
     logger.info(
-      `${LOG_PREFIX} ✅ ${doc.docType} ${doc.txnId} submitted → bridge op ${result.data.operationId}`
+      `${LOG_PREFIX} 📥 ${doc.docType} ${doc.txnId} enqueued for transfer → consolidator will submit`
     );
   }
 }

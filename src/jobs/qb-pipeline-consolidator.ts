@@ -18,6 +18,7 @@ import {
   updateCreditMemoInQb,
 } from "../lib/quickbooks/client/credit-memos";
 import { cancelEstimateInQb } from "../lib/quickbooks/client/estimates";
+import { transferDocumentCustomer } from "../lib/quickbooks/client/transfer";
 import { voidInvoiceInQb } from "../lib/quickbooks/client/invoices";
 import {
   closeSalesOrderInQb,
@@ -500,6 +501,66 @@ async function resubmitByStep(
           await failPipelineRow(
             row.id,
             modResult.error ?? "updateCreditMemoInQb failed"
+          );
+        }
+        break;
+      }
+
+      case "transfer_customer": {
+        // Reassign QB customer on a sales-order or invoice. The handler
+        // (handle-customer-transferred) enqueues the row in 'pending' with
+        // a payload containing docType, txnId, editSequence, newCustomerId.
+        // Consolidator submits to bridge and transitions to 'submitted'.
+        if (!row.reference_id) break;
+        const transferPool = getDbPool();
+        const transferRow = await transferPool.query(
+          `SELECT payload FROM qb_order_pipeline WHERE id = $1`,
+          [row.id]
+        );
+        const tPayload = (transferRow.rows[0]?.payload ?? {}) as {
+          docType?: "sales-order" | "invoice";
+          txnId?: string;
+          editSequence?: string;
+          newCustomerId?: string;
+        };
+        if (
+          !tPayload.docType ||
+          !tPayload.txnId ||
+          !tPayload.editSequence ||
+          !tPayload.newCustomerId
+        ) {
+          await failPipelineRow(
+            row.id,
+            `transfer_customer: payload incomplete (docType=${tPayload.docType}, txnId=${!!tPayload.txnId}, editSequence=${!!tPayload.editSequence}, newCustomerId=${!!tPayload.newCustomerId})`
+          );
+          break;
+        }
+        const transferResult = await transferDocumentCustomer(
+          tPayload.docType,
+          tPayload.txnId,
+          tPayload.editSequence,
+          tPayload.newCustomerId,
+          (m: string) => logger.info(m)
+        );
+        if (transferResult.success && transferResult.data?.operationId) {
+          await transferPool.query(
+            `UPDATE qb_order_pipeline
+                  SET status = 'submitted',
+                      bridge_op_id = $2,
+                      qb_txn_id = $3,
+                      submitted_at = NOW(),
+                      updated_at = NOW()
+                WHERE id = $1`,
+            [row.id, transferResult.data.operationId, tPayload.txnId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ transfer_customer ${row.id} (${tPayload.docType}) submitted op=${transferResult.data.operationId} txn=${tPayload.txnId}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            transferResult.error ??
+              `transferDocumentCustomer failed for ${tPayload.docType} ${tPayload.txnId}`
           );
         }
         break;
@@ -1624,15 +1685,15 @@ export default async function qbPipelineConsolidator(
     );
   }
 
-  // ── Pending dispatch pass for estimate_cancel + credit_memo_mod ────────────
-  // These steps are enqueued directly in 'pending' state by handlers (1.5.4 /
-  // 1.5.8). They need an active push to resubmitByStep on each tick because
-  // they don't go through wake-dependents (no parent depends_on).
+  // ── Pending dispatch pass for estimate_cancel + credit_memo_mod + transfer_customer ──
+  // These steps are enqueued directly in 'pending' state by handlers (1.5.3 /
+  // 1.5.4 / 1.5.8). They need an active push to resubmitByStep on each tick
+  // because they don't go through wake-dependents (no parent depends_on).
   try {
     const { rows: pendingMutations } = await pool.query(`
       SELECT id, order_id, reference_id, reference_type, step, qb_txn_id
         FROM qb_order_pipeline
-       WHERE step IN ('estimate_cancel', 'credit_memo_mod')
+       WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer')
          AND status = 'pending'
        ORDER BY COALESCE(updated_at, created_at) ASC
        LIMIT 20
