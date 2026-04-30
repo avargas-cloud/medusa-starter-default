@@ -197,50 +197,85 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   // more than 1 hour old, we cannot create a Sales Receipt — QB Desktop requires
   // an Invoice linked to the existing SO/Estimate. Silently downgrade to keep
   // the POS flow frictionless; accounting reviews documents downstream.
-  if (body.is_sales_receipt) {
+  //
+  // pathBAudit collects inputs/outputs of the SR vs Invoice decision. Persisted
+  // to qb_invoice_path_audit for 24h to debug spurious downgrades. Populated
+  // regardless of whether body.is_sales_receipt was true at entry.
+  const bodyIsSalesReceiptAtEntry = !!body.is_sales_receipt;
+  const pathBAudit: {
+    has_existing_qb_doc: boolean | null;
+    has_existing_qb_doc_keys: Record<string, unknown> | null;
+    age_ms: number | null;
+    has_pending_so_in_pipeline: boolean | null;
+    path_b_triggered: boolean;
+    order_metadata_snapshot: any;
+  } = {
+    has_existing_qb_doc: null,
+    has_existing_qb_doc_keys: null,
+    age_ms: null,
+    has_pending_so_in_pipeline: null,
+    path_b_triggered: false,
+    order_metadata_snapshot: null,
+  };
+  try {
+    const orderModule = req.scope.resolve(Modules.ORDER);
+    const order = (await orderModule.retrieveOrder(body.order_id, {
+      select: ["id", "created_at", "metadata"],
+    })) as any;
+    const meta = order?.metadata ?? {};
+    pathBAudit.order_metadata_snapshot = meta;
+    const docKeys = {
+      qb_sales_order_txn_id: meta.qb_sales_order_txn_id ?? null,
+      qb_estimate_txn_id: meta.qb_estimate_txn_id ?? null,
+      "qb_sales_order.txn_id": meta.qb_sales_order?.txn_id ?? null,
+      "qb_estimate.txn_id": meta.qb_estimate?.txn_id ?? null,
+    };
+    pathBAudit.has_existing_qb_doc_keys = docKeys;
+    const hasExistingQbDoc = Boolean(
+      docKeys.qb_sales_order_txn_id ||
+        docKeys.qb_estimate_txn_id ||
+        docKeys["qb_sales_order.txn_id"] ||
+        docKeys["qb_estimate.txn_id"]
+    );
+    pathBAudit.has_existing_qb_doc = hasExistingQbDoc;
+    const createdAt = order?.created_at
+      ? new Date(order.created_at).getTime()
+      : Date.now();
+    const ageMs = Date.now() - createdAt;
+    pathBAudit.age_ms = ageMs;
+    const ONE_HOUR_MS = 60 * 60 * 1000;
+    // Also check the pipeline table — SO may have already been submitted to the QB bridge.
+    // Only downgrade if the SO crossed the submission boundary (status=submitted/confirmed).
+    // A 'pending' or 'waiting' SO row hasn't reached QB yet and will be safely skipped
+    // by skipSalesOrderPipelineRow() below — do NOT let it force an Invoice path.
+    let hasPendingSoInPipeline = false;
     try {
-      const orderModule = req.scope.resolve(Modules.ORDER);
-      const order = (await orderModule.retrieveOrder(body.order_id, {
-        select: ["id", "created_at", "metadata"],
-      })) as any;
-      const meta = order?.metadata ?? {};
-      const hasExistingQbDoc = Boolean(
-        meta.qb_sales_order_txn_id ||
-        meta.qb_estimate_txn_id ||
-        meta.qb_sales_order?.txn_id ||
-        meta.qb_estimate?.txn_id
+      const pbPool = req.scope.resolve("__pg_connection__") as any;
+      const pbCheck = await pbPool.raw(
+        `SELECT id FROM qb_order_pipeline WHERE order_id = ? AND step = 'sales_order' AND status IN ('submitted','confirmed') LIMIT 1`,
+        [body.order_id]
       );
-      const createdAt = order?.created_at
-        ? new Date(order.created_at).getTime()
-        : Date.now();
-      const ageMs = Date.now() - createdAt;
-      const ONE_HOUR_MS = 60 * 60 * 1000;
-      // Also check the pipeline table — SO may have already been submitted to the QB bridge.
-      // Only downgrade if the SO crossed the submission boundary (status=submitted/confirmed).
-      // A 'pending' or 'waiting' SO row hasn't reached QB yet and will be safely skipped
-      // by skipSalesOrderPipelineRow() below — do NOT let it force an Invoice path.
-      let hasPendingSoInPipeline = false;
-      try {
-        const pbPool = req.scope.resolve("__pg_connection__") as any;
-        const pbCheck = await pbPool.raw(
-          `SELECT id FROM qb_order_pipeline WHERE order_id = ? AND step = 'sales_order' AND status IN ('submitted','confirmed') LIMIT 1`,
-          [body.order_id]
-        );
-        hasPendingSoInPipeline = (pbCheck.rows?.length ?? 0) > 0;
-      } catch { /* best-effort */ }
-      if (hasExistingQbDoc || ageMs > ONE_HOUR_MS || hasPendingSoInPipeline) {
-        console.warn(
-          `[invoice] Path B detected for order ${body.order_id} — ` +
-            `downgrading is_sales_receipt=true → false. ` +
-            `hasExistingQbDoc=${hasExistingQbDoc}, ageMs=${ageMs}`
-        );
-        body.is_sales_receipt = false;
-      }
-    } catch (pbErr: any) {
-      console.warn(
-        `[invoice] Path B detection failed for order ${body.order_id}: ${pbErr.message}`
-      );
+      hasPendingSoInPipeline = (pbCheck.rows?.length ?? 0) > 0;
+    } catch {
+      /* best-effort */
     }
+    pathBAudit.has_pending_so_in_pipeline = hasPendingSoInPipeline;
+    if (
+      body.is_sales_receipt &&
+      (hasExistingQbDoc || ageMs > ONE_HOUR_MS || hasPendingSoInPipeline)
+    ) {
+      pathBAudit.path_b_triggered = true;
+      console.warn(
+        `[invoice] Path B detected for order ${body.order_id} — ` +
+          `downgrading is_sales_receipt=true → false. ` +
+          `hasExistingQbDoc=${hasExistingQbDoc}, ageMs=${ageMs}, hasPendingSO=${hasPendingSoInPipeline}`
+      );
+      body.is_sales_receipt = false;
+    }
+  } catch (pbErr: any) {
+    console.warn(
+      `[invoice] Path B detection failed for order ${body.order_id}: ${pbErr.message}`
+    );
   }
 
   // Fetch strictly continuous sequential document number from PostgreSQL
@@ -381,6 +416,56 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         unit_price: it.unit_price,
         total: it.total,
       }))
+    );
+  }
+
+  // ── 24h Path B audit log ─────────────────────────────────────────────────
+  // Persist inputs and decision for the SR vs Invoice path so we can debug
+  // spurious downgrades. Each insert also deletes rows older than 24h —
+  // self-cleaning, no cron required. Best-effort: never fails invoice creation.
+  // TODO: remove this block + the qb_invoice_path_audit table once the bug is
+  // confirmed fixed (see migration 1777580000000-CreateInvoicePathAudit).
+  try {
+    const auditPool = req.scope.resolve("__pg_connection__") as any;
+    await auditPool.raw(
+      `DELETE FROM qb_invoice_path_audit WHERE created_at < NOW() - INTERVAL '24 hours'`
+    );
+    await auditPool.raw(
+      `INSERT INTO qb_invoice_path_audit
+        (order_id, invoice_id, invoice_number,
+         body_is_sales_receipt, final_is_sales_receipt, path_b_triggered,
+         has_existing_qb_doc, has_existing_qb_doc_keys,
+         age_ms, has_pending_so_in_pipeline,
+         request_body, order_metadata_snapshot)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?::jsonb, ?::jsonb)`,
+      [
+        body.order_id,
+        (invoice as any).id,
+        invoice_number,
+        bodyIsSalesReceiptAtEntry,
+        !!body.is_sales_receipt,
+        pathBAudit.path_b_triggered,
+        pathBAudit.has_existing_qb_doc,
+        JSON.stringify(pathBAudit.has_existing_qb_doc_keys ?? null),
+        pathBAudit.age_ms,
+        pathBAudit.has_pending_so_in_pipeline,
+        JSON.stringify({
+          order_id: body.order_id,
+          customer_id: body.customer_id,
+          total: body.total,
+          amount_paid: body.amount_paid,
+          payment_method: body.payment_method,
+          card_brand: body.card_brand,
+          terminal_payment_id: body.terminal_payment_id ?? null,
+          is_sales_receipt: bodyIsSalesReceiptAtEntry,
+          item_count: Array.isArray(body.items) ? body.items.length : 0,
+        }),
+        JSON.stringify(pathBAudit.order_metadata_snapshot ?? null),
+      ]
+    );
+  } catch (auditErr: any) {
+    console.warn(
+      `[invoice] Path B audit log failed for order ${body.order_id}: ${auditErr.message}`
     );
   }
 
