@@ -424,7 +424,8 @@ export async function POST(
     );
     (async () => {
       try {
-        const orderModule = req.scope.resolve(Modules.ORDER);
+        // 1.5.7: orderModule no longer needed in this block — retry cases
+        // now enqueue pipeline rows instead of calling handlers directly.
         const customerModule = req.scope.resolve(Modules.CUSTOMER);
 
         switch (row.step) {
@@ -466,19 +467,23 @@ export async function POST(
             break;
           }
           case "invoice": {
+            // 1.5.7: pipeline-only retry — re-enqueue 'pending' for consolidator.
             const {
-              handleFulfillmentCreated,
-            } = require("../../../../lib/quickbooks/handlers/handle-fulfillment-created");
-            await handleFulfillmentCreated(
-              {
-                order_id: row.order_id,
-                fulfillment_id: row.reference_id,
+              writePipelineRow: enqueueInvRetry,
+            } = require("../../../../lib/quickbooks/qb-pipeline");
+            await enqueueInvRetry({
+              orderId: row.order_id,
+              referenceId: row.reference_id,
+              referenceType: "invoice",
+              step: "invoice",
+              status: "pending",
+              payload: {
                 invoice_id: row.reference_id,
+                fulfillment_id: row.reference_id,
               },
-              orderModule,
-              customerModule,
-              req.scope,
-              logger
+            });
+            logger.info(
+              `[qb-pipeline-retry] 📥 Re-enqueued invoice for ${row.order_id}`
             );
             break;
           }

@@ -347,16 +347,30 @@ async function resubmitByStep(
         break;
       }
 
-      case "invoice":
+      case "invoice": {
+        // 1.5.7: read full payload from row if present (fulfillment_id, items,
+        // invoice_id, payment_method etc) and merge into event data. Falls
+        // back to just {order_id} which handleFulfillmentCreated supports.
         if (!row.order_id) break;
+        const invPool = getDbPool();
+        const invRow = await invPool.query(
+          `SELECT payload FROM qb_order_pipeline WHERE id = $1`,
+          [row.id]
+        );
+        const invPayload = invRow.rows[0]?.payload as Record<string, unknown> | null;
+        const fulfillData =
+          invPayload && Object.keys(invPayload).length > 0
+            ? { order_id: row.order_id, ...invPayload }
+            : { order_id: row.order_id };
         await handleFulfillmentCreated(
-          { order_id: row.order_id },
+          fulfillData as any,
           orderModule,
           customerModule,
           container,
           logger
         );
         break;
+      }
 
       case "customer":
         if (!row.reference_id) break;
@@ -1754,7 +1768,7 @@ export default async function qbPipelineConsolidator(
     const { rows: pendingMutations } = await pool.query(`
       SELECT id, order_id, reference_id, reference_type, step, qb_txn_id
         FROM qb_order_pipeline
-       WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt')
+       WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice')
          AND status = 'pending'
        ORDER BY COALESCE(updated_at, created_at) ASC
        LIMIT 20

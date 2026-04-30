@@ -5,10 +5,10 @@
  */
 
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
+import { Modules } from "@medusajs/utils";
 
 // Import the background syncing handlers directly to bypass Medusa outbox dropping events
-import { handleFulfillmentCreated } from "../../../lib/quickbooks/handlers/handle-fulfillment-created";
+// 1.5.7: handleFulfillmentCreated import removed — invoices route enqueues now.
 import { handlePosPaymentApplied } from "../../../lib/quickbooks/handlers/handle-pos-payment-applied";
 import { handlePosPaymentCreated } from "../../../lib/quickbooks/handlers/handle-pos-payment-created";
 // 1.5.6: handleSalesReceiptCreated import removed — invoices route enqueues now.
@@ -874,9 +874,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     setTimeout(async () => {
       try {
         const container = req.scope;
-        const orderModule = container.resolve(Modules.ORDER);
-        const customerModule = container.resolve(Modules.CUSTOMER);
-        const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
+        // 1.5.7: orderModule + customerModule + logger no longer needed at
+        // this scope — handler calls replaced with pipeline enqueue. The
+        // container is still used downstream for events / payment dispatch.
 
         // 1. Process Order Document (Invoice or Sales Receipt)
         if (body.is_sales_receipt) {
@@ -904,20 +904,24 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           });
         } else {
           console.log(
-            `DIRECT EXEC: Triggering pos.invoice.created directly for order ${body.order_id} to bypass BullMQ drops.`
+            `1.5.7: Enqueuing invoice pipeline row for order ${body.order_id}.`
           );
-          await handleFulfillmentCreated(
-            {
-              order_id: body.order_id,
+          // 1.5.7: pipeline-only — consolidator processes via pending-dispatch.
+          const {
+            writePipelineRow: enqueueInvR,
+          } = require("../../../lib/quickbooks/qb-pipeline");
+          await enqueueInvR({
+            orderId: body.order_id,
+            referenceId: (invoice as any).id,
+            referenceType: "invoice",
+            step: "invoice",
+            status: "pending",
+            payload: {
               invoice_id: (invoice as any).id,
               items: body.items,
               fulfillment_id: body.fulfillment_id,
             },
-            orderModule,
-            customerModule,
-            container,
-            logger
-          );
+          });
         }
 
         // Wait 250ms to ensure sequential QB database writing

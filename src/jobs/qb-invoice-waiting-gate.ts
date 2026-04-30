@@ -18,9 +18,9 @@
  * ~60-120 seconds from sale to QB SalesReceipt/Invoice push.
  */
 import { MedusaContainer } from "@medusajs/framework/types";
-import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
+import { ContainerRegistrationKeys } from "@medusajs/utils";
 
-import { handleFulfillmentCreated } from "../lib/quickbooks/handlers/handle-fulfillment-created";
+// 1.5.7: handleFulfillmentCreated import removed — waiting-gate enqueues now.
 import { handlePosPaymentApplied } from "../lib/quickbooks/handlers/handle-pos-payment-applied";
 import { handlePosPaymentCreated } from "../lib/quickbooks/handlers/handle-pos-payment-created";
 // 1.5.6: handleSalesReceiptCreated import removed — waiting-gate enqueues now.
@@ -46,8 +46,8 @@ type DispatchPayload = {
 export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
   const invoiceService = container.resolve(INVOICE_MODULE) as any;
-  const orderModule = container.resolve(Modules.ORDER);
-  const customerModule = container.resolve(Modules.CUSTOMER);
+  // 1.5.7: orderModule + customerModule no longer needed — handler call
+  // replaced with pipeline enqueue.
   const knex = (container as any).resolve("__pg_connection__");
 
   // Find waiting invoices via raw SQL (metadata jsonb filter isn't expressible
@@ -233,17 +233,24 @@ export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
             `[qb-invoice-waiting-gate] 📥 Enqueued sales_receipt for ${inv.order_id} / ${inv.id}`
           );
         } else {
-          await handleFulfillmentCreated(
-            {
-              order_id: inv.order_id,
+          // 1.5.7: pipeline-only — enqueue 'invoice' instead of direct call.
+          const {
+            writePipelineRow: enqueueInvWg,
+          } = require("../lib/quickbooks/qb-pipeline");
+          await enqueueInvWg({
+            orderId: inv.order_id,
+            referenceId: inv.id,
+            referenceType: "invoice",
+            step: "invoice",
+            status: "pending",
+            payload: {
               invoice_id: inv.id,
               items: bodyItems,
               fulfillment_id: payload.fulfillment_id ?? undefined,
-            } as any,
-            orderModule,
-            customerModule,
-            container,
-            logger
+            },
+          });
+          logger.info(
+            `[qb-invoice-waiting-gate] 📥 Enqueued invoice for ${inv.order_id} / ${inv.id}`
           );
         }
 

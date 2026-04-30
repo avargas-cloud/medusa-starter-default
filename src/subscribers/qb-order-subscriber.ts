@@ -19,7 +19,7 @@ import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
 // ─── Event Handlers ──────────────────────────────────────────────────────────
 
 import { handleCustomerTransferred } from "../lib/quickbooks/handlers/handle-customer-transferred";
-import { handleFulfillmentCreated } from "../lib/quickbooks/handlers/handle-fulfillment-created";
+// 1.5.7: handleFulfillmentCreated import removed — subscriber enqueues now.
 import { handleInvoiceVoided } from "../lib/quickbooks/handlers/handle-invoice-voided";
 import { handleOrderCanceled } from "../lib/quickbooks/handlers/handle-order-canceled";
 // 1.5.5: handleOrderPlaced import removed — subscriber enqueues now.
@@ -108,24 +108,45 @@ export default async function qbOrderSubscriber({
             break;
           }
         }
-        await handleFulfillmentCreated(
-          data,
-          orderModule,
-          customerModule,
-          container,
-          logger
+        // 1.5.7: pipeline-only — enqueue 'invoice' for consolidator pickup.
+        const {
+          writePipelineRow: enqueueInv1,
+        } = require("../lib/quickbooks/qb-pipeline");
+        const invPayload1 = { ...(data as any) };
+        delete invPayload1.order_id;
+        await enqueueInv1({
+          orderId: (data as any).order_id ?? (data as any).id,
+          referenceId: (data as any).fulfillment_id ?? (data as any).invoice_id ?? null,
+          referenceType: (data as any).fulfillment_id ? "fulfillment" : "invoice",
+          step: "invoice",
+          status: "pending",
+          payload: invPayload1,
+        });
+        logger.info(
+          `[QB-ORDER] 📥 Enqueued invoice for ${(data as any).order_id ?? (data as any).id}`
         );
         break;
       }
-      case "pos.invoice.created":
-        await handleFulfillmentCreated(
-          data,
-          orderModule,
-          customerModule,
-          container,
-          logger
+      case "pos.invoice.created": {
+        // 1.5.7: pipeline-only — enqueue 'invoice' for consolidator pickup.
+        const {
+          writePipelineRow: enqueueInv2,
+        } = require("../lib/quickbooks/qb-pipeline");
+        const invPayload2 = { ...(data as any) };
+        delete invPayload2.order_id;
+        await enqueueInv2({
+          orderId: (data as any).order_id ?? (data as any).id,
+          referenceId: (data as any).invoice_id ?? null,
+          referenceType: "invoice",
+          step: "invoice",
+          status: "pending",
+          payload: invPayload2,
+        });
+        logger.info(
+          `[QB-ORDER] 📥 Enqueued POS invoice for ${(data as any).order_id ?? (data as any).id}`
         );
         break;
+      }
       case "order.canceled":
         await handleOrderCanceled(data, orderModule, logger);
         break;

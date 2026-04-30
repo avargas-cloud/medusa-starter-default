@@ -1,7 +1,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 
-import { handleFulfillmentCreated } from "../../../../lib/quickbooks/handlers/handle-fulfillment-created";
+// 1.5.7: handleFulfillmentCreated import removed — pos/sync enqueues now.
 // 1.5.5: handleOrderPlaced import removed — pos/sync enqueues now.
 import { handlePosPaymentApplied } from "../../../../lib/quickbooks/handlers/handle-pos-payment-applied";
 import { handlePosPaymentCreated } from "../../../../lib/quickbooks/handlers/handle-pos-payment-created";
@@ -38,7 +38,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   try {
     const query = req.scope.resolve(ContainerRegistrationKeys.QUERY);
     const orderModule = req.scope.resolve(Modules.ORDER);
-    const customerModule = req.scope.resolve(Modules.CUSTOMER);
+    // 1.5.7: customerModule no longer needed at this scope — handler calls
+    // that used it have been replaced with pipeline enqueue.
 
     switch (type) {
       case "estimate": {
@@ -859,19 +860,23 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
                 if (soTxnId) {
                   logger.info(
-                    `${LOG_PREFIX} Intelligent Sync -> Has Sales Order -> Dispatching InvoiceAdd`
+                    `${LOG_PREFIX} Intelligent Sync -> Has Sales Order -> enqueuing invoice`
                   );
-                  await handleFulfillmentCreated(
-                    {
-                      order_id: invoice.order_id,
-                      fulfillment_id: invoice.fulfillment_id,
+                  // 1.5.7: pipeline-only — enqueue.
+                  const {
+                    writePipelineRow: enqueueInvPos,
+                  } = require("../../../../lib/quickbooks/qb-pipeline");
+                  await enqueueInvPos({
+                    orderId: invoice.order_id,
+                    referenceId: id,
+                    referenceType: "invoice",
+                    step: "invoice",
+                    status: "pending",
+                    payload: {
                       invoice_id: id,
+                      fulfillment_id: invoice.fulfillment_id,
                     },
-                    orderModule,
-                    customerModule,
-                    req.scope,
-                    logger
-                  );
+                  });
                 } else {
                   logger.info(
                     `${LOG_PREFIX} Intelligent Sync -> No Sales Order -> enqueuing sales_receipt`
