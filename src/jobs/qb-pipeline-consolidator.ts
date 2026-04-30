@@ -13,7 +13,11 @@ function compareTxnLineIds(a: string, b: string): number {
   if (!isNaN(hexA) && !isNaN(hexB)) return hexA - hexB;
   return String(a).localeCompare(String(b));
 }
-import { voidCreditMemoInQb } from "../lib/quickbooks/client/credit-memos";
+import {
+  voidCreditMemoInQb,
+  updateCreditMemoInQb,
+} from "../lib/quickbooks/client/credit-memos";
+import { cancelEstimateInQb } from "../lib/quickbooks/client/estimates";
 import { voidInvoiceInQb } from "../lib/quickbooks/client/invoices";
 import {
   closeSalesOrderInQb,
@@ -386,6 +390,118 @@ async function resubmitByStep(
           },
           container,
         } as any);
+        break;
+      }
+
+      case "estimate_cancel": {
+        // Cancel an existing QB Estimate. The estimate must already have been
+        // synced (qb_estimate.txn_id present in order metadata).
+        // Submits a TxnDel to bridge → row goes to 'submitted' with bridge_op_id.
+        // Phase B (bridge polling) will confirm later.
+        if (!row.order_id) break;
+        const orderForCancel = (await orderModule.retrieveOrder(row.order_id, {
+          select: ["id", "metadata"],
+        } as any)) as any;
+        const estTxnId =
+          orderForCancel?.metadata?.qb_estimate?.txn_id ?? null;
+        if (!estTxnId) {
+          await failPipelineRow(
+            row.id,
+            "estimate_cancel: no qb_estimate.txn_id in order metadata — nothing to cancel"
+          );
+          break;
+        }
+        const cancelResult = await cancelEstimateInQb(
+          estTxnId,
+          (m: string) => logger.info(m)
+        );
+        if (cancelResult.success && cancelResult.data?.operationId) {
+          const cancelPool = getDbPool();
+          await cancelPool.query(
+            `UPDATE qb_order_pipeline
+                  SET status = 'submitted',
+                      bridge_op_id = $2,
+                      qb_txn_id = $3,
+                      submitted_at = NOW(),
+                      updated_at = NOW()
+                WHERE id = $1`,
+            [row.id, cancelResult.data.operationId, estTxnId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ estimate_cancel ${row.id} submitted op=${cancelResult.data.operationId} txn=${estTxnId}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            cancelResult.error ?? "cancelEstimateInQb failed"
+          );
+        }
+        break;
+      }
+
+      case "credit_memo_mod": {
+        // Modify an existing QB Credit Memo. CM must already have been synced
+        // (pos_credit_memo.qb_txn_id + qb_edit_sequence both present).
+        // The pipeline row's payload contains the modification fields
+        // (memo, salesRepRef, salesTaxCode, taxExempt) — handler writes them on enqueue.
+        if (!row.reference_id) break;
+        const cmModPool = getDbPool();
+        const cmRow = await cmModPool.query(
+          `SELECT cm.qb_txn_id, cm.qb_edit_sequence, p.payload
+             FROM qb_order_pipeline p
+             JOIN pos_credit_memo cm ON cm.id = p.reference_id
+            WHERE p.id = $1`,
+          [row.id]
+        );
+        const cm = cmRow.rows[0];
+        if (!cm?.qb_txn_id) {
+          await failPipelineRow(
+            row.id,
+            "credit_memo_mod: pos_credit_memo has no qb_txn_id — was it synced?"
+          );
+          break;
+        }
+        if (!cm?.qb_edit_sequence) {
+          await failPipelineRow(
+            row.id,
+            "credit_memo_mod: pos_credit_memo has no qb_edit_sequence — query QB first"
+          );
+          break;
+        }
+        const modPayload = (cm.payload ?? {}) as {
+          salesRepRef?: string;
+          salesTaxCode?: string;
+          taxExempt?: boolean;
+          memo?: string;
+        };
+        const modResult = await updateCreditMemoInQb({
+          txnId: cm.qb_txn_id,
+          editSequence: cm.qb_edit_sequence,
+          salesRepRef: modPayload.salesRepRef,
+          salesTaxCode: modPayload.salesTaxCode,
+          taxExempt: modPayload.taxExempt,
+          memo: modPayload.memo,
+        });
+        if (modResult.success && modResult.data?.operationId) {
+          await cmModPool.query(
+            `UPDATE qb_order_pipeline
+                  SET status = 'submitted',
+                      bridge_op_id = $2,
+                      qb_txn_id = $3,
+                      submitted_at = NOW(),
+                      updated_at = NOW()
+                WHERE id = $1`,
+            [row.id, modResult.data.operationId, cm.qb_txn_id]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ credit_memo_mod ${row.id} submitted op=${modResult.data.operationId} txn=${cm.qb_txn_id}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            modResult.error ?? "updateCreditMemoInQb failed"
+          );
+        }
         break;
       }
 
@@ -1505,6 +1621,33 @@ export default async function qbPipelineConsolidator(
   } catch (dePassErr: any) {
     logger.warn(
       `${LOG_PREFIX} ⚠️ customer_data_ext pass error: ${dePassErr.message}`
+    );
+  }
+
+  // ── Pending dispatch pass for estimate_cancel + credit_memo_mod ────────────
+  // These steps are enqueued directly in 'pending' state by handlers (1.5.4 /
+  // 1.5.8). They need an active push to resubmitByStep on each tick because
+  // they don't go through wake-dependents (no parent depends_on).
+  try {
+    const { rows: pendingMutations } = await pool.query(`
+      SELECT id, order_id, reference_id, reference_type, step, qb_txn_id
+        FROM qb_order_pipeline
+       WHERE step IN ('estimate_cancel', 'credit_memo_mod')
+         AND status = 'pending'
+       ORDER BY COALESCE(updated_at, created_at) ASC
+       LIMIT 20
+    `);
+    if (pendingMutations.length > 0) {
+      logger.info(
+        `${LOG_PREFIX} Processing ${pendingMutations.length} pending estimate_cancel/credit_memo_mod row(s)...`
+      );
+      for (const r of pendingMutations) {
+        await resubmitByStep(r, container, logger);
+      }
+    }
+  } catch (mutPassErr: any) {
+    logger.warn(
+      `${LOG_PREFIX} ⚠️ pending mutations pass error: ${mutPassErr.message}`
     );
   }
 
