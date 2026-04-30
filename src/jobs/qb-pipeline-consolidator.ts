@@ -322,16 +322,30 @@ async function resubmitByStep(
         }
         break;
 
-      case "sales_receipt":
+      case "sales_receipt": {
+        // 1.5.6: read full payload from row if present (qb-invoice-waiting-gate
+        // and POS flow store invoice_id, items, payment_method etc). Falls
+        // back to just {id} which handleSalesReceiptCreated supports.
         if (!row.order_id) break;
+        const srPool = getDbPool();
+        const srRow = await srPool.query(
+          `SELECT payload FROM qb_order_pipeline WHERE id = $1`,
+          [row.id]
+        );
+        const srPayload = srRow.rows[0]?.payload as Record<string, unknown> | null;
+        const eventData =
+          srPayload && Object.keys(srPayload).length > 0
+            ? { id: row.order_id, ...srPayload }
+            : { id: row.order_id };
         await handleSalesReceiptCreated(
-          { id: row.order_id },
+          eventData as any,
           orderModule,
           customerModule,
           container,
           logger
         );
         break;
+      }
 
       case "invoice":
         if (!row.order_id) break;
@@ -1740,7 +1754,7 @@ export default async function qbPipelineConsolidator(
     const { rows: pendingMutations } = await pool.query(`
       SELECT id, order_id, reference_id, reference_type, step, qb_txn_id
         FROM qb_order_pipeline
-       WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen')
+       WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt')
          AND status = 'pending'
        ORDER BY COALESCE(updated_at, created_at) ASC
        LIMIT 20

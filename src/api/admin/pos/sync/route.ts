@@ -5,7 +5,7 @@ import { handleFulfillmentCreated } from "../../../../lib/quickbooks/handlers/ha
 // 1.5.5: handleOrderPlaced import removed — pos/sync enqueues now.
 import { handlePosPaymentApplied } from "../../../../lib/quickbooks/handlers/handle-pos-payment-applied";
 import { handlePosPaymentCreated } from "../../../../lib/quickbooks/handlers/handle-pos-payment-created";
-import { handleSalesReceiptCreated } from "../../../../lib/quickbooks/handlers/handle-sales-receipt-created";
+// 1.5.6: handleSalesReceiptCreated import removed — pos/sync enqueues now.
 import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
 import {
   getEstimateTxnId,
@@ -874,19 +874,23 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   );
                 } else {
                   logger.info(
-                    `${LOG_PREFIX} Intelligent Sync -> No Sales Order -> Dispatching SalesReceiptAdd`
+                    `${LOG_PREFIX} Intelligent Sync -> No Sales Order -> enqueuing sales_receipt`
                   );
-                  await handleSalesReceiptCreated(
-                    {
-                      order_id: invoice.order_id,
-                      fulfillment_id: invoice.fulfillment_id,
+                  // 1.5.6: pipeline-only — enqueue.
+                  const {
+                    writePipelineRow: enqueueSrPos,
+                  } = require("../../../../lib/quickbooks/qb-pipeline");
+                  await enqueueSrPos({
+                    orderId: invoice.order_id,
+                    referenceId: id,
+                    referenceType: "invoice",
+                    step: "sales_receipt",
+                    status: "pending",
+                    payload: {
                       invoice_id: id,
+                      fulfillment_id: invoice.fulfillment_id,
                     },
-                    orderModule,
-                    customerModule,
-                    req.scope,
-                    logger
-                  );
+                  });
                 }
               }
             } catch (bgErr: any) {

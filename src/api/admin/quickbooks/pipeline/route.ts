@@ -483,19 +483,23 @@ export async function POST(
             break;
           }
           case "sales_receipt": {
+            // 1.5.6: pipeline-only retry — re-enqueue 'pending' for consolidator.
             const {
-              handleSalesReceiptCreated,
-            } = require("../../../../lib/quickbooks/handlers/handle-sales-receipt-created");
-            await handleSalesReceiptCreated(
-              {
-                order_id: row.order_id,
-                fulfillment_id: row.reference_id,
+              writePipelineRow: enqueueSrRetry,
+            } = require("../../../../lib/quickbooks/qb-pipeline");
+            await enqueueSrRetry({
+              orderId: row.order_id,
+              referenceId: row.reference_id,
+              referenceType: "invoice",
+              step: "sales_receipt",
+              status: "pending",
+              payload: {
                 invoice_id: row.reference_id,
+                fulfillment_id: row.reference_id,
               },
-              orderModule,
-              customerModule,
-              req.scope,
-              logger
+            });
+            logger.info(
+              `[qb-pipeline-retry] 📥 Re-enqueued sales_receipt for ${row.order_id}`
             );
             break;
           }

@@ -11,7 +11,7 @@ import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
 import { handleFulfillmentCreated } from "../../../lib/quickbooks/handlers/handle-fulfillment-created";
 import { handlePosPaymentApplied } from "../../../lib/quickbooks/handlers/handle-pos-payment-applied";
 import { handlePosPaymentCreated } from "../../../lib/quickbooks/handlers/handle-pos-payment-created";
-import { handleSalesReceiptCreated } from "../../../lib/quickbooks/handlers/handle-sales-receipt-created";
+// 1.5.6: handleSalesReceiptCreated import removed — invoices route enqueues now.
 import {
   writePipelineRow,
   skipSalesOrderPipelineRow,
@@ -881,25 +881,27 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         // 1. Process Order Document (Invoice or Sales Receipt)
         if (body.is_sales_receipt) {
           console.log(
-            `DIRECT EXEC: Triggering pos.sales_receipt.created directly for order ${body.order_id}.`
+            `1.5.6: Enqueuing sales_receipt pipeline row for order ${body.order_id}.`
           );
-          await handleSalesReceiptCreated(
-            {
-              order_id: body.order_id,
+          const {
+            writePipelineRow: enqueueSrInv,
+          } = require("../../../lib/quickbooks/qb-pipeline");
+          await enqueueSrInv({
+            orderId: body.order_id,
+            referenceId: (invoice as any).id,
+            referenceType: "invoice",
+            step: "sales_receipt",
+            status: "pending",
+            payload: {
               invoice_id: (invoice as any).id,
               items: body.items,
               fulfillment_id: body.fulfillment_id,
-              // Use resolvedPaymentMethod — when a Dejavoo terminal_payment_id is
-              // present, this is the detected card type (e.g. 'mastercard') read
-              // from the terminal payment's metadata, not the stale body field.
+              // resolvedPaymentMethod (terminal-detected) takes precedence
+              // over the stale body field.
               payment_method: resolvedPaymentMethod,
               payment_id: paymentIdToEmit,
             },
-            orderModule,
-            customerModule,
-            container,
-            logger
-          );
+          });
         } else {
           console.log(
             `DIRECT EXEC: Triggering pos.invoice.created directly for order ${body.order_id} to bypass BullMQ drops.`

@@ -23,7 +23,7 @@ import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 import { handleFulfillmentCreated } from "../lib/quickbooks/handlers/handle-fulfillment-created";
 import { handlePosPaymentApplied } from "../lib/quickbooks/handlers/handle-pos-payment-applied";
 import { handlePosPaymentCreated } from "../lib/quickbooks/handlers/handle-pos-payment-created";
-import { handleSalesReceiptCreated } from "../lib/quickbooks/handlers/handle-sales-receipt-created";
+// 1.5.6: handleSalesReceiptCreated import removed — waiting-gate enqueues now.
 import {
   writePipelineRow,
   skipSalesOrderPipelineRow,
@@ -209,22 +209,28 @@ export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
         }
       }
 
-      // ── Fire handler chain (mirrors invoices/route.ts setTimeout body) ────────
+      // ── 1.5.6: pipeline-only — enqueue instead of calling handlers directly ──
       try {
         if (payload.is_sales_receipt) {
-          await handleSalesReceiptCreated(
-            {
-              order_id: inv.order_id,
+          const {
+            writePipelineRow: enqueueSr,
+          } = require("../lib/quickbooks/qb-pipeline");
+          await enqueueSr({
+            orderId: inv.order_id,
+            referenceId: inv.id,
+            referenceType: "invoice",
+            step: "sales_receipt",
+            status: "pending",
+            payload: {
               invoice_id: inv.id,
               items: bodyItems,
               fulfillment_id: payload.fulfillment_id ?? undefined,
               payment_method: payload.resolved_payment_method,
               payment_id: payload.payment_id_to_emit,
-            } as any,
-            orderModule,
-            customerModule,
-            container,
-            logger
+            },
+          });
+          logger.info(
+            `[qb-invoice-waiting-gate] 📥 Enqueued sales_receipt for ${inv.order_id} / ${inv.id}`
           );
         } else {
           await handleFulfillmentCreated(
