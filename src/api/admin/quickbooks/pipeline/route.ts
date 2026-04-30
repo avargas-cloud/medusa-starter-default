@@ -717,12 +717,12 @@ export async function POST(
               );
               break;
             }
+            // 1.5.8: pipeline-only retry — build payload, set row to
+            // 'pending' with full data. Consolidator's case 'credit_memo'
+            // resolves customer + submits to bridge next tick.
             const {
               ensureCustomerInQb,
             } = require("../../../../lib/quickbooks/order-flow-core");
-            const {
-              createCreditMemoInQb,
-            } = require("../../../../lib/quickbooks/client");
             const custResult = await ensureCustomerInQb(
               cmCustomer,
               customerModule,
@@ -737,8 +737,6 @@ export async function POST(
             }
             const qbItems = (cm.items ?? []).map((item: any) => {
               const unitPriceDollars = (item.unit_price || 0) / 100;
-              // Service / non-inventory items (Adjustment lines or QB service
-              // products) must NOT carry InventorySiteRef (QB error 3140).
               const isService = !item.variant_id || item.is_service === true;
               return {
                 ...(item.quickbooks_id
@@ -753,7 +751,7 @@ export async function POST(
               };
             });
             const cmSalesRepRef = parseSalesRepInitials(cm.sales_rep);
-            const cmResult = await createCreditMemoInQb({
+            const cmRetryPayload = {
               customerId: custResult.qbCustomerId,
               date: cm.completed_at
                 ? new Date(cm.completed_at).toISOString().split("T")[0]
@@ -762,26 +760,17 @@ export async function POST(
               items: qbItems,
               ...(cm.is_tax_exempt === true ? { taxExempt: true } : {}),
               ...(cmSalesRepRef ? { salesRepRef: cmSalesRepRef } : {}),
-            });
-            if (cmResult.success && cmResult.data?.operationId) {
-              await cmPool.query(
-                `UPDATE qb_order_pipeline
-                 SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW()
-                 WHERE id = $1`,
-                [row.id, cmResult.data.operationId]
-              );
-              logger.info(
-                `${LOG_PREFIX} credit_memo re-queued op=${cmResult.data.operationId}`
-              );
-            } else {
-              await cmPool.query(
-                `UPDATE qb_order_pipeline SET status = 'failed', error = $2, failed_at = NOW(), updated_at = NOW() WHERE id = $1`,
-                [row.id, cmResult.error ?? "QB credit memo creation failed"]
-              );
-              logger.error(
-                `${LOG_PREFIX} credit_memo retry failed: ${cmResult.error}`
-              );
-            }
+            };
+            await cmPool.query(
+              `UPDATE qb_order_pipeline
+               SET status = 'pending', payload = $2::jsonb, error = NULL,
+                   failed_at = NULL, updated_at = NOW()
+               WHERE id = $1`,
+              [row.id, JSON.stringify(cmRetryPayload)]
+            );
+            logger.info(
+              `${LOG_PREFIX} 📥 credit_memo retry: row reset to pending, consolidator will submit`
+            );
             break;
           }
           default:

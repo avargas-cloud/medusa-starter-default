@@ -1,6 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
-import { updateCreditMemoInQb } from "../../../../../../lib/quickbooks/client/credit-memos";
+// 1.5.8: updateCreditMemoInQb import removed — patch-meta enqueues credit_memo_mod now.
 import { parseSalesRepInitials } from "../../../../../../lib/quickbooks/parse-sales-rep";
 import { getQbConfig } from "../../../../../../lib/quickbooks/qb-config";
 import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
@@ -127,7 +127,8 @@ export async function PATCH(
 
   // ── QB Mod — fire-and-forget pipeline entry if this CM is synced to QB ──────
   const qbTxnId = (memo as any).qb_txn_id as string | null | undefined;
-  const qbEditSeq = (memo as any).qb_edit_sequence as string | null | undefined;
+  // 1.5.8: qb_edit_sequence is now read by the consolidator (case
+  // 'credit_memo_mod') from pos_credit_memo via JOIN. No longer needed here.
   const cmNumber = (memo as any).credit_memo_number as
     | string
     | null
@@ -148,27 +149,24 @@ export async function PATCH(
       qbTxnId,
     })
       .then(async () => {
+        // 1.5.8: pipeline-only — enqueue 'credit_memo_mod' with mod fields
+        // in payload. Consolidator's case (added in 1.5.1.5) joins with
+        // pos_credit_memo for qb_txn_id + qb_edit_sequence and submits.
         const qbConfig = isFlorida ? await getQbConfig() : null;
-        return updateCreditMemoInQb({
-          txnId: qbTxnId,
-          editSequence: qbEditSeq ?? "",
-          ...(salesRepRef !== undefined ? { salesRepRef } : {}),
-          ...(isFlorida && qbConfig
-            ? { salesTaxCode: qbConfig.defaultSalesTaxCode }
-            : {}),
-          ...(isExempt ? { taxExempt: true } : {}),
-        }).then((result) => {
-          const status = result.success ? "confirmed" : "failed";
-          return writePipelineRow({
-            referenceId: id,
-            referenceType: "credit_memo",
-            step: "credit_memo_mod",
-            status,
-            medusaRefNumber: cmNumber ?? null,
-            qbTxnId,
-            bridgeOpId: result.data?.operationId ?? null,
-            error: result.error ?? null,
-          });
+        return writePipelineRow({
+          referenceId: id,
+          referenceType: "credit_memo",
+          step: "credit_memo_mod",
+          status: "pending",
+          medusaRefNumber: cmNumber ?? null,
+          qbTxnId,
+          payload: {
+            ...(salesRepRef !== undefined ? { salesRepRef } : {}),
+            ...(isFlorida && qbConfig
+              ? { salesTaxCode: qbConfig.defaultSalesTaxCode }
+              : {}),
+            ...(isExempt ? { taxExempt: true } : {}),
+          },
         });
       })
       .catch((err: Error) => {

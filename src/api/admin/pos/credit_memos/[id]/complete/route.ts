@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 
-import { createCreditMemoInQb } from "../../../../../../lib/quickbooks/client";
+// 1.5.8: createCreditMemoInQb import removed — route enqueues now.
 import { parseSalesRepInitials } from "../../../../../../lib/quickbooks/parse-sales-rep";
 import {
   buildQbOrderDiscountLines,
@@ -174,7 +174,8 @@ export async function POST(
     // -- DAMAGED ITEMS TRACKING END --
 
     // -- QUICKBOOKS SYNC BEGIN --
-    let qbOperationId = null;
+    // 1.5.8: qbOperationId no longer tracked here — consolidator owns the
+    // submission lifecycle. We just enqueue and return.
     try {
       if (creditMemo.customer_id) {
         // Preflight: if customer has no qb_list_id, enqueue customer pipeline row
@@ -313,56 +314,33 @@ export async function POST(
             (creditMemo as any).sales_rep
           );
 
-          const cmResult = await createCreditMemoInQb({
-            customerId: qbCustomerId,
-            date: new Date().toISOString().split("T")[0],
-            memo: `POS Return ${creditMemo.credit_memo_number || ""}`.trim(),
-            items: qbItems,
-            ...(isTaxExempt ? { taxExempt: true } : {}),
-            ...(salesRepRef ? { salesRepRef } : {}),
-          });
-
-          if (cmResult.success && cmResult.data?.operationId) {
-            qbOperationId = cmResult.data.operationId;
+          // 1.5.8: pipeline-only — enqueue 'pending' credit_memo with full
+          // payload. Consolidator's case 'credit_memo' calls
+          // createCreditMemoInQb and transitions to 'submitted'.
+          try {
+            await writePipelineRow({
+              referenceId: id,
+              referenceType: "credit_memo",
+              step: "credit_memo",
+              status: "pending",
+              medusaRefNumber: creditMemo.credit_memo_number ?? null,
+              qbRefNumber: creditMemo.credit_memo_number ?? null,
+              payload: {
+                customerId: qbCustomerId,
+                date: new Date().toISOString().split("T")[0],
+                memo: `POS Return ${creditMemo.credit_memo_number || ""}`.trim(),
+                items: qbItems,
+                ...(isTaxExempt ? { taxExempt: true } : {}),
+                ...(salesRepRef ? { salesRepRef } : {}),
+              },
+            });
             logger.info(
-              `[credit_memos complete] QB Sync queued: ${qbOperationId}`
+              `[credit_memos complete] 📥 Enqueued credit_memo for ${id} (consolidator will submit)`
             );
-
-            // Record credit_memo step in pipeline
-            try {
-              await writePipelineRow({
-                referenceId: id,
-                referenceType: "credit_memo",
-                step: "credit_memo",
-                status: "submitted",
-                bridgeOpId: qbOperationId,
-                medusaRefNumber: creditMemo.credit_memo_number ?? null,
-                qbRefNumber: creditMemo.credit_memo_number ?? null,
-              });
-            } catch (pErr: any) {
-              logger.warn(
-                `[credit_memos complete] Could not write pipeline row: ${pErr.message}`
-              );
-            }
-          } else {
-            logger.error(
-              `[credit_memos complete] QB Sync failed: ${cmResult.error}`
+          } catch (pErr: any) {
+            logger.warn(
+              `[credit_memos complete] Could not write pipeline row: ${pErr.message}`
             );
-
-            // Record failure in pipeline
-            try {
-              await writePipelineRow({
-                referenceId: id,
-                referenceType: "credit_memo",
-                step: "credit_memo",
-                status: "failed",
-                error: cmResult.error || "QB credit memo creation failed",
-              });
-            } catch (pErr: any) {
-              logger.warn(
-                `[credit_memos complete] Could not write pipeline row: ${pErr.message}`
-              );
-            }
           }
         }
       }

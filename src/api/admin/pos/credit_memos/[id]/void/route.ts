@@ -1,7 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 
-import { voidCreditMemoInQb } from "../../../../../../lib/quickbooks/client";
+// 1.5.8: voidCreditMemoInQb import removed — route enqueues now.
 import {
   writePipelineRow,
   findInFlightQbRowsByRef,
@@ -155,43 +155,29 @@ export async function POST(
     }
 
     if (wasCompleted && creditMemo.qb_txn_id) {
+      // 1.5.8: pipeline-only — enqueue 'pending' void_credit_memo with
+      // qbTxnId set + editSequence in payload. Consolidator's case
+      // 'void_credit_memo' calls voidCreditMemoInQb and transitions to
+      // 'submitted'.
       try {
-        const result = await voidCreditMemoInQb(
-          creditMemo.qb_txn_id,
-          creditMemo.qb_edit_sequence,
-          (msg: string) => logger.info(msg)
+        await writePipelineRow({
+          referenceId: id,
+          referenceType: "credit_memo",
+          step: "void_credit_memo",
+          status: "pending",
+          qbTxnId: creditMemo.qb_txn_id,
+          qbRefNumber:
+            creditMemo.qb_ref_number ?? creditMemo.credit_memo_number ?? null,
+          medusaRefNumber: creditMemo.credit_memo_number ?? null,
+          payload: {
+            editSequence: creditMemo.qb_edit_sequence,
+          },
+        });
+        logger.info(
+          `[void CM] 📥 Enqueued void_credit_memo for ${creditMemo.qb_txn_id} (consolidator will submit)`
         );
-        if (result.success) {
-          logger.info(
-            `[void CM] QB Credit Memo ${creditMemo.qb_txn_id} voided (op: ${result.data?.operationId})`
-          );
-          await writePipelineRow({
-            referenceId: id,
-            referenceType: "credit_memo",
-            step: "void_credit_memo",
-            status: "submitted",
-            bridgeOpId: result.data?.operationId || null,
-            qbTxnId: creditMemo.qb_txn_id,
-            qbRefNumber:
-              creditMemo.qb_ref_number ?? creditMemo.credit_memo_number ?? null,
-            medusaRefNumber: creditMemo.credit_memo_number ?? null,
-          });
-        } else {
-          logger.error(`[void CM] QB void failed: ${result.error}`);
-          await writePipelineRow({
-            referenceId: id,
-            referenceType: "credit_memo",
-            step: "void_credit_memo",
-            status: "failed",
-            qbTxnId: creditMemo.qb_txn_id ?? null,
-            qbRefNumber:
-              creditMemo.qb_ref_number ?? creditMemo.credit_memo_number ?? null,
-            medusaRefNumber: creditMemo.credit_memo_number ?? null,
-            error: result.error || "QB void failed",
-          });
-        }
       } catch (qbErr: any) {
-        logger.warn(`[void CM] QB void error (non-fatal): ${qbErr.message}`);
+        logger.warn(`[void CM] enqueue error (non-fatal): ${qbErr.message}`);
       }
     }
 

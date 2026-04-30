@@ -16,6 +16,7 @@ function compareTxnLineIds(a: string, b: string): number {
 import {
   voidCreditMemoInQb,
   updateCreditMemoInQb,
+  createCreditMemoInQb,
 } from "../lib/quickbooks/client/credit-memos";
 import { cancelEstimateInQb } from "../lib/quickbooks/client/estimates";
 import { transferDocumentCustomer } from "../lib/quickbooks/client/transfer";
@@ -529,6 +530,93 @@ async function resubmitByStep(
           await failPipelineRow(
             row.id,
             modResult.error ?? "updateCreditMemoInQb failed"
+          );
+        }
+        break;
+      }
+
+      case "credit_memo": {
+        // 1.5.8: pending CM create — handler/admin enqueues with payload
+        // (customerId, items, ...). Consolidator submits to bridge.
+        if (!row.reference_id) break;
+        const cmCreatePool = getDbPool();
+        const cmCreateRow = await cmCreatePool.query(
+          `SELECT payload FROM qb_order_pipeline WHERE id = $1`,
+          [row.id]
+        );
+        const cmCreatePayload = (cmCreateRow.rows[0]?.payload ??
+          {}) as any;
+        if (!cmCreatePayload || Object.keys(cmCreatePayload).length === 0) {
+          await failPipelineRow(
+            row.id,
+            "credit_memo: payload missing — cannot create"
+          );
+          break;
+        }
+        const cmCreateResult = await createCreditMemoInQb(cmCreatePayload);
+        if (cmCreateResult.success && cmCreateResult.data?.operationId) {
+          await cmCreatePool.query(
+            `UPDATE qb_order_pipeline
+                  SET status = 'submitted',
+                      bridge_op_id = $2,
+                      submitted_at = NOW(),
+                      updated_at = NOW()
+                WHERE id = $1`,
+            [row.id, cmCreateResult.data.operationId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ credit_memo ${row.id} submitted op=${cmCreateResult.data.operationId}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            cmCreateResult.error ?? "createCreditMemoInQb failed"
+          );
+        }
+        break;
+      }
+
+      case "void_credit_memo": {
+        // 1.5.8: direct void path — admin enqueues with reference_id and
+        // qb_txn_id known (CM already in QB). Distinct from the depends_on
+        // activation flow at lines ~700+ which fires after parent confirms.
+        if (!row.qb_txn_id) {
+          await failPipelineRow(
+            row.id,
+            "void_credit_memo: missing qb_txn_id — cannot void"
+          );
+          break;
+        }
+        const voidCmPool = getDbPool();
+        const voidCmRow = await voidCmPool.query(
+          `SELECT payload FROM qb_order_pipeline WHERE id = $1`,
+          [row.id]
+        );
+        const voidCmPayload = (voidCmRow.rows[0]?.payload ?? {}) as {
+          editSequence?: string;
+        };
+        const vcResult = await voidCreditMemoInQb(
+          row.qb_txn_id,
+          voidCmPayload.editSequence ?? null,
+          (m: string) => logger.info(m)
+        );
+        if (vcResult.success && vcResult.data?.operationId) {
+          await voidCmPool.query(
+            `UPDATE qb_order_pipeline
+                  SET status = 'submitted',
+                      bridge_op_id = $2,
+                      submitted_at = NOW(),
+                      updated_at = NOW()
+                WHERE id = $1`,
+            [row.id, vcResult.data.operationId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ void_credit_memo ${row.id} submitted op=${vcResult.data.operationId}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            vcResult.error ?? "voidCreditMemoInQb failed"
           );
         }
         break;
@@ -1768,7 +1856,7 @@ export default async function qbPipelineConsolidator(
     const { rows: pendingMutations } = await pool.query(`
       SELECT id, order_id, reference_id, reference_type, step, qb_txn_id
         FROM qb_order_pipeline
-       WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice')
+       WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'credit_memo', 'void_credit_memo')
          AND status = 'pending'
        ORDER BY COALESCE(updated_at, created_at) ASC
        LIMIT 20

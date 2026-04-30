@@ -1108,9 +1108,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           );
           (async () => {
             try {
-              const {
-                voidCreditMemoInQb,
-              } = require("../../../../lib/quickbooks/client/credit-memos");
+              // 1.5.8: voidCreditMemoInQb removed — only writePipelineRow needed.
               const {
                 writePipelineRow,
               } = require("../../../../lib/quickbooks/qb-pipeline");
@@ -1135,33 +1133,25 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 );
               }
 
-              const result = await voidCreditMemoInQb(
-                creditMemo.qb_txn_id,
-                creditMemo.qb_edit_sequence,
-                (msg: string) => logger.info(msg)
+              // 1.5.8: pipeline-only — enqueue 'pending' void.
+              await writePipelineRow({
+                referenceId: id,
+                referenceType: "credit_memo",
+                step: "void_credit_memo",
+                status: "pending",
+                qbTxnId: creditMemo.qb_txn_id,
+                qbRefNumber:
+                  creditMemo.qb_ref_number ??
+                  creditMemo.credit_memo_number ??
+                  null,
+                medusaRefNumber: creditMemo.credit_memo_number ?? null,
+                payload: {
+                  editSequence: creditMemo.qb_edit_sequence,
+                },
+              });
+              logger.info(
+                `${LOG_PREFIX} 📥 Enqueued void_credit_memo for ${creditMemo.credit_memo_number}`
               );
-              if (result.success) {
-                await writePipelineRow({
-                  referenceId: id,
-                  referenceType: "credit_memo",
-                  step: "void_credit_memo",
-                  status: "submitted",
-                  bridgeOpId: result.data?.operationId || null,
-                  qbTxnId: creditMemo.qb_txn_id,
-                  qbRefNumber:
-                    creditMemo.qb_ref_number ??
-                    creditMemo.credit_memo_number ??
-                    null,
-                  medusaRefNumber: creditMemo.credit_memo_number ?? null,
-                });
-                logger.info(
-                  `${LOG_PREFIX} ✅ QB void retry succeeded for ${creditMemo.credit_memo_number}`
-                );
-              } else {
-                logger.error(
-                  `${LOG_PREFIX} ❌ QB void retry failed: ${result.error}`
-                );
-              }
             } catch (bgErr: any) {
               logger.error(
                 `${LOG_PREFIX} QB void retry error: ${bgErr.message}`
@@ -1263,32 +1253,33 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           desc: item.title,
         }));
 
-        const {
-          createCreditMemoInQb,
-        } = require("../../../../lib/quickbooks/client");
+        // 1.5.8: pipeline-only — enqueue 'pending' credit_memo with full payload.
         const cmSalesRepRef = parseSalesRepInitials(
           (creditMemo as any).sales_rep
         );
-        const cmResult = await createCreditMemoInQb({
-          customerId: custResult.qbCustomerId,
-          date: creditMemo.completed_at
-            ? new Date(creditMemo.completed_at).toISOString().split("T")[0]
-            : new Date().toISOString().split("T")[0],
-          memo: `Medusa POS Credit Memo`,
-          items: qbItems,
-          ...(cmSalesRepRef ? { salesRepRef: cmSalesRepRef } : {}),
+        const {
+          writePipelineRow: enqueueCmCreate,
+        } = require("../../../../lib/quickbooks/qb-pipeline");
+        await enqueueCmCreate({
+          referenceId: id,
+          referenceType: "credit_memo",
+          step: "credit_memo",
+          status: "pending",
+          medusaRefNumber: creditMemo.credit_memo_number ?? null,
+          payload: {
+            customerId: custResult.qbCustomerId,
+            date: creditMemo.completed_at
+              ? new Date(creditMemo.completed_at).toISOString().split("T")[0]
+              : new Date().toISOString().split("T")[0],
+            memo: `Medusa POS Credit Memo`,
+            items: qbItems,
+            ...(cmSalesRepRef ? { salesRepRef: cmSalesRepRef } : {}),
+          },
         });
-
-        if (!cmResult.success) {
-          return res.status(500).json({
-            error:
-              cmResult.error || "Failed to create Credit Memo in QuickBooks",
-          });
-        }
 
         return res.json({
           success: true,
-          message: "Credit Memo sync queued successfully",
+          message: "Credit Memo sync enqueued — consolidator will process",
         });
       }
 
