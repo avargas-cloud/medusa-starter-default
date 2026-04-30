@@ -102,4 +102,8 @@ export const PurchaseOrder = model.define("purchase_order", {
   qb_purchase_order_txn_number: model.text().nullable(),
   qb_edit_sequence: model.text().nullable(), // required for PurchaseOrderMod
   qb_synced_at: model.dateTime().nullable(),
+
+  // Free-form metadata bag — currently used for receiving worksheet snapshots
+  // (metadata.receiving_drafts[]). Stored as JSONB.
+  metadata: model.json().nullable(),
 });
