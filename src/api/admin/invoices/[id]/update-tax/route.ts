@@ -214,6 +214,8 @@ export async function POST(
             salesTaxCode:
               taxMode === "florida" ? qbConfig.defaultSalesTaxCode : undefined,
             taxExempt: taxMode === "exempt" ? (true as const) : undefined,
+            qbTaxItemListid:
+              resolveTaxListid(taxMode, qbConfig) ?? undefined,
           };
           return updateInvoiceInQb(payload).then((result) => ({
             logId,

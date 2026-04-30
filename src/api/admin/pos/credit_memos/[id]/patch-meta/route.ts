@@ -179,6 +179,15 @@ export async function PATCH(
               ? { salesTaxCode: qbConfig.defaultSalesTaxCode }
               : {}),
             ...(isExempt ? { taxExempt: true } : {}),
+            ...(qbConfig && (isFlorida || isExempt)
+              ? (() => {
+                  const listid = resolveTaxListid(
+                    isFlorida ? "florida" : "exempt",
+                    qbConfig
+                  );
+                  return listid ? { qbTaxItemListid: listid } : {};
+                })()
+              : {}),
           },
         });
       })
