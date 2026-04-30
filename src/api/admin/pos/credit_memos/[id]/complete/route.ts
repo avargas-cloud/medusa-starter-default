@@ -5,6 +5,7 @@ import { Modules } from "@medusajs/utils";
 
 // 1.5.8: createCreditMemoInQb import removed — route enqueues now.
 import { parseSalesRepInitials } from "../../../../../../lib/quickbooks/parse-sales-rep";
+import { getQbConfig } from "../../../../../../lib/quickbooks/qb-config";
 import {
   buildQbOrderDiscountLines,
   buildShippingQbItem,
@@ -310,6 +311,10 @@ export async function POST(
           logger.info(
             `[credit_memos complete] Mirroring Credit Memo to QB for customer ${qbCustomerId}...`
           );
+          const qbConfig = await getQbConfig();
+          const cmSalesTaxCode = isTaxExempt
+            ? qbConfig.exemptSalesTaxCode
+            : qbConfig.defaultSalesTaxCode;
           const salesRepRef = parseSalesRepInitials(
             (creditMemo as any).sales_rep
           );
@@ -330,7 +335,7 @@ export async function POST(
                 date: new Date().toISOString().split("T")[0],
                 memo: `POS Return ${creditMemo.credit_memo_number || ""}`.trim(),
                 items: qbItems,
-                ...(isTaxExempt ? { taxExempt: true } : {}),
+                salesTaxCode: cmSalesTaxCode,
                 ...(salesRepRef ? { salesRepRef } : {}),
               },
             });

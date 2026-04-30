@@ -11,6 +11,7 @@ import { Client } from "pg";
 export interface QbOrderConfig {
   shippingItemId: string;
   defaultSalesTaxCode: string;
+  exemptSalesTaxCode: string;
 }
 
 /**
@@ -22,7 +23,7 @@ export async function getQbConfig(): Promise<QbOrderConfig> {
   try {
     await client.connect();
     const res = await client.query(
-      `SELECT shipping_item_id, default_sales_tax_code FROM quickbooks_config WHERE id = 'default' LIMIT 1`
+      `SELECT shipping_item_id, default_sales_tax_code, exempt_sales_tax_code FROM quickbooks_config WHERE id = 'default' LIMIT 1`
     );
     const row = res.rows[0] || {};
     return {
@@ -34,12 +35,18 @@ export async function getQbConfig(): Promise<QbOrderConfig> {
         row.default_sales_tax_code ||
         process.env.QB_DEFAULT_SALES_TAX_CODE ||
         "Sale Tax 7%",
+      exemptSalesTaxCode:
+        row.exempt_sales_tax_code ||
+        process.env.QB_EXEMPT_SALES_TAX_CODE ||
+        "Exempt",
     };
   } catch {
     return {
       shippingItemId: process.env.QB_SHIPPING_ITEM_ID || "800006A3-1395258131",
       defaultSalesTaxCode:
         process.env.QB_DEFAULT_SALES_TAX_CODE || "Sale Tax 7%",
+      exemptSalesTaxCode:
+        process.env.QB_EXEMPT_SALES_TAX_CODE || "Exempt",
     };
   } finally {
     await client.end();

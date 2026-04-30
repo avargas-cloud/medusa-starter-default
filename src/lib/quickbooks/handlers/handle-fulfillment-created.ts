@@ -366,7 +366,7 @@ export async function handleFulfillmentCreated(
     }
 
     const hasTax = getFloat(order.tax_total) > 0;
-    salesTaxCode = hasTax ? qbConfig.defaultSalesTaxCode : undefined;
+    salesTaxCode = hasTax ? qbConfig.defaultSalesTaxCode : qbConfig.exemptSalesTaxCode;
   }
 
   // Inject pre-flight metadata so UI shows "CREATING..."
