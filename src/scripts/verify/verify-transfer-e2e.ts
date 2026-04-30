@@ -59,6 +59,8 @@ const pg = new PgClient({ connectionString: cfg.dbUrl });
 let bearer = "";
 let variantId = "";
 let inventoryItemId = "";
+let vendorId = "";
+let vendorName = "";
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 
@@ -171,6 +173,17 @@ async function findVariantAndItem(): Promise<void> {
   }
   variantId = r.rows[0]!.variant_id;
   inventoryItemId = r.rows[0]!.inventory_item_id;
+
+  const v = await pg.query<{ id: string; name: string | null }>(
+    `SELECT id, name FROM qb_vendor
+      WHERE deleted_at IS NULL AND qb_list_id IS NOT NULL
+      LIMIT 1`
+  );
+  if (v.rows.length === 0) {
+    throw new Error("No qb_vendor with qb_list_id found in sandbox DB");
+  }
+  vendorId = v.rows[0]!.id;
+  vendorName = v.rows[0]!.name ?? "Test Vendor";
 }
 
 interface State {
@@ -292,6 +305,8 @@ async function createDraftIt(qty = cfg.qty): Promise<IT> {
     "/admin/inventory-transfers",
     {
       destination_location_id: USA_LOC,
+      vendor_id: vendorId,
+      vendor_name_snapshot: vendorName,
       lines: [
         {
           product_variant_id: variantId,
