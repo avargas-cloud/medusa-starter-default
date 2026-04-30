@@ -215,7 +215,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         : Date.now();
       const ageMs = Date.now() - createdAt;
       const ONE_HOUR_MS = 60 * 60 * 1000;
-      if (hasExistingQbDoc || ageMs > ONE_HOUR_MS) {
+      // Also check the pipeline table — SO may be pending/submitted but not yet confirmed
+      // in metadata (race condition where invoice arrives before SO bridge confirms).
+      let hasPendingSoInPipeline = false;
+      try {
+        const pbPool = req.scope.resolve("__pg_connection__") as any;
+        const pbCheck = await pbPool.raw(
+          `SELECT id FROM qb_order_pipeline WHERE order_id = ? AND step = 'sales_order' AND status NOT IN ('failed','skipped','manual') LIMIT 1`,
+          [body.order_id]
+        );
+        hasPendingSoInPipeline = (pbCheck.rows?.length ?? 0) > 0;
+      } catch { /* best-effort */ }
+      if (hasExistingQbDoc || ageMs > ONE_HOUR_MS || hasPendingSoInPipeline) {
         console.warn(
           `[invoice] Path B detected for order ${body.order_id} — ` +
             `downgrading is_sales_receipt=true → false. ` +

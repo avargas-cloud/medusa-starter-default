@@ -6,6 +6,7 @@ import type {
 import { defineMiddlewares } from "@medusajs/medusa";
 
 import { addCategoryBreadcrumbs } from "./middlewares/add-category-breadcrumbs";
+import { syncCustomerMeili } from "./middlewares/sync-customer-meili";
 import { validateDraftOrderCustomer } from "./middlewares/validate-draft-order-customer";
 
 // Inline CORS middleware for /pos/* routes.
@@ -91,6 +92,12 @@ export default defineMiddlewares({
       matcher: "/store/product-categories/:id",
       method: "GET",
       middlewares: [addCategoryBreadcrumbs],
+    },
+    // Sync edited customer to MeiliSearch after a successful PATCH.
+    {
+      matcher: "/admin/customers/:id",
+      method: ["PATCH"],
+      middlewares: [syncCustomerMeili],
     },
     // Guard against zombie-customer creation in Medusa's findOrCreateCustomerStep.
     // Runs before createOrderWorkflow on POST /admin/draft-orders.

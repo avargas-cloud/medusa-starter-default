@@ -49,9 +49,25 @@ export default async function qbOrderSubscriber({
     switch (name) {
       case "order.placed": {
         // 1.5.5: pipeline-only — enqueue 'pending' SO row.
-        // Consolidator picks up via pending-dispatch and calls
-        // handleOrderUpdated (MOD-first) → handleOrderPlaced (CREATE fallback).
+        // POS orders skip here — convert-force already wrote a 'waiting' row and
+        // qb-pos-sync promotes it after 1 hour (only if no invoice/SR exists).
+        // Immediately promoting to 'pending' would bypass the 1h delay and create
+        // the SO before the cashier has a chance to invoice the order.
         const orderId = (data as any).id;
+        const placedQuery = container.resolve("query");
+        const {
+          data: [placedOrder],
+        } = await placedQuery.graph({
+          entity: "order",
+          fields: ["metadata", "sales_channel_id"],
+          filters: { id: orderId },
+        });
+        if (isPosOrder(placedOrder)) {
+          logger.info(
+            `[QB-ORDER] ⏭️ POS order ${orderId} — SO stays 'waiting', qb-pos-sync handles after 1h`
+          );
+          break;
+        }
         const {
           writePipelineRow,
         } = require("../lib/quickbooks/qb-pipeline");

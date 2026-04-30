@@ -149,8 +149,21 @@ export async function handleSalesReceiptCreated(
     logger.warn(
       `${LOG_PREFIX} ⚠️ Order already has a QB document ` +
         `(SO=${existingSoTxnId ?? "none"}, Estimate=${existingEstimateTxnId ?? "none"}). ` +
-        `Cannot create Sales Receipt — falling back to Invoice.`
+        `Cannot create Sales Receipt — marking SR failed and falling back to Invoice.`
     );
+    // Explicitly fail the SR pipeline row so it doesn't stay stuck in 'pending'.
+    try {
+      await writePipelineRow({
+        orderId,
+        referenceId: data.invoice_id || null,
+        referenceType: data.invoice_id ? "pos_invoice" : null,
+        step: "sales_receipt",
+        status: "failed",
+        error: `SR superseded by existing QB document (SO=${existingSoTxnId ?? "none"}, Estimate=${existingEstimateTxnId ?? "none"}) — Invoice created instead`,
+      });
+    } catch (srFailErr: any) {
+      logger.warn(`${LOG_PREFIX} ⚠️ Could not mark SR row as failed: ${srFailErr.message}`);
+    }
     await handleFulfillmentCreated(
       data,
       orderModule,
