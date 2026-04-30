@@ -7,8 +7,66 @@ import {
   applyCreditMemoToInvoiceInQb,
 } from "../qb-bridge-client";
 import { withQbLockResult } from "../qb-locks";
-import { writePipelineRow, cacheEditSequence } from "../qb-pipeline";
+import {
+  writePipelineRow,
+  cacheEditSequence,
+  requeueApplyPaymentWaiting,
+} from "../qb-pipeline";
 import { getDbPool } from "../../../api/utils/db-pool";
+
+/**
+ * Resolves the source pipeline row id for a customer_payment:
+ *   - type='credit_memo' → looks up the qb_order_pipeline row for the originating
+ *     credit memo (matched by pos_credit_memo.credit_memo_number = cpay.reference)
+ *   - any other type     → looks up the qb_order_pipeline row for the cpay's own
+ *     'payment' step (reference_id = cpay.id)
+ *
+ * Returns null if no row exists yet (caller should fall back to fail/wait logic).
+ */
+async function resolveSourcePipelineRowId(
+  pool: any,
+  cpay: { id: string; type?: string | null; reference?: string | null }
+): Promise<string | null> {
+  if (cpay.type === "credit_memo" && cpay.reference) {
+    const { rows } = await pool.query(
+      `SELECT q.id FROM qb_order_pipeline q
+         JOIN pos_credit_memo cm ON cm.id = q.reference_id
+        WHERE cm.credit_memo_number = $1
+          AND q.step = 'credit_memo'
+          AND q.status NOT IN ('skipped')
+        ORDER BY q.created_at DESC LIMIT 1`,
+      [cpay.reference]
+    );
+    return rows[0]?.id ?? null;
+  }
+  const { rows } = await pool.query(
+    `SELECT id FROM qb_order_pipeline
+      WHERE step = 'payment'
+        AND reference_id = $1
+        AND status NOT IN ('skipped')
+      ORDER BY created_at DESC LIMIT 1`,
+    [cpay.id]
+  );
+  return rows[0]?.id ?? null;
+}
+
+/**
+ * Resolves the qb_order_pipeline row id for an invoice (the target of an apply_payment).
+ */
+async function resolveInvoicePipelineRowId(
+  pool: any,
+  invoiceId: string
+): Promise<string | null> {
+  const { rows } = await pool.query(
+    `SELECT id FROM qb_order_pipeline
+      WHERE step IN ('invoice', 'sales_receipt')
+        AND reference_id = $1
+        AND status NOT IN ('skipped')
+      ORDER BY created_at DESC LIMIT 1`,
+    [invoiceId]
+  );
+  return rows[0]?.id ?? null;
+}
 
 const LOG_PREFIX = "[QB-POS-PAYMENT-APPLIED]";
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";
@@ -57,87 +115,43 @@ export async function handlePosPaymentApplied({
     return;
   }
 
-  let paymentTxnId = payment.metadata?.qb_txn_id as string | undefined;
+  const paymentTxnId = payment.metadata?.qb_txn_id as string | undefined;
   // Declare here so it's available in all early-exit error paths below
   const medusaPayRef = (payment as any).display_id
     ? `PAY-${(payment as any).display_id}`
     : null;
 
-  // Short-circuit: if this is a credit_memo payment with no QB TxnId yet, the
-  // credit memo itself may still be in the pipeline. Enqueue apply_payment as
-  // 'waiting' with depends_on so the consolidator dispatches it automatically
-  // once the CM is confirmed — avoiding the 400s polling loop.
-  if (!paymentTxnId && (payment as any).type === "credit_memo") {
-    try {
-      const pool = getDbPool();
-      const cmRef = (payment as any).reference as string | undefined;
-      if (cmRef) {
-        const { rows: cmPipelineRows } = await pool.query(
-          `SELECT q.id FROM qb_order_pipeline q
-             JOIN pos_credit_memo cm ON cm.id = q.reference_id
-            WHERE cm.credit_memo_number = $1
-              AND q.step = 'credit_memo'
-              AND q.status IN ('pending', 'submitted', 'waiting')
-            ORDER BY q.created_at DESC LIMIT 1`,
-          [cmRef]
-        );
-        if (cmPipelineRows[0]) {
-          const cmPipelineId = cmPipelineRows[0].id as string;
-          await writePipelineRow({
-            orderId: order_id,
-            referenceId: payment_id,
-            referenceType: "customer_payment",
-            step: "apply_payment",
-            status: "waiting",
-            dependsOn: cmPipelineId,
-            medusaRefNumber: medusaPayRef,
-          }).catch(() => {});
-          logger.info(
-            `${LOG_PREFIX} ⏸️ apply_payment enqueued as waiting (depends_on CM pipeline row ${cmPipelineId}) — will auto-dispatch when CM is confirmed`
-          );
-          return;
-        }
-      }
-    } catch (depErr: any) {
-      logger.warn(
-        `${LOG_PREFIX} Could not set up CM dependency, falling back to polling: ${depErr.message}`
+  // ── Source dependency check ──────────────────────────────────────────────
+  // The cpay carries the source TxnID (a Payment TxnID for type='payment',
+  // a CreditMemo TxnID for type='credit_memo'). If it's not yet in QB, requeue
+  // this apply_payment row to wait on the source pipeline row in-place.
+  // The wake-dependents pass will auto-dispatch when the source confirms.
+  if (!paymentTxnId) {
+    const pool = getDbPool();
+    const sourceRowId = await resolveSourcePipelineRowId(pool, {
+      id: payment_id,
+      type: (payment as any).type,
+      reference: (payment as any).reference,
+    }).catch(() => null);
+
+    if (sourceRowId) {
+      const { mode } = await requeueApplyPaymentWaiting({
+        orderId: order_id,
+        referenceId: payment_id,
+        dependsOnRowId: sourceRowId,
+        medusaRefNumber: medusaPayRef,
+      });
+      logger.info(
+        `${LOG_PREFIX} ⏸️ apply_payment ${mode}: waiting on source pipeline row ${sourceRowId} (cpay type=${(payment as any).type}) — will auto-dispatch when source confirms`
       );
+      return;
     }
-  }
 
-  // Wait for the payment to finish syncing to QB if it hasn't yet (up to 400 seconds)
-  if (!paymentTxnId) {
-    logger.info(
-      `${LOG_PREFIX} ⏳ Payment TxnID not found immediately. Polling for up to 400 seconds to let Payment Sync finish...`
-    );
-    for (let i = 0; i < 20; i++) {
-      await new Promise((res) => setTimeout(res, 20000));
-      const refreshedPayment = await financeService
-        .retrieveCustomerPayment(payment_id)
-        .catch(() => null);
-      paymentTxnId = refreshedPayment?.metadata?.qb_txn_id as
-        | string
-        | undefined;
-      const currentStatus = refreshedPayment?.metadata?.qb_sync_status;
-
-      if (paymentTxnId) {
-        logger.info(
-          `${LOG_PREFIX} ⏳ Found paymentTxnId: ${paymentTxnId} on attempt ${i + 1}`
-        );
-        break;
-      }
-      if (currentStatus === "error") {
-        logger.error(
-          `${LOG_PREFIX} ❌ Payment sync failed with status 'error'. Aborting application logic.`
-        );
-        break;
-      }
-    }
-  }
-
-  if (!paymentTxnId) {
+    // No source pipeline row exists yet — mark failed so it surfaces in UI
+    // for manual investigation. Common causes: cpay was created before the QB
+    // sync flow was enabled, or the source step was manually skipped.
     logger.warn(
-      `${LOG_PREFIX} Payment ${payment_id} still has no qb_txn_id after polling. Cannot apply it in QuickBooks.`
+      `${LOG_PREFIX} Payment ${payment_id} has no qb_txn_id and no resolvable source pipeline row.`
     );
     try {
       await writePipelineRow({
@@ -148,7 +162,7 @@ export async function handlePosPaymentApplied({
         status: "failed",
         medusaRefNumber: medusaPayRef,
         error:
-          "Payment not yet synced to QB — retry after payment is confirmed",
+          "Payment not yet synced to QB and no source pipeline row found — investigate the source payment/credit-memo",
       });
     } catch {}
     return;
@@ -224,45 +238,32 @@ export async function handlePosPaymentApplied({
     }
   }
 
-  // 3. Polling for up to 100 seconds if the Invoice hasn't finished syncing yet (10 attempts of 10 seconds)
+  // ── Target dependency check ──────────────────────────────────────────────
+  // The invoice carries the target TxnID. If it's not yet in QB, requeue this
+  // apply_payment row to wait on the invoice pipeline row in-place. The
+  // wake-dependents pass will auto-dispatch when the invoice confirms.
   if (!invoiceTxnId) {
-    logger.info(
-      `${LOG_PREFIX} ⏳ Invoice TxnID not found immediately. Polling for up to 100 seconds to let Invoice Sync finish...`
-    );
-    for (let i = 0; i < 10; i++) {
-      await new Promise((res) => setTimeout(res, 10000));
-      const {
-        data: [refreshedInvoice],
-      } = await query.graph({
-        entity: "pos_invoice",
-        fields: ["invoice_number", "metadata"],
-        filters: { id: invoice_id },
+    const pool = getDbPool();
+    const invoicePipelineId = await resolveInvoicePipelineRowId(
+      pool,
+      invoice_id
+    ).catch(() => null);
+
+    if (invoicePipelineId) {
+      const { mode } = await requeueApplyPaymentWaiting({
+        orderId: order_id,
+        referenceId: payment_id,
+        dependsOnRowId: invoicePipelineId,
+        medusaRefNumber: medusaPayRef,
       });
-      invoiceTxnId = refreshedInvoice?.metadata?.qb_txn_id as
-        | string
-        | undefined;
-      const currentInvStatus = refreshedInvoice?.metadata?.qb_sync_status;
-      if (refreshedInvoice?.invoice_number)
-        invoiceNumber = refreshedInvoice.invoice_number as string;
-
-      if (invoiceTxnId) {
-        logger.info(
-          `${LOG_PREFIX} ⏳ Found invoiceTxnId: ${invoiceTxnId} on attempt ${i + 1}`
-        );
-        break;
-      }
-      if (currentInvStatus === "error") {
-        logger.error(
-          `${LOG_PREFIX} ❌ Invoice sync failed with status 'error'. Aborting application logic.`
-        );
-        break;
-      }
+      logger.info(
+        `${LOG_PREFIX} ⏸️ apply_payment ${mode}: waiting on invoice pipeline row ${invoicePipelineId} — will auto-dispatch when invoice confirms`
+      );
+      return;
     }
-  }
 
-  if (!invoiceTxnId) {
     logger.error(
-      `${LOG_PREFIX} ❌ Timed out waiting for Invoice TxnID on order ${order_id}. Cannot apply payment ${paymentTxnId}.`
+      `${LOG_PREFIX} ❌ Invoice ${invoice_id} has no qb_txn_id and no resolvable pipeline row.`
     );
     await writePipelineRow({
       orderId: order_id,
@@ -272,7 +273,7 @@ export async function handlePosPaymentApplied({
       status: "failed",
       medusaRefNumber: medusaPayRef,
       error:
-        "Timed out waiting for Invoice to sync to QB — retry after invoice is confirmed",
+        "Invoice not yet synced to QB and no invoice pipeline row found — investigate the source invoice",
     }).catch(() => {});
     return;
   }

@@ -325,6 +325,80 @@ export async function skipPendingPaymentRows(
 }
 
 /**
+ * Apply-payment specific helper: transitions the existing apply_payment row
+ * (matched by order_id + reference_id) to status='waiting' with the given
+ * dependency, in-place. If no row exists, INSERTS a new waiting row.
+ *
+ * Used by handle-pos-payment-applied.ts when it discovers a missing dependency
+ * (cpay TxnID for source / invoice TxnID for target). Replaces the old behavior
+ * of calling writePipelineRow({status:'waiting'}) which only updated rows
+ * already in 'waiting' status and silently INSERTED duplicates otherwise.
+ *
+ * Skips already-confirmed or skipped rows so we never resurrect terminal state.
+ */
+export async function requeueApplyPaymentWaiting(input: {
+  orderId: string;
+  referenceId: string;
+  dependsOnRowId: string;
+  medusaRefNumber?: string | null;
+}): Promise<{ rowId: string | null; mode: "updated" | "inserted" | "noop" }> {
+  const pool = getDbPool();
+  const { rows: updated } = await pool.query(
+    `UPDATE qb_order_pipeline
+        SET status            = 'waiting',
+            depends_on        = $3,
+            updated_at        = NOW(),
+            error             = NULL,
+            failed_at         = NULL,
+            submitted_at      = NULL,
+            bridge_op_id      = NULL,
+            medusa_ref_number = COALESCE($4, medusa_ref_number)
+      WHERE step = 'apply_payment'
+        AND order_id = $1
+        AND reference_id = $2
+        AND status NOT IN ('confirmed', 'skipped')
+      RETURNING id`,
+    [
+      input.orderId,
+      input.referenceId,
+      input.dependsOnRowId,
+      input.medusaRefNumber ?? null,
+    ]
+  );
+  if (updated.length > 0) {
+    return { rowId: updated[0].id as string, mode: "updated" };
+  }
+
+  // Check if a confirmed/skipped row already exists — never duplicate.
+  const { rows: terminal } = await pool.query(
+    `SELECT id FROM qb_order_pipeline
+       WHERE step = 'apply_payment'
+         AND order_id = $1
+         AND reference_id = $2
+         AND status IN ('confirmed', 'skipped')
+       LIMIT 1`,
+    [input.orderId, input.referenceId]
+  );
+  if (terminal.length > 0) {
+    return { rowId: terminal[0].id as string, mode: "noop" };
+  }
+
+  const { rows: inserted } = await pool.query(
+    `INSERT INTO qb_order_pipeline
+        (order_id, reference_id, reference_type, step, status, depends_on, medusa_ref_number)
+       VALUES ($1, $2, 'customer_payment', 'apply_payment', 'waiting', $3, $4)
+       RETURNING id`,
+    [
+      input.orderId,
+      input.referenceId,
+      input.dependsOnRowId,
+      input.medusaRefNumber ?? null,
+    ]
+  );
+  return { rowId: inserted[0].id as string, mode: "inserted" };
+}
+
+/**
  * Skips a single waiting/pending pipeline row by its customer_payment reference_id.
  * Used as a defensive cleanup when we detect a payment was absorbed by a Sales Receipt.
  */

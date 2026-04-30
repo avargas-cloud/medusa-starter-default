@@ -131,22 +131,60 @@ export async function GET(
                 p.failed_at,
                 -- Order display_id: direct for order rows, via pos_credit_memo for credit_memo rows
                 COALESCE(ord.display_id, cm_ord.display_id) AS order_display_id,
-                -- Include parent step info for context
+                -- Include parent step info for context (used for non-apply_payment rows)
                 dep.step AS depends_on_step,
                 dep.status AS depends_on_status,
                 dep.medusa_ref_number AS depends_on_medusa_ref,
-                -- For apply_payment: also join the payment row for dual-dependency display
-                pay_dep.medusa_ref_number AS payment_dep_ref,
-                pay_dep.status AS payment_dep_status
+                -- ── apply_payment dual-dependency display ────────────────────
+                -- Always show two facts for an apply_payment row, derived from
+                -- the documents (not from depends_on, which only tracks the
+                -- current sync gate):
+                --   SOURCE: where the money came from — Payment or Credit Memo.
+                --   TARGET: which document it was applied to — usually Invoice.
+                source_dep.step AS source_dep_step,
+                source_dep.status AS source_dep_status,
+                source_dep.medusa_ref_number AS source_dep_ref,
+                target_dep.step AS target_dep_step,
+                target_dep.status AS target_dep_status,
+                target_dep.medusa_ref_number AS target_dep_ref
             FROM qb_order_pipeline p
             LEFT JOIN "order" ord ON ord.id = p.order_id
             LEFT JOIN pos_credit_memo cm ON p.reference_type = 'credit_memo' AND cm.id = p.reference_id
             LEFT JOIN "order" cm_ord ON cm_ord.id = cm.order_id
             LEFT JOIN qb_order_pipeline dep ON dep.id = p.depends_on
-            LEFT JOIN qb_order_pipeline pay_dep
+            -- apply_payment SOURCE: cpay → its payment OR credit_memo pipeline row
+            LEFT JOIN customer_payment cp_src
                 ON p.step = 'apply_payment'
-                AND pay_dep.reference_id = p.reference_id
-                AND pay_dep.step = 'payment'
+                AND cp_src.id = p.reference_id
+            LEFT JOIN pos_credit_memo cm_for_cp
+                ON cp_src.type = 'credit_memo'
+                AND cm_for_cp.credit_memo_number = cp_src.reference
+            LEFT JOIN qb_order_pipeline source_dep
+                ON p.step = 'apply_payment'
+                AND (
+                  (cp_src.type = 'credit_memo'
+                    AND source_dep.step = 'credit_memo'
+                    AND source_dep.reference_id = cm_for_cp.id)
+                  OR
+                  (cp_src.type IS DISTINCT FROM 'credit_memo'
+                    AND source_dep.step = 'payment'
+                    AND source_dep.reference_id = cp_src.id)
+                )
+            -- apply_payment TARGET: cpay → invoice via payment_application.
+            -- LATERAL keeps the join 1:1 even if a cpay was applied to multiple
+            -- invoices (most-recent non-voided application wins).
+            LEFT JOIN LATERAL (
+              SELECT invoice_id
+                FROM payment_application
+               WHERE payment_id = p.reference_id
+                 AND voided_at IS NULL
+               ORDER BY applied_at DESC NULLS LAST
+               LIMIT 1
+            ) papp ON p.step = 'apply_payment'
+            LEFT JOIN qb_order_pipeline target_dep
+                ON p.step = 'apply_payment'
+                AND target_dep.step = 'invoice'
+                AND target_dep.reference_id = papp.invoice_id
             ${where}
             ORDER BY ${sortBy === "updated_at" ? "COALESCE(p.updated_at, p.created_at)" : "p.created_at"} DESC
             LIMIT $${p} OFFSET $${p + 1}

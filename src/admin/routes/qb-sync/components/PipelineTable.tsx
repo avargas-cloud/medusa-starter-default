@@ -32,8 +32,14 @@ interface PipelineRow {
   depends_on_step: string | null;
   depends_on_status: string | null;
   depends_on_medusa_ref: string | null;
-  payment_dep_ref: string | null;
-  payment_dep_status: string | null;
+  // apply_payment dual-dependency: SOURCE (Payment or Credit Memo) + TARGET (Invoice).
+  // Derived from documents (cpay + payment_application), independent of depends_on.
+  source_dep_step: string | null;
+  source_dep_status: string | null;
+  source_dep_ref: string | null;
+  target_dep_step: string | null;
+  target_dep_status: string | null;
+  target_dep_ref: string | null;
   bridge_op_id: string | null;
   retry_count: number;
   qb_txn_id: string | null;
@@ -252,7 +258,48 @@ function PipelineRow({
         {/* Depends on */}
         <td className="px-3 py-2 text-ui-fg-subtle">
           <span className="flex flex-col gap-0.5">
-            {row.depends_on_step ? (
+            {/* apply_payment rows always render two facts: SOURCE + TARGET.
+                Source is where the money comes from (Payment or Credit Memo),
+                Target is where it was applied (Invoice). Derived from documents,
+                so they show even when the gating depends_on points to only one. */}
+            {row.step === "apply_payment" ? (
+              <>
+                {row.source_dep_step ? (
+                  <span className="flex items-center gap-1">
+                    <span className="text-ui-fg-muted text-[11px]">
+                      {STEP_LABELS[row.source_dep_step] ?? row.source_dep_step}
+                    </span>
+                    {row.source_dep_ref && (
+                      <span className="font-mono font-semibold text-[11px] text-ui-fg-base">
+                        {row.source_dep_ref}
+                      </span>
+                    )}
+                    {row.source_dep_status === "confirmed" ? (
+                      <span className="text-green-600 text-[10px]">✓</span>
+                    ) : (
+                      <span className="text-yellow-600 text-[10px]">⏳</span>
+                    )}
+                  </span>
+                ) : null}
+                {row.target_dep_step ? (
+                  <span className="flex items-center gap-1">
+                    <span className="text-ui-fg-muted text-[11px]">
+                      {STEP_LABELS[row.target_dep_step] ?? row.target_dep_step}
+                    </span>
+                    {row.target_dep_ref && (
+                      <span className="font-mono font-semibold text-[11px] text-ui-fg-base">
+                        {row.target_dep_ref}
+                      </span>
+                    )}
+                    {row.target_dep_status === "confirmed" ? (
+                      <span className="text-green-600 text-[10px]">✓</span>
+                    ) : (
+                      <span className="text-yellow-600 text-[10px]">⏳</span>
+                    )}
+                  </span>
+                ) : null}
+              </>
+            ) : row.depends_on_step ? (
               <span className="flex items-center gap-1">
                 <span className="text-ui-fg-muted text-[11px]">
                   {STEP_LABELS[row.depends_on_step] ?? row.depends_on_step}
@@ -263,19 +310,6 @@ function PipelineRow({
                   </span>
                 )}
                 {row.depends_on_status === "confirmed" ? (
-                  <span className="text-green-600 text-[10px]">✓</span>
-                ) : (
-                  <span className="text-yellow-600 text-[10px]">⏳</span>
-                )}
-              </span>
-            ) : null}
-            {row.step === "apply_payment" && row.payment_dep_ref ? (
-              <span className="flex items-center gap-1">
-                <span className="text-ui-fg-muted text-[11px]">Payment</span>
-                <span className="font-mono font-semibold text-[11px] text-ui-fg-base">
-                  {row.payment_dep_ref}
-                </span>
-                {row.payment_dep_status === "confirmed" ? (
                   <span className="text-green-600 text-[10px]">✓</span>
                 ) : (
                   <span className="text-yellow-600 text-[10px]">⏳</span>
@@ -300,7 +334,10 @@ function PipelineRow({
               </span>
             ) : null}
             {!row.depends_on_step &&
-              !(row.step === "apply_payment" && row.payment_dep_ref) &&
+              !(
+                row.step === "apply_payment" &&
+                (row.source_dep_step || row.target_dep_step)
+              ) &&
               !(
                 (row.step === "sales_order" || row.step === "estimate") &&
                 row.status === "waiting"
