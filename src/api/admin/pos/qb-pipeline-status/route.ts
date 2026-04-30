@@ -6,22 +6,46 @@ import {
 } from "../../../../lib/quickbooks/get-primary-pipeline-row";
 import type { PipelineStep } from "../../../../lib/quickbooks/qb-pipeline";
 
-type DocType = "estimate" | "order" | "invoice" | "credit_memo";
+// 1.5.10: extended types so frontend can poll status of any sub-phase 1.5
+// pipeline step. Old types kept for backwards compat — clients using
+// 'estimate', 'order', 'invoice', 'credit_memo' continue to work; new
+// callers can use a step name directly.
+type DocType =
+  | "estimate"
+  | "order"
+  | "invoice"
+  | "credit_memo"
+  | "payment"
+  | "apply_payment"
+  | "transfer_customer"
+  | "so_close"
+  | "so_reopen"
+  | "estimate_cancel"
+  | "credit_memo_mod"
+  | "void_credit_memo";
 
 const STEPS_BY_TYPE: Record<DocType, PipelineStep[]> = {
-  estimate: ["estimate"],
-  order: ["sales_order"],
+  estimate: ["estimate", "estimate_cancel"],
+  order: ["sales_order", "so_close", "so_reopen"],
   // invoices may have been promoted to Sales Receipt or stayed as Invoice
   invoice: ["invoice", "sales_receipt"],
-  credit_memo: ["credit_memo"],
+  credit_memo: ["credit_memo", "credit_memo_mod", "void_credit_memo"],
+  // direct step polling (1.5.10 additions)
+  payment: ["payment"],
+  apply_payment: ["apply_payment"],
+  transfer_customer: ["transfer_customer"],
+  so_close: ["so_close"],
+  so_reopen: ["so_reopen"],
+  estimate_cancel: ["estimate_cancel"],
+  credit_memo_mod: ["credit_memo_mod"],
+  void_credit_memo: ["void_credit_memo"],
 };
+
+const VALID_DOC_TYPES = Object.keys(STEPS_BY_TYPE) as DocType[];
 
 function isDocType(value: unknown): value is DocType {
   return (
-    value === "estimate" ||
-    value === "order" ||
-    value === "invoice" ||
-    value === "credit_memo"
+    typeof value === "string" && VALID_DOC_TYPES.includes(value as DocType)
   );
 }
 
@@ -33,8 +57,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
   if (!referenceId || !isDocType(type)) {
     return res.status(400).json({
-      error:
-        "Missing or invalid query params. Expected reference_id=<id>&type=estimate|order|invoice|credit_memo",
+      error: `Missing or invalid query params. Expected reference_id=<id>&type=${VALID_DOC_TYPES.join("|")}`,
     });
   }
 

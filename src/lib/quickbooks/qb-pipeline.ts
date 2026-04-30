@@ -12,6 +12,7 @@ export type PipelineStep =
   | "write_check"
   | "refund_payment"
   | "void_estimate"
+  | "estimate_cancel"
   | "void_invoice"
   | "void_sales_receipt"
   | "void_sales_order"
