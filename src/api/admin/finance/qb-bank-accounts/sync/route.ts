@@ -1,4 +1,5 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { pollBridgeStatus } from "../../../../../lib/quickbooks/bridge-fetch";
 
 const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
 const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
@@ -16,10 +17,11 @@ async function pollOperation(
 ): Promise<any> {
   for (let i = 0; i < maxAttempts; i++) {
     await new Promise((r) => setTimeout(r, intervalMs));
-    const res = await fetch(`${BRIDGE_URL}/api/sync/status/${operationId}`, {
-      headers: HEADERS,
-    });
-    const data = await res.json();
+    const polled = await pollBridgeStatus(operationId);
+    if (polled.status === "expired") {
+      throw new Error(`QB op ${operationId} expired (HTTP 404)`);
+    }
+    const data: any = polled.data;
     const status = data.operation?.status;
     if (status === "completed") return data.operation.result;
     if (status === "failed")

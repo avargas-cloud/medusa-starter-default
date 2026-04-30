@@ -10,6 +10,8 @@
  */
 
 const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
+import { pollBridgeStatus } from "./bridge-fetch";
+
 const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
 
 const POLL_INTERVAL_MS = 2000;
@@ -69,12 +71,14 @@ interface PollResult {
 async function pollOperation(operationId: string): Promise<PollResult> {
   for (let attempt = 1; attempt <= MAX_POLL_ATTEMPTS; attempt++) {
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-    const res = await fetch(`${BRIDGE_URL}/api/sync/status/${operationId}`, {
-      signal: AbortSignal.timeout(8000),
-      headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" },
-    });
-    if (!res.ok) continue;
-    const json = (await res.json()) as any;
+    const polled = await pollBridgeStatus(operationId);
+    if (polled.status === "expired") {
+      return {
+        status: "failed",
+        error: `DataExt op ${operationId} expired (bridge returned 404)`,
+      };
+    }
+    const json = polled.data as any;
     const op = json?.operation;
     if (!op) continue;
     if (op.status === "completed") {

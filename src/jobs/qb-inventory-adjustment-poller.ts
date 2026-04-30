@@ -1,4 +1,9 @@
 import { MedusaContainer } from "@medusajs/framework/types";
+import { pollBridgeStatus } from "../lib/quickbooks/bridge-fetch";
+import {
+  markStaleRowsAsFailed,
+  INVENTORY_ADJUSTMENT_STALE_CONFIG,
+} from "../lib/quickbooks/stale-row-cleanup";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { INVENTORY_COUNT_MODULE } from "../modules/inventory-count";
@@ -78,7 +83,7 @@ interface BridgeEnqueueResponse {
 
 interface BridgeStatusResponse {
   operation?: {
-    status?: "queued" | "processing" | "completed" | "failed";
+    status?: "queued" | "processing" | "completed" | "failed" | "expired";
     result?: any;
     error?: string;
     txnId?: string;
@@ -186,13 +191,19 @@ async function postVoidToBridge(args: {
 async function fetchBridgeStatus(
   operationId: string
 ): Promise<BridgeStatusResponse> {
-  const res = await fetch(`${BRIDGE_URL}/api/sync/status/${operationId}`, {
-    headers: COMMON_HEADERS,
-  });
-  if (!res.ok) {
-    throw new Error(`Bridge status ${res.status}`);
+  // 404 → synthetic "expired" status (centralized in bridge-fetch helper).
+  // See bridge-fetch.ts for rationale (incident PO-1015/PO-1016, 2026-04-29).
+  const _result = await pollBridgeStatus(operationId);
+  if (_result.status === "expired") {
+    return {
+      operation: {
+        status: "expired",
+        error:
+          "Bridge operation expired (HTTP 404). Op no longer in bridge queue.",
+      },
+    } as BridgeStatusResponse;
   }
-  return (await res.json()) as BridgeStatusResponse;
+  return _result.data as BridgeStatusResponse;
 }
 
 export default async function qbInventoryAdjustmentPoller(
@@ -201,6 +212,15 @@ export default async function qbInventoryAdjustmentPoller(
   const logger = container.resolve("logger");
   const query = container.resolve(ContainerRegistrationKeys.QUERY);
   const inventoryCountSvc = container.resolve(INVENTORY_COUNT_MODULE) as any;
+  const knex = (container as any).resolve("__pg_connection__");
+
+  // Safety net: demote rows stuck in waiting/processing past their thresholds.
+  await markStaleRowsAsFailed(
+    knex,
+    "qb_inventory_adjustment_pipeline",
+    INVENTORY_ADJUSTMENT_STALE_CONFIG,
+    { warn: (m: string) => (logger as any).warn?.(`[qb-ia-poller] ${m}`) }
+  );
 
   const nowIso = new Date().toISOString();
 
@@ -272,6 +292,18 @@ export default async function qbInventoryAdjustmentPoller(
       if (row.qb_operation_id && row.status === "processing") {
         const data = await fetchBridgeStatus(row.qb_operation_id);
         const status = data.operation?.status;
+
+        if (status === "expired") {
+          await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
+            id: row.id,
+            status: "error",
+            last_error: data.operation?.error ?? "Bridge operation expired",
+            qb_operation_id: null,
+            next_retry_at: new Date(Date.now() + 2 * 60_000),
+          });
+          errored++;
+          continue;
+        }
 
         if (status === "completed") {
           const txnId = extractTxnId(data);
@@ -432,6 +464,18 @@ export default async function qbInventoryAdjustmentPoller(
       if (row.void_operation_id && row.void_status === "processing") {
         const data = await fetchBridgeStatus(row.void_operation_id);
         const status = data.operation?.status;
+
+        if (status === "expired") {
+          await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({
+            id: row.id,
+            void_status: "error",
+            void_last_error: data.operation?.error ?? "Bridge operation expired",
+            void_operation_id: null,
+            void_next_retry_at: new Date(Date.now() + 2 * 60_000),
+          });
+          voidErrored++;
+          continue;
+        }
 
         if (status === "completed") {
           await inventoryCountSvc.updateQbInventoryAdjustmentPipelines({

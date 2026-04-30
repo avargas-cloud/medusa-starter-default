@@ -1,4 +1,5 @@
 import { MedusaContainer } from "@medusajs/framework/types";
+import { pollBridgeStatus } from "../lib/quickbooks/bridge-fetch";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../modules/quickbooks-catalog";
@@ -208,12 +209,13 @@ async function handleFetching(
     throw new Error("Fetching state without bridge_operation_id");
   }
 
-  const res = await fetch(
-    `${BRIDGE_URL}/api/sync/status/${run.bridge_operation_id}`,
-    { headers: HEADERS }
-  );
-  if (!res.ok) throw new Error(`Bridge status HTTP ${res.status}`);
-  const data = await res.json();
+  const polled = await pollBridgeStatus(run.bridge_operation_id);
+  if (polled.status === "expired") {
+    throw new Error(
+      `Bridge sync op ${run.bridge_operation_id} expired (HTTP 404)`
+    );
+  }
+  const data: any = polled.data;
   const status = data.operation?.status;
 
   if (status === "failed") {

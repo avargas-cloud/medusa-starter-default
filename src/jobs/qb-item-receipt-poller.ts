@@ -28,6 +28,11 @@
  */
 
 import { MedusaContainer } from "@medusajs/framework/types";
+import { pollBridgeStatus } from "../lib/quickbooks/bridge-fetch";
+import {
+  markStaleRowsAsFailed,
+  STANDARD_STALE_CONFIG,
+} from "../lib/quickbooks/stale-row-cleanup";
 
 const bridgeUrl = (): string =>
   process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
@@ -43,7 +48,7 @@ const backoffMs = (retryNum: number): number =>
 
 type BridgeStatus = {
   operation?: {
-    status?: "queued" | "processing" | "completed" | "failed";
+    status?: "queued" | "processing" | "completed" | "failed" | "expired";
     error?: string;
     txnId?: string;
     listId?: string;
@@ -52,14 +57,19 @@ type BridgeStatus = {
 };
 
 const pollBridge = async (operationId: string): Promise<BridgeStatus> => {
-  const res = await fetch(`${bridgeUrl()}/api/sync/status/${operationId}`, {
-    headers: {
-      "x-api-key": apiKey(),
-      "bypass-tunnel-reminder": "true",
-    },
-  });
-  if (!res.ok) throw new Error(`Bridge HTTP ${res.status}`);
-  return (await res.json()) as BridgeStatus;
+  // 404 → synthetic "expired" status (centralized in bridge-fetch helper).
+  // See bridge-fetch.ts for rationale (incident PO-1015/PO-1016, 2026-04-29).
+  const result = await pollBridgeStatus(operationId);
+  if (result.status === "expired") {
+    return {
+      operation: {
+        status: "expired",
+        error:
+          "Bridge operation expired (HTTP 404). Op no longer in bridge queue.",
+      },
+    } as BridgeStatus;
+  }
+  return result.data as BridgeStatus;
 };
 
 const submitAddToBridge = async (
@@ -118,6 +128,14 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
   const knex = (container as any).resolve("__pg_connection__");
 
   const TAG = "[qb-ir-poller]";
+
+  // Safety net: demote rows stuck in waiting/submitted past their thresholds.
+  await markStaleRowsAsFailed(
+    knex,
+    "qb_item_receipt_pipeline",
+    STANDARD_STALE_CONFIG,
+    { warn: (m) => logger.warn?.(`${TAG} ${m}`) }
+  );
 
   let submitted = 0;
   let resolved = 0;
@@ -197,6 +215,20 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
 
       if (!opStatus || opStatus === "queued" || opStatus === "processing")
         continue;
+
+      if (opStatus === "expired") {
+        await knex.raw(
+          `UPDATE qb_item_receipt_pipeline
+           SET status = 'error',
+               last_error = ?,
+               qb_operation_id = NULL,
+               next_retry_at = NOW() + INTERVAL '2 minutes',
+               updated_at = NOW()
+           WHERE id = ?`,
+          [data.operation?.error ?? "Bridge operation expired", row.id]
+        );
+        continue;
+      }
 
       if (opStatus === "failed") {
         const errMsg = data.operation?.error ?? "Bridge returned failed";
@@ -414,6 +446,20 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
 
       if (!opStatus || opStatus === "queued" || opStatus === "processing")
         continue;
+
+      if (opStatus === "expired") {
+        await knex.raw(
+          `UPDATE qb_item_receipt_pipeline
+           SET void_status = 'error',
+               void_last_error = ?,
+               void_operation_id = NULL,
+               void_next_retry_at = NOW() + INTERVAL '2 minutes',
+               updated_at = NOW()
+           WHERE id = ?`,
+          [data.operation?.error ?? "Bridge operation expired", row.id]
+        );
+        continue;
+      }
 
       if (opStatus === "failed") {
         await knex.raw(

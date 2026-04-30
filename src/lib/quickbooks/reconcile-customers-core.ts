@@ -1,4 +1,5 @@
 import { ICustomerModuleService } from "@medusajs/framework/types";
+import { pollBridgeStatus } from "./bridge-fetch";
 import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { isQbIntegrationEnabled } from "./qb-integration-guard";
@@ -106,20 +107,13 @@ export async function reconcileCustomersCore(
       attempts++;
       log(`⏳ Polling Status (${attempts}/${MAX_POLL_ATTEMPTS})...`);
 
-      const statusRes = await fetch(
-        `${BRIDGE_URL}/api/sync/status/${operationId}`,
-        {
-          headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" },
-        }
-      );
-
-      if (!statusRes.ok) {
-        warn(`   Bridge Status Error: ${statusRes.status}`);
-        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-        continue;
+      const polled = await pollBridgeStatus(operationId);
+      if (polled.status === "expired") {
+        const error = `QB reconcile op ${operationId} expired (bridge returned 404)`;
+        warn(`   ${error}`);
+        return { success: false, stats, error, issues: [] };
       }
-
-      const statusJson: any = await statusRes.json();
+      const statusJson: any = polled.data;
 
       if (statusJson.success && statusJson.operation) {
         if (statusJson.operation.status === "completed") {

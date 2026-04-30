@@ -1,4 +1,5 @@
 import { IPricingModuleService } from "@medusajs/types";
+import { pollBridgeStatus } from "./bridge-fetch";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 
 import { syncInventoryWorkflow } from "../../workflows/sync-inventory";
@@ -179,19 +180,13 @@ export async function syncPricesCore(
 
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
 
-      const statusRes = await fetch(
-        `${BRIDGE_URL}/api/sync/status/${operationId}`,
-        {
-          headers: { "x-api-key": API_KEY, "bypass-tunnel-reminder": "true" },
-        }
-      );
-
-      if (!statusRes.ok) {
-        warn(`   Bridge Status Error: ${statusRes.status}`);
-        continue;
+      const polled = await pollBridgeStatus(operationId);
+      if (polled.status === "expired") {
+        const error = `QB sync op ${operationId} expired (bridge returned 404)`;
+        warn(`   ${error}`);
+        return { success: false, stats, error };
       }
-
-      const statusJson: any = await statusRes.json();
+      const statusJson: any = polled.data;
 
       if (statusJson.success && statusJson.operation) {
         if (statusJson.operation.status === "completed") {

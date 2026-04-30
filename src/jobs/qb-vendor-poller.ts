@@ -1,14 +1,18 @@
 import { MedusaContainer } from "@medusajs/framework/types";
+import { pollBridgeStatus } from "../lib/quickbooks/bridge-fetch";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../modules/quickbooks-catalog";
 
-const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
-const API_KEY = process.env.QB_API_KEY || "";
 const MAX_ROWS_PER_TICK = 30;
-const MAX_RETRIES = 3;
-// Backoff caps ladder (minutes) — scheduled next_retry_at after Nth failure
-const BACKOFF_MINUTES = [2, 4, 8];
+// Use shared retry policy so vendor sync matches the rest of the QB pipeline
+// (formerly used [2,4,8] which gave up ~5× faster — see B2 fix 2026-04-29).
+import {
+  STANDARD_BACKOFF_MINUTES,
+  MAX_RETRIES,
+  computeNextRetryDate,
+} from "../lib/quickbooks/retry-config";
+const BACKOFF_MINUTES = STANDARD_BACKOFF_MINUTES;
 
 type BridgeStatusResponse = {
   operation?: {
@@ -27,12 +31,8 @@ const extractListId = (data: BridgeStatusResponse): string | null => {
   return msgs?.VendorAddRs?.VendorRet?.ListID ?? null;
 };
 
-const computeNextRetry = (attemptsSoFar: number): Date => {
-  const idx = Math.min(attemptsSoFar, BACKOFF_MINUTES.length - 1);
-  const minutes =
-    BACKOFF_MINUTES[idx] ?? BACKOFF_MINUTES[BACKOFF_MINUTES.length - 1] ?? 8;
-  return new Date(Date.now() + minutes * 60 * 1000);
-};
+const computeNextRetry = (attemptsSoFar: number): Date =>
+  computeNextRetryDate(attemptsSoFar, BACKOFF_MINUTES);
 
 type VendorRow = {
   id: string;
@@ -172,17 +172,18 @@ export default async function qbVendorPoller(container: MedusaContainer) {
     }
 
     try {
-      const res = await fetch(
-        `${BRIDGE_URL}/api/sync/status/${row.qb_operation_id}`,
-        {
-          headers: {
-            "x-api-key": API_KEY,
-            "bypass-tunnel-reminder": "true",
-          },
-        }
-      );
-      if (!res.ok) throw new Error(`Bridge ${res.status}`);
-      const data = (await res.json()) as BridgeStatusResponse;
+      const polled = await pollBridgeStatus(row.qb_operation_id);
+      if (polled.status === "expired") {
+        // Bridge no longer knows the op. Mark error so retry cycle re-submits.
+        await catalog.updateQbVendors({
+          id: row.id,
+          sync_status: "error",
+          last_error: "Bridge operation expired (HTTP 404)",
+          next_retry_at: new Date(Date.now() + 2 * 60_000),
+        });
+        continue;
+      }
+      const data = polled.data as BridgeStatusResponse;
       const status = data.operation?.status;
 
       if (status === "failed") {

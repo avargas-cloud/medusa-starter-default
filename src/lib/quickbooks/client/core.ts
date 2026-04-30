@@ -1,4 +1,5 @@
 import { QbAsyncResult, QbUpdateCustomerPayload } from "./types";
+import { pollBridgeStatus } from "../bridge-fetch";
 
 export const BRIDGE_URL =
   process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
@@ -50,11 +51,17 @@ export async function pollOperationResult(
     );
 
     try {
-      const statusRes = await bridgeFetch(
-        "GET",
-        `/api/sync/status/${operationId}`
-      );
-      const op = statusRes?.operation;
+      const polled = await pollBridgeStatus(operationId);
+      if (polled.status === "expired") {
+        // Bridge no longer knows about this op (restart, queue cleanup, state strip).
+        // Throw so the caller's QbBridgeResult wrapper returns success:false with a
+        // clear message; the originating subscriber/job will retry on next tick.
+        throw new Error(
+          `QB operation ${operationId} expired (bridge returned 404)`
+        );
+      }
+      const statusRes = polled.data;
+      const op = statusRes?.operation as any;
 
       if (!op) continue;
 
@@ -142,11 +149,14 @@ export async function pollRawOperationResult(
       `[QB] ⏳ Polling raw operation ${operationId} (${attempt}/${MAX_POLL_ATTEMPTS})...`
     );
     try {
-      const statusRes = await bridgeFetch(
-        "GET",
-        `/api/sync/status/${operationId}`
-      );
-      const op = statusRes?.operation;
+      const polled = await pollBridgeStatus(operationId);
+      if (polled.status === "expired") {
+        throw new Error(
+          `QB operation ${operationId} expired (bridge returned 404)`
+        );
+      }
+      const statusRes = polled.data;
+      const op = statusRes?.operation as any;
       if (!op) continue;
       if (op.status === "completed") return op.result;
       if (op.status === "failed")
@@ -154,7 +164,8 @@ export async function pollRawOperationResult(
           `QB operation ${operationId} failed: ${op.error || "Unknown error"}`
         );
     } catch (err: any) {
-      if (err.message.includes("failed:")) throw err;
+      if (err.message.includes("failed:") || err.message.includes("expired"))
+        throw err;
       log(`[QB] ⚠️ Raw poll error (will retry): ${err.message}`);
     }
   }
@@ -190,11 +201,13 @@ export async function getCustomerEditSequence(
     // Poll for the query result
     for (let attempt = 1; attempt <= MAX_POLL_ATTEMPTS; attempt++) {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-      const statusRes = await bridgeFetch(
-        "GET",
-        `/api/sync/status/${operationId}`
-      );
-      const op = statusRes?.operation;
+      const polled = await pollBridgeStatus(operationId);
+      if (polled.status === "expired") {
+        log(`[QB] ⚠️ EditSeq query op ${operationId} expired`);
+        return null;
+      }
+      const statusRes = polled.data;
+      const op = statusRes?.operation as any;
       if (!op) continue;
       if (op.status === "completed") {
         // Regex-extract EditSequence from the raw QB XML response (most reliable)

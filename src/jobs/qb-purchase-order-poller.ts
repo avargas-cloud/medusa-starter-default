@@ -17,6 +17,11 @@
  */
 
 import { MedusaContainer } from "@medusajs/framework/types";
+import { pollBridgeStatus } from "../lib/quickbooks/bridge-fetch";
+import {
+  markStaleRowsAsFailed,
+  STANDARD_STALE_CONFIG,
+} from "../lib/quickbooks/stale-row-cleanup";
 
 const bridgeUrl = (): string =>
   process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
@@ -32,23 +37,32 @@ const backoffMs = (retryNum: number): number =>
 
 type BridgeStatus = {
   operation?: {
-    status?: "queued" | "processing" | "completed" | "failed";
+    status?: "queued" | "processing" | "completed" | "failed" | "expired";
     error?: string;
     txnId?: string;
     listId?: string;
+    refNumber?: string;
+    editSequence?: string;
     result?: unknown;
   };
 };
 
 const pollBridge = async (operationId: string): Promise<BridgeStatus> => {
-  const res = await fetch(`${bridgeUrl()}/api/sync/status/${operationId}`, {
-    headers: {
-      "x-api-key": apiKey(),
-      "bypass-tunnel-reminder": "true",
-    },
-  });
-  if (!res.ok) throw new Error(`Bridge HTTP ${res.status}`);
-  return (await res.json()) as BridgeStatus;
+  // Use centralized helper that maps HTTP 404 → synthetic "expired" status.
+  // Why: a 404 means the bridge no longer knows about this op (queue cleaned,
+  // bridge restart, completed-and-purged). Treating it as fatal kept rows stuck
+  // in `submitted` indefinitely (incident PO-1015/PO-1016, 2026-04-29).
+  const result = await pollBridgeStatus(operationId);
+  if (result.status === "expired") {
+    return {
+      operation: {
+        status: "expired",
+        error:
+          "Bridge operation expired (HTTP 404). Op no longer in bridge queue.",
+      },
+    } as BridgeStatus;
+  }
+  return result.data as BridgeStatus;
 };
 
 const submitQueryToBridge = async (
@@ -155,11 +169,17 @@ const extractTxnId = (data: BridgeStatus): string | null => {
   return extractPoRet(data)?.TxnID ?? null;
 };
 
-const extractRefNumber = (data: BridgeStatus): string | null =>
-  extractPoRet(data)?.RefNumber ?? null;
+const extractRefNumber = (data: BridgeStatus): string | null => {
+  const op = data.operation;
+  if (op?.refNumber) return op.refNumber;
+  return extractPoRet(data)?.RefNumber ?? null;
+};
 
-const extractEditSequence = (data: BridgeStatus): string | null =>
-  extractPoRet(data)?.EditSequence ?? null;
+const extractEditSequence = (data: BridgeStatus): string | null => {
+  const op = data.operation;
+  if (op?.editSequence) return op.editSequence;
+  return extractPoRet(data)?.EditSequence ?? null;
+};
 
 const extractTxnLineIds = (data: BridgeStatus): string[] => {
   const ret = extractPoRet(data);
@@ -177,6 +197,15 @@ export default async function qbPurchaseOrderPoller(
   const knex = (container as any).resolve("__pg_connection__");
 
   const TAG = "[qb-po-poller]";
+
+  // Safety net: demote rows stuck in waiting/submitted past their thresholds
+  // (in case the consolidator is delayed or the bridge dropped operations).
+  await markStaleRowsAsFailed(
+    knex,
+    "qb_purchase_order_pipeline",
+    STANDARD_STALE_CONFIG,
+    { warn: (m) => logger.warn?.(`${TAG} ${m}`) }
+  );
 
   let submitted = 0;
   let resolved = 0;
@@ -307,6 +336,21 @@ export default async function qbPurchaseOrderPoller(
 
       if (!opStatus || opStatus === "queued" || opStatus === "processing")
         continue;
+
+      if (opStatus === "expired") {
+        // Bridge no longer knows the op. Clear op_id, mark as error, retry shortly.
+        await knex.raw(
+          `UPDATE qb_purchase_order_pipeline
+           SET status = 'error',
+               last_error = ?,
+               qb_operation_id = NULL,
+               next_retry_at = NOW() + INTERVAL '2 minutes',
+               updated_at = NOW()
+           WHERE id = ?`,
+          [data.operation?.error ?? "Bridge operation expired", row.id]
+        );
+        continue;
+      }
 
       if (opStatus === "failed") {
         const errMsg = data.operation?.error ?? "Bridge returned failed";
