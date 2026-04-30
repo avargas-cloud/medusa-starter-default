@@ -26,6 +26,7 @@ import type {
 import { deletePurchaseOrderReceiptWorkflow } from "../../../../../../workflows/purchase-orders/delete-purchase-order-receipt";
 import { updatePurchaseOrderReceiptWorkflow } from "../../../../../../workflows/purchase-orders/update-purchase-order-receipt";
 import { onPoReceiveReversed } from "../../../../../../lib/inventory-transfer-link";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
 import { getActorUserId, UnauthenticatedError } from "../../../_lib/auth";
 import { zodErrorToBody } from "../../../_lib/format";
 import { getPurchaseOrdersService } from "../../../_lib/service-resolver";
@@ -169,6 +170,16 @@ export async function DELETE(
     // Transfer-to-USA accounting: restore China stock + revert IT line qty
     if (!wasAlreadyVoided && transferLines.length > 0) {
       await onPoReceiveReversed(knex, id, transferLines);
+
+      // Re-sync MeiliSearch AFTER China stock restore. The delete workflow's
+      // own sync runs before onPoReceiveReversed and would publish stale totals.
+      await Promise.allSettled(
+        transferLines.map((l) =>
+          syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+            input: { inventoryItemId: l.inventory_item_id },
+          })
+        )
+      );
     }
 
     return res.json({ delete: result });

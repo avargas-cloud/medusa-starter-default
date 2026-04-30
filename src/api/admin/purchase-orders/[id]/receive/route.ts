@@ -20,6 +20,7 @@ import type {
 
 import { receivePurchaseOrderWorkflow } from "../../../../../workflows/purchase-orders/receive-purchase-order";
 import { onPoReceiveApplied } from "../../../../../lib/inventory-transfer-link";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
 import { getActorUserId, UnauthenticatedError } from "../../_lib/auth";
 import { zodErrorToBody } from "../../_lib/format";
 import { getPurchaseOrdersService } from "../../_lib/service-resolver";
@@ -265,6 +266,17 @@ export async function POST(
         product_variant_id: l.product_variant_id,
         qty: l.qty_received_now,
       }))
+    );
+
+    // Re-sync MeiliSearch AFTER the China stock deduction. The workflow's
+    // own sync step runs before onPoReceiveApplied and would publish stale
+    // China totals.
+    await Promise.allSettled(
+      workflowLines.map((l) =>
+        syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+          input: { inventoryItemId: l.inventory_item_id },
+        })
+      )
     );
 
     return res.json({ receipt: result });
