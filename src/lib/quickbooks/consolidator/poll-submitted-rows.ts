@@ -193,6 +193,32 @@ export async function pollSubmittedRows(
             );
           }
 
+          // Propagate synced status to customer_payment rows linked via invoices_affected
+          try {
+            const cpResult = await pool.query(
+              `UPDATE customer_payment
+               SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+                   qb = $3::jsonb
+               WHERE metadata->'invoices_affected' @> to_jsonb($1::text)
+                 AND metadata->>'is_sales_receipt_payment' = 'true'
+                 AND COALESCE(metadata->>'qb_sync_status', '') != 'synced'`,
+              [
+                row.reference_id,
+                JSON.stringify({ qb_sync_status: "synced" }),
+                JSON.stringify({ source: "sales_receipt", status: "yes" }),
+              ]
+            );
+            if ((cpResult.rowCount ?? 0) > 0) {
+              logger.info(
+                `${LOG_PREFIX} ✅ Propagated SR sync to ${cpResult.rowCount} customer_payment(s) for pos_invoice ${row.reference_id}`
+              );
+            }
+          } catch (cpErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Could not propagate SR sync to customer_payment: ${cpErr.message}`
+            );
+          }
+
           if (row.order_id) {
             try {
               await pool.query(
