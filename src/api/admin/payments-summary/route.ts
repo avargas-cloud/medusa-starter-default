@@ -55,8 +55,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
          UNION ALL
 
+         -- Refunds bucket on the day cash actually left the bank (refunded_at),
+         -- not the day the original CM was issued (received_at). Falls back to
+         -- received_at for legacy rows that never recorded refunded_at.
          SELECT
-           received_at::date AS d,
+           COALESCE((metadata->>'refunded_at')::timestamptz, received_at)::date AS d,
            CASE WHEN status = 'refunded' AND qb->>'check_txn_id' IS NOT NULL
                 THEN -COALESCE((metadata->>'refund_amount')::numeric, amount) ELSE 0 END AS net_amount,
            0                            AS gross_payments,
@@ -66,8 +69,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          FROM customer_payment
          WHERE deleted_at IS NULL
            AND type = 'credit_memo'
-           AND received_at >= ?
-           AND received_at < ?
+           AND COALESCE((metadata->>'refunded_at')::timestamptz, received_at) >= ?
+           AND COALESCE((metadata->>'refunded_at')::timestamptz, received_at) < ?
        ) sub
        GROUP BY d
        HAVING SUM(net_amount) <> 0 OR SUM(payment_count) > 0
