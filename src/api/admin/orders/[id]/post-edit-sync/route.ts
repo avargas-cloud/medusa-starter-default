@@ -897,9 +897,7 @@ export async function POST(
               }
             }
             if (qbListId) {
-              const {
-                createSalesOrderInQb,
-              } = require("../../../../../lib/quickbooks/client/sales-orders");
+              // 1.5.12: createSalesOrderInQb removed — enqueue via consolidator.
               const {
                 coalesceIfInFlight,
               } = require("../../../../../lib/quickbooks/qb-pipeline");
@@ -955,42 +953,26 @@ export async function POST(
                   { orderId: id, steps: ["sales_order"] },
                   async () => {
                     try {
-                      const soRes = await createSalesOrderInQb({
-                        customerId: qbListId,
-                        date: new Date().toISOString().split("T")[0],
-                        items: createItems,
-                        ...(salesRep ? { salesRep } : {}),
+                      // 1.5.12: pipeline-only — enqueue 'pending' SO with full
+                      // payload. Consolidator's case 'sales_order' (added in
+                      // 1.5.5) submits to bridge.
+                      await writePipelineRow({
+                        orderId: id,
+                        step: "sales_order",
+                        status: "pending",
+                        payload: {
+                          customerId: qbListId,
+                          date: new Date().toISOString().split("T")[0],
+                          items: createItems,
+                          ...(salesRep ? { salesRep } : {}),
+                        },
                       });
-                      if (soRes.success) {
-                        logger.info(
-                          `[post-edit-sync] ✅ New QB SO queued opId=${soRes.data?.operationId}`
-                        );
-                        await writePipelineRow({
-                          orderId: id,
-                          step: "sales_order",
-                          status: "submitted",
-                          bridgeOpId: soRes.data?.operationId,
-                        });
-                      } else {
-                        logger.error(
-                          `[post-edit-sync] ❌ New QB SO failed: ${soRes.error}`
-                        );
-                        try {
-                          await getDbPool().query(
-                            `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || '{"qb_sync_status":"error"}'::jsonb WHERE id = $1`,
-                            [id]
-                          );
-                          await writePipelineRow({
-                            orderId: id,
-                            step: "sales_order",
-                            status: "failed",
-                            error: soRes.error,
-                          });
-                        } catch (e) {}
-                      }
+                      logger.info(
+                        `[post-edit-sync] 📥 Enqueued sales_order for ${id}`
+                      );
                     } catch (e: any) {
                       logger.error(
-                        `[post-edit-sync] ❌ New QB SO exception: ${e.message}`
+                        `[post-edit-sync] ❌ enqueue exception: ${e.message}`
                       );
                       try {
                         await getDbPool().query(
