@@ -8,6 +8,7 @@ import {
 } from "../qb-bridge-client";
 import { withQbLockResult } from "../qb-locks";
 import { writePipelineRow, cacheEditSequence } from "../qb-pipeline";
+import { getDbPool } from "../../../api/utils/db-pool";
 
 const LOG_PREFIX = "[QB-POS-PAYMENT-APPLIED]";
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";
@@ -61,6 +62,48 @@ export async function handlePosPaymentApplied({
   const medusaPayRef = (payment as any).display_id
     ? `PAY-${(payment as any).display_id}`
     : null;
+
+  // Short-circuit: if this is a credit_memo payment with no QB TxnId yet, the
+  // credit memo itself may still be in the pipeline. Enqueue apply_payment as
+  // 'waiting' with depends_on so the consolidator dispatches it automatically
+  // once the CM is confirmed — avoiding the 400s polling loop.
+  if (!paymentTxnId && (payment as any).type === "credit_memo") {
+    try {
+      const pool = getDbPool();
+      const cmRef = (payment as any).reference as string | undefined;
+      if (cmRef) {
+        const { rows: cmPipelineRows } = await pool.query(
+          `SELECT q.id FROM qb_order_pipeline q
+             JOIN pos_credit_memo cm ON cm.id = q.reference_id
+            WHERE cm.credit_memo_number = $1
+              AND q.step = 'credit_memo'
+              AND q.status IN ('pending', 'submitted', 'waiting')
+            ORDER BY q.created_at DESC LIMIT 1`,
+          [cmRef]
+        );
+        if (cmPipelineRows[0]) {
+          const cmPipelineId = cmPipelineRows[0].id as string;
+          await writePipelineRow({
+            orderId: order_id,
+            referenceId: payment_id,
+            referenceType: "customer_payment",
+            step: "apply_payment",
+            status: "waiting",
+            dependsOn: cmPipelineId,
+            medusaRefNumber: medusaPayRef,
+          }).catch(() => {});
+          logger.info(
+            `${LOG_PREFIX} ⏸️ apply_payment enqueued as waiting (depends_on CM pipeline row ${cmPipelineId}) — will auto-dispatch when CM is confirmed`
+          );
+          return;
+        }
+      }
+    } catch (depErr: any) {
+      logger.warn(
+        `${LOG_PREFIX} Could not set up CM dependency, falling back to polling: ${depErr.message}`
+      );
+    }
+  }
 
   // Wait for the payment to finish syncing to QB if it hasn't yet (up to 400 seconds)
   if (!paymentTxnId) {
