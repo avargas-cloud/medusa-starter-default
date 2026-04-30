@@ -3,8 +3,8 @@ import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 
 // 1.5.7: handleFulfillmentCreated import removed — pos/sync enqueues now.
 // 1.5.5: handleOrderPlaced import removed — pos/sync enqueues now.
-import { handlePosPaymentApplied } from "../../../../lib/quickbooks/handlers/handle-pos-payment-applied";
-import { handlePosPaymentCreated } from "../../../../lib/quickbooks/handlers/handle-pos-payment-created";
+// 1.5.9: handlePosPaymentApplied + handlePosPaymentCreated imports removed —
+// pos/sync now enqueues pipeline rows for the consolidator.
 // 1.5.6: handleSalesReceiptCreated import removed — pos/sync enqueues now.
 import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
 import {
@@ -972,43 +972,52 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           });
         }
 
-        // Fire-and-forget — double sequence runs in background
+        // 1.5.9: pipeline-only — enqueue 'payment' + 'apply_payment' rows.
+        // The consolidator's pending-dispatch handles both in sequence
+        // (apply_payment naturally waits because it depends on payment data
+        // available after payment row confirms).
         (async () => {
           try {
-            logger.info(`${LOG_PREFIX} Sequence 1/2: handlePosPaymentCreated`);
-            await handlePosPaymentCreated({
-              event: { name: "pos.payment.created", data: { id } },
-              container: req.scope as any,
-              pluginOptions: {},
+            const {
+              writePipelineRow: enqueuePosPay,
+            } = require("../../../../lib/quickbooks/qb-pipeline");
+
+            logger.info(`${LOG_PREFIX} 📥 Enqueueing payment for ${id}`);
+            await enqueuePosPay({
+              referenceId: id,
+              referenceType: "payment",
+              step: "payment",
+              status: "pending",
             });
+
             const refreshedPayment =
               await financeService.retrieveCustomerPayment(id, {
                 relations: ["applications"],
               });
             if (refreshedPayment.applications?.length > 0) {
               logger.info(
-                `${LOG_PREFIX} Sequence 2/2: handlePosPaymentApplied`
+                `${LOG_PREFIX} 📥 Enqueueing ${refreshedPayment.applications.length} apply_payment row(s)`
               );
               for (const app of refreshedPayment.applications) {
                 if (app.invoice_id) {
-                  await handlePosPaymentApplied({
-                    event: {
-                      name: "pos.payment.applied",
-                      data: {
-                        payment_id: refreshedPayment.id,
-                        invoice_id: app.invoice_id,
-                        order_id: app.order_id,
-                        amount_applied: Number(app.amount_applied),
-                      },
+                  await enqueuePosPay({
+                    orderId: app.order_id ?? null,
+                    referenceId: refreshedPayment.id,
+                    referenceType: "payment",
+                    step: "apply_payment",
+                    status: "pending",
+                    payload: {
+                      payment_id: refreshedPayment.id,
+                      invoice_id: app.invoice_id,
+                      order_id: app.order_id,
+                      amount_applied: Number(app.amount_applied),
                     },
-                    container: req.scope as any,
-                    pluginOptions: {},
                   });
                 }
               }
             } else {
               logger.info(
-                `${LOG_PREFIX} Sequence 2/2 skipped: No payment applications found`
+                `${LOG_PREFIX} No payment applications to enqueue`
               );
             }
           } catch (err: any) {
@@ -1072,18 +1081,25 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           });
         }
 
-        handlePosPaymentCreated({
-          event: { name: "pos.payment.created", data: { id } },
-          container: req.scope as any,
-          pluginOptions: {},
-        }).catch((err: any) =>
+        // 1.5.9: pipeline-only — enqueue 'payment' for consolidator pickup.
+        try {
+          const {
+            writePipelineRow: enqueueRefundPay,
+          } = require("../../../../lib/quickbooks/qb-pipeline");
+          await enqueueRefundPay({
+            referenceId: id,
+            referenceType: "payment",
+            step: "payment",
+            status: "pending",
+          });
+        } catch (err: any) {
           logger.error(
-            `${LOG_PREFIX} Background refund sync error: ${err.message}`
-          )
-        );
+            `${LOG_PREFIX} Refund payment enqueue error: ${err.message}`
+          );
+        }
         return res.json({
           success: true,
-          message: "Refund/CreditMemo sync queued",
+          message: "Refund/CreditMemo sync enqueued — consolidator will process",
         });
       }
 

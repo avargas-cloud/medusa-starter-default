@@ -4,7 +4,8 @@ import { Client } from "pg";
 
 // 1.5.5: handleOrderPlaced import removed — pos-sync now enqueues 'pending'
 // sales_order rows for the consolidator's pending-dispatch pass.
-import { handlePosPaymentCreated } from "../lib/quickbooks/handlers/handle-pos-payment-created";
+// 1.5.9: handlePosPaymentCreated import removed — auto-retry now resets row
+// to 'pending' instead of calling handler directly.
 import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard";
 import {
   getEstimateTxnId,
@@ -244,13 +245,19 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
       );
 
       try {
-        await handlePosPaymentCreated({
-          event: {
-            name: "pos.payment.created",
-            data: { id: payRow.reference_id },
-          },
-          container,
-        } as any);
+        // 1.5.9: pipeline-only — reset row to 'pending' for consolidator pickup.
+        // The pending-dispatch pass calls handlePosPaymentCreated next tick.
+        await client.query(
+          `UPDATE qb_order_pipeline
+              SET status = 'pending', error = NULL, failed_at = NULL,
+                  updated_at = NOW(),
+                  retry_count = COALESCE(retry_count, 0) + 1
+            WHERE id = $1`,
+          [payRow.id]
+        );
+        logger.info(
+          `${LOG_PREFIX} 📥 Payment auto-retry: row ${payRow.id} reset to 'pending'`
+        );
         retriedPayments++;
       } catch (retryErr: any) {
         logger.error(

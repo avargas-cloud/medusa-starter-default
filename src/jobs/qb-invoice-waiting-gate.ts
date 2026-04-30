@@ -21,8 +21,8 @@ import { MedusaContainer } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 // 1.5.7: handleFulfillmentCreated import removed — waiting-gate enqueues now.
-import { handlePosPaymentApplied } from "../lib/quickbooks/handlers/handle-pos-payment-applied";
-import { handlePosPaymentCreated } from "../lib/quickbooks/handlers/handle-pos-payment-created";
+// 1.5.9: handlePosPaymentApplied + handlePosPaymentCreated imports removed —
+// waiting-gate enqueues pipeline rows now.
 // 1.5.6: handleSalesReceiptCreated import removed — waiting-gate enqueues now.
 import {
   writePipelineRow,
@@ -257,28 +257,44 @@ export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
         await new Promise((r) => setTimeout(r, 250));
 
         if (payload.payment_id_to_emit) {
-          await handlePosPaymentCreated({
-            event: {
-              name: "pos.payment.created",
-              data: { id: payload.payment_id_to_emit },
-            },
-            container,
-          } as any);
+          // 1.5.9: pipeline-only — enqueue 'payment' for consolidator pickup.
+          const {
+            writePipelineRow: enqueuePay,
+          } = require("../lib/quickbooks/qb-pipeline");
+          await enqueuePay({
+            orderId: inv.order_id,
+            referenceId: payload.payment_id_to_emit,
+            referenceType: "payment",
+            step: "payment",
+            status: "pending",
+          });
+          logger.info(
+            `[qb-invoice-waiting-gate] 📥 Enqueued payment for ${payload.payment_id_to_emit}`
+          );
         }
-
-        await new Promise((r) => setTimeout(r, 250));
 
         if (
           !payload.is_sales_receipt &&
           (payload.applications_to_emit?.length ?? 0) > 0
         ) {
+          // 1.5.9: pipeline-only — enqueue each apply_payment.
+          const {
+            writePipelineRow: enqueueApply,
+          } = require("../lib/quickbooks/qb-pipeline");
           await Promise.all(
             payload.applications_to_emit.map(async (appPayload: any) => {
-              await handlePosPaymentApplied({
-                event: { name: "pos.payment.applied", data: appPayload },
-                container,
-              } as any);
+              await enqueueApply({
+                orderId: appPayload.order_id ?? inv.order_id,
+                referenceId: appPayload.payment_id,
+                referenceType: "payment",
+                step: "apply_payment",
+                status: "pending",
+                payload: appPayload,
+              });
             })
+          );
+          logger.info(
+            `[qb-invoice-waiting-gate] 📥 Enqueued ${payload.applications_to_emit.length} apply_payment row(s)`
           );
         }
       } catch (dispatchErr: any) {

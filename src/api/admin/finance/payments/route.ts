@@ -1,7 +1,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
 
-import { handlePosPaymentCreated } from "../../../../lib/quickbooks/handlers/handle-pos-payment-created";
+// 1.5.9: handlePosPaymentCreated import removed — finance/payments enqueues now.
 import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../modules/finance";
 
@@ -244,19 +244,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         );
       }
 
-      setTimeout(async () => {
-        try {
-          await handlePosPaymentCreated({
-            event: { name: "pos.payment.created", data: { id: payment.id } },
-            container: req.scope as any,
-            pluginOptions: {},
-          });
-        } catch (execErr: any) {
-          console.error(
-            `[finance/payments] Direct exec pos.payment.created failed: ${execErr.message}`
-          );
-        }
-      }, 100);
+      // 1.5.9: pipeline-only — enqueue 'payment' for consolidator pickup.
+      try {
+        const {
+          writePipelineRow: enqueueFinPay,
+        } = require("../../../../lib/quickbooks/qb-pipeline");
+        await enqueueFinPay({
+          referenceId: payment.id,
+          referenceType: "payment",
+          step: "payment",
+          status: "pending",
+        });
+      } catch (enqErr: any) {
+        console.error(
+          `[finance/payments] Enqueue payment failed: ${enqErr.message}`
+        );
+      }
     }
 
     return res.json({ payment });

@@ -535,6 +535,26 @@ async function resubmitByStep(
         break;
       }
 
+      case "payment": {
+        // 1.5.9: pending payment receive — caller enqueues with payment_id
+        // (in row.reference_id). Consolidator dispatches handlePosPaymentCreated
+        // which resolves payment + customer + items and submits to bridge.
+        if (!row.reference_id) break;
+        const handlePosPaymentCreated =
+          require("../lib/quickbooks/handlers/handle-pos-payment-created").handlePosPaymentCreated;
+        await handlePosPaymentCreated({
+          event: {
+            name: "pos.payment.created",
+            data: {
+              payment_id: row.reference_id,
+              order_id: row.order_id,
+            },
+          },
+          container,
+        } as any);
+        break;
+      }
+
       case "credit_memo": {
         // 1.5.8: pending CM create — handler/admin enqueues with payload
         // (customerId, items, ...). Consolidator submits to bridge.
@@ -1856,7 +1876,7 @@ export default async function qbPipelineConsolidator(
     const { rows: pendingMutations } = await pool.query(`
       SELECT id, order_id, reference_id, reference_type, step, qb_txn_id
         FROM qb_order_pipeline
-       WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'credit_memo', 'void_credit_memo')
+       WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'credit_memo', 'void_credit_memo', 'payment', 'apply_payment')
          AND status = 'pending'
        ORDER BY COALESCE(updated_at, created_at) ASC
        LIMIT 20

@@ -1,6 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
-import { handlePosPaymentApplied } from "../../../../../../lib/quickbooks/handlers/handle-pos-payment-applied";
+// 1.5.9: handlePosPaymentApplied import removed — apply route enqueues now.
 import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../../modules/invoices";
@@ -205,30 +205,32 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           );
       }
 
-      // Direct exec — reliable, bypasses BullMQ outbox
-      setTimeout(async () => {
-        try {
-          await handlePosPaymentApplied({
-            event: {
-              name: "pos.payment.applied",
-              data: {
-                payment_id: paymentId,
-                invoice_id: invoice_id,
-                order_id: invoice.order_id,
-                amount_applied,
-                application_id: application.id,
-              },
-            },
-            container: req.scope,
-          } as any);
-        } catch (execErr: any) {
-          req.scope
-            .resolve("logger")
-            .error(
-              `[apply] Direct exec pos.payment.applied failed: ${execErr.message}`
-            );
-        }
-      }, 100);
+      // 1.5.9: pipeline-only — enqueue 'apply_payment' for consolidator pickup.
+      try {
+        const {
+          writePipelineRow: enqueueApplyFin,
+        } = require("../../../../../../lib/quickbooks/qb-pipeline");
+        await enqueueApplyFin({
+          orderId: invoice.order_id ?? null,
+          referenceId: paymentId,
+          referenceType: "payment",
+          step: "apply_payment",
+          status: "pending",
+          payload: {
+            payment_id: paymentId,
+            invoice_id,
+            order_id: invoice.order_id,
+            amount_applied,
+            application_id: application.id,
+          },
+        });
+      } catch (execErr: any) {
+        req.scope
+          .resolve("logger")
+          .error(
+            `[apply] Enqueue apply_payment failed: ${execErr.message}`
+          );
+      }
     }
 
     return res.json({ payment: updatedPayment, application });
