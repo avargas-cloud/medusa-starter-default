@@ -179,9 +179,11 @@ export async function resubmitByStep(
         const { rows: appRows } = await applyPool.query(
           `SELECT payment_id, invoice_id, order_id, amount_applied
            FROM payment_application
-           WHERE payment_id = $1 AND voided_at IS NULL
+           WHERE payment_id = $1
+             AND (order_id = $2 OR $2 IS NULL)
+             AND voided_at IS NULL
            LIMIT 1`,
-          [row.reference_id]
+          [row.reference_id, row.order_id ?? null]
         );
         const appRow = appRows[0];
         if (!appRow) {

@@ -182,6 +182,48 @@ export async function handlePosPaymentApplied({
   let invoiceTxnId = invoice.metadata?.qb_txn_id as string | undefined;
   let invoiceNumber = (invoice as any).invoice_number as string | undefined;
 
+  // Fallback: if pos_invoice.metadata.qb_txn_id is missing but the pipeline row
+  // is already confirmed, use the TxnID directly from the pipeline table.
+  // This handles cases where poll-submitted-rows failed to write back to metadata.
+  if (!invoiceTxnId) {
+    try {
+      const fbPool = getDbPool();
+      const { rows: pipelineRows } = await fbPool.query(
+        `SELECT qb_txn_id, qb_ref_number FROM qb_order_pipeline
+          WHERE reference_id = $1
+            AND step IN ('invoice', 'sales_receipt')
+            AND status = 'confirmed'
+            AND qb_txn_id IS NOT NULL
+          ORDER BY confirmed_at DESC LIMIT 1`,
+        [invoice_id]
+      );
+      if (pipelineRows[0]?.qb_txn_id) {
+        invoiceTxnId = pipelineRows[0].qb_txn_id as string;
+        logger.info(
+          `${LOG_PREFIX} 📋 Invoice TxnID sourced from confirmed pipeline row: ${invoiceTxnId}`
+        );
+        // Also backfill pos_invoice.metadata so future calls are fast
+        await fbPool.query(
+          `UPDATE pos_invoice
+              SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
+            WHERE id = $1`,
+          [
+            invoice_id,
+            JSON.stringify({
+              qb_txn_id: invoiceTxnId,
+              qb_ref_number: pipelineRows[0].qb_ref_number ?? undefined,
+              qb_sync_status: "synced",
+            }),
+          ]
+        );
+      }
+    } catch (fbErr: any) {
+      logger.warn(
+        `${LOG_PREFIX} Pipeline fallback for invoice TxnID failed: ${fbErr.message}`
+      );
+    }
+  }
+
   // 3. Polling for up to 100 seconds if the Invoice hasn't finished syncing yet (10 attempts of 10 seconds)
   if (!invoiceTxnId) {
     logger.info(
