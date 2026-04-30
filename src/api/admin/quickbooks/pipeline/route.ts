@@ -449,44 +449,20 @@ export async function POST(
             break;
           }
           case "sales_order": {
-            // If SO already exists in QB, use MOD path to avoid duplicate SO creation.
-            // Fall back to CREATE only when the SO never made it to QB (no txn_id).
-            if (row.qb_txn_id) {
-              const {
-                handleOrderUpdated,
-              } = require("../../../../lib/quickbooks/handlers/handle-order-updated");
-              const outcome = await handleOrderUpdated(
-                row.order_id,
-                req.scope,
-                logger,
-                { isCron: true, awaitSerialized: true }
-              );
-              if (outcome === "skipped") {
-                const {
-                  handleOrderPlaced,
-                } = require("../../../../lib/quickbooks/handlers/handle-order-placed");
-                await handleOrderPlaced(
-                  { id: row.order_id },
-                  orderModule,
-                  customerModule,
-                  req.scope,
-                  logger,
-                  true
-                );
-              }
-            } else {
-              const {
-                handleOrderPlaced,
-              } = require("../../../../lib/quickbooks/handlers/handle-order-placed");
-              await handleOrderPlaced(
-                { id: row.order_id },
-                orderModule,
-                customerModule,
-                req.scope,
-                logger,
-                true
-              );
-            }
+            // 1.5.5: pipeline-only retry — enqueue 'pending' instead of
+            // calling handlers directly. Consolidator's pending-dispatch
+            // pass picks it up and runs MOD-first → CREATE-fallback.
+            const {
+              writePipelineRow: enqueueSoRetry,
+            } = require("../../../../lib/quickbooks/qb-pipeline");
+            await enqueueSoRetry({
+              orderId: row.order_id,
+              step: "sales_order",
+              status: "pending",
+            });
+            logger.info(
+              `[qb-pipeline-retry] 📥 Re-enqueued sales_order for ${row.order_id}`
+            );
             break;
           }
           case "invoice": {

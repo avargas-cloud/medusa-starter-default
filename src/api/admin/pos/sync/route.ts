@@ -2,7 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 
 import { handleFulfillmentCreated } from "../../../../lib/quickbooks/handlers/handle-fulfillment-created";
-import { handleOrderPlaced } from "../../../../lib/quickbooks/handlers/handle-order-placed";
+// 1.5.5: handleOrderPlaced import removed — pos/sync enqueues now.
 import { handlePosPaymentApplied } from "../../../../lib/quickbooks/handlers/handle-pos-payment-applied";
 import { handlePosPaymentCreated } from "../../../../lib/quickbooks/handlers/handle-pos-payment-created";
 import { handleSalesReceiptCreated } from "../../../../lib/quickbooks/handlers/handle-sales-receipt-created";
@@ -470,16 +470,17 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
               } else {
                 // ── CREATE path ──
                 logger.info(
-                  `${LOG_PREFIX} No SO in QB yet — dispatching CREATE`
+                  `${LOG_PREFIX} No SO in QB yet — enqueuing for consolidator`
                 );
-                await handleOrderPlaced(
-                  { id },
-                  orderModule,
-                  customerModule,
-                  req.scope,
-                  logger,
-                  true
-                );
+                // 1.5.5: enqueue 'pending' SO row.
+                const {
+                  writePipelineRow: enqueueSo2,
+                } = require("../../../../lib/quickbooks/qb-pipeline");
+                await enqueueSo2({
+                  orderId: id,
+                  step: "sales_order",
+                  status: "pending",
+                });
               }
             } catch (bgErr: any) {
               logger.error(

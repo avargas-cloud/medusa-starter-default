@@ -1,8 +1,9 @@
 import { MedusaContainer } from "@medusajs/framework/types";
-import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
+import { ContainerRegistrationKeys } from "@medusajs/utils";
 import { Client } from "pg";
 
-import { handleOrderPlaced } from "../lib/quickbooks/handlers/handle-order-placed";
+// 1.5.5: handleOrderPlaced import removed — pos-sync now enqueues 'pending'
+// sales_order rows for the consolidator's pending-dispatch pass.
 import { handlePosPaymentCreated } from "../lib/quickbooks/handlers/handle-pos-payment-created";
 import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard";
 import {
@@ -46,8 +47,8 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
       db: client,
     });
 
-    const orderModule = container.resolve(Modules.ORDER);
-    const customerModule = container.resolve(Modules.CUSTOMER);
+    // 1.5.5: orderModule + customerModule no longer needed here — handler
+    // call removed in favor of pipeline enqueue.
 
     // 1. Fetch eligible POS Orders (between 1h and 24h old, not marked qb_skip)
     const ordersQuery = `
@@ -113,16 +114,17 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
         }
 
         logger.info(
-          `${LOG_PREFIX} Processing delayed Sales Order for order: ${row.id}`
+          `${LOG_PREFIX} 📥 Enqueueing delayed Sales Order for order: ${row.id}`
         );
-        await handleOrderPlaced(
-          { id: row.id }, // mock event payload
-          orderModule,
-          customerModule,
-          container,
-          logger,
-          true // isCron flag
-        );
+        // 1.5.5: enqueue 'pending' SO row for consolidator pending-dispatch.
+        const {
+          writePipelineRow: enqueueSo,
+        } = require("../lib/quickbooks/qb-pipeline");
+        await enqueueSo({
+          orderId: row.id,
+          step: "sales_order",
+          status: "pending",
+        });
         processedOrders++;
       }
     }

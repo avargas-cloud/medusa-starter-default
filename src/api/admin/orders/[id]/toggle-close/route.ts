@@ -2,10 +2,8 @@ import { createReservationsWorkflow } from "@medusajs/core-flows";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
 
-import {
-  closeSalesOrderInQb,
-  reopenSalesOrderInQb,
-} from "../../../../../lib/quickbooks/client/sales-orders";
+// 1.5.5: closeSalesOrderInQb/reopenSalesOrderInQb imports removed —
+// route now enqueues 'pending' rows; consolidator submits to bridge.
 import {
   writePipelineRow,
   findLastInFlightSoToggleRow,
@@ -287,51 +285,27 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         `${LOG_PREFIX} Chained as waiting — QB sync deferred until dependency resolves`
       );
     } else {
+      // 1.5.5: pipeline-only — enqueue 'pending' so_close / so_reopen row.
+      // The earlier writePipelineRow above already wrote a 'pending' row with
+      // depends_on; if soTxnId is known we can re-write as a non-dependent
+      // 'pending' which the consolidator pending-dispatch will pick up.
       try {
-        const qbResult =
-          action === "close"
-            ? await closeSalesOrderInQb(soTxnId, (msg) => console.log(msg))
-            : await reopenSalesOrderInQb(soTxnId, (msg) => console.log(msg));
-
-        if (qbResult.success) {
-          console.log(
-            `${LOG_PREFIX} ✅ QB SO ${action} queued (op: ${qbResult.data?.operationId})`
-          );
-          try {
-            await writePipelineRow({
-              orderId,
-              referenceId: orderId,
-              referenceType: "order",
-              step: pipelineStep,
-              status: "submitted",
-              bridgeOpId: qbResult.data?.operationId,
-              qbTxnId: soTxnId,
-              qbRefNumber: soRefNumber ?? null,
-              medusaRefNumber,
-            });
-          } catch {}
-        } else {
-          qbError = qbResult.error;
-          console.warn(
-            `${LOG_PREFIX} QB SO ${action} failed: ${qbResult.error}`
-          );
-          try {
-            await writePipelineRow({
-              orderId,
-              referenceId: orderId,
-              referenceType: "order",
-              step: pipelineStep,
-              status: "failed",
-              error: qbResult.error,
-              qbTxnId: soTxnId,
-              qbRefNumber: soRefNumber ?? null,
-              medusaRefNumber,
-            });
-          } catch {}
-        }
+        await writePipelineRow({
+          orderId,
+          referenceId: orderId,
+          referenceType: "order",
+          step: pipelineStep,
+          status: "pending",
+          qbTxnId: soTxnId,
+          qbRefNumber: soRefNumber ?? null,
+          medusaRefNumber,
+        });
+        console.log(
+          `${LOG_PREFIX} 📥 Enqueued ${action} for SO ${soTxnId} (consolidator will submit)`
+        );
       } catch (qbErr: any) {
         qbError = qbErr.message;
-        console.warn(`${LOG_PREFIX} QB sync exception: ${qbErr.message}`);
+        console.warn(`${LOG_PREFIX} Enqueue exception: ${qbErr.message}`);
       }
     }
 

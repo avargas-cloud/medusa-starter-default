@@ -22,7 +22,7 @@ import { handleCustomerTransferred } from "../lib/quickbooks/handlers/handle-cus
 import { handleFulfillmentCreated } from "../lib/quickbooks/handlers/handle-fulfillment-created";
 import { handleInvoiceVoided } from "../lib/quickbooks/handlers/handle-invoice-voided";
 import { handleOrderCanceled } from "../lib/quickbooks/handlers/handle-order-canceled";
-import { handleOrderPlaced } from "../lib/quickbooks/handlers/handle-order-placed";
+// 1.5.5: handleOrderPlaced import removed — subscriber enqueues now.
 import { handlePaymentCaptured } from "../lib/quickbooks/handlers/handle-payment-captured";
 import { isPosOrder } from "../lib/quickbooks/handlers/utils";
 
@@ -47,15 +47,24 @@ export default async function qbOrderSubscriber({
       `[QB-ORDER] 📥 Dispatching event: ${name} with data: ${JSON.stringify(data)}`
     );
     switch (name) {
-      case "order.placed":
-        await handleOrderPlaced(
-          data,
-          orderModule,
-          customerModule,
-          container,
-          logger
+      case "order.placed": {
+        // 1.5.5: pipeline-only — enqueue 'pending' SO row.
+        // Consolidator picks up via pending-dispatch and calls
+        // handleOrderUpdated (MOD-first) → handleOrderPlaced (CREATE fallback).
+        const orderId = (data as any).id;
+        const {
+          writePipelineRow,
+        } = require("../lib/quickbooks/qb-pipeline");
+        await writePipelineRow({
+          orderId,
+          step: "sales_order",
+          status: "pending",
+        });
+        logger.info(
+          `[QB-ORDER] 📥 Enqueued sales_order for ${orderId} (consolidator will process)`
         );
         break;
+      }
       case "order.payment_captured": {
         // Web orders: handled synchronously by the maintain-cart-prices hook
         // (which fires as part of completeCartWorkflow and is more reliable than the event bus).

@@ -506,6 +506,53 @@ async function resubmitByStep(
         break;
       }
 
+      case "so_close":
+      case "so_reopen": {
+        // Close/Reopen an existing QB Sales Order. Handler/admin enqueues
+        // the row in 'pending' with order_id; consolidator looks up the
+        // SO TxnID from order metadata and submits to bridge.
+        if (!row.order_id) break;
+        const isClose = row.step === "so_close";
+        const orderForClose = (await orderModule.retrieveOrder(row.order_id, {
+          select: ["id", "metadata"],
+        } as any)) as any;
+        const soTxnId =
+          orderForClose?.metadata?.qb_sales_order?.txn_id ?? null;
+        if (!soTxnId) {
+          await failPipelineRow(
+            row.id,
+            `${row.step}: no qb_sales_order.txn_id in order metadata — nothing to ${isClose ? "close" : "reopen"}`
+          );
+          break;
+        }
+        const closeResult = isClose
+          ? await closeSalesOrderInQb(soTxnId, (m: string) => logger.info(m))
+          : await reopenSalesOrderInQb(soTxnId, (m: string) => logger.info(m));
+        if (closeResult.success && closeResult.data?.operationId) {
+          const closePool = getDbPool();
+          await closePool.query(
+            `UPDATE qb_order_pipeline
+                  SET status = 'submitted',
+                      bridge_op_id = $2,
+                      qb_txn_id = $3,
+                      submitted_at = NOW(),
+                      updated_at = NOW()
+                WHERE id = $1`,
+            [row.id, closeResult.data.operationId, soTxnId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ ${row.step} ${row.id} submitted op=${closeResult.data.operationId} txn=${soTxnId}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            closeResult.error ??
+              `${isClose ? "closeSalesOrderInQb" : "reopenSalesOrderInQb"} failed`
+          );
+        }
+        break;
+      }
+
       case "transfer_customer": {
         // Reassign QB customer on a sales-order or invoice. The handler
         // (handle-customer-transferred) enqueues the row in 'pending' with
@@ -1693,7 +1740,7 @@ export default async function qbPipelineConsolidator(
     const { rows: pendingMutations } = await pool.query(`
       SELECT id, order_id, reference_id, reference_type, step, qb_txn_id
         FROM qb_order_pipeline
-       WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate')
+       WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen')
          AND status = 'pending'
        ORDER BY COALESCE(updated_at, created_at) ASC
        LIMIT 20
