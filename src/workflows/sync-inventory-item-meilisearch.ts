@@ -10,6 +10,7 @@ import {
   buildInventoryDocsForVariants,
   INVENTORY_DOC_FIELDS,
 } from "../lib/meilisearch/build-inventory-docs";
+import { CHINA_LOC, USA_LOC } from "../lib/locations";
 
 /**
  * Incremental single-target sync to the MeiliSearch `inventory` index.
@@ -166,7 +167,60 @@ const syncInventoryItemToMeiliStep = createStep(
       }
     }
 
-    const docs = buildInventoryDocsForVariants(variants, pricesByPriceSet);
+    // Load Miami + China stock for just the inventory_items in scope.
+    const inventoryItemIds = new Set<string>();
+    for (const v of variants as any[]) {
+      for (const ii of v.inventory_items ?? []) {
+        if (ii?.inventory?.id) inventoryItemIds.add(ii.inventory.id);
+      }
+    }
+
+    const miamiStockMap = new Map<string, number>();
+    const miamiReservedMap = new Map<string, number>();
+    const chinaStockMap = new Map<string, number>();
+    if (inventoryItemIds.size > 0) {
+      try {
+        const inventoryService: any = container.resolve(Modules.INVENTORY);
+        const ids = Array.from(inventoryItemIds);
+        const miamiLevels = await inventoryService.listInventoryLevels(
+          { location_id: USA_LOC, inventory_item_id: ids },
+          { take: 100000 }
+        );
+        for (const lev of miamiLevels) {
+          miamiStockMap.set(
+            lev.inventory_item_id,
+            lev.stocked_quantity ?? 0
+          );
+          miamiReservedMap.set(
+            lev.inventory_item_id,
+            lev.reserved_quantity ?? 0
+          );
+        }
+        const chinaLevels = await inventoryService.listInventoryLevels(
+          { location_id: CHINA_LOC, inventory_item_id: ids },
+          { take: 100000 }
+        );
+        for (const lev of chinaLevels) {
+          const available = Math.max(
+            0,
+            (lev.stocked_quantity ?? 0) - (lev.reserved_quantity ?? 0)
+          );
+          chinaStockMap.set(lev.inventory_item_id, available);
+        }
+      } catch (e: any) {
+        logger.warn(
+          `[syncInventoryItemToMeili] level fetch failed: ${e.message}`
+        );
+      }
+    }
+
+    const docs = buildInventoryDocsForVariants(
+      variants,
+      pricesByPriceSet,
+      chinaStockMap,
+      miamiStockMap,
+      miamiReservedMap
+    );
     if (docs.length === 0) {
       return new StepResponse({ synced: 0, deleted: 0 });
     }

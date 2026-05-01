@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { USA_LOC } from "../../../../../lib/locations";
 
 // Cache manager removed - using fresh pricing calculations
 
@@ -128,7 +129,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       }
     }
 
-    // Step 3: Fetch inventory
+    // Step 3: Fetch inventory — Miami only. China is excluded because web
+    // orders ship from Miami; China stock is surfaced on different surfaces.
     const inventory = await knex("inventory_level")
       .select(
         "inventory_level.stocked_quantity",
@@ -147,6 +149,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         "product_variant.id"
       )
       .where("product_variant.product_id", id)
+      .where("inventory_level.location_id", USA_LOC)
       .whereNull("inventory_level.deleted_at")
       .whereNull("product_variant.deleted_at");
 

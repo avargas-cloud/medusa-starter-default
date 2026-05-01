@@ -1,6 +1,7 @@
 import { StepResponse } from "@medusajs/framework/workflows-sdk";
 import { completeCartWorkflow } from "@medusajs/medusa/core-flows";
-import { MedusaError } from "@medusajs/utils";
+import { MedusaError, Modules } from "@medusajs/utils";
+import { USA_LOC } from "../../lib/locations";
 
 // Workaround for Medusa's exported types missing the internal hooks:
 const hooks = completeCartWorkflow.hooks as any;
@@ -64,8 +65,39 @@ hooks.validate(
     }
 
     console.log(
-      `[inventory-guard] Web Store cart ${cart_id} — running inventory check`
+      `[inventory-guard] Web Store cart ${cart_id} — running inventory check (Miami-only)`
     );
+
+    // Collect inventory_item_ids referenced by the cart, then load Miami
+    // levels in one shot. China stock is intentionally excluded — web orders
+    // ship from Miami only.
+    const inventoryItemIds = new Set<string>();
+    for (const item of cart.items ?? []) {
+      for (const inventoryItem of item.variant?.inventory_items ?? []) {
+        if (inventoryItem?.inventory?.id) {
+          inventoryItemIds.add(inventoryItem.inventory.id);
+        }
+      }
+    }
+
+    const miamiAvailableMap = new Map<string, number>();
+    if (inventoryItemIds.size > 0) {
+      const inventoryService: any = container.resolve(Modules.INVENTORY);
+      const miamiLevels = await inventoryService.listInventoryLevels(
+        {
+          location_id: USA_LOC,
+          inventory_item_id: Array.from(inventoryItemIds),
+        },
+        { take: 100000 }
+      );
+      for (const lev of miamiLevels) {
+        const available = Math.max(
+          0,
+          (lev.stocked_quantity ?? 0) - (lev.reserved_quantity ?? 0)
+        );
+        miamiAvailableMap.set(lev.inventory_item_id, available);
+      }
+    }
 
     const outOfStockItems: string[] = [];
 
@@ -74,12 +106,12 @@ hooks.validate(
         item.title ?? item.variant?.title ?? "Unknown product";
       const requestedQty = item.quantity ?? 0;
 
-      // Sum stocked quantity across all inventory items for this variant
+      // Sum Miami availability across all inventory items for this variant
       let availableQty = 0;
       for (const inventoryItem of item.variant?.inventory_items ?? []) {
-        const stocked = inventoryItem.inventory?.stocked_quantity ?? 0;
-        const reserved = inventoryItem.inventory?.reserved_quantity ?? 0;
-        availableQty += Math.max(0, stocked - reserved);
+        const id = inventoryItem?.inventory?.id;
+        if (!id) continue;
+        availableQty += miamiAvailableMap.get(id) ?? 0;
       }
 
       console.log(

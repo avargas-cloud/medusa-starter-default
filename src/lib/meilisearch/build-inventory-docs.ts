@@ -46,7 +46,13 @@ type AnyRec = Record<string, unknown>;
 export function buildInventoryDocsForVariants(
   variants: any[],
   pricesByPriceSet: Map<string, Record<string, number>> = new Map(),
-  chinaStockMap: Map<string, number> = new Map()
+  chinaStockMap: Map<string, number> = new Map(),
+  // Miami-only stock/reserved keyed by inventory_item_id. When omitted, falls
+  // back to the aggregate `inventory.stocked_quantity` (legacy behavior).
+  // China is intentionally excluded — orders ship from Miami; China is shown
+  // separately via `chinaStock`.
+  miamiStockMap: Map<string, number> = new Map(),
+  miamiReservedMap: Map<string, number> = new Map()
 ): MeiliInventoryDoc[] {
   const docs: MeiliInventoryDoc[] = [];
 
@@ -129,14 +135,20 @@ export function buildInventoryDocsForVariants(
     for (const invItem of variant.inventory_items) {
       const inventory = invItem?.inventory;
       if (!inventory?.id) continue;
+      const miamiStock = miamiStockMap.has(inventory.id)
+        ? (miamiStockMap.get(inventory.id) ?? 0)
+        : (inventory.stocked_quantity || 0);
+      const miamiReserved = miamiReservedMap.has(inventory.id)
+        ? (miamiReservedMap.get(inventory.id) ?? 0)
+        : (inventory.reserved_quantity || 0);
       docs.push({
         id: inventory.id,
         sku: inventory.sku || variant.sku || "",
         sku_plain: (inventory.sku || variant.sku || "").replace(/-/g, ""),
         title: inventory.title || product?.title || "Untitled",
         thumbnail: resolvedThumbnail,
-        totalStock: inventory.stocked_quantity || 0,
-        totalReserved: inventory.reserved_quantity || 0,
+        totalStock: miamiStock,
+        totalReserved: miamiReserved,
         price: retailPrice?.amount || 0,
         currencyCode:
           (retailPrice?.currency_code as string | undefined)?.toUpperCase() ||
