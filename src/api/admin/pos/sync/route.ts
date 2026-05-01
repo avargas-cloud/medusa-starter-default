@@ -155,6 +155,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   "items.*",
                   "items.variant.*",
                   "items.variant.metadata",
+                  "items.adjustments.*",
+                  "shipping_methods.*",
                 ],
                 filters: { id },
               });
@@ -185,7 +187,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
                 const qbItems = buildQbItems(activeItems, freshOrder.metadata);
 
-                const discountTotal = Number(freshOrder.discount_total || 0);
+                const {
+                  getEffectiveOrderDiscount,
+                } = require("../../../../lib/quickbooks/order-flow-core");
+                const discountTotal = getEffectiveOrderDiscount(freshOrder);
                 if (discountTotal > 0) {
                   const subtotal = Number(freshOrder.subtotal || 0);
                   const pct =
@@ -396,7 +401,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
                 const qbItems = buildQbItems(activeItems, freshOrder.metadata);
 
-                const discountTotal = Number(freshOrder.discount_total || 0);
+                const {
+                  getEffectiveOrderDiscount,
+                } = require("../../../../lib/quickbooks/order-flow-core");
+                const discountTotal = getEffectiveOrderDiscount(freshOrder);
                 if (discountTotal > 0) {
                   const subtotal = Number(freshOrder.subtotal || 0);
                   const pct =
@@ -669,7 +677,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   parentOrder?.metadata || {}
                 );
 
-                const discountTotal = Number(parentOrder?.discount_total || 0);
+                const {
+                  getEffectiveOrderDiscount,
+                } = require("../../../../lib/quickbooks/order-flow-core");
+                const discountTotal = getEffectiveOrderDiscount(parentOrder);
                 if (discountTotal > 0) {
                   const subtotal = Number(parentOrder?.subtotal || 0);
                   const pct =

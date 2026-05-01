@@ -6,6 +6,7 @@ import {
   buildQbItems,
   buildShippingQbItem,
   buildQbOrderDiscountLines,
+  getEffectiveOrderDiscount,
 } from "../order-flow-core";
 import { parseSalesRepInitials } from "../parse-sales-rep";
 import { resolveQbPaymentMethodForPayment } from "../payment-method-sanitizer";
@@ -74,6 +75,7 @@ export async function handleSalesReceiptCreated(
         "items.item.unit_price",
         "items.variant.*",
         "items.variant.metadata",
+        "items.adjustments.*",
         "customer.*",
         "customer.metadata",
         "shipping_methods.*",
@@ -245,7 +247,7 @@ export async function handleSalesReceiptCreated(
   let prebuiltItems: any[] | undefined;
   let salesTaxCode: string | undefined;
   const qbConfig = await getQbConfig();
-  const orderDiscountTotal = getFloat(order.discount_total || 0);
+  const orderDiscountTotal = getEffectiveOrderDiscount(order);
 
   const activeItems = (order.items || [])
     .filter((item: any) => (item.quantity ?? 0) > 0)

@@ -424,6 +424,44 @@ export function buildQbItems(
  * @param discountTotalCents - Total order-level discount in cents (positive value)
  * @param discountPercent    - Optional human-readable % to include in the description
  */
+/**
+ * Computes the effective order-level discount in dollars, robust to Medusa
+ * fields not being populated.
+ *
+ * Tries (in order):
+ *   1. order.discount_total — Medusa's aggregated discount field
+ *   2. Sum of order.items[].adjustments[].amount — per-item promotion
+ *      adjustments (Medusa stores POS promotion codes like CPOS-PCT-XXXX
+ *      as line-item adjustments; discount_total can lag or return 0).
+ *   3. order.metadata.computed_discount — POS-side snapshot at placement
+ *
+ * Returns the FIRST source that yields a positive number; 0 if none do.
+ *
+ * Why: in production we observed orders (e.g. order 1350 / SO 6295) where
+ * a 12% promotion existed as 7 per-item adjustments summing to $875.33,
+ * but order.discount_total returned 0 — so handlers that gate on
+ * discount_total alone silently dropped the Discount line in QB.
+ */
+export function getEffectiveOrderDiscount(order: any): number {
+  const fromTotal = Number(order?.discount_total);
+  if (Number.isFinite(fromTotal) && fromTotal > 0) return fromTotal;
+
+  const items = Array.isArray(order?.items) ? order.items : [];
+  let fromAdjustments = 0;
+  for (const it of items) {
+    const adjs = Array.isArray(it?.adjustments) ? it.adjustments : [];
+    for (const a of adjs) {
+      if (a?.deleted_at) continue;
+      const amt = Number(a?.amount);
+      if (Number.isFinite(amt) && amt > 0) fromAdjustments += amt;
+    }
+  }
+  if (fromAdjustments > 0) return fromAdjustments;
+
+  const fromMetadata = Number(order?.metadata?.computed_discount);
+  return Number.isFinite(fromMetadata) && fromMetadata > 0 ? fromMetadata : 0;
+}
+
 export function buildQbOrderDiscountLines(
   discountTotal: number,
   discountPercent?: number | null

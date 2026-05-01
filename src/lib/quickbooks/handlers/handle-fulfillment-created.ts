@@ -6,6 +6,7 @@ import {
   buildQbItems,
   buildShippingQbItem,
   buildQbOrderDiscountLines,
+  getEffectiveOrderDiscount,
 } from "../order-flow-core";
 import { parseSalesRepInitials } from "../parse-sales-rep";
 import {
@@ -72,6 +73,7 @@ export async function handleFulfillmentCreated(
         "items.item.unit_price",
         "items.variant.*",
         "items.variant.metadata",
+        "items.adjustments.*",
         "customer.*",
         "customer.metadata",
         "shipping_methods.*",
@@ -259,13 +261,21 @@ export async function handleFulfillmentCreated(
   let prebuiltItems: any[] | undefined;
   let salesTaxCode: string | undefined;
 
-  if (!linkedTxnId || (linkedTxnId === qbSoTxnId && isPartial)) {
+  // Always build explicit items + discount + shipping for the bridge.
+  // Pre-1.5 the discount/shipping block was gated behind
+  //   `if (!linkedTxnId || (linkedTxnId === qbSoTxnId && isPartial))`
+  // which meant full SO→Invoice conversions silently lost the order-level
+  // promotion + shipping line in QB. The SO handler is responsible for
+  // baking these into the SO itself, but we cannot rely on QB auto-copy
+  // when the POS invoice carries its own discount/shipping snapshot.
+  {
     const qbConfig = await getQbConfig();
-    const orderDiscountTotal = getFloat(order.discount_total || 0);
+    const orderDiscountTotal = getEffectiveOrderDiscount(order);
+    const isPartialAgainstSo = linkedTxnId === qbSoTxnId && isPartial;
 
     const activeItems = (order.items || [])
       .filter((item: any) => {
-        if (linkedTxnId === qbSoTxnId && isPartial) {
+        if (isPartialAgainstSo) {
           const fi = fulfillmentItems.find((i: any) => {
             if (i.item_id && i.item_id === item.id) return true;
             if (i.id && i.id === item.id) return true;
@@ -336,7 +346,7 @@ export async function handleFulfillmentCreated(
       );
     }
 
-    if (linkedTxnId === qbSoTxnId && isPartial) {
+    if (isPartialAgainstSo) {
       const {
         getSalesOrderDetailsFromQb,
       } = require("../../quickbooks/qb-bridge-client");

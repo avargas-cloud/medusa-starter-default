@@ -24,6 +24,8 @@ import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
 import {
   buildQbItems,
   buildQbOrderDiscountLines,
+  buildShippingQbItem,
+  getEffectiveOrderDiscount,
   processEstimateInQb,
 } from "../lib/quickbooks/order-flow-core";
 import { parseSalesRepInitials } from "../lib/quickbooks/parse-sales-rep";
@@ -200,6 +202,8 @@ export async function handleDraftOrderCreated(
         "items.*",
         "items.variant.*",
         "items.variant.metadata",
+        "items.adjustments.*",
+        "shipping_methods.*",
       ],
       filters: { id: draftOrderId },
     });
@@ -290,7 +294,7 @@ export async function handleDraftOrderCreated(
   // Build QB items — query.graph returns unit_price in DOLLARS; buildQbItems also expects DOLLARS
   const qbItems = buildQbItems(draftOrder.items || [], draftOrder.metadata);
 
-  const orderDiscountDollars = draftOrder.discount_total || 0;
+  const orderDiscountDollars = getEffectiveOrderDiscount(draftOrder);
   if (orderDiscountDollars > 0) {
     const orderSubtotal = draftOrder.subtotal || 0;
     const discountPercent =
@@ -298,6 +302,14 @@ export async function handleDraftOrderCreated(
     buildQbOrderDiscountLines(orderDiscountDollars, discountPercent).forEach(
       (l) => qbItems.push(l)
     );
+  }
+
+  // Shipping line for estimate (parity with Sales Order / Invoice handlers)
+  const shippingItem = buildShippingQbItem(
+    (draftOrder as any).shipping_methods || []
+  );
+  if (shippingItem) {
+    qbItems.push(shippingItem);
   }
 
   logger.info(
