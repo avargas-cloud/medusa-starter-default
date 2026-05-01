@@ -1,5 +1,6 @@
 import { getDbPool } from "../../../api/utils/db-pool";
 import type { WritePipelineRowInput } from "./types";
+import { decideRetry, type RetryDecision } from "../retry-config";
 
 /**
  * Writes a row to qb_order_pipeline.
@@ -463,4 +464,57 @@ export async function failPipelineRow(
          WHERE id = $1`,
     [rowId, error]
   );
+}
+
+/**
+ * Retry-aware variant of `failPipelineRow` (Section 1.5.15 Phase 3b).
+ *
+ * Routes transient errors (3170 lock, 3210 EditSeq, network, parser failures,
+ * etc.) to `status='error'` with backoff via `next_retry_at`, so the
+ * consolidator picks them up again on the next tick. Permanent errors and
+ * exhausted retry budgets still land at `status='failed'` — preserves the
+ * legacy terminal state for downstream cascade-fail logic.
+ *
+ * Returns the decision so callers can branch (e.g., suppress cascade-fail
+ * when the row is going to retry).
+ */
+export async function failOrRetryPipelineRow(
+  rowId: string,
+  error: string,
+  retriesSoFar: number
+): Promise<RetryDecision> {
+  const decision = decideRetry({
+    error: { message: error },
+    retriesSoFar,
+    hasNextRetryAt: true,
+    hasFailedPermanent: false,
+  });
+  const pool = getDbPool();
+  if (decision.newStatus === "error") {
+    await pool.query(
+      `UPDATE qb_order_pipeline
+           SET status        = 'error',
+               retry_count   = $2,
+               error         = $3,
+               next_retry_at = $4,
+               confirmed_at  = NULL,
+               updated_at    = NOW()
+         WHERE id = $1`,
+      [rowId, decision.newRetries, error, decision.nextRetryAt]
+    );
+  } else {
+    await pool.query(
+      `UPDATE qb_order_pipeline
+           SET status        = 'failed',
+               retry_count   = $2,
+               error         = $3,
+               failed_at     = NOW(),
+               next_retry_at = NULL,
+               confirmed_at  = NULL,
+               updated_at    = NOW()
+         WHERE id = $1`,
+      [rowId, decision.newRetries, error]
+    );
+  }
+  return decision;
 }

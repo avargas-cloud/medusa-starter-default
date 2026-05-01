@@ -27,6 +27,7 @@ import {
   markStaleRowsAsFailed,
   STANDARD_STALE_CONFIG,
 } from "../lib/quickbooks/stale-row-cleanup";
+import { classifyQbError } from "../lib/quickbooks/error-classifier";
 
 const bridgeUrl = (): string =>
   process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
@@ -771,6 +772,53 @@ export default async function qbPurchaseOrderPoller(
     const exhausted = newRetries >= MAX_RETRIES;
 
     if (exhausted) {
+      // Zombie detector (Section 1.5.15 Phase 3a):
+      //   When a Mod actually succeeded in QB but the bridge response parser
+      //   couldn't extract the TxnID, the pipeline keeps retrying — but the
+      //   parent purchase_order row gets `qb_synced_at` advanced on every
+      //   completed poll. If the parent looks recently synced AND the error
+      //   class is "parser_failed" or "po_missing", treat the row as a
+      //   bookkeeping ghost and promote it to `synced` instead of escalating
+      //   to `failed_permanent`. (Incident PO-1015/PO-1016, 2026-05-01.)
+      const cls = classifyQbError({ message: row.last_error });
+      if (cls.class === "parser_failed" || cls.class === "po_missing") {
+        const parent = await knex
+          .raw(
+            `SELECT qb_synced_at, qb_purchase_order_list_id
+               FROM purchase_order
+              WHERE id = ?
+              LIMIT 1`,
+            [row.purchase_order_id]
+          )
+          .then((r: any) => r.rows[0]);
+        const syncedAtMs = parent?.qb_synced_at
+          ? new Date(parent.qb_synced_at).getTime()
+          : 0;
+        const recentlySynced =
+          syncedAtMs > 0 && Date.now() - syncedAtMs < 60 * 60 * 1000;
+        if (recentlySynced && parent?.qb_purchase_order_list_id) {
+          await knex.raw(
+            `UPDATE qb_purchase_order_pipeline
+                SET status = 'synced',
+                    retries = ?,
+                    qb_list_id = ?,
+                    last_error = NULL,
+                    next_retry_at = NULL,
+                    synced_at = NOW(),
+                    updated_at = NOW()
+              WHERE id = ?`,
+            [newRetries, parent.qb_purchase_order_list_id, row.id]
+          );
+          resolved++;
+          logger.warn(
+            `${TAG} row ${row.id}: ZOMBIE detected (parent synced ${Math.round(
+              (Date.now() - syncedAtMs) / 1000
+            )}s ago, error class=${cls.class}) — promoted to synced instead of failed_permanent`
+          );
+          continue;
+        }
+      }
+
       await knex.raw(
         `UPDATE qb_purchase_order_pipeline
             SET status = 'failed_permanent',

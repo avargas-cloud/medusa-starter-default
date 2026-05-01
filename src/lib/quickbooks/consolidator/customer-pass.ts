@@ -4,15 +4,71 @@ import { Modules } from "@medusajs/utils";
 import { getDbPool } from "../../../api/utils/db-pool";
 import { ensureCustomerInQb } from "../order-flow-core";
 import { syncCustomerDataExtToQb } from "../sync-customer-data-ext";
+import { decideRetry, type RetryDecision } from "../retry-config";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
+/**
+ * Apply a uniform retry decision to a qb_order_pipeline row after a failure.
+ *
+ * Replaces the old `status='failed'`-direct branches that gave 3170-class
+ * lock errors no chance to retry (incident PO #34, 2026-05-01). Transient
+ * errors now park at `status='error'` with a backoff timestamp; the consolidator
+ * picks them up on the next tick once `next_retry_at <= NOW()`. Permanent
+ * errors and exhausted retries still land at `status='failed'` (legacy
+ * terminal — preserved for downstream UI/consumer compatibility).
+ */
+async function applyCustomerPipelineFailure(
+  pool: ReturnType<typeof getDbPool>,
+  rowId: string,
+  retriesSoFar: number,
+  errorMessage: string
+): Promise<RetryDecision> {
+  const decision = decideRetry({
+    error: { message: errorMessage },
+    retriesSoFar,
+    hasNextRetryAt: true,
+    hasFailedPermanent: false,
+  });
+
+  if (decision.newStatus === "error") {
+    await pool
+      .query(
+        `UPDATE qb_order_pipeline
+            SET status        = 'error',
+                retry_count   = $2,
+                error         = $3,
+                next_retry_at = $4,
+                updated_at    = NOW()
+          WHERE id = $1`,
+        [rowId, decision.newRetries, errorMessage, decision.nextRetryAt]
+      )
+      .catch(() => {});
+  } else {
+    await pool
+      .query(
+        `UPDATE qb_order_pipeline
+            SET status        = 'failed',
+                retry_count   = $2,
+                error         = $3,
+                failed_at     = NOW(),
+                next_retry_at = NULL,
+                updated_at    = NOW()
+          WHERE id = $1`,
+        [rowId, decision.newRetries, errorMessage]
+      )
+      .catch(() => {});
+  }
+  return decision;
+}
+
 export async function processCustomerPipelineRow(
-  row: { id: string; customer_id: string },
+  row: { id: string; customer_id: string; retry_count?: number },
   customerModule: any,
   logger: any
 ): Promise<void> {
   const pool = getDbPool();
+  const retriesSoFar = row.retry_count ?? 0;
 
   try {
     const customer = await customerModule.retrieveCustomer(row.customer_id, {
@@ -72,44 +128,37 @@ export async function processCustomerPipelineRow(
     } else {
       const errMsg =
         result.error ?? "ensureCustomerInQb returned no qbCustomerId";
-      await pool.query(
-        `UPDATE qb_order_pipeline
-            SET status     = 'failed',
-                failed_at  = NOW(),
-                updated_at = NOW(),
-                error      = $2
-          WHERE id = $1`,
-        [row.id, errMsg]
+      const decision = await applyCustomerPipelineFailure(
+        pool,
+        row.id,
+        retriesSoFar,
+        errMsg
       );
       logger.warn(
-        `${LOG_PREFIX} ❌ Customer pipeline row ${row.id} failed: ${errMsg}`
+        `${LOG_PREFIX} ❌ Customer pipeline row ${row.id} → ${decision.newStatus} (${decision.classification.class}, retry ${decision.newRetries}): ${errMsg}`
       );
     }
   } catch (err: any) {
     const msg = err?.message ?? String(err);
-    await pool
-      .query(
-        `UPDATE qb_order_pipeline
-            SET status     = 'failed',
-                failed_at  = NOW(),
-                updated_at = NOW(),
-                error      = $2
-          WHERE id = $1`,
-        [row.id, msg]
-      )
-      .catch(() => {});
+    const decision = await applyCustomerPipelineFailure(
+      pool,
+      row.id,
+      retriesSoFar,
+      msg
+    );
     logger.warn(
-      `${LOG_PREFIX} ❌ Customer pipeline row ${row.id} exception: ${msg}`
+      `${LOG_PREFIX} ❌ Customer pipeline row ${row.id} exception → ${decision.newStatus} (${decision.classification.class}, retry ${decision.newRetries}): ${msg}`
     );
   }
 }
 
 export async function processCustomerDataExtPipelineRow(
-  row: { id: string; customer_id: string },
+  row: { id: string; customer_id: string; retry_count?: number },
   customerModule: any,
   logger: any
 ): Promise<void> {
   const pool = getDbPool();
+  const retriesSoFar = row.retry_count ?? 0;
 
   try {
     const customer = await customerModule.retrieveCustomer(row.customer_id);
@@ -122,12 +171,13 @@ export async function processCustomerDataExtPipelineRow(
         : "";
 
     if (!qbListId) {
-      await pool.query(
-        `UPDATE qb_order_pipeline
-            SET status='failed', failed_at=NOW(), updated_at=NOW(),
-                error='customer has no qb_list_id in metadata'
-          WHERE id=$1`,
-        [row.id]
+      // Permanent: customer master sync hasn't completed yet, can't add DataExt.
+      // Classifier routes "permanent" → `failed` directly (no retry).
+      await applyCustomerPipelineFailure(
+        pool,
+        row.id,
+        retriesSoFar,
+        "customer has no qb_list_id in metadata"
       );
       return;
     }
@@ -171,28 +221,27 @@ export async function processCustomerDataExtPipelineRow(
         `${LOG_PREFIX} ✅ customer_data_ext row ${row.id} confirmed (${result.action}): ${qbListId} = "${channel}"`
       );
     } else {
-      await pool.query(
-        `UPDATE qb_order_pipeline
-            SET status='failed', failed_at=NOW(), updated_at=NOW(), error=$2
-          WHERE id=$1`,
-        [row.id, result.error ?? "unknown data-ext error"]
+      const errMsg = result.error ?? "unknown data-ext error";
+      const decision = await applyCustomerPipelineFailure(
+        pool,
+        row.id,
+        retriesSoFar,
+        errMsg
       );
       logger.warn(
-        `${LOG_PREFIX} ❌ customer_data_ext row ${row.id} failed: ${result.error}`
+        `${LOG_PREFIX} ❌ customer_data_ext row ${row.id} → ${decision.newStatus} (${decision.classification.class}, retry ${decision.newRetries}): ${errMsg}`
       );
     }
   } catch (err: any) {
     const msg = err?.message ?? String(err);
-    await pool
-      .query(
-        `UPDATE qb_order_pipeline
-            SET status='failed', failed_at=NOW(), updated_at=NOW(), error=$2
-          WHERE id=$1`,
-        [row.id, msg]
-      )
-      .catch(() => {});
+    const decision = await applyCustomerPipelineFailure(
+      pool,
+      row.id,
+      retriesSoFar,
+      msg
+    );
     logger.warn(
-      `${LOG_PREFIX} ❌ customer_data_ext row ${row.id} exception: ${msg}`
+      `${LOG_PREFIX} ❌ customer_data_ext row ${row.id} exception → ${decision.newStatus} (${decision.classification.class}, retry ${decision.newRetries}): ${msg}`
     );
   }
 }
@@ -204,10 +253,13 @@ export async function runCustomerPass(
   const pool = getDbPool();
   try {
     const { rows: pendingCustomers } = await pool.query(`
-      SELECT id, reference_id
+      SELECT id, reference_id, COALESCE(retry_count, 0) AS retry_count
         FROM qb_order_pipeline
        WHERE step = 'customer'
-         AND status = 'pending'
+         AND (
+           status = 'pending'
+           OR (status = 'error' AND (next_retry_at IS NULL OR next_retry_at <= NOW()))
+         )
          AND reference_id IS NOT NULL
        ORDER BY COALESCE(updated_at, created_at) ASC
        LIMIT 10
@@ -216,11 +268,15 @@ export async function runCustomerPass(
     if (pendingCustomers.length > 0) {
       const customerModule = container.resolve(Modules.CUSTOMER);
       logger.info(
-        `${LOG_PREFIX} Processing ${pendingCustomers.length} pending customer row(s)...`
+        `${LOG_PREFIX} Processing ${pendingCustomers.length} pending/retrying customer row(s)...`
       );
       for (const custRow of pendingCustomers) {
         await processCustomerPipelineRow(
-          { id: custRow.id, customer_id: custRow.reference_id },
+          {
+            id: custRow.id,
+            customer_id: custRow.reference_id,
+            retry_count: custRow.retry_count,
+          },
           customerModule,
           logger
         );
@@ -240,10 +296,13 @@ export async function runCustomerDataExtPass(
   const pool = getDbPool();
   try {
     const { rows: pendingDataExt } = await pool.query(`
-      SELECT id, reference_id
+      SELECT id, reference_id, COALESCE(retry_count, 0) AS retry_count
         FROM qb_order_pipeline
        WHERE step = 'customer_data_ext'
-         AND status = 'pending'
+         AND (
+           status = 'pending'
+           OR (status = 'error' AND (next_retry_at IS NULL OR next_retry_at <= NOW()))
+         )
          AND reference_id IS NOT NULL
        ORDER BY COALESCE(updated_at, created_at) ASC
        LIMIT 10
@@ -252,11 +311,15 @@ export async function runCustomerDataExtPass(
     if (pendingDataExt.length > 0) {
       const customerModule = container.resolve(Modules.CUSTOMER);
       logger.info(
-        `${LOG_PREFIX} Processing ${pendingDataExt.length} pending customer_data_ext row(s)...`
+        `${LOG_PREFIX} Processing ${pendingDataExt.length} pending/retrying customer_data_ext row(s)...`
       );
       for (const r of pendingDataExt) {
         await processCustomerDataExtPipelineRow(
-          { id: r.id, customer_id: r.reference_id },
+          {
+            id: r.id,
+            customer_id: r.reference_id,
+            retry_count: r.retry_count,
+          },
           customerModule,
           logger
         );

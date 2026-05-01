@@ -11,7 +11,7 @@ import {
 } from "../client/sales-orders";
 import {
   confirmPipelineRow,
-  failPipelineRow,
+  failOrRetryPipelineRow,
   cacheEditSequence,
   claimAndResetForResubmit,
   invalidateEditSequenceCache,
@@ -804,7 +804,11 @@ export async function pollSubmittedRows(
         }
       } else if (op.status === "failed") {
         const errMsg = op.error || "QB operation failed (no details)";
-        await failPipelineRow(row.id, errMsg);
+        const decision = await failOrRetryPipelineRow(
+          row.id,
+          errMsg,
+          row.retry_count ?? 0
+        );
         // Invalidate cached EditSequence — but only when the error implies
         // the cached value is wrong. Error 3175 ("transaction locked") means
         // QB never touched the document, so the cache is still valid.
@@ -817,8 +821,15 @@ export async function pollSubmittedRows(
           ).catch(() => {});
         }
         logger.warn(
-          `${LOG_PREFIX} ❌ Failed row ${row.id} (${row.step}): ${errMsg}`
+          `${LOG_PREFIX} ❌ Row ${row.id} (${row.step}) → ${decision.newStatus} (${decision.classification.class}, retry ${decision.newRetries}): ${errMsg}`
         );
+
+        // Cascade-fail / skip-dependent logic only fires on TERMINAL failure.
+        // Transient errors going to status='error' will retry on next tick;
+        // dependents must keep waiting, not be cascaded down.
+        if (decision.newStatus !== "failed") {
+          continue;
+        }
 
         // so_close/so_reopen failed → cascade-fail any waiting dependent rows
         if (row.step === "so_close" || row.step === "so_reopen") {

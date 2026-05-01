@@ -29,6 +29,7 @@ type PipelineRow = {
 type CustomerRow = PipelineRow & {
   customer_name: string;
   customer_email: string;
+  customer_company_name: string;
   acquisition_channel: string;
   qb_list_id: string | null;
   customer_created_at: string | null;
@@ -129,6 +130,7 @@ export const CustomerSyncPipelineSection = () => {
         {
           name: string;
           email: string;
+          company_name: string;
           acq: string;
           list_id: string | null;
           created_at: string | null;
@@ -136,7 +138,7 @@ export const CustomerSyncPipelineSection = () => {
       >();
       if (uniqueIds.length > 0) {
         const cRes = await fetch(
-          `/admin/customers?id[]=${uniqueIds.join("&id[]=")}&limit=${uniqueIds.length}&fields=id,first_name,last_name,email,metadata,created_at`,
+          `/admin/customers?id[]=${uniqueIds.join("&id[]=")}&limit=${uniqueIds.length}&fields=id,first_name,last_name,email,company_name,metadata,created_at`,
           { credentials: "include" }
         );
         if (cRes.ok) {
@@ -149,6 +151,8 @@ export const CustomerSyncPipelineSection = () => {
                 c.email ||
                 c.id,
               email: c.email ?? "",
+              company_name:
+                typeof c.company_name === "string" ? c.company_name : "",
               acq:
                 typeof meta.acquisition_channel === "string"
                   ? meta.acquisition_channel
@@ -178,6 +182,7 @@ export const CustomerSyncPipelineSection = () => {
           ...r,
           customer_name: info?.name ?? r.reference_id ?? "—",
           customer_email: info?.email ?? "",
+          customer_company_name: info?.company_name ?? "",
           acquisition_channel: info?.acq ?? "",
           qb_list_id: info?.list_id ?? null,
           customer_created_at: info?.created_at ?? null,
@@ -344,7 +349,20 @@ export const CustomerSyncPipelineSection = () => {
                         </Table.Cell>
                         <Table.Cell>
                           <div className="flex flex-col">
-                            <span className="font-medium">{r.customer_name}</span>
+                            {r.customer_company_name ? (
+                              <span className="font-medium">
+                                {r.customer_company_name}
+                              </span>
+                            ) : null}
+                            <span
+                              className={
+                                r.customer_company_name
+                                  ? "text-ui-fg-subtle text-xs"
+                                  : "font-medium"
+                              }
+                            >
+                              {r.customer_name}
+                            </span>
                             <span className="text-ui-fg-subtle text-xs">
                               {r.customer_email}
                             </span>
