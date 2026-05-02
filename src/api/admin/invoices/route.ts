@@ -87,6 +87,7 @@ interface CreateInvoiceBody {
     quantity: number;
     unit_price: number; // cents
     total: number; // cents
+    attached_image?: string | null; // base64 JPEG (96x96 @ 0.6) — snapshotted from order line item
   }>;
   subtotal: number; // cents
   discount?: number; // cents
@@ -94,7 +95,12 @@ interface CreateInvoiceBody {
   tax: number; // cents
   total: number; // cents
   amount_paid: number; // cents
-  payment_method: // Canonical values — new callers should send these.
+  /**
+   * Payment method at issuance. Optional/null when the invoice is created with
+   * Skip Payment (amount_paid === 0). The field is populated on the first
+   * payment captured via POST /invoices/[id]/payments.
+   */
+  payment_method?:
     | "credit_card"
     | "debit_card"
     | "cash"
@@ -110,7 +116,8 @@ interface CreateInvoiceBody {
     | "amex"
     | "discover"
     | "capital_one"
-    | "credit_memo";
+    | "credit_memo"
+    | null;
   /**
    * Card network when payment_method is a card. Optional — null for cash/check/zelle/ach
    * or for debit-only transactions where the brand is intentionally not recorded.
@@ -316,11 +323,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     "discover",
     "capital_one",
   ]);
-  let normalizedPaymentMethod: string = body.payment_method;
+  let normalizedPaymentMethod: string | null = body.payment_method ?? null;
   let normalizedCardBrand: string | null = body.card_brand ?? null;
-  if (CARD_BRANDS.has(body.payment_method)) {
+  if (normalizedPaymentMethod && CARD_BRANDS.has(normalizedPaymentMethod)) {
+    normalizedCardBrand = normalizedPaymentMethod;
     normalizedPaymentMethod = "credit_card";
-    normalizedCardBrand = body.payment_method;
   }
 
   let paymentIdToEmit: string | null = null;
@@ -331,7 +338,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   // 'cash' default, etc.) when the Dejavoo terminal fires the auto-submit. For
   // terminal-sourced payments we override this with the card type that Dejavoo
   // actually reported, stored on the customer_payment metadata.
-  let resolvedPaymentMethod: string = normalizedPaymentMethod;
+  let resolvedPaymentMethod: string | null = normalizedPaymentMethod;
   let resolvedCardBrand: string | null = normalizedCardBrand;
 
   // Pre-create override: for terminal-sourced payments, the Dejavoo terminal
@@ -415,6 +422,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         quantity: it.quantity,
         unit_price: it.unit_price,
         total: it.total,
+        attached_image: it.attached_image ?? null,
       }))
     );
   }
@@ -502,6 +510,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   // Step 3: If an initial payment amount is sent, record it in ALL ledgers
   if (body.amount_paid > 0) {
+    if (!resolvedPaymentMethod) {
+      return res.status(400).json({
+        error:
+          "payment_method is required when amount_paid > 0 (skip-payment invoices must send amount_paid: 0)",
+      });
+    }
     const paymentDate = new Date();
 
     // A. PosInvoice internal payment record

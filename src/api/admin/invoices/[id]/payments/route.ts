@@ -180,11 +180,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const balanceDue = Math.max(0, getNum(invoice.total) - totalPaid);
     const newStatus = balanceDue <= 0 ? "paid" : "partial";
 
+    // Backfill pos_invoice.payment_method on the FIRST captured payment when
+    // the invoice was created via Skip Payment (payment_method left null).
+    const invoiceMethodBackfill = !(invoice as any).payment_method
+      ? { payment_method }
+      : {};
+
     await invoiceService.updatePosInvoices({
       id,
       amount_paid: totalPaid,
       balance_due: balanceDue,
       status: newStatus,
+      ...invoiceMethodBackfill,
     });
 
     // 6. Register in Medusa native Payment Module (best-effort, every payment)

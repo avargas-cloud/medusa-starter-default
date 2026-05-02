@@ -18,6 +18,7 @@ const PosInvoiceItem = model.define("pos_invoice_item", {
   refunded_quantity: model.number().default(0), // cumulative units refunded via credit memos
   unit_price: model.bigNumber(),
   total: model.bigNumber(),
+  attached_image: model.text().nullable(),
 });
 
 export default PosInvoiceItem;

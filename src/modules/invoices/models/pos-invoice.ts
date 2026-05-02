@@ -56,7 +56,7 @@ const PosInvoice = model.define("pos_invoice", {
     "discover",
     "capital_one",
     "credit_memo",
-  ]),
+  ]).nullable(),
   /**
    * Card network (visa, mastercard, amex, discover, capital_one) for card
    * payments. NULL for non-card methods (cash, check, zelle, ach) and for

@@ -128,11 +128,26 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const balanceDue = Math.max(0, getNum(invoice.total) - totalInvoicePaid);
     const newInvoiceStatus = balanceDue <= 0 ? "paid" : "partial";
 
+    // Backfill pos_invoice.payment_method on the FIRST applied payment when
+    // the invoice was created via Skip Payment (payment_method left null).
+    // The underlying customer_payment carries the actual method (cash/check/...);
+    // for cards we pull the brand off the payment's metadata.
+    const invoiceMethodBackfill =
+      !(invoice as any).payment_method && (payment as any).method
+        ? {
+            payment_method: (payment as any).method,
+            card_brand:
+              ((payment as any).metadata?.card_brand as string | undefined) ??
+              null,
+          }
+        : {};
+
     await invoiceService.updatePosInvoices({
       id: invoice_id,
       amount_paid: totalInvoicePaid,
       balance_due: balanceDue,
       status: newInvoiceStatus,
+      ...invoiceMethodBackfill,
     });
 
     // 7. Register in Medusa native Payment Module (best-effort, every payment)
