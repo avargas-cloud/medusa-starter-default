@@ -67,69 +67,72 @@ type Line = {
 };
 
 const LINES: Line[] = [
-  // SKU items — 10% line discount applied (unit_price = original × 0.9 rounded)
+  // SKU items — store ORIGINAL unit prices and PRE-discount line totals.
+  // The pos_invoice carries `discount = 29906` ($299.06) at the document
+  // level so the printed invoice matches QB's layout (line totals at
+  // original prices + a single 10% discount line at the bottom).
   {
     sku: "EMSH4V160D30WRW3",
     description:
       "FPC LED Module, 24V DC 30W , 105LED SMD5050 with lens: 160 degree, Color: pure white RGBW (3000K) Size: 503.5 x 235 x 6.7 mm",
     quantity: 30,
-    unit_price: 6299, // $62.99 (= 69.99 × 0.9)
-    total: 188970,    // $1,889.70
+    unit_price: 6999, // $69.99
+    total: 209970,    // $2,099.70
   },
   {
     sku: "EPS-JNA-300-24",
     description:
       "J-Box Constant Voltage Power Supply, 300W, 100-277VAC, 12.5A. Output 24VDC. Potentiometer Included. Damp and Wet Rated. UL Listed. 5-year Warranty.",
     quantity: 3,
-    unit_price: 15479, // $154.79 (= 171.99 × 0.9)
-    total: 46437,      // $464.37
+    unit_price: 17199, // $171.99
+    total: 51597,      // $515.97
   },
   {
     sku: "ECNA-POC2P-6F-B",
     description:
       "6ft 18 AWG AC Power Cord NEMA 1-15P to IEC-60320-C7 18 AWG 2C 7A SPT-2 125V Black.",
     quantity: 3,
-    unit_price: 629,  // $6.29 (= 6.99 × 0.9)
-    total: 1887,      // $18.87
+    unit_price: 699,  // $6.99
+    total: 2097,      // $20.97
   },
   {
     sku: "ECTSK-AM3&4C8A",
     description:
       "SKY RGB/RGBW Amplifier, 3 or 4 channels, 8A/Channel, For RGB 12V/288W & 24V/576W, For RGBW 12V/384W & 24V/768W, compatible with SKY RF RGB/RGBW Remote Controllers. 2 year warranty.",
     quantity: 3,
-    unit_price: 4478, // $44.78 (= 49.75 × 0.9)
-    total: 13434,     // $134.34
+    unit_price: 4975, // $49.75
+    total: 14925,     // $149.25
   },
   {
     sku: "ECTSK-TWRC5C6A",
     description:
       "SKY TUYA WIFI RGB/RGBW/RGBCCT Receiver, 3/4/5 channels, 6A/Channel, For Dimming 12V/360W & 24V/720W, For CCT 12V/288W & 24V/576W,For RGB 12V/216W & 24V/432W, For RGBW 12V/288W & 24V/576W   compatible with SKY RF RGB/RGBW Remote Controllers, Tuya App, and Alexa/Google Home.. 2 year warranty.",
     quantity: 1,
-    unit_price: 4703, // $47.03 (= 52.25 × 0.9)
-    total: 4703,      // $47.03
+    unit_price: 5225, // $52.25
+    total: 5225,      // $52.25
   },
   {
     sku: "ECTSK-RM3&4C4ZB",
     description:
       "SKY RF RGB/RGBW Remote Controller, 4 zones, black model, compatible with SKY RF RGB/RGBW Receivers, Black Finish. 2 year warranty.",
     quantity: 1,
-    unit_price: 3329, // $33.29 (= 36.99 × 0.9)
-    total: 3329,      // $33.29
+    unit_price: 3699, // $36.99
+    total: 3699,      // $36.99
   },
   {
     sku: "ECB-22-6-STR-WH",
     description: "Wire AWG 22/6 Stranded White. Non returnable except complete roll.",
     quantity: 150,
-    unit_price: 51,   // $0.51 (= 0.57 × 0.9 rounded)
-    total: 7650,      // $76.50
+    unit_price: 57,   // $0.57
+    total: 8550,      // $85.50
   },
-  // Materials (Special Item) — discounted
+  // Materials (Special Item)
   {
     sku: "Special Item",
     description: "Materials",
     quantity: 1,
-    unit_price: 2700, // $27.00 (= 30 × 0.9)
-    total: 2700,
+    unit_price: 3000, // $30.00
+    total: 3000,
   },
   // Services — NOT discounted, taxable in QB
   {
