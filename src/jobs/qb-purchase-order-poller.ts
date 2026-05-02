@@ -167,6 +167,35 @@ const extractPoRet = (data: BridgeStatus): any => {
   return Array.isArray(ret) ? (ret[0] ?? null) : ret;
 };
 
+// Extract QB-side error from a QBXML response. The bridge can briefly mark an
+// operation as "completed" (QBXML round-trip succeeded) while the embedded
+// QBXML response itself is an error (statusCode != "0"). Without this check
+// the poller falls through to the success path and falsely marks the row as
+// synced. Returns the QB error message if any *Rs has non-zero statusCode.
+const extractQbResponseError = (data: BridgeStatus): string | null => {
+  const op = data.operation;
+  if (!op) return null;
+  const msgs =
+    (op.result as any)?.QBXML?.QBXMLMsgsRs ??
+    (op.result as any)?.QBXMLMsgsRs ??
+    null;
+  if (!msgs) return null;
+  for (const key of [
+    "PurchaseOrderAddRs",
+    "PurchaseOrderModRs",
+    "PurchaseOrderQueryRs",
+  ]) {
+    const rs = (msgs as any)[key];
+    if (!rs) continue;
+    const code = String(rs.statusCode ?? rs["@statusCode"] ?? "0");
+    if (code !== "0") {
+      const msg = rs.statusMessage ?? rs["@statusMessage"] ?? `QB ${key} statusCode=${code}`;
+      return `QuickBooks Error ${code}: ${msg}`;
+    }
+  }
+  return null;
+};
+
 const extractTxnId = (data: BridgeStatus): string | null => {
   const op = data.operation;
   if (!op) return null;
@@ -194,6 +223,27 @@ const extractTxnLineIds = (data: BridgeStatus): string[] => {
   if (!lineRets) return [];
   const arr = Array.isArray(lineRets) ? lineRets : [lineRets];
   return arr.map((l: any) => l.TxnLineID ?? "").filter(Boolean);
+};
+
+// Returns SKU/ListID-keyed line metadata from a QB PurchaseOrderRet, used by
+// the line-recovery path to re-map qb_txn_line_id on each purchase_order_line
+// row by SKU instead of positional index. SKU match is the canonical key
+// because QB will reorder lines on Mod and positional matching is unsafe.
+const extractLineMetaBySku = (
+  data: BridgeStatus
+): Array<{ sku: string; listId: string | null; txnLineId: string }> => {
+  const ret = extractPoRet(data);
+  if (!ret) return [];
+  const lineRets = ret.PurchaseOrderLineRet;
+  if (!lineRets) return [];
+  const arr = Array.isArray(lineRets) ? lineRets : [lineRets];
+  return arr
+    .map((l: any) => ({
+      sku: (l.ItemRef?.FullName ?? "") as string,
+      listId: (l.ItemRef?.ListID ?? null) as string | null,
+      txnLineId: (l.TxnLineID ?? "") as string,
+    }))
+    .filter((r) => r.sku && r.txnLineId);
 };
 
 /**
@@ -438,8 +488,24 @@ export default async function qbPurchaseOrderPoller(
       // pipeline synced. Without this guard, the back-fill block below
       // uses row.qb_list_id as a fallback TxnID and writes synced_at,
       // leaving the pipeline lying about a Mod that never reached QB.
-      if (opStatus === "completed" && data.operation?.error) {
-        opStatus = "failed";
+      //
+      // Two flavours of "completed-but-failed":
+      //   1. data.operation.error is populated by the bridge after retry.
+      //   2. data.operation.error is empty BUT the embedded QBXML response
+      //      has statusCode != "0" (Add/Mod/Query Rs). The bridge marks the
+      //      QBXML round-trip as completed even when QB itself returned an
+      //      error. Without inspecting statusCode, errors like 3120 (object
+      //      not found) and 3200 (stale EditSequence) sneak past as success.
+      if (opStatus === "completed") {
+        const embeddedErr =
+          data.operation?.error ?? extractQbResponseError(data);
+        if (embeddedErr) {
+          (data.operation as any) = {
+            ...(data.operation ?? {}),
+            error: embeddedErr,
+          };
+          opStatus = "failed";
+        }
       }
 
       if (opStatus === "expired") {
@@ -460,6 +526,37 @@ export default async function qbPurchaseOrderPoller(
       if (opStatus === "failed") {
         const errMsg = data.operation?.error ?? "Bridge returned failed";
         const pl = row.payload as Record<string, unknown>;
+
+        // QB Error 3120: "Object … cannot be found" — usually means a TxnLineID
+        // we sent doesn't exist in QB (line IDs went stale). Recovery: re-query
+        // QB with IncludeLineItems and re-map qb_txn_line_id by SKU before
+        // retrying the Mod. The query path already requests IncludeLineItems=1;
+        // we just need to flag the row so Phase B's query handler knows to
+        // overwrite line TxnLineIDs by SKU (not positional) before re-queueing.
+        const isLineIdMissingErr = /3120|object.*cannot be found|invalid reference/i.test(errMsg);
+        if ((pl.is_mod || pl.is_void) && !pl.is_query && isLineIdMissingErr) {
+          const freshPl = {
+            ...pl,
+            is_query: true,
+            edit_sequence: undefined,
+            _needs_line_recovery: true,
+          };
+          await knex.raw(
+            `UPDATE qb_purchase_order_pipeline
+                SET status = 'waiting',
+                    qb_operation_id = NULL,
+                    payload = ?,
+                    last_error = ?,
+                    next_retry_at = NULL,
+                    updated_at = NOW()
+              WHERE id = ?`,
+            [JSON.stringify(freshPl), errMsg, row.id]
+          );
+          logger.warn(
+            `${TAG} row ${row.id}: stale TxnLineID (${errMsg.slice(0, 80)}) → re-query QB with line recovery`
+          );
+          continue;
+        }
 
         // Stale/missing EditSequence (QB status 3100/3200 or message text) → re-query QB, then retry mod/void
         const isEditSeqErr = /editsequence|edit.?sequence|3[12]00|po not found in qb|may have been deleted/i.test(errMsg);
@@ -571,6 +668,31 @@ export default async function qbPurchaseOrderPoller(
       if (pl.is_query && (pl.is_mod || pl.is_void)) {
         const poRet = extractPoRet(data);
         const isManuallyClosed = poRet?.IsManuallyClosed === 'true';
+
+        // Line recovery: when the previous Mod attempt failed with QB 3120
+        // (object not found), the qb_txn_line_id values in DB are stale.
+        // Now that the query came back with the current line items, re-map
+        // by SKU and overwrite DB so the next Mod sends the real TxnLineIDs.
+        // Then rebuild the payload's lines from DB so the retry uses fresh
+        // data. SKU is the canonical key — positional matching is unsafe
+        // because QB can reorder lines across Mod operations.
+        if (pl._needs_line_recovery && poRet) {
+          const meta = extractLineMetaBySku(data);
+          if (meta.length > 0) {
+            for (const m of meta) {
+              await knex.raw(
+                `UPDATE purchase_order_line
+                    SET qb_txn_line_id = ?, updated_at = NOW()
+                  WHERE purchase_order_id = ?
+                    AND sku_snapshot = ?`,
+                [m.txnLineId, row.purchase_order_id, m.sku]
+              );
+            }
+            logger.info(
+              `${TAG} row ${row.id}: line recovery re-mapped ${meta.length} TxnLineIDs by SKU`
+            );
+          }
+        }
 
         // PO already closed in QB — void is a no-op, mark synced instead of error
         if (pl.is_void && isManuallyClosed) {
@@ -713,7 +835,39 @@ export default async function qbPurchaseOrderPoller(
             );
           }
         } else {
-          const modPl = { ...pl, is_query: false, edit_sequence: editSequence };
+          // If we just ran line recovery, rebuild the lines array from DB so
+          // the next Mod uses the freshly-mapped qb_txn_line_id values. Without
+          // this, modPl.lines would still carry the stale IDs from the original
+          // payload and the Mod would fail again with the same 3120 error.
+          let refreshedLines = pl.lines as Array<Record<string, unknown>> | undefined;
+          if (pl._needs_line_recovery) {
+            const dbLines = await knex
+              .raw(
+                `SELECT id, qb_txn_line_id, qb_item_list_id_snapshot, sku_snapshot,
+                        description_snapshot, qty_ordered, unit_cost_cents
+                   FROM purchase_order_line
+                  WHERE purchase_order_id = ?
+                  ORDER BY line_order ASC, created_at ASC`,
+                [row.purchase_order_id]
+              )
+              .then((r: any) => r.rows ?? []);
+            refreshedLines = dbLines.map((l: any) => ({
+              line_id: l.id,
+              qb_txn_line_id: l.qb_txn_line_id,
+              qb_item_list_id: l.qb_item_list_id_snapshot,
+              sku: l.sku_snapshot,
+              description: l.description_snapshot,
+              qty_ordered: l.qty_ordered,
+              unit_cost_cents: l.unit_cost_cents,
+            }));
+          }
+          const modPl = {
+            ...pl,
+            is_query: false,
+            edit_sequence: editSequence,
+            ...(refreshedLines ? { lines: refreshedLines } : {}),
+            _needs_line_recovery: undefined,
+          };
           await knex.raw(
             `UPDATE qb_purchase_order_pipeline
                 SET status = 'waiting',
@@ -727,7 +881,7 @@ export default async function qbPurchaseOrderPoller(
             [JSON.stringify(modPl), row.id]
           );
           logger.info(
-            `${TAG} row ${row.id}: got EditSequence ${editSequence} from QB, reset to ${pl.is_void ? "void" : "mod"}`
+            `${TAG} row ${row.id}: got EditSequence ${editSequence} from QB, reset to ${pl.is_void ? "void" : "mod"}${pl._needs_line_recovery ? " (lines refreshed from DB)" : ""}`
           );
           submitted++; // count as progress
         }
