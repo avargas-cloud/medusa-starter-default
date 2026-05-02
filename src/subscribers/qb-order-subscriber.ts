@@ -144,6 +144,17 @@ export default async function qbOrderSubscriber({
         break;
       }
       case "pos.invoice.created": {
+        // The route POST /admin/invoices already enqueues the correct pipeline
+        // row upfront (sales_receipt OR invoice depending on is_sales_receipt).
+        // When the SR path is taken upfront, this event must NOT enqueue a
+        // duplicate "invoice" row — that path produced ghost QB Invoices like
+        // #19480 (memo "Invoice 1651") for order 1651 / pos_invoice 20245.
+        if ((data as any).is_sales_receipt === true) {
+          logger.info(
+            `[QB-ORDER] ⏭️  pos.invoice.created skipped — SR path already enqueued upfront for ${(data as any).order_id ?? (data as any).id}`
+          );
+          break;
+        }
         // 1.5.7: pipeline-only — enqueue 'invoice' for consolidator pickup.
         const {
           writePipelineRow: enqueueInv2,

@@ -1181,7 +1181,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const eventBus = req.scope.resolve(Modules.EVENT_BUS);
     await eventBus.emit({
       name: "pos.invoice.created",
-      data: { id: (invoice as any).id, order_id: body.order_id },
+      data: {
+        id: (invoice as any).id,
+        invoice_id: (invoice as any).id,
+        order_id: body.order_id,
+        is_sales_receipt: body.is_sales_receipt === true,
+      },
     });
   } catch (emitErr: any) {
     console.warn(
