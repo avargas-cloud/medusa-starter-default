@@ -45,10 +45,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     );
     const available = Math.max(0, Number(payment.amount) - alreadyApplied);
 
-    if (amount > available) {
-      return res.status(400).json({
-        error: `Amount (${amount}) exceeds available balance (${available})`,
-      });
+    if (available <= 0) {
+      return res
+        .status(400)
+        .json({ error: "This payment has no available balance to apply." });
     }
 
     // 2. Load invoice
@@ -59,6 +59,27 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         .status(400)
         .json({ error: "Cannot apply to a voided invoice" });
 
+    // Auto-clamp: never apply more than what the invoice still owes,
+    // and never more than what the deposit has available. The unused portion
+    // stays on the CustomerPayment as available credit for future invoices.
+    const invoiceTotal = Number((invoice as any).total ?? 0);
+    const invoiceAmountPaid = Number((invoice as any).amount_paid ?? 0);
+    const invoiceBalanceDue = Math.max(0, invoiceTotal - invoiceAmountPaid);
+
+    if (invoiceBalanceDue <= 0) {
+      return res.status(400).json({
+        error: "Invoice is already paid in full — no balance to apply.",
+      });
+    }
+
+    const requestedAmount = Number(amount);
+    const effectiveAmount = Math.min(
+      requestedAmount,
+      invoiceBalanceDue,
+      available
+    );
+    const overflowAmount = requestedAmount - effectiveAmount;
+
     const now = new Date();
 
     // 3. Create the application
@@ -66,19 +87,30 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       payment_id: id,
       invoice_id,
       order_id: invoice.order_id,
-      amount_applied: amount,
+      amount_applied: effectiveAmount,
       applied_at: now,
       applied_by: applied_by ?? null,
     });
 
-    // 4. Update invoice balance
+    // 4. Create the corresponding InvoicePayment so future recalculations stay consistent.
+    await invoiceService.createInvoicePayments({
+      invoice_id,
+      amount: effectiveAmount,
+      payment_method: "credit",
+      notes: `Applied from deposit/payment ${payment.reference || id}`,
+      created_by: applied_by ?? null,
+      paid_at: now,
+    });
+
+    // 5. Update invoice balance from the authoritative invoice_payments sum
     const allInvPayments = await invoiceService.listInvoicePayments({
       invoice_id,
     });
-    const totalPaid =
-      allInvPayments.reduce((s: number, p: any) => s + Number(p.amount), 0) +
-      amount;
-    const balanceDue = Math.max(0, Number(invoice.total) - totalPaid);
+    const totalPaid = allInvPayments.reduce(
+      (s: number, p: any) => s + Number(p.amount),
+      0
+    );
+    const balanceDue = Math.max(0, invoiceTotal - totalPaid);
     await invoiceService.updatePosInvoices(
       { id: invoice_id },
       {
@@ -88,18 +120,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       }
     );
 
-    // 5a. Register capture in Medusa native payment module so order.payment_status updates
+    // 6. Register capture in Medusa native payment module so order.payment_status updates
     if (invoice.order_id) {
       await registerMedusaPayment(req.scope, {
         order_id: invoice.order_id,
-        amount,
+        amount: effectiveAmount,
         payment_method: payment.method,
-        invoice_total: Number(invoice.total),
+        invoice_total: invoiceTotal,
       }).catch(() => {}); // non-fatal
     }
 
-    // 5. Update payment status
-    const newApplied = alreadyApplied + amount;
+    // 7. Update payment status
+    const newApplied = alreadyApplied + effectiveAmount;
     const newAvailable = Math.max(0, Number(payment.amount) - newApplied);
     const newStatus = newAvailable <= 0 ? "applied" : "partially_applied";
     await financeService.updateCustomerPayments({ id, status: newStatus });
@@ -107,7 +139,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const updated = await financeService.retrieveCustomerPayment(id, {
       relations: ["applications"],
     });
-    return res.json({ payment: updated });
+    return res.json({
+      payment: updated,
+      requested_amount: requestedAmount,
+      applied_amount: effectiveAmount,
+      overflow_amount: overflowAmount,
+      remaining_payment_balance: newAvailable,
+    });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }

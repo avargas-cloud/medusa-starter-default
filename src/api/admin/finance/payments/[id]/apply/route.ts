@@ -105,6 +105,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       invoiceBalanceDue,
       availableAmount
     );
+    const overflowAmount = requestedAmount - effectiveAmount;
 
     // 3. Create the PaymentApplication record in Finance module
     const application = await financeService.createPaymentApplications({
