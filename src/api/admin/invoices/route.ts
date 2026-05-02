@@ -1175,5 +1175,19 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     })
     .catch(() => invoice);
 
+  // Emit pos.invoice.created so downstream subscribers (Meilisearch sync,
+  // future hooks) can react. Best-effort — never fails the response.
+  try {
+    const eventBus = req.scope.resolve(Modules.EVENT_BUS);
+    await eventBus.emit({
+      name: "pos.invoice.created",
+      data: { id: (invoice as any).id, order_id: body.order_id },
+    });
+  } catch (emitErr: any) {
+    console.warn(
+      `[invoice] pos.invoice.created emit failed: ${emitErr?.message}`
+    );
+  }
+
   return res.status(201).json({ invoice: full });
 }

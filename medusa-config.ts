@@ -582,6 +582,43 @@ module.exports = defineConfig({
               };
             },
           },
+          // POS Invoices index — same self-managed pattern as `orders`.
+          // Populated by `pos-invoice-meilisearch-sync` subscriber and the
+          // `sync-meili-pos-invoices` backfill script. Doc shape lives in
+          // lib/meilisearch/build-pos-invoice-doc.ts.
+          pos_invoices: {
+            indexSettings: {
+              searchableAttributes: [
+                "invoice_number",
+                "invoice_number_str",
+                "order_display_id_str",
+                "order_document_number",
+                "customer_name",
+                "customer_email",
+                "customer_phone",
+                "customer_phone_digits",
+                "company_name",
+                "qb_invoice_ref",
+                "payment_method",
+                "notes",
+              ],
+              filterableAttributes: [
+                "status",
+                "payment_method",
+                "card_brand",
+                "has_balance",
+              ],
+              sortableAttributes: [
+                "invoice_number",
+                "created_at_ts",
+                "total_cents",
+                "balance_cents",
+              ],
+              displayedAttributes: ["id"],
+            },
+            primaryKey: "id",
+            transformer: (doc: any) => doc,
+          },
           // Orders index — populated by our own subscriber + backfill script
           // (the plugin doesn't auto-ingest orders; settings here only ensure
           // the index is created with the right searchable/filterable schema
