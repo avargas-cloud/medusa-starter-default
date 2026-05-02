@@ -73,9 +73,29 @@ export default class PosTaxProvider implements ITaxProvider {
       return taxLines;
     }
 
-    // 2. Normal Flow - Florida 7%
-    const taxLines: (ItemTaxLineDTO | ShippingTaxLineDTO)[] = itemLines.flatMap(
+    // 2. Normal Flow - Florida 7% per line, with per-item exemption
+    // A line is non-taxable when:
+    //   • line_item.taxable === false (snapshot from product at add-to-cart), OR
+    //   • line_item.metadata?.taxable === false (POS direct override for custom items)
+    // Default = taxable (preserves prior behavior).
+    const taxLines: (ItemTaxLineDTO | ShippingTaxLineDTO)[] = itemLines.map(
       (l) => {
+        const li: any = l.line_item;
+        const isLineExempt =
+          li?.taxable === false ||
+          li?.metadata?.taxable === false;
+
+        if (isLineExempt) {
+          return {
+            rate_id: PosTaxProvider.US_EXEMPT_TAX_RATE_ID,
+            rate: 0,
+            name: "Non-Taxable",
+            code: "EXEMPT",
+            line_item_id: l.line_item.id,
+            provider_id: this.getIdentifier(),
+          };
+        }
+
         return {
           rate_id: PosTaxProvider.FLORIDA_TAX_RATE_ID,
           rate: 7,

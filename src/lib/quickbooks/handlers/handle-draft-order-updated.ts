@@ -1,7 +1,7 @@
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { updateEstimateInQb } from "../client/estimates";
-import { buildQbItems, type MedusaOrderForQb } from "../order-flow-core";
+import { buildQbItems, resolveProductTaxableMap, type MedusaOrderForQb } from "../order-flow-core";
 import { parseSalesRepInitials } from "../parse-sales-rep";
 import { getEstimateTxnId, getEstimateRef } from "../qb-metadata-types";
 import {
@@ -165,7 +165,11 @@ export async function handleDraftOrderUpdated(
     }
 
     const typedOrder = fullOrder as unknown as MedusaOrderForQb;
-    const qbItems = buildQbItems(typedOrder.items || [], typedOrder.metadata);
+    const productTaxableMap = await resolveProductTaxableMap(
+      container.resolve("__pg_connection__"),
+      typedOrder.items || []
+    );
+    const qbItems = buildQbItems(typedOrder.items || [], typedOrder.metadata, productTaxableMap);
     const memo =
       (fullOrder.metadata?.document_number as string | undefined) ||
       (fullOrder.display_id ? `E${fullOrder.display_id}` : freshTxnId);

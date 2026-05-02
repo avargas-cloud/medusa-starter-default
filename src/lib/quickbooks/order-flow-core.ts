@@ -359,9 +359,50 @@ function sanitizeForQb(text: string): string {
  * Set variant.metadata.quickbooks_uom (e.g. "each") to prevent QB UOM multiplication.
  * Also parses metadata.pos_comment_lines (if present) and interleaves them based on sort_order.
  */
+/**
+ * Resolves the productId → taxable map for a set of order items.
+ * Reads `product.taxable` directly via raw SQL because the column is added
+ * by a custom migration outside Medusa's entity model.
+ *
+ * Pass the returned map as the third arg to buildQbItems so the bridge can
+ * emit per-line `<SalesTaxCodeRef>Non</...>` for non-taxable lines.
+ */
+export async function resolveProductTaxableMap(
+  pg: any,
+  items: MedusaOrderForQb["items"]
+): Promise<Record<string, boolean>> {
+  const productIds = Array.from(
+    new Set(
+      (items || [])
+        .map((i) => (i.variant as any)?.product_id ?? (i as any).product_id)
+        .filter(Boolean) as string[]
+    )
+  );
+  if (productIds.length === 0) return {};
+  try {
+    const r = await pg.raw(
+      `SELECT id, taxable FROM product WHERE id = ANY(?::text[])`,
+      [productIds]
+    );
+    return Object.fromEntries(
+      (r.rows ?? []).map((row: any) => [row.id, row.taxable !== false])
+    );
+  } catch {
+    return {};
+  }
+}
+
 export function buildQbItems(
   items: MedusaOrderForQb["items"],
-  _metadata?: Record<string, any>
+  _metadata?: Record<string, any>,
+  /**
+   * Optional map of Medusa product_id → taxable. When provided, each emitted
+   * QB line item carries `taxable: false` if the product is non-taxable.
+   * The bridge consults this flag to emit `<SalesTaxCodeRef>Non</...>` per
+   * line, so QB does not tax services / labor lines like INSTALL.
+   * Default (undefined) preserves prior behavior — every line is taxable.
+   */
+  productTaxableMap?: Record<string, boolean>
 ): QbOrderItem[] {
   const productLines = (items || [])
     .filter((item) => item.variant?.metadata?.quickbooks_id)
@@ -385,6 +426,15 @@ export function buildQbItems(
         item.variant?.metadata?.quickbooks_no_site === true ||
         item.variant?.metadata?.quickbooks_no_site === "true"
       );
+      // Resolve per-line tax flag from the optional product map. When the
+      // map is missing or has no entry for this product, default to taxable
+      // (true) — preserves legacy behavior.
+      const productIdMedusa =
+        (item.variant as any)?.product_id ?? (item as any).product_id;
+      const lineTaxable =
+        productTaxableMap && productIdMedusa
+          ? productTaxableMap[productIdMedusa] !== false
+          : true;
       return {
         _sortOrder:
           typeof item.metadata?.sort_order === "number"
@@ -403,6 +453,7 @@ export function buildQbItems(
               : `${item.title || item.product_title || ""}${item.variant?.sku ? ` (${item.variant.sku})` : ""}`
           ),
           ...(isService ? { noSite: true } : {}),
+          ...(lineTaxable ? {} : { taxable: false }),
         },
       };
     });

@@ -13,6 +13,7 @@ import { applyShippingAttributesStep } from "./steps/apply-shipping-attributes-s
 import { applyWholesalePricesStep } from "./steps/apply-wholesale-prices-step";
 import { enqueueQbItemsStep, QbItemType } from "./steps/enqueue-qb-items-step";
 import { linkQbVendorStep } from "./steps/link-qb-vendor-step";
+import { setProductTaxableStep } from "./steps/set-product-taxable-step";
 
 export type CreatePosProductV2VariantInput = {
   sku: string;
@@ -61,6 +62,8 @@ export type CreatePosProductV2Input = {
   income_account_full_name?: string;
   vendor_full_name?: string;
   vendor_qb_id?: string;
+  /** Default true. False marks the product non-taxable across all order line items (services / labor). */
+  taxable?: boolean;
   variants: CreatePosProductV2VariantInput[];
   currency_code?: string;
   /** MinIO URLs from POST /admin/uploads. First entry becomes the thumbnail. */
@@ -302,6 +305,13 @@ export const createPosProductV2Workflow = createWorkflow(
       };
     });
     applyShippingAttributesStep(shippingStepInput);
+
+    // Persist the per-product tax flag (default TRUE; non-taxable products skip FL 7%).
+    const taxableStepInput = transform({ input, productRef }, (data) => ({
+      product_id: (data.productRef as any)?.id as string,
+      taxable: data.input.taxable !== false,
+    }));
+    setProductTaxableStep(taxableStepInput);
 
     // Meilisearch indexes must reflect the new product immediately so the cashier
     // can find it in Load Template / product search right after creation. The QB

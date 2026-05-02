@@ -4,6 +4,7 @@ import { getDbPool } from "../../../api/utils/db-pool";
 import {
   processInvoiceInQb,
   buildQbItems,
+  resolveProductTaxableMap,
   buildShippingQbItem,
   buildQbOrderDiscountLines,
   getEffectiveOrderDiscount,
@@ -298,7 +299,11 @@ export async function handleFulfillmentCreated(
           item.subtotal !== undefined ? getFloat(item.subtotal) : undefined,
       }));
 
-    prebuiltItems = buildQbItems(activeItems, order.metadata);
+    const productTaxableMap = await resolveProductTaxableMap(
+      _container.resolve("__pg_connection__"),
+      activeItems
+    );
+    prebuiltItems = buildQbItems(activeItems, order.metadata, productTaxableMap);
 
     if (orderDiscountTotal > 0) {
       const orderSubtotal = getFloat(order.subtotal);

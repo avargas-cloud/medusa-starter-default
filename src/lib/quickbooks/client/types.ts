@@ -10,6 +10,11 @@ export interface QbOrderItem {
   desc?: string;
   noSite?: boolean;
   /**
+   * Per-line tax flag. When false, the bridge emits `<SalesTaxCodeRef>Non</...>`
+   * so QB doesn't tax this line. Default (omitted) → taxable.
+   */
+  taxable?: boolean;
+  /**
    * For *Mod operations only. Use the TxnLineID from an existing QB line
    * (as returned by InvoiceQuery/SalesReceiptQuery) to update that line,
    * or "-1" to append a new line. Omit for *Add operations.

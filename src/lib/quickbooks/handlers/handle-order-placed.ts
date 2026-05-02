@@ -4,6 +4,7 @@ import { getDbPool } from "../../../api/utils/db-pool";
 import {
   processOrderInQb,
   buildQbItems,
+  resolveProductTaxableMap,
   buildShippingQbItem,
   buildQbOrderDiscountLines,
   getEffectiveOrderDiscount,
@@ -276,7 +277,11 @@ export async function handleOrderPlaced(
         subtotal: undefined,
       }));
 
-    const qbItems = buildQbItems(activeItems, order.metadata);
+    const productTaxableMap = await resolveProductTaxableMap(
+      _container.resolve("__pg_connection__"),
+      activeItems
+    );
+    const qbItems = buildQbItems(activeItems, order.metadata, productTaxableMap);
 
     if (orderDiscountTotal > 0) {
       const orderSubtotal = Number(order.subtotal || 0);
