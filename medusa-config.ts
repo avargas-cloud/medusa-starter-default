@@ -582,6 +582,45 @@ module.exports = defineConfig({
               };
             },
           },
+          // Orders index — populated by our own subscriber + backfill script
+          // (the plugin doesn't auto-ingest orders; settings here only ensure
+          // the index is created with the right searchable/filterable schema
+          // and survives the plugin's startup overrides).
+          orders: {
+            indexSettings: {
+              searchableAttributes: [
+                "document_number",
+                "display_id_str",
+                "customer_name",
+                "customer_email",
+                "customer_phone",
+                "customer_phone_digits",
+                "company_name",
+                "qb_sales_order_ref",
+                "qb_invoice_refs",
+              ],
+              filterableAttributes: [
+                "status",
+                "payment_status",
+                "fulfillment_status",
+                "is_canceled",
+                "is_voided",
+                "is_web_order",
+                "sales_rep_initials",
+                "sales_channel_id",
+              ],
+              sortableAttributes: [
+                "display_id",
+                "created_at_ts",
+                "total_cents",
+              ],
+              displayedAttributes: ["id"],
+            },
+            primaryKey: "id",
+            // No-op transformer: the plugin will not auto-feed Medusa
+            // entities into this index. Our subscriber owns ingestion.
+            transformer: (doc: any) => doc,
+          },
         },
       },
     },
