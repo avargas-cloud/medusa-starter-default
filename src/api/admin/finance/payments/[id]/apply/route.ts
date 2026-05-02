@@ -69,9 +69,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     const availableAmount = Number(payment.amount) - totalApplied;
 
-    if (amount_applied > availableAmount) {
+    if (availableAmount <= 0) {
       return res.status(400).json({
-        error: `Requested amount (${amount_applied}) exceeds available payment balance (${availableAmount})`,
+        error: "This payment has no available balance to apply.",
       });
     }
 
@@ -86,20 +86,40 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         .json({ error: "Cannot apply payment to a voided invoice" });
     }
 
+    // Auto-clamp the requested amount: never apply more than what the invoice still owes,
+    // and never more than what the deposit has available. Anything left over stays on the
+    // CustomerPayment as available credit for future invoices.
+    const invoiceTotal = getNum((invoice as any).total);
+    const invoiceAmountPaid = getNum((invoice as any).amount_paid);
+    const invoiceBalanceDue = Math.max(0, invoiceTotal - invoiceAmountPaid);
+
+    if (invoiceBalanceDue <= 0) {
+      return res.status(400).json({
+        error: "Invoice is already paid in full — no balance to apply.",
+      });
+    }
+
+    const requestedAmount = Number(amount_applied);
+    const effectiveAmount = Math.min(
+      requestedAmount,
+      invoiceBalanceDue,
+      availableAmount
+    );
+
     // 3. Create the PaymentApplication record in Finance module
     const application = await financeService.createPaymentApplications({
       payment_id: paymentId,
       invoice_id: invoice_id,
       invoice_number: String((invoice as any).invoice_number || ""),
       order_id: invoice.order_id,
-      amount_applied,
+      amount_applied: effectiveAmount,
       applied_at: new Date(),
       applied_by: applied_by || null,
     });
 
     // 4. Update the CustomerPayment status
     const isFullyApplied =
-      totalApplied + Number(amount_applied) >= Number(payment.amount);
+      totalApplied + effectiveAmount >= Number(payment.amount);
     const newPaymentStatus = isFullyApplied ? "applied" : "partially_applied";
 
     await financeService.updateCustomerPayments({
@@ -110,7 +130,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // 5. Create the corresponding InvoicePayment in the Invoice module
     await invoiceService.createInvoicePayments({
       invoice_id: invoice_id,
-      amount: amount_applied,
+      amount: effectiveAmount,
       payment_method: "credit", // In the context of the invoice, the method is "customer credit"
       notes: `Applied from deposit/payment ${payment.reference || paymentId}`,
       created_by: applied_by || null,
@@ -154,7 +174,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     if (invoice.order_id) {
       const medusaPaymentId = await registerMedusaPayment(req.scope, {
         order_id: invoice.order_id,
-        amount: amount_applied,
+        amount: effectiveAmount,
         payment_method: payment.method,
         invoice_total: getNum(invoice.total),
       });
@@ -235,7 +255,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             payment_id: paymentId,
             invoice_id,
             order_id: invoice.order_id,
-            amount_applied,
+            amount_applied: effectiveAmount,
             application_id: application.id,
           },
         });
@@ -248,7 +268,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       }
     }
 
-    return res.json({ payment: updatedPayment, application });
+    return res.json({
+      payment: updatedPayment,
+      application,
+      requested_amount: requestedAmount,
+      applied_amount: effectiveAmount,
+      overflow_amount: overflowAmount,
+      remaining_payment_balance: availableAmount - effectiveAmount,
+    });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
