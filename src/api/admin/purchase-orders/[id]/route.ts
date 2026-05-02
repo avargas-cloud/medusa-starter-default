@@ -387,9 +387,13 @@ export async function PATCH(
       : null;
   }
 
-  // Replace lines if provided — hard-delete (no soft-delete / version history
-  // so removed items vanish from the PO entirely). MedusaService's deleteXXX
-  // already does a hard delete (softDeleteXXX is a separate method).
+  // Reconcile lines if provided — DIFF by id (update existing, insert new,
+  // delete missing) instead of full hard-delete + re-insert. This preserves
+  // each line's qb_txn_line_id so subsequent QB Mods can target the existing
+  // QuickBooks line items by their TxnLineID; otherwise QB sees Mod requests
+  // with TxnLineID=-1 on every line and adds duplicate lines while leaving
+  // the originals as ghosts (qty=0). See incident: "On PO" cache drift on
+  // ENEA1-18-30 / ENEA1-18-60 (May 2026).
   if (body.lines !== undefined) {
     // Guard: cannot replace lines if any active receipts exist on this PO.
     const existingReceipts = (await service.listPurchaseOrderReceipts(
@@ -408,9 +412,7 @@ export async function PATCH(
       { purchase_order_id: id },
       { take: 1000, skip: 0 }
     )) as Array<{ id: string }>;
-    if (oldLines.length > 0) {
-      await service.deletePurchaseOrderLines(oldLines.map((l) => l.id));
-    }
+    const oldIds = new Set(oldLines.map((l) => l.id));
 
     const normalized = body.lines.map(normalizeLine);
     const totals = computeTotals(normalized, {
@@ -424,26 +426,53 @@ export async function PATCH(
         (existing as { other_fees_cents?: number }).other_fees_cents,
     });
 
-    if (normalized.length > 0) {
-      await service.createPurchaseOrderLines(
-        normalized.map((l, i) => ({
+    // Partition body lines: those with a known existing id → update;
+    // those without (or with an unknown id) → insert.
+    const toUpdate: Array<{ id: string; data: Record<string, unknown> }> = [];
+    const toInsert: Array<Record<string, unknown>> = [];
+    const keepIds = new Set<string>();
+
+    normalized.forEach((l, i) => {
+      const lineFields = {
+        product_variant_id: l.product_variant_id,
+        inventory_item_id: l.inventory_item_id,
+        sku_snapshot: l.sku_snapshot,
+        description_snapshot: l.description_snapshot,
+        qb_item_list_id_snapshot: l.qb_item_list_id_snapshot ?? null,
+        qty_ordered: l.qty_ordered,
+        unit_cost_cents: l.unit_cost_cents,
+        tax_cents: l.tax_cents ?? 0,
+        total_cents: l.total_cents,
+        line_order: l.line_order ?? i,
+        notes: l.notes ?? null,
+      };
+      if (l.id && oldIds.has(l.id)) {
+        keepIds.add(l.id);
+        toUpdate.push({ id: l.id, data: lineFields });
+      } else {
+        toInsert.push({
           purchase_order_id: id,
-          product_variant_id: l.product_variant_id,
-          inventory_item_id: l.inventory_item_id,
-          sku_snapshot: l.sku_snapshot,
-          description_snapshot: l.description_snapshot,
-          qb_item_list_id_snapshot: l.qb_item_list_id_snapshot ?? null,
-          qty_ordered: l.qty_ordered,
+          ...lineFields,
           qty_received: 0,
           qty_cancelled: 0,
-          unit_cost_cents: l.unit_cost_cents,
-          tax_cents: l.tax_cents ?? 0,
-          total_cents: l.total_cents,
           status: "open",
-          line_order: l.line_order ?? i,
-          notes: l.notes ?? null,
-        }))
+        });
+      }
+    });
+
+    // Anything not kept gets hard-deleted.
+    const toDelete = oldLines.filter((l) => !keepIds.has(l.id)).map((l) => l.id);
+
+    if (toDelete.length > 0) {
+      await service.deletePurchaseOrderLines(toDelete);
+    }
+    if (toUpdate.length > 0) {
+      await service.updatePurchaseOrderLines(
+        toUpdate.map((u) => ({ id: u.id, ...u.data }))
       );
+    }
+    if (toInsert.length > 0) {
+      await service.createPurchaseOrderLines(toInsert);
     }
 
     headerUpdate.subtotal_cents = totals.subtotal_cents;

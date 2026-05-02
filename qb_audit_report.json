@@ -1,11 +1,11 @@
 {
-  "generated_at": "2026-04-22T19:55:16.504Z",
+  "generated_at": "2026-05-01T22:06:15.137Z",
   "stats": {
-    "qb_total": 7654,
-    "medusa_total": 7567,
-    "no_qb_id": 10,
-    "missing_in_medusa": 2,
-    "orphan_in_medusa": 3
+    "qb_total": 7680,
+    "medusa_total": 7587,
+    "no_qb_id": 8,
+    "missing_in_medusa": 4,
+    "orphan_in_medusa": 5
   },
   "a_no_qb_id": [
     {
@@ -14,20 +14,6 @@
       "name": "Legacy Customer",
       "has_account": true,
       "created_at": "2026-02-23T18:32:36.413Z"
-    },
-    {
-      "medusa_id": "cus_01KJ6SQBNV60T05J0ESKN0VBTJ",
-      "email": "browser-test-1771902315132@test.com",
-      "name": "Test User",
-      "has_account": true,
-      "created_at": "2026-02-24T03:05:16.220Z"
-    },
-    {
-      "medusa_id": "cus_01KPRR37YYFKD30XH71QZ0R4HB",
-      "email": "contac@flashlandscape.com",
-      "name": "MARC WINKLER",
-      "has_account": false,
-      "created_at": "2026-04-21T19:25:55.551Z"
     },
     {
       "medusa_id": "cus_01KMGHHNGCSAADY7R61C961Z93",
@@ -91,6 +77,16 @@
       "customer_type": "Carpenter / General Assembler"
     },
     {
+      "qb_list_id": "80000A29-1487363151",
+      "name": "Doral Hyundai",
+      "first_name": "Pedro",
+      "last_name": "",
+      "company": "Doral Hyundai",
+      "email": "",
+      "price_level": "",
+      "customer_type": "Car & Truck Dealer"
+    },
+    {
       "qb_list_id": "8000228B-1773678912",
       "name": "RENE HERNANDEZ",
       "first_name": "RENE",
@@ -99,14 +95,36 @@
       "email": "RENEHD2506832gmailcom",
       "price_level": "Wholesale",
       "customer_type": "Carpenter / General Assembler"
+    },
+    {
+      "qb_list_id": "800022E1-1777128708",
+      "name": "RODNEY PEREZ",
+      "first_name": "RODNEY",
+      "last_name": "PEREZ",
+      "company": "",
+      "email": "RONEYPEREZ13@YAHOO.COM",
+      "price_level": "Retail",
+      "customer_type": "Home Owner / Renter"
     }
   ],
   "c_orphan_in_medusa": [
+    {
+      "medusa_id": "cus_01KPRR37YYFKD30XH71QZ0R4HB",
+      "email": "contac@flashlandscape.com",
+      "name": "MARC WINKLER",
+      "stale_qb_list_id": "\"800022B9-1776888557\""
+    },
     {
       "medusa_id": "cus_01KMGKJEH369F6CMZBBBE0VA5T",
       "email": "noemail-1774378891713@ecopowertech.com",
       "name": "test6 test6",
       "stale_qb_list_id": "80002296-1774378921"
+    },
+    {
+      "medusa_id": "cus_5fa4c8007bb9474780da3ecf80",
+      "email": "stigmawood@yahoo.com",
+      "name": "Osmani Carvajal",
+      "stale_qb_list_id": "800022DA-1776949219"
     },
     {
       "medusa_id": "cus_01KMGKVG6F5A4VVHF1XXPZSPPK",

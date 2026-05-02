@@ -251,9 +251,15 @@ export function BridgeStatus() {
         </div>
 
         {stats?.error ? (
-          <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
-            {stats.error}
-          </div>
+          <details className="group rounded-md bg-red-50 border border-red-200 text-sm text-red-700">
+            <summary className="flex items-center gap-2 px-4 py-2 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+              <span className="inline-block transition-transform group-open:rotate-90">▶</span>
+              <span className="font-medium">Error</span>
+            </summary>
+            <div className="px-4 pb-3 pt-1 border-t border-red-200 max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px]">
+              {stats.error}
+            </div>
+          </details>
         ) : stats ? (
           <div className="space-y-3">
             {/* qbBusy banner */}

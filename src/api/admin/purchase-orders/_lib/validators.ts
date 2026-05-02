@@ -9,6 +9,10 @@ import { z } from "zod";
 import { PURCHASE_ORDER_STATUSES } from "../../../../modules/purchase-orders/types";
 
 export const draftLineInputSchema = z.object({
+  // Optional: when present on PATCH, matches an existing line for in-place
+  // update (preserves qb_txn_line_id so QB Mods don't create ghost lines).
+  // Always absent on POST (create).
+  id: z.string().min(1).optional(),
   product_variant_id: z.string().min(1, "product_variant_id is required"),
   inventory_item_id: z.string().min(1, "inventory_item_id is required"),
   sku_snapshot: z.string().min(1, "sku_snapshot is required"),

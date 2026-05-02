@@ -411,10 +411,36 @@ export default async function qbPurchaseOrderPoller(
   for (const row of polling) {
     try {
       const data = await pollBridge(row.qb_operation_id);
-      const opStatus = data.operation?.status;
+      let opStatus = data.operation?.status;
 
       if (!opStatus || opStatus === "queued" || opStatus === "processing")
         continue;
+
+      // Defensive: any status outside the 4 documented final values means the
+      // bridge is in an unknown state. Skip this tick rather than fall through
+      // to the success path. Only "completed" / "failed" / "expired" are
+      // handled below.
+      if (
+        opStatus !== "completed" &&
+        opStatus !== "failed" &&
+        opStatus !== "expired"
+      ) {
+        logger.warn(
+          `${TAG} row ${row.id}: unknown bridge opStatus="${opStatus}" — skipping`
+        );
+        continue;
+      }
+
+      // Bridge says "completed" but attached an error → QB call returned a
+      // soft error (e.g. EditSequence 3200 or item-list mismatch). The MOD
+      // was NOT applied. Treat this exactly like opStatus === "failed" so
+      // the EditSeq re-query path fires instead of falsely marking the
+      // pipeline synced. Without this guard, the back-fill block below
+      // uses row.qb_list_id as a fallback TxnID and writes synced_at,
+      // leaving the pipeline lying about a Mod that never reached QB.
+      if (opStatus === "completed" && data.operation?.error) {
+        opStatus = "failed";
+      }
 
       if (opStatus === "expired") {
         // Bridge no longer knows the op. Clear op_id, mark as error, retry shortly.
