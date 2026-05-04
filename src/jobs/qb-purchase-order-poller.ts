@@ -46,7 +46,7 @@ const withCanonicalPoMemo = (
 ): Record<string, unknown> => {
   const poNumber = payload.po_number;
   if (typeof poNumber !== "string" || poNumber.length === 0) return payload;
-  return { ...payload, memo: `Medusa PO ${poNumber}` };
+  return { ...payload, memo: `Medusa PO ${poNumber.replace(/^PO-/i, "")}` };
 };
 
 type BridgeStatus = {

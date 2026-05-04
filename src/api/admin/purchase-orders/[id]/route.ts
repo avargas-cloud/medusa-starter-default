@@ -42,7 +42,9 @@ interface QbCatalogServiceLike {
   retrieveQbVendor: (id: string) => Promise<QbVendorLike | null>;
 }
 
-
+function poMemoNumber(poNumber: string): string {
+  return poNumber.replace(/^PO-/i, "");
+}
 
 async function resolveUserBrief(
   req: AuthenticatedMedusaRequest,
@@ -563,7 +565,7 @@ export async function PATCH(
               existing.expected_at as unknown as string | Date
             ).toISOString()
           : null,
-        memo: `Medusa PO ${existing.number ?? id}`,
+        memo: `Medusa PO ${poMemoNumber(existing.number ?? id)}`,
         reference_number: existing.reference_number ?? null,
         lines: freshLines.map((l) => ({
           line_id: l.id,

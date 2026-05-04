@@ -84,6 +84,10 @@ function formatDate(value: Date | string | null | undefined): string {
   });
 }
 
+function poDocumentNumber(value: string | number): string {
+  return String(value).replace(/^PO-/i, "");
+}
+
 async function resolveSender(req: AuthenticatedMedusaRequest): Promise<{
   from: string;
   replyTo?: string;
@@ -118,7 +122,7 @@ async function resolveSender(req: AuthenticatedMedusaRequest): Promise<{
 }
 
 function buildPreviewHtml(po: PurchaseOrderEmailRecord, vendor: VendorEmailRecord | null) {
-  const poNumber = po.number ?? po.draft_number ?? po.id;
+  const poNumber = poDocumentNumber(po.number ?? po.draft_number ?? po.id);
   const vendorName =
     vendor?.company_name ?? vendor?.full_name ?? vendor?.name ?? po.vendor_name_snapshot ?? "Vendor";
   const total = new Intl.NumberFormat("en-US", {
@@ -199,7 +203,7 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
   }
 
   const displayId = body.displayId ?? po.number ?? po.draft_number ?? po.id;
-  const poNumber = String(displayId);
+  const poNumber = poDocumentNumber(displayId);
   const vendorName =
     vendor?.company_name ?? vendor?.full_name ?? vendor?.name ?? po.vendor_name_snapshot ?? "Vendor";
   const total = new Intl.NumberFormat("en-US", {
@@ -223,7 +227,7 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
       const posUrl =
         process.env.POS_URL ?? forwardedBase ?? originBase ?? "http://localhost:3001";
       const params = new URLSearchParams({ auto: "0" });
-      if (displayId) params.set("displayId", String(displayId));
+      if (displayId) params.set("displayId", poNumber);
       const printUrl = `${posUrl}/print/po/${resolvedTemplateId}?${params}`;
       const templateData = await fetchTemplateForPdf(resolvedTemplateId);
       pdfBuffer = await generatePdfFromUrl(
