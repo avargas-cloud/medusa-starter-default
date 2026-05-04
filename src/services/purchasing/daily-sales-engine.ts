@@ -16,6 +16,8 @@
  *   • FALLBACK mode (< 26 biz days since go-live):
  *     tier0 = previous full calendar month from purchasing_sales_history.
  *     Q4..Q1 history shifts back one month to avoid double-counting that month.
+ *   • APRIL 2026 BRIDGE:
+ *     tier0 = QB Excel Apr 1-13 + Medusa POS Apr 14-30 while still in fallback.
  *
  * tier0_30d stored in snapshot = normalized monthly rate (daily × biz_per_month).
  */
@@ -129,7 +131,7 @@ export async function buildSalesEngineContext(
 
   // ── 2. Tier0 totals for ALL variants ─────────────────────────────────────
   // Three modes:
-  //   • april2026_combined: SUM(excel for Apr 1-13 from history) + (pos for Apr 14-today).
+  //   • april2026_combined: SUM(excel for Apr 1-13 from history) + POS from Apr 14-window_end.
   //   • fallback_prev_month: previous full calendar month from history (DISTINCT ON).
   //   • live_window: pos_invoice last 26 Mon-Sat days (returns netted at sale date).
   // Revenue is NET of returns: in pos_invoice we scale total by (qty - refunded)/qty.

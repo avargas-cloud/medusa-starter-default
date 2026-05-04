@@ -14,8 +14,11 @@
  *
  * Run: yarn tsx src/scripts/verify/verify-tier0-fallback.ts
  */
+import * as dotenv from "dotenv";
 import { Client } from "pg";
 import { buildSalesEngineContext } from "../../services/purchasing/daily-sales-engine";
+
+dotenv.config();
 
 async function main() {
   const db = new Client({ connectionString: process.env.DATABASE_URL });

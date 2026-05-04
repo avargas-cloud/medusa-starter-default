@@ -3,9 +3,10 @@
  * Used by the engine AND by the API route, so the FE can label quarters
  * with the actual months the engine used.
  *
- * In fallback mode (Medusa < TIER0_MIN_BIZDAYS post-go-live), tier0 = previous
- * full calendar month from purchasing_sales_history. Q4..Q1 then shift
- * back one month to avoid double-counting that month.
+ * In fallback mode (Medusa < TIER0_MIN_BIZDAYS post-go-live), tier0 usually
+ * uses the previous full calendar month from purchasing_sales_history.
+ * April 2026 is the bridge month: combine QB Excel pre-go-live rows with
+ * Medusa POS rows until the live window has enough post-go-live days.
  */
 
 export const MEDUSA_GOLIVE_ISO = "2026-04-14";
@@ -63,21 +64,27 @@ export function computeTier0Meta(todayET: string): Tier0Meta {
   const bizDaysSinceLive = countMonSatBetween(MEDUSA_GOLIVE_ISO, todayET);
   const inFallback = bizDaysSinceLive < TIER0_MIN_BIZDAYS;
 
+  const prevY = m === 1 ? y - 1 : y;
+  const prevM = m === 1 ? 12 : m - 1;
+
   // Special-case April 2026 (the bridge month): combine QB Excel days 1-13
-  // with Medusa pos_invoice days 14-today. Active only while we're inside
-  // April 2026 AND the live window hasn't accumulated enough biz days yet.
+  // with Medusa pos_invoice days 14-window_end. This applies both during
+  // April and in early May while Medusa still lacks a full live tier0 window.
   // Quarter offsets stay live-style because tier0 covers April only — Q4 is
   // jan-mar 26 (no overlap).
-  if (inFallback && y === 2026 && m === 4) {
+  if (inFallback && ((y === 2026 && m === 4) || (prevY === 2026 && prevM === 4))) {
     const window_start = "2026-04-01";
-    const window_end = todayET; // exclusive — counts up to yesterday
+    const window_end = y === 2026 && m === 4 ? todayET : "2026-05-01";
+    const endDay = parseInt(window_end.slice(8, 10), 10) - 1;
+    const medusaEndLabel =
+      window_end === "2026-05-01" ? "30" : String(endDay);
     return {
       in_fallback_mode: true,
       source: "april2026_combined",
       window_start,
       window_end,
       biz_days: countMonSatBetween(window_start, window_end),
-      label: `Abril 2026 (QB días 1-13 + Medusa días 14-${parseInt(todayET.slice(8, 10), 10) - 1})`,
+      label: `Abril 2026 (QB días 1-13 + Medusa días 14-${medusaEndLabel})`,
       quarter_offsets: {
         q4: [3, 1],
         q3: [6, 4],
@@ -88,8 +95,6 @@ export function computeTier0Meta(todayET: string): Tier0Meta {
   }
 
   if (inFallback) {
-    const prevY = m === 1 ? y - 1 : y;
-    const prevM = m === 1 ? 12 : m - 1;
     const mm = String(prevM).padStart(2, "0");
     const window_start = `${prevY}-${mm}-01`;
     const nextY = prevM === 12 ? prevY + 1 : prevY;
