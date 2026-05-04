@@ -66,6 +66,8 @@ export function transformVendor(vendor: any) {
         alt_phone: vendor.alt_phone ?? null,
         fax: vendor.fax ?? null,
 
+        addr1: vendor.addr1 ?? null,
+        addr2: vendor.addr2 ?? null,
         city: vendor.city ?? null,
         state: vendor.state ?? null,
         postal_code: vendor.postal_code ?? null,
