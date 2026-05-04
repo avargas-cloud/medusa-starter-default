@@ -41,6 +41,14 @@ const backoffMs = (retryNum: number): number =>
   (RETRY_BACKOFF_MIN[Math.min(retryNum, RETRY_BACKOFF_MIN.length - 1)] ??
     FIRST_ERROR_BACKOFF_MIN) * 60_000;
 
+const withCanonicalPoMemo = (
+  payload: Record<string, unknown>
+): Record<string, unknown> => {
+  const poNumber = payload.po_number;
+  if (typeof poNumber !== "string" || poNumber.length === 0) return payload;
+  return { ...payload, memo: `Medusa PO ${poNumber}` };
+};
+
 type BridgeStatus = {
   operation?: {
     status?: "queued" | "processing" | "completed" | "failed" | "expired";
@@ -94,6 +102,7 @@ const submitQueryToBridge = async (
 const submitVoidToBridge = async (
   payload: Record<string, unknown>
 ): Promise<string> => {
+  const body = withCanonicalPoMemo(payload);
   const res = await fetch(`${bridgeUrl()}/api/purchase-orders/void`, {
     method: "POST",
     headers: {
@@ -101,7 +110,7 @@ const submitVoidToBridge = async (
       "x-api-key": apiKey(),
       "bypass-tunnel-reminder": "true",
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
   if (!res.ok)
     throw new Error(`Bridge HTTP ${res.status} — ${await res.text()}`);
@@ -114,6 +123,7 @@ const submitVoidToBridge = async (
 const submitModToBridge = async (
   payload: Record<string, unknown>
 ): Promise<string> => {
+  const body = withCanonicalPoMemo(payload);
   const res = await fetch(`${bridgeUrl()}/api/purchase-orders/mod`, {
     method: "PUT",
     headers: {
@@ -121,7 +131,7 @@ const submitModToBridge = async (
       "x-api-key": apiKey(),
       "bypass-tunnel-reminder": "true",
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
   if (!res.ok)
     throw new Error(`Bridge HTTP ${res.status} — ${await res.text()}`);
@@ -134,6 +144,7 @@ const submitModToBridge = async (
 const submitToBridge = async (
   payload: Record<string, unknown>
 ): Promise<string> => {
+  const body = withCanonicalPoMemo(payload);
   const res = await fetch(`${bridgeUrl()}/api/purchase-orders`, {
     method: "POST",
     headers: {
@@ -141,7 +152,7 @@ const submitToBridge = async (
       "x-api-key": apiKey(),
       "bypass-tunnel-reminder": "true",
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
   if (!res.ok)
     throw new Error(`Bridge HTTP ${res.status} — ${await res.text()}`);

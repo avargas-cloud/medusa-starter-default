@@ -88,7 +88,7 @@ export const enqueueQbPurchaseOrderStep = createStep(
       expected_at: input.expected_at
         ? new Date(input.expected_at as unknown as string | Date).toISOString()
         : null,
-      memo: input.memo,
+      memo: `Medusa PO ${input.po_number}`,
       reference_number: input.reference_number,
       lines: input.lines.map((l) => ({
         line_id: l.line_id,

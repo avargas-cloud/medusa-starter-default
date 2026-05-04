@@ -563,7 +563,7 @@ export async function PATCH(
               existing.expected_at as unknown as string | Date
             ).toISOString()
           : null,
-        memo: existing.memo ?? null,
+        memo: `Medusa PO ${existing.number ?? id}`,
         reference_number: existing.reference_number ?? null,
         lines: freshLines.map((l) => ({
           line_id: l.id,
