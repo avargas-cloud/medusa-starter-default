@@ -7,7 +7,7 @@ import {
 } from "../../../../../lib/quickbooks/sync-jobs";
 
 /**
- * GET /admin/quickbooks/sync/last-job?type=inventory|prices|customers
+ * GET /admin/quickbooks/sync/last-job?type=inventory|prices|average-cost|customers
  *
  * Returns the last job_id + status for a given sync type.
  * Checks in-memory first, then falls back to disk-persisted report.
@@ -21,11 +21,16 @@ export async function GET(
 
   if (
     !type ||
-    !["inventory", "prices", "customers", "reconcile"].includes(type)
+    !["inventory", "prices", "average-cost", "customers", "reconcile"].includes(
+      type
+    )
   ) {
     res
       .status(400)
-      .json({ error: "type must be inventory | prices | customers" });
+      .json({
+        error:
+          "type must be inventory | prices | average-cost | customers | reconcile",
+      });
     return;
   }
 

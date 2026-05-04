@@ -85,6 +85,16 @@ const QuickBooksPage = () => {
   const [priceRespectHours, setPriceRespectHours] = useState(false);
   const [lastPriceSync, setLastPriceSync] = useState<string | null>(null);
 
+  // Average cost sync
+  const [averageCostInterval, setAverageCostInterval] = useState("disabled");
+  const [averageCostTimeOfDay, setAverageCostTimeOfDay] = useState("00:00");
+  const [averageCostSyncing, setAverageCostSyncing] = useState(false);
+  const [averageCostRespectHours, setAverageCostRespectHours] =
+    useState(false);
+  const [lastAverageCostSync, setLastAverageCostSync] = useState<string | null>(
+    null
+  );
+
   // Customer sync
   const [customerInterval, setCustomerInterval] = useState("disabled");
   const [customerTimeOfDay, setCustomerTimeOfDay] = useState("00:00");
@@ -102,6 +112,7 @@ const QuickBooksPage = () => {
   const [lastJobIds, setLastJobIds] = useState<{
     inventory?: string;
     prices?: string;
+    averageCost?: string;
     customers?: string;
     reconcile?: string;
   }>({});
@@ -120,6 +131,8 @@ const QuickBooksPage = () => {
       if (config.last_inventory_sync)
         setLastInventorySync(config.last_inventory_sync);
       if (config.last_price_sync) setLastPriceSync(config.last_price_sync);
+      if (config.last_average_cost_sync)
+        setLastAverageCostSync(config.last_average_cost_sync);
       if (config.last_customer_sync)
         setLastCustomerSync(config.last_customer_sync);
     } catch {
@@ -141,6 +154,8 @@ const QuickBooksPage = () => {
         if (config.last_inventory_sync)
           setLastInventorySync(config.last_inventory_sync);
         if (config.last_price_sync) setLastPriceSync(config.last_price_sync);
+        if (config.last_average_cost_sync)
+          setLastAverageCostSync(config.last_average_cost_sync);
         if (config.last_customer_sync)
           setLastCustomerSync(config.last_customer_sync);
 
@@ -169,6 +184,8 @@ const QuickBooksPage = () => {
           setInventoryRespectHours(config.inventory_respect_hours);
         if (config.price_respect_hours != null)
           setPriceRespectHours(config.price_respect_hours);
+        if (config.average_cost_respect_hours != null)
+          setAverageCostRespectHours(config.average_cost_respect_hours);
         if (config.customer_respect_hours != null)
           setCustomerRespectHours(config.customer_respect_hours);
 
@@ -183,6 +200,11 @@ const QuickBooksPage = () => {
             ? String(Math.floor(config.price_interval_minutes / 60))
             : "disabled"
         );
+        setAverageCostInterval(
+          config.average_cost_interval_minutes != null
+            ? String(Math.floor(config.average_cost_interval_minutes / 60))
+            : "disabled"
+        );
         setCustomerInterval(
           config.customer_interval_minutes != null
             ? String(Math.floor(config.customer_interval_minutes / 60))
@@ -194,17 +216,24 @@ const QuickBooksPage = () => {
           const h = String(config.price_sync_hour).padStart(2, "0");
           setPriceTimeOfDay(`${h}:00`);
         }
+        if (config.average_cost_sync_hour != null) {
+          const h = String(config.average_cost_sync_hour).padStart(2, "0");
+          setAverageCostTimeOfDay(`${h}:00`);
+        }
       } catch (e) {
         console.error("Failed to load config:", e);
       }
     };
     const loadJobs = async () => {
       try {
-        const [inv, prices, cust, recon] = await Promise.all([
+        const [inv, prices, avgCost, cust, recon] = await Promise.all([
           fetch("/admin/quickbooks/sync/last-job?type=inventory", {
             credentials: "include",
           }).then((r) => r.json()),
           fetch("/admin/quickbooks/sync/last-job?type=prices", {
+            credentials: "include",
+          }).then((r) => r.json()),
+          fetch("/admin/quickbooks/sync/last-job?type=average-cost", {
             credentials: "include",
           }).then((r) => r.json()),
           fetch("/admin/quickbooks/sync/last-job?type=customers", {
@@ -219,6 +248,7 @@ const QuickBooksPage = () => {
         setLastJobIds({
           inventory: inv.job_id ?? undefined,
           prices: prices.job_id ?? undefined,
+          averageCost: avgCost.job_id ?? undefined,
           customers: cust.job_id ?? undefined,
           reconcile: recon.job_id ?? undefined,
         });
@@ -318,6 +348,28 @@ const QuickBooksPage = () => {
     }
   };
 
+  const handleSaveAverageCost = async () => {
+    try {
+      const averageCostSyncHour = parseInt(
+        averageCostTimeOfDay.split(":")[0] ?? "0",
+        10
+      );
+      await postConfig({
+        average_cost_sync_interval_minutes:
+          averageCostInterval === "disabled"
+            ? null
+            : parseInt(averageCostInterval) * 60,
+        average_cost_respect_hours: averageCostRespectHours,
+        average_cost_sync_hour: averageCostSyncHour,
+      });
+      toast.success("Average cost sync saved", {
+        description: `Scheduled daily at ${averageCostTimeOfDay}.`,
+      });
+    } catch (e) {
+      toast.error("Failed to save", { description: (e as Error).message });
+    }
+  };
+
   const handleSaveCustomer = async () => {
     try {
       await postConfig({
@@ -368,6 +420,30 @@ const QuickBooksPage = () => {
       toast.error("Price sync failed", { description: (e as Error).message });
     } finally {
       setPriceSyncing(false);
+    }
+  };
+
+  const handleAverageCostSync = async () => {
+    setAverageCostSyncing(true);
+    try {
+      const res = await fetch("/admin/quickbooks/sync/average-cost", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to start sync");
+      const { job_id } = await res.json();
+      setLastJobIds((p) => ({ ...p, averageCost: job_id }));
+      setReportModal({
+        jobId: job_id,
+        title: "📊 Average Cost Sync Report",
+      });
+      await refreshTimestamps();
+    } catch (e) {
+      toast.error("Average cost sync failed", {
+        description: (e as Error).message,
+      });
+    } finally {
+      setAverageCostSyncing(false);
     }
   };
 
@@ -543,6 +619,31 @@ const QuickBooksPage = () => {
         showTimePicker={priceInterval === "24"}
         timeValue={priceTimeOfDay}
         onTimeChange={setPriceTimeOfDay}
+        timeOptions={TIME_OF_DAY}
+      />
+
+      {/* Average Cost Sync */}
+      <SyncCard
+        title="📊 Average Cost Sync"
+        intervalValue={averageCostInterval}
+        onIntervalChange={setAverageCostInterval}
+        intervals={HOUR_INTERVALS}
+        respectHours={averageCostRespectHours}
+        onRespectHoursChange={setAverageCostRespectHours}
+        onSave={handleSaveAverageCost}
+        onViewReport={() =>
+          setReportModal({
+            jobId: lastJobIds.averageCost ?? null,
+            title: "📊 Average Cost Sync Report",
+          })
+        }
+        onSyncNow={handleAverageCostSync}
+        isSyncing={averageCostSyncing}
+        lastSync={lastAverageCostSync}
+        formatSyncDate={formatSyncDate}
+        showTimePicker={averageCostInterval === "24"}
+        timeValue={averageCostTimeOfDay}
+        onTimeChange={setAverageCostTimeOfDay}
         timeOptions={TIME_OF_DAY}
       />
 

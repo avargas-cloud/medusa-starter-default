@@ -49,6 +49,7 @@ export type QbOperation =
   | "customer_transfer"
   | "inventory_sync"
   | "price_sync"
+  | "average_cost_sync"
   | "customer_sync"
   | "pos_sync";
 

@@ -2,7 +2,12 @@ import { EventEmitter } from "events";
 import { writeFileSync, readFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 
-export type SyncType = "inventory" | "prices" | "customers" | "reconcile";
+export type SyncType =
+  | "inventory"
+  | "prices"
+  | "average-cost"
+  | "customers"
+  | "reconcile";
 
 export interface SyncJob {
   id: string;

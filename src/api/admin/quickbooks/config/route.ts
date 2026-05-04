@@ -22,9 +22,11 @@ export async function GET(
                 integration_enabled,
                 inventory_interval_minutes,
                 price_interval_minutes,
+                average_cost_interval_minutes,
                 customer_interval_minutes,
                 last_inventory_sync,
                 last_price_sync,
+                last_average_cost_sync,
                 last_customer_sync,
                 bridge_url,
                 -- Store hours
@@ -40,10 +42,14 @@ export async function GET(
                 -- Respect hours flags
                 inventory_respect_hours,
                 price_respect_hours,
+                average_cost_respect_hours,
                 customer_respect_hours,
                 -- Price sync schedule
                 price_sync_hour,
                 price_sync_timezone,
+                -- Average cost sync schedule
+                average_cost_sync_hour,
+                average_cost_sync_timezone,
                 -- Order flow settings
                 shipping_item_id,
                 default_sales_tax_code,
@@ -83,6 +89,7 @@ export async function POST(
     const {
       inventory_sync_interval_minutes,
       price_sync_interval_minutes,
+      average_cost_sync_interval_minutes,
       customer_sync_interval_minutes,
       integration_enabled,
       // Store hours
@@ -101,6 +108,7 @@ export async function POST(
       // Respect hours flags
       inventory_respect_hours,
       price_respect_hours,
+      average_cost_respect_hours,
       customer_respect_hours,
     } = body;
 
@@ -133,6 +141,13 @@ export async function POST(
       return;
     if (
       !validateMinutes(
+        average_cost_sync_interval_minutes,
+        "average_cost_sync_interval_minutes"
+      )
+    )
+      return;
+    if (
+      !validateMinutes(
         customer_sync_interval_minutes,
         "customer_sync_interval_minutes"
       )
@@ -157,6 +172,11 @@ export async function POST(
       set("inventory_interval_minutes", inventory_sync_interval_minutes);
     if (price_sync_interval_minutes !== undefined)
       set("price_interval_minutes", price_sync_interval_minutes);
+    if (average_cost_sync_interval_minutes !== undefined)
+      set(
+        "average_cost_interval_minutes",
+        average_cost_sync_interval_minutes
+      );
     if (customer_sync_interval_minutes !== undefined)
       set("customer_interval_minutes", customer_sync_interval_minutes);
 
@@ -187,6 +207,8 @@ export async function POST(
       set("inventory_respect_hours", inventory_respect_hours);
     if (price_respect_hours !== undefined)
       set("price_respect_hours", price_respect_hours);
+    if (average_cost_respect_hours !== undefined)
+      set("average_cost_respect_hours", average_cost_respect_hours);
     if (customer_respect_hours !== undefined)
       set("customer_respect_hours", customer_respect_hours);
 
@@ -195,6 +217,10 @@ export async function POST(
       set("price_sync_hour", body.price_sync_hour);
     if (body.price_sync_timezone !== undefined)
       set("price_sync_timezone", body.price_sync_timezone);
+    if (body.average_cost_sync_hour !== undefined)
+      set("average_cost_sync_hour", body.average_cost_sync_hour);
+    if (body.average_cost_sync_timezone !== undefined)
+      set("average_cost_sync_timezone", body.average_cost_sync_timezone);
 
     // Order flow settings
     if (shipping_item_id !== undefined)

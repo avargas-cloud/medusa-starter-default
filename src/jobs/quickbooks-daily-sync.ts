@@ -3,6 +3,7 @@ import { Client } from "pg";
 
 import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard";
 import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger";
+import { syncAverageCostCore } from "../lib/quickbooks/sync-average-cost-core";
 import { syncCustomersCore } from "../lib/quickbooks/sync-customers-core";
 import { syncPricesCore } from "../lib/quickbooks/sync-prices-core";
 
@@ -33,11 +34,15 @@ export default async function qbDailySyncHandler(container: MedusaContainer) {
     const { rows } = await client.query(`
             SELECT
                 price_interval_minutes,
+                average_cost_interval_minutes,
                 customer_interval_minutes,
                 last_price_sync,
+                last_average_cost_sync,
                 last_customer_sync,
                 price_sync_hour,
-                price_sync_timezone
+                price_sync_timezone,
+                average_cost_sync_hour,
+                average_cost_sync_timezone
             FROM quickbooks_config
             WHERE id = 'default'
         `);
@@ -151,6 +156,108 @@ export default async function qbDailySyncHandler(container: MedusaContainer) {
           }
         } catch (e: any) {
           console.error(`${TAG} ❌ Price sync threw: ${e.message}`);
+          await QbSyncLogger.fail(logId, e.message, { db: client });
+        }
+      }
+    }
+
+    // ─── Average Cost Sync ─────────────────────────────────────────────────
+    if (cfg.average_cost_interval_minutes) {
+      const avgTz = cfg.average_cost_sync_timezone || tz;
+      const avgCurrentHour = parseInt(
+        new Intl.DateTimeFormat("en-US", {
+          hour: "numeric",
+          hour12: false,
+          timeZone: avgTz,
+        }).format(now),
+        10
+      );
+      const avgTodayStr = new Intl.DateTimeFormat("en-CA", {
+        timeZone: avgTz,
+      }).format(now);
+      const isAverageCostDaily = cfg.average_cost_interval_minutes >= 1440;
+      let shouldRunAverageCost = false;
+
+      if (isAverageCostDaily) {
+        const targetHour: number = cfg.average_cost_sync_hour ?? 0;
+        if (avgCurrentHour !== targetHour) {
+          console.log(
+            `${TAG} Average cost sync not due yet (Daily: target ${targetHour}:00, current ${avgCurrentHour}:xx ${avgTz}).`
+          );
+        } else {
+          let alreadyRan = false;
+          if (cfg.last_average_cost_sync) {
+            const lastDateStr = new Intl.DateTimeFormat("en-CA", {
+              timeZone: avgTz,
+            }).format(new Date(cfg.last_average_cost_sync));
+            const lastHour = parseInt(
+              new Intl.DateTimeFormat("en-US", {
+                hour: "numeric",
+                hour12: false,
+                timeZone: avgTz,
+              }).format(new Date(cfg.last_average_cost_sync)),
+              10
+            );
+            if (lastDateStr === avgTodayStr && lastHour === targetHour) {
+              alreadyRan = true;
+              console.log(
+                `${TAG} Average cost sync already completed today at ${targetHour}:00 ${avgTz}. Skipping.`
+              );
+            }
+          }
+          if (!alreadyRan) shouldRunAverageCost = true;
+        }
+      } else {
+        const avgIntervalMs = cfg.average_cost_interval_minutes * 60 * 1000;
+        const nowSlot = Math.floor(Date.now() / avgIntervalMs);
+        const lastSlot = cfg.last_average_cost_sync
+          ? Math.floor(
+              new Date(cfg.last_average_cost_sync).getTime() / avgIntervalMs
+            )
+          : -1;
+        if (nowSlot === lastSlot) {
+          const nextInMin = Math.round(
+            ((nowSlot + 1) * avgIntervalMs - Date.now()) / 60000
+          );
+          console.log(
+            `${TAG} Average cost sync: already ran in this ${cfg.average_cost_interval_minutes}m slot — next in ~${nextInMin} min.`
+          );
+        } else {
+          shouldRunAverageCost = true;
+        }
+      }
+
+      if (shouldRunAverageCost) {
+        const modeLabel = isAverageCostDaily
+          ? `daily at ${cfg.average_cost_sync_hour ?? 0}:00 ${avgTz}`
+          : `every ${cfg.average_cost_interval_minutes}min`;
+        console.log(`${TAG} ⏰ Running average cost sync (${modeLabel})...`);
+        const logId = await QbSyncLogger.start({
+          operation: "average_cost_sync",
+          syncType: "average_cost",
+          triggeredBy: "auto",
+          message: `Scheduled average cost sync started (${modeLabel})`,
+          db: client,
+        });
+        try {
+          const result = await syncAverageCostCore(container as any);
+          if (result.success) {
+            await client.query(
+              `UPDATE quickbooks_config SET last_average_cost_sync = NOW(), updated_at = NOW() WHERE id = 'default'`
+            );
+            const msg = `Average costs: ${result.stats.updatedAverageCost} updated`;
+            console.log(`${TAG} ✅ ${msg}`);
+            await QbSyncLogger.complete(logId, { message: msg, db: client });
+          } else {
+            console.error(
+              `${TAG} ❌ Average cost sync failed: ${result.error}`
+            );
+            await QbSyncLogger.fail(logId, result.error || "Unknown error", {
+              db: client,
+            });
+          }
+        } catch (e: any) {
+          console.error(`${TAG} ❌ Average cost sync threw: ${e.message}`);
           await QbSyncLogger.fail(logId, e.message, { db: client });
         }
       }

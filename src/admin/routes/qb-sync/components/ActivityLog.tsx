@@ -47,6 +47,7 @@ const OPERATION_LABELS: Record<string, string> = {
   customer_transfer: "Customer Transfer",
   inventory_sync: "Inventory Sync",
   price_sync: "Price Sync",
+  average_cost_sync: "Average Cost Sync",
   customer_sync: "Customer Sync",
 };
 
@@ -59,6 +60,7 @@ const OPERATION_ICONS: Record<string, string> = {
   customer_transfer: "👤",
   inventory_sync: "📦",
   price_sync: "💵",
+  average_cost_sync: "📊",
   customer_sync: "👥",
 };
 
