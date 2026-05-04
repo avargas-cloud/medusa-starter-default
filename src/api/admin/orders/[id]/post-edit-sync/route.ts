@@ -1017,4 +1017,20 @@ export async function POST(
   }
 
   res.status(200).json({ success: true, ...results });
+
+  // ── Persist POS-computed total in metadata for list-view consistency ────────
+  if (pos_total != null && pos_total > 0) {
+    setImmediate(async () => {
+      try {
+        const pool = getDbPool();
+        await pool.query(
+          `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || jsonb_build_object('pos_total', $1::numeric) WHERE id = $2`,
+          [pos_total, id]
+        );
+        logger.info(`[post-edit-sync] ✅ Persisted pos_total=$${pos_total} in metadata`);
+      } catch (e: any) {
+        logger.warn(`[post-edit-sync] Failed to persist pos_total: ${e.message}`);
+      }
+    });
+  }
 }
