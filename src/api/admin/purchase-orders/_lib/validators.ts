@@ -19,7 +19,7 @@ export const draftLineInputSchema = z.object({
   description_snapshot: z.string().min(1, "description_snapshot is required"),
   qb_item_list_id_snapshot: z.string().min(1).nullish(),
   qty_ordered: z.number().int().positive().max(1_000_000),
-  unit_cost_cents: z.number().int().min(0).max(1_000_000_000),
+  unit_cost_cents: z.number().finite().min(0).max(1_000_000_000),
   tax_cents: z.number().int().min(0).max(1_000_000_000).optional().default(0),
   notes: z.string().max(1000).nullish(),
   line_order: z.number().int().min(0).optional(),
@@ -66,7 +66,6 @@ export const receiveLineSchema = z.object({
   qty_received_now: z.number().int().positive().max(1_000_000),
   unit_cost_cents_override: z
     .number()
-    .int()
     .min(0)
     .max(1_000_000_000)
     .nullish(),

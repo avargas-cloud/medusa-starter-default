@@ -500,7 +500,7 @@ export async function PATCH(
         tax_cents: number;
       }>;
       const subtotal = currentLines.reduce(
-        (a, l) => a + l.qty_ordered * l.unit_cost_cents,
+        (a, l) => a + Math.round(l.qty_ordered * l.unit_cost_cents),
         0
       );
       const lineTax = currentLines.reduce((a, l) => a + (l.tax_cents ?? 0), 0);

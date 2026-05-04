@@ -24,7 +24,7 @@ export interface PoTotals {
 }
 
 export function normalizeLine(line: DraftLineInput): NormalizedPoLine {
-  const subtotal = line.qty_ordered * line.unit_cost_cents;
+  const subtotal = Math.round(line.qty_ordered * line.unit_cost_cents);
   const total = subtotal + (line.tax_cents ?? 0);
   return { ...line, total_cents: total };
 }
@@ -41,7 +41,7 @@ export function computeTotals(
   let lineTax = 0;
   let totalUnits = 0;
   for (const l of lines) {
-    subtotal += l.qty_ordered * l.unit_cost_cents;
+    subtotal += l.total_cents - (l.tax_cents ?? 0);
     lineTax += l.tax_cents ?? 0;
     totalUnits += l.qty_ordered;
   }
