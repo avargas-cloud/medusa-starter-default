@@ -46,6 +46,67 @@ function poMemoNumber(poNumber: string): string {
   return poNumber.replace(/^PO-/i, "");
 }
 
+function hasPatchKey(patch: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(patch, key);
+}
+
+function nullableValue(value: unknown): unknown {
+  return value ?? null;
+}
+
+function headerPatchRequiresQbMod(
+  patch: Record<string, unknown>,
+  existing: PoHeader & Record<string, unknown>
+): boolean {
+  const qbRelevantHeaderFields = [
+    "vendor_id",
+    "stock_location_id",
+    "memo",
+    "reference_number",
+    "shipping_cents",
+    "tax_cents",
+    "other_fees_cents",
+  ];
+
+  return qbRelevantHeaderFields.some(
+    (key) =>
+      hasPatchKey(patch, key) &&
+      nullableValue(patch[key]) !== nullableValue(existing[key])
+  );
+}
+
+function linesPatchRequiresQbMod(
+  patchLines: ReturnType<typeof normalizeLine>[],
+  existingLines: Array<Record<string, unknown> & { id: string }>
+): boolean {
+  if (patchLines.length !== existingLines.length) return true;
+
+  const existingById = new Map(existingLines.map((line) => [line.id, line]));
+  return patchLines.some((line, index) => {
+    if (!line.id) return true;
+    const existing = existingById.get(line.id);
+    if (!existing) return true;
+
+    const comparisons: Array<[unknown, unknown]> = [
+      [line.product_variant_id, existing.product_variant_id],
+      [line.inventory_item_id, existing.inventory_item_id],
+      [line.sku_snapshot, existing.sku_snapshot],
+      [line.description_snapshot, existing.description_snapshot],
+      [
+        nullableValue(line.qb_item_list_id_snapshot),
+        nullableValue(existing.qb_item_list_id_snapshot),
+      ],
+      [line.qty_ordered, existing.qty_ordered],
+      [line.unit_cost_cents, existing.unit_cost_cents],
+      [line.tax_cents ?? 0, existing.tax_cents ?? 0],
+      [line.line_order ?? index, existing.line_order ?? index],
+      [nullableValue(line.notes), nullableValue(existing.notes)],
+    ];
+
+    return comparisons.some(([next, current]) => next !== current);
+  });
+}
+
 async function resolveUserBrief(
   req: AuthenticatedMedusaRequest,
   userId: string | null | undefined
@@ -389,6 +450,11 @@ export async function PATCH(
       : null;
   }
 
+  let requiresQbMod = headerPatchRequiresQbMod(
+    body,
+    existing as PoHeader & Record<string, unknown>
+  );
+
   // Reconcile lines if provided — DIFF by id (update existing, insert new,
   // delete missing) instead of full hard-delete + re-insert. This preserves
   // each line's qb_txn_line_id so subsequent QB Mods can target the existing
@@ -413,10 +479,13 @@ export async function PATCH(
     const oldLines = (await service.listPurchaseOrderLines(
       { purchase_order_id: id },
       { take: 1000, skip: 0 }
-    )) as Array<{ id: string }>;
+    )) as Array<Record<string, unknown> & { id: string }>;
     const oldIds = new Set(oldLines.map((l) => l.id));
 
     const normalized = body.lines.map(normalizeLine);
+    if (!requiresQbMod) {
+      requiresQbMod = linesPatchRequiresQbMod(normalized, oldLines);
+    }
     const totals = computeTotals(normalized, {
       shipping_cents:
         body.shipping_cents ??
@@ -524,7 +593,8 @@ export async function PATCH(
   const EDITABLE_SYNCED_STATUSES = ["submitted", "partially_received"];
   if (
     EDITABLE_SYNCED_STATUSES.includes(existing.status) &&
-    existing.qb_purchase_order_list_id
+    existing.qb_purchase_order_list_id &&
+    requiresQbMod
   ) {
     try {
       // Fetch fresh lines (with their qb_txn_line_id if available)
