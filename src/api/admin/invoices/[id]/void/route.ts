@@ -282,6 +282,28 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         qb: {},
       });
 
+      // Medusa module updates can merge JSON metadata, so omitting SR keys above
+      // is not enough to guarantee they are removed from the row. Strip them at
+      // the database level so future apply_payment rows treat this as a reusable
+      // ReceivePayment credit, not an embedded Sales Receipt payment.
+      await getDbPool().query(
+        `UPDATE customer_payment
+            SET metadata = (
+                  COALESCE(metadata, '{}'::jsonb)
+                    - 'is_sales_receipt_payment'
+                    - 'qb_source'
+                    - 'qb_txn_id'
+                    - 'qb_ref_number'
+                    - 'qb_operation_id'
+                    - 'invoices_affected'
+                    - 'invoices_affected_friendly'
+                ) || jsonb_build_object('qb_sync_status', 'pending'),
+                qb = '{}'::jsonb,
+                updated_at = NOW()
+          WHERE id = $1`,
+        [currentPaymentDesc.id]
+      );
+
       console.log(
         `[VOID INVOICE] SR payment ${currentPaymentDesc.id} released → available (ref: ${orderDocumentNumber ?? "unchanged"})`
       );
