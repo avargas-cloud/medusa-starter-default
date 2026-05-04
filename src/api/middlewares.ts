@@ -70,6 +70,12 @@ export default defineMiddlewares({
       bodyParser: { sizeLimit: "50mb" },
       middlewares: [],
     },
+    {
+      matcher: "/admin/purchase-orders/:id/send-email",
+      method: "POST",
+      bodyParser: { sizeLimit: "50mb" },
+      middlewares: [],
+    },
     // pdf-link receives posState (localStorage snapshot w/ attached base64 images).
     // Default 100kb is too tight; 2mb is ~10× the realistic max usage.
     {

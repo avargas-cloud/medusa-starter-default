@@ -117,7 +117,8 @@ export async function launchBrowser() {
 export async function generatePdfFromUrl(
   url: string,
   posState?: string,
-  templateData?: Record<string, unknown> | null
+  templateData?: Record<string, unknown> | null,
+  localStoragePayloads?: Record<string, string>
 ): Promise<Buffer> {
   const browser = await launchBrowser();
   try {
@@ -126,13 +127,27 @@ export async function generatePdfFromUrl(
     const originUrl = new URL(url).origin;
     await page.goto(originUrl, { waitUntil: "domcontentloaded" });
     await page.evaluate(
-      ([state, tmpl]: [string | undefined, string | null]) => {
-        if (state) localStorage.setItem("pos-documents", state);
-        if (tmpl) localStorage.setItem("pdf-template-injection", tmpl);
-      },
-      [posState, templateData ? JSON.stringify(templateData) : null] as [
+      ([state, tmpl, payloads]: [
         string | undefined,
         string | null,
+        Record<string, string> | undefined,
+      ]) => {
+        if (state) localStorage.setItem("pos-documents", state);
+        if (tmpl) localStorage.setItem("pdf-template-injection", tmpl);
+        if (payloads) {
+          for (const [key, value] of Object.entries(payloads)) {
+            localStorage.setItem(key, value);
+          }
+        }
+      },
+      [
+        posState,
+        templateData ? JSON.stringify(templateData) : null,
+        localStoragePayloads,
+      ] as [
+        string | undefined,
+        string | null,
+        Record<string, string> | undefined,
       ]
     );
     await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
