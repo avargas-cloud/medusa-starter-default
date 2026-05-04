@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-05-04T16:58:08-04:00",
+  "title": "Design System: EcoPowerTech Medusa Admin Extensions",
+  "extensions": {
+    "colorMeta": {
+      "blue-action": {
+        "role": "primary",
+        "displayName": "Admin Action Blue",
+        "canonical": "#2563eb",
+        "tonalRamp": ["#eff6ff", "#bfdbfe", "#2563eb", "#1d4ed8"]
+      },
+      "ui-bg-base": {
+        "role": "neutral",
+        "displayName": "Admin Canvas",
+        "canonical": "#ffffff",
+        "tonalRamp": ["#ffffff", "#f8fafc", "#e5e7eb", "#111827"]
+      },
+      "orange-warning": {
+        "role": "secondary",
+        "displayName": "Warning Orange",
+        "canonical": "#f97316",
+        "tonalRamp": ["#fff7ed", "#fed7aa", "#f97316", "#c2410c"]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Admin Headline",
+        "purpose": "Route titles inside Medusa Admin."
+      },
+      "body": {
+        "displayName": "Admin Body",
+        "purpose": "Operational instructions and table content."
+      }
+    },
+    "shadows": [
+      {
+        "name": "medusa-inherited-modal",
+        "value": "inherited from @medusajs/ui",
+        "purpose": "FocusModal and modal-level surfaces only."
+      }
+    ],
+    "motion": [
+      {
+        "name": "admin-default",
+        "value": "inherited from @medusajs/ui",
+        "purpose": "Default admin component transitions."
+      }
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Admin Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Use Medusa Button variant primary for save, sync, create, and execute actions.",
+      "html": "<button class=\"medusa-btn-primary\">Save Changes</button>",
+      "css": ".medusa-btn-primary { background: #2563eb; color: #ffffff; border-radius: 8px; padding: 8px 12px; font-weight: 600; }"
+    },
+    {
+      "name": "Sortable Filter Row",
+      "kind": "custom",
+      "refersTo": "card-base",
+      "description": "Compact drag row for active filters and sorting workflows.",
+      "html": "<div class=\"admin-sort-row\"><span>Color</span><span class=\"admin-badge\">checkbox</span></div>",
+      "css": ".admin-sort-row { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #ffffff; cursor: move; } .admin-badge { font-size: 12px; padding: 2px 8px; border-radius: 4px; background: #f8fafc; color: #6b7280; }"
+    }
+  ]
+}
