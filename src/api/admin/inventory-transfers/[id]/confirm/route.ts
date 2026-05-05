@@ -41,6 +41,8 @@ interface TransferRow {
   vendor_id: string | null;
   vendor_name_snapshot: string | null;
   linked_purchase_order_id: string | null;
+  reference_number: string | null;
+  expected_arrival_at: string | null;
 }
 
 interface TransferLineRow {
@@ -55,6 +57,11 @@ interface TransferLineRow {
 
 interface PurchaseOrdersService {
   getNextPoSequence: () => Promise<number>;
+}
+
+interface VariantPurchaseSnapshot {
+  inventory_item_id: string;
+  qb_item_list_id: string | null;
 }
 
 // ── POST ──────────────────────────────────────────────────────────────────────
@@ -80,7 +87,8 @@ export async function POST(
 
   // 1. Load transfer
   const transferResult = await knex.raw(
-    `SELECT id, number, status, destination_location_id, vendor_id, vendor_name_snapshot, linked_purchase_order_id
+    `SELECT id, number, status, destination_location_id, vendor_id, vendor_name_snapshot,
+            linked_purchase_order_id, reference_number, expected_arrival_at
      FROM inventory_transfer WHERE id = ? AND deleted_at IS NULL`,
     [id]
   );
@@ -131,23 +139,32 @@ export async function POST(
   // 5. Resolve inventory_item_id per variant — IT lines don't capture it
   // and PO line + receive workflow both require it for stock adjust.
   const variantIds = activeLines.map((l) => l.product_variant_id);
-  const variantToItem = new Map<string, string>();
+  const variantSnapshots = new Map<string, VariantPurchaseSnapshot>();
   if (variantIds.length > 0) {
     const placeholders = variantIds.map(() => "?").join(",");
     const itemRes = await knex.raw(
-      `SELECT variant_id, inventory_item_id
-         FROM product_variant_inventory_item
-        WHERE variant_id IN (${placeholders})`,
+      `SELECT pvi.variant_id,
+              pvi.inventory_item_id,
+              pv.metadata->>'quickbooks_id' AS qb_item_list_id
+         FROM product_variant_inventory_item pvi
+         JOIN product_variant pv
+           ON pv.id = pvi.variant_id
+          AND pv.deleted_at IS NULL
+        WHERE pvi.variant_id IN (${placeholders})`,
       variantIds
     );
     for (const row of itemRes.rows as Array<{
       variant_id: string;
       inventory_item_id: string;
+      qb_item_list_id: string | null;
     }>) {
-      variantToItem.set(row.variant_id, row.inventory_item_id);
+      variantSnapshots.set(row.variant_id, {
+        inventory_item_id: row.inventory_item_id,
+        qb_item_list_id: row.qb_item_list_id ?? null,
+      });
     }
   }
-  const missing = variantIds.filter((v) => !variantToItem.has(v));
+  const missing = variantIds.filter((v) => !variantSnapshots.has(v));
   if (missing.length > 0) {
     return res.status(400).json({
       error: `Missing inventory_item link for variants: ${missing.join(", ")}`,
@@ -205,6 +222,14 @@ export async function POST(
   // 6. Insert PurchaseOrder lines
   let poSubtotalCents = 0;
   let poTotalUnits = 0;
+  const qbPayloadLines: Array<{
+    line_id: string;
+    qb_item_list_id: string | null;
+    sku: string;
+    description: string;
+    qty_ordered: number;
+    unit_cost_cents: number;
+  }> = [];
 
   for (let i = 0; i < activeLines.length; i++) {
     const line = activeLines[i]!;
@@ -213,32 +238,40 @@ export async function POST(
     poSubtotalCents += totalCents;
     poTotalUnits += line.qty;
 
-    const lineInventoryItemId = variantToItem.get(line.product_variant_id)!;
+    const variantSnapshot = variantSnapshots.get(line.product_variant_id)!;
     await knex.raw(
       `INSERT INTO purchase_order_line (
         id, purchase_order_id, product_variant_id, inventory_item_id,
-        sku_snapshot, description_snapshot,
+        sku_snapshot, description_snapshot, qb_item_list_id_snapshot,
         qty_ordered, qty_received, qty_cancelled,
         unit_cost_cents, tax_cents, total_cents,
         status, line_order,
         created_at, updated_at
       ) VALUES (
         ?, ?, ?, ?,
-        ?, ?,
+        ?, ?, ?,
         ?, 0, 0,
         ?, 0, ?,
         'open', ?,
         ?, ?
       )`,
       [
-        polId, poId, line.product_variant_id, lineInventoryItemId,
-        line.sku, line.description,
+        polId, poId, line.product_variant_id, variantSnapshot.inventory_item_id,
+        line.sku, line.description, variantSnapshot.qb_item_list_id,
         line.qty,
         line.unit_cost_cents, totalCents,
         i,
         now, now,
       ]
     );
+    qbPayloadLines.push({
+      line_id: polId,
+      qb_item_list_id: variantSnapshot.qb_item_list_id,
+      sku: line.sku,
+      description: line.description,
+      qty_ordered: line.qty,
+      unit_cost_cents: line.unit_cost_cents,
+    });
   }
 
   // 7. Update PO totals
@@ -247,6 +280,35 @@ export async function POST(
      SET subtotal_cents = ?, total_cents = ?, total_lines = ?, total_units_ordered = ?, updated_at = ?
      WHERE id = ?`,
     [poSubtotalCents, poSubtotalCents, activeLines.length, poTotalUnits, now, poId]
+  );
+
+  // Transfer-created POs are already submitted, so they must explicitly
+  // enqueue the same frozen QuickBooks payload as the normal PO submit workflow.
+  await knex.raw(
+    `INSERT INTO qb_purchase_order_pipeline (
+      id, purchase_order_id, status, payload, created_at, updated_at
+    ) VALUES (
+      ?, ?, 'waiting', ?::jsonb, ?, ?
+    )`,
+    [
+      generateEntityId("", "qbpopipe"),
+      poId,
+      JSON.stringify({
+        po_id: poId,
+        po_number: poNumber,
+        vendor_qb_list_id: vendorQbListId,
+        vendor_name: transfer.vendor_name_snapshot ?? transfer.vendor_id ?? "",
+        ordered_at: null,
+        expected_at: transfer.expected_arrival_at
+          ? new Date(transfer.expected_arrival_at).toISOString()
+          : null,
+        memo: `Medusa PO ${poSeq}`,
+        reference_number: transfer.reference_number ?? null,
+        lines: qbPayloadLines,
+      }),
+      now,
+      now,
+    ]
   );
 
   // 8. Update transfer to confirmed
