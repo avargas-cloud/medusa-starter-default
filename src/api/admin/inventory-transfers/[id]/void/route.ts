@@ -13,6 +13,8 @@ import type {
 } from "@medusajs/framework/http";
 
 import { getActorUserId, UnauthenticatedError } from "../../../purchase-orders/_lib/auth";
+import { releaseTransferChinaReservations } from "../../../../../lib/inventory-transfer-reservations";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
 
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -70,6 +72,10 @@ export async function POST(
 
   const body = req.body as { void_reason?: string };
   const now = new Date().toISOString();
+  const touchedInventoryItemIds = await releaseTransferChinaReservations(
+    knex,
+    id
+  );
 
   // Void the linked PO if present
   if (transfer.linked_purchase_order_id) {
@@ -91,6 +97,14 @@ export async function POST(
          updated_at = ?
      WHERE id = ?`,
     [userId, body.void_reason ?? null, now, id]
+  );
+
+  await Promise.allSettled(
+    touchedInventoryItemIds.map((inventoryItemId) =>
+      syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+        input: { inventoryItemId },
+      })
+    )
   );
 
   const updatedResult = await knex.raw(

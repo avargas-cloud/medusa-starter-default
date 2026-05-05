@@ -13,6 +13,8 @@ import type {
 
 import { generateEntityId } from "@medusajs/utils";
 import { getActorUserId, UnauthenticatedError } from "../../purchase-orders/_lib/auth";
+import { rebuildTransferChinaReservations } from "../../../../lib/inventory-transfer-reservations";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../workflows/sync-inventory-item-meilisearch";
 
 // ── Knex type ─────────────────────────────────────────────────────────────────
 
@@ -241,6 +243,31 @@ export async function PATCH(
     // Sync linked PO lines
     if (existing.linked_purchase_order_id) {
       const poId = existing.linked_purchase_order_id;
+      const variantIds = body.lines.map((line) => line.product_variant_id);
+      const variantToItem = new Map<string, string>();
+      if (variantIds.length > 0) {
+        const placeholders = variantIds.map(() => "?").join(",");
+        const itemRes = await knex.raw(
+          `SELECT variant_id, inventory_item_id
+             FROM product_variant_inventory_item
+            WHERE variant_id IN (${placeholders})
+              AND deleted_at IS NULL`,
+          variantIds
+        );
+        for (const row of itemRes.rows as Array<{
+          variant_id: string;
+          inventory_item_id: string;
+        }>) {
+          variantToItem.set(row.variant_id, row.inventory_item_id);
+        }
+      }
+      const missingVariantIds = variantIds.filter((v) => !variantToItem.has(v));
+      if (missingVariantIds.length > 0) {
+        return res.status(400).json({
+          error: `Missing inventory_item link for variants: ${missingVariantIds.join(", ")}`,
+          code: "missing_inventory_item",
+        });
+      }
 
       await knex.raw(
         `UPDATE purchase_order_line SET deleted_at = ? WHERE purchase_order_id = ? AND deleted_at IS NULL`,
@@ -262,9 +289,10 @@ export async function PATCH(
             qty_ordered, qty_received, qty_cancelled,
             unit_cost_cents, tax_cents, total_cents,
             status, line_order, created_at, updated_at
-          ) VALUES (?, ?, ?, '', ?, ?, ?, 0, 0, ?, 0, ?, 'open', ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, 0, ?, 'open', ?, ?, ?)`,
           [
             polId, poId, line.product_variant_id,
+            variantToItem.get(line.product_variant_id)!,
             line.sku, line.description ?? "",
             line.qty,
             line.unit_cost_cents ?? 0, totalCents,
@@ -276,6 +304,19 @@ export async function PATCH(
       await knex.raw(
         `UPDATE purchase_order SET total_lines = ?, total_units_ordered = ?, subtotal_cents = ?, updated_at = ? WHERE id = ?`,
         [body.lines.length, poUnits, poSubtotal, now, poId]
+      );
+
+      const touchedInventoryItemIds = await rebuildTransferChinaReservations(
+        knex,
+        id,
+        poId
+      );
+      await Promise.allSettled(
+        touchedInventoryItemIds.map((inventoryItemId) =>
+          syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+            input: { inventoryItemId },
+          })
+        )
       );
     }
   }

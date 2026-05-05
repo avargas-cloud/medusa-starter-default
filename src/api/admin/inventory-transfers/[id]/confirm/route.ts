@@ -16,6 +16,8 @@ import type {
 import { generateEntityId } from "@medusajs/utils";
 import { getActorUserId, UnauthenticatedError } from "../../../purchase-orders/_lib/auth";
 import { PURCHASE_ORDERS_MODULE } from "../../../../../modules/purchase-orders";
+import { rebuildTransferChinaReservations } from "../../../../../lib/inventory-transfer-reservations";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
 
 // ── Knex type ─────────────────────────────────────────────────────────────────
 
@@ -257,6 +259,22 @@ export async function POST(
          updated_at = ?
      WHERE id = ?`,
     [userId, poId, now, id]
+  );
+
+  // Confirming creates the linked PO, so China units are now committed to that
+  // transfer even before the shipment leaves. Reserve the pending China qty
+  // immediately so China available = stocked - reserved.
+  const touchedInventoryItemIds = await rebuildTransferChinaReservations(
+    knex,
+    id,
+    poId
+  );
+  await Promise.allSettled(
+    touchedInventoryItemIds.map((inventoryItemId) =>
+      syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+        input: { inventoryItemId },
+      })
+    )
   );
 
   // 9. Return updated transfer

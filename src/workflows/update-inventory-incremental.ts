@@ -4,6 +4,13 @@ import {
   StepResponse,
   WorkflowResponse,
 } from "@medusajs/framework/workflows-sdk";
+import { Modules } from "@medusajs/utils";
+
+import { CHINA_LOC, USA_LOC } from "../lib/locations";
+import {
+  buildInventoryDocsForVariants,
+  INVENTORY_DOC_FIELDS,
+} from "../lib/meilisearch/build-inventory-docs";
 
 interface UpdateInventoryIncrementalInput {
   variantId?: string;
@@ -85,98 +92,58 @@ const updateInventoryIncrementalStep = createStep(
       // 2. Fetch variants with all data (MUST MATCH sync-inventory.ts fields!)
       const { data: variants } = await query.graph({
         entity: "product_variant",
-        fields: [
-          "id",
-          "sku",
-          "metadata",
-          "price_set.id",
-          "created_at",
-          "updated_at",
-          "product.id",
-          "product.title",
-          "product.handle",
-          "product.thumbnail",
-          "product.status",
-          "product.categories.id",
-          "product.categories.handle",
-          "product.categories.parent_category.handle",
-          "product.categories.parent_category.parent_category.handle",
-          "prices.amount",
-          "prices.currency_code",
-          "inventory_items.inventory.id",
-          "inventory_items.inventory.sku",
-          "inventory_items.inventory.title",
-          "inventory_items.inventory.created_at",
-          "inventory_items.inventory.updated_at",
-          "inventory_items.inventory.stocked_quantity", // ✅ DIRECT field (not location_levels)
-          "inventory_items.inventory.reserved_quantity", // ✅ DIRECT field
-          "options.value",
-          "options.option.title",
-        ],
+        fields: [...INVENTORY_DOC_FIELDS],
         filters: { id: variantIds },
       });
 
-      // 3. Transform to inventory items (MUST MATCH sync-inventory.ts logic!)
-      const inventoryItems = variants.flatMap((variant: any) => {
-        const product = variant.product;
-        const priceObj = variant.prices?.[0];
-        const priceSetId = variant.price_set?.id;
-        const pricesByList = priceSetId
-          ? (pricesByPriceSet.get(priceSetId) ?? {})
-          : {};
+      const inventoryItemIds = new Set<string>();
+      for (const variant of variants as any[]) {
+        for (const invItem of variant.inventory_items ?? []) {
+          if (invItem?.inventory?.id) inventoryItemIds.add(invItem.inventory.id);
+        }
+      }
 
-        // ✅ Flatten all category handles (including parents) - SAME AS FULL SYNC
-        const allCategoryHandles = new Set<string>();
-        product?.categories?.forEach((c: any) => {
-          if (c.handle) allCategoryHandles.add(c.handle);
-          if (c.parent_category?.handle)
-            allCategoryHandles.add(c.parent_category.handle);
-          if (c.parent_category?.parent_category?.handle)
-            allCategoryHandles.add(c.parent_category.parent_category.handle);
-        });
+      const miamiStockMap = new Map<string, number>();
+      const miamiReservedMap = new Map<string, number>();
+      const chinaStockMap = new Map<string, number>();
+      if (inventoryItemIds.size > 0) {
+        const inventoryService: any = container.resolve(Modules.INVENTORY);
+        const ids = Array.from(inventoryItemIds);
 
-        const mappedOptions = (variant.options || []).map((opt: any) => ({
-          title: opt.option?.title || "Option",
-          value: opt.value || "",
-        }));
-
-        return (
-          variant.inventory_items
-            ?.map((invItem: any) => {
-              const inventory = invItem.inventory;
-              if (!inventory || !variant.product?.id) return null;
-
-              return {
-                id: inventory.id,
-                sku: inventory.sku || variant.sku || "",
-                title: inventory.title || product?.title || "Untitled",
-                thumbnail: product?.thumbnail || null,
-                totalStock: inventory.stocked_quantity || 0, // ✅ FIXED: Direct field
-                totalReserved: inventory.reserved_quantity || 0, // ✅ FIXED: Direct field
-                price: priceObj?.amount || 0, // v2: already in dollars
-                currencyCode: priceObj?.currency_code?.toUpperCase() || "USD",
-                pricesByList,
-                variantId: variant.id,
-                productId: product.id,
-                handle: product?.handle || null,
-                salesDescription:
-                  (variant?.metadata as any)?.sales_description || null,
-                cost: (variant?.metadata as any)?.qb_purchase_cost || null,
-                vendorName: (variant?.metadata as any)?.qb_vendor_name || null,
-                options: mappedOptions,
-                category_handles: Array.from(allCategoryHandles), // ✅ FIXED: Include parents
-                status: product.status || "draft",
-                created_at: new Date(
-                  inventory.created_at || variant.created_at
-                ).getTime(),
-                updated_at: new Date(
-                  inventory.updated_at || variant.updated_at
-                ).getTime(),
-              };
-            })
-            .filter(Boolean) || []
+        const miamiLevels = await inventoryService.listInventoryLevels(
+          { location_id: USA_LOC, inventory_item_id: ids },
+          { take: 100000 }
         );
-      });
+        for (const level of miamiLevels) {
+          miamiStockMap.set(level.inventory_item_id, level.stocked_quantity ?? 0);
+          miamiReservedMap.set(
+            level.inventory_item_id,
+            level.reserved_quantity ?? 0
+          );
+        }
+
+        const chinaLevels = await inventoryService.listInventoryLevels(
+          { location_id: CHINA_LOC, inventory_item_id: ids },
+          { take: 100000 }
+        );
+        for (const level of chinaLevels) {
+          const available = Math.max(
+            0,
+            (level.stocked_quantity ?? 0) - (level.reserved_quantity ?? 0)
+          );
+          chinaStockMap.set(level.inventory_item_id, available);
+        }
+      }
+
+      // 3. Transform to inventory docs using the shared full-sync logic.
+      // This keeps `totalStock` Miami-only and exposes China separately.
+      const inventoryItems = buildInventoryDocsForVariants(
+        variants,
+        pricesByPriceSet,
+        chinaStockMap,
+        miamiStockMap,
+        miamiReservedMap
+      ).filter((item) => item.variantId && item.productId);
 
       if (inventoryItems.length === 0) {
         logger.warn(

@@ -12,6 +12,7 @@ import type {
 } from "@medusajs/framework/http";
 
 import { onPoVoided } from "../../../../../lib/inventory-transfer-link";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
 import { getActorUserId, UnauthenticatedError } from "../../_lib/auth";
 import { voidReceiptSchema } from "../../_lib/validators";
 import { zodErrorToBody } from "../../_lib/format";
@@ -131,7 +132,14 @@ export async function POST(
   }
 
   // Transfer-to-USA accounting: void the linked IT (goods return to China)
-  await onPoVoided(knex, id, userId);
+  const touchedInventoryItemIds = await onPoVoided(knex, id, userId);
+  await Promise.allSettled(
+    touchedInventoryItemIds.map((inventoryItemId) =>
+      syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+        input: { inventoryItemId },
+      })
+    )
+  );
 
   return res.json({ purchase_order: updated });
 }

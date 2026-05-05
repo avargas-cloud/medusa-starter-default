@@ -4,14 +4,19 @@
  * When a PO is linked to an inventory_transfer (origin_country='CN'),
  * receiving/cancelling/voiding that PO must keep China stock in sync:
  *
- *   China available = stocked_quantity − SUM(shipped_in_transit)
- *   shipped_in_transit = itl.qty − itl.qty_received  (IT.status = 'shipped')
+ *   China available = stocked_quantity − reserved_quantity
+ *   reserved_quantity includes pending IT qty as soon as the Transfer is confirmed.
  *
  * These helpers are called from route handlers AFTER the Medusa workflow
  * has already committed (so they only fire on success).
  */
 
 import { CHINA_LOC } from "./locations";
+import {
+  rebuildTransferChinaReservations,
+  releaseTransferChinaReservations,
+  releaseTransferLineChinaReservation,
+} from "./inventory-transfer-reservations";
 
 type KnexRaw = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -66,6 +71,15 @@ export async function onPoReceiveApplied(
   const now = new Date().toISOString();
 
   for (const line of lines) {
+    // The transfer line was reserved when the IT was confirmed. Once units are
+    // received, release that reserved qty before deducting physical China stock.
+    await releaseTransferLineChinaReservation(
+      knex,
+      transfer.id,
+      line.product_variant_id,
+      line.qty
+    );
+
     // Deduct from China warehouse inventory
     await knex.raw(
       `UPDATE inventory_level
@@ -154,6 +168,10 @@ export async function onPoReceiveReversed(
     );
   }
 
+  // Rebuild pending reservations after qty_received is reduced. This restores
+  // the reversed quantity as committed China stock for the linked PO again.
+  await rebuildTransferChinaReservations(knex, transfer.id, po_id);
+
   // Revert IT to 'shipped' if it had reached 'received'
   if (transfer.status === "received") {
     await knex.raw(
@@ -178,16 +196,21 @@ export async function onPoVoided(
   knex: KnexRaw,
   po_id: string,
   voided_by_user_id: string
-): Promise<void> {
+): Promise<string[]> {
   const transfer = await findLinkedTransfer(knex, po_id, [
     "draft",
     "confirmed",
     "shipped",
     "received",
   ]);
-  if (!transfer) return;
+  if (!transfer) return [];
 
   const now = new Date().toISOString();
+  const touchedInventoryItemIds = await releaseTransferChinaReservations(
+    knex,
+    transfer.id
+  );
+
   await knex.raw(
     `UPDATE inventory_transfer
         SET status             = 'voided',
@@ -198,4 +221,6 @@ export async function onPoVoided(
       WHERE id = ?`,
     [now, voided_by_user_id, now, transfer.id]
   );
+
+  return touchedInventoryItemIds;
 }

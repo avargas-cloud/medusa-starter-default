@@ -112,7 +112,7 @@ function add(name: string, pass: boolean, detail?: string) {
   add(
     "scenario 1 — variant metadata surfaced",
     d.salesDescription === "A nice description" &&
-      d.cost === 10 &&
+      d.purchaseCost === 10 &&
       d.vendorName === "VendorCo"
   );
   add(
@@ -122,6 +122,44 @@ function add(name: string, pass: boolean, detail?: string) {
 }
 
 // ---------- Scenario 2: variant WITHOUT inventory_items (service) ----------
+{
+  const variants = [
+    {
+      id: "variant_loc",
+      sku: "SKU-LOC",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      product: { id: "prod_loc", title: "Location Test", status: "published" },
+      prices: [{ amount: 10, currency_code: "usd" }],
+      inventory_items: [
+        {
+          inventory: {
+            id: "iitem_loc",
+            sku: "SKU-LOC",
+            stocked_quantity: 999,
+            reserved_quantity: 99,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+        },
+      ],
+      options: [],
+    },
+  ];
+  const docs = buildInventoryDocsForVariants(
+    variants,
+    new Map(),
+    new Map([["iitem_loc", 40]]),
+    new Map([["iitem_loc", 12]]),
+    new Map([["iitem_loc", 3]])
+  );
+  add(
+    "scenario 2 — totalStock uses Miami map, not aggregate or China",
+    docs[0]!.totalStock === 12 && docs[0]!.totalReserved === 3 && docs[0]!.chinaStock === 40
+  );
+}
+
+// ---------- Scenario 3: variant WITHOUT inventory_items (service) ----------
 {
   const variants = [
     {
@@ -136,13 +174,13 @@ function add(name: string, pass: boolean, detail?: string) {
     },
   ];
   const docs = buildInventoryDocsForVariants(variants);
-  add("scenario 2 (synthetic) — one doc produced", docs.length === 1);
-  add("scenario 2 — id falls back to variant.id", docs[0]!.id === "variant_S");
-  add("scenario 2 — totalStock is null for service", docs[0]!.totalStock === null);
-  add("scenario 2 — price 50 USD", docs[0]!.price === 50 && docs[0]!.currencyCode === "USD");
+  add("scenario 3 (synthetic) — one doc produced", docs.length === 1);
+  add("scenario 3 — id falls back to variant.id", docs[0]!.id === "variant_S");
+  add("scenario 3 — totalStock is null for service", docs[0]!.totalStock === null);
+  add("scenario 3 — price 50 USD", docs[0]!.price === 50 && docs[0]!.currencyCode === "USD");
 }
 
-// ---------- Scenario 3: variant without SKU AND no inventory → skipped ----------
+// ---------- Scenario 4: variant without SKU AND no inventory → skipped ----------
 {
   const variants = [
     {
@@ -157,10 +195,10 @@ function add(name: string, pass: boolean, detail?: string) {
     },
   ];
   const docs = buildInventoryDocsForVariants(variants);
-  add("scenario 3 — synthetic with no sku is skipped (no doc)", docs.length === 0);
+  add("scenario 4 — synthetic with no sku is skipped (no doc)", docs.length === 0);
 }
 
-// ---------- Scenario 4: variant with multiple inventory_items → multiple docs ----------
+// ---------- Scenario 5: variant with multiple inventory_items → multiple docs ----------
 {
   const variants = [
     {
@@ -196,20 +234,20 @@ function add(name: string, pass: boolean, detail?: string) {
     },
   ];
   const docs = buildInventoryDocsForVariants(variants);
-  add("scenario 4 — two docs produced", docs.length === 2);
+  add("scenario 5 — two docs produced", docs.length === 2);
   const ids = docs.map((d) => d.id).sort();
   add(
-    "scenario 4 — ids are both inventory_item ids",
+    "scenario 5 — ids are both inventory_item ids",
     ids[0] === "iitem_1" && ids[1] === "iitem_2"
   );
   add(
-    "scenario 4 — stocks mapped per item",
+    "scenario 5 — stocks mapped per item",
     docs.find((d) => d.id === "iitem_1")!.totalStock === 5 &&
       docs.find((d) => d.id === "iitem_2")!.totalStock === 8
   );
 }
 
-// ---------- Scenario 5: retail price picks the MAX when multiple USD ----------
+// ---------- Scenario 6: retail price picks the MAX when multiple USD ----------
 {
   const variants = [
     {
@@ -238,10 +276,10 @@ function add(name: string, pass: boolean, detail?: string) {
     },
   ];
   const docs = buildInventoryDocsForVariants(variants);
-  add("scenario 5 — retail price picks max (42)", docs[0]!.price === 42);
+  add("scenario 6 — retail price picks max (42)", docs[0]!.price === 42);
 }
 
-// ---------- Scenario 6: built workflow imports the correct shared transform ----------
+// ---------- Scenario 7: built workflow imports the correct shared transform ----------
 {
   const wfPath = resolvePath(
     __dirname,
@@ -249,26 +287,26 @@ function add(name: string, pass: boolean, detail?: string) {
   );
   const src = readFileSync(wfPath, "utf8");
   add(
-    "scenario 6 — workflow imports buildInventoryDocsForVariants",
+    "scenario 7 — workflow imports buildInventoryDocsForVariants",
     /buildInventoryDocsForVariants[\s\S]*INVENTORY_DOC_FIELDS/.test(src)
   );
   add(
-    "scenario 6 — workflow accepts productId/variantId/inventoryItemId scope",
+    "scenario 7 — workflow accepts productId/variantId/inventoryItemId scope",
     /productId\?\s*:\s*string/.test(src) &&
       /variantId\?\s*:\s*string/.test(src) &&
       /inventoryItemId\?\s*:\s*string/.test(src)
   );
   add(
-    "scenario 6 — workflow handles delete via deleteWhenMissing",
+    "scenario 7 — workflow handles delete via deleteWhenMissing",
     /deleteWhenMissing/.test(src) && /deleteDocument|deleteDocuments/.test(src)
   );
   add(
-    "scenario 6 — workflow calls addDocuments with primaryKey: 'id'",
+    "scenario 7 — workflow calls addDocuments with primaryKey: 'id'",
     /addDocuments\([^)]*primaryKey:\s*"id"/.test(src)
   );
 }
 
-// ---------- Scenario 7: product workflow cascades to inventory ----------
+// ---------- Scenario 8: product workflow cascades to inventory ----------
 {
   const prodWfPath = resolvePath(
     __dirname,
@@ -276,11 +314,11 @@ function add(name: string, pass: boolean, detail?: string) {
   );
   const src = readFileSync(prodWfPath, "utf8");
   add(
-    "scenario 7 — product workflow imports the inventory cascade",
+    "scenario 8 — product workflow imports the inventory cascade",
     /syncInventoryItemToMeiliSearchWorkflow/.test(src)
   );
   add(
-    "scenario 7 — product workflow runs inventory cascade as step",
+    "scenario 8 — product workflow runs inventory cascade as step",
     /syncInventoryItemToMeiliSearchWorkflow\.runAsStep[\s\S]*productId/.test(
       src
     )
