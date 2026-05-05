@@ -19,6 +19,8 @@ import {
 import { sendMail } from "../../../../../utils/mailer";
 import { getPurchaseOrdersService } from "../../_lib/service-resolver";
 
+const PURCHASING_CC_EMAIL = "purchase@ecopowertech.com";
+
 interface SendPoEmailBody {
   to?: string;
   cc?: string;
@@ -296,7 +298,14 @@ ${sigHtml}
 
   const sender = await resolveSender(req);
   const toEmails = splitEmails(vendorEmail);
-  const ccEmails = splitEmails(body.cc).filter((email) => !toEmails.includes(email));
+  const toEmailSet = new Set(toEmails.map((email) => email.toLowerCase()));
+  const ccEmailSet = new Set<string>();
+  const ccEmails = [...splitEmails(body.cc), PURCHASING_CC_EMAIL].filter((email) => {
+    const normalized = email.toLowerCase();
+    if (toEmailSet.has(normalized) || ccEmailSet.has(normalized)) return false;
+    ccEmailSet.add(normalized);
+    return true;
+  });
 
   try {
     await sendMail({
