@@ -127,8 +127,8 @@ export async function writePipelineRow(
   ) {
     const matchStatuses =
       input.status === "confirmed"
-        ? `'pending', 'submitted', 'confirmed'`
-        : `'pending', 'submitted'`;
+        ? `'processing', 'pending', 'submitted', 'confirmed'`
+        : `'processing', 'pending', 'submitted'`;
     const { rows: updated } = await pool.query(
       `UPDATE qb_order_pipeline
              SET status            = $3,
@@ -214,6 +214,21 @@ export async function writePipelineRow(
     (input.orderId || input.referenceId) &&
     input.step
   ) {
+    const { rows: claimed } = await pool.query(
+      `SELECT id
+         FROM qb_order_pipeline
+        WHERE step = $2
+          AND status = 'processing'
+          AND (
+            ($1::text IS NOT NULL AND order_id = $1::text AND ($3::text IS NULL OR reference_id = $3::text))
+            OR ($1::text IS NULL AND $3::text IS NOT NULL AND reference_id = $3::text)
+          )
+        ORDER BY COALESCE(updated_at, created_at) DESC
+        LIMIT 1`,
+      [input.orderId ?? null, input.step, input.referenceId ?? null]
+    );
+    if (claimed.length > 0) return claimed[0].id as string;
+
     const { rows: anyExisting } = await pool.query(
       `UPDATE qb_order_pipeline
              SET status            = 'pending',
@@ -226,6 +241,7 @@ export async function writePipelineRow(
                  medusa_ref_number = COALESCE($3, medusa_ref_number),
                  retry_count       = CASE WHEN status = 'failed' THEN retry_count + 1 ELSE retry_count END
              WHERE step = $2
+               AND status <> 'processing'
                AND (
                  ($1::text IS NOT NULL AND order_id = $1::text AND ($4::text IS NULL OR reference_id = $4::text))
                  OR ($1::text IS NULL AND $4::text IS NOT NULL AND reference_id = $4::text)

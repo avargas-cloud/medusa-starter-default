@@ -40,9 +40,11 @@ const PATHS = {
   invoices:
     "/home/alejo/webapps/ecopowertech-workspace/backend/src/api/admin/invoices/route.ts",
   pipelineRetry:
-    "/home/alejo/webapps/ecopowertech-workspace/backend/src/api/admin/quickbooks/pipeline/route.ts",
-  consolidator:
-    "/home/alejo/webapps/ecopowertech-workspace/backend/src/jobs/qb-pipeline-consolidator.ts",
+    "/home/alejo/webapps/ecopowertech-workspace/backend/src/api/admin/quickbooks/pipeline/handlers/post-pipeline.ts",
+  dispatchPass:
+    "/home/alejo/webapps/ecopowertech-workspace/backend/src/lib/quickbooks/consolidator/dispatch-pass.ts",
+  resubmitByStep:
+    "/home/alejo/webapps/ecopowertech-workspace/backend/src/lib/quickbooks/consolidator/resubmit-by-step.ts",
 };
 
 function readFile(label: keyof typeof PATHS): string {
@@ -99,12 +101,21 @@ function testStaticChecks() {
   }
 
   console.log("\n=== TEST 5 — Consolidator pending-dispatch + payload-aware case ===");
-  const cons = readFile("consolidator");
+  const dispatch = readFile("dispatchPass");
+  const resubmit = readFile("resubmitByStep");
   assert(
-    /step IN \([^)]*'sales_receipt'[^)]*\)/.test(cons),
+    dispatch.includes("'sales_receipt'"),
     "pending-dispatch SQL includes 'sales_receipt'"
   );
-  const srCaseBlock = cons.match(/case "sales_receipt":[\s\S]+?break;\s*\}/);
+  assert(
+    /FOR UPDATE SKIP LOCKED/.test(dispatch),
+    "pending-dispatch claims rows atomically"
+  );
+  assert(
+    /SET status = 'processing'/.test(dispatch),
+    "pending-dispatch marks claimed rows processing"
+  );
+  const srCaseBlock = resubmit.match(/case "sales_receipt":[\s\S]+?break;\s*\}/);
   assert(srCaseBlock !== null, "found sales_receipt case in consolidator");
   if (srCaseBlock) {
     assert(

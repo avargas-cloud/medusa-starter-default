@@ -72,7 +72,7 @@ export async function pollUntilQbConfirmed(
 }
 
 /**
- * Returns all in-flight (pending/submitted/waiting) pipeline rows for the given order
+ * Returns all in-flight (pending/processing/submitted/waiting) pipeline rows for the given order
  * matching the provided steps. Used to detect races between creation and void operations.
  */
 export async function findInFlightQbRows(
@@ -86,7 +86,7 @@ export async function findInFlightQbRows(
     `SELECT id, step, status FROM qb_order_pipeline
          WHERE order_id = $1
            AND step IN (${placeholders})
-           AND status IN ('pending', 'submitted', 'waiting')
+           AND status IN ('pending', 'processing', 'submitted', 'waiting')
          ORDER BY created_at DESC`,
     [orderId, ...steps]
   );
@@ -118,7 +118,7 @@ export async function skipPipelineRowById(
 }
 
 /**
- * Returns all in-flight (pending/submitted/waiting) pipeline rows matched by referenceId
+ * Returns all in-flight (pending/processing/submitted/waiting) pipeline rows matched by referenceId
  * and referenceType. Used for credit memos and other reference-keyed documents.
  */
 export async function findInFlightQbRowsByRef(
@@ -134,7 +134,7 @@ export async function findInFlightQbRowsByRef(
          WHERE reference_id = $1
            AND reference_type = $2
            AND step IN (${placeholders})
-           AND status IN ('pending', 'submitted', 'waiting')
+           AND status IN ('pending', 'processing', 'submitted', 'waiting')
          ORDER BY created_at DESC`,
     [referenceId, referenceType, ...steps]
   );
@@ -145,7 +145,7 @@ export async function findInFlightQbRowsByRef(
 }
 
 /**
- * Returns the id of the most recent in-flight (pending/submitted/waiting) so_close or
+ * Returns the id of the most recent in-flight (pending/processing/submitted/waiting) so_close or
  * so_reopen pipeline row for the given order, or null if none exists.
  * Used by toggle-close to create dependency chains and prevent race conditions.
  */
@@ -157,7 +157,7 @@ export async function findLastInFlightSoToggleRow(
     `SELECT id FROM qb_order_pipeline
          WHERE order_id = $1
            AND step IN ('so_close', 'so_reopen')
-           AND status IN ('pending', 'submitted', 'waiting')
+           AND status IN ('pending', 'processing', 'submitted', 'waiting')
          ORDER BY created_at DESC
          LIMIT 1`,
     [orderId]
@@ -258,7 +258,7 @@ export async function claimAndResetForResubmit(
 
 /**
  * Find the most recent in-flight pipeline row for a given document.
- * Returns the row if one exists with status 'submitted', or 'pending' with a
+ * Returns the row if one exists with status 'processing'/'submitted', or 'pending' with a
  * bridge_op_id (already dispatched). Pre-flight 'pending' rows without a
  * bridge_op_id are excluded — they haven't been sent to the bridge yet and
  * waiting on them would deadlock (the caller IS the one that will submit them).
@@ -277,7 +277,7 @@ export async function findLatestInFlightRow(
     `SELECT id, status, created_at, updated_at
          FROM qb_order_pipeline
          WHERE order_id = $1 AND step = ANY($2)
-           AND (status = 'submitted' OR (status = 'pending' AND bridge_op_id IS NOT NULL))
+           AND (status IN ('processing', 'submitted') OR (status = 'pending' AND bridge_op_id IS NOT NULL))
          ORDER BY created_at DESC
          LIMIT 1`,
     [orderId, steps]

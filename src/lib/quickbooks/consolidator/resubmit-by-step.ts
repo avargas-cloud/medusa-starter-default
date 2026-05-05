@@ -602,5 +602,6 @@ export async function resubmitByStep(
     logger.warn(
       `${LOG_PREFIX} ⚠️ resubmitByStep failed for row ${row.id} (${row.step}): ${err.message}`
     );
+    await failPipelineRow(row.id, err.message || "resubmitByStep failed");
   }
 }

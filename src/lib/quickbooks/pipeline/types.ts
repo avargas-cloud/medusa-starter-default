@@ -26,6 +26,7 @@ export type PipelineStep =
 
 export type PipelineStatus =
   | "pending"
+  | "processing"
   | "submitted"
   | "confirmed"
   | "failed"

@@ -4,7 +4,7 @@ import { invalidateEditSequenceCache } from "../qb-pipeline";
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
 /**
- * Timeout pass: pending rows stuck for >20 minutes are marked failed.
+ * Timeout pass: pending/processing rows stuck for >20 minutes are marked failed.
  * Covers cases where the async QB call threw before ever reaching 'submitted'
  * (e.g. bad query.graph fields, network error, bridge down).
  */
@@ -15,9 +15,9 @@ export async function runTimeoutPass(logger: any): Promise<void> {
             UPDATE qb_order_pipeline
             SET    status     = 'failed',
                    updated_at = NOW(),
-                   error      = 'Timed out in pending state (>20 min) — no response from QB bridge',
+                   error      = 'Timed out before submitted state (>20 min) — no response from QB bridge',
                    failed_at  = NOW()
-            WHERE  status = 'pending'
+            WHERE  status IN ('pending', 'processing')
               AND  COALESCE(updated_at, created_at) < NOW() - INTERVAL '20 minutes'
             RETURNING id, step, order_id
         `);
@@ -70,7 +70,7 @@ export async function runStaleSubmittedCleanup(logger: any): Promise<void> {
 }
 
 /**
- * Stale pending cleanup: rows stuck in 'pending' for >20 minutes are marked
+ * Stale pending/processing cleanup: rows stuck before bridge submission for >20 minutes are marked
  * failed with individual log entries (complements the timeout pass batch update).
  */
 export async function runStalePendingCleanup(logger: any): Promise<void> {
@@ -79,12 +79,12 @@ export async function runStalePendingCleanup(logger: any): Promise<void> {
     const { rows: stalePending } = await pool.query(
       `UPDATE qb_order_pipeline
              SET status = 'failed', error = 'Stale: never submitted within 20 minutes', updated_at = NOW(), failed_at = NOW(), confirmed_at = NULL
-             WHERE status = 'pending' AND updated_at < NOW() - INTERVAL '20 minutes'
-             RETURNING id, step`
+             WHERE status IN ('pending', 'processing') AND updated_at < NOW() - INTERVAL '20 minutes'
+             RETURNING id, step, status`
     );
     for (const row of stalePending) {
       logger.warn(
-        `${LOG_PREFIX} ⏱️ Marked stale pending row ${row.id} (step=${row.step}) as failed`
+        `${LOG_PREFIX} ⏱️ Marked stale ${row.status} row ${row.id} (step=${row.step}) as failed`
       );
     }
   } catch (stalePendingErr: unknown) {

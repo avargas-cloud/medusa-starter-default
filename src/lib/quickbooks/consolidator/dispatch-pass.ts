@@ -20,12 +20,22 @@ export async function runPendingDispatchPass(
   const pool = getDbPool();
   try {
     const { rows: pendingMutations } = await pool.query(`
-      SELECT id, order_id, reference_id, reference_type, step, qb_txn_id
-        FROM qb_order_pipeline
-       WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'credit_memo', 'void_credit_memo', 'void_invoice', 'void_sales_receipt', 'void_check', 'payment', 'apply_payment')
-         AND status = 'pending'
-       ORDER BY COALESCE(updated_at, created_at) ASC
-       LIMIT 20
+      WITH claim AS (
+        SELECT id
+          FROM qb_order_pipeline
+         WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'credit_memo', 'void_credit_memo', 'void_invoice', 'void_sales_receipt', 'void_check', 'payment', 'apply_payment')
+           AND status = 'pending'
+         ORDER BY COALESCE(updated_at, created_at) ASC
+         LIMIT 20
+         FOR UPDATE SKIP LOCKED
+      )
+      UPDATE qb_order_pipeline p
+         SET status = 'processing',
+             updated_at = NOW(),
+             error = NULL
+        FROM claim
+       WHERE p.id = claim.id
+       RETURNING p.id, p.order_id, p.reference_id, p.reference_type, p.step, p.qb_txn_id
     `);
     if (pendingMutations.length > 0) {
       logger.info(
@@ -44,7 +54,7 @@ export async function runPendingDispatchPass(
 
 /**
  * Wake dependents pass: any 'waiting' row whose depends_on row is now 'confirmed'
- * is moved to 'pending' AND immediately dispatched via resubmitByStep.
+ * is claimed as 'processing' AND immediately dispatched via resubmitByStep.
  * Typical case: a document was blocked on customer creation; once the customer
  * confirms, the dependent document auto-resubmits with no user intervention.
  */
@@ -56,7 +66,7 @@ export async function runWakeDependentsPass(
   try {
     const { rows: awakenedRows } = await pool.query(
       `UPDATE qb_order_pipeline w
-          SET status       = 'pending',
+          SET status       = 'processing',
               updated_at   = NOW(),
               error        = NULL,
               failed_at    = NULL,
