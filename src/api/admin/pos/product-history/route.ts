@@ -58,6 +58,8 @@ export async function GET(
       JOIN pos_invoice_item ii ON ii.invoice_id = i.id AND ii.variant_id = ?
       LEFT JOIN customer c ON c.id = i.customer_id
       WHERE i.deleted_at IS NULL
+        AND i.voided_at IS NULL
+        AND i.status <> 'voided'
         AND ii.deleted_at IS NULL
       GROUP BY
         i.id,
