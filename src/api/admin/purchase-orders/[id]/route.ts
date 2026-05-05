@@ -280,7 +280,8 @@ export async function GET(
     (po as unknown as { voided_by_user_id?: string | null }).voided_by_user_id
   );
 
-  // Line thumbnails — batched variant lookup
+  // Line thumbnails — batched variant lookup. Variant thumbnail wins; product
+  // thumbnail is only a fallback for variants without a specific image.
   const variantIds = Array.from(
     new Set(
       lines
@@ -300,7 +301,7 @@ export async function GET(
       const rows: Array<{ id: string; thumbnail: string | null; mpn: string | null }> =
         await knex.raw(
           `SELECT pv.id,
-                  p.thumbnail,
+                  COALESCE(pv.thumbnail, p.thumbnail) AS thumbnail,
                   pv.metadata->>'mpn' AS mpn
              FROM product_variant pv
              LEFT JOIN product p ON p.id = pv.product_id

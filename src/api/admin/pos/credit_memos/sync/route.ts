@@ -109,12 +109,14 @@ export async function POST(
         const query = req.scope.resolve("query");
         const { data: variants } = await query.graph({
           entity: "product_variant",
-          fields: ["id", "product.thumbnail"],
+          fields: ["id", "thumbnail", "product.thumbnail"],
           filters: { id: variantIds },
         });
         for (const v of variants) {
-          if (v.id && (v as any).product?.thumbnail) {
-            thumbnailMap[v.id] = (v as any).product.thumbnail;
+          const thumbnail =
+            (v as any).thumbnail ?? (v as any).product?.thumbnail ?? null;
+          if (v.id && thumbnail) {
+            thumbnailMap[v.id] = thumbnail;
           }
         }
       } catch (thumbErr: any) {

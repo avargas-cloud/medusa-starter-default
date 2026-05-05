@@ -40,7 +40,46 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     .listInvoicePayments({ invoice_id: id }, { order: { paid_at: "ASC" } })
     .catch(() => []);
 
-  return res.json({ invoice, payments });
+  const invoiceItems = ((invoice as any).items ?? []) as Array<{
+    variant_id?: string | null;
+    [key: string]: unknown;
+  }>;
+  const variantIds = [
+    ...new Set(invoiceItems.map((item) => item.variant_id).filter(Boolean)),
+  ] as string[];
+  const thumbnailByVariantId = new Map<string, string | null>();
+
+  if (variantIds.length > 0) {
+    try {
+      const pgConnection = req.scope.resolve("__pg_connection__") as any;
+      const rows = await pgConnection.raw(
+        `SELECT pv.id,
+                COALESCE(pv.thumbnail, p.thumbnail) AS thumbnail
+           FROM product_variant pv
+           LEFT JOIN product p ON p.id = pv.product_id
+          WHERE pv.id = ANY(?)`,
+        [variantIds]
+      );
+
+      for (const row of rows.rows ?? []) {
+        thumbnailByVariantId.set(row.id, row.thumbnail ?? null);
+      }
+    } catch {
+      /* non-critical */
+    }
+  }
+
+  const hydratedInvoice = {
+    ...invoice,
+    items: invoiceItems.map((item) => ({
+      ...item,
+      thumbnail: item.variant_id
+        ? thumbnailByVariantId.get(item.variant_id) ?? null
+        : null,
+    })),
+  };
+
+  return res.json({ invoice: hydratedInvoice, payments });
 }
 
 export async function PATCH(req: MedusaRequest, res: MedusaResponse) {

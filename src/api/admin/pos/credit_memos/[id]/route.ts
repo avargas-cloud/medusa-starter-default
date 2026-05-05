@@ -136,9 +136,46 @@ export async function GET(
       }
     }
 
+    const memoItems = ((creditMemo as any).items ?? []) as Array<{
+      variant_id?: string | null;
+      thumbnail?: string | null;
+      [key: string]: unknown;
+    }>;
+    const variantIds = [
+      ...new Set(memoItems.map((item) => item.variant_id).filter(Boolean)),
+    ] as string[];
+    const thumbnailByVariantId = new Map<string, string | null>();
+
+    if (variantIds.length > 0) {
+      try {
+        const rows = await pgConnection.raw(
+          `SELECT pv.id,
+                  COALESCE(pv.thumbnail, p.thumbnail) AS thumbnail
+             FROM product_variant pv
+             LEFT JOIN product p ON p.id = pv.product_id
+            WHERE pv.id = ANY(?)`,
+          [variantIds]
+        );
+
+        for (const row of rows.rows ?? []) {
+          thumbnailByVariantId.set(row.id, row.thumbnail ?? null);
+        }
+      } catch {
+        /* non-critical */
+      }
+    }
+
+    const hydratedItems = memoItems.map((item) => ({
+      ...item,
+      thumbnail: item.variant_id
+        ? thumbnailByVariantId.get(item.variant_id) ?? item.thumbnail ?? null
+        : item.thumbnail ?? null,
+    }));
+
     res.status(200).json({
       credit_memo: {
         ...creditMemo,
+        items: hydratedItems,
         invoice_number,
         order_display_id,
         qb_ref_number,
