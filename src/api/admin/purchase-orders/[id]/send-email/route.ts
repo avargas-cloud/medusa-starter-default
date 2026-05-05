@@ -272,7 +272,6 @@ ${bodyHtml}
 <div class="box">
 <div><b>PO #:</b> ${escapeHtml(poNumber)}</div>
 <div><b>Date:</b> ${escapeHtml(formatDate(po.ordered_at))}</div>
-${po.expected_at ? `<div><b>Expected:</b> ${escapeHtml(formatDate(po.expected_at))}</div>` : ""}
 <div><b>Total:</b> ${escapeHtml(total)}</div>
 </div>
 ${sigHtml}
