@@ -51,13 +51,22 @@ export async function GET(
         i.invoice_number,
         i.created_at,
         i.order_id,
-        ii.quantity,
+        SUM(ii.quantity)::int AS quantity,
         TRIM(CONCAT(c.first_name, ' ', c.last_name)) AS customer_name,
         COALESCE(c.email, '') AS customer_email
       FROM pos_invoice i
       JOIN pos_invoice_item ii ON ii.invoice_id = i.id AND ii.variant_id = ?
       LEFT JOIN customer c ON c.id = i.customer_id
       WHERE i.deleted_at IS NULL
+        AND ii.deleted_at IS NULL
+      GROUP BY
+        i.id,
+        i.invoice_number,
+        i.created_at,
+        i.order_id,
+        c.first_name,
+        c.last_name,
+        c.email
       ORDER BY i.created_at DESC
       LIMIT 200
       `,
@@ -90,24 +99,42 @@ export async function GET(
 
     pgConnection.raw(
       `
+      WITH reservation_rows AS (
+        SELECT DISTINCT
+          ri.id           AS reservation_id,
+          o.id            AS order_id,
+          o.display_id,
+          o.created_at,
+          ri.quantity,
+          ri.created_at   AS reserved_at,
+          TRIM(CONCAT(c.first_name, ' ', c.last_name)) AS customer_name,
+          COALESCE(c.email, o.email, '') AS customer_email
+        FROM reservation_item ri
+        JOIN order_line_item oli ON oli.id = ri.line_item_id AND oli.variant_id = ?
+        JOIN order_item oi ON oi.item_id = oli.id
+          AND oi.version = (SELECT MAX(oi2.version) FROM order_item oi2 WHERE oi2.order_id = oi.order_id)
+        JOIN "order" o ON o.id = oi.order_id
+        LEFT JOIN customer c ON c.id = o.customer_id
+        WHERE ri.deleted_at IS NULL
+          AND o.deleted_at IS NULL
+      )
       SELECT
-        ri.id           AS reservation_id,
-        o.id            AS order_id,
-        o.display_id,
-        o.created_at,
-        ri.quantity,
-        ri.created_at   AS reserved_at,
-        TRIM(CONCAT(c.first_name, ' ', c.last_name)) AS customer_name,
-        COALESCE(c.email, o.email, '') AS customer_email
-      FROM reservation_item ri
-      JOIN order_line_item oli ON oli.id = ri.line_item_id AND oli.variant_id = ?
-      JOIN order_item oi ON oi.item_id = oli.id
-        AND oi.version = (SELECT MAX(oi2.version) FROM order_item oi2 WHERE oi2.order_id = oi.order_id)
-      JOIN "order" o ON o.id = oi.order_id
-      LEFT JOIN customer c ON c.id = o.customer_id
-      WHERE ri.deleted_at IS NULL
-        AND o.deleted_at IS NULL
-      ORDER BY o.created_at DESC
+        MIN(reservation_id) AS reservation_id,
+        order_id,
+        display_id,
+        created_at,
+        SUM(quantity)::int AS quantity,
+        MIN(reserved_at) AS reserved_at,
+        customer_name,
+        customer_email
+      FROM reservation_rows
+      GROUP BY
+        order_id,
+        display_id,
+        created_at,
+        customer_name,
+        customer_email
+      ORDER BY created_at DESC
       LIMIT 200
       `,
       [variant_id]
