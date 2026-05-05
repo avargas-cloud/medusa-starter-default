@@ -14,6 +14,7 @@ import {
   getActorUserId,
   UnauthenticatedError,
 } from "../purchase-orders/_lib/auth";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../workflows/sync-inventory-item-meilisearch";
 
 export const CHINA_LOCATION_ID = "sloc_01KQ14C1CFX30EDD722BF87HDM";
 
@@ -43,6 +44,37 @@ export interface InventoryServiceLike {
   ) => Promise<void>;
 }
 
+export async function syncChinaAdjustmentItemsToMeili(
+  req: AuthenticatedMedusaRequest,
+  inventoryItemIds: string[]
+) {
+  const logger = req.scope.resolve("logger") as {
+    warn: (m: string) => void;
+    info: (m: string) => void;
+  };
+  const uniqueIds = Array.from(new Set(inventoryItemIds.filter(Boolean)));
+  if (uniqueIds.length === 0) return { synced: 0, failed: 0 };
+
+  const results = await Promise.allSettled(
+    uniqueIds.map((inventoryItemId) =>
+      syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+        input: { inventoryItemId },
+      })
+    )
+  );
+  const failed = results.filter((r) => r.status === "rejected");
+  for (const r of failed) {
+    const reason = (r as PromiseRejectedResult).reason;
+    logger.warn(
+      `[china-adjustment] Meili sync failed: ${reason?.message ?? reason}`
+    );
+  }
+  logger.info(
+    `[china-adjustment] synced ${results.length - failed.length}/${results.length} inventory item(s) to Meili`
+  );
+  return { synced: results.length - failed.length, failed: failed.length };
+}
+
 // ── GET ───────────────────────────────────────────────────────────────────────
 
 export async function GET(
@@ -62,7 +94,7 @@ export async function GET(
      LEFT JOIN china_adjustment_line cl ON cl.china_adjustment_id = ca.id
      GROUP BY ca.id
      ORDER BY ca.created_at DESC
-     LIMIT $1`,
+     LIMIT ?`,
     [limit]
   );
 
@@ -164,7 +196,7 @@ export async function POST(
 
   await knex.raw(
     `INSERT INTO china_adjustment (id, notes, total_lines, created_by_user_id, created_at)
-     VALUES ($1, $2, $3, $4, now())`,
+     VALUES (?, ?, ?, ?, now())`,
     [id, notes ?? null, appliedLines.length, userId]
   );
 
@@ -173,10 +205,12 @@ export async function POST(
     await knex.raw(
       `INSERT INTO china_adjustment_line
          (id, china_adjustment_id, inventory_item_id, sku, old_qty, new_qty, delta)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [lineId, id, al.inventory_item_id, al.sku, al.old_qty, al.new_qty, al.delta]
     );
   }
 
-  return res.status(201).json({ adjustment: { id, lines: appliedLines } });
+  const meili = await syncChinaAdjustmentItemsToMeili(req, itemIds);
+
+  return res.status(201).json({ adjustment: { id, lines: appliedLines, meili } });
 }
