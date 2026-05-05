@@ -214,8 +214,25 @@ export async function POST(
 
   // 7. Persist line updates
   await Promise.all(
-    lineUpdates.map(({ id, ...fields }) =>
-      service.updateVendorBillLines({ id }, fields)
+    lineUpdates.map((fields) =>
+      knex.raw(
+        `UPDATE vendor_bill_line
+         SET cbm_per_unit = ?::float,
+             commission_per_unit_cents = ?,
+             freight_per_unit_cents = ?,
+             tariff_per_unit_cents = ?,
+             landed_unit_cost_cents = ?,
+             updated_at = NOW()
+         WHERE id = ? AND deleted_at IS NULL`,
+        [
+          fields.cbm_per_unit,
+          fields.commission_per_unit_cents,
+          fields.freight_per_unit_cents,
+          fields.tariff_per_unit_cents,
+          fields.landed_unit_cost_cents,
+          fields.id,
+        ]
+      )
     )
   );
 
@@ -229,14 +246,15 @@ export async function POST(
   }
 
   // 9. Mark bill as confirmed.
-  await service.updateVendorBills(
-    { id: bill.id },
-    {
-      number: vbNumber,
-      status: "confirmed",
-      confirmed_at: new Date(),
-      confirmed_by_user_id: userId,
-    }
+  await knex.raw(
+    `UPDATE vendor_bill
+     SET number = ?,
+         status = 'confirmed',
+         confirmed_at = NOW(),
+         confirmed_by_user_id = ?,
+         updated_at = NOW()
+     WHERE id = ? AND deleted_at IS NULL`,
+    [vbNumber, userId, bill.id]
   );
 
   // 10. AVCO: update avg_landed_cost_cents per variant using QB weighted-average formula

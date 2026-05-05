@@ -411,10 +411,22 @@ export async function PATCH(
     updatePayload.tariff_number = patch.tariff_number ?? null;
   if ("notes" in patch) updatePayload.notes = patch.notes ?? null;
 
-  const updated = await service.updateVendorBills(
-    { id: bill.id },
-    updatePayload
-  );
+  const knex = resolveKnex(req);
+  const entries = Object.entries(updatePayload);
+  let updated: VendorBillRow = bill;
+
+  if (entries.length > 0) {
+    const assignments = entries.map(([key]) => `${key} = ?`).join(", ");
+    const values = entries.map(([, value]) => value);
+    const result = await knex.raw(
+      `UPDATE vendor_bill
+       SET ${assignments}, updated_at = NOW()
+       WHERE id = ? AND deleted_at IS NULL
+       RETURNING *`,
+      [...values, bill.id]
+    );
+    updated = (result.rows[0] ?? bill) as VendorBillRow;
+  }
 
   const lines = await service.listVendorBillLines(
     { vendor_bill_id: bill.id },
