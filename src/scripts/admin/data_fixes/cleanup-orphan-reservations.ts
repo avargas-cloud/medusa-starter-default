@@ -22,6 +22,13 @@ interface DriftRow {
   delta: number;
 }
 
+interface RawMirrorDriftRow {
+  location_id: string;
+  variant_sku: string | null;
+  reserved: number;
+  raw_value: string | null;
+}
+
 function resolveMode(args: string[]): Mode {
   if (args.includes("apply") || args.includes("--apply")) return "apply";
   if (process.env.CLEANUP_APPLY === "1" || process.env.CLEANUP_APPLY === "true") return "apply";
@@ -131,12 +138,44 @@ export default async function cleanupOrphanReservations({ container, args }: Exe
     if (drift.length > 25) console.log(`   ... and ${drift.length - 25} more`);
   }
 
+  const rawMirrorDriftResult = await pgConnection.raw(
+    `
+    SELECT
+      il.location_id,
+      pv.sku AS variant_sku,
+      il.reserved_quantity::int AS reserved,
+      il.raw_reserved_quantity->>'value' AS raw_value
+    FROM inventory_level il
+    LEFT JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = il.inventory_item_id
+      AND pvii.deleted_at IS NULL
+    LEFT JOIN product_variant pv ON pv.id = pvii.variant_id
+    WHERE il.deleted_at IS NULL
+      AND COALESCE(il.raw_reserved_quantity->>'value', '') <> il.reserved_quantity::int::text
+    ORDER BY il.updated_at DESC
+    `,
+    []
+  );
+
+  const rawMirrorDrift = rawMirrorDriftResult.rows as RawMirrorDriftRow[];
+  console.log(`\n📊 raw_reserved_quantity mirror drift rows: ${rawMirrorDrift.length}`);
+  if (rawMirrorDrift.length > 0) {
+    console.table(
+      rawMirrorDrift.slice(0, 25).map(d => ({
+        sku: d.variant_sku ?? "(unknown)",
+        location: d.location_id.slice(-12),
+        reserved: d.reserved,
+        raw: d.raw_value ?? "(null)",
+      }))
+    );
+    if (rawMirrorDrift.length > 25) console.log(`   ... and ${rawMirrorDrift.length - 25} more`);
+  }
+
   if (mode === "dry-run") {
     console.log(`\n✅ Dry-run complete. Run with \`yarn medusa exec ./src/scripts/admin/data_fixes/cleanup-orphan-reservations.ts apply\` (positional) or \`CLEANUP_APPLY=1 yarn medusa exec ...\` to execute.\n`);
     return;
   }
 
-  if (orphans.length === 0 && drift.length === 0) {
+  if (orphans.length === 0 && drift.length === 0 && rawMirrorDrift.length === 0) {
     console.log(`\n✅ Nothing to fix. Database is clean.\n`);
     return;
   }
@@ -159,6 +198,12 @@ export default async function cleanupOrphanReservations({ container, args }: Exe
     `
     UPDATE inventory_level il
     SET reserved_quantity = COALESCE(sub.qty, 0),
+        raw_reserved_quantity = jsonb_build_object(
+          'value',
+          COALESCE(sub.qty, 0)::text,
+          'precision',
+          20
+        ),
         updated_at = NOW()
     FROM (
       SELECT inventory_item_id, location_id, SUM(quantity)::int AS qty
@@ -178,6 +223,12 @@ export default async function cleanupOrphanReservations({ container, args }: Exe
     `
     UPDATE inventory_level il
     SET reserved_quantity = 0,
+        raw_reserved_quantity = jsonb_build_object(
+          'value',
+          '0',
+          'precision',
+          20
+        ),
         updated_at = NOW()
     WHERE il.deleted_at IS NULL
       AND il.reserved_quantity::int <> 0
@@ -191,6 +242,23 @@ export default async function cleanupOrphanReservations({ container, args }: Exe
     []
   );
 
+  await pgConnection.raw(
+    `
+    UPDATE inventory_level il
+    SET raw_reserved_quantity = jsonb_build_object(
+          'value',
+          il.reserved_quantity::int::text,
+          'precision',
+          20
+        ),
+        updated_at = NOW()
+    WHERE il.deleted_at IS NULL
+      AND COALESCE(il.raw_reserved_quantity->>'value', '') <> il.reserved_quantity::int::text
+    `,
+    []
+  );
+
   console.log(`   ✓ Recomputed reserved_quantity across ${drift.length} inventory_level rows`);
+  console.log(`   ✓ Synced raw_reserved_quantity across ${rawMirrorDrift.length} inventory_level rows`);
   console.log(`\n✅ Cleanup complete.\n`);
 }

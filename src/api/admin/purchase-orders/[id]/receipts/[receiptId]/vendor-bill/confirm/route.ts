@@ -22,6 +22,7 @@ import { getPurchaseOrdersService } from "../../../../../_lib/service-resolver";
 
 interface VendorBillRow {
   id: string;
+  number: string | null;
   status: string;
   purchase_order_id: string;
   purchase_order_receipt_id: string;
@@ -218,13 +219,16 @@ export async function POST(
     )
   );
 
-  // 8. Assign sequential VB-XXXX number (drafts have no number until confirm)
-  const seqResult = await knex.raw(
-    `SELECT nextval('custom_vendor_bill_seq') AS seq`
-  );
-  const vbNumber = `VB-${(seqResult.rows[0] as { seq: string | number }).seq}`;
+  // 8. Keep the draft's VB-XXXX number; backfill only legacy unnumbered drafts.
+  let vbNumber = bill.number;
+  if (!vbNumber) {
+    const seqResult = await knex.raw(
+      `SELECT nextval('custom_vendor_bill_seq') AS seq`
+    );
+    vbNumber = `VB-${(seqResult.rows[0] as { seq: string | number }).seq}`;
+  }
 
-  // 9. Mark bill as confirmed with sequential number
+  // 9. Mark bill as confirmed.
   await service.updateVendorBills(
     { id: bill.id },
     {

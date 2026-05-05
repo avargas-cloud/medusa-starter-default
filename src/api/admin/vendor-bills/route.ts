@@ -52,6 +52,7 @@ interface VendorBillListRow {
   tariff_amount_cents: number;
   line_count: string; // bigint from COUNT — convert to number
   total_landed_cents: string | null; // bigint from SUM — convert to number
+  billed_receipt_ids: string[] | null;
   po_number: string | null;
   receipt_number: string | null;
   vendor_name: string | null;
@@ -115,6 +116,7 @@ export async function GET(
        vb.created_at,
        COALESCE(agg.line_count, 0)         AS line_count,
        COALESCE(agg.total_landed_cents, 0) AS total_landed_cents,
+       COALESCE(agg.billed_receipt_ids, ARRAY[]::text[]) AS billed_receipt_ids,
        po."number"                         AS po_number,
        por."number"                        AS receipt_number,
        po.vendor_name_snapshot              AS vendor_name
@@ -126,8 +128,13 @@ export async function GET(
      LEFT JOIN LATERAL (
        SELECT
          COUNT(*)                                        AS line_count,
-         SUM(vbl.landed_unit_cost_cents * vbl.qty)       AS total_landed_cents
+         SUM(vbl.landed_unit_cost_cents * vbl.qty)       AS total_landed_cents,
+         ARRAY_AGG(DISTINCT porl.purchase_order_receipt_id)
+           FILTER (WHERE porl.purchase_order_receipt_id IS NOT NULL)
+                                                        AS billed_receipt_ids
        FROM vendor_bill_line vbl
+       LEFT JOIN purchase_order_receipt_line porl
+         ON porl.id = vbl.receipt_line_id AND porl.deleted_at IS NULL
        WHERE vbl.vendor_bill_id = vb.id AND vbl.deleted_at IS NULL
      ) agg ON TRUE
      WHERE ${whereStr}
