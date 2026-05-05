@@ -24,7 +24,10 @@ export async function runPendingDispatchPass(
         SELECT id
           FROM qb_order_pipeline
          WHERE step IN ('estimate_cancel', 'credit_memo_mod', 'transfer_customer', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'credit_memo', 'void_credit_memo', 'void_invoice', 'void_sales_receipt', 'void_check', 'payment', 'apply_payment')
-           AND status = 'pending'
+           AND (
+             status = 'pending'
+             OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= NOW())
+           )
          ORDER BY COALESCE(updated_at, created_at) ASC
          LIMIT 20
          FOR UPDATE SKIP LOCKED

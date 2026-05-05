@@ -486,10 +486,10 @@ export async function failPipelineRow(
  * Retry-aware variant of `failPipelineRow` (Section 1.5.15 Phase 3b).
  *
  * Routes transient errors (3170 lock, 3210 EditSeq, network, parser failures,
- * etc.) to `status='error'` with backoff via `next_retry_at`, so the
+ * etc.) to `status='failed'` with backoff via `next_retry_at`, so the
  * consolidator picks them up again on the next tick. Permanent errors and
- * exhausted retry budgets still land at `status='failed'` — preserves the
- * legacy terminal state for downstream cascade-fail logic.
+ * exhausted retry budgets also land at `status='failed'`, but with
+ * `next_retry_at = NULL`.
  *
  * Returns the decision so callers can branch (e.g., suppress cascade-fail
  * when the row is going to retry).
@@ -506,13 +506,14 @@ export async function failOrRetryPipelineRow(
     hasFailedPermanent: false,
   });
   const pool = getDbPool();
-  if (decision.newStatus === "error") {
+  if (decision.nextRetryAt) {
     await pool.query(
       `UPDATE qb_order_pipeline
-           SET status        = 'error',
+           SET status        = 'failed',
                retry_count   = $2,
                error         = $3,
                next_retry_at = $4,
+               failed_at     = NOW(),
                confirmed_at  = NULL,
                updated_at    = NOW()
          WHERE id = $1`,
@@ -532,5 +533,5 @@ export async function failOrRetryPipelineRow(
       [rowId, decision.newRetries, error]
     );
   }
-  return decision;
+  return { ...decision, newStatus: "failed" as const };
 }

@@ -824,10 +824,10 @@ export async function pollSubmittedRows(
           `${LOG_PREFIX} ❌ Row ${row.id} (${row.step}) → ${decision.newStatus} (${decision.classification.class}, retry ${decision.newRetries}): ${errMsg}`
         );
 
-        // Cascade-fail / skip-dependent logic only fires on TERMINAL failure.
-        // Transient errors going to status='error' will retry on next tick;
-        // dependents must keep waiting, not be cascaded down.
-        if (decision.newStatus !== "failed") {
+        // Cascade-fail / skip-dependent logic only fires on terminal failure.
+        // Retryable failures are also `failed`, but carry `next_retry_at`;
+        // dependents must keep waiting until the retry budget is exhausted.
+        if (decision.nextRetryAt) {
           continue;
         }
 

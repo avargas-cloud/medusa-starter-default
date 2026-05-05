@@ -13,10 +13,9 @@ const LOG_PREFIX = "[QB-CONSOLIDATOR]";
  *
  * Replaces the old `status='failed'`-direct branches that gave 3170-class
  * lock errors no chance to retry (incident PO #34, 2026-05-01). Transient
- * errors now park at `status='error'` with a backoff timestamp; the consolidator
- * picks them up on the next tick once `next_retry_at <= NOW()`. Permanent
- * errors and exhausted retries still land at `status='failed'` (legacy
- * terminal — preserved for downstream UI/consumer compatibility).
+ * errors now park at `status='failed'` with a backoff timestamp; the
+ * consolidator picks them up once `next_retry_at <= NOW()`. Permanent errors
+ * and exhausted retries use the same `failed` status with `next_retry_at = NULL`.
  */
 async function applyCustomerPipelineFailure(
   pool: ReturnType<typeof getDbPool>,
@@ -31,14 +30,15 @@ async function applyCustomerPipelineFailure(
     hasFailedPermanent: false,
   });
 
-  if (decision.newStatus === "error") {
+  if (decision.nextRetryAt) {
     await pool
       .query(
         `UPDATE qb_order_pipeline
-            SET status        = 'error',
+            SET status        = 'failed',
                 retry_count   = $2,
                 error         = $3,
                 next_retry_at = $4,
+                failed_at     = NOW(),
                 updated_at    = NOW()
           WHERE id = $1`,
         [rowId, decision.newRetries, errorMessage, decision.nextRetryAt]
@@ -59,7 +59,7 @@ async function applyCustomerPipelineFailure(
       )
       .catch(() => {});
   }
-  return decision;
+  return { ...decision, newStatus: "failed" as const };
 }
 
 export async function processCustomerPipelineRow(
@@ -258,7 +258,7 @@ export async function runCustomerPass(
        WHERE step = 'customer'
          AND (
            status = 'pending'
-           OR (status = 'error' AND (next_retry_at IS NULL OR next_retry_at <= NOW()))
+           OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= NOW())
          )
          AND reference_id IS NOT NULL
        ORDER BY COALESCE(updated_at, created_at) ASC
@@ -301,7 +301,7 @@ export async function runCustomerDataExtPass(
        WHERE step = 'customer_data_ext'
          AND (
            status = 'pending'
-           OR (status = 'error' AND (next_retry_at IS NULL OR next_retry_at <= NOW()))
+           OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= NOW())
          )
          AND reference_id IS NOT NULL
        ORDER BY COALESCE(updated_at, created_at) ASC
