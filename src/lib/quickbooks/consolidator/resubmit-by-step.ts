@@ -179,10 +179,17 @@ export async function resubmitByStep(
       case "apply_payment": {
         if (!row.reference_id) break;
         const applyPool = getDbPool();
+        const payloadRes = await applyPool.query(
+          `SELECT payload FROM qb_order_pipeline WHERE id = $1`,
+          [row.id]
+        );
+        const payload = payloadRes.rows[0]?.payload as
+          | Record<string, unknown>
+          | null;
         const { rows: appRows } = await applyPool.query(
           `SELECT payment_id, invoice_id, order_id, amount_applied
            FROM payment_application
-           WHERE payment_id = $1
+           WHERE (id = $1 OR payment_id = $1)
              AND (order_id = $2 OR $2 IS NULL)
              AND voided_at IS NULL
            LIMIT 1`,
@@ -199,10 +206,16 @@ export async function resubmitByStep(
           event: {
             name: "pos.payment.applied",
             data: {
-              payment_id: row.reference_id,
-              invoice_id: appRow.invoice_id ?? null,
+              payment_id: appRow.payment_id,
+              invoice_id:
+                (payload?.invoice_id as string | undefined) ??
+                appRow.invoice_id ??
+                null,
               order_id: appRow.order_id ?? row.order_id,
               amount_applied: appRow.amount_applied ?? 0,
+              application_id:
+                (payload?.application_id as string | undefined) ??
+                row.reference_id,
             },
           },
           container,

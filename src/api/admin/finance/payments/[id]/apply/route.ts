@@ -226,8 +226,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       try {
         await writePipelineRow({
           orderId: invoice.order_id,
-          referenceId: paymentId,
-          referenceType: "customer_payment",
+          referenceId: application.id,
+          referenceType: "payment_application",
           step: "apply_payment",
           status: "waiting",
           dependsOn: invoicePipelineRowId,
@@ -248,8 +248,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         } = require("../../../../../../lib/quickbooks/qb-pipeline");
         await enqueueApplyFin({
           orderId: invoice.order_id ?? null,
-          referenceId: paymentId,
-          referenceType: "payment",
+          referenceId: application.id,
+          referenceType: "payment_application",
           step: "apply_payment",
           status: "pending",
           payload: {

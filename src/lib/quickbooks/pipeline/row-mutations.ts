@@ -358,6 +358,7 @@ export async function requeueApplyPaymentWaiting(input: {
   referenceId: string;
   dependsOnRowId: string;
   medusaRefNumber?: string | null;
+  referenceType?: string | null;
 }): Promise<{ rowId: string | null; mode: "updated" | "inserted" | "noop" }> {
   const pool = getDbPool();
   const { rows: updated } = await pool.query(
@@ -403,13 +404,14 @@ export async function requeueApplyPaymentWaiting(input: {
   const { rows: inserted } = await pool.query(
     `INSERT INTO qb_order_pipeline
         (order_id, reference_id, reference_type, step, status, depends_on, medusa_ref_number)
-       VALUES ($1, $2, 'customer_payment', 'apply_payment', 'waiting', $3, $4)
+       VALUES ($1, $2, $5, 'apply_payment', 'waiting', $3, $4)
        RETURNING id`,
     [
       input.orderId,
       input.referenceId,
       input.dependsOnRowId,
       input.medusaRefNumber ?? null,
+      input.referenceType ?? "customer_payment",
     ]
   );
   return { rowId: inserted[0].id as string, mode: "inserted" };

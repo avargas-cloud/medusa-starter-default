@@ -543,7 +543,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             try {
               // Re-read invoice metadata inside the lock — a prior CREATE
               // may have written the txnId since we entered the queue.
-              const freshInvoice = await invoiceService.retrievePosInvoice(id);
+              const freshInvoice = await invoiceService.retrievePosInvoice(id, {
+                relations: ["items"],
+              });
               if (!freshInvoice) return;
 
               const freshTxnId =
@@ -600,13 +602,49 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 } = require("../../../../lib/quickbooks/qb-pipeline");
 
                 const qbConfig = await getQbConfig();
-                const activeItems = (parentOrder?.items || [])
+                const parentItemsByVariant = new Map<string, any>(
+                  (parentOrder?.items || [])
+                    .filter((item: any) => item.variant_id)
+                    .map((item: any) => [item.variant_id, item])
+                );
+                const activeItems = ((freshInvoice as any).items || [])
                   .filter((item: any) => (item.quantity ?? 0) > 0)
-                  .map((item: any) => ({
-                    ...item,
-                    unit_price: Number(item.unit_price || 0),
-                    subtotal: undefined,
-                  }));
+                  .map((item: any) => {
+                    const parentItem = item.variant_id
+                      ? parentItemsByVariant.get(item.variant_id)
+                      : null;
+                    return {
+                      ...(parentItem || {}),
+                      id: parentItem?.id ?? item.id,
+                      variant_id: item.variant_id,
+                      variant: parentItem?.variant ?? {
+                        id: item.variant_id,
+                        sku: item.sku,
+                        metadata: {},
+                      },
+                      title:
+                        parentItem?.title ||
+                        parentItem?.product_title ||
+                        item.description ||
+                        item.sku ||
+                        "",
+                      product_title:
+                        parentItem?.product_title ||
+                        parentItem?.title ||
+                        item.description ||
+                        item.sku ||
+                        "",
+                      quantity: Number(item.quantity || 0),
+                      unit_price: Number(item.unit_price || 0) / 100,
+                      subtotal: Number(item.total || 0) / 100,
+                      metadata: {
+                        ...(parentItem?.metadata || {}),
+                        sales_description:
+                          item.description ||
+                          parentItem?.metadata?.sales_description,
+                      },
+                    };
+                  });
 
                 // Fresh-resolve variant metadata: if a variant's quickbooks_id
                 // was added AFTER the order was created, re-query it here so
@@ -680,9 +718,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 const {
                   getEffectiveOrderDiscount,
                 } = require("../../../../lib/quickbooks/order-flow-core");
-                const discountTotal = getEffectiveOrderDiscount(parentOrder);
+                const invoiceDiscount = Number((freshInvoice as any).discount);
+                const discountTotal =
+                  Number.isFinite(invoiceDiscount) && invoiceDiscount > 0
+                    ? invoiceDiscount / 100
+                    : getEffectiveOrderDiscount(parentOrder);
                 if (discountTotal > 0) {
-                  const subtotal = Number(parentOrder?.subtotal || 0);
+                  const subtotal =
+                    Number((freshInvoice as any).subtotal || 0) / 100 ||
+                    Number(parentOrder?.subtotal || 0);
                   const pct =
                     subtotal > 0 ? (discountTotal / subtotal) * 100 : null;
                   buildQbOrderDiscountLines(discountTotal, pct).forEach(
@@ -691,7 +735,17 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 }
 
                 const shippingItem = buildShippingQbItem(
-                  parentOrder?.shipping_methods || [],
+                  (freshInvoice as any).shipping !== undefined &&
+                    (freshInvoice as any).shipping !== null
+                    ? Number((freshInvoice as any).shipping) > 0
+                      ? [
+                          {
+                            name: "Shipping",
+                            amount: Number((freshInvoice as any).shipping) / 100,
+                          },
+                        ]
+                      : []
+                    : parentOrder?.shipping_methods || [],
                   qbConfig.shippingItemId
                 );
                 if (shippingItem) qbItems.push(shippingItem);
@@ -774,6 +828,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   try {
                     await writePipelineRow({
                       orderId: invoice.order_id,
+                      referenceId: id,
+                      referenceType: "pos_invoice",
                       step: isSR ? "sales_receipt_update" : "invoice_update",
                       status: "failed",
                       error: `Line snapshot fetch failed: ${mErr.message}`,
@@ -796,6 +852,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 try {
                   await writePipelineRow({
                     orderId: invoice.order_id,
+                    referenceId: id,
+                    referenceType: "pos_invoice",
                     step: pipelineStep,
                     status: "pending",
                     qbTxnId: freshTxnId,
@@ -814,6 +872,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 const modPayload: any = {
                   txnId: freshTxnId,
                   items: qbItems,
+                  memo: freshInvoice.invoice_number
+                    ? `POS Invoice ${freshInvoice.invoice_number}`
+                    : undefined,
                   ...(salesRep ? { salesRep } : {}),
                   ...(salesTaxCode ? { salesTaxCode } : { taxExempt: true }),
                 };
@@ -833,6 +894,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   try {
                     await writePipelineRow({
                       orderId: invoice.order_id,
+                      referenceId: id,
+                      referenceType: "pos_invoice",
                       step: pipelineStep,
                       status: "failed",
                       error: modResult.error,
@@ -846,6 +909,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 try {
                   await writePipelineRow({
                     orderId: invoice.order_id,
+                    referenceId: id,
+                    referenceType: "pos_invoice",
                     step: pipelineStep,
                     status: "submitted",
                     bridgeOpId: modResult.data?.operationId || null,
@@ -937,7 +1002,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           paySyncStatus &&
           ["creating", "editing", "pending"].includes(paySyncStatus);
         if (payTxnId) {
-          // Already in QB → fetch + cache EditSequence in background
+          // Already in QB → fetch/cache EditSequence, then re-enqueue each
+          // payment application. This lets Manual Sync repair cases where the
+          // ReceivePayment exists but one invoice application was missed.
           (async () => {
             try {
               const {
@@ -964,6 +1031,31 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 logger.info(
                   `${LOG_PREFIX} ✅ Cached EditSeq for payment ${payTxnId}: ${editSeq}`
                 );
+              }
+
+              const {
+                writePipelineRow: enqueueExistingPayApply,
+              } = require("../../../../lib/quickbooks/qb-pipeline");
+              const refreshedPayment =
+                await financeService.retrieveCustomerPayment(id, {
+                  relations: ["applications"],
+                });
+              for (const app of refreshedPayment.applications || []) {
+                if (!app.invoice_id || app.voided_at) continue;
+                await enqueueExistingPayApply({
+                  orderId: app.order_id ?? null,
+                  referenceId: app.id,
+                  referenceType: "payment_application",
+                  step: "apply_payment",
+                  status: "pending",
+                  payload: {
+                    payment_id: refreshedPayment.id,
+                    invoice_id: app.invoice_id,
+                    order_id: app.order_id,
+                    amount_applied: Number(app.amount_applied),
+                    application_id: app.id,
+                  },
+                });
               }
             } catch (bgErr: any) {
               logger.warn(
@@ -1013,8 +1105,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 if (app.invoice_id) {
                   await enqueuePosPay({
                     orderId: app.order_id ?? null,
-                    referenceId: refreshedPayment.id,
-                    referenceType: "payment",
+                    referenceId: app.id,
+                    referenceType: "payment_application",
                     step: "apply_payment",
                     status: "pending",
                     payload: {
@@ -1022,6 +1114,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                       invoice_id: app.invoice_id,
                       order_id: app.order_id,
                       amount_applied: Number(app.amount_applied),
+                      application_id: app.id,
                     },
                   });
                 }

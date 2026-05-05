@@ -163,6 +163,7 @@ export async function updateInvoiceInQb(
         ? { qbTaxItemListid: payload.qbTaxItemListid }
         : {}),
       ...(payload.taxExempt === true ? { taxExempt: true } : {}),
+      ...(payload.memo !== undefined ? { memo: payload.memo } : {}),
       ...(payload.items && payload.items.length > 0
         ? { items: payload.items }
         : {}),

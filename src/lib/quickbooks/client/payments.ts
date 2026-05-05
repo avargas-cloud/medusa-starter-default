@@ -176,10 +176,13 @@ export async function fetchPaymentCurrentState(
     : [];
 
   const appliedToInvoices = appliedArr
-    .map((a) => ({
-      invoiceId: String(a?.TxnID || ""),
-      amount: parseFloat(String(a?.Amount ?? "0")) || 0,
-    }))
+    .map((a) => {
+      const rawAmount = parseFloat(String(a?.PaymentAmount ?? a?.Amount ?? "0"));
+      return {
+        invoiceId: String(a?.TxnID || ""),
+        amount: Number.isFinite(rawAmount) ? Math.abs(rawAmount) : 0,
+      };
+    })
     .filter((a) => a.invoiceId && a.amount > 0);
 
   return { editSequence: String(editSequence), appliedToInvoices };

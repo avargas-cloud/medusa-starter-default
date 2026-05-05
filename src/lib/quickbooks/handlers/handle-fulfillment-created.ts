@@ -40,9 +40,21 @@ export async function handleFulfillmentCreated(
   );
   logger.info(`${LOG_PREFIX} Fulfillment event data: ${JSON.stringify(data)}`);
 
+  const invoiceReferenceId = data.invoice_id || data.fulfillment_id || null;
+  const invoiceReferenceType = data.invoice_id
+    ? "pos_invoice"
+    : data.fulfillment_id
+      ? "fulfillment"
+      : null;
+  let invoiceMedusaRefNumber: string | null = null;
+
   // Coalesce rapid saves: if an invoice op is already in-flight, mark next_payload
   // and return — consolidator will re-submit after current op confirms.
-  const coalescedInv = await coalesceIfInFlight(orderId, null, "invoice");
+  const coalescedInv = await coalesceIfInFlight(
+    orderId,
+    invoiceReferenceId,
+    "invoice"
+  );
   if (coalescedInv) {
     logger.info(
       `${LOG_PREFIX} ⏸ Invoice in-flight for ${orderId} — coalesced as next submit`
@@ -235,13 +247,14 @@ export async function handleFulfillmentCreated(
   const pool = getDbPool();
   let memo: string | undefined;
   let invoiceShippingAmount: number | undefined;
+  let invoiceDiscountAmount: number | undefined;
 
   try {
-    let sql = `SELECT invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
+    let sql = `SELECT invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, discount FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
     let params: any[] = [data.fulfillment_id];
 
     if (data.invoice_id) {
-      sql = `SELECT invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping FROM pos_invoice WHERE id = $1 LIMIT 1`;
+      sql = `SELECT invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, discount FROM pos_invoice WHERE id = $1 LIMIT 1`;
       params = [data.invoice_id];
     }
 
@@ -251,10 +264,16 @@ export async function handleFulfillmentCreated(
       const seq = row.qb_ref_number || row.invoice_number;
       if (seq) {
         memo = `POS Invoice ${seq}`;
+        invoiceMedusaRefNumber = `INV-${row.invoice_number}`;
       }
       if (row.shipping !== undefined && row.shipping !== null) {
         // pos_invoice.shipping is stored in cents — convert to dollars for QB
         invoiceShippingAmount = Number(row.shipping) / 100;
+      }
+      if (row.discount !== undefined && row.discount !== null) {
+        // pos_invoice.discount is the invoice-level snapshot. For partial
+        // invoices this is intentionally different from order.discount_total.
+        invoiceDiscountAmount = Number(row.discount) / 100;
       }
     }
   } catch (e) {}
@@ -271,32 +290,48 @@ export async function handleFulfillmentCreated(
   // when the POS invoice carries its own discount/shipping snapshot.
   {
     const qbConfig = await getQbConfig();
-    const orderDiscountTotal = getEffectiveOrderDiscount(order);
+    const orderDiscountTotal =
+      invoiceDiscountAmount !== undefined
+        ? invoiceDiscountAmount
+        : getEffectiveOrderDiscount(order);
     const isPartialAgainstSo = linkedTxnId === qbSoTxnId && isPartial;
 
     const activeItems = (order.items || [])
       .filter((item: any) => {
-        if (isPartialAgainstSo) {
-          const fi = fulfillmentItems.find((i: any) => {
-            if (i.item_id && i.item_id === item.id) return true;
-            if (i.id && i.id === item.id) return true;
-            if (i.variant_id && i.variant_id === item.variant_id) return true;
-            if (i.sku && item.variant?.sku && i.sku === item.variant.sku)
-              return true;
-            return false;
-          });
-          if (!fi || fi.quantity <= 0) return false;
+        const fi = fulfillmentItems.find((i: any) => {
+          if (i.item_id && i.item_id === item.id) return true;
+          if (i.id && i.id === item.id) return true;
+          if (i.variant_id && i.variant_id === item.variant_id) return true;
+          if (i.sku && item.variant?.sku && i.sku === item.variant.sku)
+            return true;
+          return false;
+        });
+
+        if (fi) {
           item.fulfillment_quantity = fi.quantity;
-          return true;
+          item.fulfillment_unit_price = fi.unit_price;
+          item.fulfillment_total = fi.total;
+          return fi.quantity > 0;
+        }
+
+        if (isPartialAgainstSo) {
+          return false;
         }
         return (item.quantity ?? 0) > 0;
       })
       .map((item: any) => ({
         ...item,
         quantity: item.fulfillment_quantity ?? item.quantity,
-        unit_price: getFloat(item.unit_price),
+        unit_price:
+          item.fulfillment_unit_price !== undefined
+            ? getFloat(item.fulfillment_unit_price)
+            : getFloat(item.unit_price),
         subtotal:
-          item.subtotal !== undefined ? getFloat(item.subtotal) : undefined,
+          item.fulfillment_total !== undefined
+            ? getFloat(item.fulfillment_total)
+            : item.subtotal !== undefined
+              ? getFloat(item.subtotal)
+              : undefined,
       }));
 
     const productTaxableMap = await resolveProductTaxableMap(
@@ -404,7 +439,14 @@ export async function handleFulfillmentCreated(
 
   // Write "pending" pipeline row immediately so it appears in the UI before polling starts
   try {
-    await writePipelineRow({ orderId, step: "invoice", status: "pending" });
+    await writePipelineRow({
+      orderId,
+      referenceId: invoiceReferenceId,
+      referenceType: invoiceReferenceType,
+      step: "invoice",
+      status: "pending",
+      medusaRefNumber: invoiceMedusaRefNumber,
+    });
   } catch (pErr: any) {
     logger.warn(
       `${LOG_PREFIX} ⚠️ Could not write pre-flight pipeline row: ${pErr.message}`
@@ -433,9 +475,12 @@ export async function handleFulfillmentCreated(
     onSubmitted: async (operationId) => {
       await writePipelineRow({
         orderId,
+        referenceId: invoiceReferenceId,
+        referenceType: invoiceReferenceType,
         step: "invoice",
         status: "submitted",
         bridgeOpId: operationId,
+        medusaRefNumber: invoiceMedusaRefNumber,
       });
     },
   });
@@ -454,11 +499,12 @@ export async function handleFulfillmentCreated(
     try {
       await writePipelineRow({
         orderId,
-        referenceId: data.invoice_id || data.fulfillment_id || null,
-        referenceType: data.invoice_id ? "pos_invoice" : "fulfillment",
+        referenceId: invoiceReferenceId,
+        referenceType: invoiceReferenceType,
         step: "invoice",
         status: "failed",
         error: result.error,
+        medusaRefNumber: invoiceMedusaRefNumber,
       });
     } catch (pErr: any) {
       logger.warn(
@@ -473,13 +519,14 @@ export async function handleFulfillmentCreated(
     try {
       await writePipelineRow({
         orderId,
-        referenceId: data.invoice_id || data.fulfillment_id || null,
-        referenceType: data.invoice_id ? "pos_invoice" : "fulfillment",
+        referenceId: invoiceReferenceId,
+        referenceType: invoiceReferenceType,
         step: "invoice",
         status: result.operationId && !result.txnId ? "submitted" : "confirmed",
         bridgeOpId: result.operationId || null,
         qbTxnId: result.txnId || null,
         qbRefNumber: result.refNumber || null,
+        medusaRefNumber: invoiceMedusaRefNumber,
       });
     } catch (pErr: any) {
       logger.warn(

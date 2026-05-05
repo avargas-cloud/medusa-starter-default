@@ -209,6 +209,7 @@ export async function updateSalesReceiptInQb(
           ? { qbTaxItemListid: payload.qbTaxItemListid }
           : {}),
         ...(payload.taxExempt === true ? { taxExempt: true } : {}),
+        ...(payload.memo !== undefined ? { memo: payload.memo } : {}),
         ...(payload.paymentMethod
           ? { PaymentMethod: payload.paymentMethod }
           : {}),

@@ -84,7 +84,8 @@ export async function handlePosPaymentApplied({
     return;
   }
 
-  const { payment_id, invoice_id, order_id, amount_applied } = event.data;
+  const { payment_id, invoice_id, order_id, amount_applied, application_id } =
+    event.data;
   if (!payment_id || !invoice_id || !order_id) {
     logger.warn(
       `${LOG_PREFIX} Missing required fields in event data: ${JSON.stringify(event.data)}`
@@ -120,6 +121,10 @@ export async function handlePosPaymentApplied({
   const medusaPayRef = (payment as any).display_id
     ? `PAY-${(payment as any).display_id}`
     : null;
+  const applyReferenceId = application_id || payment_id;
+  const applyReferenceType = application_id
+    ? "payment_application"
+    : "customer_payment";
 
   // ── Source dependency check ──────────────────────────────────────────────
   // The cpay carries the source TxnID (a Payment TxnID for type='payment',
@@ -137,7 +142,8 @@ export async function handlePosPaymentApplied({
     if (sourceRowId) {
       const { mode } = await requeueApplyPaymentWaiting({
         orderId: order_id,
-        referenceId: payment_id,
+        referenceId: applyReferenceId,
+        referenceType: applyReferenceType,
         dependsOnRowId: sourceRowId,
         medusaRefNumber: medusaPayRef,
       });
@@ -156,8 +162,8 @@ export async function handlePosPaymentApplied({
     try {
       await writePipelineRow({
         orderId: order_id,
-        referenceId: payment_id,
-        referenceType: "customer_payment",
+        referenceId: applyReferenceId,
+        referenceType: applyReferenceType,
         step: "apply_payment",
         status: "failed",
         medusaRefNumber: medusaPayRef,
@@ -183,8 +189,8 @@ export async function handlePosPaymentApplied({
     );
     await writePipelineRow({
       orderId: order_id,
-      referenceId: payment_id,
-      referenceType: "customer_payment",
+      referenceId: applyReferenceId,
+      referenceType: applyReferenceType,
       step: "apply_payment",
       status: "failed",
       medusaRefNumber: medusaPayRef,
@@ -252,7 +258,8 @@ export async function handlePosPaymentApplied({
     if (invoicePipelineId) {
       const { mode } = await requeueApplyPaymentWaiting({
         orderId: order_id,
-        referenceId: payment_id,
+        referenceId: applyReferenceId,
+        referenceType: applyReferenceType,
         dependsOnRowId: invoicePipelineId,
         medusaRefNumber: medusaPayRef,
       });
@@ -267,8 +274,8 @@ export async function handlePosPaymentApplied({
     );
     await writePipelineRow({
       orderId: order_id,
-      referenceId: payment_id,
-      referenceType: "customer_payment",
+      referenceId: applyReferenceId,
+      referenceType: applyReferenceType,
       step: "apply_payment",
       status: "failed",
       medusaRefNumber: medusaPayRef,
@@ -282,8 +289,8 @@ export async function handlePosPaymentApplied({
   try {
     await writePipelineRow({
       orderId: order_id,
-      referenceId: payment_id,
-      referenceType: "customer_payment",
+      referenceId: applyReferenceId,
+      referenceType: applyReferenceType,
       step: "apply_payment",
       status: "pending",
       medusaRefNumber: medusaPayRef,
@@ -317,8 +324,8 @@ export async function handlePosPaymentApplied({
     );
     await writePipelineRow({
       orderId: order_id,
-      referenceId: payment_id,
-      referenceType: "customer_payment",
+      referenceId: applyReferenceId,
+      referenceType: applyReferenceType,
       step: "apply_payment",
       status: "failed",
       medusaRefNumber: medusaPayRef,
@@ -349,8 +356,8 @@ export async function handlePosPaymentApplied({
   const onQueued = async (opId: string) => {
     await writePipelineRow({
       orderId: order_id,
-      referenceId: payment_id,
-      referenceType: "customer_payment",
+      referenceId: applyReferenceId,
+      referenceType: applyReferenceType,
       step: "apply_payment",
       status: "submitted",
       medusaRefNumber: medusaPayRef,
@@ -388,8 +395,8 @@ export async function handlePosPaymentApplied({
       try {
         await writePipelineRow({
           orderId: order_id,
-          referenceId: payment_id,
-          referenceType: "customer_payment",
+          referenceId: applyReferenceId,
+          referenceType: applyReferenceType,
           step: "apply_payment",
           status: "failed",
           medusaRefNumber: medusaPayRef,
@@ -417,8 +424,8 @@ export async function handlePosPaymentApplied({
       }
       await writePipelineRow({
         orderId: order_id,
-        referenceId: payment_id,
-        referenceType: "customer_payment",
+        referenceId: applyReferenceId,
+        referenceType: applyReferenceType,
         step: "apply_payment",
         status: "confirmed",
         medusaRefNumber: medusaPayRef,
@@ -429,8 +436,8 @@ export async function handlePosPaymentApplied({
       logger.info(`${LOG_PREFIX} ✅ Dry-run or instant success reported.`);
       await writePipelineRow({
         orderId: order_id,
-        referenceId: payment_id,
-        referenceType: "customer_payment",
+        referenceId: applyReferenceId,
+        referenceType: applyReferenceType,
         step: "apply_payment",
         status: "confirmed",
         medusaRefNumber: medusaPayRef,
