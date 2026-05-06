@@ -27,6 +27,20 @@ import {
 import { handleOrderPlaced } from "./handle-order-placed";
 import { LOG_PREFIX, getQbConfig, getFloat } from "./utils";
 
+function normalizePosInvoicePayloadItems(items: any[]): any[] {
+  return items.map((item) => ({
+    ...item,
+    unit_price:
+      item.unit_price !== undefined && item.unit_price !== null
+        ? Number(item.unit_price) / 100
+        : item.unit_price,
+    total:
+      item.total !== undefined && item.total !== null
+        ? Number(item.total) / 100
+        : item.total,
+  }));
+}
+
 export async function handleFulfillmentCreated(
   data: any,
   orderModule: any,
@@ -152,7 +166,9 @@ export async function handleFulfillmentCreated(
   let fulfillmentAmount = order.total || 0;
   let isPartial = false;
   let fulfillmentItems: any[] =
-    data.items && Array.isArray(data.items) ? data.items : [];
+    data.items && Array.isArray(data.items)
+      ? normalizePosInvoicePayloadItems(data.items)
+      : [];
 
   if (data.fulfillment_id && fulfillmentItems.length === 0) {
     try {
