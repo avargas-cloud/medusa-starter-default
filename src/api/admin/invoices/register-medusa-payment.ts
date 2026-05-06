@@ -5,7 +5,8 @@
  * Called from POST /admin/invoices and POST /admin/invoices/:id/payments.
  *
  * Guards:
- *   - Skips if payment_method === 'credit' (web payment already in Medusa — don't duplicate)
+ *   - Skips store-credit/credit-memo methods (already represented in the ledger/QB;
+ *     creating a new Medusa capture would inflate the order paid amount)
  *   - Non-fatal: all errors are caught/logged — Finance Ledger is the source of truth
  *
  * Returns Medusa payment.id if captured, null if skipped or failed.
@@ -17,6 +18,12 @@ const MODULE_PAYMENT = "payment"; // Modules.PAYMENT
 const KEY_QUERY = "query"; // ContainerRegistrationKeys.QUERY
 const KEY_REMOTE_LINK = "remoteLink"; // ContainerRegistrationKeys.REMOTE_LINK
 const SYSTEM_PROVIDER = "pp_system_default";
+
+const MEDUSA_CAPTURE_EXCLUDED_METHODS = new Set([
+  "credit",
+  "credit_memo",
+  "store_credit",
+]);
 
 export async function registerMedusaPayment(
   scope: any,
@@ -31,8 +38,9 @@ export async function registerMedusaPayment(
   const { order_id, amount, payment_method, invoice_total } = opts;
   const currency_code = opts.currency_code ?? "usd";
 
-  // Guard: 'credit' reuses an existing web payment already in Medusa — skip to avoid duplicates
-  if (payment_method === "credit") return null;
+  // Guard: applying customer credit is not new money. Do not create a native
+  // Medusa capture for credit memo/store-credit applications.
+  if (MEDUSA_CAPTURE_EXCLUDED_METHODS.has(payment_method)) return null;
 
   // ⚠️  Medusa payment module stores amounts in DOLLARS (major units), not cents.
   // Our finance ledger uses cents. Convert before every Medusa call.
