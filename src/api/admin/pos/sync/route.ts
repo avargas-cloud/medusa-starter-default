@@ -14,10 +14,16 @@ import {
 import { withQbSerialized } from "../../../../lib/quickbooks/qb-serializer";
 import { FINANCE_MODULE } from "../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../modules/invoices";
+import { PURCHASE_ORDERS_MODULE } from "../../../../modules/purchase-orders";
+import type PurchaseOrdersModuleService from "../../../../modules/purchase-orders/service";
 // 1.5.4: handleDraftOrderCreated import removed — pos/sync now enqueues
 // 'pending' rows for the consolidator's pending-dispatch pass.
 
 const LOG_PREFIX = "[POST /admin/pos/sync]";
+
+function poMemoNumber(poNumber: string): string {
+  return poNumber.replace(/^PO-/i, "");
+}
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const logger = req.scope.resolve(ContainerRegistrationKeys.LOGGER);
@@ -42,6 +48,112 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // that used it have been replaced with pipeline enqueue.
 
     switch (type) {
+      case "purchase_order": {
+        if (action === "void") {
+          return res.status(400).json({
+            error: "Use the Purchase Order void route for PO voids.",
+          });
+        }
+
+        const service = req.scope.resolve(
+          PURCHASE_ORDERS_MODULE
+        ) as unknown as PurchaseOrdersModuleService;
+        const knex = (req.scope as any).resolve("__pg_connection__");
+
+        const [po] = (await service.listPurchaseOrders(
+          { id },
+          { take: 1, skip: 0 }
+        )) as Array<{
+          id: string;
+          number: string | null;
+          status: string;
+          vendor_id: string;
+          vendor_name_snapshot: string | null;
+          vendor_qb_list_id_snapshot: string | null;
+          ordered_at: string | Date | null;
+          expected_at: string | Date | null;
+          reference_number: string | null;
+          qb_purchase_order_list_id: string | null;
+          qb_edit_sequence: string | null;
+        }>;
+
+        if (!po) {
+          return res.status(404).json({ error: "Purchase Order not found" });
+        }
+        if (!po.qb_purchase_order_list_id) {
+          return res.status(400).json({
+            error: "Cannot force MOD: Purchase Order is not in QuickBooks.",
+          });
+        }
+        if (["draft", "cancelled", "voided"].includes(po.status)) {
+          return res.status(400).json({
+            error: `Cannot force MOD for PO status ${po.status}.`,
+          });
+        }
+
+        const lines = (await service.listPurchaseOrderLines(
+          { purchase_order_id: id },
+          { take: 1000, skip: 0, order: { line_order: "ASC", created_at: "ASC" } }
+        )) as Array<{
+          id: string;
+          sku_snapshot: string;
+          description_snapshot: string;
+          qty_ordered: number;
+          unit_cost_cents: number;
+          qb_item_list_id_snapshot: string | null;
+          qb_txn_line_id?: string | null;
+        }>;
+
+        const modPayload = {
+          is_mod: true,
+          txn_id: po.qb_purchase_order_list_id,
+          edit_sequence: po.qb_edit_sequence ?? undefined,
+          po_id: id,
+          po_number: po.number ?? undefined,
+          vendor_qb_list_id: po.vendor_qb_list_id_snapshot ?? null,
+          vendor_name: po.vendor_name_snapshot ?? po.vendor_id,
+          ordered_at: po.ordered_at ? new Date(po.ordered_at).toISOString() : null,
+          expected_at: po.expected_at ? new Date(po.expected_at).toISOString() : null,
+          memo: `Medusa PO ${poMemoNumber(po.number ?? id)}`,
+          reference_number: po.reference_number ?? null,
+          lines: lines.map((line) => ({
+            line_id: line.id,
+            qb_txn_line_id: line.qb_txn_line_id ?? null,
+            qb_item_list_id: line.qb_item_list_id_snapshot,
+            sku: line.sku_snapshot,
+            description: line.description_snapshot,
+            qty_ordered: line.qty_ordered,
+            unit_cost_cents: line.unit_cost_cents,
+          })),
+        };
+
+        const updated = await knex.raw(
+          `UPDATE qb_purchase_order_pipeline
+              SET status          = 'waiting',
+                  qb_operation_id = NULL,
+                  payload         = ?,
+                  retries         = 0,
+                  last_error      = NULL,
+                  next_retry_at   = NULL,
+                  synced_at       = NULL,
+                  updated_at      = NOW()
+            WHERE purchase_order_id = ?
+              AND deleted_at IS NULL`,
+          [JSON.stringify(modPayload), id]
+        );
+
+        if ((updated.rowCount ?? 0) === 0) {
+          await service.createQbPurchaseOrderPipelines([
+            { purchase_order_id: id, status: "waiting", payload: modPayload },
+          ]);
+        }
+
+        return res.json({
+          success: true,
+          message: "Purchase Order MOD queued",
+        });
+      }
+
       case "estimate": {
         // Fetch the draft order
         const {
@@ -165,93 +277,21 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
               const freshTxnId = getEstimateTxnId(freshOrder.metadata || {});
 
               if (freshTxnId) {
-                // ── EDIT path ──
                 const {
-                  buildQbItems,
-                  buildQbOrderDiscountLines,
-                } = require("../../../../lib/quickbooks/order-flow-core");
-                const {
-                  updateEstimateInQb,
-                } = require("../../../../lib/quickbooks/client/estimates");
-                const {
-                  cacheEditSequence,
+                  writePipelineRow: enqueueEstimateMod,
                 } = require("../../../../lib/quickbooks/qb-pipeline");
-
-                const activeItems = (freshOrder.items || [])
-                  .filter((item: any) => (item.quantity ?? 0) > 0)
-                  .map((item: any) => ({
-                    ...item,
-                    unit_price: Number(item.unit_price || 0),
-                    subtotal: undefined,
-                  }));
-
-                const qbItems = buildQbItems(activeItems, freshOrder.metadata);
-
-                const {
-                  getEffectiveOrderDiscount,
-                } = require("../../../../lib/quickbooks/order-flow-core");
-                const discountTotal = getEffectiveOrderDiscount(freshOrder);
-                if (discountTotal > 0) {
-                  const subtotal = Number(freshOrder.subtotal || 0);
-                  const pct =
-                    subtotal > 0 ? (discountTotal / subtotal) * 100 : null;
-                  buildQbOrderDiscountLines(discountTotal, pct).forEach(
-                    (l: any) => qbItems.push(l)
-                  );
-                }
-
-                const hasTax = freshOrder.tax_total && freshOrder.tax_total > 0;
-                const salesRep = parseSalesRepInitials(
-                  freshOrder.metadata?.sales_rep
-                );
-
-                logger.info(
-                  `${LOG_PREFIX} Estimate already exists (${freshTxnId}) — running EstimateMod with ${qbItems.length} items`
-                );
-
-                const modResult = await updateEstimateInQb({
-                  txnId: freshTxnId,
-                  items: qbItems,
-                  ...(hasTax ? {} : { taxExempt: true }),
-                  ...(salesRep ? { salesRep } : {}),
+                await enqueueEstimateMod({
+                  orderId: id,
+                  step: "estimate",
+                  status: "pending",
+                  qbTxnId: freshTxnId,
+                  medusaRefNumber:
+                    (freshOrder.metadata as any)?.document_number ?? null,
+                  payload: { forceMod: true },
                 });
-
-                if (!modResult.success) {
-                  logger.error(
-                    `${LOG_PREFIX} ❌ Estimate Mod failed: ${modResult.error}`
-                  );
-                  return;
-                }
-
-                if (modResult.data?.operationId) {
-                  const {
-                    pollOperationResult,
-                  } = require("../../../../lib/quickbooks/client/core");
-                  const pollResult = await pollOperationResult(
-                    modResult.data.operationId
-                  );
-                  if (pollResult.editSequence) {
-                    await cacheEditSequence(
-                      "estimate",
-                      freshTxnId,
-                      pollResult.editSequence
-                    );
-                    const refreshed = await orderModule.retrieveOrder(id);
-                    await orderModule.updateOrders(id, {
-                      metadata: {
-                        ...(refreshed.metadata || {}),
-                        qb_estimate: {
-                          ...((refreshed.metadata?.qb_estimate as object) ||
-                            {}),
-                          edit_sequence: pollResult.editSequence,
-                        },
-                      },
-                    });
-                    logger.info(
-                      `${LOG_PREFIX} ✅ Estimate Mod confirmed — EditSeq=${pollResult.editSequence}`
-                    );
-                  }
-                }
+                logger.info(
+                  `${LOG_PREFIX} Estimate already exists (${freshTxnId}) — enqueued forced EstimateMod`
+                );
               } else {
                 // ── CREATE path ──
                 logger.info(
@@ -371,111 +411,21 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
               const freshSoTxnId = getSoTxnId(freshOrder.metadata || {});
 
               if (freshSoTxnId) {
-                // ── EDIT path ──
                 const {
-                  buildQbItems,
-                  buildShippingQbItem,
-                  buildQbOrderDiscountLines,
-                } = require("../../../../lib/quickbooks/order-flow-core");
-                const {
-                  updateSalesOrderInQb,
-                } = require("../../../../lib/quickbooks/client/sales-orders");
-                const {
-                  getQbConfig,
-                } = require("../../../../lib/quickbooks/handlers/utils");
-                const {
-                  cacheEditSequence,
+                  writePipelineRow: enqueueSalesOrderMod,
                 } = require("../../../../lib/quickbooks/qb-pipeline");
-                const {
-                  pollOperationResult,
-                } = require("../../../../lib/quickbooks/client/core");
-
-                const qbConfig = await getQbConfig();
-                const activeItems = (freshOrder.items || [])
-                  .filter((item: any) => (item.quantity ?? 0) > 0)
-                  .map((item: any) => ({
-                    ...item,
-                    unit_price: Number(item.unit_price || 0),
-                    subtotal: undefined,
-                  }));
-
-                const qbItems = buildQbItems(activeItems, freshOrder.metadata);
-
-                const {
-                  getEffectiveOrderDiscount,
-                } = require("../../../../lib/quickbooks/order-flow-core");
-                const discountTotal = getEffectiveOrderDiscount(freshOrder);
-                if (discountTotal > 0) {
-                  const subtotal = Number(freshOrder.subtotal || 0);
-                  const pct =
-                    subtotal > 0 ? (discountTotal / subtotal) * 100 : null;
-                  buildQbOrderDiscountLines(discountTotal, pct).forEach(
-                    (l: any) => qbItems.push(l)
-                  );
-                }
-
-                const shippingItem = buildShippingQbItem(
-                  freshOrder.shipping_methods || [],
-                  qbConfig.shippingItemId
-                );
-                if (shippingItem) qbItems.push(shippingItem);
-
-                const hasTax = freshOrder.tax_total && freshOrder.tax_total > 0;
-                const salesTaxCode = hasTax
-                  ? qbConfig.defaultSalesTaxCode
-                  : undefined;
-                const qbListId =
-                  (freshOrder.customer as any)?.metadata?.qb_list_id ||
-                  freshOrder.metadata?.qb_list_id;
-                const salesRep = parseSalesRepInitials(
-                  freshOrder.metadata?.sales_rep
-                );
-
-                logger.info(
-                  `${LOG_PREFIX} SO already exists (${freshSoTxnId}) — running SalesOrderMod with ${qbItems.length} items`
-                );
-
-                const modResult = await updateSalesOrderInQb({
-                  txnId: freshSoTxnId,
-                  ...(qbListId ? { customerId: qbListId } : {}),
-                  items: qbItems,
-                  ...(salesTaxCode ? { salesTaxCode } : { taxExempt: true }),
-                  ...(salesRep ? { salesRep } : {}),
+                await enqueueSalesOrderMod({
+                  orderId: id,
+                  step: "sales_order",
+                  status: "pending",
+                  qbTxnId: freshSoTxnId,
+                  medusaRefNumber:
+                    (freshOrder.metadata as any)?.document_number ?? null,
+                  payload: { forceMod: true },
                 });
-
-                if (!modResult.success) {
-                  logger.error(
-                    `${LOG_PREFIX} ❌ SO Mod failed: ${modResult.error}`
-                  );
-                  return;
-                }
-
-                if (modResult.data?.operationId) {
-                  const pollResult = await pollOperationResult(
-                    modResult.data.operationId
-                  );
-                  if (pollResult.editSequence) {
-                    await cacheEditSequence(
-                      "sales_order",
-                      freshSoTxnId,
-                      pollResult.editSequence
-                    );
-                    const refreshed = await orderModule.retrieveOrder(id);
-                    await orderModule.updateOrders(id, {
-                      metadata: {
-                        ...(refreshed.metadata || {}),
-                        qb_sales_order: {
-                          ...((refreshed.metadata?.qb_sales_order as object) ||
-                            {}),
-                          edit_sequence: pollResult.editSequence,
-                        },
-                      },
-                    });
-                    logger.info(
-                      `${LOG_PREFIX} ✅ SO Mod confirmed — EditSeq=${pollResult.editSequence}`
-                    );
-                  }
-                }
+                logger.info(
+                  `${LOG_PREFIX} SO already exists (${freshSoTxnId}) — enqueued forced SalesOrderMod`
+                );
               } else {
                 // ── CREATE path ──
                 logger.info(
@@ -879,48 +829,19 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   ...(salesTaxCode ? { salesTaxCode } : { taxExempt: true }),
                 };
 
-                const modResult = isSR
-                  ? await require("../../../../lib/quickbooks/client/sales-receipts").updateSalesReceiptInQb(
-                      modPayload
-                    )
-                  : await require("../../../../lib/quickbooks/client/invoices").updateInvoiceInQb(
-                      modPayload
-                    );
-
-                if (!modResult.success) {
-                  logger.error(
-                    `${LOG_PREFIX} ❌ ${isSR ? "Sales Receipt" : "Invoice"} Mod failed: ${modResult.error}`
-                  );
-                  try {
-                    await writePipelineRow({
-                      orderId: invoice.order_id,
-                      referenceId: id,
-                      referenceType: "pos_invoice",
-                      step: pipelineStep,
-                      status: "failed",
-                      error: modResult.error,
-                      qbTxnId: freshTxnId,
-                      medusaRefNumber,
-                    });
-                  } catch {}
-                  return;
-                }
-
-                try {
-                  await writePipelineRow({
-                    orderId: invoice.order_id,
-                    referenceId: id,
-                    referenceType: "pos_invoice",
-                    step: pipelineStep,
-                    status: "submitted",
-                    bridgeOpId: modResult.data?.operationId || null,
-                    qbTxnId: freshTxnId,
-                    medusaRefNumber,
-                  });
-                } catch {}
+                await writePipelineRow({
+                  orderId: invoice.order_id,
+                  referenceId: id,
+                  referenceType: "pos_invoice",
+                  step: pipelineStep,
+                  status: "pending",
+                  qbTxnId: freshTxnId,
+                  medusaRefNumber,
+                  payload: modPayload,
+                });
 
                 logger.info(
-                  `${LOG_PREFIX} ✅ ${isSR ? "Sales Receipt" : "Invoice"} ${freshTxnId} full sync queued (op: ${modResult.data?.operationId})`
+                  `${LOG_PREFIX} ✅ ${isSR ? "Sales Receipt" : "Invoice"} ${freshTxnId} full MOD enqueued`
                 );
               } else {
                 // ── CREATE path ── Intelligent routing: Invoice vs Sales Receipt
@@ -1289,50 +1210,31 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             error: "Only completed credit memos can be synced to QuickBooks.",
           });
 
-        const cmTxnId = creditMemo.metadata?.qb_txn_id as string | undefined;
+        const cmTxnId =
+          (creditMemo.qb_txn_id as string | undefined) ??
+          (creditMemo.metadata?.qb_txn_id as string | undefined);
         if (cmTxnId) {
-          // Already in QB → fetch + cache EditSequence in background
-          (async () => {
-            try {
-              const {
-                bridgeFetch,
-                pollRawOperationResult,
-              } = require("../../../../lib/quickbooks/client/core");
-              const {
-                cacheEditSequence,
-              } = require("../../../../lib/quickbooks/qb-pipeline");
-              const resp = await bridgeFetch(
-                "GET",
-                `/api/credit-memos/${cmTxnId}`
-              );
-              if (!resp?.operationId) return;
-              const raw = await pollRawOperationResult(resp.operationId);
-              const editSeq =
-                raw?.QBXML?.QBXMLMsgsRs?.CreditMemoQueryRs?.CreditMemoRet
-                  ?.EditSequence ||
-                raw?.QBXMLMsgsRs?.CreditMemoQueryRs?.CreditMemoRet
-                  ?.EditSequence ||
-                raw?.CreditMemoRet?.EditSequence;
-              if (editSeq) {
-                await cacheEditSequence(
-                  "credit_memo",
-                  cmTxnId,
-                  String(editSeq)
-                );
-                logger.info(
-                  `${LOG_PREFIX} ✅ Cached EditSeq for credit_memo ${cmTxnId}: ${editSeq}`
-                );
-              }
-            } catch (bgErr: any) {
-              logger.warn(
-                `${LOG_PREFIX} ⚠️ Could not refresh credit memo EditSeq: ${bgErr.message}`
-              );
-            }
-          })();
+          const {
+            writePipelineRow: enqueueCreditMemoMod,
+          } = require("../../../../lib/quickbooks/qb-pipeline");
+          await enqueueCreditMemoMod({
+            referenceId: id,
+            referenceType: "credit_memo",
+            step: "credit_memo_mod",
+            status: "pending",
+            qbTxnId: cmTxnId,
+            medusaRefNumber: creditMemo.credit_memo_number ?? null,
+            payload: {
+              memo: "Medusa POS Credit Memo",
+              salesRepRef: parseSalesRepInitials(
+                (creditMemo as any).sales_rep
+              ),
+            },
+          });
           return res.json({
             success: true,
             message:
-              "Credit Memo already in QuickBooks — EditSequence refresh queued",
+              "Credit Memo MOD enqueued — consolidator will process",
           });
         }
 

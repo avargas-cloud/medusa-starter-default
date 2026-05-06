@@ -15,8 +15,11 @@ import {
   closeSalesOrderInQb,
   reopenSalesOrderInQb,
 } from "../client/sales-orders";
-import { voidInvoiceInQb } from "../client/invoices";
-import { voidSalesReceiptInQb } from "../client/sales-receipts";
+import { updateInvoiceInQb, voidInvoiceInQb } from "../client/invoices";
+import {
+  updateSalesReceiptInQb,
+  voidSalesReceiptInQb,
+} from "../client/sales-receipts";
 import { voidCheckInQb } from "../client/checks";
 import { handleDraftOrderUpdated } from "../handlers/handle-draft-order-updated";
 import { handleFulfillmentCreated } from "../handlers/handle-fulfillment-created";
@@ -155,6 +158,48 @@ export async function resubmitByStep(
           container,
           logger
         );
+        break;
+      }
+
+      case "invoice_update":
+      case "sales_receipt_update": {
+        if (!row.reference_id) break;
+        const updatePool = getDbPool();
+        const updateRow = await updatePool.query(
+          `SELECT payload FROM qb_order_pipeline WHERE id = $1`,
+          [row.id]
+        );
+        const payload = (updateRow.rows[0]?.payload ?? {}) as Record<string, unknown>;
+        const txnId = (payload.txnId as string | undefined) ?? row.qb_txn_id ?? null;
+        if (!txnId) {
+          await failPipelineRow(row.id, `${row.step}: missing QB TxnID`);
+          break;
+        }
+        const modResult =
+          row.step === "sales_receipt_update"
+            ? await updateSalesReceiptInQb({ ...payload, txnId } as any)
+            : await updateInvoiceInQb({ ...payload, txnId } as any);
+
+        if (modResult.success && modResult.data?.operationId) {
+          await updatePool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted',
+                    bridge_op_id = $2,
+                    qb_txn_id = $3,
+                    submitted_at = NOW(),
+                    updated_at = NOW()
+              WHERE id = $1`,
+            [row.id, modResult.data.operationId, txnId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ ${row.step} ${row.id} submitted op=${modResult.data.operationId} txn=${txnId}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            modResult.error ?? `${row.step} update failed`
+          );
+        }
         break;
       }
 

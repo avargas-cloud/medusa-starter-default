@@ -15,6 +15,7 @@ export type PipelineStep =
   | "void_sales_receipt"
   | "void_sales_order"
   | "invoice_update"
+  | "sales_receipt_update"
   | "credit_memo_mod"
   | "void_credit_memo"
   | "void_check"
@@ -22,7 +23,10 @@ export type PipelineStep =
   | "transfer_customer"
   | "so_close"
   | "so_reopen"
-  | "vendor_bill_void";
+  | "vendor_bill_void"
+  | "purchase_order"
+  | "mod_purchase_order"
+  | "void_purchase_order";
 
 export type PipelineStatus =
   | "pending"
@@ -32,7 +36,11 @@ export type PipelineStatus =
   | "failed"
   | "skipped"
   | "waiting" // POS 1-hour delay window — cron will process when time arrives
-  | "manual"; // qb_skip=true — order intentionally excluded from QB auto-sync
+  | "manual" // qb_skip=true — order intentionally excluded from QB auto-sync
+  | "synced"
+  | "error"
+  | "cancelled"
+  | "voided";
 
 export interface WritePipelineRowInput {
   orderId?: string | null;

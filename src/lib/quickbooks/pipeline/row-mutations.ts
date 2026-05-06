@@ -97,6 +97,7 @@ export async function writePipelineRow(
                  bridge_op_id      = NULL,
                  qb_result         = NULL,
                  medusa_ref_number = COALESCE($3, medusa_ref_number),
+                 payload           = COALESCE($5::jsonb, payload),
                  retry_count       = CASE WHEN status = 'failed' THEN retry_count + 1 ELSE retry_count END
              WHERE step = $2 AND status IN ('submitted', 'confirmed', 'failed', 'skipped')
                AND (
@@ -109,6 +110,7 @@ export async function writePipelineRow(
         input.step,
         input.medusaRefNumber ?? null,
         input.referenceId ?? null,
+        input.payload ? JSON.stringify(input.payload) : null,
       ]
     );
     if (reactivated.length > 0) return reactivated[0].id as string;
