@@ -13,6 +13,7 @@ import { model } from "@medusajs/utils";
  *   synced     → qb_list_id populated, receipt.qb_synced_at set
  *   error      → bridge/QB returned an error; retries per next_retry_at
  *   cancelled  → receipt voided before sync completed
+ *   failed_permanent → retry budget exhausted; manual intervention required
  *
  * ItemReceipt semantics in QB: ItemReceiptAdd increases stock in QB AND
  * creates an accounts-payable entry against the vendor. This is the

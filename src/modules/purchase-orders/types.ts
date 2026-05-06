@@ -74,6 +74,7 @@ export const QB_PO_PIPELINE_STATUSES = [
   "synced",
   "error",
   "cancelled",
+  "failed_permanent",
 ] as const;
 
 export type QbPoPipelineStatus = (typeof QB_PO_PIPELINE_STATUSES)[number];

@@ -51,6 +51,7 @@ interface VendorBillDetailRow {
   created_at: string;
   updated_at: string;
   po_number: string | null;
+  po_qb_ref_number: string | null;
   receipt_number: string | null;
   vendor_name: string | null;
   receipt_received_at: string | null;
@@ -107,6 +108,7 @@ export async function GET(
        vb.created_at,
        vb.updated_at,
        po."number"                         AS po_number,
+       po.qb_purchase_order_txn_number      AS po_qb_ref_number,
        por."number"                        AS receipt_number,
        po.vendor_name_snapshot             AS vendor_name,
        por.received_at                     AS receipt_received_at,

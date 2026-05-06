@@ -155,9 +155,78 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     if (!fulfillmentItems.length) {
-      return res.status(400).json({
-        message:
-          "No unfulfilled order items matched the invoice — the order may already be fulfilled",
+      const existingFulfillmentRes = await pool.query<{
+        fulfillment_id: string;
+        delivered_at: Date | null;
+      }>(
+        `SELECT f.id AS fulfillment_id, f.delivered_at
+           FROM order_fulfillment ofu
+           JOIN fulfillment f ON f.id = ofu.fulfillment_id
+          WHERE ofu.order_id = $1
+            AND ofu.deleted_at IS NULL
+            AND f.deleted_at IS NULL
+            AND f.canceled_at IS NULL
+            AND EXISTS (
+              SELECT 1
+                FROM fulfillment_item fi
+                JOIN pos_invoice_item pii ON pii.invoice_id = $2
+                 AND pii.variant_id IS NOT NULL
+                 AND pii.deleted_at IS NULL
+                JOIN order_line_item oli ON oli.id = fi.line_item_id
+                 AND oli.variant_id = pii.variant_id
+               WHERE fi.fulfillment_id = f.id
+                 AND fi.deleted_at IS NULL
+            )
+          ORDER BY f.delivered_at DESC NULLS LAST, f.created_at DESC
+          LIMIT 1`,
+        [orderId, invoice_id]
+      );
+      const existingFulfillment = existingFulfillmentRes.rows[0];
+      if (!existingFulfillment) {
+        return res.status(400).json({
+          message:
+            "No unfulfilled order items matched the invoice — the order may already be fulfilled",
+        });
+      }
+
+      const { markOrderFulfillmentAsDeliveredWorkflow } =
+        await import("@medusajs/core-flows");
+      if (!existingFulfillment.delivered_at) {
+        await markOrderFulfillmentAsDeliveredWorkflow(req.scope).run({
+          input: { orderId, fulfillmentId: existingFulfillment.fulfillment_id },
+        });
+      }
+
+      const pickedUpAt = new Date().toISOString();
+      const existingMetadata = (orderData.metadata ?? {}) as Record<
+        string,
+        unknown
+      >;
+      const nextMetadata: Record<string, unknown> = {
+        ...existingMetadata,
+        picked_up_at: pickedUpAt,
+        picked_up_by: picked_up_by ?? existingMetadata.picked_up_by ?? null,
+      };
+      delete nextMetadata.pickup_pending;
+      delete nextMetadata.pickup_pending_invoice_id;
+      try {
+        await orderModule.updateOrders([
+          { id: orderId, metadata: nextMetadata },
+        ]);
+      } catch (metaErr: any) {
+        console.warn(
+          `[complete-pickup] metadata update warning: ${metaErr?.message}`
+        );
+      }
+      await pool.query(
+        `UPDATE pos_invoice SET fulfillment_id = $1 WHERE id = $2`,
+        [existingFulfillment.fulfillment_id, invoice_id]
+      );
+
+      return res.status(200).json({
+        fulfillment_id: existingFulfillment.fulfillment_id,
+        picked_up_at: pickedUpAt,
+        picked_up_by: nextMetadata.picked_up_by ?? null,
       });
     }
 
@@ -213,24 +282,165 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       }
     }
 
-    // ── Step 5: Create fulfillment via native workflow ──────────────────────
+    // ── Step 5: Create fulfillment ─────────────────────────────────────────
     const {
       createOrderFulfillmentWorkflow,
       markOrderFulfillmentAsDeliveredWorkflow,
     } = await import("@medusajs/core-flows");
 
-    const fulfillResult = await createOrderFulfillmentWorkflow(req.scope).run({
-      input: {
-        order_id: orderId,
-        items: fulfillmentItems,
-        location_id,
-        no_notification: true,
-        created_by: ((req as any).auth_context?.actor_id ?? "") as string,
-      },
-    });
+    let fulfillmentId: string | undefined;
+    try {
+      const fulfillResult = await createOrderFulfillmentWorkflow(req.scope).run({
+        input: {
+          order_id: orderId,
+          items: fulfillmentItems,
+          location_id,
+          no_notification: true,
+          created_by: ((req as any).auth_context?.actor_id ?? "") as string,
+        },
+      });
+      fulfillmentId = (fulfillResult.result as any)?.id;
+    } catch (workflowErr: any) {
+      console.warn(
+        `[complete-pickup] native fulfillment failed (${workflowErr?.message?.slice(0, 120)}), using force fallback`
+      );
 
-    const fulfillment = fulfillResult.result as any;
-    const fulfillmentId = fulfillment?.id;
+      const fulfillmentModule = req.scope.resolve(Modules.FULFILLMENT) as any;
+      const freshOrderData = await orderModule.retrieveOrder(orderId, {
+        relations: ["items", "shipping_address", "shipping_methods"],
+      });
+      const shippingMethod = freshOrderData?.shipping_methods?.[0];
+      const fallbackItems = fulfillmentItems.map((reqItem) => {
+        const orderItem = freshOrderData?.items?.find(
+          (item: any) => item.id === reqItem.id
+        );
+        const sku = orderItem?.variant_sku ?? orderItem?.sku ?? null;
+        return {
+          title: orderItem?.title ?? "Item",
+          sku,
+          barcode: orderItem?.variant_barcode ?? sku ?? "",
+          quantity: reqItem.quantity,
+          line_item_id: reqItem.id,
+        };
+      });
+
+      const dbProviders: string[] = [];
+      try {
+        const rows = await fulfillmentModule.listFulfillmentProviders(
+          {},
+          { take: 20 }
+        );
+        dbProviders.push(
+          ...(rows as any[]).map((provider: any) => provider.id).filter(Boolean)
+        );
+      } catch {
+        /* non-fatal */
+      }
+
+      const optionProvider = shippingMethod?.shipping_option?.provider_id;
+      const candidates = [
+        ...new Set(
+          [
+            "store-pickup_store-pickup",
+            "manual_manual",
+            optionProvider,
+            ...dbProviders,
+          ].filter(Boolean)
+        ),
+      ] as string[];
+
+      const deliveryAddress = freshOrderData?.shipping_address?.country_code
+        ? (() => {
+            const { id, created_at, updated_at, deleted_at, ...clean } =
+              freshOrderData.shipping_address as any;
+            return clean;
+          })()
+        : {
+            address_1: "2760 W 84th St Unit 4",
+            city: "Hialeah",
+            province: "FL",
+            postal_code: "33016",
+            country_code: "us",
+          };
+
+      let fallbackFulfillment: any;
+      for (const providerId of candidates) {
+        try {
+          fallbackFulfillment = await fulfillmentModule.createFulfillment({
+            location_id,
+            provider_id: providerId,
+            shipping_option_id: shippingMethod?.shipping_option_id ?? null,
+            items: fallbackItems,
+            delivery_address: deliveryAddress,
+            order: { id: orderId },
+            data: {},
+            labels: [],
+          });
+          break;
+        } catch (providerErr: any) {
+          console.warn(
+            `[complete-pickup] fallback provider ${providerId} failed: ${providerErr?.message?.slice(0, 80)}`
+          );
+        }
+      }
+
+      if (!fallbackFulfillment) {
+        fallbackFulfillment = await fulfillmentModule.createFulfillment({
+          location_id,
+          shipping_option_id: shippingMethod?.shipping_option_id ?? null,
+          items: fallbackItems,
+          delivery_address: deliveryAddress,
+          order: { id: orderId },
+          data: {},
+          labels: [],
+        });
+      }
+
+      let linkOk = false;
+      try {
+        await orderModule.registerFulfillment({
+          order_id: orderId,
+          reference: "fulfillment",
+          reference_id: fallbackFulfillment.id,
+          items: fulfillmentItems,
+        });
+        linkOk = true;
+      } catch (regErr: any) {
+        console.warn(
+          `[complete-pickup] registerFulfillment failed (${regErr?.message?.slice(0, 100)}), inserting order_fulfillment link`
+        );
+        try {
+          const { ulid } = await import("ulid");
+          await pool.query(
+            `INSERT INTO order_fulfillment (id, order_id, fulfillment_id, created_at, updated_at)
+             VALUES ($1, $2, $3, NOW(), NOW())
+             ON CONFLICT DO NOTHING`,
+            [`ordful_${ulid()}`, orderId, fallbackFulfillment.id]
+          );
+          linkOk = true;
+        } catch (linkErr: any) {
+          console.error(
+            `[complete-pickup] order_fulfillment link failed: ${linkErr?.message}`
+          );
+        }
+      }
+
+      if (!linkOk) {
+        try {
+          await fulfillmentModule.softDeleteFulfillments([
+            fallbackFulfillment.id,
+          ]);
+        } catch {
+          /* swallow */
+        }
+        throw new Error(
+          `Fulfillment ${fallbackFulfillment.id} created but could not be linked to order ${orderId}`
+        );
+      }
+
+      fulfillmentId = fallbackFulfillment.id;
+    }
+
     if (!fulfillmentId) {
       throw new Error("Fulfillment creation returned no id");
     }

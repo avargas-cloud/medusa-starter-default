@@ -54,6 +54,7 @@ interface VendorBillListRow {
   total_landed_cents: string | null; // bigint from SUM — convert to number
   billed_receipt_ids: string[] | null;
   po_number: string | null;
+  po_qb_ref_number: string | null;
   receipt_number: string | null;
   vendor_name: string | null;
   created_at: string;
@@ -118,6 +119,7 @@ export async function GET(
        COALESCE(agg.total_landed_cents, 0) AS total_landed_cents,
        COALESCE(agg.billed_receipt_ids, ARRAY[]::text[]) AS billed_receipt_ids,
        po."number"                         AS po_number,
+       po.qb_purchase_order_txn_number      AS po_qb_ref_number,
        por."number"                        AS receipt_number,
        po.vendor_name_snapshot              AS vendor_name
      FROM vendor_bill vb

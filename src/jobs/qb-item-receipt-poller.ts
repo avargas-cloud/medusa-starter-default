@@ -52,6 +52,7 @@ type BridgeStatus = {
     error?: string;
     txnId?: string;
     listId?: string;
+    refNumber?: string;
     result?: unknown;
   };
 };
@@ -121,6 +122,16 @@ const extractTxnId = (data: BridgeStatus): string | null => {
     (op.result as any)?.QBXMLMsgsRs ??
     {};
   return msgs?.ItemReceiptAddRs?.ItemReceiptRet?.TxnID ?? null;
+};
+
+const extractRefNumber = (data: BridgeStatus): string | null => {
+  const op = data.operation;
+  if (op?.refNumber) return op.refNumber;
+  const msgs =
+    (op?.result as any)?.QBXML?.QBXMLMsgsRs ??
+    (op?.result as any)?.QBXMLMsgsRs ??
+    {};
+  return msgs?.ItemReceiptAddRs?.ItemReceiptRet?.RefNumber ?? null;
 };
 
 export default async function qbItemReceiptPoller(container: MedusaContainer) {
@@ -273,31 +284,35 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
         continue;
       }
 
+      const refNumber = extractRefNumber(data);
+
       // Mark pipeline row synced
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
             SET status = 'synced',
                 qb_list_id = ?,
+                qb_txn_number = COALESCE(?, qb_txn_number),
                 synced_at = NOW(),
                 updated_at = NOW()
           WHERE id = ?`,
-        [txnId, row.id]
+        [txnId, refNumber, row.id]
       );
 
       // Back-fill QB data on the receipt header
       await knex.raw(
         `UPDATE purchase_order_receipt
             SET qb_item_receipt_list_id = ?,
+                qb_item_receipt_txn_number = COALESCE(?, qb_item_receipt_txn_number),
                 qb_synced_at = NOW(),
                 status = CASE WHEN status = 'pending' THEN 'applied' ELSE status END,
                 updated_at = NOW()
           WHERE id = ?`,
-        [txnId, row.purchase_order_receipt_id]
+        [txnId, refNumber, row.purchase_order_receipt_id]
       );
 
       resolved++;
       logger.info(
-        `${TAG} receipt ${row.purchase_order_receipt_id} synced → QB TxnID=${txnId}`
+        `${TAG} receipt ${row.purchase_order_receipt_id} synced → QB TxnID=${txnId}${refNumber ? ` Ref=${refNumber}` : ""}`
       );
     } catch (err: any) {
       logger.warn(`${TAG} poll failed for row ${row.id}: ${err.message}`);
