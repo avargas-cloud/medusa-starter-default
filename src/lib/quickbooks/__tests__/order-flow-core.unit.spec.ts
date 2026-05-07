@@ -126,25 +126,34 @@ describe("getEffectiveOrderDiscount", () => {
 });
 
 describe("buildQbItems", () => {
-  it("marks QB service items as noSite from qb_item_type metadata", () => {
+  it("marks QB service items as noSite from product qb_item_type metadata", () => {
     const [item] = buildQbItems([
       {
         title: "Assembly Panels",
         quantity: 1,
         unit_price: 2100,
+        product_id: "prod_service",
         variant: {
           sku: "Services:Assembly-Panels",
+          product_id: "prod_service",
           metadata: {
             quickbooks_id: "80000001-TEST",
-            qb_item_type: "Service",
           },
         },
       },
-    ]);
+    ] as any, undefined, {
+      prod_service: {
+        taxable: true,
+        metadata: {
+          qb_item_type: "Service",
+        },
+      },
+    });
 
     expect(item.productId).toBe("80000001-TEST");
     expect(item.qbItemType).toBe("Service");
     expect(item.noSite).toBe(true);
+    expect(item.taxable).toBe(false);
   });
 
   it("does not mark inventory items as noSite from qb_item_type metadata", () => {
@@ -165,6 +174,7 @@ describe("buildQbItems", () => {
 
     expect(item.qbItemType).toBe("Inventory");
     expect(item.noSite).toBeUndefined();
+    expect(item.taxable).toBeUndefined();
   });
 });
 

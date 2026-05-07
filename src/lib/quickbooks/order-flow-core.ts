@@ -100,6 +100,9 @@ export interface MedusaOrderForQb {
       sku?: string;
       metadata?: Record<string, any>;
     };
+    product?: {
+      metadata?: Record<string, any>;
+    };
     title?: string;
     product_title?: string;
     quantity: number;
@@ -111,6 +114,13 @@ export interface MedusaOrderForQb {
   tax_total?: number; // in cents (Medusa v2) — 0 = tax-exempt order
   discount_total?: number; // in cents — total discount applied to the order (for order-level promos)
 }
+
+type ProductQbInfo =
+  | boolean
+  | {
+      taxable: boolean;
+      metadata?: Record<string, any>;
+    };
 
 export interface OrderFlowResult {
   enabled: boolean;
@@ -380,7 +390,7 @@ function sanitizeForQb(text: string): string {
 export async function resolveProductTaxableMap(
   pg: any,
   items: MedusaOrderForQb["items"]
-): Promise<Record<string, boolean>> {
+): Promise<Record<string, ProductQbInfo>> {
   const productIds = Array.from(
     new Set(
       (items || [])
@@ -391,11 +401,17 @@ export async function resolveProductTaxableMap(
   if (productIds.length === 0) return {};
   try {
     const r = await pg.raw(
-      `SELECT id, taxable FROM product WHERE id = ANY(?::text[])`,
+      `SELECT id, taxable, metadata FROM product WHERE id = ANY(?::text[])`,
       [productIds]
     );
     return Object.fromEntries(
-      (r.rows ?? []).map((row: any) => [row.id, row.taxable !== false])
+      (r.rows ?? []).map((row: any) => [
+        row.id,
+        {
+          taxable: row.taxable !== false,
+          metadata: row.metadata ?? {},
+        },
+      ])
     );
   } catch {
     return {};
@@ -412,7 +428,7 @@ export function buildQbItems(
    * line, so QB does not tax services / labor lines like INSTALL.
    * Default (undefined) preserves prior behavior — every line is taxable.
    */
-  productTaxableMap?: Record<string, boolean>
+  productTaxableMap?: Record<string, ProductQbInfo>
 ): QbOrderItem[] {
   const productLines = (items || [])
     .filter((item) => item.variant?.metadata?.quickbooks_id)
@@ -430,23 +446,39 @@ export function buildQbItems(
       // Service / non-inventory items must NOT carry InventorySiteRef (QB
       // error 3140). Flag explicitly via variant metadata so the bridge can
       // skip the tag on both *Add and *Mod operations.
-      const qbItemType = item.variant?.metadata?.qb_item_type;
+      const productIdMedusa =
+        (item.variant as any)?.product_id ?? (item as any).product_id;
+      const productInfo = productIdMedusa
+        ? productTaxableMap?.[productIdMedusa]
+        : undefined;
+      const productMetadata =
+        (item.product as any)?.metadata ??
+        (typeof productInfo === "object" ? productInfo.metadata : undefined) ??
+        {};
+      const qbItemType =
+        item.variant?.metadata?.qb_item_type ?? productMetadata.qb_item_type;
       const isNoSiteItem = !!(
         item.variant?.metadata?.quickbooks_is_service === true ||
         item.variant?.metadata?.quickbooks_is_service === "true" ||
         item.variant?.metadata?.quickbooks_no_site === true ||
         item.variant?.metadata?.quickbooks_no_site === "true" ||
+        productMetadata.quickbooks_is_service === true ||
+        productMetadata.quickbooks_is_service === "true" ||
+        productMetadata.quickbooks_no_site === true ||
+        productMetadata.quickbooks_no_site === "true" ||
         (typeof qbItemType === "string" &&
           NON_SITE_QB_ITEM_TYPES.has(qbItemType))
       );
       // Resolve per-line tax flag from the optional product map. When the
       // map is missing or has no entry for this product, default to taxable
       // (true) — preserves legacy behavior.
-      const productIdMedusa =
-        (item.variant as any)?.product_id ?? (item as any).product_id;
       const lineTaxable =
-        productTaxableMap && productIdMedusa
-          ? productTaxableMap[productIdMedusa] !== false
+        isNoSiteItem
+          ? false
+          : productTaxableMap && productIdMedusa
+          ? typeof productInfo === "object"
+            ? productInfo.taxable !== false
+            : productInfo !== false
           : true;
       return {
         _sortOrder:
