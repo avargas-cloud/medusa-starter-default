@@ -3,6 +3,10 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { handlePosPaymentVoided } from "../../../../../../lib/quickbooks/handlers/handle-pos-payment-voided";
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../../modules/invoices";
+import {
+  getAppliedInvoiceTotal,
+  getNum,
+} from "../../../../invoices/payment-balance";
 
 /**
  * POST /admin/finance/payments/:id/void
@@ -81,20 +85,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             paid_at: new Date(),
           });
 
-          const allInvoicePayments = await invoiceService.listInvoicePayments({
-            invoice_id: app.invoice_id,
-          });
-          const totalInvoicePaid = allInvoicePayments.reduce(
-            (sum: number, p: any) => sum + Number(p.amount),
-            0
+          const totalInvoicePaid = await getAppliedInvoiceTotal(
+            req.scope,
+            app.invoice_id
           );
           const invoice = await invoiceService.retrievePosInvoice(
             app.invoice_id
           );
-          const balanceDue = Math.max(
-            0,
-            Number(invoice.total) - totalInvoicePaid
-          );
+          const balanceDue = Math.max(0, getNum(invoice.total) - totalInvoicePaid);
           const newStatus =
             totalInvoicePaid <= 0
               ? "issued"

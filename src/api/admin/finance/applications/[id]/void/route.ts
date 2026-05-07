@@ -3,6 +3,10 @@ import { Modules } from "@medusajs/utils";
 
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../../modules/invoices";
+import {
+  getAppliedInvoiceTotal,
+  getNum,
+} from "../../../../invoices/payment-balance";
 
 /**
  * POST /admin/finance/applications/:id/void
@@ -102,17 +106,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         });
 
         // Recalculate invoice totals
-        const allInvoicePayments = await invoiceService.listInvoicePayments({
-          invoice_id: application.invoice_id,
-        });
-        const totalInvoicePaid = allInvoicePayments.reduce(
-          (sum: number, p: any) => sum + Number(p.amount),
-          0
+        const totalInvoicePaid = await getAppliedInvoiceTotal(
+          req.scope,
+          application.invoice_id
         );
-        const balanceDue = Math.max(
-          0,
-          Number(invoice.total) - totalInvoicePaid
-        );
+        const balanceDue = Math.max(0, getNum(invoice.total) - totalInvoicePaid);
         const newInvoiceStatus = balanceDue <= 0 ? "paid" : "partial"; // Or possibly 'issued' if 0
 
         await invoiceService.updatePosInvoices(

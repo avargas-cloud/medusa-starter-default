@@ -51,7 +51,7 @@ export const syncCustomersToMeiliStep = createStep(
           "metadata",
           "created_at",
           "updated_at",
-          "customer_groups.name",
+          "groups.name",
         ],
         pagination: { take: 50000 },
       });
@@ -63,7 +63,7 @@ export const syncCustomersToMeiliStep = createStep(
       const docs = customers.map((c: any) => {
         const meta = (c.metadata as Record<string, any>) ?? {};
         const groupNames: string[] =
-          c.customer_groups?.map((g: any) => g.name) ?? [];
+          c.groups?.map((g: any) => g.name) ?? [];
         const price_level =
           meta.qb_price_level ??
           meta.price_level ??

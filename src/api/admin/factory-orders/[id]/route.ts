@@ -40,6 +40,28 @@ interface QbCatalogServiceLike {
   retrieveQbVendor: (id: string) => Promise<QbVendorLike | null>;
 }
 
+async function resolveVendorSnapshot(
+  req: AuthenticatedMedusaRequest,
+  vendorId: string
+): Promise<{ name: string; qb_list_id: string | null }> {
+  try {
+    const qbCatalog = req.scope.resolve(
+      "quickbooks_catalog"
+    ) as unknown as QbCatalogServiceLike;
+    const vendor = await qbCatalog.retrieveQbVendor(vendorId);
+    return {
+      name:
+        vendor?.company_name ??
+        vendor?.full_name ??
+        vendor?.name ??
+        vendorId,
+      qb_list_id: vendor?.qb_list_id ?? null,
+    };
+  } catch {
+    return { name: vendorId, qb_list_id: null };
+  }
+}
+
 async function resolveUserBrief(
   req: AuthenticatedMedusaRequest,
   userId: string | null | undefined
@@ -84,6 +106,7 @@ interface FoHeader {
   expected_at?: Date | string | null;
   memo?: string | null;
   reference_number?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 async function loadFo(
@@ -319,9 +342,19 @@ export async function PATCH(
     });
   }
 
+  const vendorSnapshot =
+    body.vendor_id !== undefined
+      ? await resolveVendorSnapshot(req, body.vendor_id)
+      : null;
+
   const headerUpdate: Record<string, unknown> = { id };
   if (bodyPoStatus !== undefined) headerUpdate.po_status = bodyPoStatus ?? null;
-  if (body.vendor_id !== undefined) headerUpdate.vendor_id = body.vendor_id;
+  if (body.vendor_id !== undefined) {
+    headerUpdate.vendor_id = body.vendor_id;
+    headerUpdate.vendor_name_snapshot = vendorSnapshot?.name ?? body.vendor_id;
+    headerUpdate.vendor_list_id_snapshot =
+      vendorSnapshot?.qb_list_id ?? null;
+  }
   // stock_location_id intentionally NOT patchable — always China Warehouse
   if (body.ordered_at !== undefined)
     headerUpdate.ordered_at = body.ordered_at ? new Date(body.ordered_at) : null;
@@ -334,6 +367,11 @@ export async function PATCH(
     headerUpdate.shipping_method = bodyShippingMethod ?? null;
   if (bodyPaymentTerms !== undefined)
     headerUpdate.payment_terms = bodyPaymentTerms ?? null;
+  if (body.metadata !== undefined) {
+    headerUpdate.metadata = body.metadata
+      ? { ...(existing.metadata ?? {}), ...body.metadata }
+      : null;
+  }
   if (body.linked_order_ids !== undefined) {
     headerUpdate.linked_order_ids = body.linked_order_ids?.length
       ? JSON.stringify(body.linked_order_ids)

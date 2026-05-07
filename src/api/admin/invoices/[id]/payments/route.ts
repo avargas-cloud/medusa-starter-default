@@ -14,20 +14,8 @@ import { handlePosPaymentCreated } from "../../../../../lib/quickbooks/handlers/
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
+import { getAppliedInvoiceTotal, getNum } from "../../payment-balance";
 import { registerMedusaPayment } from "../../register-medusa-payment";
-
-function getNum(val: any): number {
-  if (val === null || val === undefined) return 0;
-  if (typeof val === "number") return val;
-  if (typeof val === "string") return Number(val);
-  if (typeof val === "object") {
-    if ("toNumber" in val && typeof val.toNumber === "function")
-      return val.toNumber();
-    if ("numeric" in val) return Number(val.numeric);
-    if ("value" in val) return Number(val.value);
-  }
-  return Number(val) || 0;
-}
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const id = req.params.id!;
@@ -173,10 +161,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const allPayments = await invoiceService.listInvoicePayments({
       invoice_id: id,
     });
-    const totalPaid = allPayments.reduce(
-      (sum: number, p: any) => sum + getNum(p.amount),
-      0
-    );
+    const totalPaid = await getAppliedInvoiceTotal(req.scope, id);
     const balanceDue = Math.max(0, getNum(invoice.total) - totalPaid);
     const newStatus = balanceDue <= 0 ? "paid" : "partial";
 

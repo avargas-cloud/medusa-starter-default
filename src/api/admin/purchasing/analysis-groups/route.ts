@@ -155,22 +155,42 @@ async function assertNoCategoryConflicts(
   const existing = await db.query<{
     product_id: string;
     product_title: string;
+    sku: string;
     group_title: string;
   }>(
     `
-    SELECT gp.product_id, p.title AS product_title, g.title AS group_title
-    FROM purchasing_analysis_group_product gp
+    WITH candidate_skus AS (
+      SELECT
+        p.id AS product_id,
+        p.title AS product_title,
+        pv.sku
+      FROM product p
+      JOIN product_variant pv
+        ON pv.product_id = p.id
+       AND pv.deleted_at IS NULL
+       AND pv.sku IS NOT NULL
+       AND btrim(pv.sku) <> ''
+      WHERE p.deleted_at IS NULL
+        AND p.id = ANY($2::text[])
+    )
+    SELECT
+      candidate_skus.product_id,
+      candidate_skus.product_title,
+      candidate_skus.sku,
+      g.title AS group_title
+    FROM candidate_skus
+    JOIN product_variant existing_variant
+      ON existing_variant.sku = candidate_skus.sku
+     AND existing_variant.deleted_at IS NULL
+    JOIN purchasing_analysis_group_product gp
+      ON gp.product_id = existing_variant.product_id
+     AND gp.deleted_at IS NULL
     JOIN purchasing_analysis_group g
       ON g.id = gp.group_id
      AND g.deleted_at IS NULL
      AND g.is_active = true
-    JOIN product p
-      ON p.id = gp.product_id
-     AND p.deleted_at IS NULL
-    WHERE gp.deleted_at IS NULL
-      AND g.category = $1
-      AND gp.product_id = ANY($2::text[])
-      ${groupFilter}
+     AND g.category = $1
+     ${groupFilter}
     LIMIT 1
     `,
     params
@@ -180,7 +200,7 @@ async function assertNoCategoryConflicts(
   if (!row) return { ok: true };
   return {
     ok: false,
-    message: `"${row.product_title}" is already in "${row.group_title}" for ${category}.`,
+    message: `SKU "${row.sku}" from "${row.product_title}" is already in "${row.group_title}" for ${category}.`,
   };
 }
 

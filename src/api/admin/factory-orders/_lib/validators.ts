@@ -2,6 +2,8 @@ import { z } from "zod";
 
 import { FACTORY_ORDER_STATUSES } from "../../../../modules/factory-orders/types";
 
+const metadataSchema = z.record(z.string(), z.unknown());
+
 // No qb_item_list_id_snapshot — factory orders have no QB integration
 export const draftLineInputSchema = z.object({
   product_variant_id: z.string().min(1, "product_variant_id is required"),
@@ -26,6 +28,7 @@ export const createDraftSchema = z.object({
   linked_order_ids: z.array(z.string()).max(100).nullish(),
   shipping_method: z.string().max(200).nullish(),
   payment_terms: z.string().max(200).nullish(),
+  metadata: metadataSchema.nullish(),
   shipping_cents: z.number().int().min(0).optional().default(0),
   tax_cents: z.number().int().min(0).optional().default(0),
   other_fees_cents: z.number().int().min(0).optional().default(0),
@@ -43,6 +46,7 @@ export const updateDraftSchema = z.object({
   linked_order_ids: z.array(z.string()).max(100).nullish(),
   shipping_method: z.string().max(200).nullish(),
   payment_terms: z.string().max(200).nullish(),
+  metadata: metadataSchema.nullish(),
   shipping_cents: z.number().int().min(0).optional(),
   tax_cents: z.number().int().min(0).optional(),
   other_fees_cents: z.number().int().min(0).optional(),

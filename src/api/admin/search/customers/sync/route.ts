@@ -66,6 +66,18 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       });
     }
 
+    if (!force) {
+      return res.json({
+        success: true,
+        synced: 0,
+        status: "drift_detected",
+        message: "Customer index drift detected",
+        reason: drift.reason,
+        dbCount: drift.dbCount,
+        meiliCount: drift.meiliCount,
+      });
+    }
+
     const { result } = await syncCustomersWorkflow(req.scope).run();
     const synced =
       typeof result?.synced === "number"

@@ -7,6 +7,7 @@ import { resolveTaxListid } from "../../../../../lib/quickbooks/resolve-tax-list
 import { QbSyncLogger } from "../../../../../lib/quickbooks/qb-sync-logger";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
+import { getAppliedInvoiceTotal } from "../../payment-balance";
 
 /**
  * POST /admin/invoices/:id/update-tax
@@ -88,14 +89,7 @@ export async function POST(
   const newUntaxedTotal = subtotal + shipping;
 
   // ── 4. Load existing payments & recalculate balance ────────────────────────
-  const payments = await invoiceService
-    .listInvoicePayments({ invoice_id: id })
-    .catch(() => [] as any[]);
-
-  const totalPaid = payments.reduce(
-    (sum: number, p: any) => sum + getNum(p.amount),
-    0
-  );
+  const totalPaid = await getAppliedInvoiceTotal(req.scope, id);
 
   const newBalanceDue = Math.max(0, newTotal - totalPaid);
   const newAmountPaid = Math.min(totalPaid, newTotal);

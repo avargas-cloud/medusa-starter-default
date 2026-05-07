@@ -42,6 +42,7 @@ export const CustomerHeader = ({
             </Heading>
             <SyncStatusButton
               entity="customers"
+              showForceSync
               onSyncComplete={() =>
                 queryClient.invalidateQueries({ queryKey: ["meili-customers"] })
               }

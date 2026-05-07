@@ -6,6 +6,7 @@ type SyncStatus =
   | "idle"
   | "loading"
   | "already_synced"
+  | "drift_detected"
   | "synced_now"
   | "error";
 
@@ -59,10 +60,16 @@ function useSyncAction(
         credentials: "include",
       });
       const data = await response.json();
+      if (!response.ok || data.success === false) {
+        throw new Error(data.message || data.error || "Sync failed");
+      }
 
       if (data.status === "already_synced") {
         setStatus("already_synced");
         setMessage("Up to Date");
+      } else if (data.status === "drift_detected") {
+        setStatus("drift_detected");
+        setMessage("Drift Found");
       } else {
         setStatus("synced_now");
         setMessage(
@@ -105,6 +112,8 @@ export const SyncStatusButton = ({
             "bg-transparent text-ui-fg-interactive hover:bg-ui-bg-base-hover border-transparent shadow-none",
           status === "synced_now" &&
             "bg-transparent text-blue-600 hover:bg-ui-bg-base-hover border-transparent shadow-none",
+          status === "drift_detected" &&
+            "bg-orange-50 text-orange-600 border-orange-200",
           status === "error" && "bg-red-50 text-red-600"
         )}
       >
@@ -114,6 +123,9 @@ export const SyncStatusButton = ({
           <CheckCircle className="text-green-500" />
         )}
         {status === "synced_now" && <CheckCircle className="text-blue-500" />}
+        {status === "drift_detected" && (
+          <ExclamationCircle className="text-orange-500" />
+        )}
         {status === "error" && <ExclamationCircle />}
         <span>{status === "idle" ? label : message}</span>
       </Button>

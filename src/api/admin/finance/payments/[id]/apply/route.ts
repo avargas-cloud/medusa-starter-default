@@ -5,20 +5,11 @@ import { writePipelineRow } from "../../../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../../modules/invoices";
 import { getDbPool } from "../../../../../utils/db-pool";
+import {
+  getAppliedInvoiceTotal,
+  getNum,
+} from "../../../../invoices/payment-balance";
 import { registerMedusaPayment } from "../../../../invoices/register-medusa-payment";
-
-function getNum(val: any): number {
-  if (val === null || val === undefined) return 0;
-  if (typeof val === "number") return val;
-  if (typeof val === "string") return Number(val);
-  if (typeof val === "object") {
-    if ("toNumber" in val && typeof val.toNumber === "function")
-      return val.toNumber();
-    if ("numeric" in val) return Number(val.numeric);
-    if ("value" in val) return Number(val.value);
-  }
-  return Number(val) || 0;
-}
 
 /**
  * POST /admin/finance/payments/:id/apply
@@ -90,7 +81,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // and never more than what the deposit has available. Anything left over stays on the
     // CustomerPayment as available credit for future invoices.
     const invoiceTotal = getNum((invoice as any).total);
-    const invoiceAmountPaid = getNum((invoice as any).amount_paid);
+    const invoiceAmountPaid = await getAppliedInvoiceTotal(
+      req.scope,
+      invoice_id
+    );
     const invoiceBalanceDue = Math.max(0, invoiceTotal - invoiceAmountPaid);
 
     if (invoiceBalanceDue <= 0) {
@@ -139,12 +133,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     });
 
     // 6. Recalculate invoice totals and status
-    const allInvoicePayments = await invoiceService.listInvoicePayments({
-      invoice_id: invoice_id,
-    });
-    const totalInvoicePaid = allInvoicePayments.reduce(
-      (sum: number, p: any) => sum + getNum(p.amount),
-      0
+    const totalInvoicePaid = await getAppliedInvoiceTotal(
+      req.scope,
+      invoice_id
     );
     const balanceDue = Math.max(0, getNum(invoice.total) - totalInvoicePaid);
     const newInvoiceStatus = balanceDue <= 0 ? "paid" : "partial";

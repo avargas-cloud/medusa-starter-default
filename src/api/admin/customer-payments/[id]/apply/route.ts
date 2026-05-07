@@ -7,6 +7,10 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
+import {
+  getAppliedInvoiceTotal,
+  getNum,
+} from "../../../invoices/payment-balance";
 import { registerMedusaPayment } from "../../../invoices/register-medusa-payment";
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
@@ -62,8 +66,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // Auto-clamp: never apply more than what the invoice still owes,
     // and never more than what the deposit has available. The unused portion
     // stays on the CustomerPayment as available credit for future invoices.
-    const invoiceTotal = Number((invoice as any).total ?? 0);
-    const invoiceAmountPaid = Number((invoice as any).amount_paid ?? 0);
+    const invoiceTotal = getNum((invoice as any).total);
+    const invoiceAmountPaid = await getAppliedInvoiceTotal(req.scope, invoice_id);
     const invoiceBalanceDue = Math.max(0, invoiceTotal - invoiceAmountPaid);
 
     if (invoiceBalanceDue <= 0) {
@@ -103,13 +107,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     });
 
     // 5. Update invoice balance from the authoritative invoice_payments sum
-    const allInvPayments = await invoiceService.listInvoicePayments({
-      invoice_id,
-    });
-    const totalPaid = allInvPayments.reduce(
-      (s: number, p: any) => s + Number(p.amount),
-      0
-    );
+    const totalPaid = await getAppliedInvoiceTotal(req.scope, invoice_id);
     const balanceDue = Math.max(0, invoiceTotal - totalPaid);
     await invoiceService.updatePosInvoices(
       { id: invoice_id },

@@ -47,6 +47,7 @@ export const FactoryOrder = model.define("factory_order", {
 
   shipping_method: model.text().nullable(),
   payment_terms: model.text().nullable(),
+  metadata: model.json().nullable(),
 
   created_by_user_id: model.text(),
 

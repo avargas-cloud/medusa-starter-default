@@ -151,6 +151,7 @@ export async function POST(
       linked_order_ids: body.linked_order_ids?.length
         ? JSON.stringify(body.linked_order_ids)
         : null,
+      metadata: body.metadata ?? null,
       subtotal_cents: totals.subtotal_cents,
       tax_cents: totals.tax_cents,
       shipping_cents: totals.shipping_cents,
