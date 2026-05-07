@@ -15,9 +15,9 @@ interface UpdateSingleCustomerInput {
  * Updates only the specified customer in MeiliSearch.
  * Used by auto-sync middleware for real-time updates.
  *
- * LOGIC (matches subscriber):
- * - customer_type: Preserved from metadata (business category)
- * - price_level: Calculated from customer groups (Wholesale/Retail)
+ * LOGIC (matches transformCustomer):
+ * - customer_type: metadata.qb_customer_type first, legacy customer_type fallback
+ * - price_level: metadata.qb_price_level first, legacy price_level fallback
  */
 
 const updateSingleCustomerStep = createStep(
@@ -58,14 +58,18 @@ const updateSingleCustomerStep = createStep(
         return new StepResponse({ success: false, customerId: "", email: "" });
       }
 
-      // 2. Calculate price_level from customer groups (SAME AS SUBSCRIBER)
+      const meta = (customer.metadata ?? {}) as Record<string, any>;
+
+      // 2. Resolve price level from QB metadata first. Groups are only a
+      // fallback for old customers that have not been normalized yet.
       const customerGroups = customer.groups?.map((g: any) => g.name) || [];
       const hasWholesaleGroup = customerGroups.includes("Wholesale");
-      const priceLevel = hasWholesaleGroup ? "Wholesale" : "Retail";
+      const priceLevel =
+        meta.qb_price_level || meta.price_level || (hasWholesaleGroup ? "Wholesale" : "Retail");
 
-      // 3. Get customer_type from metadata (PRESERVE IT, DON'T CHANGE)
+      // 3. Get customer_type from QB metadata first (matches customer detail UI)
       const existingCustomerType =
-        customer.metadata?.customer_type || "Standard";
+        meta.qb_customer_type || meta.customer_type || "Standard";
 
       // 4. Initialize MeiliSearch client
       const client = new MeiliSearch({
@@ -79,13 +83,16 @@ const updateSingleCustomerStep = createStep(
         email: customer.email,
         first_name: customer.first_name,
         last_name: customer.last_name,
-        company_name: customer.company_name || "",
+        company_name: meta.company_name || customer.company_name || "",
         phone: customer.phone,
         has_account: customer.has_account,
         customer_type: existingCustomerType,
         price_level: priceLevel,
         status: customer.has_account ? "Registered" : "Guest",
-        list_id: customer.metadata?.qb_list_id || "",
+        list_id: meta.qb_list_id || "",
+        acquisition_channel: meta.acquisition_channel || "",
+        default_tax: meta.default_tax || null,
+        tax_exempt_reason: meta.tax_exempt_reason || null,
         groups: customerGroups,
         updated_at: new Date(customer.updated_at).getTime(),
         created_at: new Date(customer.created_at).getTime(),

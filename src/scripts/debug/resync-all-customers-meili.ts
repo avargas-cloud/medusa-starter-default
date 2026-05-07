@@ -51,9 +51,10 @@ export default async function run({
   const docs = customers.map((c: any) => {
     const meta = (c.metadata as any) || {};
     const groupNames: string[] = c.groups?.map((g: any) => g.name) || [];
-    const price_level = groupNames.includes("Wholesale")
-      ? "Wholesale"
-      : "Retail";
+    const price_level =
+      meta.qb_price_level ||
+      meta.price_level ||
+      (groupNames.includes("Wholesale") ? "Wholesale" : "Retail");
     const customer_type =
       meta.qb_customer_type || meta.customer_type || "Standard";
 
@@ -62,7 +63,7 @@ export default async function run({
       email: c.email,
       first_name: c.first_name || "",
       last_name: c.last_name || "",
-      company_name: (c as any).company_name || "",
+      company_name: meta.company_name || (c as any).company_name || "",
       phone: c.phone || "",
       has_account: c.has_account,
       status: c.has_account ? "Registered" : "Guest",
@@ -70,13 +71,15 @@ export default async function run({
       acquisition_channel: meta.acquisition_channel || "",
       customer_type,
       price_level,
+      default_tax: meta.default_tax || null,
+      tax_exempt_reason: meta.tax_exempt_reason || null,
       groups: groupNames,
       updated_at: new Date(c.updated_at).getTime(),
       created_at: new Date(c.created_at).getTime(),
     };
   });
 
-  const CHUNK = 500;
+  const CHUNK = 100;
   let synced = 0;
   for (let i = 0; i < docs.length; i += CHUNK) {
     const chunk = docs.slice(i, i + CHUNK);

@@ -6,20 +6,26 @@
  * the subscriber) or when you need to force a refresh for specific IDs.
  *
  * Usage:
- *   yarn medusa exec ./src/scripts/fix/meili-sync-specific-customers.ts
+ *   CUSTOMER_IDS=cus_x,cus_y yarn medusa exec ./src/scripts/fix/meili-sync-specific-customers.ts
  */
 
 import { ExecArgs } from "@medusajs/framework/types";
 import { Modules } from "@medusajs/utils";
 import { MeiliSearch } from "meilisearch";
 
-const CUSTOMER_IDS = [
-  "cus_01KQA4QMDM4Z3S9JNAK789AAGZ",  // FLORIDA CONVERSION LLC (SR 27925 backfill)
-];
+const CUSTOMER_IDS = (process.env.CUSTOMER_IDS || "")
+  .split(",")
+  .map((id) => id.trim())
+  .filter(Boolean);
 
 export default async function meiliSyncSpecificCustomers({ container }: ExecArgs) {
   const logger = container.resolve("logger");
   const customerModule = container.resolve(Modules.CUSTOMER);
+
+  if (CUSTOMER_IDS.length === 0) {
+    logger.warn("\n⚠️  Set CUSTOMER_IDS=cus_x,cus_y to sync specific customers.\n");
+    return;
+  }
 
   const client = new MeiliSearch({
     host: process.env.MEILISEARCH_HOST!,
@@ -42,32 +48,30 @@ export default async function meiliSyncSpecificCustomers({ container }: ExecArgs
       }
 
       const meta = (customer.metadata as any) || {};
-      const existingCustomerType = meta.customer_type || "Standard";
-
-      let priceLevel = "Retail";
-      if (customer.groups?.length > 0) {
-        if (customer.groups.some((g: any) => g.name === "Wholesale")) {
-          priceLevel = "Wholesale";
-        }
-      }
-      // Also check metadata qb_price_level as fallback (Stigma has no group yet)
-      if (priceLevel === "Retail" && meta.qb_price_level === "Wholesale") {
-        priceLevel = "Wholesale";
-      }
+      const existingCustomerType =
+        meta.qb_customer_type || meta.customer_type || "Standard";
+      const groupNames = customer.groups?.map((g: any) => g.name) || [];
+      const priceLevel =
+        meta.qb_price_level ||
+        meta.price_level ||
+        (groupNames.includes("Wholesale") ? "Wholesale" : "Retail");
 
       const doc = {
         id: customer.id,
         email: (customer.email || "").toLowerCase(),
         first_name: customer.first_name || "",
         last_name: customer.last_name || "",
-        company_name: (customer as any).company_name || "",
+        company_name: meta.company_name || (customer as any).company_name || "",
         phone: customer.phone || "",
         has_account: customer.has_account,
         customer_type: existingCustomerType,
         price_level: priceLevel,
         status: customer.has_account ? "Registered" : "Guest",
         list_id: meta.qb_list_id || "",
-        groups: customer.groups?.map((g: any) => g.name) || [],
+        acquisition_channel: meta.acquisition_channel || "",
+        default_tax: meta.default_tax || null,
+        tax_exempt_reason: meta.tax_exempt_reason || null,
+        groups: groupNames,
         updated_at: new Date(customer.updated_at).getTime(),
         created_at: new Date(customer.created_at).getTime(),
       };

@@ -92,22 +92,22 @@ async function syncCustomer(customerId: string, container: any, logger: any) {
       return;
     }
 
-    const existingCustomerType =
-      (customer.metadata as any)?.customer_type || "Standard";
-
-    let priceLevel = "Retail";
-    if (customer.groups && customer.groups.length > 0) {
-      const groupNames = customer.groups.map((g: any) => g.name);
-      if (groupNames.includes("Wholesale")) priceLevel = "Wholesale";
-    }
-
     const meta = (customer.metadata as any) || {};
+
+    const existingCustomerType =
+      meta.qb_customer_type || meta.customer_type || "Standard";
+
+    const groupNames = customer.groups?.map((g: any) => g.name) || [];
+    const hasWholesaleGroup = groupNames.includes("Wholesale");
+    const priceLevel =
+      meta.qb_price_level || meta.price_level || (hasWholesaleGroup ? "Wholesale" : "Retail");
+
     const meiliDoc = {
       id: customer.id,
       email: (customer.email || "").toLowerCase(),
       first_name: customer.first_name || "",
       last_name: customer.last_name || "",
-      company_name: (customer as any).company_name || "",
+      company_name: meta.company_name || (customer as any).company_name || "",
       phone: customer.phone || "",
       has_account: customer.has_account,
       customer_type: existingCustomerType,
@@ -115,7 +115,9 @@ async function syncCustomer(customerId: string, container: any, logger: any) {
       status: customer.has_account ? "Registered" : "Guest",
       list_id: meta.qb_list_id || "",
       acquisition_channel: meta.acquisition_channel || "",
-      groups: customer.groups?.map((g: any) => g.name) || [],
+      default_tax: meta.default_tax || null,
+      tax_exempt_reason: meta.tax_exempt_reason || null,
+      groups: groupNames,
       updated_at: new Date(customer.updated_at).getTime(),
       created_at: new Date(customer.created_at).getTime(),
     };

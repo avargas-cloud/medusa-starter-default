@@ -6,8 +6,7 @@ import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
  * POST /admin/customers/resync-meili
  *
  * Resyncs all customers (or a batch) to MeiliSearch,
- * writing the correct groups, price_level, list_id, and status
- * based on actual Medusa customer group membership.
+ * writing the correct metadata-backed price_level, list_id, and status.
  *
  * Body params (optional):
  *   limit: number  (default 500, use 0 for all)
@@ -65,9 +64,10 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     const docs = customers.map((c: any) => {
       const meta = (c.metadata as any) || {};
       const groupNames: string[] = c.groups?.map((g: any) => g.name) || [];
-      const price_level = groupNames.includes("Wholesale")
-        ? "Wholesale"
-        : "Retail";
+      const price_level =
+        meta.qb_price_level ||
+        meta.price_level ||
+        (groupNames.includes("Wholesale") ? "Wholesale" : "Retail");
       const customer_type =
         meta.qb_customer_type || meta.customer_type || "Standard";
 
@@ -76,7 +76,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         email: c.email,
         first_name: c.first_name || "",
         last_name: c.last_name || "",
-        company_name: (c as any).company_name || "",
+        company_name: meta.company_name || (c as any).company_name || "",
         phone: c.phone || "",
         has_account: c.has_account,
         status: c.has_account ? "Registered" : "Guest",
@@ -84,6 +84,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         acquisition_channel: meta.acquisition_channel || "",
         customer_type,
         price_level,
+        default_tax: meta.default_tax || null,
+        tax_exempt_reason: meta.tax_exempt_reason || null,
         groups: groupNames,
         updated_at: new Date(c.updated_at).getTime(),
         created_at: new Date(c.created_at).getTime(),
