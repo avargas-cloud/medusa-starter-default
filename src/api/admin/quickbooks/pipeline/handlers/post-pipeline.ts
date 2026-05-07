@@ -547,7 +547,12 @@ export async function POST(
                             'quickbooks_id', pv.metadata->>'quickbooks_id',
                             'is_service', (pv.metadata->>'quickbooks_is_service' = 'true'
                                            OR pv.metadata->>'quickbooks_no_site' = 'true'
+                                           OR p.metadata->>'quickbooks_is_service' = 'true'
+                                           OR p.metadata->>'quickbooks_no_site' = 'true'
                                            OR pv.metadata->>'qb_item_type' IN
+                                               ('Service','NonInventory','NonInventoryPart',
+                                                'OtherCharge','Discount')
+                                           OR p.metadata->>'qb_item_type' IN
                                                ('Service','NonInventory','NonInventoryPart',
                                                 'OtherCharge','Discount'))
                           )
@@ -558,6 +563,7 @@ export async function POST(
                LEFT JOIN pos_credit_memo_item i
                  ON i.credit_memo_id = cm.id AND i.deleted_at IS NULL AND i.quantity > 0
                LEFT JOIN product_variant pv ON pv.id = i.variant_id
+               LEFT JOIN product p ON p.id = pv.product_id
                LEFT JOIN pos_invoice inv ON inv.id = cm.invoice_id
                LEFT JOIN customer c ON c.id = cm.customer_id
                WHERE cm.id = $1
@@ -614,6 +620,7 @@ export async function POST(
                 amount: Number((unitPriceDollars * Number(item.quantity)).toFixed(2)),
                 desc: item.description || item.title,
                 ...(isService ? { noSite: true } : {}),
+                ...(isService ? { taxable: false } : {}),
               };
             });
             const cmSalesRepRef = parseSalesRepInitials(cm.sales_rep);

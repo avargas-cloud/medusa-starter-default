@@ -27,7 +27,6 @@ export async function POST(
     req.scope.resolve(CREDIT_MEMO_MODULE);
   const inventoryService = req.scope.resolve(Modules.INVENTORY);
   const stockLocationService = req.scope.resolve(Modules.STOCK_LOCATION);
-  const productModule = req.scope.resolve(Modules.PRODUCT) as any;
   const financeService = req.scope.resolve(FINANCE_MODULE) as any;
 
   const { id } = req.params as { id: string };
@@ -210,15 +209,27 @@ export async function POST(
             .filter((id: any): id is string => !!id);
 
           const variants: any[] = variantIds.length
-            ? await productModule
-                .listProductVariants(
-                  { id: variantIds },
-                  { select: ["id", "metadata"] }
+            ? await (req.scope.resolve("__pg_connection__") as any)
+                .raw(
+                  `SELECT pv.id,
+                          COALESCE(pv.metadata, '{}'::jsonb) AS variant_metadata,
+                          COALESCE(p.metadata, '{}'::jsonb) AS product_metadata
+                     FROM product_variant pv
+                     LEFT JOIN product p ON p.id = pv.product_id
+                    WHERE pv.id = ANY(?::text[])`,
+                  [variantIds]
                 )
+                .then((r: any) => r.rows ?? [])
                 .catch(() => [])
             : [];
-          const variantMetaMap = new Map<string, any>(
-            variants.map((v) => [v.id, v.metadata || {}])
+          const variantInfoMap = new Map<string, any>(
+            variants.map((v) => [
+              v.id,
+              {
+                variantMetadata: v.variant_metadata || {},
+                productMetadata: v.product_metadata || {},
+              },
+            ])
           );
 
           const NON_INVENTORY_QB_TYPES = new Set([
@@ -230,18 +241,25 @@ export async function POST(
           ]);
           const qbItems = creditMemo.items.map((item: any) => {
             const unitPriceDollars = (item.unit_price || 0) / 100;
-            const meta = item.variant_id
-              ? variantMetaMap.get(item.variant_id)
+            const info = item.variant_id
+              ? variantInfoMap.get(item.variant_id)
               : null;
+            const meta = info?.variantMetadata || {};
+            const productMeta = info?.productMetadata || {};
             const qbListId = meta?.quickbooks_id as string | undefined;
+            const qbItemType = meta?.qb_item_type ?? productMeta?.qb_item_type;
             const isService = !!(
               !item.variant_id ||
               meta?.quickbooks_is_service === true ||
               meta?.quickbooks_is_service === "true" ||
               meta?.quickbooks_no_site === true ||
               meta?.quickbooks_no_site === "true" ||
-              (typeof meta?.qb_item_type === "string" &&
-                NON_INVENTORY_QB_TYPES.has(meta.qb_item_type))
+              productMeta?.quickbooks_is_service === true ||
+              productMeta?.quickbooks_is_service === "true" ||
+              productMeta?.quickbooks_no_site === true ||
+              productMeta?.quickbooks_no_site === "true" ||
+              (typeof qbItemType === "string" &&
+                NON_INVENTORY_QB_TYPES.has(qbItemType))
             );
             return {
               // Prefer ListID (stable) over FullName (SKU can be renamed in Medusa)
@@ -251,7 +269,9 @@ export async function POST(
               price: unitPriceDollars,
               amount: Number((unitPriceDollars * item.quantity).toFixed(2)),
               desc: item.description || item.title,
+              ...(typeof qbItemType === "string" ? { qbItemType } : {}),
               ...(isService ? { noSite: true } : {}),
+              ...(isService ? { taxable: false } : {}),
             };
           });
 

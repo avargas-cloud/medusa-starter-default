@@ -7,6 +7,7 @@ import {
   buildQbItems,
   buildShippingQbItem,
   buildQbOrderDiscountLines,
+  resolveProductTaxableMap,
   processEstimateInQb,
   processUpdateEstimateInQb,
   processDeactivateEstimateInQb,
@@ -191,7 +192,11 @@ export async function POST(
       subtotal: undefined, // force original price, ignore item-level adjustments
     }));
 
-    const qbItems = buildQbItems(itemsForQb, order.metadata);
+    const productTaxableMap = await resolveProductTaxableMap(
+      req.scope.resolve("__pg_connection__"),
+      itemsForQb
+    );
+    const qbItems = buildQbItems(itemsForQb, order.metadata, productTaxableMap);
 
     // Append Subtotal + Discount BEFORE shipping so the QB Subtotal only sums products.
     // Shipping goes LAST — outside the Subtotal — so it's never included in the discount.

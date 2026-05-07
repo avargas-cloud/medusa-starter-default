@@ -6,6 +6,7 @@ import {
   buildQbItems,
   buildShippingQbItem,
   buildQbOrderDiscountLines,
+  resolveProductTaxableMap,
   processOrderInQb,
 } from "../../../../lib/quickbooks/order-flow-core";
 import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
@@ -122,7 +123,11 @@ export async function POST(
       subtotal: undefined, // force original price, ignore item-level adjustments
     }));
 
-    const qbItems = buildQbItems(itemsForQb, order.metadata);
+    const productTaxableMap = await resolveProductTaxableMap(
+      req.scope.resolve("__pg_connection__"),
+      itemsForQb
+    );
+    const qbItems = buildQbItems(itemsForQb, order.metadata, productTaxableMap);
 
     // Append Subtotal + Discount lines BEFORE shipping so the Subtotal only sums products.
     // Shipping goes LAST — outside the Subtotal — so it's never included in the discount.
