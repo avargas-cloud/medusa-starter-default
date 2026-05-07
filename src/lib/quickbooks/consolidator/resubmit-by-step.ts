@@ -519,6 +519,59 @@ export async function resubmitByStep(
         break;
       }
 
+      case "void_sales_order": {
+        let soTxnId = row.qb_txn_id ?? null;
+        if (!soTxnId && row.order_id) {
+          const soPool = getDbPool();
+          const { rows: soRows } = await soPool.query(
+            `SELECT qb_txn_id
+               FROM qb_order_pipeline
+              WHERE order_id = $1
+                AND step IN ('estimate', 'sales_order')
+                AND status = 'confirmed'
+                AND qb_txn_id IS NOT NULL
+              ORDER BY confirmed_at DESC
+              LIMIT 1`,
+            [row.order_id]
+          );
+          soTxnId = soRows[0]?.qb_txn_id ?? null;
+        }
+
+        if (!soTxnId) {
+          await failPipelineRow(
+            row.id,
+            "void_sales_order: missing qb_txn_id — cannot close sales order"
+          );
+          break;
+        }
+
+        const closeResult = await closeSalesOrderInQb(soTxnId, (m: string) =>
+          logger.info(m)
+        );
+        if (closeResult.success && closeResult.data?.operationId) {
+          const soPool = getDbPool();
+          await soPool.query(
+            `UPDATE qb_order_pipeline
+                  SET status = 'submitted',
+                      bridge_op_id = $2,
+                      qb_txn_id = $3,
+                      submitted_at = NOW(),
+                      updated_at = NOW()
+                WHERE id = $1`,
+            [row.id, closeResult.data.operationId, soTxnId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ void_sales_order ${row.id} submitted op=${closeResult.data.operationId} txn=${soTxnId}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            closeResult.error ?? "closeSalesOrderInQb failed"
+          );
+        }
+        break;
+      }
+
       case "void_check": {
         if (!row.qb_txn_id) {
           await failPipelineRow(

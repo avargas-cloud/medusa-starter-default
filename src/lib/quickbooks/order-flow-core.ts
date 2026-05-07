@@ -57,6 +57,16 @@ import { QbSyncLogger } from "./qb-sync-logger";
 
 const ORDER_FLOW_ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";
 const DRY_RUN = process.env.QB_DRY_RUN === "true";
+const NON_SITE_QB_ITEM_TYPES = new Set([
+  "Service",
+  "NonInventory",
+  "NonInventoryPart",
+  "OtherCharge",
+  "Discount",
+  "Subtotal",
+  "Payment",
+  "SalesTax",
+]);
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -420,11 +430,14 @@ export function buildQbItems(
       // Service / non-inventory items must NOT carry InventorySiteRef (QB
       // error 3140). Flag explicitly via variant metadata so the bridge can
       // skip the tag on both *Add and *Mod operations.
-      const isService = !!(
+      const qbItemType = item.variant?.metadata?.qb_item_type;
+      const isNoSiteItem = !!(
         item.variant?.metadata?.quickbooks_is_service === true ||
         item.variant?.metadata?.quickbooks_is_service === "true" ||
         item.variant?.metadata?.quickbooks_no_site === true ||
-        item.variant?.metadata?.quickbooks_no_site === "true"
+        item.variant?.metadata?.quickbooks_no_site === "true" ||
+        (typeof qbItemType === "string" &&
+          NON_SITE_QB_ITEM_TYPES.has(qbItemType))
       );
       // Resolve per-line tax flag from the optional product map. When the
       // map is missing or has no entry for this product, default to taxable
@@ -452,7 +465,8 @@ export function buildQbItems(
               ? String(item.metadata.sales_description)
               : `${item.title || item.product_title || ""}${item.variant?.sku ? ` (${item.variant.sku})` : ""}`
           ),
-          ...(isService ? { noSite: true } : {}),
+          ...(typeof qbItemType === "string" ? { qbItemType } : {}),
+          ...(isNoSiteItem ? { noSite: true } : {}),
           ...(lineTaxable ? {} : { taxable: false }),
         },
       };

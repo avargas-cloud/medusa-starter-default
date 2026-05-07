@@ -1,5 +1,6 @@
 import {
   getEffectiveOrderDiscount,
+  buildQbItems,
   buildQbOrderDiscountLines,
   buildShippingQbItem,
 } from "../order-flow-core";
@@ -121,6 +122,49 @@ describe("getEffectiveOrderDiscount", () => {
       metadata: { computed_discount: 875.33 },
     };
     expect(getEffectiveOrderDiscount(order)).toBeCloseTo(875.33, 2);
+  });
+});
+
+describe("buildQbItems", () => {
+  it("marks QB service items as noSite from qb_item_type metadata", () => {
+    const [item] = buildQbItems([
+      {
+        title: "Assembly Panels",
+        quantity: 1,
+        unit_price: 2100,
+        variant: {
+          sku: "Services:Assembly-Panels",
+          metadata: {
+            quickbooks_id: "80000001-TEST",
+            qb_item_type: "Service",
+          },
+        },
+      },
+    ]);
+
+    expect(item.productId).toBe("80000001-TEST");
+    expect(item.qbItemType).toBe("Service");
+    expect(item.noSite).toBe(true);
+  });
+
+  it("does not mark inventory items as noSite from qb_item_type metadata", () => {
+    const [item] = buildQbItems([
+      {
+        title: "Tape Light",
+        quantity: 2,
+        unit_price: 10,
+        variant: {
+          sku: "TL-1",
+          metadata: {
+            quickbooks_id: "80000002-TEST",
+            qb_item_type: "Inventory",
+          },
+        },
+      },
+    ]);
+
+    expect(item.qbItemType).toBe("Inventory");
+    expect(item.noSite).toBeUndefined();
   });
 });
 

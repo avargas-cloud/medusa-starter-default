@@ -196,6 +196,7 @@ export async function updateSalesOrderInQb(
           amount: item.amount,
           desc: item.desc,
           noSite: item.noSite,
+          qbItemType: item.qbItemType,
         };
       })
       // QB Error 3290: TxnLineIDs must be sent in ascending numeric order.

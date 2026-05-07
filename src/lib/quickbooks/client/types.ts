@@ -9,6 +9,8 @@ export interface QbOrderItem {
   unitOfMeasure?: string;
   desc?: string;
   noSite?: boolean;
+  /** QB item classification copied from variant metadata. Non-inventory types must not emit InventorySiteRef. */
+  qbItemType?: string;
   /**
    * Per-line tax flag. When false, the bridge emits `<SalesTaxCodeRef>Non</...>`
    * so QB doesn't tax this line. Default (omitted) → taxable.
