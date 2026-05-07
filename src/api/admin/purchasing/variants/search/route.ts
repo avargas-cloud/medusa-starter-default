@@ -15,17 +15,20 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+
 import { withDb } from "../../_lib/db";
 
 export async function GET(
   req: AuthenticatedMedusaRequest,
   res: MedusaResponse
-) {
+): Promise<unknown> {
   const q = ((req.query as Record<string, string>).q ?? "").trim();
-  const exclude = ((req.query as Record<string, string>).exclude ?? "")
+  const query = req.query as Record<string, string>;
+  const exclude = (query.exclude ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+  const mainOnly = query.main_only === "true" || query.main_only === "1";
 
   if (q.length < 2) {
     return res.json({ variants: [] });
@@ -33,10 +36,19 @@ export async function GET(
 
   return withDb(async (db) => {
     try {
+      const host = process.env.MEILISEARCH_HOST;
+      const apiKey = process.env.MEILISEARCH_API_KEY;
+      if (!host || !apiKey) {
+        return res.status(500).json({
+          error: "Search failed",
+          message: "MeiliSearch is not configured",
+          variants: [],
+        });
+      }
       const { MeiliSearch } = await import("meilisearch");
       const client = new MeiliSearch({
-        host: process.env.MEILISEARCH_HOST!,
-        apiKey: process.env.MEILISEARCH_API_KEY!,
+        host,
+        apiKey,
       });
 
       const filter =
@@ -46,18 +58,38 @@ export async function GET(
 
       const results = await client.index("inventory").search<{
         variantId: string;
+        productId?: string;
         sku: string;
         title: string;
         totalStock: number | null;
       }>(q, {
         limit: 20,
-        attributesToRetrieve: ["variantId", "sku", "title", "totalStock"],
+        attributesToRetrieve: [
+          "variantId",
+          "productId",
+          "sku",
+          "title",
+          "totalStock",
+        ],
         ...(filter ? { filter } : {}),
       });
 
-      const variantIds = results.hits
-        .map((h) => h.variantId)
-        .filter(Boolean);
+      const variantIds = results.hits.map((h) => h.variantId).filter(Boolean);
+
+      let alternativeSet = new Set<string>();
+      if (mainOnly && variantIds.length > 0) {
+        const alternatives = await db.query<{ alt_variant_id: string }>(
+          `SELECT alt_variant_id
+           FROM product_alternative
+           WHERE alt_variant_id = ANY($1::text[])
+             AND is_active = true
+             AND deleted_at IS NULL`,
+          [variantIds]
+        );
+        alternativeSet = new Set(
+          alternatives.rows.map((r) => r.alt_variant_id)
+        );
+      }
 
       // Check which results are already primaries with at least one active alt
       let primaryMap: Record<string, number> = {};
@@ -76,14 +108,35 @@ export async function GET(
         );
       }
 
-      const variants = results.hits.map((h) => ({
-        id: h.variantId,
-        sku: h.sku,
-        product_title: h.title,
-        inv_usa: h.totalStock ?? 0,
-        is_primary: primaryMap[h.variantId] !== undefined,
-        own_alt_count: primaryMap[h.variantId] ?? 0,
-      }));
+      const missingProductVariantIds = results.hits
+        .filter((h) => !h.productId)
+        .map((h) => h.variantId)
+        .filter(Boolean);
+      let productMap: Record<string, string> = {};
+      if (missingProductVariantIds.length > 0) {
+        const products = await db.query<{ id: string; product_id: string }>(
+          `SELECT id, product_id
+           FROM product_variant
+           WHERE id = ANY($1::text[])
+             AND deleted_at IS NULL`,
+          [missingProductVariantIds]
+        );
+        productMap = Object.fromEntries(
+          products.rows.map((r) => [r.id, r.product_id])
+        );
+      }
+
+      const variants = results.hits
+        .filter((h) => !mainOnly || !alternativeSet.has(h.variantId))
+        .map((h) => ({
+          id: h.variantId,
+          product_id: h.productId ?? productMap[h.variantId] ?? null,
+          sku: h.sku,
+          product_title: h.title,
+          inv_usa: h.totalStock ?? 0,
+          is_primary: primaryMap[h.variantId] !== undefined,
+          own_alt_count: primaryMap[h.variantId] ?? 0,
+        }));
 
       return res.json({ variants });
     } catch (e) {
