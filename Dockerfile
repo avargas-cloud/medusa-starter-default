@@ -53,5 +53,6 @@ ENV NODE_ENV=production
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 COPY --from=builder /app/.medusa/server ./
+COPY --from=builder /app/scripts/run-custom-migrations.js ./scripts/run-custom-migrations.js
 
 CMD ["npm", "start"]

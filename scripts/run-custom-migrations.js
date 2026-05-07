@@ -47,18 +47,26 @@ if (!DATABASE_URL) {
 // ── 2. Resolve compiled migration files ─────────────────────────────────────
 // `medusa build` compiles src/migrations/*.ts → .medusa/server/src/migrations/*.js
 
-const MIGRATIONS_DIR = path.join(__dirname, '../.medusa/server/src/migrations');
+const MIGRATION_DIR_CANDIDATES = [
+  path.join(__dirname, '../.medusa/server/src/migrations'),
+  path.join(__dirname, '../src/migrations'),
+];
 
 async function main() {
-  if (!fs.existsSync(MIGRATIONS_DIR)) {
-    console.warn(`⚠️  [custom-migrations] Compiled migrations dir not found: ${MIGRATIONS_DIR}`);
+  const migrationsDir = MIGRATION_DIR_CANDIDATES.find((dir) => fs.existsSync(dir));
+
+  if (!migrationsDir) {
+    console.warn(`⚠️  [custom-migrations] Compiled migrations dir not found.`);
+    for (const candidate of MIGRATION_DIR_CANDIDATES) {
+      console.warn(`    Checked: ${candidate}`);
+    }
     console.warn('    Build the project first with `medusa build`, or this is a dev environment.');
     console.log('✅ [custom-migrations] Skipping — nothing to run.');
     return;
   }
 
   // Collect all .js migration files, sorted by filename (timestamp prefix = correct order)
-  const files = fs.readdirSync(MIGRATIONS_DIR)
+  const files = fs.readdirSync(migrationsDir)
     .filter(f => f.endsWith('.js'))
     .sort();
 
@@ -72,7 +80,7 @@ async function main() {
   // TypeORM migrations require up(queryRunner), so function.length >= 1 is the discriminator.
   const migrationClasses = [];
   for (const file of files) {
-    const mod = require(path.join(MIGRATIONS_DIR, file));
+    const mod = require(path.join(migrationsDir, file));
     for (const exported of Object.values(mod)) {
       if (
         typeof exported === 'function' &&
