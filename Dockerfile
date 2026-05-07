@@ -10,8 +10,6 @@ RUN apt-get update \
     g++ \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g yarn@1.22.22
-
 COPY package.json yarn.lock ./
 COPY patches ./patches
 
