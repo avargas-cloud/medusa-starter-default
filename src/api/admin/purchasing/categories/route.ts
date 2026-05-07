@@ -22,6 +22,27 @@ const CATEGORIES_JSON = path.resolve(
 
 type CategorySkuRow = { category: string; sku: string };
 
+const MEDUSA_CATEGORY_HANDLES: Array<{ category: string; handles: string[] }> = [
+  {
+    category: "Connectors",
+    handles: [
+    "linear-lighting-accessories",
+    "cables",
+    "accessories-power-supplies",
+    ],
+  },
+  { category: "LED Strips", handles: ["led-strips"] },
+  { category: "LED Modules", handles: ["led-modules-sign-backlighting"] },
+  { category: "EasyLED", handles: ["easyled"] },
+  { category: "LED Drivers", handles: ["led-drivers"] },
+  { category: "LED Channels", handles: ["led-channels"] },
+  { category: "Controllers", handles: ["controllers"] },
+  { category: "Legrand", handles: ["legrand-switches-dimmers-outlets"] },
+  { category: "Landscaping", handles: ["underground-lights-led-landscaping"] },
+  { category: "Ceiling Lights", handles: ["ceiling-lights"] },
+  { category: "Lutron", handles: ["lutron-switches-dimmers-outlets"] },
+];
+
 /** Build response shape from flat category+sku rows */
 function buildResponse(
   rows: CategorySkuRow[],
@@ -35,13 +56,72 @@ function buildResponse(
   const skuToCategory: Record<string, string> = {};
   for (const { category, sku } of rows) {
     categorySet.add(category);
-    skuToCategory[sku] = category;
+    if (!skuToCategory[sku]) {
+      skuToCategory[sku] = category;
+    }
   }
   return {
     categories: Array.from(categorySet).sort(),
     sku_to_category: skuToCategory,
     alt_skus: altSkus,
   };
+}
+
+async function getMedusaCategorySkuRows(db: {
+  query: <T = unknown>(
+    sql: string,
+    params?: unknown[]
+  ) => Promise<{ rows: T[] }>;
+}): Promise<CategorySkuRow[]> {
+  const entries = MEDUSA_CATEGORY_HANDLES.flatMap(({ category, handles }, index) =>
+    handles.map((handle) => ({ category, handle, priority: index }))
+  );
+  if (entries.length === 0) return [];
+
+  const categories = entries.map((entry) => entry.category);
+  const handles = entries.map((entry) => entry.handle);
+  const priorities = entries.map((entry) => entry.priority);
+
+  const { rows } = await db.query<CategorySkuRow>(
+    `
+    WITH RECURSIVE roots(category, handle, priority) AS (
+      SELECT * FROM unnest($1::text[], $2::text[], $3::int[])
+    ),
+    tree(category, category_id, priority) AS (
+      SELECT roots.category, pc.id, roots.priority
+      FROM roots
+      JOIN product_category pc
+        ON pc.handle = roots.handle
+       AND pc.deleted_at IS NULL
+
+      UNION ALL
+
+      SELECT tree.category, child.id, tree.priority
+      FROM tree
+      JOIN product_category child
+        ON child.parent_category_id = tree.category_id
+       AND child.deleted_at IS NULL
+    )
+    SELECT tree.category, pv.sku
+    FROM tree
+    JOIN product_category_product pcp
+      ON pcp.product_category_id = tree.category_id
+    JOIN product p
+      ON p.id = pcp.product_id
+     AND p.deleted_at IS NULL
+     AND p.status = 'published'
+    JOIN product_variant pv
+      ON pv.product_id = p.id
+     AND pv.deleted_at IS NULL
+    WHERE pv.sku IS NOT NULL
+      AND btrim(pv.sku) <> ''
+    GROUP BY tree.category, pv.sku
+    ORDER BY MIN(tree.priority), tree.category, pv.sku
+    `,
+    [categories, handles, priorities]
+  );
+
+  return rows;
 }
 
 export async function GET(
@@ -105,9 +185,16 @@ export async function GET(
        WHERE pa.is_active = true AND pa.deleted_at IS NULL`
     );
 
+    const medusaRows = await getMedusaCategorySkuRows(db);
+    const legacySkuSet = new Set(categoryRows.map((r) => r.sku));
+    const combinedRows = [
+      ...categoryRows,
+      ...medusaRows.filter((r) => !legacySkuSet.has(r.sku)),
+    ];
+
     return res.json(
       buildResponse(
-        categoryRows,
+        combinedRows,
         altRows.rows.map((r) => r.sku)
       )
     );

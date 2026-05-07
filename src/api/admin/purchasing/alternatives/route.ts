@@ -73,7 +73,7 @@ export async function GET(
         WHERE po.status IN ('submitted', 'partially_received')
           AND pol.status IN ('open', 'partial')
           AND pol.deleted_at IS NULL
-          AND po.stock_location_id = $1
+          AND BTRIM(po.stock_location_id, E' \\t\\n\\r') = $1
         GROUP BY pol.sku_snapshot
       ),
       alt_inv AS (
@@ -101,7 +101,7 @@ export async function GET(
         COALESCE(pv.metadata->>'sales_description', '') AS sales_description,
         ac.alt_count::int,
         COALESCE(SUM(CASE WHEN inv.location_id = $1 THEN inv.qty ELSE 0 END), 0)::int AS inv_usa,
-        COALESCE(SUM(CASE WHEN inv.location_id = $2 THEN inv.qty ELSE 0 END), 0)::int AS inv_china,
+        COALESCE(SUM(CASE WHEN inv.location_id = $2 THEN GREATEST(0, inv.qty - inv.reserved) ELSE 0 END), 0)::int AS inv_china,
         COALESCE(ai.alt_inv_usa, 0)::int AS alt_inv_usa,
         COALESCE(ai.alt_inv_usa_reserved, 0)::int AS alt_inv_usa_reserved,
         COALESCE(apo.alt_qty_on_po, 0)::int AS alt_qty_on_po,

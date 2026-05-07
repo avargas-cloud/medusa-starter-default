@@ -160,7 +160,7 @@ export async function PATCH(
   const updates: Record<string, unknown> = { updated_at: now };
 
   if (body.destination_location_id !== undefined)
-    updates.destination_location_id = body.destination_location_id;
+    updates.destination_location_id = body.destination_location_id.trim();
   if (body.vendor_id !== undefined) updates.vendor_id = body.vendor_id;
   if (body.vendor_name_snapshot !== undefined)
     updates.vendor_name_snapshot = body.vendor_name_snapshot;

@@ -162,7 +162,8 @@ export async function POST(
     lines?: TransferLineInput[];
   };
 
-  if (!body.destination_location_id) {
+  const destinationLocationId = body.destination_location_id?.trim();
+  if (!destinationLocationId) {
     return res.status(400).json({
       error: "destination_location_id is required",
       code: "missing_field",
@@ -197,7 +198,7 @@ export async function POST(
       ?, ?, ?
     )`,
     [
-      id, number, seq, body.destination_location_id,
+      id, number, seq, destinationLocationId,
       body.vendor_id ?? null, body.vendor_name_snapshot ?? null,
       body.reference_number ?? null, body.tracking_number ?? null,
       body.shipper ?? null, body.notes ?? null,

@@ -47,7 +47,7 @@ export async function GET(
         p.title AS product_title,
         p.id    AS product_id,
         COALESCE(SUM(CASE WHEN il.location_id = $2 THEN il.stocked_quantity ELSE 0 END), 0)::int AS inv_usa,
-        COALESCE(SUM(CASE WHEN il.location_id = $3 THEN il.stocked_quantity ELSE 0 END), 0)::int AS inv_china,
+        COALESCE(SUM(CASE WHEN il.location_id = $3 THEN GREATEST(0, il.stocked_quantity - il.reserved_quantity) ELSE 0 END), 0)::int AS inv_china,
         snap.abc_class,
         snap.xyz_class
       FROM product_variant pv
@@ -113,7 +113,7 @@ export async function GET(
         COALESCE(pv.metadata->>'sales_description', '') AS sales_description,
         COALESCE(SUM(CASE WHEN il.location_id = $2 THEN il.stocked_quantity   ELSE 0 END), 0)::int AS inv_usa,
         COALESCE(SUM(CASE WHEN il.location_id = $2 THEN il.reserved_quantity  ELSE 0 END), 0)::int AS inv_usa_reserved,
-        COALESCE(SUM(CASE WHEN il.location_id = $3 THEN il.stocked_quantity   ELSE 0 END), 0)::int AS inv_china,
+        COALESCE(SUM(CASE WHEN il.location_id = $3 THEN GREATEST(0, il.stocked_quantity - il.reserved_quantity) ELSE 0 END), 0)::int AS inv_china,
         snap.abc_class,
         snap.xyz_class,
         snap.daily_sales_est,
@@ -155,7 +155,7 @@ export async function GET(
         WHERE po.status IN ('submitted', 'partially_received')
           AND pol.status IN ('open', 'partial')
           AND pol.deleted_at IS NULL
-          AND po.stock_location_id = $2
+          AND BTRIM(po.stock_location_id, E' \\t\\n\\r') = $2
         GROUP BY pol.sku_snapshot
       ) open_po_usa ON open_po_usa.sku_snapshot = pv.sku
       LEFT JOIN (
@@ -166,7 +166,7 @@ export async function GET(
         WHERE po.status IN ('submitted', 'partially_received')
           AND pol.status IN ('open', 'partial')
           AND pol.deleted_at IS NULL
-          AND po.stock_location_id = $3
+          AND BTRIM(po.stock_location_id, E' \\t\\n\\r') = $3
         GROUP BY pol.sku_snapshot
       ) open_po_china ON open_po_china.sku_snapshot = pv.sku
       LEFT JOIN (

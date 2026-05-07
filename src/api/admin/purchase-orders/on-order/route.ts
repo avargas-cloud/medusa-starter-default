@@ -61,7 +61,7 @@ export async function GET(
   const activePOs = new Set<string>();
   try {
     const poFilter: Record<string, unknown> = { id: poIds, status: ACTIVE_STATUSES };
-    if (stockLocationId) poFilter.stock_location_id = stockLocationId;
+    if (stockLocationId) poFilter.stock_location_id = stockLocationId.trim();
     const pos = (await service.listPurchaseOrders(
       poFilter,
       { take: 1000, skip: 0 }

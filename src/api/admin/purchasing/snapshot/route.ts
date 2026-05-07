@@ -103,8 +103,9 @@ export async function GET(
     const offsetIdx = params.length;
 
     const rows = await db.query(
-      `SELECT
+       `SELECT
          snap.variant_id,
+         p.id AS product_id,
          pv.sku,
          p.title AS product_title,
          COALESCE(pv.metadata->>'sales_description', '') AS sales_description,
@@ -113,9 +114,12 @@ export async function GET(
          snap.sales_last_24d,
          snap.unmet_net_30d,
          snap.daily_sales_est, snap.monthly_sales_est,
+         SUM(snap.daily_sales_est) OVER (PARTITION BY p.id) AS product_group_daily_sales,
          snap.cv,
          snap.abc_class, snap.xyz_class, snap.abcxyz_class,
-         snap.inv_usa, snap.inv_china, snap.inv_china_alt,
+         COALESCE(live_inv.inv_usa, snap.inv_usa)::int AS inv_usa,
+         COALESCE(live_inv.inv_china, snap.inv_china)::int AS inv_china,
+         snap.inv_china_alt,
          snap.qty_on_po_china_alt,
          snap.qty_to_transfer, snap.qty_to_factory, snap.production_days,
          snap.first_sale_date,
@@ -134,6 +138,16 @@ export async function GET(
        JOIN product_variant pv ON pv.id = snap.variant_id AND pv.deleted_at IS NULL
        JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
        LEFT JOIN (
+         SELECT pvii.variant_id,
+                COALESCE(SUM(CASE WHEN il.location_id = $${usaLocIdx} THEN il.stocked_quantity ELSE 0 END), 0)::int AS inv_usa,
+                COALESCE(SUM(CASE WHEN il.location_id = $${chinaLocIdx} THEN GREATEST(0, il.stocked_quantity - il.reserved_quantity) ELSE 0 END), 0)::int AS inv_china
+         FROM product_variant_inventory_item pvii
+         JOIN inventory_item ii ON ii.id = pvii.inventory_item_id AND ii.deleted_at IS NULL
+         JOIN inventory_level il ON il.inventory_item_id = ii.id
+           AND il.location_id IN ($${usaLocIdx}, $${chinaLocIdx}) AND il.deleted_at IS NULL
+         GROUP BY pvii.variant_id
+       ) live_inv ON live_inv.variant_id = snap.variant_id
+       LEFT JOIN (
          SELECT pol.sku_snapshot,
                 SUM(GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled))::int AS on_order
          FROM purchase_order_line pol
@@ -141,7 +155,7 @@ export async function GET(
          WHERE po.status IN ('submitted', 'partially_received')
            AND pol.status IN ('open', 'partial')
            AND pol.deleted_at IS NULL
-           AND po.stock_location_id = $${usaLocIdx}
+           AND BTRIM(po.stock_location_id, E' \\t\\n\\r') = $${usaLocIdx}
          GROUP BY pol.sku_snapshot
        ) open_po_usa ON open_po_usa.sku_snapshot = pv.sku
        LEFT JOIN (
@@ -152,7 +166,7 @@ export async function GET(
          WHERE po.status IN ('submitted', 'partially_received')
            AND pol.status IN ('open', 'partial')
            AND pol.deleted_at IS NULL
-           AND po.stock_location_id = $${chinaLocIdx}
+           AND BTRIM(po.stock_location_id, E' \\t\\n\\r') = $${chinaLocIdx}
          GROUP BY pol.sku_snapshot
        ) open_po_china ON open_po_china.sku_snapshot = pv.sku
        LEFT JOIN (
@@ -230,7 +244,7 @@ export async function GET(
          WHERE pa.is_active = true AND pa.deleted_at IS NULL
            AND po.status IN ('submitted', 'partially_received')
            AND pol.status IN ('open', 'partial')
-           AND po.stock_location_id = $${usaLocIdx}
+           AND BTRIM(po.stock_location_id, E' \\t\\n\\r') = $${usaLocIdx}
          GROUP BY pa.primary_variant_id
        ) alt_po_usa ON alt_po_usa.primary_variant_id = snap.variant_id
        WHERE ${where}

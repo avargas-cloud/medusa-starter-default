@@ -211,7 +211,7 @@ export async function POST(
       poId, poNumber, poSeq,
       transfer.vendor_id ?? null, transfer.vendor_name_snapshot ?? null,
       vendorQbListId,
-      transfer.destination_location_id,
+      transfer.destination_location_id.trim(),
       poMemo,
       userId,
       userId,

@@ -83,7 +83,7 @@ export async function runPurchasingSnapshot(
       db.query<{ variant_id: string; inv_usa: string; inv_china: string }>(
         `SELECT pvii.variant_id,
                 COALESCE(SUM(CASE WHEN il.location_id = $1 THEN il.stocked_quantity ELSE 0 END), 0) AS inv_usa,
-                COALESCE(SUM(CASE WHEN il.location_id = $2 THEN il.stocked_quantity ELSE 0 END), 0) AS inv_china
+                COALESCE(SUM(CASE WHEN il.location_id = $2 THEN GREATEST(0, il.stocked_quantity - il.reserved_quantity) ELSE 0 END), 0) AS inv_china
          FROM product_variant_inventory_item pvii
          JOIN inventory_item ii ON ii.id = pvii.inventory_item_id AND ii.deleted_at IS NULL
          JOIN inventory_level il ON il.inventory_item_id = ii.id
@@ -93,10 +93,10 @@ export async function runPurchasingSnapshot(
       ),
       db.query<{ sku: string; on_order_usa: string; on_order_china: string }>(
         `SELECT pol.sku_snapshot AS sku,
-                SUM(CASE WHEN po.stock_location_id = $1
+                SUM(CASE WHEN BTRIM(po.stock_location_id, E' \\t\\n\\r') = $1
                          THEN GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)
                          ELSE 0 END) AS on_order_usa,
-                SUM(CASE WHEN po.stock_location_id = $2
+                SUM(CASE WHEN BTRIM(po.stock_location_id, E' \\t\\n\\r') = $2
                          THEN GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)
                          ELSE 0 END) AS on_order_china
          FROM purchase_order_line pol
@@ -632,7 +632,7 @@ export async function recalculateForVariants(
         db.query<{ variant_id: string; inv_usa: string; inv_china: string }>(
           `SELECT pvii.variant_id,
                 COALESCE(SUM(CASE WHEN il.location_id = $2 THEN il.stocked_quantity ELSE 0 END), 0) AS inv_usa,
-                COALESCE(SUM(CASE WHEN il.location_id = $3 THEN il.stocked_quantity ELSE 0 END), 0) AS inv_china
+                COALESCE(SUM(CASE WHEN il.location_id = $3 THEN GREATEST(0, il.stocked_quantity - il.reserved_quantity) ELSE 0 END), 0) AS inv_china
          FROM product_variant_inventory_item pvii
          JOIN inventory_item ii ON ii.id = pvii.inventory_item_id AND ii.deleted_at IS NULL
          JOIN inventory_level il ON il.inventory_item_id = ii.id
@@ -663,10 +663,10 @@ export async function recalculateForVariants(
           on_order_china: string;
         }>(
           `SELECT pol.sku_snapshot AS sku,
-                SUM(CASE WHEN po.stock_location_id = $2
+                SUM(CASE WHEN BTRIM(po.stock_location_id, E' \\t\\n\\r') = $2
                          THEN GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)
                          ELSE 0 END) AS on_order_usa,
-                SUM(CASE WHEN po.stock_location_id = $3
+                SUM(CASE WHEN BTRIM(po.stock_location_id, E' \\t\\n\\r') = $3
                          THEN GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)
                          ELSE 0 END) AS on_order_china
          FROM purchase_order_line pol
