@@ -113,9 +113,20 @@ if (process.env.SKIP_MEDUSA_SERVER_INSTALL === "1") {
       process.env.RAILWAY_SERVICE_ID;
 
     if (isRailway && process.env.KEEP_ROOT_NODE_MODULES !== "1" && fs.existsSync(ROOT_NODE_MODULES)) {
-      console.log("🧹  Railway build detected — removing root node_modules from final image.");
-      fs.rmSync(ROOT_NODE_MODULES, { recursive: true, force: true });
-      console.log("✅  root node_modules removed; .medusa/server/node_modules remains available for runtime.");
+      console.log("🧹  Railway build detected — pruning root node_modules from final image.");
+      for (const entry of fs.readdirSync(ROOT_NODE_MODULES)) {
+        if (entry === ".cache") {
+          console.log("ℹ️   Leaving node_modules/.cache in place; Railway may keep it locked during build.");
+          continue;
+        }
+
+        try {
+          fs.rmSync(path.join(ROOT_NODE_MODULES, entry), { recursive: true, force: true });
+        } catch (cleanupErr) {
+          console.warn(`⚠️   Could not remove node_modules/${entry}: ${cleanupErr.message}`);
+        }
+      }
+      console.log("✅  root node_modules pruned; .medusa/server/node_modules remains available for runtime.");
     }
   } catch (err) {
     console.error("❌  yarn install in .medusa/server failed:", err.message);
