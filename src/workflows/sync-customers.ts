@@ -64,10 +64,10 @@ export const syncCustomersToMeiliStep = createStep(
         const meta = (c.metadata as Record<string, any>) ?? {};
         const groupNames: string[] =
           c.customer_groups?.map((g: any) => g.name) ?? [];
-        // Source of truth for price_level = customer groups (not metadata)
-        const price_level = groupNames.includes("Wholesale")
-          ? "Wholesale"
-          : "Retail";
+        const price_level =
+          meta.qb_price_level ??
+          meta.price_level ??
+          (groupNames.includes("Wholesale") ? "Wholesale" : "Retail");
         const customer_type =
           meta.qb_customer_type ?? meta.customer_type ?? "Standard";
         return {
@@ -75,7 +75,7 @@ export const syncCustomersToMeiliStep = createStep(
           email: (c.email ?? "").toLowerCase(),
           first_name: c.first_name ?? "",
           last_name: c.last_name ?? "",
-          company_name: c.company_name ?? "",
+          company_name: meta.company_name ?? c.company_name ?? "",
           phone: c.phone ?? "",
           has_account: c.has_account ?? false,
           status: c.has_account ? "Registered" : "Guest",
@@ -83,6 +83,8 @@ export const syncCustomersToMeiliStep = createStep(
           acquisition_channel: meta.acquisition_channel ?? "",
           customer_type,
           price_level,
+          default_tax: meta.default_tax ?? null,
+          tax_exempt_reason: meta.tax_exempt_reason ?? null,
           groups: groupNames,
           updated_at: new Date(c.updated_at).getTime(),
           created_at: new Date(c.created_at).getTime(),

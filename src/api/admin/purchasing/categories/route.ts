@@ -109,7 +109,6 @@ async function getMedusaCategorySkuRows(db: {
     JOIN product p
       ON p.id = pcp.product_id
      AND p.deleted_at IS NULL
-     AND p.status = 'published'
     JOIN product_variant pv
       ON pv.product_id = p.id
      AND pv.deleted_at IS NULL

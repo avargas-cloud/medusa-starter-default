@@ -67,9 +67,16 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     }
 
     const { result } = await syncCustomersWorkflow(req.scope).run();
+    const synced =
+      typeof result?.synced === "number"
+        ? result.synced
+        : typeof (result as any)?.upserted === "number"
+          ? (result as any).upserted
+          : 0;
+
     return res.json({
       success: true,
-      synced: result.synced,
+      synced,
       status: "synced_now",
       message: "Customers synced",
       reason: drift.reason,
