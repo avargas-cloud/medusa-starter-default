@@ -21,6 +21,7 @@ const path = require("path");
 const { execSync } = require("child_process");
 
 const SERVER_DIR = path.resolve(__dirname, "../.medusa/server");
+const ROOT_NODE_MODULES = path.resolve(__dirname, "../node_modules");
 const PATCHES_SRC = path.resolve(__dirname, "../patches");
 const PATCHES_DST = path.join(SERVER_DIR, "patches");
 const PKG_JSON = path.join(SERVER_DIR, "package.json");
@@ -105,6 +106,17 @@ if (process.env.SKIP_MEDUSA_SERVER_INSTALL === "1") {
     });
     const elapsed = ((Date.now() - installStart) / 1000).toFixed(1);
     console.log(`✅  yarn install complete in ${elapsed}s — node_modules baked into image.`);
+
+    const isRailway =
+      process.env.RAILWAY_ENVIRONMENT ||
+      process.env.RAILWAY_PROJECT_ID ||
+      process.env.RAILWAY_SERVICE_ID;
+
+    if (isRailway && process.env.KEEP_ROOT_NODE_MODULES !== "1" && fs.existsSync(ROOT_NODE_MODULES)) {
+      console.log("🧹  Railway build detected — removing root node_modules from final image.");
+      fs.rmSync(ROOT_NODE_MODULES, { recursive: true, force: true });
+      console.log("✅  root node_modules removed; .medusa/server/node_modules remains available for runtime.");
+    }
   } catch (err) {
     console.error("❌  yarn install in .medusa/server failed:", err.message);
     process.exit(1);
