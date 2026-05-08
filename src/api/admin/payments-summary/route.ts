@@ -12,10 +12,10 @@ export interface PaymentSummaryDay {
  * GET /admin/payments-summary?from=ISO&to=ISO
  * Returns daily NET totals of customer_payments in the given range.
  *
- * Cash IN  → type='payment' with status applied/available/partially_applied (+amount)
- * Cash OUT → type='credit_memo' with status='refunded' AND qb.check_txn_id confirmed (−amount)
+ * Cash IN  → type='payment' unless voided (+amount)
+ * Cash OUT → refund records only after QB Write Check is confirmed (−refund_amount)
  *
- * Voided/pending/applied credit_memos contribute 0 (no cash movement).
+ * Requested refunds without a confirmed Write Check contribute 0 (money has not left).
  * Amounts in cents. count = number of incoming payments only.
  */
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
@@ -31,7 +31,16 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const pgConnection = req.scope.resolve("__pg_connection__") as any;
 
     const result = await pgConnection.raw(
-      `SELECT
+      `WITH latest_write_check AS (
+         SELECT DISTINCT ON (reference_id)
+           reference_id,
+           COALESCE(updated_at, created_at) AS confirmed_at
+         FROM qb_order_pipeline
+         WHERE step = 'write_check'
+           AND status = 'confirmed'
+         ORDER BY reference_id, COALESCE(updated_at, created_at) DESC
+       )
+       SELECT
          d AS date,
          SUM(net_amount)::bigint      AS net_amount,
          SUM(gross_payments)::bigint  AS gross_payments,
@@ -40,12 +49,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        FROM (
          SELECT
            received_at::date AS d,
-           CASE WHEN status IN ('applied', 'available', 'partially_applied')
+           CASE WHEN status <> 'voided'
                 THEN amount ELSE 0 END AS net_amount,
-           CASE WHEN status IN ('applied', 'available', 'partially_applied')
+           CASE WHEN status <> 'voided'
                 THEN amount ELSE 0 END AS gross_payments,
            0                           AS refunds,
-           CASE WHEN status IN ('applied', 'available', 'partially_applied')
+           CASE WHEN status <> 'voided'
                 THEN 1 ELSE 0 END      AS payment_count
          FROM customer_payment
          WHERE deleted_at IS NULL
@@ -55,22 +64,24 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
          UNION ALL
 
-         -- Refunds bucket on the day cash actually left the bank (refunded_at),
-         -- not the day the original CM was issued (received_at). Falls back to
-         -- received_at for legacy rows that never recorded refunded_at.
+         -- Refunds bucket on the day cash actually left the bank: the confirmed
+         -- Write Check timestamp. Legacy rows fall back only after confirmation.
          SELECT
-           COALESCE((metadata->>'refunded_at')::timestamptz, received_at)::date AS d,
-           CASE WHEN status = 'refunded' AND qb->>'check_txn_id' IS NOT NULL
-                THEN -COALESCE((metadata->>'refund_amount')::numeric, amount) ELSE 0 END AS net_amount,
+           COALESCE(lwc.confirmed_at, (cp.metadata->>'refunded_at')::timestamptz, cp.received_at)::date AS d,
+           -COALESCE((cp.metadata->>'refund_amount')::numeric, cp.amount) AS net_amount,
            0                            AS gross_payments,
-           CASE WHEN status = 'refunded' AND qb->>'check_txn_id' IS NOT NULL
-                THEN COALESCE((metadata->>'refund_amount')::numeric, amount) ELSE 0 END  AS refunds,
+           COALESCE((cp.metadata->>'refund_amount')::numeric, cp.amount) AS refunds,
            0                            AS payment_count
-         FROM customer_payment
-         WHERE deleted_at IS NULL
-           AND type = 'credit_memo'
-           AND COALESCE((metadata->>'refunded_at')::timestamptz, received_at) >= ?
-           AND COALESCE((metadata->>'refunded_at')::timestamptz, received_at) < ?
+         FROM customer_payment cp
+         LEFT JOIN latest_write_check lwc ON lwc.reference_id = cp.id
+         WHERE cp.deleted_at IS NULL
+           AND (
+             cp.type = 'refund'
+             OR (cp.type <> 'refund' AND cp.status IN ('refunded', 'partial_refunded'))
+           )
+           AND cp.qb->>'check_txn_id' IS NOT NULL
+           AND COALESCE(lwc.confirmed_at, (cp.metadata->>'refunded_at')::timestamptz, cp.received_at) >= ?
+           AND COALESCE(lwc.confirmed_at, (cp.metadata->>'refunded_at')::timestamptz, cp.received_at) < ?
        ) sub
        GROUP BY d
        HAVING SUM(net_amount) <> 0 OR SUM(payment_count) > 0
