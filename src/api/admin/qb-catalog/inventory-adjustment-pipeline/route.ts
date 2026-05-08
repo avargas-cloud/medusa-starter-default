@@ -80,7 +80,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
     -- ── New rows from qb_order_pipeline ──
     SELECT
-      ia.id,
+      ia.id::text,
       ia.seq,
       ia.order_id                   AS count_id,
       ia.medusa_ref_number          AS count_number_col,
