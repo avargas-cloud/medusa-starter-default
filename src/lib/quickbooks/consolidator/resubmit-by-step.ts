@@ -21,6 +21,11 @@ import {
   voidSalesReceiptInQb,
 } from "../client/sales-receipts";
 import { voidCheckInQb } from "../client/checks";
+import {
+  postInventoryAdjustmentToQb,
+  voidInventoryAdjustmentInQb,
+  type AdjustmentGroupPayload,
+} from "../client/inventory-adjustments";
 import { handleDraftOrderUpdated } from "../handlers/handle-draft-order-updated";
 import { handleFulfillmentCreated } from "../handlers/handle-fulfillment-created";
 import { handleOrderPlaced } from "../handlers/handle-order-placed";
@@ -699,6 +704,63 @@ export async function resubmitByStep(
             row.id,
             transferResult.error ??
               `transferDocumentCustomer failed for ${tPayload.docType} ${tPayload.txnId}`
+          );
+        }
+        break;
+      }
+
+      case "inventory_adjustment": {
+        const pool = getDbPool();
+        const iaRow = await pool.query(
+          `SELECT payload FROM qb_order_pipeline WHERE id = $1`,
+          [row.id]
+        );
+        const iaPayload = iaRow.rows[0]?.payload as AdjustmentGroupPayload | null;
+        if (!iaPayload?.lines?.length) {
+          await failPipelineRow(row.id, "inventory_adjustment: missing or empty payload");
+          break;
+        }
+        const iaResult = await postInventoryAdjustmentToQb(row.id, iaPayload, container, logger);
+        if (iaResult.success) {
+          await pool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW()
+              WHERE id = $1`,
+            [row.id, iaResult.operationId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ inventory_adjustment ${row.id} submitted op=${iaResult.operationId}`
+          );
+        } else {
+          await failPipelineRow(row.id, iaResult.error);
+          logger.warn(
+            `${LOG_PREFIX} ❌ inventory_adjustment ${row.id} failed: ${iaResult.error}`
+          );
+        }
+        break;
+      }
+
+      case "void_inventory_adjustment": {
+        if (!row.qb_txn_id) {
+          await failPipelineRow(row.id, "void_inventory_adjustment: missing qb_txn_id");
+          break;
+        }
+        const viaResult = await voidInventoryAdjustmentInQb(row.id, row.qb_txn_id);
+        if (viaResult.success) {
+          const pool = getDbPool();
+          await pool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW(), updated_at = NOW()
+              WHERE id = $1`,
+            [row.id, viaResult.operationId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ void_inventory_adjustment ${row.id} submitted op=${viaResult.operationId}`
+          );
+        } else {
+          await failPipelineRow(row.id, viaResult.error);
+          logger.warn(
+            `${LOG_PREFIX} ❌ void_inventory_adjustment ${row.id} failed: ${viaResult.error}`
           );
         }
         break;

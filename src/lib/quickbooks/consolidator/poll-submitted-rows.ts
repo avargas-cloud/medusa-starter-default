@@ -163,6 +163,23 @@ export async function pollSubmittedRows(
           );
         }
 
+        // inventory_adjustment confirmed → stamp qb_synced_at on the inventory_count
+        if (row.step === "inventory_adjustment" && row.order_id) {
+          try {
+            await pool.query(
+              `UPDATE inventory_count SET qb_synced_at = NOW() WHERE id = $1`,
+              [row.order_id]
+            );
+            logger.info(
+              `${LOG_PREFIX} ✅ inventory_count ${row.order_id} → qb_synced_at stamped (TxnID=${txnId})`
+            );
+          } catch (icErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Could not stamp qb_synced_at on inventory_count ${row.order_id}: ${icErr.message}`
+            );
+          }
+        }
+
         // sales_receipt / invoice confirmed via async poll → propagate qb_sync_status='synced'
         // to pos_invoice.metadata AND clear stale 'error' on order.metadata.
         if (

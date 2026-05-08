@@ -2,19 +2,21 @@
  * src/workflows/inventory-count/steps/enqueue-qb-adjustments-step.ts
  *
  * Groups applied lines by qb_account_list_id and inserts one row per group
- * into qb_inventory_adjustment_pipeline. Each row contains an immutable
- * payload snapshot used by the cron poller; future retries read the
- * payload, never the live tables.
+ * into qb_order_pipeline (step='inventory_adjustment'). The consolidator
+ * cron picks these up and calls the QB bridge — same path as every other
+ * QB operation. No separate poller.
+ *
+ * reference_id = "${count_id}:${accountListId}" — unique per group, idempotent.
+ * order_id     = count_id — lets poll-submitted-rows stamp qb_synced_at on confirm.
  *
  * No compensation: if this step fails, no QB queue rows exist yet, so
  * there is nothing to revert (Medusa stock changes are reverted by the
  * apply-stock-deltas-step compensation).
  */
 
+import { randomUUID } from "crypto";
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
-
-import { INVENTORY_COUNT_MODULE } from "../../../modules/inventory-count";
-import type InventoryCountModuleService from "../../../modules/inventory-count/service";
+import { getDbPool } from "../../../api/utils/db-pool";
 
 import type { AppliedDelta } from "./apply-stock-deltas-step";
 import type { ClassifiedLine } from "./classify-lines-step";
@@ -36,36 +38,16 @@ export interface EnqueueQbAdjustmentsStepOutput {
   }>;
 }
 
-interface GroupPayloadLine {
-  line_id: string;
-  inventory_item_id: string;
-  product_variant_id: string;
-  sku: string;
-  delta_applied: number;
-  new_stock: number;
-}
-
-interface GroupPayload {
-  count_id: string;
-  count_number: string;
-  count_memo: string;
-  qb_account_list_id: string;
-  lines: GroupPayloadLine[];
-}
-
 export const enqueueQbAdjustmentsStep = createStep(
   "enqueue-qb-inventory-adjustments",
   async (
-    input: EnqueueQbAdjustmentsStepInput,
-    { container }
+    input: EnqueueQbAdjustmentsStepInput
   ): Promise<StepResponse<EnqueueQbAdjustmentsStepOutput, null>> => {
     if (input.applied.length === 0) {
       return new StepResponse({ pipeline_ids: [], groups: [] }, null);
     }
 
-    const service = container.resolve(
-      INVENTORY_COUNT_MODULE
-    ) as unknown as InventoryCountModuleService;
+    const pool = getDbPool();
 
     const appliedByLineId = new Map<string, AppliedDelta>();
     for (const a of input.applied) appliedByLineId.set(a.line_id, a);
@@ -77,11 +59,11 @@ export const enqueueQbAdjustmentsStep = createStep(
       groupsByAccount.set(line.qb_account_list_id, list);
     }
 
-    const toCreate: Array<Record<string, unknown>> = [];
     const groupSummary: EnqueueQbAdjustmentsStepOutput["groups"] = [];
+    const pipelineIds: string[] = [];
 
     for (const [accountListId, lines] of groupsByAccount.entries()) {
-      const payload: GroupPayload = {
+      const payload = {
         count_id: input.count_id,
         count_number: input.count_number,
         count_memo: input.count_memo,
@@ -99,35 +81,45 @@ export const enqueueQbAdjustmentsStep = createStep(
         }),
       };
 
-      toCreate.push({
-        inventory_count_id: input.count_id,
-        qb_account_list_id: accountListId,
-        status: "waiting",
-        payload,
-      });
-    }
+      // Composite reference_id is unique per group and idempotent across retries.
+      const referenceId = `${input.count_id}:${accountListId}`;
+      const id = randomUUID();
 
-    const created =
-      await service.createQbInventoryAdjustmentPipelines(toCreate);
-    const createdArr = Array.isArray(created) ? created : [created];
+      // Upsert: if a pending/failed row already exists for this group (e.g. manual
+      // retry), reset it to pending with a fresh payload. Otherwise INSERT new.
+      const { rows: updated } = await pool.query(
+        `UPDATE qb_order_pipeline
+            SET status = 'pending', payload = $3::jsonb, error = NULL,
+                next_retry_at = NULL, updated_at = NOW()
+          WHERE reference_id = $1 AND step = 'inventory_adjustment'
+            AND status IN ('pending', 'failed')
+          RETURNING id`,
+        [referenceId, accountListId, JSON.stringify(payload)]
+      );
 
-    for (let i = 0; i < createdArr.length; i++) {
-      const row = createdArr[i] as { id: string; qb_account_list_id: string };
-      const lineCount =
-        groupsByAccount.get(row.qb_account_list_id)?.length ?? 0;
+      let rowId: string;
+      if (updated.length > 0) {
+        rowId = updated[0].id as string;
+      } else {
+        await pool.query(
+          `INSERT INTO qb_order_pipeline
+             (id, order_id, reference_id, reference_type, step, status, payload,
+              medusa_ref_number, created_at, updated_at)
+           VALUES ($1, $2, $3, 'inventory_count', 'inventory_adjustment', 'pending',
+                   $4::jsonb, $5, NOW(), NOW())`,
+          [id, input.count_id, referenceId, JSON.stringify(payload), input.count_number]
+        );
+        rowId = id;
+      }
+
+      pipelineIds.push(rowId);
       groupSummary.push({
-        qb_account_list_id: row.qb_account_list_id,
-        line_count: lineCount,
-        pipeline_id: row.id,
+        qb_account_list_id: accountListId,
+        line_count: lines.length,
+        pipeline_id: rowId,
       });
     }
 
-    return new StepResponse(
-      {
-        pipeline_ids: createdArr.map((r) => (r as { id: string }).id),
-        groups: groupSummary,
-      },
-      null
-    );
+    return new StepResponse({ pipeline_ids: pipelineIds, groups: groupSummary }, null);
   }
 );

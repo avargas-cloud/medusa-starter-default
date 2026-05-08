@@ -26,7 +26,9 @@ export type PipelineStep =
   | "vendor_bill_void"
   | "purchase_order"
   | "mod_purchase_order"
-  | "void_purchase_order";
+  | "void_purchase_order"
+  | "inventory_adjustment"
+  | "void_inventory_adjustment";
 
 export type PipelineStatus =
   | "pending"
