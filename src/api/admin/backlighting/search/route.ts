@@ -27,7 +27,32 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
                 v.metadata AS variant_metadata,
                 p.id AS product_id,
                 p.title AS product_title,
-                p.thumbnail
+                p.thumbnail,
+                (
+                    SELECT pr.amount
+                    FROM product_variant_price_set psl
+                    JOIN price pr ON pr.price_set_id = psl.price_set_id
+                    WHERE psl.variant_id = v.id
+                      AND pr.currency_code = 'usd'
+                      AND pr.deleted_at IS NULL
+                      AND pr.price_list_id IS NULL
+                    ORDER BY (pr.price_list_id IS NULL) DESC, pr.created_at DESC
+                    LIMIT 1
+                ) AS standard_price_amount,
+                (
+                    SELECT pr.amount
+                    FROM product_variant_price_set psl
+                    JOIN price pr ON pr.price_set_id = psl.price_set_id
+                    JOIN price_list pl ON pl.id = pr.price_list_id
+                    WHERE psl.variant_id = v.id
+                      AND pr.currency_code = 'usd'
+                      AND pr.deleted_at IS NULL
+                      AND pl.deleted_at IS NULL
+                      AND LOWER(pl.title) LIKE '%wholesale%'
+                    ORDER BY pr.created_at DESC
+                    LIMIT 1
+                ) AS wholesale_price_amount,
+                'usd' AS currency_code
              FROM product_variant v
              JOIN product p ON v.product_id = p.id
              WHERE v.deleted_at IS NULL AND p.deleted_at IS NULL
