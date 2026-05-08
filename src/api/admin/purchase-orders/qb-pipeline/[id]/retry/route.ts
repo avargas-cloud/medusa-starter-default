@@ -11,6 +11,10 @@
 
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+import {
+  orderPurchaseOrderModLines,
+  type PurchaseOrderModLineLike,
+} from "../../../../../../lib/quickbooks/purchase-order-line-order";
 import { PURCHASE_ORDERS_MODULE } from "../../../../../../modules/purchase-orders";
 import type PurchaseOrdersModuleService from "../../../../../../modules/purchase-orders/service";
 
@@ -98,7 +102,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   const row = rows[0];
   if (!row) return res.status(404).json({ error: "Pipeline entry not found" });
-  const retryableStatuses = ["error", "waiting", "submitted"];
+  const retryableStatuses = [
+    "error",
+    "failed_permanent",
+    "waiting",
+    "submitted",
+  ];
   if (!retryableStatuses.includes(row.status)) {
     return res
       .status(409)
@@ -113,9 +122,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const needsQuery = (pl.is_mod || pl.is_void) && (!pl.edit_sequence || isEditSeqErr);
   // Strip _query_attempts so the re-queued query gets fresh retries.
   const { _query_attempts: _removed, ...plClean } = pl as Record<string, unknown>;
+  const sortedLines =
+    plClean.is_mod && Array.isArray(plClean.lines)
+      ? orderPurchaseOrderModLines(
+          plClean.lines as Array<
+            PurchaseOrderModLineLike & Record<string, unknown>
+          >
+        )
+      : undefined;
+  const plOrdered = sortedLines ? { ...plClean, lines: sortedLines } : plClean;
   const newPayload = needsQuery
-    ? { ...plClean, is_query: true, edit_sequence: undefined }
-    : plClean;
+    ? { ...plOrdered, is_query: true, edit_sequence: undefined }
+    : plOrdered;
 
   await knex.raw(
     `UPDATE qb_purchase_order_pipeline

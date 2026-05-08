@@ -100,3 +100,12 @@ export type QbPoVoidStatus = (typeof QB_PO_VOID_STATUSES)[number];
 export const VENDOR_BILL_STATUSES = ["draft", "confirmed", "synced"] as const;
 
 export type VendorBillStatus = (typeof VENDOR_BILL_STATUSES)[number];
+
+export const VENDOR_BILL_TYPES = [
+  "regular",
+  "service",
+  "freight",
+  "tariff",
+] as const;
+
+export type VendorBillType = (typeof VENDOR_BILL_TYPES)[number];

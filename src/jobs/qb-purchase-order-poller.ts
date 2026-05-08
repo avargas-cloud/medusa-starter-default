@@ -28,6 +28,10 @@ import {
   STANDARD_STALE_CONFIG,
 } from "../lib/quickbooks/stale-row-cleanup";
 import { classifyQbError } from "../lib/quickbooks/error-classifier";
+import {
+  orderPurchaseOrderModLines,
+  type PurchaseOrderModLineLike,
+} from "../lib/quickbooks/purchase-order-line-order";
 
 const bridgeUrl = (): string =>
   process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
@@ -123,7 +127,17 @@ const submitVoidToBridge = async (
 const submitModToBridge = async (
   payload: Record<string, unknown>
 ): Promise<string> => {
-  const body = withCanonicalPoMemo(payload);
+  const sortedLines = Array.isArray(payload.lines)
+    ? orderPurchaseOrderModLines(
+        payload.lines as Array<
+          PurchaseOrderModLineLike & Record<string, unknown>
+        >
+      )
+    : undefined;
+  const body = withCanonicalPoMemo({
+    ...payload,
+    ...(sortedLines ? { lines: sortedLines } : {}),
+  });
   const res = await fetch(`${bridgeUrl()}/api/purchase-orders/mod`, {
     method: "PUT",
     headers: {
@@ -862,15 +876,17 @@ export default async function qbPurchaseOrderPoller(
                 [row.purchase_order_id]
               )
               .then((r: any) => r.rows ?? []);
-            refreshedLines = dbLines.map((l: any) => ({
-              line_id: l.id,
-              qb_txn_line_id: l.qb_txn_line_id,
-              qb_item_list_id: l.qb_item_list_id_snapshot,
-              sku: l.sku_snapshot,
-              description: l.description_snapshot,
-              qty_ordered: l.qty_ordered,
-              unit_cost_cents: l.unit_cost_cents,
-            }));
+            refreshedLines = orderPurchaseOrderModLines(dbLines).map(
+              (l: any) => ({
+                line_id: l.id,
+                qb_txn_line_id: l.qb_txn_line_id,
+                qb_item_list_id: l.qb_item_list_id_snapshot,
+                sku: l.sku_snapshot,
+                description: l.description_snapshot,
+                qty_ordered: l.qty_ordered,
+                unit_cost_cents: l.unit_cost_cents,
+              })
+            );
           }
           const modPl = {
             ...pl,

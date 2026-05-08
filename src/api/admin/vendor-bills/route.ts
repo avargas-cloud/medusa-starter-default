@@ -17,8 +17,10 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+import { randomUUID } from "crypto";
 import { z } from "zod";
 
+import { getActorUserId, UnauthenticatedError } from "../purchase-orders/_lib/auth";
 import { zodErrorToBody } from "../purchase-orders/_lib/format";
 
 // ── Zod query schema ──────────────────────────────────────────────────────────
@@ -28,6 +30,14 @@ const listQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
   status: z.string().optional(),
   po_id: z.string().optional(),
+  bill_type: z.enum(["regular", "service", "freight", "tariff"]).optional(),
+});
+
+const createVendorBillSchema = z.object({
+  bill_type: z.enum(["regular", "service", "freight", "tariff"]).default("regular"),
+  reference_id: z.string().max(200).nullish(),
+  commission_mode: z.enum(["percent", "fixed"]).default("percent"),
+  notes: z.string().max(2000).nullish(),
 });
 
 // ── Knex type ────────────────────────────────────────────────────────────────
@@ -39,8 +49,10 @@ type KnexInstance = {
 interface VendorBillListRow {
   id: string;
   number: string | null;
-  purchase_order_id: string;
-  purchase_order_receipt_id: string;
+  purchase_order_id: string | null;
+  purchase_order_receipt_id: string | null;
+  bill_type: string;
+  reference_id: string | null;
   status: string;
   confirmed_at: string | null;
   commission_mode: string;
@@ -70,7 +82,7 @@ export async function GET(
   if (!parsed.success) {
     return res.status(400).json(zodErrorToBody(parsed.error));
   }
-  const { limit, offset, status, po_id } = parsed.data;
+  const { limit, offset, status, po_id, bill_type } = parsed.data;
 
   const knex = (
     req.scope as unknown as { resolve: (k: string) => unknown }
@@ -87,6 +99,10 @@ export async function GET(
   if (po_id) {
     whereClauses.push(`vb.purchase_order_id = ?`);
     bindings.push(po_id);
+  }
+  if (bill_type) {
+    whereClauses.push(`vb.bill_type = ?`);
+    bindings.push(bill_type);
   }
 
   const whereStr = whereClauses.join(" AND ");
@@ -105,6 +121,8 @@ export async function GET(
        vb.number,
        vb.purchase_order_id,
        vb.purchase_order_receipt_id,
+       vb.bill_type,
+       vb.reference_id,
        vb.status,
        vb.confirmed_at,
        vb.commission_mode,
@@ -152,4 +170,79 @@ export async function GET(
   }));
 
   return res.json({ vendor_bills: rows, count });
+}
+
+export async function POST(
+  req: AuthenticatedMedusaRequest,
+  res: MedusaResponse
+) {
+  try {
+    getActorUserId(req);
+  } catch (err) {
+    if (err instanceof UnauthenticatedError) {
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
+    }
+    throw err;
+  }
+
+  const parsed = createVendorBillSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json(zodErrorToBody(parsed.error));
+  }
+
+  const body = parsed.data;
+  const knex = (
+    req.scope as unknown as { resolve: (k: string) => unknown }
+  ).resolve("__pg_connection__") as KnexInstance;
+
+  const seqResult = await knex.raw(
+    `SELECT nextval('custom_vendor_bill_seq') AS seq`
+  );
+  const vbNumber = `VB-${(seqResult.rows[0] as { seq: string | number }).seq}`;
+
+  const result = await knex.raw(
+    `INSERT INTO vendor_bill (
+       id,
+       number,
+       purchase_order_receipt_id,
+       purchase_order_id,
+       bill_type,
+       status,
+       reference_id,
+       commission_mode,
+       commission_rate_bps,
+       commission_amount_cents,
+       freight_included,
+       freight_amount_cents,
+       tariff_included,
+       tariff_amount_cents,
+       notes,
+       created_at,
+       updated_at
+     ) VALUES (
+       ?,
+       ?, NULL, NULL, ?, 'draft', ?, ?, 0, 0, false, 0, false, 0, ?, NOW(), NOW()
+     )
+     RETURNING *`,
+    [
+      `vb_${randomUUID().replace(/-/g, "")}`,
+      vbNumber,
+      body.bill_type,
+      body.reference_id ?? null,
+      body.commission_mode,
+      body.notes ?? null,
+    ]
+  );
+
+  return res.status(201).json({
+    vendor_bill: {
+      ...(result.rows[0] as Record<string, unknown>),
+      lines: [],
+      line_count: 0,
+      total_landed_cents: 0,
+      billed_receipt_ids: [],
+    },
+  });
 }

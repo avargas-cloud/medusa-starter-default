@@ -18,10 +18,15 @@ export const VendorBillLine = model.define("vendor_bill_line", {
   id: model.id({ prefix: "vbl" }).primaryKey(),
 
   vendor_bill_id: model.text(),
-  receipt_line_id: model.text(),
+  receipt_line_id: model.text().nullable(),
+
+  line_type: model.text().default("product"), // product | qb_account
+  qb_account_list_id: model.text().nullable(),
+  qb_account_full_name: model.text().nullable(),
+  qb_account_type: model.text().nullable(),
 
   // Snapshot fields (frozen from the receipt line at bill creation)
-  product_variant_id: model.text(),
+  product_variant_id: model.text().nullable(),
   sku: model.text(),
   description: model.text(),
   qty: model.number(),

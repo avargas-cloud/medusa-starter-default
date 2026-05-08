@@ -26,9 +26,12 @@ export const VendorBill = model.define("vendor_bill", {
   // Sequential human-readable ID assigned at creation (VB-XXXX)
   number: model.text().nullable(),
 
-  // One-to-one with receipt (enforced by UNIQUE index in migration)
-  purchase_order_receipt_id: model.text(),
-  purchase_order_id: model.text(),
+  // Regular bills may be filled from a PO/receipt. Service/freight/tariff bills
+  // can be created independently and linked to a regular bill later.
+  purchase_order_receipt_id: model.text().nullable(),
+  purchase_order_id: model.text().nullable(),
+
+  bill_type: model.text().default("regular"), // regular | service | freight | tariff
 
   // Lifecycle
   status: model.text().default("draft"), // draft | confirmed | synced
@@ -38,16 +41,19 @@ export const VendorBill = model.define("vendor_bill", {
   commission_rate_bps: model.number().default(0), // 1500 = 15.00%
   commission_amount_cents: model.number().default(0), // used when mode=fixed
   commission_invoice_number: model.text().nullable(),
+  service_vendor_bill_id: model.text().nullable(),
 
   // Freight
   freight_included: model.boolean().default(false),
   freight_amount_cents: model.number().default(0),
   freight_invoice_number: model.text().nullable(),
+  freight_vendor_bill_id: model.text().nullable(),
 
   // Tariff / duty
   tariff_included: model.boolean().default(false),
   tariff_amount_cents: model.number().default(0),
   tariff_number: model.text().nullable(),
+  tariff_vendor_bill_id: model.text().nullable(),
 
   // Vendor's own reference / PI number for this shipment
   reference_id: model.text().nullable(),

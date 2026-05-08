@@ -21,6 +21,7 @@ import { zodErrorToBody } from "../_lib/format";
 import { getPurchaseOrdersService } from "../_lib/service-resolver";
 import { computeTotals, normalizeLine } from "../_lib/totals";
 import { updateDraftSchema } from "../_lib/validators";
+import { orderPurchaseOrderModLines } from "../../../../lib/quickbooks/purchase-order-line-order";
 
 interface QbVendorLike {
   id: string;
@@ -638,7 +639,7 @@ export async function PATCH(
           : null,
         memo: `Medusa PO ${poMemoNumber(existing.number ?? id)}`,
         reference_number: existing.reference_number ?? null,
-        lines: freshLines.map((l) => ({
+        lines: orderPurchaseOrderModLines(freshLines).map((l) => ({
           line_id: l.id,
           qb_txn_line_id: l.qb_txn_line_id ?? null,
           qb_item_list_id: l.qb_item_list_id_snapshot,

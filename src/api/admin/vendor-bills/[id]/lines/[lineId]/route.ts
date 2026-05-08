@@ -22,7 +22,7 @@ export async function DELETE(
   const bills = (await service.listVendorBills(
     { id },
     { take: 1 }
-  )) as unknown as Array<{ id: string; status: string }>;
+  )) as unknown as Array<{ id: string; status: string; bill_type?: string }>;
   const bill = bills[0] ?? null;
 
   if (!bill) {
@@ -50,7 +50,7 @@ export async function DELETE(
       .json({ error: "Vendor bill line not found", code: "not_found" });
   }
 
-  if (lines.length <= 1) {
+  if ((bill.bill_type ?? "regular") === "regular" && lines.length <= 1) {
     return res.status(422).json({
       error: "Vendor bill must keep at least one line",
       code: "last_line",

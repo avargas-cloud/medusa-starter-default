@@ -7,6 +7,7 @@ import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 // pos/sync now enqueues pipeline rows for the consolidator.
 // 1.5.6: handleSalesReceiptCreated import removed — pos/sync enqueues now.
 import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
+import { orderPurchaseOrderModLines } from "../../../../lib/quickbooks/purchase-order-line-order";
 import {
   getEstimateTxnId,
   getSoTxnId,
@@ -116,7 +117,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           expected_at: po.expected_at ? new Date(po.expected_at).toISOString() : null,
           memo: `Medusa PO ${poMemoNumber(po.number ?? id)}`,
           reference_number: po.reference_number ?? null,
-          lines: lines.map((line) => ({
+          lines: orderPurchaseOrderModLines(lines).map((line) => ({
             line_id: line.id,
             qb_txn_line_id: line.qb_txn_line_id ?? null,
             qb_item_list_id: line.qb_item_list_id_snapshot,
