@@ -37,9 +37,13 @@ interface VendorBillDetailRow {
   number: string | null;
   purchase_order_id: string | null;
   purchase_order_receipt_id: string | null;
+  vendor_id: string | null;
+  vendor_name_snapshot: string | null;
+  vendor_qb_list_id_snapshot: string | null;
   bill_type: string;
   status: string;
   reference_id: string | null;
+  document_date: string | null;
   commission_mode: string;
   commission_rate_bps: number;
   commission_amount_cents: number;
@@ -88,8 +92,10 @@ interface VendorBillLineRow {
 }
 
 const vendorBillPatchSchema = z.object({
+  vendor_id: z.string().min(1).nullish(),
   bill_type: z.enum(["regular", "service", "freight", "tariff"]).optional(),
   reference_id: z.string().max(200).nullish(),
+  document_date: z.string().datetime().nullish(),
   commission_mode: z.enum(["percent", "fixed"]).optional(),
   commission_rate_bps: z.number().int().min(0).max(100_000).optional(),
   commission_amount_cents: z.number().int().min(0).max(1_000_000_000).optional(),
@@ -128,9 +134,13 @@ export async function GET(
        vb.number,
        vb.purchase_order_id,
        vb.purchase_order_receipt_id,
+       vb.vendor_id,
+       vb.vendor_name_snapshot,
+       vb.vendor_qb_list_id_snapshot,
        vb.bill_type,
        vb.status,
        vb.reference_id,
+       vb.document_date,
        vb.commission_mode,
        vb.commission_rate_bps,
        vb.commission_amount_cents,
@@ -152,7 +162,7 @@ export async function GET(
        po."number"                         AS po_number,
        po.qb_purchase_order_txn_number      AS po_qb_ref_number,
        por."number"                        AS receipt_number,
-       po.vendor_name_snapshot             AS vendor_name,
+       COALESCE(vb.vendor_name_snapshot, po.vendor_name_snapshot) AS vendor_name,
        por.received_at                     AS receipt_received_at,
        sl.name                             AS ship_to_location_name
      FROM vendor_bill vb
@@ -233,22 +243,52 @@ export async function PATCH(
   const knex = resolveKnex(req);
 
   const lookup = await knex.raw(
-    `SELECT id, status, bill_type FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
+    `SELECT id, status, bill_type, purchase_order_id FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
     [id]
   );
   const bill = (lookup.rows[0] ?? null) as
-    | { id: string; status: string; bill_type: string }
+    | { id: string; status: string; bill_type: string; purchase_order_id: string | null }
     | null;
   if (!bill) {
     return res
       .status(404)
       .json({ error: "Vendor bill not found", code: "not_found" });
   }
-  if (bill.status !== "draft") {
+  if (bill.status !== "draft" && bill.status !== "confirmed") {
     return res.status(409).json({
-      error: `Cannot update a vendor bill in status '${bill.status}'. Only draft bills can be edited.`,
+      error: `Cannot update a vendor bill in status '${bill.status}'. Only draft or confirmed bills can be edited.`,
       code: "not_draft",
     });
+  }
+
+  if (patch.vendor_id !== undefined && patch.vendor_id !== null) {
+    const vendorResult = await knex.raw(
+      `SELECT id, qb_list_id, full_name, name, company_name
+       FROM qb_vendor
+       WHERE id = ? AND deleted_at IS NULL AND is_active = true
+       LIMIT 1`,
+      [patch.vendor_id]
+    );
+    const vendor = (vendorResult.rows[0] ?? null) as
+      | {
+          id: string;
+          qb_list_id: string | null;
+          full_name: string | null;
+          name: string | null;
+          company_name: string | null;
+        }
+      | null;
+    if (!vendor) {
+      return res.status(422).json({
+        error: "A valid active vendor must be selected",
+        code: "vendor_required",
+      });
+    }
+    patch.vendor_id = vendor.id;
+    (patch as typeof patch & { vendor_name_snapshot?: string }).vendor_name_snapshot =
+      vendor.company_name ?? vendor.full_name ?? vendor.name ?? vendor.id;
+    (patch as typeof patch & { vendor_qb_list_id_snapshot?: string | null }).vendor_qb_list_id_snapshot =
+      vendor.qb_list_id;
   }
 
   if (patch.bill_type && patch.bill_type !== bill.bill_type) {
@@ -272,6 +312,22 @@ export async function PATCH(
         [id]
       );
     }
+  }
+
+  const effectiveBillType = patch.bill_type ?? bill.bill_type;
+  if (effectiveBillType !== "regular") {
+    patch.commission_rate_bps = 0;
+    patch.commission_amount_cents = 0;
+    patch.commission_invoice_number = null;
+    patch.service_vendor_bill_id = null;
+    patch.freight_included = false;
+    patch.freight_amount_cents = 0;
+    patch.freight_invoice_number = null;
+    patch.freight_vendor_bill_id = null;
+    patch.tariff_included = false;
+    patch.tariff_amount_cents = 0;
+    patch.tariff_number = null;
+    patch.tariff_vendor_bill_id = null;
   }
 
   for (const [field, requiredType] of Object.entries(LINKED_BILL_TYPE_BY_FIELD)) {
@@ -304,9 +360,9 @@ export async function PATCH(
         code: "linked_bill_wrong_type",
       });
     }
-    if (linked.status !== "draft") {
+    if (linked.status !== "draft" && linked.status !== "confirmed") {
       return res.status(422).json({
-        error: `Linked ${requiredType} bill must be open/draft`,
+        error: `Linked ${requiredType} bill must be draft or confirmed`,
         code: "linked_bill_not_open",
       });
     }
@@ -314,8 +370,12 @@ export async function PATCH(
 
   const updatePayload: Record<string, unknown> = {};
   for (const key of [
+    "vendor_id",
+    "vendor_name_snapshot",
+    "vendor_qb_list_id_snapshot",
     "bill_type",
     "reference_id",
+    "document_date",
     "commission_mode",
     "commission_rate_bps",
     "commission_amount_cents",
@@ -346,6 +406,25 @@ export async function PATCH(
        WHERE id = ? AND deleted_at IS NULL`,
       [...values, id]
     );
+  }
+
+  if (bill.bill_type === "regular" && bill.purchase_order_id) {
+    const linkedIds = [
+      patch.service_vendor_bill_id,
+      patch.freight_vendor_bill_id,
+      patch.tariff_vendor_bill_id,
+    ].filter((linkedId): linkedId is string => typeof linkedId === "string" && linkedId.length > 0);
+
+    if (linkedIds.length > 0) {
+      await knex.raw(
+        `UPDATE vendor_bill
+         SET purchase_order_id = ?, updated_at = NOW()
+         WHERE id = ANY(?)
+           AND deleted_at IS NULL
+           AND bill_type IN ('service', 'freight', 'tariff')`,
+        [bill.purchase_order_id, linkedIds]
+      );
+    }
   }
 
   return GET(req, res);

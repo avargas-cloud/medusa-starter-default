@@ -31,6 +31,12 @@ export const VendorBill = model.define("vendor_bill", {
   purchase_order_receipt_id: model.text().nullable(),
   purchase_order_id: model.text().nullable(),
 
+  // Vendor is selected directly for every bill type. Regular bills may still
+  // be filled from a PO, but the bill keeps its own vendor snapshot.
+  vendor_id: model.text().nullable(),
+  vendor_name_snapshot: model.text().nullable(),
+  vendor_qb_list_id_snapshot: model.text().nullable(),
+
   bill_type: model.text().default("regular"), // regular | service | freight | tariff
 
   // Lifecycle
@@ -57,6 +63,10 @@ export const VendorBill = model.define("vendor_bill", {
 
   // Vendor's own reference / PI number for this shipment
   reference_id: model.text().nullable(),
+
+  // Date printed on the vendor document. This is intentionally separate from
+  // created_at, which only means when we entered it in the system.
+  document_date: model.dateTime().nullable(),
 
   // Free-text notes
   notes: model.text().nullable(),

@@ -83,10 +83,10 @@ export async function POST(
       .status(404)
       .json({ error: "Vendor bill not found", code: "not_found" });
   }
-  if (bill.status !== "draft") {
+  if (bill.status !== "draft" && bill.status !== "confirmed") {
     return res.status(409).json({
-      error: "Only draft vendor bills can be edited",
-      code: "not_draft",
+      error: "Only draft or confirmed vendor bills can be edited",
+      code: "not_editable",
     });
   }
   if (bill.bill_type === "regular") {

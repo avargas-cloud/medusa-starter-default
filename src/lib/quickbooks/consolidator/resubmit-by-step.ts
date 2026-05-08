@@ -712,7 +712,10 @@ export async function resubmitByStep(
       case "inventory_adjustment": {
         const pool = getDbPool();
         const iaRow = await pool.query(
-          `SELECT payload FROM qb_order_pipeline WHERE id = $1`,
+          `SELECT p.payload, ic.stock_location_id
+             FROM qb_order_pipeline p
+             LEFT JOIN inventory_count ic ON ic.id = p.order_id
+            WHERE p.id = $1`,
           [row.id]
         );
         const iaPayload = iaRow.rows[0]?.payload as AdjustmentGroupPayload | null;
@@ -720,7 +723,35 @@ export async function resubmitByStep(
           await failPipelineRow(row.id, "inventory_adjustment: missing or empty payload");
           break;
         }
-        const iaResult = await postInventoryAdjustmentToQb(row.id, iaPayload, container, logger);
+
+        // Refresh new_stock from current inventory_level so retries send accurate
+        // quantities even if stock moved (sales/receipts) since original approval.
+        const stockLocationId = iaRow.rows[0]?.stock_location_id as string | null;
+        let sendPayload = iaPayload;
+        if (stockLocationId) {
+          const itemIds = iaPayload.lines.map((l) => l.inventory_item_id);
+          const { rows: levels } = await pool.query(
+            `SELECT inventory_item_id, stocked_quantity
+               FROM inventory_level
+              WHERE inventory_item_id = ANY($1) AND location_id = $2`,
+            [itemIds, stockLocationId]
+          );
+          const stockNow = new Map<string, number>();
+          for (const lvl of levels as Array<{ inventory_item_id: string; stocked_quantity: number | null }>) {
+            stockNow.set(lvl.inventory_item_id, Number(lvl.stocked_quantity ?? 0));
+          }
+          sendPayload = {
+            ...iaPayload,
+            lines: iaPayload.lines.map((l) => ({
+              ...l,
+              new_stock: stockNow.has(l.inventory_item_id)
+                ? stockNow.get(l.inventory_item_id)!
+                : l.new_stock,
+            })),
+          };
+        }
+
+        const iaResult = await postInventoryAdjustmentToQb(row.id, sendPayload, container, logger);
         if (iaResult.success) {
           await pool.query(
             `UPDATE qb_order_pipeline

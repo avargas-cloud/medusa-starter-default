@@ -266,6 +266,9 @@ export async function POST(
   const newBill = (await service.createVendorBills({
     purchase_order_receipt_id: anchorReceipt.id,
     purchase_order_id: poId,
+    vendor_id: (po as { vendor_id?: string }).vendor_id ?? null,
+    vendor_name_snapshot: (po as { vendor_name_snapshot?: string | null }).vendor_name_snapshot ?? null,
+    vendor_qb_list_id_snapshot: (po as { vendor_qb_list_id_snapshot?: string | null }).vendor_qb_list_id_snapshot ?? null,
     number: vbNumber,
     status: "draft",
     reference_id: body.reference_id ?? null,

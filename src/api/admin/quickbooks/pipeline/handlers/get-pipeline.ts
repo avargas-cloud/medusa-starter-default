@@ -83,9 +83,8 @@ export async function GET(
       conditions.push(`p.step = $${p++}`);
       values.push(step);
     } else {
-      // El Sales Pipeline (sin filtro step explícito) no debe mostrar
-      // rows de customer_data_ext — tienen su propio tab "Customer Sync".
-      conditions.push(`p.step <> 'customer_data_ext'`);
+      // Exclude steps that have dedicated tabs in the QB pipeline UI.
+      conditions.push(`p.step NOT IN ('customer_data_ext', 'inventory_adjustment', 'void_inventory_adjustment')`);
     }
     if (refId) {
       conditions.push(`(p.order_id = $${p} OR p.reference_id = $${p})`);

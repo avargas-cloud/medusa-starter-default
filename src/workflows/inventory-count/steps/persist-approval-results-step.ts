@@ -5,8 +5,10 @@
  * refreshes denormalized counters on the header. Sets header status to
  * 'approved' if every line succeeded, otherwise 'partially_applied'.
  *
- * No compensation: if this step fails, the prior applyStockDeltasStep will
- * roll back the in-memory inventory levels via its own compensation.
+ * Compensation: reverts the count back to 'submitted' and all touched lines
+ * back to 'pending'. This runs when enqueueQbAdjustmentsStep fails after us,
+ * keeping DB state consistent with the stock-delta compensation from
+ * applyStockDeltasStep (which also reverts when enqueue fails).
  */
 
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
@@ -43,12 +45,22 @@ export interface PersistApprovalResultsStepOutput {
   total_lines_skipped: number;
 }
 
+interface PersistApprovalResultsStepCompensation {
+  count_id: string;
+  line_ids: string[];
+}
+
 export const persistApprovalResultsStep = createStep(
   "persist-inventory-count-approval-results",
   async (
     input: PersistApprovalResultsStepInput,
     { container }
-  ): Promise<StepResponse<PersistApprovalResultsStepOutput, null>> => {
+  ): Promise<
+    StepResponse<
+      PersistApprovalResultsStepOutput,
+      PersistApprovalResultsStepCompensation
+    >
+  > => {
     const service = container.resolve(
       INVENTORY_COUNT_MODULE
     ) as unknown as InventoryCountModuleService;
@@ -135,6 +147,13 @@ export const persistApprovalResultsStep = createStep(
       },
     ]);
 
+    const allTouchedLineIds = [
+      ...input.applied.map((a) => a.line_id),
+      ...input.blocked.map((b) => b.line_id),
+      ...input.skipped.map((s) => s.line_id),
+      ...input.verified.map((v) => v.line_id),
+    ];
+
     return new StepResponse(
       {
         status: finalStatus,
@@ -143,7 +162,43 @@ export const persistApprovalResultsStep = createStep(
         total_lines_blocked: totalBlocked,
         total_lines_skipped: totalSkipped,
       },
-      null
+      { count_id: input.count_id, line_ids: allTouchedLineIds }
     );
+  },
+  async (
+    compensation: PersistApprovalResultsStepCompensation | undefined,
+    { container }
+  ) => {
+    if (!compensation) return;
+    const service = container.resolve(
+      INVENTORY_COUNT_MODULE
+    ) as unknown as InventoryCountModuleService;
+
+    if (compensation.line_ids.length > 0) {
+      await service.updateInventoryCountLines(
+        compensation.line_ids.map((id) => ({
+          id,
+          status: "pending",
+          delta_applied: null,
+          qty_at_apply_time: null,
+          projected_stock: null,
+          qb_account_list_id: null,
+          override_note: null,
+          block_reason: null,
+        }))
+      );
+    }
+
+    await service.updateInventoryCounts([
+      {
+        id: compensation.count_id,
+        status: "submitted",
+        reviewed_by_user_id: null,
+        reviewed_at: null,
+        applied_at: null,
+        total_lines_applied: 0,
+        total_lines_blocked: 0,
+      },
+    ]);
   }
 );

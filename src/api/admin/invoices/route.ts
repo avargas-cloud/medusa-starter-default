@@ -26,7 +26,7 @@ import { registerMedusaPayment } from "./register-medusa-payment";
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const invoiceService = req.scope.resolve(INVOICE_MODULE);
   const customerModule = req.scope.resolve(Modules.CUSTOMER);
-  const { order_id, customer_id, created_at, status, limit, offset } =
+  const { order_id, customer_id, created_at, status, limit, offset, balance_due_gt } =
     req.query as Record<string, any>;
 
   const filters: Record<string, unknown> = {};
@@ -34,6 +34,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   if (customer_id) filters.customer_id = customer_id;
   if (created_at) filters.created_at = created_at;
   if (status) filters.status = status;
+  if (balance_due_gt !== undefined) filters.balance_due = { $gt: parseInt(balance_due_gt, 10) };
 
   const config: Record<string, any> = {
     relations: ["items", "tracking_links"],

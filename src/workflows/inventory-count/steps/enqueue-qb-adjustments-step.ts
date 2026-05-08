@@ -89,12 +89,12 @@ export const enqueueQbAdjustmentsStep = createStep(
       // retry), reset it to pending with a fresh payload. Otherwise INSERT new.
       const { rows: updated } = await pool.query(
         `UPDATE qb_order_pipeline
-            SET status = 'pending', payload = $3::jsonb, error = NULL,
+            SET status = 'pending', payload = $2::jsonb, error = NULL,
                 next_retry_at = NULL, updated_at = NOW()
           WHERE reference_id = $1 AND step = 'inventory_adjustment'
             AND status IN ('pending', 'failed')
           RETURNING id`,
-        [referenceId, accountListId, JSON.stringify(payload)]
+        [referenceId, JSON.stringify(payload)]
       );
 
       let rowId: string;

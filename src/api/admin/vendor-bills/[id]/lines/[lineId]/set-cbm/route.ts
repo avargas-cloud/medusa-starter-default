@@ -2,7 +2,7 @@
  * PATCH /admin/vendor-bills/:id/lines/:lineId/set-cbm
  *
  * Sets the CBM (cubic meters per unit) on a product variant and refreshes the
- * vendor_bill_line snapshot. Allowed on draft bills only.
+ * vendor_bill_line snapshot.
  */
 
 import type {
@@ -43,7 +43,7 @@ export async function PATCH(
 
   const service = getPurchaseOrdersService(req);
 
-  // Validate line belongs to this bill and bill is draft
+  // Validate line belongs to this bill and bill is editable.
   const lines = (await service.listVendorBillLines(
     { id: lineId, vendor_bill_id: billId },
     { take: 1 }
@@ -71,10 +71,10 @@ export async function PATCH(
       .status(404)
       .json({ error: "Vendor bill not found", code: "not_found" });
   }
-  if (bill.status !== "draft") {
+  if (bill.status !== "draft" && bill.status !== "confirmed") {
     return res.status(409).json({
-      error: "CBM can only be updated on draft vendor bills",
-      code: "not_draft",
+      error: "CBM can only be updated on draft or confirmed vendor bills",
+      code: "not_editable",
     });
   }
 

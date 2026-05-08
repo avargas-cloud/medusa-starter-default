@@ -29,6 +29,7 @@ interface VendorBillRow {
   commission_mode: string;
   commission_rate_bps: number;
   commission_amount_cents: number;
+  service_vendor_bill_id: string | null;
   freight_included: boolean;
   freight_amount_cents: number;
   tariff_included: boolean;
@@ -166,6 +167,25 @@ export async function POST(
     totalQty += line.qty;
   }
 
+  let serviceBillTotalCents = 0;
+  if (bill.service_vendor_bill_id) {
+    const serviceBillResult = await knex.raw(
+      `SELECT COALESCE(SUM(vbl.landed_unit_cost_cents * vbl.qty), 0)::int AS total
+       FROM vendor_bill vb
+       JOIN vendor_bill_line vbl
+         ON vbl.vendor_bill_id = vb.id
+        AND vbl.deleted_at IS NULL
+       WHERE vb.id = ?
+         AND vb.deleted_at IS NULL
+         AND vb.bill_type = 'service'
+         AND vb.status IN ('draft', 'confirmed')`,
+      [bill.service_vendor_bill_id]
+    );
+    serviceBillTotalCents = Number(
+      (serviceBillResult.rows[0] as { total: number | string } | undefined)?.total ?? 0
+    );
+  }
+
   // 6. Calculate per-unit cost components
   type LineUpdate = {
     id: string;
@@ -179,15 +199,8 @@ export async function POST(
   const lineUpdates: LineUpdate[] = lines.map((line) => {
     const cbm = cbmByVariantId.get(line.product_variant_id) ?? null;
 
-    let commissionPerUnit: number;
-    if (bill.commission_mode === "percent") {
-      commissionPerUnit = Math.round(
-        (line.unit_cost_cents * bill.commission_rate_bps) / 10_000
-      );
-    } else {
-      commissionPerUnit =
-        totalQty > 0 ? Math.round(bill.commission_amount_cents / totalQty) : 0;
-    }
+    const commissionPerUnit =
+      totalQty > 0 ? Math.round(serviceBillTotalCents / totalQty) : 0;
 
     let freightPerUnit = 0;
     if (bill.freight_included && totalCbm > 0 && cbm !== null) {

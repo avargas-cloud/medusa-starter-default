@@ -206,10 +206,60 @@ export async function GET(
         >)
       : [];
 
+  const billedByReceiptLineId = new Map<string, { vendor_bill_id: string; vendor_bill_number: string | null }>();
+  const billedQtyByPoLineId = new Map<string, number>();
+  if (receiptLines.length > 0) {
+    const receiptLineIds = receiptLines.map((rl) => rl.id).filter(Boolean);
+    const knex = (req.scope as any).resolve("__pg_connection__");
+    const billedRows: Array<{
+      receipt_line_id: string;
+      purchase_order_line_id: string;
+      qty_received_now: number;
+      vendor_bill_id: string;
+      vendor_bill_number: string | null;
+    }> = await knex.raw(
+      `SELECT
+         porl.id AS receipt_line_id,
+         porl.purchase_order_line_id,
+         porl.qty_received_now,
+         vb.id AS vendor_bill_id,
+         vb.number AS vendor_bill_number
+       FROM purchase_order_receipt_line porl
+       JOIN vendor_bill_line vbl
+         ON vbl.receipt_line_id = porl.id
+        AND vbl.deleted_at IS NULL
+       JOIN vendor_bill vb
+         ON vb.id = vbl.vendor_bill_id
+        AND vb.deleted_at IS NULL
+        AND vb.status NOT IN ('cancelled', 'voided')
+       WHERE porl.id = ANY(?)`,
+      [receiptLineIds]
+    ).then((r: any) => r.rows);
+
+    for (const row of billedRows) {
+      billedByReceiptLineId.set(row.receipt_line_id, {
+        vendor_bill_id: row.vendor_bill_id,
+        vendor_bill_number: row.vendor_bill_number,
+      });
+      billedQtyByPoLineId.set(
+        row.purchase_order_line_id,
+        (billedQtyByPoLineId.get(row.purchase_order_line_id) ?? 0) + Number(row.qty_received_now ?? 0)
+      );
+    }
+  }
+
   const linesByReceipt = new Map<string, Array<Record<string, unknown>>>();
   for (const rl of receiptLines) {
+    const billed = billedByReceiptLineId.get(rl.id as string) ?? null;
+    const decoratedReceiptLine = {
+      ...rl,
+      vendor_bill_id: billed?.vendor_bill_id ?? null,
+      vendor_bill_number: billed?.vendor_bill_number ?? null,
+      billing_status: billed ? "billed" : "unbilled",
+      is_billed: Boolean(billed),
+    };
     const arr = linesByReceipt.get(rl.purchase_order_receipt_id) ?? [];
-    arr.push(rl);
+    arr.push(decoratedReceiptLine);
     linesByReceipt.set(rl.purchase_order_receipt_id, arr);
   }
 
@@ -321,10 +371,18 @@ export async function GET(
   const decoratedLines = lines.map((l) => {
     const vid = (l as { product_variant_id?: string | null })
       .product_variant_id;
+    const lineId = l.id as string;
+    const qtyReceived = Number((l as { qty_received?: number }).qty_received ?? 0);
+    const billedQty = billedQtyByPoLineId.get(lineId) ?? 0;
+    const billingStatus =
+      billedQty <= 0 ? "unbilled" : billedQty >= qtyReceived ? "billed" : "partially_billed";
     return {
       ...l,
       thumbnail: vid ? (thumbnailByVariantId.get(vid) ?? null) : null,
       mpn: vid ? (mpnByVariantId.get(vid) ?? null) : null,
+      billed_qty: billedQty,
+      unbilled_received_qty: Math.max(0, qtyReceived - billedQty),
+      billing_status: billingStatus,
     };
   });
 

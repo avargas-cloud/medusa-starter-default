@@ -45,21 +45,21 @@ export async function POST(
 
   const knex = resolveKnex(req);
   const billResult = await knex.raw(
-    `SELECT id, status, bill_type FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
+    `SELECT id, status, bill_type, vendor_id FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
     [id]
   );
   const bill = (billResult.rows[0] ?? null) as
-    | { id: string; status: string; bill_type: string }
+    | { id: string; status: string; bill_type: string; vendor_id: string | null }
     | null;
   if (!bill) {
     return res
       .status(404)
       .json({ error: "Vendor bill not found", code: "not_found" });
   }
-  if (bill.status !== "draft") {
+  if (bill.status !== "draft" && bill.status !== "confirmed") {
     return res.status(409).json({
-      error: "Only draft vendor bills can be edited",
-      code: "not_draft",
+      error: "Only draft or confirmed vendor bills can be edited",
+      code: "not_editable",
     });
   }
   if (bill.bill_type !== "regular") {
@@ -69,25 +69,36 @@ export async function POST(
     });
   }
 
-  const existingLines = await knex.raw(
-    `SELECT COUNT(*) AS count FROM vendor_bill_line WHERE vendor_bill_id = ? AND deleted_at IS NULL`,
-    [id]
-  );
-  if (Number((existingLines.rows[0] as { count: string }).count) > 0) {
-    return res.status(409).json({
-      error: "This vendor bill already has lines",
-      code: "has_lines",
-    });
-  }
-
   const poResult = await knex.raw(
-    `SELECT id FROM purchase_order WHERE id = ? AND deleted_at IS NULL`,
+    `SELECT id, vendor_id, vendor_name_snapshot, vendor_qb_list_id_snapshot
+     FROM purchase_order
+     WHERE id = ? AND deleted_at IS NULL`,
     [parsed.data.purchase_order_id]
   );
-  if (!poResult.rows[0]) {
+  const po = (poResult.rows[0] ?? null) as
+    | {
+        id: string;
+        vendor_id: string;
+        vendor_name_snapshot: string | null;
+        vendor_qb_list_id_snapshot: string | null;
+      }
+    | null;
+  if (!po) {
     return res
       .status(404)
       .json({ error: "Purchase order not found", code: "po_not_found" });
+  }
+  if (!bill.vendor_id) {
+    return res.status(422).json({
+      error: "Select a vendor on this bill before filling it from a purchase order",
+      code: "vendor_required",
+    });
+  }
+  if (bill.vendor_id !== po.vendor_id) {
+    return res.status(422).json({
+      error: "Purchase order vendor must match the selected vendor bill vendor",
+      code: "vendor_mismatch",
+    });
   }
 
   const receiptResult = await knex.raw(
@@ -202,9 +213,34 @@ export async function POST(
 
   await knex.raw(
     `UPDATE vendor_bill
-     SET purchase_order_id = ?, purchase_order_receipt_id = ?, updated_at = NOW()
+     SET purchase_order_id = ?,
+         purchase_order_receipt_id = ?,
+         vendor_name_snapshot = COALESCE(vendor_name_snapshot, ?),
+         vendor_qb_list_id_snapshot = COALESCE(vendor_qb_list_id_snapshot, ?),
+         updated_at = NOW()
      WHERE id = ? AND deleted_at IS NULL`,
-    [parsed.data.purchase_order_id, anchorReceipt.id, id]
+    [
+      parsed.data.purchase_order_id,
+      anchorReceipt.id,
+      po.vendor_name_snapshot,
+      po.vendor_qb_list_id_snapshot,
+      id,
+    ]
+  );
+
+  await knex.raw(
+    `UPDATE vendor_bill linked
+     SET purchase_order_id = ?, updated_at = NOW()
+     FROM vendor_bill regular
+     WHERE regular.id = ?
+       AND regular.deleted_at IS NULL
+       AND linked.deleted_at IS NULL
+       AND linked.id IN (
+         regular.service_vendor_bill_id,
+         regular.freight_vendor_bill_id,
+         regular.tariff_vendor_bill_id
+       )`,
+    [parsed.data.purchase_order_id, id]
   );
 
   return res.status(201).json({

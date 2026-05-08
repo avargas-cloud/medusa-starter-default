@@ -225,6 +225,13 @@ export async function POST(
     });
   }
 
+  const po = await service.retrievePurchaseOrder(id).catch(() => null);
+  if (!po) {
+    return res
+      .status(404)
+      .json({ error: "Purchase order not found", code: "not_found" });
+  }
+
   // Fetch receipt lines to create bill lines
   const receiptLines = (await service.listPurchaseOrderReceiptLines(
     { purchase_order_receipt_id: receiptId },
@@ -304,6 +311,9 @@ export async function POST(
   const newBill = (await service.createVendorBills({
     purchase_order_receipt_id: receiptId,
     purchase_order_id: id,
+    vendor_id: (po as { vendor_id?: string }).vendor_id ?? null,
+    vendor_name_snapshot: (po as { vendor_name_snapshot?: string | null }).vendor_name_snapshot ?? null,
+    vendor_qb_list_id_snapshot: (po as { vendor_qb_list_id_snapshot?: string | null }).vendor_qb_list_id_snapshot ?? null,
     number: vbNumber,
     status: "draft",
     reference_id: body.reference_id ?? null,
