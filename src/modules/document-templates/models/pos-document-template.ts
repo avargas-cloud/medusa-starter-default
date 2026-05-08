@@ -13,6 +13,7 @@ const PosDocumentTemplate = model.define("pos_document_template", {
     "order",
     "invoice",
     "purchase_order",
+    "purchase_order_receipt",
     "factory_order",
     "return",
     "statement",
