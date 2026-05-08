@@ -42,6 +42,7 @@ interface GroupPayloadLine {
   product_variant_id: string;
   sku: string;
   delta_applied: number;
+  new_stock: number;
 }
 
 interface GroupPayload {
@@ -93,6 +94,7 @@ export const enqueueQbAdjustmentsStep = createStep(
             product_variant_id: l.product_variant_id,
             sku: l.sku,
             delta_applied: a?.delta_applied ?? l.effective_delta,
+            new_stock: a?.new_stock ?? l.projected_stock,
           };
         }),
       };

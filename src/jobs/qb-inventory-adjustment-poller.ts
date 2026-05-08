@@ -66,6 +66,7 @@ interface PayloadShape {
     product_variant_id: string;
     sku: string;
     delta_applied: number;
+    new_stock: number;
   }>;
 }
 
@@ -151,7 +152,7 @@ async function postAdjustmentToBridge(args: {
       payload.qb_inventory_site_list_id ?? DEFAULT_QB_INVENTORY_SITE_LIST_ID,
     lines: payload.lines.map((l) => ({
       qb_list_id: qbListIdsBySku.get(l.sku) as string,
-      quantity_difference: l.delta_applied,
+      new_quantity: l.new_stock,
     })),
   };
 

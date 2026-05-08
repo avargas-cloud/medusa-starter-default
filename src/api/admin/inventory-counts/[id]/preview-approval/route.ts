@@ -106,13 +106,18 @@ export async function GET(
     };
   });
 
+  const applyLines = previewLines.filter((l) => !l.will_block);
   const summary = {
     total_lines: previewLines.length,
-    will_apply: previewLines.filter((l) => !l.will_block).length,
+    will_apply: applyLines.length,
     will_block: previewLines.filter((l) => l.will_block).length,
-    total_delta_units_apply: previewLines
-      .filter((l) => !l.will_block)
-      .reduce((acc, l) => acc + Math.abs(l.delta_original), 0),
+    positive_delta_units: applyLines
+      .filter((l) => l.delta_original > 0)
+      .reduce((acc, l) => acc + l.delta_original, 0),
+    negative_delta_units: applyLines
+      .filter((l) => l.delta_original < 0)
+      .reduce((acc, l) => acc + l.delta_original, 0),
+    net_delta_units: applyLines.reduce((acc, l) => acc + l.delta_original, 0),
   };
 
   return res.json({
