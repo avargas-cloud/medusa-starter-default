@@ -16,6 +16,10 @@ const PosCreditMemoItem = model.define("pos_credit_memo_item", {
   damaged_qty: model.number().default(0), // Units returned but NOT restocked (defective)
   unit_price: model.bigNumber(), // In DOLLARS (matching posStore expectations, or cents) -> Usually we store cents in DB for Medusa v2. Let's strictly use BIG NUMBER cents in DB.
   line_total: model.bigNumber(), // quantity * unit_price (optional store)
+  // Same semantics as pos_invoice_item: snapshotted from
+  // variant.metadata.qb_avg_cost at credit-memo creation time. Frozen.
+  average_unit_cost: model.bigNumber().nullable(),
+  average_unit_cost_synced_at: model.dateTime().nullable(),
 });
 
 export default PosCreditMemoItem;

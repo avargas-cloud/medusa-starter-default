@@ -19,6 +19,14 @@ const PosInvoiceItem = model.define("pos_invoice_item", {
   unit_price: model.bigNumber(),
   total: model.bigNumber(),
   attached_image: model.text().nullable(),
+  // Snapshot of variant.metadata.qb_avg_cost at the moment the invoice was
+  // issued. Frozen forever — QB sync never back-propagates here. NULL for
+  // custom lines without a variant_id and for variants whose qb_avg_cost
+  // had not been synced yet.
+  average_unit_cost: model.bigNumber().nullable(),
+  // Snapshot of variant.metadata.qb_avg_cost_synced_at at issue time.
+  // Lets reports show cost freshness ("based on a sync from N days ago").
+  average_unit_cost_synced_at: model.dateTime().nullable(),
 });
 
 export default PosInvoiceItem;

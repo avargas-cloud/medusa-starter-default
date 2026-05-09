@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+import { getVariantAvgCostBatch } from "../../../../../lib/cost/get-variant-avg-cost";
 import { CREDIT_MEMO_MODULE } from "../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../modules/credit_memos/service";
 
@@ -126,26 +127,39 @@ export async function POST(
       }
     }
 
+    // Snapshot avg unit cost from variant.metadata.qb_avg_cost so credit-memo
+    // margin reports stay accurate even after later QB cost re-syncs.
+    // Custom lines without a variantId legitimately get NULL.
+    const costVariantIds = (items ?? [])
+      .map((i: any) => i.variantId)
+      .filter((id: unknown): id is string => !!id);
+    const costMap = await getVariantAvgCostBatch(req.scope, costVariantIds);
+
     const buildItems = (targetId: string) =>
-      (items ?? []).map((item: any) => ({
-        credit_memo_id: targetId,
-        variant_id: item.variantId || null,
-        sku: item.sku || null,
-        title: item.title,
-        description: item.salesDescription || item.title,
-        thumbnail:
-          item.thumbnail ||
-          (item.variantId ? thumbnailMap[item.variantId] : null) ||
-          null,
-        quantity: item.quantity,
-        damaged_qty: item.damagedQty ?? 0,
-        unit_price: Math.round(
-          (item.effectiveUnitPrice || item.unitPrice) * 100
-        ),
-        line_total: Math.round(
-          (item.effectiveUnitPrice || item.unitPrice) * 100 * item.quantity
-        ),
-      }));
+      (items ?? []).map((item: any) => {
+        const cost = item.variantId ? costMap.get(item.variantId) : undefined;
+        return {
+          credit_memo_id: targetId,
+          variant_id: item.variantId || null,
+          sku: item.sku || null,
+          title: item.title,
+          description: item.salesDescription || item.title,
+          thumbnail:
+            item.thumbnail ||
+            (item.variantId ? thumbnailMap[item.variantId] : null) ||
+            null,
+          quantity: item.quantity,
+          damaged_qty: item.damagedQty ?? 0,
+          unit_price: Math.round(
+            (item.effectiveUnitPrice || item.unitPrice) * 100
+          ),
+          line_total: Math.round(
+            (item.effectiveUnitPrice || item.unitPrice) * 100 * item.quantity
+          ),
+          average_unit_cost: cost?.cost ?? null,
+          average_unit_cost_synced_at: cost?.synced_at ?? null,
+        };
+      });
 
     if (action === "create" || id === "new" || !id || id.startsWith("new:")) {
       const pgConnection = req.scope.resolve("__pg_connection__") as any;

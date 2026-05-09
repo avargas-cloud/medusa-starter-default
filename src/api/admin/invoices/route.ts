@@ -17,6 +17,7 @@ import {
   skipSalesOrderPipelineRow,
   skipPendingPaymentRows,
 } from "../../../lib/quickbooks/qb-pipeline";
+import { getVariantAvgCostBatch } from "../../../lib/cost/get-variant-avg-cost";
 import { FINANCE_MODULE } from "../../../modules/finance";
 import { INVOICE_MODULE } from "../../../modules/invoices";
 
@@ -414,17 +415,30 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   // Step 2: Create line items linked to the invoice
   if (body.items?.length) {
+    // Snapshot avg unit cost from variant.metadata.qb_avg_cost so margin
+    // reports can be computed later without re-fetching (cost may drift).
+    // Custom lines without variant_id legitimately get NULL.
+    const variantIds = body.items
+      .map((it) => it.variant_id)
+      .filter((id): id is string => !!id);
+    const costMap = await getVariantAvgCostBatch(req.scope, variantIds);
+
     await invoiceService.createPosInvoiceItems(
-      body.items.map((it) => ({
-        invoice_id: (invoice as any).id,
-        variant_id: it.variant_id ?? null,
-        sku: it.sku ?? null,
-        description: it.description,
-        quantity: it.quantity,
-        unit_price: it.unit_price,
-        total: it.total,
-        attached_image: it.attached_image ?? null,
-      }))
+      body.items.map((it) => {
+        const cost = it.variant_id ? costMap.get(it.variant_id) : undefined;
+        return {
+          invoice_id: (invoice as any).id,
+          variant_id: it.variant_id ?? null,
+          sku: it.sku ?? null,
+          description: it.description,
+          quantity: it.quantity,
+          unit_price: it.unit_price,
+          total: it.total,
+          attached_image: it.attached_image ?? null,
+          average_unit_cost: cost?.cost ?? null,
+          average_unit_cost_synced_at: cost?.synced_at ?? null,
+        };
+      })
     );
   }
 

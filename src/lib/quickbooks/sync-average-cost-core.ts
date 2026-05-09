@@ -295,21 +295,23 @@ export async function syncAverageCostCore(
       }
 
       const currentAverageCost = readNumber(variant.metadata?.qb_avg_cost);
-      if (
+      const isUnchanged =
         currentAverageCost !== null &&
-        Math.abs(currentAverageCost - qb.avgCost) < 0.0001
-      ) {
-        stats.skippedNoChange++;
-        continue;
-      }
+        Math.abs(currentAverageCost - qb.avgCost) < 0.0001;
 
       const sku = variant.sku ?? qb.sku ?? variant.id;
       if (dryRun) {
         log(
-          `   [DRY RUN] Would update ${sku}: ${currentAverageCost ?? "null"} → ${qb.avgCost}`
+          isUnchanged
+            ? `   [DRY RUN] Would refresh sync timestamp for ${sku} (cost unchanged at ${qb.avgCost})`
+            : `   [DRY RUN] Would update ${sku}: ${currentAverageCost ?? "null"} → ${qb.avgCost}`
         );
       }
 
+      // Always bump qb_avg_cost_synced_at on every successful sync — gives
+      // downstream snapshots a "we confirmed this cost as of T" signal even
+      // when the value itself didn't change. New invoices/credit-memos copy
+      // both fields into their average_unit_cost{,_synced_at} columns.
       updates.push({
         id: variant.id,
         productId: variant.product?.id ?? "",
@@ -317,12 +319,17 @@ export async function syncAverageCostCore(
         metadata: {
           ...(variant.metadata ?? {}),
           qb_avg_cost: qb.avgCost,
+          qb_avg_cost_synced_at: new Date().toISOString(),
         },
       });
+      if (isUnchanged) stats.skippedNoChange++;
       if (variant.product?.id) touchedProductIds.add(variant.product.id);
     }
 
-    stats.updatedAverageCost = updates.length;
+    // updatedAverageCost reflects rows whose qb_avg_cost actually changed.
+    // updates.length includes timestamp-only refreshes (cost unchanged) too;
+    // separate the count so the stats line stays meaningful.
+    stats.updatedAverageCost = updates.length - stats.skippedNoChange;
 
     if (!dryRun) {
       log(`⚡ Applying ${updates.length} average cost metadata updates...`);
