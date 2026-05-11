@@ -142,7 +142,7 @@ export async function POST(
       vendor_id: body.vendor_id,
       vendor_name_snapshot: vendorNameSnapshot,
       vendor_qb_list_id_snapshot: vendorQbListIdSnapshot,
-      stock_location_id: body.stock_location_id,
+      stock_location_id: body.stock_location_id?.trim() ?? body.stock_location_id,
       ordered_at: body.ordered_at ? new Date(body.ordered_at) : null,
       expected_at: body.expected_at ? new Date(body.expected_at) : null,
       memo: body.memo ?? null,

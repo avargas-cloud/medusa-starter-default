@@ -488,7 +488,7 @@ export async function PATCH(
     headerUpdate.vendor_qb_list_id_snapshot = vendorSnapshot?.qb_list_id ?? null;
   }
   if (body.stock_location_id !== undefined)
-    headerUpdate.stock_location_id = body.stock_location_id;
+    headerUpdate.stock_location_id = body.stock_location_id?.trim() ?? body.stock_location_id;
   if (body.ordered_at !== undefined)
     headerUpdate.ordered_at = body.ordered_at
       ? new Date(body.ordered_at)
