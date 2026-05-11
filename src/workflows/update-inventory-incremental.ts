@@ -127,10 +127,7 @@ const updateInventoryIncrementalStep = createStep(
           { take: 100000 }
         );
         for (const level of chinaLevels) {
-          const available = Math.max(
-            0,
-            (level.stocked_quantity ?? 0) - (level.reserved_quantity ?? 0)
-          );
+          const available = (level.stocked_quantity ?? 0) - (level.reserved_quantity ?? 0);
           chinaStockMap.set(level.inventory_item_id, available);
         }
       }
