@@ -14,6 +14,7 @@ export type EnqueueQbItemInput = {
   item_type: QbItemType;
   cogs_account_full_name?: string | null;
   income_account_full_name?: string | null;
+  vendor_list_id?: string | null;
   vendor_full_name?: string | null;
   mpn?: string | null;
 };
@@ -39,7 +40,9 @@ const buildQbPayload = (item: EnqueueQbItemInput) => {
   };
 
   if (item.mpn) base.ManufacturerPartNumber = item.mpn;
-  if (item.vendor_full_name)
+  if (item.vendor_list_id)
+    base.PrefVendorRef = { ListID: item.vendor_list_id };
+  else if (item.vendor_full_name)
     base.PrefVendorRef = { FullName: item.vendor_full_name };
   if (item.income_account_full_name)
     base.IncomeAccountRef = { FullName: item.income_account_full_name };

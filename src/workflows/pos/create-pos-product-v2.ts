@@ -251,6 +251,8 @@ export const createPosProductV2Workflow = createWorkflow(
           v.overrides?.income_account_full_name ??
           data.input.income_account_full_name ??
           null,
+        vendor_list_id:
+          v.overrides?.vendor_qb_id ?? data.input.vendor_qb_id ?? null,
         vendor_full_name:
           v.overrides?.vendor_full_name ?? data.input.vendor_full_name ?? null,
         mpn: v.mpn ?? null,

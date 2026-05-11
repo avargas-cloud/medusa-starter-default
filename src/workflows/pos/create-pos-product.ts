@@ -18,6 +18,7 @@ export type CreatePosProductInput = {
   mid_code?: string;
   cost: number;
   vendor: string;
+  vendor_qb_id?: string;
   mpn: string;
 };
 
@@ -70,7 +71,11 @@ export const createPosProductWorkflow = createWorkflow(
         PurchaseDesc: input.salesDescription,
         SalesPrice: 0.0, // POS doesn't set selling price yet, edit later
         PurchaseCost: input.cost,
-        PrefVendorRef: input.vendor ? { FullName: input.vendor } : undefined,
+        PrefVendorRef: input.vendor_qb_id
+          ? { ListID: input.vendor_qb_id }
+          : input.vendor
+            ? { FullName: input.vendor }
+            : undefined,
         ManufacturerPartNumber: input.mpn || undefined,
       },
     });

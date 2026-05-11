@@ -8,7 +8,7 @@ import {
   Text,
   toast,
 } from "@medusajs/ui";
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 type VendorPipelineRow = {
   id: string;
@@ -227,8 +227,8 @@ export const VendorPipelineSection = () => {
               </Table.Header>
               <Table.Body>
                 {filtered.map((r) => (
-                  <>
-                    <Table.Row key={r.id}>
+                  <React.Fragment key={r.id}>
+                    <Table.Row>
                       <Table.Cell className="font-mono text-sm text-ui-fg-subtle">
                         #{r.seq}
                       </Table.Cell>
@@ -285,7 +285,7 @@ export const VendorPipelineSection = () => {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </React.Fragment>
                 ))}
               </Table.Body>
             </Table>
