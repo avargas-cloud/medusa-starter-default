@@ -1,0 +1,66 @@
+import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { parseDateRange } from "../../_lib/date-range"
+import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
+import { parseRegion, regionClause } from "../../_lib/region-filter"
+
+export async function GET(req: MedusaRequest, res: MedusaResponse) {
+  const range = parseDateRange(req)
+  if (!range) return res.status(400).json({ error: "from and to are required" })
+
+  const pg = req.scope.resolve("__pg_connection__") as any
+
+  const ROOT_CAT = 'pcat_01KGAD1KQV29RKZZHEZ4N88B8H'
+  const region = parseRegion(req)
+  const regionWhere = regionClause(region)
+
+  try {
+    const result = await pg.raw(
+      `SELECT
+         COALESCE(
+           CASE WHEN pc.parent_category_id = ? THEN pc.name END,
+           CASE WHEN pc2.parent_category_id = ? THEN pc2.name END,
+           'Uncategorized'
+         )                                               AS category,
+         COALESCE(
+           CASE WHEN pc.parent_category_id = ? THEN pc.id END,
+           CASE WHEN pc2.parent_category_id = ? THEN pc2.id END
+         )                                               AS category_id,
+         SUM(pii.quantity - pii.refunded_quantity)::int AS qty_sold,
+         SUM(pii.total)::bigint                         AS revenue,
+         SUM(${COST_DOLLARS})::bigint                     AS cogs,
+         COUNT(DISTINCT pii.invoice_id)::int            AS invoice_count
+       FROM pos_invoice_item pii
+       JOIN pos_invoice i ON i.id = pii.invoice_id AND i.deleted_at IS NULL
+         AND i.status NOT IN ('draft','voided')
+         AND i.issued_at >= ? AND i.issued_at < ?
+       ${COGS_JOIN}
+       LEFT JOIN product p ON p.id = pv.product_id
+       LEFT JOIN product_category_product pcp ON pcp.product_id = p.id
+       LEFT JOIN product_category pc ON pc.id = pcp.product_category_id
+       LEFT JOIN product_category pc2 ON pc2.id = pc.parent_category_id
+       WHERE pii.deleted_at IS NULL ${regionWhere}
+       GROUP BY 1, 2
+       ORDER BY revenue DESC`,
+      [ROOT_CAT, ROOT_CAT, ROOT_CAT, ROOT_CAT, range.from, range.to]
+    )
+
+    const rows = (result.rows as any[]).map((r) => {
+      const revenue = Number(r.revenue) / 100
+      const cogs    = Number(r.cogs)
+      const profit  = revenue - cogs
+      return {
+        category: r.category,
+        category_id: r.category_id ?? null,
+        qty_sold: Number(r.qty_sold),
+        revenue,
+        gross_profit: profit,
+        margin_pct: revenue > 0 ? Math.round((profit / revenue) * 1000) / 10 : 0,
+        invoice_count: Number(r.invoice_count),
+      }
+    })
+
+    return res.json({ rows, total: rows.length })
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to fetch sales by category" })
+  }
+}
