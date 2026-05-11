@@ -155,22 +155,29 @@ export default async function qbOrderSubscriber({
           );
           break;
         }
-        // 1.5.7: pipeline-only — enqueue 'invoice' for consolidator pickup.
+        // 1.5.7 / partial-invoice fix (2026-05-11):
+        // POST /admin/invoices already enqueues the invoice row with the
+        // full payload {invoice_id, items, fulfillment_id}. The event data
+        // here only carries {id, invoice_id, is_sales_receipt} — enqueueing
+        // it would stomp the route's payload via COALESCE($payload, payload),
+        // erasing items/fulfillment_id and causing handleFulfillmentCreated
+        // to fall back to ALL order.items at full SO quantities (root cause
+        // of QB Invoice 19507 receiving 7 lines for partial POS invoice 20330).
+        //
+        // Back-compat: still enqueue, but WITHOUT a payload, so the upsert
+        // updates status only and preserves the rich payload the route wrote.
         const {
           writePipelineRow: enqueueInv2,
         } = require("../lib/quickbooks/qb-pipeline");
-        const invPayload2 = { ...(data as any) };
-        delete invPayload2.order_id;
         await enqueueInv2({
           orderId: (data as any).order_id ?? (data as any).id,
           referenceId: (data as any).invoice_id ?? null,
           referenceType: "invoice",
           step: "invoice",
           status: "pending",
-          payload: invPayload2,
         });
         logger.info(
-          `[QB-ORDER] 📥 Enqueued POS invoice for ${(data as any).order_id ?? (data as any).id}`
+          `[QB-ORDER] 📥 Enqueued POS invoice for ${(data as any).order_id ?? (data as any).id} (payload preserved from route)`
         );
         break;
       }

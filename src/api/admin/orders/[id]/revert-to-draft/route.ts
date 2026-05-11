@@ -127,6 +127,30 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       },
     ]);
 
+    // 2b. Cleanup orphan QB pipeline rows.
+    // convert-force writes a `sales_order/waiting` row when the order is converted.
+    // After revert, that row would never be processed (qb-pos-sync filters
+    // is_draft_order=false in the SO section, and the estimate section only
+    // touches step='estimate' rows). Mark them skipped so they don't linger
+    // forever as orphans in the pipeline UI.
+    try {
+      await pgConnection.raw(
+        `UPDATE qb_order_pipeline
+            SET status     = 'skipped',
+                error      = 'Order reverted to draft — Sales Order superseded',
+                updated_at = NOW()
+          WHERE order_id   = ?
+            AND step       = 'sales_order'
+            AND status IN ('waiting', 'pending', 'failed')`,
+        [order.id]
+      );
+    } catch (cleanupErr: any) {
+      console.warn(
+        `[revert-to-draft] Failed to skip orphan sales_order pipeline rows for ${id}:`,
+        cleanupErr?.message
+      );
+    }
+
     // 3. Clear existing inventory reservations (from Strategy 1 native fulfillment allocations)
     try {
       for (const item of order.items || []) {
