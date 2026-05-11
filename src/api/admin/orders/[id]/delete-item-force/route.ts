@@ -25,6 +25,27 @@ async function handleDelete(
 
   try {
     const orderModule = req.scope.resolve(Modules.ORDER) as any;
+    const inventoryModule = req.scope.resolve(Modules.INVENTORY) as any;
+
+    // Release any reservation tied to this line item before deleting it,
+    // so inventory_level.reserved_quantity stays accurate.
+    try {
+      const existing = await inventoryModule.listReservationItems({
+        line_item_id,
+      });
+      if (existing?.length) {
+        await inventoryModule.deleteReservationItems(
+          existing.map((r: any) => r.id)
+        );
+        console.log(
+          `[delete-item-force] Released ${existing.length} reservation(s) for ${line_item_id}`
+        );
+      }
+    } catch (resErr: any) {
+      console.warn(
+        `[delete-item-force] Reservation cleanup failed (non-fatal): ${resErr.message}`
+      );
+    }
 
     // Hard delete — physically removes the row from order_line_item
     if (typeof orderModule.deleteOrderLineItems === "function") {

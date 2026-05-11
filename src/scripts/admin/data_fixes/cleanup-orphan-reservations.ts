@@ -46,6 +46,7 @@ export default async function cleanupOrphanReservations({ container, args }: Exe
 
   const orphansResult = await pgConnection.raw(
     `
+    -- Case A: line_item_id exists in order_line_item but order is gone/deleted
     SELECT
       ri.id            AS reservation_id,
       ri.line_item_id,
@@ -65,7 +66,30 @@ export default async function cleanupOrphanReservations({ container, args }: Exe
     LEFT JOIN product_variant pv ON pv.id = oli.variant_id
     WHERE ri.deleted_at IS NULL
       AND (oi.id IS NULL OR o.deleted_at IS NOT NULL)
-    ORDER BY ri.created_at ASC
+
+    UNION ALL
+
+    -- Case B: line_item_id does not exist in order_line_item at all
+    -- (order was edited and line items were replaced, leaving stale reservation IDs)
+    SELECT
+      ri.id            AS reservation_id,
+      ri.line_item_id,
+      ri.inventory_item_id,
+      ri.location_id,
+      ri.quantity,
+      pv.sku           AS variant_sku,
+      'line_item_id missing from order_line_item' AS reason
+    FROM reservation_item ri
+    LEFT JOIN product_variant_inventory_item pvii
+      ON pvii.inventory_item_id = ri.inventory_item_id AND pvii.deleted_at IS NULL
+    LEFT JOIN product_variant pv ON pv.id = pvii.variant_id
+    WHERE ri.deleted_at IS NULL
+      AND ri.line_item_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM order_line_item oli WHERE oli.id = ri.line_item_id
+      )
+
+    ORDER BY reason, quantity DESC
     `,
     []
   );
