@@ -71,17 +71,54 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const financeService = req.scope.resolve(FINANCE_MODULE);
   const customerModule = req.scope.resolve(Modules.CUSTOMER);
 
-  const q = (req.query ?? {}) as Record<string, string | string[] | undefined>;
-  const customerIdParam = Array.isArray(q.customer_id)
-    ? q.customer_id[0]
-    : q.customer_id;
-  const limitParam = Array.isArray(q.limit) ? q.limit[0] : q.limit;
+  const query = (req.query ?? {}) as Record<
+    string,
+    string | string[] | undefined
+  >;
+  const customerIdParam = Array.isArray(query.customer_id)
+    ? query.customer_id[0]
+    : query.customer_id;
+  const limitParam = Array.isArray(query.limit) ? query.limit[0] : query.limit;
   const parsedLimit = limitParam
     ? Math.max(1, Math.min(500, parseInt(limitParam, 10) || 0))
     : undefined;
+  const searchParam = Array.isArray(query.q) ? query.q[0] : query.q;
+  const trimmedSearch = (searchParam ?? "").trim();
 
   const filters: Record<string, unknown> = {};
   if (customerIdParam) filters.customer_id = customerIdParam;
+
+  // ── Optional search (q): match by customer name/email/company/phone or payment reference ──
+  if (trimmedSearch) {
+    const like = `%${trimmedSearch}%`;
+    const digits = trimmedSearch.replace(/[^\d]/g, "");
+    const orClauses: Record<string, unknown>[] = [
+      { first_name: { $ilike: like } },
+      { last_name: { $ilike: like } },
+      { email: { $ilike: like } },
+      { company_name: { $ilike: like } },
+    ];
+    if (digits.length >= 3) {
+      orClauses.push({ phone: { $ilike: `%${digits}%` } });
+    }
+    let matchedCustomerIds: string[] = [];
+    try {
+      const matchedCustomers = await customerModule.listCustomers(
+        { $or: orClauses } as any,
+        { select: ["id"], take: 500 }
+      );
+      matchedCustomerIds = matchedCustomers.map((c: any) => c.id);
+    } catch {
+      /* non-fatal */
+    }
+    const paymentOr: Record<string, unknown>[] = [
+      { reference: { $ilike: like } },
+    ];
+    if (matchedCustomerIds.length) {
+      paymentOr.push({ customer_id: matchedCustomerIds });
+    }
+    filters.$or = paymentOr;
+  }
 
   try {
     const payments = await financeService.listCustomerPayments(filters, {
