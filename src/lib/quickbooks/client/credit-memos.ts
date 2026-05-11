@@ -81,7 +81,13 @@ export async function updateCreditMemoInQb(
           ? { qbTaxItemListid: payload.qbTaxItemListid }
           : {}),
         ...(payload.taxExempt === true ? { taxExempt: true } : {}),
-        ...(payload.memo ? { memo: payload.memo } : {}),
+        ...(payload.memo !== undefined ? { memo: payload.memo } : {}),
+        ...(payload.customerId ? { customerId: payload.customerId } : {}),
+        ...(payload.date ? { date: payload.date } : {}),
+        ...(payload.refNumber ? { refNumber: payload.refNumber } : {}),
+        ...(payload.items && payload.items.length > 0
+          ? { items: payload.items }
+          : {}),
       }
     );
     const operationId = modResp?.operationId;

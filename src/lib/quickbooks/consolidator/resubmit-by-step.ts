@@ -350,6 +350,10 @@ export async function resubmitByStep(
           qbTaxItemListid?: string;
           taxExempt?: boolean;
           memo?: string;
+          customerId?: string;
+          date?: string;
+          refNumber?: string;
+          items?: Array<Record<string, unknown>>;
         };
         const modResult = await updateCreditMemoInQb({
           txnId: cm.qb_txn_id,
@@ -359,6 +363,10 @@ export async function resubmitByStep(
           qbTaxItemListid: modPayload.qbTaxItemListid,
           taxExempt: modPayload.taxExempt,
           memo: modPayload.memo,
+          customerId: modPayload.customerId,
+          date: modPayload.date,
+          refNumber: modPayload.refNumber,
+          items: modPayload.items as any,
         });
         if (modResult.success && modResult.data?.operationId) {
           await cmModPool.query(

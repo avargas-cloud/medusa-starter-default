@@ -20,6 +20,10 @@ const PosCreditMemoItem = model.define("pos_credit_memo_item", {
   // variant.metadata.qb_avg_cost at credit-memo creation time. Frozen.
   average_unit_cost: model.bigNumber().nullable(),
   average_unit_cost_synced_at: model.dateTime().nullable(),
+  // QB TxnLineID captured from CreditMemoLineRet after a successful
+  // CreditMemoAdd. Required for CreditMemoMod to address individual lines
+  // (modify vs add vs delete). Nullable for legacy rows / drafts.
+  qb_txn_line_id: model.text().nullable(),
 });
 
 export default PosCreditMemoItem;

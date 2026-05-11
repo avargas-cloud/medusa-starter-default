@@ -151,6 +151,12 @@ export async function pollSubmittedRows(
             op.result?.QBXML?.QBXMLMsgsRs?.SalesOrderModRs?.SalesOrderRet
               ?.SalesOrderLineRet
           ) ??
+          extractLineIds(
+            msgs?.CreditMemoAddRs?.CreditMemoRet?.CreditMemoLineRet
+          ) ??
+          extractLineIds(
+            msgs?.CreditMemoModRs?.CreditMemoRet?.CreditMemoLineRet
+          ) ??
           null;
 
         // Cache EditSequence (+ TxnLineIDs when available) so next mod can skip the GET round-trip
@@ -312,21 +318,78 @@ export async function pollSubmittedRows(
           }
         }
 
-        if (txnId && row.step === "credit_memo" && row.reference_id) {
-          try {
-            await pool.query(
-              `UPDATE pos_credit_memo
-                             SET qb_txn_id = $2, qb_edit_sequence = $3
-                             WHERE id = $1`,
-              [row.reference_id, txnId, editSeq ?? null]
-            );
-            logger.info(
-              `${LOG_PREFIX} ✅ Wrote qb_txn_id=${txnId} + editSeq to pos_credit_memo ${row.reference_id}`
-            );
-          } catch (cmErr: any) {
-            logger.warn(
-              `${LOG_PREFIX} ⚠️ Could not update pos_credit_memo: ${cmErr.message}`
-            );
+        if (
+          txnId &&
+          (row.step === "credit_memo" || row.step === "credit_memo_mod") &&
+          row.reference_id
+        ) {
+          if (row.step === "credit_memo") {
+            try {
+              await pool.query(
+                `UPDATE pos_credit_memo
+                               SET qb_txn_id = $2, qb_edit_sequence = $3
+                               WHERE id = $1`,
+                [row.reference_id, txnId, editSeq ?? null]
+              );
+              logger.info(
+                `${LOG_PREFIX} ✅ Wrote qb_txn_id=${txnId} + editSeq to pos_credit_memo ${row.reference_id}`
+              );
+            } catch (cmErr: any) {
+              logger.warn(
+                `${LOG_PREFIX} ⚠️ Could not update pos_credit_memo: ${cmErr.message}`
+              );
+            }
+          } else if (row.step === "credit_memo_mod" && editSeq) {
+            // Refresh stored EditSequence after a successful MOD so the next
+            // MOD round does not need to query QB for it.
+            try {
+              await pool.query(
+                `UPDATE pos_credit_memo SET qb_edit_sequence = $2 WHERE id = $1`,
+                [row.reference_id, editSeq]
+              );
+              logger.info(
+                `${LOG_PREFIX} ✅ Refreshed qb_edit_sequence on pos_credit_memo ${row.reference_id} after mod`
+              );
+            } catch (modErr: any) {
+              logger.warn(
+                `${LOG_PREFIX} ⚠️ Could not refresh editSeq after credit_memo_mod: ${modErr.message}`
+              );
+            }
+          }
+
+          // Persist per-line TxnLineID on pos_credit_memo_item so future
+          // CreditMemoMod requests can address individual lines (update vs
+          // add vs delete). Match by QB ItemRef.ListID → variant.metadata.quickbooks_id
+          // ordering: QB returns lines in submission order, we update the
+          // earliest matching row that does not yet have a qb_txn_line_id.
+          if (lineIds) {
+            try {
+              for (const [qbListId, txnLineIds] of Object.entries(lineIds)) {
+                for (const txnLineId of txnLineIds) {
+                  await pool.query(
+                    `UPDATE pos_credit_memo_item
+                     SET qb_txn_line_id = $3
+                     WHERE id = (
+                       SELECT cmi.id FROM pos_credit_memo_item cmi
+                       LEFT JOIN product_variant pv ON pv.id = cmi.variant_id
+                       WHERE cmi.credit_memo_id = $1
+                         AND cmi.qb_txn_line_id IS DISTINCT FROM $3
+                         AND COALESCE(pv.metadata->>'quickbooks_id', '') = $2
+                       ORDER BY cmi.id ASC
+                       LIMIT 1
+                     )`,
+                    [row.reference_id, qbListId, txnLineId]
+                  );
+                }
+              }
+              logger.info(
+                `${LOG_PREFIX} ✅ Persisted TxnLineIDs to pos_credit_memo_item rows for CM ${row.reference_id}`
+              );
+            } catch (lineErr: any) {
+              logger.warn(
+                `${LOG_PREFIX} ⚠️ Could not persist TxnLineIDs for CM ${row.reference_id}: ${lineErr.message}`
+              );
+            }
           }
 
           // Also propagate qb_txn_id to the customer_payment (store credit) derived

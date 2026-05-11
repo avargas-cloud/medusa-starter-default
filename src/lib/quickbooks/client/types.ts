@@ -146,6 +146,17 @@ export interface QbUpdateCreditMemoPayload {
   qbTaxItemListid?: string;
   taxExempt?: boolean;
   memo?: string;
+  /** Customer override (ListID). Optional — defaults to original customer. */
+  customerId?: string;
+  /** Transaction date (YYYY-MM-DD). Optional override. */
+  date?: string;
+  /** Document RefNumber override. Optional. */
+  refNumber?: string;
+  /**
+   * Full line replacement. Existing lines with their TxnLineID + "-1" for new.
+   * Lines from the original CM not included here are deleted by QB.
+   */
+  items?: QbOrderItem[];
 }
 
 export interface QbUpdateInvoicePayload {

@@ -10,7 +10,6 @@ import {
 import {
   writePipelineRow,
   requireQbCustomer,
-  invalidateEditSequence,
 } from "../../../../../../lib/quickbooks/qb-pipeline";
 import { getVariantAvgCostBatch } from "../../../../../../lib/cost/get-variant-avg-cost";
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
@@ -76,6 +75,7 @@ export async function PATCH(
         sales_rep?: { initials: string; name: string } | null;
         invoice_id?: string | null;
         order_id?: string | null;
+        metadata?: Record<string, unknown> | null;
       };
       items?: Array<{
         variantId?: string | null;
@@ -148,6 +148,86 @@ export async function PATCH(
           });
           return;
         }
+      }
+    }
+
+    // ── Per-item quantity guard: new_qty ≤ invoiced − refunded_in_other_CMs ────
+    // For each SKU on the new payload, ensure it does not exceed what's still
+    // available to refund on the parent invoice. The current
+    // pos_invoice_item.refunded_quantity reflects ALL credit memos (including
+    // this one), so we subtract this CM's old contribution to get
+    // refunded_by_others, then enforce new_qty ≤ invoiced − refunded_by_others.
+    // SKUs not present on the parent invoice are blocked unless they were
+    // already in this CM (preserves legacy state, blocks new fabrications).
+    if (creditMemo.order_id) {
+      try {
+        const invoiceService = req.scope.resolve("invoices") as any;
+        const invoices = await invoiceService.listPosInvoices(
+          { order_id: creditMemo.order_id },
+          { relations: ["items"], order: { issued_at: "DESC" } }
+        );
+        const parentInvoice = invoices?.[0];
+        if (parentInvoice) {
+          const oldQtyBySku = new Map<string, number>();
+          for (const item of creditMemo.items as any[]) {
+            if (!item.sku) continue;
+            oldQtyBySku.set(
+              item.sku,
+              (oldQtyBySku.get(item.sku) ?? 0) + Number(item.quantity ?? 0)
+            );
+          }
+          const newQtyBySku = new Map<string, number>();
+          for (const item of newItems) {
+            if (!item.sku) continue;
+            newQtyBySku.set(
+              item.sku,
+              (newQtyBySku.get(item.sku) ?? 0) + Number(item.quantity ?? 0)
+            );
+          }
+          const invoiceItemBySku = new Map<string, any>();
+          for (const invItem of (parentInvoice.items as any[]) ?? []) {
+            if (!invItem.sku) continue;
+            invoiceItemBySku.set(invItem.sku, invItem);
+          }
+
+          const errors: string[] = [];
+          for (const [sku, newQty] of newQtyBySku) {
+            if (newQty <= 0) continue;
+            const invItem = invoiceItemBySku.get(sku);
+            if (!invItem) {
+              if (!oldQtyBySku.has(sku)) {
+                errors.push(
+                  `${sku}: not on parent invoice — cannot return what wasn't sold.`
+                );
+              }
+              continue;
+            }
+            const invoicedQty = Number(invItem.quantity ?? 0);
+            const totalRefunded = Number(invItem.refunded_quantity ?? 0);
+            const thisCmOldQty = oldQtyBySku.get(sku) ?? 0;
+            const refundedByOthers = Math.max(
+              0,
+              totalRefunded - thisCmOldQty
+            );
+            const allowed = invoicedQty - refundedByOthers;
+            if (newQty > allowed) {
+              errors.push(
+                `${sku}: requested ${newQty}, max allowed ${allowed} ` +
+                  `(invoiced ${invoicedQty}, already returned on other credit memos ${refundedByOthers}).`
+              );
+            }
+          }
+          if (errors.length > 0) {
+            res.status(409).json({
+              error: `Quantity validation failed:\n${errors.join("\n")}`,
+            });
+            return;
+          }
+        }
+      } catch (qtyErr: any) {
+        logger.warn(
+          `[edit CM] Per-item quantity guard skipped: ${qtyErr.message}`
+        );
       }
     }
 
@@ -377,12 +457,17 @@ export async function PATCH(
               ) ?? "updatePosCreditMemos");
 
     const oldQbTxnId = (creditMemo as any).qb_txn_id as string | null;
-    const oldQbEditSeq = (creditMemo as any).qb_edit_sequence as
-      | string
-      | null;
     const oldQbRefNumber = (creditMemo as any).qb_ref_number as
       | string
       | null;
+
+    // Merge metadata: preserve background fields (original_shipping_cents,
+    // original_discount_cents, etc.) from the existing record and let the
+    // client override / extend them.
+    const mergedMetadata: Record<string, unknown> = {
+      ...((creditMemo as any).metadata ?? {}),
+      ...(payload?.metadata ?? {}),
+    };
 
     await (creditMemoService as any)[updateMethodName]({
       id,
@@ -395,21 +480,42 @@ export async function PATCH(
         shipping?.optionId ?? creditMemo.shipping_option_id ?? null,
       shipping_option_name:
         shipping?.optionName ?? creditMemo.shipping_option_name ?? null,
-      qb_txn_id: null,
-      qb_edit_sequence: null,
+      metadata: mergedMetadata,
+      // qb_txn_id / qb_edit_sequence stay intact — credit_memo_mod uses them.
       ...dbTotals,
     });
 
+    // Load existing items BEFORE deletion to capture per-SKU qb_txn_line_id
+    // mapping. Each SKU keeps a queue of TxnLineIDs so duplicate-SKU lines are
+    // mapped in submission order.
     const existingItems = await creditMemoService.listPosCreditMemoItems({
       credit_memo_id: id,
     });
+    const txnLineIdQueueBySku = new Map<string, string[]>();
+    for (const it of existingItems as any[]) {
+      const sku = (it.sku ?? "") as string;
+      const tlid = (it.qb_txn_line_id ?? null) as string | null;
+      if (sku && tlid) {
+        const arr = txnLineIdQueueBySku.get(sku) ?? [];
+        arr.push(tlid);
+        txnLineIdQueueBySku.set(sku, arr);
+      }
+    }
     if (existingItems.length > 0) {
       await creditMemoService.deletePosCreditMemoItems(
         existingItems.map((i: any) => i.id)
       );
     }
+    // Plan new rows: pop a preserved TxnLineID from the per-SKU queue when
+    // available so subsequent edits stay stable.
+    const newItemPlans = newItems.map((item) => {
+      const sku = (item.sku ?? "") as string;
+      const queue = txnLineIdQueueBySku.get(sku);
+      const reusedTxnLineId = queue && queue.length > 0 ? queue.shift()! : null;
+      return { item, reusedTxnLineId };
+    });
     await creditMemoService.createPosCreditMemoItems(
-      newItems.map((item) => {
+      newItemPlans.map(({ item, reusedTxnLineId }) => {
         const cost = item.variantId ? costMap.get(item.variantId) : undefined;
         const price = item.effectiveUnitPrice ?? item.unitPrice;
         return {
@@ -425,29 +531,14 @@ export async function PATCH(
           line_total: Math.round(price * 100 * item.quantity),
           average_unit_cost: cost?.cost ?? null,
           average_unit_cost_synced_at: cost?.synced_at ?? null,
+          qb_txn_line_id: reusedTxnLineId,
         };
       })
     );
 
-    // ── QB: void old CM + enqueue fresh one ───────────────────────────────────
+    // ── QB: enqueue a single credit_memo_mod (replaces void+recreate) ─────────
     if (oldQbTxnId && process.env.QB_ORDER_FLOW_ENABLED === "true") {
       try {
-        await writePipelineRow({
-          referenceId: id,
-          referenceType: "credit_memo",
-          step: "void_credit_memo",
-          status: "pending",
-          qbTxnId: oldQbTxnId,
-          qbRefNumber: oldQbRefNumber ?? cmNumber ?? null,
-          medusaRefNumber: cmNumber ?? null,
-          payload: { editSequence: oldQbEditSeq },
-        });
-        logger.info(
-          `[edit CM] Enqueued void_credit_memo for old txnId ${oldQbTxnId}`
-        );
-
-        await invalidateEditSequence("credit_memo", oldQbTxnId).catch(() => {});
-
         // Build QB items from updated data
         const variantIds = newItems
           .map((i) => i.variantId)
@@ -478,7 +569,7 @@ export async function PATCH(
           ])
         );
 
-        const qbItems: any[] = newItems.map((item) => {
+        const qbItems: any[] = newItemPlans.map(({ item, reusedTxnLineId }) => {
           const price = item.effectiveUnitPrice ?? item.unitPrice ?? 0;
           const info = item.variantId
             ? variantInfoMap.get(item.variantId)
@@ -501,6 +592,10 @@ export async function PATCH(
               NON_INVENTORY_QB_TYPES.has(qbItemType))
           );
           return {
+            // TxnLineID: preserved from prior CM line when SKU matched, else
+            // "-1" so QB treats it as a new line. Lines from the original CM
+            // that we omit here will be deleted by QB.
+            TxnLineID: reusedTxnLineId ?? "-1",
             ...(qbListId ? { productId: qbListId } : {}),
             productName: item.sku ?? item.title,
             quantity: item.quantity,
@@ -561,7 +656,7 @@ export async function PATCH(
         if (effectiveCustomerId) {
           const check = await requireQbCustomer({
             customerId: effectiveCustomerId,
-            step: "credit_memo",
+            step: "credit_memo_mod",
             selfReferenceId: id,
             selfReferenceType: "credit_memo",
             selfMedusaRefNumber: cmNumber ?? null,
@@ -569,7 +664,7 @@ export async function PATCH(
 
           if ("waiting" in check) {
             logger.info(
-              `[edit CM] ⏸ Waiting on customer before re-creating QB CM`
+              `[edit CM] ⏸ Waiting on customer before submitting credit_memo_mod`
             );
           } else {
             const qbConfig = await getQbConfig();
@@ -583,25 +678,30 @@ export async function PATCH(
             await writePipelineRow({
               referenceId: id,
               referenceType: "credit_memo",
-              step: "credit_memo",
+              step: "credit_memo_mod",
               status: "pending",
+              qbTxnId: oldQbTxnId,
+              qbRefNumber: oldQbRefNumber ?? cmNumber ?? null,
               medusaRefNumber: cmNumber ?? null,
-              qbRefNumber: cmNumber ?? null,
               payload: {
                 customerId: check.qbListId,
                 date: new Date().toISOString().split("T")[0],
+                refNumber: cmNumber ?? undefined,
                 memo: `POS Return ${cmNumber ?? ""}`.trim(),
                 items: qbItems,
                 salesTaxCode: cmSalesTaxCode,
+                ...(isTaxExempt ? { taxExempt: true } : {}),
                 ...(salesRepRef ? { salesRepRef } : {}),
               },
             });
-            logger.info(`[edit CM] Enqueued new credit_memo for ${id}`);
+            logger.info(
+              `[edit CM] Enqueued credit_memo_mod for ${id} (txn=${oldQbTxnId})`
+            );
           }
         }
       } catch (qbErr: any) {
         logger.warn(
-          `[edit CM] QB re-enqueue failed (non-fatal): ${qbErr.message}`
+          `[edit CM] credit_memo_mod enqueue failed (non-fatal): ${qbErr.message}`
         );
       }
     }
