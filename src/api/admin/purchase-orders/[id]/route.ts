@@ -22,6 +22,7 @@ import { getPurchaseOrdersService } from "../_lib/service-resolver";
 import { computeTotals, normalizeLine } from "../_lib/totals";
 import { updateDraftSchema } from "../_lib/validators";
 import { orderPurchaseOrderModLines } from "../../../../lib/quickbooks/purchase-order-line-order";
+import { rebuildTransferChinaReservations } from "../../../../lib/inventory-transfer-reservations";
 
 interface QbVendorLike {
   id: string;
@@ -604,6 +605,56 @@ export async function PATCH(
     }
     if (toInsert.length > 0) {
       await service.createPurchaseOrderLines(toInsert);
+    }
+
+    // Sync China reservations when lines are removed or qty is reduced.
+    // A linked inventory_transfer holds reservation_items in China; without
+    // this sync, deleting a PO line leaves orphan reservations indefinitely.
+    const qtyChangedUpdates = toUpdate.filter((u) => {
+      const old = oldLines.find((ol) => ol.id === u.id);
+      return old && Number(old.qty_ordered) !== Number(u.data.qty_ordered);
+    });
+    if (toDelete.length > 0 || qtyChangedUpdates.length > 0) {
+      try {
+        const knex = (req.scope as any).resolve("__pg_connection__") as {
+          raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+        };
+        const transferResult = await knex.raw(
+          `SELECT id FROM inventory_transfer WHERE linked_purchase_order_id = ? AND deleted_at IS NULL LIMIT 1`,
+          [id]
+        );
+        const linkedTransfer = transferResult.rows[0] as { id: string } | undefined;
+
+        if (linkedTransfer) {
+          const transferId = linkedTransfer.id;
+
+          for (const oldLine of oldLines.filter((l) => toDelete.includes(l.id))) {
+            await knex.raw(
+              `UPDATE inventory_transfer_line
+                  SET deleted_at = NOW(), updated_at = NOW()
+                WHERE transfer_id = ?
+                  AND product_variant_id = ?
+                  AND deleted_at IS NULL`,
+              [transferId, oldLine.product_variant_id]
+            );
+          }
+
+          for (const upd of qtyChangedUpdates) {
+            await knex.raw(
+              `UPDATE inventory_transfer_line
+                  SET qty = ?, updated_at = NOW()
+                WHERE transfer_id = ?
+                  AND product_variant_id = ?
+                  AND deleted_at IS NULL`,
+              [upd.data.qty_ordered, transferId, upd.data.product_variant_id]
+            );
+          }
+
+          await rebuildTransferChinaReservations(knex, transferId, id);
+        }
+      } catch (transferErr) {
+        console.error("[po-patch] Failed to sync China transfer reservations:", transferErr);
+      }
     }
 
     headerUpdate.subtotal_cents = totals.subtotal_cents;

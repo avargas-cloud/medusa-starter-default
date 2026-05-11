@@ -1,6 +1,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
 import { COGS_JOIN, COST_DOLLARS, HAS_COST } from "../../_lib/cogs-join"
+import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -15,7 +16,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          pii.sku,
          pii.description,
          SUM(pii.quantity - pii.refunded_quantity)::int  AS qty_sold,
-         SUM(pii.total)::bigint                          AS revenue,
+         SUM(${NET_ITEM_REVENUE})::bigint                AS revenue,
          SUM(${COST_DOLLARS})::bigint                      AS cogs
        FROM pos_invoice_item pii
        JOIN pos_invoice i ON i.id = pii.invoice_id AND i.deleted_at IS NULL

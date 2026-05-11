@@ -1,6 +1,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange, priorPeriod } from "../../_lib/date-range"
 import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
+import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
 
 const ACTIVE = `i.status NOT IN ('draft','voided')`
 
@@ -8,7 +9,7 @@ async function fetchPeriodStats(pg: any, from: string, to: string) {
   const result = await pg.raw(
     `SELECT
        COUNT(DISTINCT i.id)::int                              AS invoice_count,
-       COALESCE(SUM(pii.total), 0)::bigint                   AS revenue,
+       COALESCE(SUM(${NET_ITEM_REVENUE}), 0)::bigint          AS revenue,
        COALESCE(SUM(pii.refunded_quantity * pii.unit_price), 0)::bigint AS refunded,
        COALESCE(SUM(${COST_DOLLARS}), 0)::bigint               AS cogs
      FROM pos_invoice i
@@ -19,6 +20,25 @@ async function fetchPeriodStats(pg: any, from: string, to: string) {
     [from, to]
   )
   return result.rows[0]
+}
+
+async function fetchInventoryAdjCogs(pg: any, from: string, to: string): Promise<number> {
+  const result = await pg.raw(
+    `SELECT COALESCE(SUM(
+       icl.delta_applied::numeric *
+       COALESCE((pv.metadata->>'average_unit_cost')::numeric,
+                (pv.metadata->>'qb_avg_cost')::numeric, 0)
+     ), 0) AS adj_cogs
+     FROM inventory_count ic
+     JOIN inventory_count_line icl ON icl.inventory_count_id = ic.id
+       AND icl.deleted_at IS NULL AND icl.status = 'applied' AND icl.delta_applied != 0
+     LEFT JOIN product_variant pv ON pv.id = icl.product_variant_id
+     WHERE ic.deleted_at IS NULL AND ic.voided_at IS NULL
+       AND ic.status = 'approved'
+       AND ic.applied_at >= ? AND ic.applied_at < ?`,
+    [from, to]
+  )
+  return Number(result.rows[0].adj_cogs)
 }
 
 async function fetchTopCustomer(pg: any, from: string, to: string) {
@@ -46,21 +66,23 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const pg = req.scope.resolve("__pg_connection__") as any
 
   try {
-    const [curr, prev, topCustomer] = await Promise.all([
+    const [curr, prev, topCustomer, adjCogs, prevAdjCogs] = await Promise.all([
       fetchPeriodStats(pg, range.from, range.to),
       fetchPeriodStats(pg, prior.from, prior.to),
       fetchTopCustomer(pg, range.from, range.to),
+      fetchInventoryAdjCogs(pg, range.from, range.to),
+      fetchInventoryAdjCogs(pg, prior.from, prior.to),
     ])
 
     const revenue = Number(curr.revenue) / 100    // cents → dollars
-    const cogs    = Number(curr.cogs)              // already dollars
+    const cogs    = Number(curr.cogs) + adjCogs   // already dollars + inventory adj
     const profit  = revenue - cogs
     const margin_pct  = revenue > 0 ? (profit / revenue) * 100 : 0
     const refunded    = Number(curr.refunded) / 100
     const refund_pct  = revenue > 0 ? (refunded / revenue) * 100 : 0
 
     const prevRevenue = Number(prev.revenue) / 100
-    const prevProfit  = prevRevenue - Number(prev.cogs)
+    const prevProfit  = prevRevenue - (Number(prev.cogs) + prevAdjCogs)
 
     return res.json({
       invoice_count: Number(curr.invoice_count),

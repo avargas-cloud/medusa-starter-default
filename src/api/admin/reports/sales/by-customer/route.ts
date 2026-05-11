@@ -1,6 +1,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
 import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
+import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -18,7 +19,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          c.phone,
          c.metadata->>'qb_price_level'                  AS price_level,
          COUNT(DISTINCT i.id)::int                       AS invoice_count,
-         SUM(pii.total)::bigint                          AS revenue,
+         SUM(${NET_ITEM_REVENUE})::bigint                AS revenue,
          SUM(pii.refunded_quantity * pii.unit_price)::bigint AS refunded,
          SUM(${COST_DOLLARS})::bigint                      AS cogs
        FROM pos_invoice i
