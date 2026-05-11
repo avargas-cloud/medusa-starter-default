@@ -13,6 +13,7 @@ import { applyShippingAttributesStep } from "./steps/apply-shipping-attributes-s
 import { applyWholesalePricesStep } from "./steps/apply-wholesale-prices-step";
 import { enqueueQbItemsStep, QbItemType } from "./steps/enqueue-qb-items-step";
 import { linkQbVendorStep } from "./steps/link-qb-vendor-step";
+import { resolveQbVendorListIdStep } from "./steps/resolve-qb-vendor-list-id-step";
 import { setProductTaxableStep } from "./steps/set-product-taxable-step";
 
 export type CreatePosProductV2VariantInput = {
@@ -88,16 +89,31 @@ const VENDOR_QB_ID_PLACEHOLDER = "__NO_VENDOR__";
 export const createPosProductV2Workflow = createWorkflow(
   "create-pos-product-v2",
   function (input: CreatePosProductV2Input) {
-    const productsInput = transform({ input }, (data) => {
+    // Resolve internal qb_vendor.id values → actual QB Desktop ListIDs before
+    // building the product payload. Passing the internal Medusa ID as ListID
+    // causes QB Error 3000 (invalid object ID).
+    const vendorIdsForResolution = transform({ input }, (data) => ({
+      vendor_qb_ids: [
+        data.input.vendor_qb_id ?? null,
+        ...data.input.variants.map((v) => v.overrides?.vendor_qb_id ?? null),
+      ],
+    }));
+    const resolvedVendors = resolveQbVendorListIdStep(vendorIdsForResolution);
+
+    const productsInput = transform({ input, resolvedVendors }, (data) => {
       const i = data.input;
       const currency = (i.currency_code ?? "usd").toLowerCase();
       const manageInventory = i.item_type === "Inventory";
+      const globalListId =
+        i.vendor_qb_id != null
+          ? (data.resolvedVendors.listIdByVendorId[i.vendor_qb_id] ?? null)
+          : null;
       const sharedMeta = {
         qb_item_type: i.item_type,
         qb_income_account_full_name: i.income_account_full_name ?? null,
         qb_cogs_account_full_name: i.cogs_account_full_name ?? null,
         qb_vendor_full_name: i.vendor_full_name ?? null,
-        qb_vendor_list_id: i.vendor_qb_id ?? null,
+        qb_vendor_list_id: globalListId,
       };
 
       // Prefer explicit option_title; otherwise infer from the first variant's
@@ -230,34 +246,46 @@ export const createPosProductV2Workflow = createWorkflow(
       currency_code: currencyCode,
     });
 
-    const qbItems = transform({ input, productRef }, (data) => {
-      const variants = (data.productRef as any)?.variants ?? [];
-      return data.input.variants.map((v, idx) => ({
-        variant_id: variants[idx]?.id ?? "",
-        sku: v.sku,
-        title: v.title ?? v.sku,
-        sales_description:
-          v.sales_description ??
-          data.input.sales_description ??
-          data.input.title,
-        cost: v.cost,
-        retail_price: v.retail_price,
-        item_type: data.input.item_type,
-        cogs_account_full_name:
-          v.overrides?.cogs_account_full_name ??
-          data.input.cogs_account_full_name ??
-          null,
-        income_account_full_name:
-          v.overrides?.income_account_full_name ??
-          data.input.income_account_full_name ??
-          null,
-        vendor_list_id:
-          v.overrides?.vendor_qb_id ?? data.input.vendor_qb_id ?? null,
-        vendor_full_name:
-          v.overrides?.vendor_full_name ?? data.input.vendor_full_name ?? null,
-        mpn: v.mpn ?? null,
-      }));
-    });
+    const qbItems = transform(
+      { input, productRef, resolvedVendors },
+      (data) => {
+        const variants = (data.productRef as any)?.variants ?? [];
+        return data.input.variants.map((v, idx) => {
+          const vendorQbId =
+            v.overrides?.vendor_qb_id ?? data.input.vendor_qb_id ?? null;
+          const vendorListId =
+            vendorQbId != null
+              ? (data.resolvedVendors.listIdByVendorId[vendorQbId] ?? null)
+              : null;
+          return {
+            variant_id: variants[idx]?.id ?? "",
+            sku: v.sku,
+            title: v.title ?? v.sku,
+            sales_description:
+              v.sales_description ??
+              data.input.sales_description ??
+              data.input.title,
+            cost: v.cost,
+            retail_price: v.retail_price,
+            item_type: data.input.item_type,
+            cogs_account_full_name:
+              v.overrides?.cogs_account_full_name ??
+              data.input.cogs_account_full_name ??
+              null,
+            income_account_full_name:
+              v.overrides?.income_account_full_name ??
+              data.input.income_account_full_name ??
+              null,
+            vendor_list_id: vendorListId,
+            vendor_full_name:
+              v.overrides?.vendor_full_name ??
+              data.input.vendor_full_name ??
+              null,
+            mpn: v.mpn ?? null,
+          };
+        });
+      }
+    );
 
     const qbEnqueue = enqueueQbItemsStep({ items: qbItems });
 
