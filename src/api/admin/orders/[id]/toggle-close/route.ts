@@ -42,6 +42,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       Modules.STOCK_LOCATION
     ) as any;
     const remoteQuery = req.scope.resolve("remoteQuery") as any;
+    const pg = req.scope.resolve("__pg_connection__") as any;
 
     // 1. Fetch order — we need metadata + items
     const orders = await orderService.listOrders(
@@ -119,13 +120,42 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       }
 
       // 5. Recreate reservations with allow_backorder=true
+      // Pre-fetch invoiced quantities for this order so we can skip items that
+      // are already fully invoiced (guard against re-leaking reservations).
+      const invoicedQtyMap = new Map<string, number>();
+      try {
+        const { rows: invRows } = await pg.raw(
+          `SELECT pii.variant_id, COALESCE(SUM(pii.quantity), 0) AS invoiced_qty
+           FROM pos_invoice_item pii
+           JOIN pos_invoice pi ON pi.id = pii.invoice_id
+           WHERE pi.order_id = ? AND pi.status != 'voided'
+             AND pi.deleted_at IS NULL AND pii.deleted_at IS NULL
+           GROUP BY pii.variant_id`,
+          [orderId]
+        );
+        for (const row of invRows) {
+          invoicedQtyMap.set(row.variant_id, Number(row.invoiced_qty));
+        }
+      } catch (mapErr: any) {
+        console.warn(`${LOG_PREFIX} Could not fetch invoiced quantities: ${mapErr.message}`);
+      }
+
       for (const item of order.items || []) {
         const variantId = item.variant_id;
         if (!variantId) continue;
 
         const fulfilledQty = Number(item.detail?.fulfilled_quantity || 0);
-        const quantity = Math.max(0, Number(item.quantity) - fulfilledQty);
-        if (quantity === 0) continue;
+        const invoicedQty = invoicedQtyMap.get(variantId) ?? 0;
+        const alreadyDone = Math.max(fulfilledQty, invoicedQty);
+        const quantity = Math.max(0, Number(item.quantity) - alreadyDone);
+        if (quantity === 0) {
+          if (invoicedQty >= Number(item.quantity)) {
+            console.log(
+              `${LOG_PREFIX} Skipping reservation for ${variantId} — fully invoiced (${invoicedQty}/${item.quantity})`
+            );
+          }
+          continue;
+        }
 
         try {
           // Resolve inventory_item_id

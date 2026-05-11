@@ -442,6 +442,38 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     );
   }
 
+  // Step 2B: Release inventory reservations for invoiced items (best-effort)
+  try {
+    const inventoryModule = req.scope.resolve(Modules.INVENTORY) as any;
+    const orderSvc = req.scope.resolve(Modules.ORDER) as any;
+    const ordersWithItems = await orderSvc.listOrders(
+      { id: body.order_id },
+      { relations: ["items"] }
+    );
+    const orderForItems = ordersWithItems?.[0];
+    const invoicedVariantIds = new Set(
+      (body.items ?? []).map((it: any) => it.variant_id).filter(Boolean)
+    );
+    for (const item of orderForItems?.items ?? []) {
+      if (!item.variant_id || !invoicedVariantIds.has(item.variant_id)) continue;
+      const existing = await inventoryModule.listReservationItems({
+        line_item_id: item.id,
+      });
+      if (existing?.length) {
+        await inventoryModule.deleteReservationItems(
+          existing.map((r: any) => r.id)
+        );
+        console.log(
+          `[invoice] Released ${existing.length} reservation(s) for line item ${item.id} (variant ${item.variant_id})`
+        );
+      }
+    }
+  } catch (resErr: any) {
+    console.warn(
+      `[invoice] Failed to release reservations for order ${body.order_id}: ${resErr.message}`
+    );
+  }
+
   // ── 24h Path B audit log ─────────────────────────────────────────────────
   // Persist inputs and decision for the SR vs Invoice path so we can debug
   // spurious downgrades. Each insert also deletes rows older than 24h —

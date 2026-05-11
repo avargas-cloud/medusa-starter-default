@@ -177,8 +177,82 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
   } else {
     console.log(
-      `[VOID INVOICE] Skipped physical rollback (missing fulfillment_id or order_id)`
+      `[VOID INVOICE] No fulfillment_id — skipping physical stock rollback`
     );
+    // No physical stock movement to reverse, but we do need to recreate the
+    // reservation that was deleted when the invoice was created (2026-05-11+).
+    if (invoice.order_id) {
+      try {
+        const pool = getDbPool();
+        const stockLocMod = req.scope.resolve(Modules.STOCK_LOCATION) as any;
+
+        const [invItemsRes, locs, orderItemsRes] = await Promise.all([
+          pool.query(
+            `SELECT * FROM pos_invoice_item WHERE invoice_id = $1 AND deleted_at IS NULL`,
+            [id]
+          ),
+          stockLocMod.listStockLocations({}, { take: 1, select: ["id"] }),
+          pool.query<{ line_item_id: string; variant_id: string }>(
+            `SELECT oli.id AS line_item_id, oli.variant_id
+             FROM order_item oi
+             JOIN order_line_item oli ON oi.item_id = oli.id
+             WHERE oi.order_id = $1`,
+            [invoice.order_id]
+          ),
+        ]);
+
+        const locId: string | undefined = locs?.[0]?.id;
+        if (locId) {
+          const { createReservationsWorkflow } = await import(
+            "@medusajs/core-flows"
+          );
+          for (const posItem of invItemsRes.rows) {
+            if (!posItem.quantity || !posItem.variant_id) continue;
+            const orderItem = orderItemsRes.rows.find(
+              (oi) => oi.variant_id === posItem.variant_id
+            );
+            if (!orderItem) continue;
+            const invLinkRes = await pool.query<{
+              inventory_item_id: string;
+            }>(
+              `SELECT inventory_item_id FROM product_variant_inventory_item
+               WHERE variant_id = $1 AND deleted_at IS NULL LIMIT 1`,
+              [posItem.variant_id]
+            );
+            const inventoryItemId =
+              invLinkRes.rows[0]?.inventory_item_id;
+            if (!inventoryItemId) continue;
+            try {
+              await createReservationsWorkflow(req.scope).run({
+                input: {
+                  reservations: [
+                    {
+                      inventory_item_id: inventoryItemId,
+                      location_id: locId,
+                      quantity: Number(posItem.quantity),
+                      line_item_id: orderItem.line_item_id,
+                      allow_backorder: true,
+                      description: `Restored via void of invoice ${invoice.invoice_number || invoice.id}`,
+                    },
+                  ],
+                },
+              });
+              console.log(
+                `[VOID INVOICE] Recreated reservation for variant ${posItem.variant_id} (no-fulfillment path)`
+              );
+            } catch (resErr: any) {
+              console.warn(
+                `[VOID INVOICE] Reservation recreation failed for ${posItem.variant_id}: ${resErr.message}`
+              );
+            }
+          }
+        }
+      } catch (elseErr: any) {
+        console.warn(
+          `[VOID INVOICE] Reservation restoration failed (no-fulfillment path): ${elseErr.message}`
+        );
+      }
+    }
   }
 
   // 1. UNAPPLY ALL ATTACHED PAYMENTS FIRST (Free up customer balance)
