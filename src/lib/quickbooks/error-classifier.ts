@@ -67,7 +67,7 @@ const RX_PARSER = /completed but no txnid|no txnid in response/i;
 const RX_NETWORK =
   /econnrefused|etimedout|enotfound|fetch failed|socket hang up|network error|getaddrinfo/i;
 const RX_BRIDGE_BUSY =
-  /qbwc|queue is full|bridge busy|web connector|qb desktop may be offline|qbxml session/i;
+  /qbwc|queue is full|bridge busy|web connector|qb desktop may be offline|qbxml session|timeout waiting for bridge|bridge operation timed out/i;
 
 function asString(v: unknown): string {
   if (v == null) return "";

@@ -58,6 +58,21 @@ async function applyCustomerPipelineFailure(
         [rowId, decision.newRetries, errorMessage]
       )
       .catch(() => {});
+
+    // Permanent failure — cascade-fail any documents waiting on this customer row.
+    // Without this, invoice/SR/order rows remain stuck in 'waiting' indefinitely.
+    await pool
+      .query(
+        `UPDATE qb_order_pipeline
+            SET status     = 'failed',
+                failed_at  = NOW(),
+                updated_at = NOW(),
+                error      = 'Customer QB sync permanently failed — retry customer creation first'
+          WHERE depends_on = $1
+            AND status     = 'waiting'`,
+        [rowId]
+      )
+      .catch(() => {});
   }
   return { ...decision, newStatus: "failed" as const };
 }
