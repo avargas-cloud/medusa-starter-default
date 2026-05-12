@@ -524,19 +524,6 @@ export async function PATCH(
   // the originals as ghosts (qty=0). See incident: "On PO" cache drift on
   // ENEA1-18-30 / ENEA1-18-60 (May 2026).
   if (body.lines !== undefined) {
-    // Guard: cannot replace lines if any active receipts exist on this PO.
-    const existingReceipts = (await service.listPurchaseOrderReceipts(
-      { purchase_order_id: id },
-      { take: 100, skip: 0 }
-    )) as Array<{ status: string }>;
-    const activeReceipts = existingReceipts.filter((r) => r.status !== "deleted");
-    if (activeReceipts.length > 0) {
-      return res.status(409).json({
-        error: `Cannot modify lines: this PO has ${activeReceipts.length} active receipt(s). Delete all receipts from this PO first, then retry.`,
-        code: "has_receipts",
-      });
-    }
-
     const oldLines = (await service.listPurchaseOrderLines(
       { purchase_order_id: id },
       { take: 1000, skip: 0 }
@@ -593,7 +580,38 @@ export async function PATCH(
     });
 
     // Anything not kept gets hard-deleted.
-    const toDelete = oldLines.filter((l) => !keepIds.has(l.id)).map((l) => l.id);
+    const toDeleteLines = oldLines.filter((l) => !keepIds.has(l.id));
+    const toDelete = toDeleteLines.map((l) => l.id);
+
+    // Per-item guard: block only the affected lines, not the whole PO.
+    // A line with any received units cannot be deleted; a fully-received
+    // line cannot be modified; qty_ordered cannot drop below qty_received.
+    {
+      type OldLine = Record<string, unknown> & { id: string };
+      const lineErrors: string[] = [];
+      for (const dl of toDeleteLines as OldLine[]) {
+        const qtyRecv = Number(dl.qty_received ?? 0);
+        if (qtyRecv > 0) {
+          lineErrors.push(`"${dl.sku_snapshot ?? dl.id}" has ${qtyRecv} received unit(s) and cannot be deleted.`);
+        }
+      }
+      for (const u of toUpdate) {
+        const old = (oldLines as OldLine[]).find((ol) => ol.id === u.id);
+        if (!old) continue;
+        const qtyRecv = Number(old.qty_received ?? 0);
+        const sku = old.sku_snapshot ?? old.id;
+        if (Number(u.data.qty_ordered) < qtyRecv) {
+          lineErrors.push(`"${sku}": qty_ordered cannot go below qty_received (${qtyRecv}).`);
+        }
+      }
+      if (lineErrors.length > 0) {
+        return res.status(409).json({
+          error: `Cannot apply line changes: ${lineErrors.join(" ")}`,
+          code: "line_locked",
+          details: lineErrors,
+        });
+      }
+    }
 
     if (toDelete.length > 0) {
       await service.deletePurchaseOrderLines(toDelete);
