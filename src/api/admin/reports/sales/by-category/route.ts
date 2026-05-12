@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
 import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
 import { parseRegion, regionClause } from "../../_lib/region-filter"
+import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -34,12 +35,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        )
        SELECT * FROM (
          SELECT
-           COALESCE(pt.category, 'Uncategorized')        AS category,
-           pt.category_id                                 AS category_id,
-           SUM(pii.quantity - pii.refunded_quantity)::int AS qty_sold,
-           SUM(pii.total)::bigint                         AS revenue,
-           SUM(${COST_DOLLARS})::bigint                     AS cogs,
-           COUNT(DISTINCT pii.invoice_id)::int            AS invoice_count
+           COALESCE(pt.category, 'Uncategorized')                        AS category,
+           pt.category_id                                                 AS category_id,
+           SUM(pii.quantity - pii.refunded_quantity)::int                 AS qty_sold,
+           SUM(${NET_ITEM_REVENUE})::bigint                               AS revenue,
+           SUM(${COST_DOLLARS})::bigint                                   AS cogs,
+           COUNT(DISTINCT pii.invoice_id)::int                            AS invoice_count
          FROM pos_invoice_item pii
          JOIN pos_invoice i ON i.id = pii.invoice_id AND i.deleted_at IS NULL
            AND i.status NOT IN ('draft','voided')
@@ -49,19 +50,6 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          LEFT JOIN product_tier1 pt ON pt.product_id = p.id
          WHERE pii.deleted_at IS NULL ${regionWhere}
          GROUP BY 1, 2
-         UNION ALL
-         SELECT
-           'Order Discount'                                             AS category,
-           NULL::text                                                   AS category_id,
-           0::int                                                       AS qty_sold,
-           (-COALESCE(SUM(i.discount), 0))::bigint                      AS revenue,
-           0::bigint                                                    AS cogs,
-           COUNT(DISTINCT CASE WHEN i.discount > 0 THEN i.id END)::int AS invoice_count
-         FROM pos_invoice i
-         WHERE i.deleted_at IS NULL
-           AND i.status NOT IN ('draft','voided')
-           AND i.issued_at >= ? AND i.issued_at < ?
-           AND i.discount > 0
          UNION ALL
          SELECT
            'Inventory Adjustment'                                       AS category,
@@ -83,7 +71,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND ic.applied_at >= ? AND ic.applied_at < ?
        ) t
        ORDER BY revenue DESC`,
-      [ROOT_CAT, ROOT_CAT, ROOT_CAT, ROOT_CAT, range.from, range.to, range.from, range.to, range.from, range.to]
+      [ROOT_CAT, ROOT_CAT, ROOT_CAT, ROOT_CAT, range.from, range.to, range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map((r) => {

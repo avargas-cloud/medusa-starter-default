@@ -15,8 +15,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       `SELECT
          pii.sku,
          pii.description,
-         SUM(pii.quantity - pii.refunded_quantity)::int  AS qty_sold,
-         SUM(${NET_ITEM_REVENUE})::bigint                AS revenue,
+         SUM(pii.quantity - pii.refunded_quantity)::int    AS qty_sold,
+         SUM(${NET_ITEM_REVENUE})::bigint                  AS revenue,
          SUM(${COST_DOLLARS})::bigint                      AS cogs
        FROM pos_invoice_item pii
        JOIN pos_invoice i ON i.id = pii.invoice_id AND i.deleted_at IS NULL
@@ -25,7 +25,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        ${COGS_JOIN}
        WHERE pii.deleted_at IS NULL AND ${HAS_COST}
        GROUP BY pii.sku, pii.description
-       ORDER BY (SUM(pii.total) - SUM(${COST_DOLLARS})) DESC
+       ORDER BY (SUM(${NET_ITEM_REVENUE}) - SUM(${COST_DOLLARS})) DESC
        LIMIT 20`,
       [range.from, range.to]
     )
@@ -35,8 +35,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       `SELECT
          i.customer_id,
          COALESCE(c.first_name || ' ' || c.last_name, c.email, 'Unknown') AS name,
-         SUM(pii.total)::bigint       AS revenue,
-         SUM(${COST_DOLLARS})::bigint AS cogs
+         SUM(${NET_ITEM_REVENUE})::bigint                  AS revenue,
+         SUM(${COST_DOLLARS})::bigint                      AS cogs
        FROM pos_invoice i
        LEFT JOIN customer c ON c.id = i.customer_id
        JOIN pos_invoice_item pii ON pii.invoice_id = i.id AND pii.deleted_at IS NULL
@@ -45,7 +45,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          AND i.status NOT IN ('draft','voided')
          AND i.issued_at >= ? AND i.issued_at < ?
        GROUP BY i.customer_id, c.first_name, c.last_name, c.email
-       ORDER BY (SUM(pii.total) - SUM(${COST_DOLLARS})) DESC
+       ORDER BY (SUM(${NET_ITEM_REVENUE}) - SUM(${COST_DOLLARS})) DESC
        LIMIT 20`,
       [range.from, range.to]
     )
