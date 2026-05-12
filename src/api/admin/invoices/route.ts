@@ -90,6 +90,8 @@ interface CreateInvoiceBody {
     unit_price: number; // cents
     total: number; // cents
     attached_image?: string | null; // base64 JPEG (96x96 @ 0.6) — snapshotted from order line item
+    discount_type?: "percent" | "fixed" | null;
+    discount_value?: number | null;
   }>;
   subtotal: number; // cents
   discount?: number; // cents
@@ -437,6 +439,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           attached_image: it.attached_image ?? null,
           average_unit_cost: cost?.cost ?? null,
           average_unit_cost_synced_at: cost?.synced_at ?? null,
+          discount_type: it.discount_type ?? null,
+          discount_value: it.discount_value ?? null,
         };
       })
     );

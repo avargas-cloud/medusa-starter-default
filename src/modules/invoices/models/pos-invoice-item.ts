@@ -27,6 +27,10 @@ const PosInvoiceItem = model.define("pos_invoice_item", {
   // Snapshot of variant.metadata.qb_avg_cost_synced_at at issue time.
   // Lets reports show cost freshness ("based on a sync from N days ago").
   average_unit_cost_synced_at: model.dateTime().nullable(),
+  // Per-item discount snapshotted at invoice creation — self-contained, never
+  // derived from the live order. NULL = no discount on this line.
+  discount_type: model.text().nullable(),   // 'percent' | 'fixed'
+  discount_value: model.number().nullable(), // percentage (0-100) or fixed dollar amount
 });
 
 export default PosInvoiceItem;
