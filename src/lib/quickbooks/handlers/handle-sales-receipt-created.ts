@@ -26,6 +26,7 @@ import {
 
 import { handleFulfillmentCreated } from "./handle-fulfillment-created";
 import { LOG_PREFIX, getQbConfig, getFloat } from "./utils";
+import { resolveTaxListid } from "../resolve-tax-listid";
 
 export async function handleSalesReceiptCreated(
   data: any,
@@ -306,7 +307,18 @@ export async function handleSalesReceiptCreated(
   }
 
   const hasTax = getFloat(order.tax_total) > 0;
-  salesTaxCode = hasTax ? qbConfig.defaultSalesTaxCode : undefined;
+  salesTaxCode = hasTax
+    ? qbConfig.defaultSalesTaxCode
+    : qbConfig.exemptSalesTaxCode;
+  // Resolve the QB SalesTaxItem ListID — exempt orders get the env-configured
+  // Exempt ListID so QB skips tax math even though per-line items remain
+  // marked taxable. Bridge prefers ListID over FullName.
+  const persistedTaxListid = order.metadata?.qb_tax_item_listid as
+    | string
+    | undefined;
+  const qbTaxItemListid = hasTax
+    ? persistedTaxListid ?? resolveTaxListid("florida", qbConfig) ?? undefined
+    : resolveTaxListid("exempt", qbConfig) ?? undefined;
 
   try {
     await orderModule.updateOrders(orderId, {
@@ -364,6 +376,7 @@ export async function handleSalesReceiptCreated(
     paymentMethod: qbPaymentMethod,
     prebuiltItems,
     salesTaxCode,
+    qbTaxItemListid,
     salesRep: parseSalesRepInitials(order.metadata?.sales_rep),
     memo,
     onSubmitted: async (operationId) => {

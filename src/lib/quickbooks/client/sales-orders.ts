@@ -29,7 +29,7 @@ export async function createSalesOrderInQb(
     console.log(
       `[QB DRY RUN] Would create Sales Order for:`,
       payload.customerId,
-      `(${payload.items.length} items)`
+      `(${payload.items.length} items, salesTaxCode=${payload.salesTaxCode ?? "(none)"}, qbTaxItemListid=${payload.qbTaxItemListid ?? "(none)"})`
     );
     return {
       success: true,

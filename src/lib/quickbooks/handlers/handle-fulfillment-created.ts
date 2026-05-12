@@ -26,6 +26,7 @@ import {
 
 import { handleOrderPlaced } from "./handle-order-placed";
 import { LOG_PREFIX, getQbConfig, getFloat } from "./utils";
+import { resolveTaxListid } from "../resolve-tax-listid";
 
 function normalizePosInvoicePayloadItems(items: any[]): any[] {
   return items.map((item) => ({
@@ -190,6 +191,34 @@ export async function handleFulfillmentCreated(
     }
   }
 
+  // Defense-in-depth: if a POS invoice arrives without items in the payload
+  // (subscriber stomp, retry, dual event), reload the snapshot from
+  // pos_invoice_item. Prevents isPartial from defaulting to false and keeps
+  // LinkToTxnLineID per line so QB SO BO decrements correctly. History:
+  // QB Inv 19507 (POS 20330) became standalone because handler had no
+  // item-level fallback for invoice_id (2026-05-11).
+  if (data.invoice_id && fulfillmentItems.length === 0) {
+    try {
+      const fbPool = getDbPool();
+      const { rows: invRows } = await fbPool.query(
+        `SELECT variant_id, sku, quantity, unit_price, total
+           FROM pos_invoice_item
+          WHERE invoice_id = $1 AND deleted_at IS NULL`,
+        [data.invoice_id]
+      );
+      if (invRows.length > 0) {
+        fulfillmentItems = normalizePosInvoicePayloadItems(invRows);
+        logger.info(
+          `${LOG_PREFIX} ✅ Fallback: loaded ${invRows.length} item(s) from pos_invoice_item for invoice ${data.invoice_id}`
+        );
+      }
+    } catch (e: any) {
+      logger.warn(
+        `${LOG_PREFIX} Failed to fetch pos_invoice_item fallback: ${e.message}`
+      );
+    }
+  }
+
   if (fulfillmentItems.length > 0) {
     const orderItemsMap = new Map<string, any>(
       (order.items || []).map((i: any) => [i.id, i])
@@ -304,8 +333,8 @@ export async function handleFulfillmentCreated(
   // promotion + shipping line in QB. The SO handler is responsible for
   // baking these into the SO itself, but we cannot rely on QB auto-copy
   // when the POS invoice carries its own discount/shipping snapshot.
+  const qbConfig = await getQbConfig();
   {
-    const qbConfig = await getQbConfig();
     const orderDiscountTotal =
       invoiceDiscountAmount !== undefined
         ? invoiceDiscountAmount
@@ -469,12 +498,19 @@ export async function handleFulfillmentCreated(
     );
   }
 
-  // Read the persisted QB SalesTaxItem ListID from order metadata. When
-  // present, the bridge emits ItemSalesTaxRef.ListID; the legacy FullName
-  // (salesTaxCode) is kept as fallback during backfill.
-  const qbTaxItemListid = order.metadata?.qb_tax_item_listid as
+  // Resolve the QB SalesTaxItem ListID. When the order is exempt
+  // (tax_total === 0) we emit the env-configured Exempt ListID so QB
+  // stamps the header tax code as Exempt and skips tax math even though
+  // per-line items remain marked taxable. Falls back to the persisted
+  // metadata.qb_tax_item_listid (legacy) when present and the order is
+  // taxable; otherwise to the taxed ListID from env.
+  const hasTaxForListid = getFloat(order.tax_total) > 0;
+  const persistedTaxListid = order.metadata?.qb_tax_item_listid as
     | string
     | undefined;
+  const qbTaxItemListid = hasTaxForListid
+    ? persistedTaxListid ?? resolveTaxListid("florida", qbConfig) ?? undefined
+    : resolveTaxListid("exempt", qbConfig) ?? undefined;
 
   const result = await processInvoiceInQb({
     orderId,

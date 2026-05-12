@@ -23,6 +23,7 @@ import {
 } from "../qb-pipeline";
 
 import { LOG_PREFIX, getQbConfig, isPosOrder, processingOrders } from "./utils";
+import { resolveTaxListid } from "../resolve-tax-listid";
 
 async function mergeOrderMetadata(
   orderId: string,
@@ -309,13 +310,21 @@ export async function handleOrderPlaced(
     }
 
     const hasTax = order.tax_total && order.tax_total > 0;
-    const salesTaxCode = hasTax ? qbConfig.defaultSalesTaxCode : undefined;
-    // Read the persisted QB SalesTaxItem ListID from order metadata. When
-    // present, the bridge emits ItemSalesTaxRef.ListID and ignores the
-    // legacy FullName-based salesTaxCode (kept as fallback for backfill gap).
-    const qbTaxItemListid = order.metadata?.qb_tax_item_listid as
+    const salesTaxCode = hasTax
+      ? qbConfig.defaultSalesTaxCode
+      : qbConfig.exemptSalesTaxCode;
+    // Resolve the QB SalesTaxItem ListID. When the order is exempt
+    // (tax_total === 0) we always emit the env-configured Exempt ListID so
+    // QB stamps the header tax code as Exempt and skips tax math even
+    // though per-line items remain marked taxable. Falls back to the
+    // persisted metadata.qb_tax_item_listid (legacy) when present and the
+    // order is taxable; otherwise to the taxed ListID from env.
+    const persistedTaxListid = order.metadata?.qb_tax_item_listid as
       | string
       | undefined;
+    const qbTaxItemListid = hasTax
+      ? persistedTaxListid ?? resolveTaxListid("florida", qbConfig) ?? undefined
+      : resolveTaxListid("exempt", qbConfig) ?? undefined;
     logger.info(
       `${LOG_PREFIX} tax_total=${order.tax_total} → salesTaxCode=${salesTaxCode ?? "Exempt (none passed)"} qbTaxItemListid=${qbTaxItemListid ?? "(none, fallback to FullName)"}`
     );
