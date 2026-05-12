@@ -16,6 +16,7 @@ import {
   getSoTxnId,
   getEstimateTxnId,
 } from "../qb-metadata-types";
+import { bridgeFetch } from "../client/core";
 import {
   coalesceIfInFlight,
   writePipelineRow,
@@ -51,6 +52,53 @@ export async function handleSalesReceiptCreated(
       `${LOG_PREFIX} ⏸ Sales receipt in-flight for ${orderId} — coalesced as next submit`
     );
     return;
+  }
+
+  // Secondary guard: detect recently-failed SR rows that still have a bridge op
+  // pending. coalesceIfInFlight only sees 'submitted' rows; a row can be marked
+  // 'failed' by the stale-cleanup pass while its bridge op is still processing.
+  // Submitting a new SR in that window creates a duplicate document in QB.
+  {
+    const pool = getDbPool();
+    const { rows: failedWithOp } = await pool.query(
+      `SELECT id, bridge_op_id FROM qb_order_pipeline
+       WHERE order_id = $1 AND step = 'sales_receipt'
+         AND status = 'failed' AND bridge_op_id IS NOT NULL
+         AND failed_at > NOW() - INTERVAL '2 hours'
+       ORDER BY failed_at DESC LIMIT 1`,
+      [orderId]
+    );
+    if (failedWithOp.length > 0) {
+      const { id: failedRowId, bridge_op_id: oldOpId } = failedWithOp[0] as {
+        id: string;
+        bridge_op_id: string;
+      };
+      try {
+        const statusRes = await bridgeFetch(
+          "GET",
+          `/api/sync/status/${oldOpId}`
+        );
+        const opStatus = statusRes?.operation?.status as string | undefined;
+        if (opStatus === "pending" || opStatus === "processing") {
+          // The original bridge op is still running — restore the row to
+          // 'submitted' so the consolidator picks it up, and skip this retry.
+          await pool.query(
+            `UPDATE qb_order_pipeline
+             SET status = 'submitted', failed_at = NULL, error = NULL, updated_at = NOW()
+             WHERE id = $1`,
+            [failedRowId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ⏸ Bridge op ${oldOpId} still ${opStatus} — restored row ${failedRowId} to submitted, skipping duplicate SR`
+          );
+          return;
+        }
+      } catch (bridgeCheckErr: any) {
+        logger.warn(
+          `${LOG_PREFIX} ⚠️ Could not check bridge op ${oldOpId}: ${bridgeCheckErr.message} — proceeding with SR creation`
+        );
+      }
+    }
   }
 
   let order: any;

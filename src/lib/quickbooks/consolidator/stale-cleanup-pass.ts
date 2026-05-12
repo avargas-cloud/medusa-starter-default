@@ -1,4 +1,5 @@
 import { getDbPool } from "../../../api/utils/db-pool";
+import { bridgeFetch } from "../client/core";
 import { invalidateEditSequenceCache } from "../qb-pipeline";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
@@ -35,21 +36,95 @@ export async function runTimeoutPass(logger: any): Promise<void> {
   }
 }
 
+const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+
 /**
  * Stale submitted cleanup: rows stuck in 'submitted' for >30 minutes are
  * marked failed and their EditSequence cache is invalidated so stale sequences
  * aren't reused on the next retry.
+ *
+ * IMPORTANT: before marking a row as failed, we poll the bridge for the
+ * outstanding bridge_op_id. If the op is still pending/processing we extend
+ * the submitted window instead of giving up — a blind fail while the bridge is
+ * still working causes a duplicate document in QB on the next retry.
+ * We only force-fail after 2 hours of pending bridge status.
  */
 export async function runStaleSubmittedCleanup(logger: any): Promise<void> {
   const pool = getDbPool();
   try {
     const { rows: staleSubmitted } = await pool.query(
-      `UPDATE qb_order_pipeline
-             SET status = 'failed', error = 'Stale: no bridge confirmation after 30 minutes', updated_at = NOW(), failed_at = NOW(), confirmed_at = NULL
-             WHERE status = 'submitted' AND updated_at < NOW() - INTERVAL '30 minutes'
-             RETURNING id, step, qb_txn_id`
+      `SELECT id, step, qb_txn_id, bridge_op_id, submitted_at
+       FROM qb_order_pipeline
+       WHERE status = 'submitted' AND updated_at < NOW() - INTERVAL '30 minutes'`
     );
+
     for (const row of staleSubmitted) {
+      if (row.bridge_op_id) {
+        let shouldFail = false;
+        try {
+          const statusRes = await bridgeFetch(
+            "GET",
+            `/api/sync/status/${row.bridge_op_id}`
+          );
+          const opStatus = statusRes?.operation?.status as string | undefined;
+
+          if (opStatus === "pending" || opStatus === "processing") {
+            const submittedMs = row.submitted_at
+              ? Date.now() - new Date(row.submitted_at as string).getTime()
+              : Infinity;
+            if (submittedMs < TWO_HOURS_MS) {
+              // Bridge is still working — extend the window to prevent a
+              // premature fail that would trigger a duplicate QB submission.
+              await pool.query(
+                `UPDATE qb_order_pipeline SET updated_at = NOW() WHERE id = $1`,
+                [row.id]
+              );
+              logger.info(
+                `${LOG_PREFIX} ⏳ Row ${row.id} (step=${row.step}) bridge op ${row.bridge_op_id} still ${opStatus} — extending window`
+              );
+              continue;
+            }
+            // Pending for >2 hours — abandon
+            logger.warn(
+              `${LOG_PREFIX} ⏱️ Row ${row.id} (step=${row.step}) bridge op pending >2h — marking failed`
+            );
+            shouldFail = true;
+          } else if (opStatus === "completed") {
+            // Bridge completed but the confirmation callback was missed (e.g.
+            // server restart). Reset updated_at so the poll loop picks it up.
+            await pool.query(
+              `UPDATE qb_order_pipeline SET updated_at = NOW() WHERE id = $1`,
+              [row.id]
+            );
+            logger.info(
+              `${LOG_PREFIX} ✅ Row ${row.id} (step=${row.step}) bridge op already completed — will confirm on next poll`
+            );
+            continue;
+          } else {
+            // Bridge says failed or op not found — fall through to mark failed
+            shouldFail = true;
+          }
+        } catch (bridgeErr: any) {
+          // Bridge unreachable — be conservative and leave as submitted
+          logger.warn(
+            `${LOG_PREFIX} ⚠️ Could not reach bridge for row ${row.id}: ${bridgeErr.message} — leaving submitted`
+          );
+          continue;
+        }
+        if (!shouldFail) continue;
+      }
+
+      // No bridge_op_id, bridge says failed/not-found, or op pending >2h
+      await pool.query(
+        `UPDATE qb_order_pipeline
+         SET    status       = 'failed',
+                error        = 'Stale: no bridge confirmation after 30 minutes',
+                updated_at   = NOW(),
+                failed_at    = NOW(),
+                confirmed_at = NULL
+         WHERE  id = $1`,
+        [row.id]
+      );
       logger.warn(
         `${LOG_PREFIX} ⏱️ Marked stale submitted row ${row.id} (step=${row.step}) as failed`
       );
