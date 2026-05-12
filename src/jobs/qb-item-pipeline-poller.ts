@@ -23,9 +23,6 @@ const FIRST_ERROR_BACKOFF_MIN = 2;
 const backoffForRetry = (retryNum: number): number =>
   RETRY_BACKOFF_MIN[Math.min(retryNum, RETRY_BACKOFF_MIN.length - 1)] ??
   FIRST_ERROR_BACKOFF_MIN;
-/** Bridge poll loop for the in-line ItemQuery during EditSequence fallback. */
-const ITEM_QUERY_POLL_ATTEMPTS = 10;
-const ITEM_QUERY_POLL_INTERVAL_MS = 2_000;
 
 type BridgeStatusResponse = {
   operation?: {
@@ -97,61 +94,9 @@ const isEditSequenceError = (msg: string | null | undefined): boolean => {
     m.includes("editsequence") ||
     m.includes("3170") ||
     m.includes("3180") ||
+    m.includes("3200") ||
     m.includes("failed to build xml")
   );
-};
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Issues an ItemQuery to the bridge for a single ListID and returns the latest
- * EditSequence. Polls the operation result inline (short loop). Returns null
- * when the bridge times out, errors, or doesn't include an EditSequence.
- */
-const fetchEditSequenceFromBridge = async (
-  listId: string,
-  log: (msg: string) => void
-): Promise<string | null> => {
-  try {
-    const initRes = await fetch(`${bridgeUrl()}/api/products/${listId}`, {
-      headers: { "x-api-key": apiKey(), "bypass-tunnel-reminder": "true" },
-    });
-    if (!initRes.ok) {
-      log(`ItemQuery init failed: HTTP ${initRes.status}`);
-      return null;
-    }
-    const initJson = (await initRes.json()) as { operationId?: string };
-    const opId = initJson.operationId;
-    if (!opId) return null;
-
-    for (let i = 1; i <= ITEM_QUERY_POLL_ATTEMPTS; i++) {
-      await sleep(ITEM_QUERY_POLL_INTERVAL_MS);
-      const status = await fetchBridgeStatus(opId).catch(() => null);
-      if (!status?.operation) continue;
-      if (status.operation.status === "failed" || status.operation.status === "expired") {
-        log(`ItemQuery operation ${status.operation.status}: ${status.operation.error ?? "?"}`);
-        return null;
-      }
-      if (status.operation.status !== "completed") continue;
-      const seq = extractEditSequence(status);
-      if (seq) return seq;
-      // Try ItemQueryRs explicitly (response shape differs from Add/Mod)
-      const msgs =
-        status.operation.result?.QBXML?.QBXMLMsgsRs ??
-        status.operation.result?.QBXMLMsgsRs ??
-        {};
-      return (
-        msgs?.ItemQueryRs?.ItemInventoryRet?.EditSequence ??
-        msgs?.ItemQueryRs?.ItemServiceRet?.EditSequence ??
-        msgs?.ItemQueryRs?.ItemNonInventoryRet?.EditSequence ??
-        null
-      );
-    }
-    return null;
-  } catch (e: any) {
-    log(`ItemQuery exception: ${e.message}`);
-    return null;
-  }
 };
 
 /**
@@ -176,7 +121,9 @@ const resubmitToBridge = async (
       "x-api-key": apiKey(),
       "bypass-tunnel-reminder": "true",
     },
-    body: JSON.stringify({ action, data: payload }),
+    body: action === "add"
+      ? JSON.stringify({ action, ...payload })
+      : JSON.stringify({ action, data: payload }),
   });
   if (!res.ok) {
     throw new Error(`Bridge ${res.status} — ${await res.text()}`);
@@ -212,6 +159,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
       "qb_operation_id",
       "qb_id",
       "op_action",
+      "op_payload",
       "item_type",
       "retries",
     ],
@@ -221,6 +169,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
 
   let resolved = 0;
   let failedToError = 0;
+  let editSeqHydrated = 0;
 
   if (pending && pending.length > 0) {
     logger.info(
@@ -229,13 +178,13 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
 
     for (const row of pending as any[]) {
       if (!row.qb_operation_id) {
+        // No operationId means the row was manually retried (retry route clears it).
+        // Set next_retry_at: null so Phase B picks it up on the very next tick.
         await catalog.updateQbItemPipelines({
           id: row.id,
           status: "error",
-          last_error: "Missing qb_operation_id",
-          next_retry_at: new Date(
-            Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000
-          ),
+          last_error: "Missing qb_operation_id — awaiting Phase B resubmit",
+          next_retry_at: null,
         });
         failedToError++;
         continue;
@@ -244,20 +193,36 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
       try {
         const data = await fetchBridgeStatus(row.qb_operation_id);
         const status = data.operation?.status;
+        const isItemQuery = (row.op_payload as any)?.__iq_pending === true;
 
-        if (status === "expired") {
-          await catalog.updateQbItemPipelines({
-            id: row.id,
-            status: "error",
-            last_error:
-              data.operation?.error ?? "Bridge operation expired",
-            qb_operation_id: null,
-            next_retry_at: new Date(Date.now() + 2 * 60_000),
-          });
-          continue;
-        }
+        if (status === "expired" || status === "failed") {
+          if (isItemQuery) {
+            // ItemQuery didn't complete — restore error so Phase B retries with stale EditSequence.
+            const origPayload = { ...(row.op_payload ?? {}) } as Record<string, unknown>;
+            delete origPayload.__iq_pending;
+            await catalog.updateQbItemPipelines({
+              id: row.id,
+              status: "error",
+              last_error: `ItemQuery ${status}: ${data.operation?.error ?? "unknown"} — will retry with stale EditSequence`,
+              qb_operation_id: null,
+              op_payload: origPayload,
+              next_retry_at: new Date(Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000),
+            });
+            failedToError++;
+            continue;
+          }
 
-        if (status === "failed") {
+          if (status === "expired") {
+            await catalog.updateQbItemPipelines({
+              id: row.id,
+              status: "error",
+              last_error: data.operation?.error ?? "Bridge operation expired",
+              qb_operation_id: null,
+              next_retry_at: new Date(Date.now() + 2 * 60_000),
+            });
+            continue;
+          }
+
           const errorMsg = data.operation?.error ?? "Bridge returned failed";
           await catalog.updateQbItemPipelines({
             id: row.id,
@@ -274,6 +239,60 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
         }
 
         if (status !== "completed") continue;
+
+        // ItemQuery completed — extract fresh EditSequence and resubmit the original mod.
+        if (isItemQuery) {
+          const freshSeq = extractEditSequence(data) ?? (data.operation as any)?.editSequence ?? null;
+          const origPayload = { ...(row.op_payload ?? {}) } as Record<string, unknown>;
+          delete origPayload.__iq_pending;
+
+          if (!freshSeq) {
+            await catalog.updateQbItemPipelines({
+              id: row.id,
+              status: "error",
+              last_error: "ItemQuery completed but returned no EditSequence — will retry with stale",
+              qb_operation_id: null,
+              op_payload: origPayload,
+              next_retry_at: new Date(Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000),
+            });
+            failedToError++;
+            continue;
+          }
+
+          origPayload.EditSequence = freshSeq;
+          await knex.raw(
+            `UPDATE product_variant
+               SET metadata = COALESCE(metadata, '{}'::jsonb)
+                 || jsonb_build_object('qb_edit_sequence', ?::text)
+             WHERE id = ?`,
+            [freshSeq, row.variant_id]
+          );
+
+          try {
+            const newOpId = await resubmitToBridge("mod", origPayload);
+            await catalog.updateQbItemPipelines({
+              id: row.id,
+              status: "waiting",
+              qb_operation_id: newOpId,
+              op_payload: origPayload,
+              last_error: null,
+              next_retry_at: null,
+            });
+            editSeqHydrated++;
+            logger.info(`[qb-item-pipeline-poller] ${row.sku}: EditSequence hydrated → mod resubmitted (op=${newOpId})`);
+          } catch (resubErr: any) {
+            await catalog.updateQbItemPipelines({
+              id: row.id,
+              status: "error",
+              last_error: resubErr.message,
+              qb_operation_id: null,
+              op_payload: origPayload,
+              next_retry_at: new Date(Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000),
+            });
+            failedToError++;
+          }
+          continue;
+        }
 
         const listId = extractListId(data);
         const editSequence = extractEditSequence(data);
@@ -381,16 +400,21 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
 
   let retried = 0;
   let permaFailed = 0;
-  let editSeqHydrated = 0;
 
   if (retryable && retryable.length > 0) {
+    // Rows with no op_payload can't be auto-retried — update their error message
+    // so the user knows to re-edit the item in inventory to enqueue a fresh op.
+    for (const r of retryable as any[]) {
+      if (!r.op_payload && !r.last_error?.includes("re-edit")) {
+        await catalog.updateQbItemPipelines({
+          id: r.id,
+          last_error: "No payload — re-edit this item in inventory to queue a new sync",
+        });
+      }
+    }
+
     const dueRows = (retryable as any[]).filter((r) => {
-      // Skip rows missing op_payload (legacy rows from before F1 — they have no
-      // way to retry without a payload). Mark them failed_permanent on first
-      // touch so they show up in the digest and stop blocking the worker.
       if (!r.op_payload) return false;
-      // Skip rows that haven't reached their next_retry_at yet. Rows with a
-      // null next_retry_at (manual Retry just reset them) are also due.
       if (r.next_retry_at && new Date(r.next_retry_at) > now) return false;
       return true;
     });
@@ -407,31 +431,48 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
 
       const payload: Record<string, unknown> = { ...(row.op_payload ?? {}) };
 
-      // EditSequence auto-fallback (free retry, doesn't consume counter).
+      // Price/cost fallback: if payload is missing SalesPrice or PurchaseCost,
+      // default to 0 so QB doesn't reject with error 3045.
+      if (payload.SalesPrice === undefined || payload.SalesPrice === null) {
+        payload.SalesPrice = 0;
+        log("SalesPrice missing in payload — defaulted to 0");
+      }
+      if (payload.PurchaseCost === undefined || payload.PurchaseCost === null) {
+        payload.PurchaseCost = 0;
+      }
+
+      // EditSequence async fallback — submit ItemQuery, let Phase A pick up the result
+      // on the next poller tick (avoids blocking the cron while waiting for QB COM).
       if (
         row.op_action === "mod" &&
         row.qb_id &&
         isEditSequenceError(row.last_error)
       ) {
-        log(
-          "EditSequence error detected — fetching fresh sequence via ItemQuery"
-        );
-        const freshSeq = await fetchEditSequenceFromBridge(row.qb_id, log);
-        if (freshSeq) {
-          payload.EditSequence = freshSeq;
-          // Persist on the variant too so future Mods don't re-hit this path.
-          await knex.raw(
-            `UPDATE product_variant
-               SET metadata = COALESCE(metadata, '{}'::jsonb)
-                 || jsonb_build_object('qb_edit_sequence', ?::text)
-             WHERE id = ?`,
-            [freshSeq, row.variant_id]
-          );
-          editSeqHydrated++;
-          log(`EditSequence hydrated to ${freshSeq}`);
-        } else {
-          log("EditSequence fallback failed — proceeding with stale sequence");
+        log("EditSequence error detected — queueing async ItemQuery");
+        try {
+          const iqRes = await fetch(`${bridgeUrl()}/api/products/${row.qb_id}`, {
+            headers: { "x-api-key": apiKey(), "bypass-tunnel-reminder": "true" },
+          });
+          if (iqRes.ok) {
+            const iqJson = (await iqRes.json()) as { operationId?: string };
+            if (iqJson.operationId) {
+              await catalog.updateQbItemPipelines({
+                id: row.id,
+                status: "waiting",
+                qb_operation_id: iqJson.operationId,
+                op_payload: { ...payload, __iq_pending: true },
+                last_error: null,
+                next_retry_at: null,
+              });
+              log(`ItemQuery queued (op=${iqJson.operationId}) — Phase A will resubmit after EditSequence arrives`);
+              continue;
+            }
+          }
+          log(`ItemQuery init failed (HTTP ${iqRes.status}) — proceeding with stale EditSequence`);
+        } catch (iqErr: any) {
+          log(`ItemQuery exception: ${iqErr.message} — proceeding with stale EditSequence`);
         }
+        // Falls through to resubmitToBridge with stale EditSequence
       }
 
       try {

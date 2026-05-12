@@ -6,10 +6,9 @@ import {
   Heading,
   Table,
   Text,
-  Tooltip,
   toast,
 } from "@medusajs/ui";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 
 type PipelineStatus = "waiting" | "synced" | "error" | "failed_permanent";
 
@@ -99,6 +98,9 @@ export const ItemPipelineSection = () => {
   const [status, setStatus] = useState("__all__");
   const [search, setSearch] = useState("");
   const [retrying, setRetrying] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleExpand = (id: string) =>
+    setExpanded((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const fetchRows = async () => {
     setLoading(true);
@@ -261,10 +263,11 @@ export const ItemPipelineSection = () => {
                 </Table.Row>
               </Table.Header>
               <Table.Body>
-                {filtered.map((r) => (
-                  <Table.Row key={r.id}>
+                {filtered.map((r, idx) => (
+                  <Fragment key={r.id}>
+                  <Table.Row>
                     <Table.Cell className="font-mono text-sm text-ui-fg-subtle">
-                      #{r.seq}
+                      #{idx + 1}
                     </Table.Cell>
                     <Table.Cell className="font-mono text-sm">
                       {r.sku}
@@ -291,20 +294,19 @@ export const ItemPipelineSection = () => {
                     <Table.Cell className="text-ui-fg-subtle text-xs">
                       {fmt(r.resolved_at)}
                     </Table.Cell>
-                    <Table.Cell className="max-w-xs">
+                    <Table.Cell>
                       {r.last_error ? (
-                        <Tooltip content={r.last_error}>
-                          <span className="text-ui-fg-error text-xs truncate block">
-                            {r.last_error}
-                          </span>
-                        </Tooltip>
-                      ) : (
-                        "—"
-                      )}
+                        <button
+                          type="button"
+                          onClick={() => toggleExpand(r.id)}
+                          className="text-[10px] text-ui-fg-error hover:underline whitespace-nowrap"
+                        >
+                          {expanded.has(r.id) ? "▲ hide" : "▼ error"}
+                        </button>
+                      ) : "—"}
                     </Table.Cell>
                     <Table.Cell>
-                      {(r.status === "error" ||
-                        r.status === "failed_permanent") && (
+                      {(r.status === "error" || r.status === "failed_permanent") && (
                         <Button
                           size="small"
                           variant="secondary"
@@ -316,6 +318,16 @@ export const ItemPipelineSection = () => {
                       )}
                     </Table.Cell>
                   </Table.Row>
+                  {expanded.has(r.id) && r.last_error && (
+                    <tr className="bg-ui-bg-subtle border-b border-ui-border-base">
+                      <td colSpan={12} className="px-4 py-2">
+                        <pre className="text-[11px] text-ui-fg-error whitespace-pre-wrap break-all font-mono">
+                          {r.last_error}
+                        </pre>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </Table.Body>
             </Table>

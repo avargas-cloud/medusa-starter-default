@@ -56,14 +56,12 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
     await catalog.updateQbItemPipelines({
       id: row.id,
-      status: "error",
+      status: "waiting",
       retries: 0,
+      qb_operation_id: null,
       next_retry_at: null,
       failed_at: null,
-      last_error:
-        row.status === "failed_permanent"
-          ? "Manually revived from failed_permanent"
-          : "Manually re-queued",
+      last_error: null,
     });
 
     logger.info(

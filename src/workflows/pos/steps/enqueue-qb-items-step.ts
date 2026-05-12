@@ -31,17 +31,20 @@ type BridgeResponse = {
 const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
 const API_KEY = process.env.QB_API_KEY || "";
 
+const isQbListId = (id: string): boolean => /^[0-9A-Fa-f]+-\d+$/.test(id);
+
 const buildQbPayload = (item: EnqueueQbItemInput) => {
   const base: Record<string, unknown> = {
     Name: item.sku,
     SalesDesc: item.sales_description || item.title,
-    SalesPrice: item.retail_price,
+    SalesPrice: item.retail_price ?? 0,
     ItemType: item.item_type,
   };
 
   if (item.mpn) base.ManufacturerPartNumber = item.mpn;
-  if (item.vendor_list_id)
-    base.PrefVendorRef = { ListID: item.vendor_list_id };
+  const vid = item.vendor_list_id;
+  if (vid && isQbListId(vid))
+    base.PrefVendorRef = { ListID: vid };
   else if (item.vendor_full_name)
     base.PrefVendorRef = { FullName: item.vendor_full_name };
   if (item.income_account_full_name)
@@ -49,14 +52,14 @@ const buildQbPayload = (item: EnqueueQbItemInput) => {
 
   if (item.item_type === "Inventory") {
     base.PurchaseDesc = item.sales_description || item.title;
-    base.PurchaseCost = item.cost;
+    base.PurchaseCost = item.cost ?? 0;
     if (item.cogs_account_full_name) {
       base.COGSAccountRef = { FullName: item.cogs_account_full_name };
     }
   } else {
-    if (item.cost > 0) {
+    if ((item.cost ?? 0) > 0) {
       base.PurchaseDesc = item.sales_description || item.title;
-      base.PurchaseCost = item.cost;
+      base.PurchaseCost = item.cost ?? 0;
       if (item.cogs_account_full_name) {
         base.ExpenseAccountRef = { FullName: item.cogs_account_full_name };
       }
@@ -115,6 +118,7 @@ export const enqueueQbItemsStep = createStep(
             item_type: item.item_type,
             status: "error",
             last_error: bridge.error ?? "Bridge returned no operationId",
+            op_payload: payload,
           });
           logger.warn(
             `[createPosProductV2] Variant ${item.sku} failed to enqueue: ${bridge.error}`
@@ -155,6 +159,7 @@ export const enqueueQbItemsStep = createStep(
           item_type: item.item_type,
           status: "error",
           last_error: err.message,
+          op_payload: payload,
         });
         results.push({
           variant_id: item.variant_id,
