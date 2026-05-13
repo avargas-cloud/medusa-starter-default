@@ -70,7 +70,7 @@ export async function POST(
   }
 
   const poResult = await knex.raw(
-    `SELECT id, vendor_id, vendor_name_snapshot, vendor_qb_list_id_snapshot
+    `SELECT id, status, vendor_id, vendor_name_snapshot, vendor_qb_list_id_snapshot
      FROM purchase_order
      WHERE id = ? AND deleted_at IS NULL`,
     [parsed.data.purchase_order_id]
@@ -78,6 +78,7 @@ export async function POST(
   const po = (poResult.rows[0] ?? null) as
     | {
         id: string;
+        status: string;
         vendor_id: string;
         vendor_name_snapshot: string | null;
         vendor_qb_list_id_snapshot: string | null;
@@ -100,6 +101,46 @@ export async function POST(
       code: "vendor_mismatch",
     });
   }
+  if (!["submitted", "partially_received"].includes(po.status)) {
+    return res.status(422).json({
+      error: "Only open purchase orders can be used. Fully received purchase orders are excluded.",
+      code: "po_not_open",
+    });
+  }
+
+  const linkedRegularBillResult = await knex.raw(
+    `SELECT id, number
+     FROM vendor_bill
+     WHERE purchase_order_id = ?
+       AND bill_type = 'regular'
+       AND id <> ?
+       AND deleted_at IS NULL
+     LIMIT 1`,
+    [parsed.data.purchase_order_id, id]
+  );
+  const linkedRegularBill = linkedRegularBillResult.rows[0] as
+    | { id: string; number: string | null }
+    | undefined;
+  if (linkedRegularBill) {
+    return res.status(409).json({
+      error: `Purchase order is already linked to regular bill ${linkedRegularBill.number ?? linkedRegularBill.id}`,
+      code: "already_linked_regular_bill",
+    });
+  }
+
+  const existingLineResult = await knex.raw(
+    `SELECT 1
+     FROM vendor_bill_line
+     WHERE vendor_bill_id = ? AND deleted_at IS NULL
+     LIMIT 1`,
+    [id]
+  );
+  if (existingLineResult.rows.length > 0) {
+    return res.status(409).json({
+      error: "This vendor bill already has lines",
+      code: "bill_has_lines",
+    });
+  }
 
   const receiptResult = await knex.raw(
     `SELECT id
@@ -112,63 +153,48 @@ export async function POST(
     [parsed.data.purchase_order_id]
   );
   const anchorReceipt = (receiptResult.rows[0] ?? null) as { id: string } | null;
-  if (!anchorReceipt) {
-    return res.status(422).json({
-      error: "Purchase order has no applied receipts to bill",
-      code: "no_receipts",
-    });
-  }
 
-  const receiptLinesResult = await knex.raw(
-    `WITH receipt_lines AS (
+  const poLinesResult = await knex.raw(
+    `WITH po_lines AS (
        SELECT
-         porl.id AS receipt_line_id,
-         porl.purchase_order_line_id,
-         porl.product_variant_id,
-         porl.sku_snapshot,
-         porl.description_snapshot,
-         porl.qty_received_now,
-         COALESCE(porl.unit_cost_cents_override, pol.unit_cost_cents, 0) AS unit_cost_cents,
+         pol.id AS purchase_order_line_id,
+         pol.product_variant_id,
+         pol.sku_snapshot,
+         pol.description_snapshot,
+         GREATEST(pol.qty_ordered - COALESCE(pol.qty_cancelled, 0), 0) AS qty,
+         COALESCE(pol.unit_cost_cents, 0) AS unit_cost_cents,
          pv.metadata
-       FROM purchase_order_receipt por
-       JOIN purchase_order_receipt_line porl
-         ON porl.purchase_order_receipt_id = por.id AND porl.deleted_at IS NULL
-       LEFT JOIN purchase_order_line pol
-         ON pol.id = porl.purchase_order_line_id AND pol.deleted_at IS NULL
+       FROM purchase_order_line pol
        LEFT JOIN product_variant pv
-         ON pv.id = porl.product_variant_id AND pv.deleted_at IS NULL
-       WHERE por.purchase_order_id = ?
-         AND por.status IN ('applied','synced')
-         AND por.deleted_at IS NULL
-         AND NOT EXISTS (
-           SELECT 1
-           FROM vendor_bill_line vbl
-           WHERE vbl.receipt_line_id = porl.id
-             AND vbl.deleted_at IS NULL
-         )
+         ON pv.id = pol.product_variant_id AND pv.deleted_at IS NULL
+       WHERE pol.purchase_order_id = ?
+         AND pol.deleted_at IS NULL
+         AND COALESCE(pol.status, 'open') <> 'cancelled'
      )
-     SELECT * FROM receipt_lines`,
+     SELECT * FROM po_lines
+     WHERE qty > 0
+     ORDER BY purchase_order_line_id`,
     [parsed.data.purchase_order_id]
   );
-  const receiptLines = receiptLinesResult.rows as Array<{
-    receipt_line_id: string;
+  const poLines = poLinesResult.rows as Array<{
+    purchase_order_line_id: string;
     product_variant_id: string;
     sku_snapshot: string;
     description_snapshot: string;
-    qty_received_now: number;
+    qty: number;
     unit_cost_cents: number;
     metadata: Record<string, unknown> | null;
   }>;
 
-  if (receiptLines.length === 0) {
+  if (poLines.length === 0) {
     return res.status(409).json({
-      error: "All received lines on this purchase order are already billed",
-      code: "already_billed",
+      error: "Purchase order has no open lines to bill",
+      code: "no_open_lines",
     });
   }
 
   const insertedRows: unknown[] = [];
-  for (const line of receiptLines) {
+  for (const line of poLines) {
     const cbmRaw = line.metadata?.cbm;
     const cbm = cbmRaw === undefined || cbmRaw === null || cbmRaw === ""
       ? null
@@ -198,12 +224,12 @@ export async function POST(
       [
         `vbl_${randomUUID().replace(/-/g, "")}`,
         id,
-        line.receipt_line_id,
+        null,
         line.product_variant_id,
         line.sku_snapshot,
         typeof line.metadata?.mpn === "string" ? line.metadata.mpn : null,
         line.description_snapshot,
-        line.qty_received_now,
+        line.qty,
         line.unit_cost_cents,
         cbm !== null && !Number.isNaN(cbm) ? cbm : null,
       ]
@@ -221,7 +247,7 @@ export async function POST(
      WHERE id = ? AND deleted_at IS NULL`,
     [
       parsed.data.purchase_order_id,
-      anchorReceipt.id,
+      anchorReceipt?.id ?? null,
       po.vendor_name_snapshot,
       po.vendor_qb_list_id_snapshot,
       id,

@@ -103,13 +103,37 @@ export async function POST(
     });
   }
 
-  // 2. Fetch vendor bill (must exist and be draft)
-  const bills = (await service.listVendorBills(
-    { purchase_order_receipt_id: receiptId },
-    { take: 1 }
-  )) as unknown as VendorBillRow[];
+  const poStatusResult = await knex.raw(
+    `SELECT status FROM purchase_order WHERE id = ? AND deleted_at IS NULL`,
+    [poId]
+  );
+  const poStatus = (poStatusResult.rows[0] as { status?: string } | undefined)?.status;
+  if (poStatus !== "received") {
+    return res.status(422).json({
+      error: "Pending fully receiption",
+      code: "pending_fully_receiption",
+    });
+  }
 
-  const bill = bills[0];
+  // 2. Fetch vendor bill (must exist and be draft)
+  const billResult = await knex.raw(
+    `SELECT *
+     FROM vendor_bill
+     WHERE deleted_at IS NULL
+       AND bill_type = 'regular'
+       AND (
+         purchase_order_receipt_id = ?
+         OR (
+           purchase_order_receipt_id IS NULL
+           AND purchase_order_id = ?
+         )
+       )
+     ORDER BY purchase_order_receipt_id IS NULL ASC, created_at ASC
+     LIMIT 1`,
+    [receiptId, poId]
+  );
+
+  const bill = (billResult.rows[0] ?? null) as VendorBillRow | null;
   if (!bill) {
     return res.status(404).json({
       error: "Vendor bill not found — create it first",
@@ -121,6 +145,15 @@ export async function POST(
       error: `Vendor bill is already in status '${bill.status}'`,
       code: "not_draft",
     });
+  }
+  if (!bill.purchase_order_receipt_id) {
+    await knex.raw(
+      `UPDATE vendor_bill
+       SET purchase_order_receipt_id = ?, updated_at = NOW()
+       WHERE id = ? AND deleted_at IS NULL`,
+      [receiptId, bill.id]
+    );
+    bill.purchase_order_receipt_id = receiptId;
   }
 
   // 3. Fetch vendor bill lines

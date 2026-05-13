@@ -63,6 +63,7 @@ interface VendorBillDetailRow {
   created_at: string;
   updated_at: string;
   po_number: string | null;
+  po_status: string | null;
   po_qb_ref_number: string | null;
   receipt_number: string | null;
   vendor_name: string | null;
@@ -133,7 +134,7 @@ export async function GET(
        vb.id,
        vb.number,
        vb.purchase_order_id,
-       vb.purchase_order_receipt_id,
+       COALESCE(vb.purchase_order_receipt_id, fallback_por.id) AS purchase_order_receipt_id,
        vb.vendor_id,
        vb.vendor_name_snapshot,
        vb.vendor_qb_list_id_snapshot,
@@ -160,18 +161,29 @@ export async function GET(
        vb.created_at,
        vb.updated_at,
        po."number"                         AS po_number,
+       po.status                           AS po_status,
        po.qb_purchase_order_txn_number      AS po_qb_ref_number,
-       por."number"                        AS receipt_number,
+       COALESCE(por."number", fallback_por."number") AS receipt_number,
        COALESCE(vb.vendor_name_snapshot, po.vendor_name_snapshot) AS vendor_name,
-       por.received_at                     AS receipt_received_at,
+       COALESCE(por.received_at, fallback_por.received_at) AS receipt_received_at,
        sl.name                             AS ship_to_location_name
      FROM vendor_bill vb
      LEFT JOIN purchase_order po
        ON po.id = vb.purchase_order_id AND po.deleted_at IS NULL
      LEFT JOIN purchase_order_receipt por
        ON por.id = vb.purchase_order_receipt_id AND por.deleted_at IS NULL
+     LEFT JOIN LATERAL (
+       SELECT id, "number", received_at, stock_location_id
+       FROM purchase_order_receipt
+       WHERE purchase_order_id = po.id
+         AND po.status = 'received'
+         AND status IN ('applied', 'synced')
+         AND deleted_at IS NULL
+       ORDER BY received_at ASC
+       LIMIT 1
+     ) fallback_por ON vb.purchase_order_receipt_id IS NULL
      LEFT JOIN stock_location sl
-       ON sl.id = por.stock_location_id AND sl.deleted_at IS NULL
+       ON sl.id = COALESCE(por.stock_location_id, fallback_por.stock_location_id) AND sl.deleted_at IS NULL
      WHERE vb.id = ? AND vb.deleted_at IS NULL`,
     [id]
   );
