@@ -686,7 +686,6 @@ export async function PATCH(
               payload: {
                 customerId: check.qbListId,
                 date: new Date().toISOString().split("T")[0],
-                refNumber: cmNumber ?? undefined,
                 memo: `POS Return ${cmNumber ?? ""}`.trim(),
                 items: qbItems,
                 salesTaxCode: cmSalesTaxCode,

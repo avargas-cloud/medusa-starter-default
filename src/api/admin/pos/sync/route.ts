@@ -1324,7 +1324,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 .toISOString()
                 .split("T")[0]
             : new Date().toISOString().split("T")[0],
-          refNumber: (creditMemo as any).credit_memo_number ?? undefined,
           memo: `POS Return ${creditMemo.credit_memo_number || ""}`.trim(),
           items: qbItems,
           salesTaxCode: cmSalesTaxCode,

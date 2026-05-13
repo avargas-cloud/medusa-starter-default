@@ -39,9 +39,7 @@ export async function createCreditMemoInQb(
   }
 
   try {
-    const body = {
-      ...payload,
-    };
+    const { refNumber: _refNumber, ...body } = payload;
     const data = await bridgeFetch("POST", "/api/credit-memos", body);
     const operationId = data?.operationId;
     if (!operationId)
@@ -84,7 +82,6 @@ export async function updateCreditMemoInQb(
         ...(payload.memo !== undefined ? { memo: payload.memo } : {}),
         ...(payload.customerId ? { customerId: payload.customerId } : {}),
         ...(payload.date ? { date: payload.date } : {}),
-        ...(payload.refNumber ? { refNumber: payload.refNumber } : {}),
         ...(payload.items && payload.items.length > 0
           ? { items: payload.items }
           : {}),
