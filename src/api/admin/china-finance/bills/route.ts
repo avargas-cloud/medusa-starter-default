@@ -32,6 +32,50 @@ const createBillSchema = z.object({
 
 // ── Auto-register new Veetech vendor bills ───────────────────────────────────
 async function syncVeetchBills(knex: Knex): Promise<void> {
+  // Keep Vendor Bill-linked finance rows aligned with the bill header.
+  // Amounts stay locked once a bill has been applied to a wire, but document
+  // dates should still reflect the bill's own invoice date.
+  await knex.raw(
+    `WITH vendor_bill_totals AS (
+       SELECT
+         vb.id,
+         vb.reference_id,
+         vb.bill_type,
+         po.number AS po_ref_number,
+         COALESCE(po.reference_number, po.qb_purchase_order_txn_number) AS po_number,
+         COALESCE((
+           SELECT SUM(vbl.unit_cost_cents::bigint * vbl.qty)::integer
+           FROM vendor_bill_line vbl
+           WHERE vbl.vendor_bill_id = vb.id AND vbl.deleted_at IS NULL
+         ), 0) AS amount_cents,
+         COALESCE(vb.document_date::date, po.ordered_at::date) AS document_date,
+         (COALESCE(vb.document_date::date, po.ordered_at::date) + INTERVAL '21 days')::date AS due_date
+       FROM vendor_bill vb
+       LEFT JOIN purchase_order po ON po.id = vb.purchase_order_id
+       WHERE vb.vendor_id = ?
+         AND vb.bill_type IN ('regular','service','freight')
+         AND vb.deleted_at IS NULL
+     )
+     UPDATE china_finance_bill cfb
+     SET
+       invoice_number = vbt.reference_id,
+       po_ref_number = vbt.po_ref_number,
+       po_number = vbt.po_number,
+       amount_cents = CASE
+         WHEN EXISTS (
+           SELECT 1 FROM china_wire_transfer_application cwta
+           WHERE cwta.bill_id = cfb.id
+         ) THEN cfb.amount_cents
+         ELSE vbt.amount_cents
+       END,
+       document_date = vbt.document_date,
+       due_date = vbt.due_date
+     FROM vendor_bill_totals vbt
+     WHERE cfb.vendor_bill_id = vbt.id
+       AND cfb.type = 'vendor_bill'`,
+    [VEETECH_VENDOR_ID]
+  );
+
   // Find confirmed/draft non-tariff Veetech VBs with no cfb record
   const { rows: unlinked } = await knex.raw(
     `SELECT
@@ -43,9 +87,9 @@ async function syncVeetchBills(knex: Knex): Promise<void> {
          FROM vendor_bill_line vbl
          WHERE vbl.vendor_bill_id = vb.id AND vbl.deleted_at IS NULL
        ), 0) AS amount_cents,
-       po.ordered_at::date  AS document_date,
-       po.expected_at::date AS due_date,
-       po.reference_number  AS po_ext_number
+       COALESCE(vb.document_date::date, po.ordered_at::date) AS document_date,
+       (COALESCE(vb.document_date::date, po.ordered_at::date) + INTERVAL '21 days')::date AS due_date,
+       COALESCE(po.reference_number, po.qb_purchase_order_txn_number) AS po_ext_number
      FROM vendor_bill vb
      LEFT JOIN purchase_order po ON po.id = vb.purchase_order_id
      WHERE vb.vendor_id = ?
@@ -85,15 +129,16 @@ async function syncVeetchBills(knex: Knex): Promise<void> {
     await knex.raw(
       `INSERT INTO china_finance_bill
          (id, type, sort_order, vendor_bill_id, document_type,
-          invoice_number, po_ref_number, payee, amount_cents,
+          invoice_number, po_number, po_ref_number, payee, amount_cents,
           document_date, due_date)
-       VALUES (?, 'vendor_bill', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, 'vendor_bill', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         randomUUID(),
         nextSort,
         vb.id,
         docType,
         vb.reference_id ?? null,
+        vb.po_ext_number ?? null,
         vb.po_ref_number ?? null,
         payee,
         vb.amount_cents,
@@ -144,7 +189,20 @@ export const GET = async (
      JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
      LEFT JOIN vendor_bill vb ON vb.id = cfb.vendor_bill_id
      LEFT JOIN paid ON paid.bill_id = cfb.id
-    ORDER BY cwt.sent_date ASC NULLS LAST, cwta.sort_order ASC, cfb.sort_order ASC
+    ORDER BY
+      cwt.sent_date ASC NULLS LAST,
+      cfb.document_date ASC NULLS LAST,
+      cfb.due_date ASC NULLS LAST,
+      cfb.po_ref_number ASC NULLS LAST,
+      CASE cfb.document_type
+        WHEN 'commercial_invoice' THEN 1
+        WHEN 'purchasing_services' THEN 2
+        WHEN 'shipping_cost' THEN 3
+        WHEN 'bank_fee' THEN 4
+        ELSE 5
+      END,
+      cwta.sort_order ASC,
+      cfb.sort_order ASC
   `) as { rows: Array<Record<string, unknown>> };
 
   // Group confirmed bills by wire_transfer_id
@@ -169,7 +227,7 @@ export const GET = async (
   }
   const confirmed = Array.from(wireMap.values());
 
-  // Pending bills have a positive remaining balance, ordered by sort_order.
+  // Pending bills have a positive remaining balance, ordered by document date.
   const today = new Date().toISOString().slice(0, 10);
   const { rows: pending } = await knex.raw(
     `WITH paid AS (
@@ -191,7 +249,18 @@ export const GET = async (
      LEFT JOIN vendor_bill vb ON vb.id = cfb.vendor_bill_id
      LEFT JOIN paid ON paid.bill_id = cfb.id
      WHERE GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) > 0
-     ORDER BY cfb.sort_order ASC`,
+     ORDER BY
+       cfb.document_date ASC NULLS LAST,
+       cfb.due_date ASC NULLS LAST,
+       cfb.po_ref_number ASC NULLS LAST,
+       CASE cfb.document_type
+         WHEN 'commercial_invoice' THEN 1
+         WHEN 'purchasing_services' THEN 2
+         WHEN 'shipping_cost' THEN 3
+         WHEN 'bank_fee' THEN 4
+         ELSE 5
+       END,
+       cfb.sort_order ASC`,
     [today]
   ) as { rows: Array<Record<string, unknown>> };
 
