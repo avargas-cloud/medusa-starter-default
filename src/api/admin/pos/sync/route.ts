@@ -6,6 +6,7 @@ import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 // 1.5.9: handlePosPaymentApplied + handlePosPaymentCreated imports removed —
 // pos/sync now enqueues pipeline rows for the consolidator.
 // 1.5.6: handleSalesReceiptCreated import removed — pos/sync enqueues now.
+import { buildInvoiceForceSyncActiveItems } from "../../../../lib/quickbooks/force-sync-doc-payload";
 import { parseSalesRepInitials } from "../../../../lib/quickbooks/parse-sales-rep";
 import { orderPurchaseOrderModLines } from "../../../../lib/quickbooks/purchase-order-line-order";
 import {
@@ -553,49 +554,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 } = require("../../../../lib/quickbooks/qb-pipeline");
 
                 const qbConfig = await getQbConfig();
-                const parentItemsByVariant = new Map<string, any>(
-                  (parentOrder?.items || [])
-                    .filter((item: any) => item.variant_id)
-                    .map((item: any) => [item.variant_id, item])
-                );
-                const activeItems = ((freshInvoice as any).items || [])
-                  .filter((item: any) => (item.quantity ?? 0) > 0)
-                  .map((item: any) => {
-                    const parentItem = item.variant_id
-                      ? parentItemsByVariant.get(item.variant_id)
-                      : null;
-                    return {
-                      ...(parentItem || {}),
-                      id: parentItem?.id ?? item.id,
-                      variant_id: item.variant_id,
-                      variant: parentItem?.variant ?? {
-                        id: item.variant_id,
-                        sku: item.sku,
-                        metadata: {},
-                      },
-                      title:
-                        parentItem?.title ||
-                        parentItem?.product_title ||
-                        item.description ||
-                        item.sku ||
-                        "",
-                      product_title:
-                        parentItem?.product_title ||
-                        parentItem?.title ||
-                        item.description ||
-                        item.sku ||
-                        "",
-                      quantity: Number(item.quantity || 0),
-                      unit_price: Number(item.unit_price || 0) / 100,
-                      subtotal: Number(item.total || 0) / 100,
-                      metadata: {
-                        ...(parentItem?.metadata || {}),
-                        sales_description:
-                          item.description ||
-                          parentItem?.metadata?.sales_description,
-                      },
-                    };
-                  });
+                const { activeItems, invoiceLineDiscountCents } =
+                  buildInvoiceForceSyncActiveItems(
+                    ((freshInvoice as any).items || []) as any[],
+                    ((parentOrder as any)?.items || []) as any[]
+                  );
 
                 // Fresh-resolve variant metadata: if a variant's quickbooks_id
                 // was added AFTER the order was created, re-query it here so
@@ -621,8 +584,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                       (freshVariants || []).map((v: any) => [v.id, v])
                     );
                     for (const it of activeItems) {
+                      const variantMetadata = (it.variant as any)?.metadata;
                       if (
-                        !it.variant?.metadata?.quickbooks_id &&
+                        !variantMetadata?.quickbooks_id &&
                         it.variant_id &&
                         byId.has(it.variant_id)
                       ) {
@@ -672,7 +636,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 const invoiceDiscount = Number((freshInvoice as any).discount);
                 const discountTotal =
                   Number.isFinite(invoiceDiscount) && invoiceDiscount > 0
-                    ? invoiceDiscount / 100
+                    ? Math.max(0, invoiceDiscount - invoiceLineDiscountCents) /
+                      100
                     : getEffectiveOrderDiscount(parentOrder);
                 if (discountTotal > 0) {
                   const subtotal =
@@ -1214,23 +1179,174 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const cmTxnId =
           (creditMemo.qb_txn_id as string | undefined) ??
           (creditMemo.metadata?.qb_txn_id as string | undefined);
+        const {
+          writePipelineRow: enqueueCreditMemoRow,
+          requireQbCustomer,
+        } = require("../../../../lib/quickbooks/qb-pipeline");
+        const {
+          buildQbOrderDiscountLines,
+          buildShippingQbItem,
+        } = require("../../../../lib/quickbooks/order-flow-core");
+        const {
+          getQbConfig,
+        } = require("../../../../lib/quickbooks/handlers/utils");
+
+        const customerCheck = await requireQbCustomer({
+          customerId: creditMemo.customer_id,
+          step: cmTxnId ? "credit_memo_mod" : "credit_memo",
+          selfReferenceId: id,
+          selfReferenceType: "credit_memo",
+          selfMedusaRefNumber: creditMemo.credit_memo_number ?? null,
+        });
+
+        if ("waiting" in customerCheck) {
+          return res.json({
+            success: true,
+            message: "Credit Memo sync waiting for customer QuickBooks sync",
+          });
+        }
+
+        const pgConnection = req.scope.resolve("__pg_connection__") as any;
+        const variantIds: string[] = ((creditMemo as any).items || [])
+          .map((item: any) => item.variant_id)
+          .filter((variantId: any): variantId is string => !!variantId);
+        const variants: any[] = variantIds.length
+          ? await pgConnection
+              .raw(
+                `SELECT pv.id,
+                        COALESCE(pv.metadata, '{}'::jsonb) AS variant_metadata,
+                        COALESCE(p.metadata, '{}'::jsonb) AS product_metadata
+                   FROM product_variant pv
+                   LEFT JOIN product p ON p.id = pv.product_id
+                  WHERE pv.id = ANY(?::text[])`,
+                [variantIds]
+              )
+              .then((r: any) => r.rows ?? [])
+              .catch(() => [])
+          : [];
+        const variantInfoMap = new Map<string, any>(
+          variants.map((variant) => [
+            variant.id,
+            {
+              variantMetadata: variant.variant_metadata || {},
+              productMetadata: variant.product_metadata || {},
+            },
+          ])
+        );
+        const nonInventoryQbTypes = new Set([
+          "Service",
+          "NonInventory",
+          "NonInventoryPart",
+          "OtherCharge",
+          "Discount",
+        ]);
+        const qbItems = ((creditMemo as any).items || []).map((item: any) => {
+          const unitPriceDollars = Number(item.unit_price || 0) / 100;
+          const info = item.variant_id
+            ? variantInfoMap.get(item.variant_id)
+            : null;
+          const meta = info?.variantMetadata || {};
+          const productMeta = info?.productMetadata || {};
+          const qbListId = meta?.quickbooks_id as string | undefined;
+          const qbItemType = meta?.qb_item_type ?? productMeta?.qb_item_type;
+          const isService = !!(
+            !item.variant_id ||
+            meta?.quickbooks_is_service === true ||
+            meta?.quickbooks_is_service === "true" ||
+            meta?.quickbooks_no_site === true ||
+            meta?.quickbooks_no_site === "true" ||
+            productMeta?.quickbooks_is_service === true ||
+            productMeta?.quickbooks_is_service === "true" ||
+            productMeta?.quickbooks_no_site === true ||
+            productMeta?.quickbooks_no_site === "true" ||
+            (typeof qbItemType === "string" &&
+              nonInventoryQbTypes.has(qbItemType))
+          );
+          return {
+            ...(cmTxnId ? { TxnLineID: item.qb_txn_line_id ?? "-1" } : {}),
+            ...(qbListId ? { productId: qbListId } : {}),
+            productName: item.sku || item.title,
+            quantity: item.quantity,
+            price: unitPriceDollars,
+            amount: Number((unitPriceDollars * item.quantity).toFixed(2)),
+            desc: item.description || item.title,
+            ...(typeof qbItemType === "string" ? { qbItemType } : {}),
+            ...(isService ? { noSite: true, taxable: false } : {}),
+          };
+        });
+
+        if (Number((creditMemo as any).discount || 0) > 0) {
+          buildQbOrderDiscountLines(
+            Number((creditMemo as any).discount) / 100
+          ).forEach((line: any) => qbItems.push(line));
+        }
+        if (Number((creditMemo as any).shipping || 0) > 0) {
+          const shippingItem = buildShippingQbItem([
+            {
+              amount: Number((creditMemo as any).shipping) / 100,
+              name: (creditMemo as any).shipping_option_name || "Shipping",
+            },
+          ]);
+          if (shippingItem) qbItems.push(shippingItem);
+        }
+
+        let isTaxExempt = false;
+        try {
+          if ((creditMemo as any).invoice_id) {
+            const invRes = await pgConnection.raw(
+              `SELECT tax, subtotal FROM pos_invoice WHERE id = ? LIMIT 1`,
+              [(creditMemo as any).invoice_id]
+            );
+            const inv = invRes?.rows?.[0];
+            if (inv) {
+              isTaxExempt =
+                Number(inv.tax) === 0 && Number(inv.subtotal) > 0;
+            }
+          } else if ((creditMemo as any).customer_id) {
+            const custRes = await pgConnection.raw(
+              `SELECT metadata FROM customer WHERE id = ? LIMIT 1`,
+              [(creditMemo as any).customer_id]
+            );
+            const flag = custRes?.rows?.[0]?.metadata?.is_tax_exempt;
+            isTaxExempt =
+              flag === true ||
+              (typeof flag === "string" &&
+                (flag.toLowerCase() === "yes" ||
+                  flag.toLowerCase() === "true"));
+          }
+        } catch {}
+
+        const qbConfig = await getQbConfig();
+        const cmSalesTaxCode = isTaxExempt
+          ? qbConfig.exemptSalesTaxCode
+          : qbConfig.defaultSalesTaxCode;
+        const cmSalesRepRef = parseSalesRepInitials(
+          (creditMemo as any).sales_rep
+        );
+        const cmPayload = {
+          customerId: customerCheck.qbListId,
+          date: (creditMemo as any).completed_at
+            ? new Date((creditMemo as any).completed_at)
+                .toISOString()
+                .split("T")[0]
+            : new Date().toISOString().split("T")[0],
+          refNumber: (creditMemo as any).credit_memo_number ?? undefined,
+          memo: `POS Return ${creditMemo.credit_memo_number || ""}`.trim(),
+          items: qbItems,
+          salesTaxCode: cmSalesTaxCode,
+          ...(isTaxExempt ? { taxExempt: true } : {}),
+          ...(cmSalesRepRef ? { salesRepRef: cmSalesRepRef } : {}),
+        };
+
         if (cmTxnId) {
-          const {
-            writePipelineRow: enqueueCreditMemoMod,
-          } = require("../../../../lib/quickbooks/qb-pipeline");
-          await enqueueCreditMemoMod({
+          await enqueueCreditMemoRow({
             referenceId: id,
             referenceType: "credit_memo",
             step: "credit_memo_mod",
             status: "pending",
             qbTxnId: cmTxnId,
             medusaRefNumber: creditMemo.credit_memo_number ?? null,
-            payload: {
-              memo: "Medusa POS Credit Memo",
-              salesRepRef: parseSalesRepInitials(
-                (creditMemo as any).sales_rep
-              ),
-            },
+            payload: cmPayload,
           });
           return res.json({
             success: true,
@@ -1239,65 +1355,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           });
         }
 
-        const customerModule = req.scope.resolve(Modules.CUSTOMER);
-        let customer;
-        try {
-          customer = await customerModule.retrieveCustomer(
-            creditMemo.customer_id,
-            { relations: ["addresses"] }
-          );
-        } catch {
-          return res
-            .status(404)
-            .json({ error: "Customer not found for this Credit Memo." });
-        }
-
-        const {
-          ensureCustomerInQb,
-        } = require("../../../../lib/quickbooks/order-flow-core");
-        const custResult: any = await ensureCustomerInQb(
-          customer,
-          customerModule,
-          (m: string) => logger.info(m)
-        );
-
-        if (!custResult.success || !custResult.qbCustomerId) {
-          return res
-            .status(500)
-            .json({ error: "Failed to ensure customer in QuickBooks" });
-        }
-
-        const qbItems = creditMemo.items.map((item: any) => ({
-          productId: item.variant_id || item.product_id,
-          productName: item.title,
-          quantity: item.quantity,
-          price: item.unit_price,
-          amount: item.quantity * item.unit_price,
-          desc: item.title,
-        }));
-
         // 1.5.8: pipeline-only — enqueue 'pending' credit_memo with full payload.
-        const cmSalesRepRef = parseSalesRepInitials(
-          (creditMemo as any).sales_rep
-        );
-        const {
-          writePipelineRow: enqueueCmCreate,
-        } = require("../../../../lib/quickbooks/qb-pipeline");
-        await enqueueCmCreate({
+        await enqueueCreditMemoRow({
           referenceId: id,
           referenceType: "credit_memo",
           step: "credit_memo",
           status: "pending",
           medusaRefNumber: creditMemo.credit_memo_number ?? null,
-          payload: {
-            customerId: custResult.qbCustomerId,
-            date: creditMemo.completed_at
-              ? new Date(creditMemo.completed_at).toISOString().split("T")[0]
-              : new Date().toISOString().split("T")[0],
-            memo: `Medusa POS Credit Memo`,
-            items: qbItems,
-            ...(cmSalesRepRef ? { salesRepRef: cmSalesRepRef } : {}),
-          },
+          qbRefNumber: creditMemo.credit_memo_number ?? null,
+          payload: cmPayload,
         });
 
         return res.json({
