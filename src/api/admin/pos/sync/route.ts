@@ -1188,6 +1188,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           buildShippingQbItem,
         } = require("../../../../lib/quickbooks/order-flow-core");
         const {
+          resolveTaxListid,
+        } = require("../../../../lib/quickbooks/resolve-tax-listid");
+        const {
           getQbConfig,
         } = require("../../../../lib/quickbooks/handlers/utils");
 
@@ -1207,7 +1210,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
 
         const pgConnection = req.scope.resolve("__pg_connection__") as any;
-        const variantIds: string[] = ((creditMemo as any).items || [])
+        const positiveItems = (((creditMemo as any).items || []) as any[]).filter(
+          (item: any) => Number(item.quantity ?? 0) > 0
+        );
+        if (positiveItems.length === 0) {
+          return res.status(400).json({
+            error: "Cannot sync Credit Memo to QuickBooks: no positive-quantity return lines.",
+          });
+        }
+
+        const variantIds: string[] = positiveItems
           .map((item: any) => item.variant_id)
           .filter((variantId: any): variantId is string => !!variantId);
         const variants: any[] = variantIds.length
@@ -1240,7 +1252,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           "OtherCharge",
           "Discount",
         ]);
-        const qbItems = ((creditMemo as any).items || []).map((item: any) => {
+        const qbItems = positiveItems.map((item: any) => {
           const unitPriceDollars = Number(item.unit_price || 0) / 100;
           const info = item.variant_id
             ? variantInfoMap.get(item.variant_id)
@@ -1290,36 +1302,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           if (shippingItem) qbItems.push(shippingItem);
         }
 
-        let isTaxExempt = false;
-        try {
-          if ((creditMemo as any).invoice_id) {
-            const invRes = await pgConnection.raw(
-              `SELECT tax, subtotal FROM pos_invoice WHERE id = ? LIMIT 1`,
-              [(creditMemo as any).invoice_id]
-            );
-            const inv = invRes?.rows?.[0];
-            if (inv) {
-              isTaxExempt =
-                Number(inv.tax) === 0 && Number(inv.subtotal) > 0;
-            }
-          } else if ((creditMemo as any).customer_id) {
-            const custRes = await pgConnection.raw(
-              `SELECT metadata FROM customer WHERE id = ? LIMIT 1`,
-              [(creditMemo as any).customer_id]
-            );
-            const flag = custRes?.rows?.[0]?.metadata?.is_tax_exempt;
-            isTaxExempt =
-              flag === true ||
-              (typeof flag === "string" &&
-                (flag.toLowerCase() === "yes" ||
-                  flag.toLowerCase() === "true"));
-          }
-        } catch {}
+        const isTaxExempt =
+          Number((creditMemo as any).tax ?? 0) === 0 &&
+          Number((creditMemo as any).subtotal ?? 0) > 0;
 
         const qbConfig = await getQbConfig();
         const cmSalesTaxCode = isTaxExempt
           ? qbConfig.exemptSalesTaxCode
           : qbConfig.defaultSalesTaxCode;
+        const qbTaxItemListid = resolveTaxListid(
+          isTaxExempt ? "exempt" : "florida",
+          qbConfig
+        );
         const cmSalesRepRef = parseSalesRepInitials(
           (creditMemo as any).sales_rep
         );
@@ -1334,6 +1328,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           memo: `POS Return ${creditMemo.credit_memo_number || ""}`.trim(),
           items: qbItems,
           salesTaxCode: cmSalesTaxCode,
+          ...(qbTaxItemListid ? { qbTaxItemListid } : {}),
           ...(isTaxExempt ? { taxExempt: true } : {}),
           ...(cmSalesRepRef ? { salesRepRef: cmSalesRepRef } : {}),
         };

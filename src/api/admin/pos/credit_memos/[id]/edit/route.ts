@@ -3,6 +3,7 @@ import { Modules } from "@medusajs/utils";
 
 import { parseSalesRepInitials } from "../../../../../../lib/quickbooks/parse-sales-rep";
 import { getQbConfig } from "../../../../../../lib/quickbooks/qb-config";
+import { resolveTaxListid } from "../../../../../../lib/quickbooks/resolve-tax-listid";
 import {
   buildQbOrderDiscountLines,
   buildShippingQbItem,
@@ -549,12 +550,21 @@ export async function PATCH(
       })
     );
 
-    // ── QB: enqueue a single credit_memo_mod (replaces void+recreate) ─────────
-    if (oldQbTxnId && process.env.QB_ORDER_FLOW_ENABLED === "true") {
+    // ── QB: enqueue one fresh payload ────────────────────────────────────────
+    // Synced CMs use CreditMemoMod. Completed-but-unsynced CMs may have a failed
+    // CreditMemoAdd row; editing must replace that stale create payload.
+    if (process.env.QB_ORDER_FLOW_ENABLED === "true") {
       try {
         // Build QB items from updated data
-        const variantIds = newItems
-          .map((i) => i.variantId)
+        const positiveItemPlans = newItemPlans.filter(
+          ({ item }) => Number(item.quantity ?? 0) > 0
+        );
+        if (positiveItemPlans.length === 0) {
+          throw new Error("No positive-quantity return lines to sync");
+        }
+
+        const variantIds = positiveItemPlans
+          .map(({ item }) => item.variantId)
           .filter((v): v is string => !!v);
 
         const variants: any[] = variantIds.length
@@ -582,7 +592,7 @@ export async function PATCH(
           ])
         );
 
-        const qbItems: any[] = newItemPlans.map(({ item, reusedTxnLineId }) => {
+        const qbItems: any[] = positiveItemPlans.map(({ item, reusedTxnLineId }) => {
           const price = item.effectiveUnitPrice ?? item.unitPrice ?? 0;
           const info = item.variantId
             ? variantInfoMap.get(item.variantId)
@@ -608,7 +618,7 @@ export async function PATCH(
             // TxnLineID: preserved from prior CM line when SKU matched, else
             // "-1" so QB treats it as a new line. Lines from the original CM
             // that we omit here will be deleted by QB.
-            TxnLineID: reusedTxnLineId ?? "-1",
+            ...(oldQbTxnId ? { TxnLineID: reusedTxnLineId ?? "-1" } : {}),
             ...(qbListId ? { productId: qbListId } : {}),
             productName: item.sku ?? item.title,
             quantity: item.quantity,
@@ -635,41 +645,14 @@ export async function PATCH(
           if (shippingItem) qbItems.push(shippingItem);
         }
 
-        let isTaxExempt = false;
-        try {
-          const effectiveInvoiceId =
-            payload?.invoice_id ?? creditMemo.invoice_id;
-          const effectiveCustomerId =
-            payload?.customer_id ?? creditMemo.customer_id;
-          if (effectiveInvoiceId) {
-            const invRes = await pgConnection.raw(
-              `SELECT tax, subtotal FROM pos_invoice WHERE id = ? LIMIT 1`,
-              [effectiveInvoiceId]
-            );
-            const inv = invRes?.rows?.[0];
-            if (inv)
-              isTaxExempt =
-                Number(inv.tax) === 0 && Number(inv.subtotal) > 0;
-          } else if (effectiveCustomerId) {
-            const custRes = await pgConnection.raw(
-              `SELECT metadata FROM customer WHERE id = ? LIMIT 1`,
-              [effectiveCustomerId]
-            );
-            const flag = custRes?.rows?.[0]?.metadata?.is_tax_exempt;
-            isTaxExempt =
-              flag === true ||
-              (typeof flag === "string" &&
-                (flag.toLowerCase() === "yes" ||
-                  flag.toLowerCase() === "true"));
-          }
-        } catch {}
+        const isTaxExempt = dbTotals.tax === 0 && dbTotals.subtotal > 0;
 
         const effectiveCustomerId =
           payload?.customer_id ?? creditMemo.customer_id;
         if (effectiveCustomerId) {
           const check = await requireQbCustomer({
             customerId: effectiveCustomerId,
-            step: "credit_memo_mod",
+            step: oldQbTxnId ? "credit_memo_mod" : "credit_memo",
             selfReferenceId: id,
             selfReferenceType: "credit_memo",
             selfMedusaRefNumber: cmNumber ?? null,
@@ -677,13 +660,17 @@ export async function PATCH(
 
           if ("waiting" in check) {
             logger.info(
-              `[edit CM] ⏸ Waiting on customer before submitting credit_memo_mod`
+              `[edit CM] ⏸ Waiting on customer before submitting ${oldQbTxnId ? "credit_memo_mod" : "credit_memo"}`
             );
           } else {
             const qbConfig = await getQbConfig();
             const cmSalesTaxCode = isTaxExempt
               ? qbConfig.exemptSalesTaxCode
               : qbConfig.defaultSalesTaxCode;
+            const qbTaxItemListid = resolveTaxListid(
+              isTaxExempt ? "exempt" : "florida",
+              qbConfig
+            );
             const salesRepRef = parseSalesRepInitials(
               payload?.sales_rep ?? creditMemo.sales_rep
             );
@@ -691,9 +678,9 @@ export async function PATCH(
             await writePipelineRow({
               referenceId: id,
               referenceType: "credit_memo",
-              step: "credit_memo_mod",
+              step: oldQbTxnId ? "credit_memo_mod" : "credit_memo",
               status: "pending",
-              qbTxnId: oldQbTxnId,
+              qbTxnId: oldQbTxnId ?? undefined,
               qbRefNumber: oldQbRefNumber ?? cmNumber ?? null,
               medusaRefNumber: cmNumber ?? null,
               payload: {
@@ -703,12 +690,13 @@ export async function PATCH(
                 memo: `POS Return ${cmNumber ?? ""}`.trim(),
                 items: qbItems,
                 salesTaxCode: cmSalesTaxCode,
+                ...(qbTaxItemListid ? { qbTaxItemListid } : {}),
                 ...(isTaxExempt ? { taxExempt: true } : {}),
                 ...(salesRepRef ? { salesRepRef } : {}),
               },
             });
             logger.info(
-              `[edit CM] Enqueued credit_memo_mod for ${id} (txn=${oldQbTxnId})`
+              `[edit CM] Enqueued ${oldQbTxnId ? "credit_memo_mod" : "credit_memo"} for ${id}`
             );
           }
         }

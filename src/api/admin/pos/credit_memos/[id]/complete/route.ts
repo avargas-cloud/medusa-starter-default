@@ -6,6 +6,7 @@ import { Modules } from "@medusajs/utils";
 // 1.5.8: createCreditMemoInQb import removed — route enqueues now.
 import { parseSalesRepInitials } from "../../../../../../lib/quickbooks/parse-sales-rep";
 import { getQbConfig } from "../../../../../../lib/quickbooks/qb-config";
+import { resolveTaxListid } from "../../../../../../lib/quickbooks/resolve-tax-listid";
 import {
   buildQbOrderDiscountLines,
   buildShippingQbItem,
@@ -252,74 +253,56 @@ export async function POST(
             "OtherCharge",
             "Discount",
           ]);
-          const qbItems = creditMemo.items.map((item: any) => {
-            const unitPriceDollars = (item.unit_price || 0) / 100;
-            const info = item.variant_id
-              ? variantInfoMap.get(item.variant_id)
-              : null;
-            const meta = info?.variantMetadata || {};
-            const productMeta = info?.productMetadata || {};
-            const qbListId = meta?.quickbooks_id as string | undefined;
-            const qbItemType = meta?.qb_item_type ?? productMeta?.qb_item_type;
-            const isService = !!(
-              !item.variant_id ||
-              meta?.quickbooks_is_service === true ||
-              meta?.quickbooks_is_service === "true" ||
-              meta?.quickbooks_no_site === true ||
-              meta?.quickbooks_no_site === "true" ||
-              productMeta?.quickbooks_is_service === true ||
-              productMeta?.quickbooks_is_service === "true" ||
-              productMeta?.quickbooks_no_site === true ||
-              productMeta?.quickbooks_no_site === "true" ||
-              (typeof qbItemType === "string" &&
-                NON_INVENTORY_QB_TYPES.has(qbItemType))
-            );
-            return {
-              // Prefer ListID (stable) over FullName (SKU can be renamed in Medusa)
-              ...(qbListId ? { productId: qbListId } : {}),
-              productName: item.sku || item.title,
-              quantity: item.quantity,
-              price: unitPriceDollars,
-              amount: Number((unitPriceDollars * item.quantity).toFixed(2)),
-              desc: item.description || item.title,
-              ...(typeof qbItemType === "string" ? { qbItemType } : {}),
-              ...(isService ? { noSite: true } : {}),
-              ...(isService ? { taxable: false } : {}),
-            };
-          });
+          const qbItems = creditMemo.items
+            .filter((item: any) => Number(item.quantity ?? 0) > 0)
+            .map((item: any) => {
+              const unitPriceDollars = (item.unit_price || 0) / 100;
+              const info = item.variant_id
+                ? variantInfoMap.get(item.variant_id)
+                : null;
+              const meta = info?.variantMetadata || {};
+              const productMeta = info?.productMetadata || {};
+              const qbListId = meta?.quickbooks_id as string | undefined;
+              const qbItemType =
+                meta?.qb_item_type ?? productMeta?.qb_item_type;
+              const isService = !!(
+                !item.variant_id ||
+                meta?.quickbooks_is_service === true ||
+                meta?.quickbooks_is_service === "true" ||
+                meta?.quickbooks_no_site === true ||
+                meta?.quickbooks_no_site === "true" ||
+                productMeta?.quickbooks_is_service === true ||
+                productMeta?.quickbooks_is_service === "true" ||
+                productMeta?.quickbooks_no_site === true ||
+                productMeta?.quickbooks_no_site === "true" ||
+                (typeof qbItemType === "string" &&
+                  NON_INVENTORY_QB_TYPES.has(qbItemType))
+              );
+              return {
+                // Prefer ListID (stable) over FullName (SKU can be renamed in Medusa)
+                ...(qbListId ? { productId: qbListId } : {}),
+                productName: item.sku || item.title,
+                quantity: item.quantity,
+                price: unitPriceDollars,
+                amount: Number((unitPriceDollars * item.quantity).toFixed(2)),
+                desc: item.description || item.title,
+                ...(typeof qbItemType === "string" ? { qbItemType } : {}),
+                ...(isService ? { noSite: true } : {}),
+                ...(isService ? { taxable: false } : {}),
+              };
+            });
 
-          // Determine taxExempt for the whole CM:
-          //   - if invoice_id set → inherit from the parent pos_invoice (tax=0 && subtotal>0 => was exempt)
-          //   - else (quick credit) → read customer.metadata.is_tax_exempt
-          let isTaxExempt = false;
-          try {
-            const pg = req.scope.resolve("__pg_connection__") as any;
-            if (creditMemo.invoice_id) {
-              const invRes = await pg.raw(
-                `SELECT tax, subtotal FROM pos_invoice WHERE id = ? LIMIT 1`,
-                [creditMemo.invoice_id]
-              );
-              const inv = invRes?.rows?.[0];
-              if (inv) {
-                isTaxExempt = Number(inv.tax) === 0 && Number(inv.subtotal) > 0;
-              }
-            } else if (creditMemo.customer_id) {
-              const custRes = await pg.raw(
-                `SELECT metadata FROM customer WHERE id = ? LIMIT 1`,
-                [creditMemo.customer_id]
-              );
-              const flag = custRes?.rows?.[0]?.metadata?.is_tax_exempt;
-              isTaxExempt =
-                flag === true ||
-                (typeof flag === "string" &&
-                  (flag.toLowerCase() === "yes" ||
-                    flag.toLowerCase() === "true"));
-            }
-          } catch (teErr: any) {
-            logger.warn(
-              `[credit_memos complete] Could not determine taxExempt (non-fatal): ${teErr.message}`
+          if (qbItems.length === 0) {
+            throw new Error(
+              `Skipping QB sync for ${id}: no positive-quantity return lines`
             );
           }
+
+          // A return's tax mode belongs to the CM itself. Do not inherit tax
+          // from the parent invoice, since partial returns can be tax-exempt.
+          const isTaxExempt =
+            Number(creditMemo.tax ?? 0) === 0 &&
+            Number(creditMemo.subtotal ?? 0) > 0;
 
           // Add order-level discount lines (Subtotal + Discount QB items)
           if (creditMemo.discount > 0) {
@@ -348,6 +331,10 @@ export async function POST(
           const cmSalesTaxCode = isTaxExempt
             ? qbConfig.exemptSalesTaxCode
             : qbConfig.defaultSalesTaxCode;
+          const qbTaxItemListid = resolveTaxListid(
+            isTaxExempt ? "exempt" : "florida",
+            qbConfig
+          );
           const salesRepRef = parseSalesRepInitials(
             (creditMemo as any).sales_rep
           );
@@ -369,6 +356,8 @@ export async function POST(
                 memo: `POS Return ${creditMemo.credit_memo_number || ""}`.trim(),
                 items: qbItems,
                 salesTaxCode: cmSalesTaxCode,
+                ...(qbTaxItemListid ? { qbTaxItemListid } : {}),
+                ...(isTaxExempt ? { taxExempt: true } : {}),
                 ...(salesRepRef ? { salesRepRef } : {}),
               },
             });
