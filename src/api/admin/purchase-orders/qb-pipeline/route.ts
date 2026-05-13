@@ -23,8 +23,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   await client.connect();
   try {
     const { status, search } = req.query as Record<string, string | undefined>;
+    const limitParam = Number(req.query.limit ?? 50);
+    const offsetParam = Number(req.query.offset ?? 0);
+    const limit = Number.isFinite(limitParam)
+      ? Math.min(200, Math.max(1, limitParam))
+      : 50;
+    const offset = Number.isFinite(offsetParam) ? Math.max(0, offsetParam) : 0;
 
-    const sql = `
+    const feedSql = `
       SELECT * FROM (
         -- ── Purchase Order pipeline ──────────────────────────────────────
         SELECT
@@ -109,34 +115,49 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         WHERE qbp.deleted_at IS NULL
           AND qbp.void_status IS NOT NULL
       ) feed
-      ${status && status !== "__all__" ? "WHERE status = $1" : ""}
-      ORDER BY created_at DESC, id DESC
-      LIMIT 200
     `;
 
     const values: unknown[] = [];
-    if (status && status !== "__all__") values.push(status);
+    const conditions: string[] = [];
+    let p = 1;
+    if (status && status !== "__all__") {
+      conditions.push(`status = $${p++}`);
+      values.push(status);
+    }
+    if (search) {
+      conditions.push(`(
+        COALESCE(po_number, '') ILIKE $${p}
+        OR COALESCE(draft_number, '') ILIKE $${p}
+        OR COALESCE(receipt_number, '') ILIKE $${p}
+        OR COALESCE(vendor_name, '') ILIKE $${p}
+        OR COALESCE(qb_list_id, '') ILIKE $${p}
+        OR COALESCE(last_error, '') ILIKE $${p}
+        OR COALESCE(qb_txn_number, '') ILIKE $${p}
+      )`);
+      values.push(`%${search}%`);
+      p++;
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    const { rows } = await client.query(sql, values);
-
-    const searchLower = search?.toLowerCase();
-    const filtered = searchLower
-      ? rows.filter((r) =>
-          [
-            r.po_number,
-            r.draft_number,
-            r.receipt_number,
-            r.vendor_name,
-            r.qb_list_id,
-            r.last_error,
-            r.qb_txn_number,
-          ]
-            .filter(Boolean)
-            .join(" ")
-            .toLowerCase()
-            .includes(searchLower)
-        )
-      : rows;
+    const [{ rows }, countResult, summaryResult] = await Promise.all([
+      client.query(
+        `SELECT numbered.*
+           FROM (
+             SELECT scoped.*,
+                    ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS display_seq
+             FROM (${feedSql}) scoped
+             ${where}
+           ) numbered
+          ORDER BY created_at DESC, id DESC
+          LIMIT $${p} OFFSET $${p + 1}`,
+        [...values, limit, offset]
+      ),
+      client.query(`SELECT COUNT(*) AS count FROM (${feedSql}) scoped ${where}`, values),
+      client.query(
+        `SELECT status, COUNT(*) AS count FROM (${feedSql}) scoped GROUP BY status`,
+        []
+      ),
+    ]);
 
     const counts: Record<string, number> = {
       waiting: 0,
@@ -146,12 +167,23 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       error: 0,
       failed_permanent: 0,
     };
-    for (const r of rows) {
+    for (const r of summaryResult.rows) {
       const s = r.status as string;
-      if (s in counts) counts[s] = (counts[s] ?? 0) + 1;
+      if (s in counts) counts[s] = Number(r.count ?? 0);
     }
 
-    return res.json({ rows: filtered, counts });
+    const total = Number(countResult.rows[0]?.count ?? 0);
+
+    return res.json({
+      rows,
+      counts,
+      pagination: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + rows.length < total,
+      },
+    });
   } finally {
     await client.end();
   }

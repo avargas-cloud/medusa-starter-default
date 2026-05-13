@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from "react";
 
+import { PAGE_SIZE, PipelinePagination } from "./PipelinePagination";
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type PoStatus = "waiting" | "submitted" | "error" | "synced" | "failed_permanent";
@@ -21,6 +23,7 @@ type PoStep =
 interface PoRow {
   id: string;
   seq: number | null;
+  display_seq: number | null;
   parent_id: string;
   po_number: string | null;
   draft_number: string | null;
@@ -147,7 +150,7 @@ function PipelinePoRow({
         {/* Seq */}
         <td className="px-3 py-2 whitespace-nowrap">
           <span className="font-mono text-[11px] text-ui-fg-muted">
-            #{row.seq ?? "—"}
+            #{row.display_seq ?? row.seq ?? "—"}
           </span>
         </td>
 
@@ -306,6 +309,7 @@ export const PurchaseOrderPipelineSection = () => {
     failed_permanent: 0,
   });
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -320,27 +324,32 @@ export const PurchaseOrderPipelineSection = () => {
         const params = new URLSearchParams();
         if (statusFilter !== "all") params.set("status", statusFilter);
         if (searchQuery.trim()) params.set("search", searchQuery.trim());
+        params.set("limit", String(PAGE_SIZE));
+        params.set("offset", String(page * PAGE_SIZE));
         const res = await fetch(
           `/admin/purchase-orders/qb-pipeline?${params}`,
           { credentials: "include" }
         );
         if (!res.ok) return;
         const data = await res.json();
-        const allRows: PoRow[] = data.rows ?? [];
-        setRows(allRows);
-        const c: Counts = { waiting: 0, submitted: 0, error: 0, synced: 0, failed_permanent: 0 };
-        for (const r of allRows) {
-          if (r.status in c) c[r.status as keyof Counts]++;
-        }
-        setCounts(c);
-        setTotal(allRows.length);
+        setRows(data.rows ?? []);
+        setCounts(
+          data.counts ?? {
+            waiting: 0,
+            submitted: 0,
+            error: 0,
+            synced: 0,
+            failed_permanent: 0,
+          }
+        );
+        setTotal(data.pagination?.total ?? 0);
       } catch {
         /* non-blocking */
       } finally {
         if (!silent) setLoading(false);
       }
     },
-    [statusFilter, searchQuery]
+    [page, statusFilter, searchQuery]
   );
 
   useEffect(() => {
@@ -355,7 +364,7 @@ export const PurchaseOrderPipelineSection = () => {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [counts.waiting, fetchRows]);
+  }, [counts.waiting, counts.submitted, fetchRows]);
 
   const handleRetry = async (id: string) => {
     setRetryingId(id);
@@ -454,12 +463,18 @@ export const PurchaseOrderPipelineSection = () => {
             type="text"
             placeholder="Search PO / receipt / vendor / QB ref / error…"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setPage(0);
+            }}
             className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base w-52 placeholder:text-ui-fg-muted"
           />
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setPage(0);
+            }}
             className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base"
           >
             <option value="all">All Statuses</option>
@@ -517,6 +532,11 @@ export const PurchaseOrderPipelineSection = () => {
             </table>
           </div>
         )}
+        <PipelinePagination
+          page={page}
+          total={total}
+          onPageChange={setPage}
+        />
       </div>
     </Container>
   );

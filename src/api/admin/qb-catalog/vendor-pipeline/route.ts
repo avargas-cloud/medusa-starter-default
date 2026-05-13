@@ -13,6 +13,12 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const statusParam = req.query.status ? String(req.query.status) : "";
   const search = req.query.search ? String(req.query.search).toLowerCase() : "";
   const vendorId = req.query.vendor_id ? String(req.query.vendor_id) : "";
+  const limitParam = Number(req.query.limit ?? 50);
+  const offsetParam = Number(req.query.offset ?? 0);
+  const limit = Number.isFinite(limitParam)
+    ? Math.min(200, Math.max(1, limitParam))
+    : 50;
+  const offset = Number.isFinite(offsetParam) ? Math.max(0, offsetParam) : 0;
 
   const filters: Record<string, unknown> = {};
   if (ALLOWED_STATUSES.has(statusParam)) {
@@ -70,10 +76,18 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     return Number.isNaN(d.getTime()) ? 0 : d.getTime();
   };
 
-  return res.json({
-    rows: (filtered as any[]).sort(
+  const sorted = (filtered as any[]).sort(
       (a, b) => toTime(b.created_at) - toTime(a.created_at)
-    ),
+  );
+
+  return res.json({
+    rows: sorted.slice(offset, offset + limit),
     counts,
+    pagination: {
+      total: sorted.length,
+      limit,
+      offset,
+      hasMore: offset + limit < sorted.length,
+    },
   });
 };

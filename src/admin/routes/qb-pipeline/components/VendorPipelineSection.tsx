@@ -8,7 +8,9 @@ import {
   Text,
   toast,
 } from "@medusajs/ui";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
+
+import { PAGE_SIZE, PipelinePagination } from "./PipelinePagination";
 
 type VendorPipelineRow = {
   id: string;
@@ -65,6 +67,8 @@ export const VendorPipelineSection = () => {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("__all__");
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
   const [retrying, setRetrying] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -75,11 +79,14 @@ export const VendorPipelineSection = () => {
       return next;
     });
 
-  const fetchRows = async () => {
+  const fetchRows = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
       if (status !== "__all__") params.set("status", status);
+      if (search.trim()) params.set("search", search.trim());
+      params.set("limit", String(PAGE_SIZE));
+      params.set("offset", String(page * PAGE_SIZE));
       const res = await fetch(`/admin/qb-catalog/vendor-pipeline?${params}`, {
         credentials: "include",
       });
@@ -87,6 +94,7 @@ export const VendorPipelineSection = () => {
       const data = await res.json();
       setRows(data.rows ?? []);
       setCounts(data.counts ?? { waiting: 0, synced: 0, error: 0 });
+      setTotal(data.pagination?.total ?? 0);
     } catch (e) {
       toast.error("Failed to load vendor pipeline", {
         description: (e as Error).message,
@@ -94,30 +102,16 @@ export const VendorPipelineSection = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, search, status]);
 
   useEffect(() => {
     fetchRows();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
+  }, [fetchRows]);
 
   useEffect(() => {
     const interval = setInterval(fetchRows, 15000);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
-
-  const filtered = useMemo(() => {
-    if (!search.trim()) return rows;
-    const s = search.toLowerCase();
-    return rows.filter((r) =>
-      [r.vendor_name, r.qb_list_id, r.last_error]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(s)
-    );
-  }, [rows, search]);
+  }, [fetchRows]);
 
   const retry = async (row: VendorPipelineRow) => {
     setRetrying((prev) => new Set(prev).add(row.id));
@@ -183,7 +177,10 @@ export const VendorPipelineSection = () => {
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <select
             value={status}
-            onChange={(e) => setStatus(e.target.value)}
+            onChange={(e) => {
+              setStatus(e.target.value);
+              setPage(0);
+            }}
             className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base"
           >
             {STATUS_FILTERS.map((f) => (
@@ -194,21 +191,24 @@ export const VendorPipelineSection = () => {
             type="text"
             placeholder="Search vendor / ListID / error…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(0);
+            }}
             className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base w-52 placeholder:text-ui-fg-muted"
           />
           <span className="text-xs text-ui-fg-muted ml-auto">
-            {filtered.length} total operation{filtered.length !== 1 ? "s" : ""}
+            {total} total operation{total !== 1 ? "s" : ""}
           </span>
         </div>
 
         {loading && rows.length === 0 && (
           <Text className="text-ui-fg-subtle py-6 text-center">Loading…</Text>
         )}
-        {!loading && filtered.length === 0 && (
+        {!loading && rows.length === 0 && (
           <Text className="text-ui-fg-subtle py-6 text-center">No rows match.</Text>
         )}
-        {filtered.length > 0 && (
+        {rows.length > 0 && (
           <div className="max-h-[calc(100vh-380px)] overflow-y-auto">
             <Table>
               <Table.Header>
@@ -226,7 +226,7 @@ export const VendorPipelineSection = () => {
                 </Table.Row>
               </Table.Header>
               <Table.Body>
-                {filtered.map((r) => (
+                {rows.map((r) => (
                   <React.Fragment key={r.id}>
                     <Table.Row>
                       <Table.Cell className="font-mono text-sm text-ui-fg-subtle">
@@ -291,6 +291,11 @@ export const VendorPipelineSection = () => {
             </Table>
           </div>
         )}
+        <PipelinePagination
+          page={page}
+          total={total}
+          onPageChange={setPage}
+        />
       </div>
     </Container>
   );

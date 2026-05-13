@@ -10,6 +10,8 @@ import {
 } from "@medusajs/ui";
 import { Fragment, useEffect, useMemo, useState } from "react";
 
+import { PAGE_SIZE, PipelinePagination } from "./PipelinePagination";
+
 type PipelineRow = {
   id: string;
   seq: number;
@@ -77,6 +79,7 @@ export const CustomerSyncPipelineSection = () => {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("__all__");
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
   const [retrying, setRetrying] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [counts, setCounts] = useState<{
@@ -224,6 +227,10 @@ export const CustomerSyncPipelineSection = () => {
         (r.qb_list_id ?? "").toLowerCase().includes(q)
     );
   }, [rows, search]);
+  const paginated = useMemo(
+    () => filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
+    [filtered, page]
+  );
 
   const retry = async (id: string) => {
     setRetrying((s) => new Set(s).add(id));
@@ -282,7 +289,10 @@ export const CustomerSyncPipelineSection = () => {
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <select
             value={status}
-            onChange={(e) => setStatus(e.target.value)}
+            onChange={(e) => {
+              setStatus(e.target.value);
+              setPage(0);
+            }}
             className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base"
           >
             {STATUS_FILTERS.map((s) => (
@@ -293,7 +303,10 @@ export const CustomerSyncPipelineSection = () => {
             type="text"
             placeholder="Search customer / email / channel / QB ListID..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(0);
+            }}
             className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base w-72 placeholder:text-ui-fg-muted"
           />
           <span className="text-xs text-ui-fg-muted ml-auto">
@@ -324,7 +337,7 @@ export const CustomerSyncPipelineSection = () => {
                 </Table.Row>
               </Table.Header>
               <Table.Body>
-                {filtered.map((r) => {
+                {paginated.map((r) => {
                   const resolved = r.confirmed_at ?? r.failed_at ?? null;
                   const isNewCustomer = (() => {
                     if (!r.customer_created_at) return false;
@@ -440,6 +453,11 @@ export const CustomerSyncPipelineSection = () => {
             </Table>
           </div>
         )}
+        <PipelinePagination
+          page={page}
+          total={filtered.length}
+          onPageChange={setPage}
+        />
       </div>
     </Container>
   );

@@ -9,7 +9,9 @@ import {
   Tooltip,
   toast,
 } from "@medusajs/ui";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+
+import { PAGE_SIZE, PipelinePagination } from "./PipelinePagination";
 
 type AddStatus = "waiting" | "processing" | "synced" | "error";
 type VoidStatus = null | "waiting" | "processing" | "voided" | "error";
@@ -111,21 +113,38 @@ export const InventoryAdjustmentPipelineSection = () => {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("__all__");
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState({
+    waiting: 0,
+    processing: 0,
+    synced: 0,
+    error: 0,
+    void: 0,
+  });
   const [retrying, setRetrying] = useState<Set<string>>(new Set());
 
-  const fetchRows = async () => {
+  const fetchRows = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
       if (status !== "__all__") params.set("status", status);
-      params.set("limit", "200");
+      if (search.trim()) params.set("search", search.trim());
+      params.set("limit", String(PAGE_SIZE));
+      params.set("offset", String(page * PAGE_SIZE));
       const res = await fetch(
         `/admin/qb-catalog/inventory-adjustment-pipeline?${params}`,
         { credentials: "include" }
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { rows: PipelineRow[] };
+      const data = (await res.json()) as {
+        rows: PipelineRow[];
+        count?: number;
+        counts?: Partial<typeof counts>;
+      };
       setRows(data.rows ?? []);
+      setTotal(data.count ?? 0);
+      setCounts((prev) => ({ ...prev, ...(data.counts ?? {}) }));
     } catch (e) {
       toast.error("Failed to load inventory adjustment pipeline", {
         description: (e as Error).message,
@@ -133,49 +152,16 @@ export const InventoryAdjustmentPipelineSection = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, search, status]);
 
   useEffect(() => {
     fetchRows();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
+  }, [fetchRows]);
 
   useEffect(() => {
     const interval = setInterval(fetchRows, 15000);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
-
-  const filtered = useMemo(() => {
-    if (!search.trim()) return rows;
-    const s = search.toLowerCase();
-    return rows.filter((r) =>
-      [
-        r.count_number,
-        r.qb_txn_number,
-        r.qb_list_id,
-        r.last_error,
-        r.void_last_error,
-        r.count_memo,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(s)
-    );
-  }, [rows, search]);
-
-  const counts = useMemo(() => {
-    const c = { waiting: 0, processing: 0, synced: 0, error: 0, void: 0 };
-    for (const r of rows) {
-      if (r.status === "waiting") c.waiting++;
-      else if (r.status === "processing") c.processing++;
-      else if (r.status === "synced") c.synced++;
-      else if (r.status === "error") c.error++;
-      if (r.void_status) c.void++;
-    }
-    return c;
-  }, [rows]);
+  }, [fetchRows]);
 
   const retry = async (row: PipelineRow) => {
     setRetrying((prev) => new Set(prev).add(row.id));
@@ -245,7 +231,10 @@ export const InventoryAdjustmentPipelineSection = () => {
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <select
             value={status}
-            onChange={(e) => setStatus(e.target.value)}
+            onChange={(e) => {
+              setStatus(e.target.value);
+              setPage(0);
+            }}
             className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base"
           >
             {STATUS_FILTERS.map((f) => (
@@ -256,21 +245,24 @@ export const InventoryAdjustmentPipelineSection = () => {
             type="text"
             placeholder="Search count # / RefNumber / TxnID / error…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(0);
+            }}
             className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base w-52 placeholder:text-ui-fg-muted"
           />
           <span className="text-xs text-ui-fg-muted ml-auto">
-            {filtered.length} total operation{filtered.length !== 1 ? "s" : ""}
+            {total} total operation{total !== 1 ? "s" : ""}
           </span>
         </div>
 
         {loading && rows.length === 0 && (
           <Text className="text-ui-fg-subtle py-6 text-center">Loading…</Text>
         )}
-        {!loading && filtered.length === 0 && (
+        {!loading && rows.length === 0 && (
           <Text className="text-ui-fg-subtle py-6 text-center">No rows match.</Text>
         )}
-        {filtered.length > 0 && (
+        {rows.length > 0 && (
           <div className="max-h-[calc(100vh-380px)] overflow-y-auto">
             <Table>
               <Table.Header>
@@ -290,7 +282,7 @@ export const InventoryAdjustmentPipelineSection = () => {
                 </Table.Row>
               </Table.Header>
               <Table.Body>
-                {filtered.map((r) => {
+                {rows.map((r) => {
                   const error = r.last_error ?? r.void_last_error;
                   const totalRetries = (r.retries ?? 0) + (r.void_retries ?? 0);
                   const canRetry =
@@ -357,6 +349,11 @@ export const InventoryAdjustmentPipelineSection = () => {
             </Table>
           </div>
         )}
+        <PipelinePagination
+          page={page}
+          total={total}
+          onPageChange={setPage}
+        />
       </div>
     </Container>
   );

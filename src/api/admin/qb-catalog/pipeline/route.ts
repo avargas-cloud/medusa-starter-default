@@ -13,6 +13,12 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
   const statusParam = req.query.status ? String(req.query.status) : "";
   const search = req.query.search ? String(req.query.search).toLowerCase() : "";
+  const limitParam = Number(req.query.limit ?? 50);
+  const offsetParam = Number(req.query.offset ?? 0);
+  const limit = Number.isFinite(limitParam)
+    ? Math.min(200, Math.max(1, limitParam))
+    : 50;
+  const offset = Number.isFinite(offsetParam) ? Math.max(0, offsetParam) : 0;
 
   const filters: Record<string, unknown> = {};
   if (ALLOWED_STATUSES.has(statusParam)) {
@@ -47,7 +53,11 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
   const filtered = search
     ? (data as any[]).filter((r) =>
-        (r.sku ?? "").toLowerCase().includes(search)
+        [r.sku, r.qb_list_id, r.last_error]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(search)
       )
     : data;
 
@@ -73,10 +83,31 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     return Number.isNaN(d.getTime()) ? 0 : d.getTime();
   };
 
-  return res.json({
-    rows: (filtered as any[]).sort(
+  const sorted = (filtered as any[]).sort(
       (a, b) => toTime(b.created_at) - toTime(a.created_at)
-    ),
+  );
+  const displaySeqById = new Map<string, number>();
+  [...sorted]
+    .sort((a, b) => {
+      const byCreated = toTime(a.created_at) - toTime(b.created_at);
+      if (byCreated !== 0) return byCreated;
+      return String(a.id).localeCompare(String(b.id));
+    })
+    .forEach((row, index) => {
+      displaySeqById.set(String(row.id), index + 1);
+    });
+
+  return res.json({
+    rows: sorted.slice(offset, offset + limit).map((row) => ({
+      ...row,
+      display_seq: displaySeqById.get(String(row.id)) ?? null,
+    })),
     counts,
+    pagination: {
+      total: sorted.length,
+      limit,
+      offset,
+      hasMore: offset + limit < sorted.length,
+    },
   });
 };

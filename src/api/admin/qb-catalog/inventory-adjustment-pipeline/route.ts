@@ -43,6 +43,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const offset = Number.isFinite(offsetParam) ? Math.max(0, offsetParam) : 0;
 
   const uiStatus = req.query.status ? String(req.query.status) : "";
+  const search = req.query.search ? String(req.query.search).trim() : "";
   const hasStatusFilter = ALLOWED_UI_STATUSES.has(uiStatus);
 
   // ── Legacy table (status already in UI vocab) ─────────────────────────────
@@ -117,12 +118,36 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     ${newStatusClause}
   `;
 
-  const [dataResult, countResult] = await Promise.all([
+  const values: unknown[] = [];
+  const conditions: string[] = [];
+  let p = 1;
+  if (search) {
+    conditions.push(`(
+      COALESCE(count_number_col, '') ILIKE $${p}
+      OR COALESCE(qb_txn_number, '') ILIKE $${p}
+      OR COALESCE(last_error, '') ILIKE $${p}
+      OR COALESCE(void_last_error, '') ILIKE $${p}
+      OR COALESCE(payload::text, '') ILIKE $${p}
+    )`);
+    values.push(`%${search}%`);
+    p++;
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const [dataResult, countResult, summaryResult, voidResult] = await Promise.all([
     pool.query(
-      `SELECT * FROM (${unionSql}) combined ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
-      [limit, offset]
+      `SELECT * FROM (${unionSql}) combined ${where} ORDER BY created_at DESC LIMIT $${p} OFFSET $${p + 1}`,
+      [...values, limit, offset]
     ),
-    pool.query(`SELECT COUNT(*) AS total FROM (${unionSql}) combined`, []),
+    pool.query(`SELECT COUNT(*) AS total FROM (${unionSql}) combined ${where}`, values),
+    pool.query(
+      `SELECT ui_status, COUNT(*) AS count FROM (${unionSql}) combined GROUP BY ui_status`,
+      []
+    ),
+    pool.query(
+      `SELECT COUNT(*) AS count FROM (${unionSql}) combined WHERE ui_void_status IS NOT NULL`,
+      []
+    ),
   ]);
 
   const enriched = dataResult.rows.map((r) => {
@@ -162,8 +187,17 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     };
   });
 
+  const counts = { waiting: 0, processing: 0, synced: 0, error: 0 };
+  for (const row of summaryResult.rows as Array<{ ui_status: string; count: string }>) {
+    if (row.ui_status in counts) {
+      counts[row.ui_status as keyof typeof counts] = Number(row.count);
+    }
+  }
+  const voidCount = Number((voidResult.rows[0] as { count?: string } | undefined)?.count ?? 0);
+
   return res.json({
     rows: enriched,
     count: Number((countResult.rows[0] as { total: string }).total),
+    counts: { ...counts, void: voidCount },
   });
 };
