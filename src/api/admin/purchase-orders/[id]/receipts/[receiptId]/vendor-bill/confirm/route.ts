@@ -295,15 +295,43 @@ export async function POST(
     [...landedByVariant.entries()].map(async ([variantId, { totalLanded, totalQty: receivedQty }]) => {
       const batchLandedPerUnit = receivedQty > 0 ? totalLanded / receivedQty : 0;
 
-      // Current stocked_quantity across all locations (already includes this receipt)
-      const qResult = await knex.raw(
-        `SELECT COALESCE(SUM(il.stocked_quantity)::int, 0) AS qty
-         FROM inventory_level il
-         JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = il.inventory_item_id
-         WHERE pvii.variant_id = ? AND il.deleted_at IS NULL`,
-        [variantId]
+      // Read qty_on_hand captured at receive time (per-location, same scope as receipt).
+      // For pre-fix receipts the column is NULL — fall back to live cross-location sum.
+      const stockRes = await knex.raw(
+        `SELECT
+           COALESCE(SUM(rl.qty_on_hand_at_receive)::int, 0) AS q_before,
+           COALESCE(SUM(rl.qty_received_now)::int, 0)       AS q_received,
+           BOOL_AND(rl.qty_on_hand_at_receive IS NOT NULL)  AS has_capture
+         FROM purchase_order_receipt_line rl
+         WHERE rl.purchase_order_receipt_id = ?
+           AND rl.product_variant_id = ?
+           AND rl.deleted_at IS NULL`,
+        [receiptId, variantId]
       );
-      const qOnHand: number = (qResult.rows[0] as { qty: number } | undefined)?.qty ?? 0;
+      const stockRow = stockRes.rows[0] as
+        | { q_before: number; q_received: number; has_capture: boolean }
+        | undefined;
+
+      let qBefore: number;
+      let qOnHand: number;
+      if (stockRow?.has_capture) {
+        // Post-fix path: use the historical snapshot
+        qBefore = stockRow.q_before;
+        qOnHand = qBefore + stockRow.q_received;
+      } else {
+        // Pre-fix fallback: read current inventory (old behaviour)
+        const fallbackRes = await knex.raw(
+          `SELECT COALESCE(SUM(il.stocked_quantity)::int, 0) AS qty
+           FROM inventory_level il
+           JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = il.inventory_item_id
+           WHERE pvii.variant_id = ? AND il.deleted_at IS NULL`,
+          [variantId]
+        );
+        const currentQty =
+          (fallbackRes.rows[0] as { qty: number } | undefined)?.qty ?? 0;
+        qOnHand = currentQty;
+        qBefore = Math.max(0, qOnHand - receivedQty);
+      }
 
       // Read current avg (prev avg before this bill)
       const metaResult = await knex.raw(
@@ -313,10 +341,7 @@ export async function POST(
       const meta = (metaResult.rows[0] as VariantMetadataRow | undefined)?.metadata;
       const prevAvg = Number(meta?.avg_landed_cost_cents ?? 0) || 0;
 
-      // Q_before = inventory that existed before this receipt was stocked
-      const qBefore = Math.max(0, qOnHand - receivedQty);
-
-      // QB AVCO formula
+      // QB-style AVCO: new_avg = (Q_before × old_avg + received × landed) / Q_on_hand
       const newAvg =
         qOnHand > 0
           ? (qBefore * prevAvg + receivedQty * batchLandedPerUnit) / qOnHand

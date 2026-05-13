@@ -36,6 +36,10 @@ export const PurchaseOrderReceiptLine = model.define(
 
     // Receipt-specific quantities
     qty_received_now: model.number(),
+    // Inventory on hand at the receive location BEFORE this receipt was applied.
+    // Captured at receive time so the vendor bill confirm can compute AVCO
+    // without reading current (post-sell) inventory. NULL for pre-fix receipts.
+    qty_on_hand_at_receive: model.number().nullable(),
 
     // Optional cost override for this specific shipment
     unit_cost_cents_override: model.number().nullable(),

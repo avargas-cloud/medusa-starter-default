@@ -109,6 +109,7 @@ export const persistReceiptStep = createStep(
         description_snapshot: l.description_snapshot,
         qb_item_list_id_snapshot: l.qb_item_list_id_snapshot,
         qty_received_now: l.qty_received_now,
+        qty_on_hand_at_receive: applied?.qty_at_apply_time ?? null,
         unit_cost_cents_override: l.unit_cost_cents_override,
         stock_applied: isApplied,
         stock_applied_at: isApplied ? input.received_at : null,
