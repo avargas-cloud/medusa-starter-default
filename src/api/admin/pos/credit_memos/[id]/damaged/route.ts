@@ -5,6 +5,7 @@ import { Modules } from "@medusajs/utils";
 
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
 
 /**
  * PATCH /admin/pos/credit_memos/:id/damaged
@@ -61,6 +62,7 @@ export async function PATCH(
 
     const allLocations = await stockLocationService.listStockLocations({});
     const locationId = allLocations[0]?.id;
+    const touchedInventoryItemIds = new Set<string>();
 
     const pgConnection = req.scope.resolve("__pg_connection__") as any;
 
@@ -114,6 +116,7 @@ export async function PATCH(
                   location_id: locationId,
                   stocked_quantity: newQty,
                 } as any);
+                touchedInventoryItemIds.add(invItemId);
                 logger.info(
                   `[damaged update] Variant ${dbItem.variant_id}: stock ${currentQty} → ${newQty} (damaged delta: +${delta})`
                 );
@@ -131,6 +134,16 @@ export async function PATCH(
       await pgConnection("pos_credit_memo_item")
         .where({ id: update.id })
         .update({ damaged_qty: newDamaged });
+    }
+
+    if (touchedInventoryItemIds.size > 0) {
+      await Promise.allSettled(
+        Array.from(touchedInventoryItemIds).map((inventoryItemId) =>
+          syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+            input: { inventoryItemId },
+          })
+        )
+      );
     }
 
     // Rebuild pos_damaged_item tracking records for this CM

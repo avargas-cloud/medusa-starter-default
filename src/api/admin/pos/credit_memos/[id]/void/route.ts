@@ -9,6 +9,7 @@ import {
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
 
 export async function POST(
   req: MedusaRequest,
@@ -41,6 +42,7 @@ export async function POST(
     const wasCompleted = creditMemo.status === "completed";
 
     // 1. Reverse inventory if CM was completed (items were restocked)
+    const touchedInventoryItemIds = new Set<string>();
     if (wasCompleted) {
       const allLocations = await stockLocationService.listStockLocations({});
       const locationId = allLocations[0]?.id;
@@ -77,6 +79,7 @@ export async function POST(
                   location_id: locationId,
                   stocked_quantity: newQty,
                 } as any);
+                touchedInventoryItemIds.add(invItemId);
                 logger.info(
                   `[void CM] Reversed inventory for variant ${item.variant_id}: -${item.quantity}`
                 );
@@ -89,6 +92,16 @@ export async function POST(
           }
         }
       }
+    }
+
+    if (touchedInventoryItemIds.size > 0) {
+      await Promise.allSettled(
+        Array.from(touchedInventoryItemIds).map((inventoryItemId) =>
+          syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+            input: { inventoryItemId },
+          })
+        )
+      );
     }
 
     // 2. Void associated customer_payment (credit_memo type)

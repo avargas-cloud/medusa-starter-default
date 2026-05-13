@@ -33,6 +33,7 @@ import {
 } from "./steps/classify-lines-step";
 import { enqueueQbAdjustmentsStep } from "./steps/enqueue-qb-adjustments-step";
 import { persistApprovalResultsStep } from "./steps/persist-approval-results-step";
+import { syncReceiptInventoryMeiliStep } from "../shared/steps/sync-receipt-inventory-meili-step";
 
 export interface ApproveInventoryCountWorkflowInput {
   count_id: string;
@@ -92,6 +93,14 @@ export const approveInventoryCountWorkflow = createWorkflow(
       toApply: classified.toApply,
       applied: stock.applied,
     });
+
+    const meiliInput = transform({ stock, queued }, (data) => ({
+      inventory_item_ids: Array.from(
+        new Set(data.stock.applied.map((a) => a.inventory_item_id))
+      ),
+    }));
+
+    syncReceiptInventoryMeiliStep(meiliInput);
 
     const response = transform(
       { input, persisted, stock, classified, queued },

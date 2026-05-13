@@ -183,7 +183,7 @@ export async function GET(
       JOIN inventory_count ic ON ic.id = icl.inventory_count_id
       WHERE icl.product_variant_id = ?
         AND ic.stock_location_id = ?
-        AND ic.status = 'applied'
+        AND ic.status IN ('approved', 'partially_applied')
         AND ic.applied_at IS NOT NULL
         AND ic.applied_at >= ?
         AND ic.applied_at < ?

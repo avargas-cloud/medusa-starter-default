@@ -14,6 +14,7 @@ import {
 import { getVariantAvgCostBatch } from "../../../../../../lib/cost/get-variant-avg-cost";
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
 
 const NON_INVENTORY_QB_TYPES = new Set([
   "Service",
@@ -237,6 +238,7 @@ export async function PATCH(
     // delta = new_restockable - old_restockable → apply to stocked_quantity
     const allLocations = await stockLocationService.listStockLocations({});
     const locationId = allLocations[0]?.id;
+    const touchedInventoryItemIds = new Set<string>();
 
     if (locationId) {
       const oldByVariant = new Map<string, { qty: number; damaged: number }>();
@@ -303,6 +305,7 @@ export async function PATCH(
             location_id: locationId,
             stocked_quantity: newQty,
           } as any);
+          touchedInventoryItemIds.add(invItemId);
           logger.info(
             `[edit CM] Inventory delta for ${variantId}: ${delta > 0 ? "+" : ""}${delta} → ${newQty}`
           );
@@ -312,6 +315,16 @@ export async function PATCH(
           );
         }
       }
+    }
+
+    if (touchedInventoryItemIds.size > 0) {
+      await Promise.allSettled(
+        Array.from(touchedInventoryItemIds).map((inventoryItemId) =>
+          syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+            input: { inventoryItemId },
+          })
+        )
+      );
     }
 
     // ── Update customer_payment amount ─────────────────────────────────────────

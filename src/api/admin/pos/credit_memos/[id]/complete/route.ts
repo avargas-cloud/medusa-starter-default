@@ -17,6 +17,7 @@ import {
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
 
 export async function POST(
   req: MedusaRequest,
@@ -81,6 +82,7 @@ export async function POST(
     // Use the first active stock location (no assumption on name)
     const allLocations = await stockLocationService.listStockLocations({});
     const locationId = allLocations[0]?.id;
+    const touchedInventoryItemIds = new Set<string>();
 
     if (locationId) {
       for (const item of creditMemo.items) {
@@ -122,6 +124,7 @@ export async function POST(
                     location_id: locationId,
                     stocked_quantity: newQty,
                   } as any);
+                  touchedInventoryItemIds.add(invItemId);
                   logger.info(
                     `Restocked inventory for variant ${item.variant_id}: +${restockQty} (${damagedQty} damaged, not restocked)`
                   );
@@ -139,6 +142,16 @@ export async function POST(
           );
         }
       }
+    }
+
+    if (touchedInventoryItemIds.size > 0) {
+      await Promise.allSettled(
+        Array.from(touchedInventoryItemIds).map((inventoryItemId) =>
+          syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+            input: { inventoryItemId },
+          })
+        )
+      );
     }
 
     // -- DAMAGED ITEMS TRACKING BEGIN --
