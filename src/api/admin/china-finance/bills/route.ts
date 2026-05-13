@@ -115,15 +115,23 @@ export const GET = async (
 
   await syncVeetchBills(knex);
 
-  // Confirmed bills grouped by wire transfer (ordered by wire sent_date DESC)
+  // Bills applied to wire transfers, grouped by wire.
   const { rows: confirmedBills } = await knex.raw(`
+    WITH paid AS (
+      SELECT bill_id, SUM(applied_cents)::integer AS paid_cents
+      FROM china_wire_transfer_application
+      GROUP BY bill_id
+    )
     SELECT
       cfb.id, cfb.type, cfb.sort_order, cfb.document_type,
       cfb.invoice_number, cfb.po_number, cfb.po_ref_number,
-      cfb.payee, cfb.description, cfb.amount_cents,
+      cfb.payee, cfb.description,
+      cwta.applied_cents AS amount_cents,
+      cfb.amount_cents AS original_amount_cents,
+      GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) AS bill_balance_cents,
       cfb.document_date, cfb.due_date,
       cfb.vendor_bill_id,
-      cfb.wire_transfer_id,
+      cwta.wire_transfer_id,
       vb.purchase_order_id AS po_id,
       cwt.status        AS wire_status,
       cwt.sent_date     AS wire_sent_date,
@@ -131,10 +139,12 @@ export const GET = async (
       cwt.bank_fee_cents,
       cwt.received_amount_cents,
       cwt.confirmed_date
-    FROM china_finance_bill cfb
-    JOIN china_wire_transfer cwt ON cwt.id = cfb.wire_transfer_id
-    LEFT JOIN vendor_bill vb ON vb.id = cfb.vendor_bill_id
-    ORDER BY cwt.sent_date ASC NULLS LAST, cfb.sort_order ASC
+     FROM china_wire_transfer_application cwta
+     JOIN china_finance_bill cfb ON cfb.id = cwta.bill_id
+     JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
+     LEFT JOIN vendor_bill vb ON vb.id = cfb.vendor_bill_id
+     LEFT JOIN paid ON paid.bill_id = cfb.id
+    ORDER BY cwt.sent_date ASC NULLS LAST, cwta.sort_order ASC, cfb.sort_order ASC
   `) as { rows: Array<Record<string, unknown>> };
 
   // Group confirmed bills by wire_transfer_id
@@ -159,20 +169,28 @@ export const GET = async (
   }
   const confirmed = Array.from(wireMap.values());
 
-  // Pending bills (no wire_transfer_id), ordered by sort_order
+  // Pending bills have a positive remaining balance, ordered by sort_order.
   const today = new Date().toISOString().slice(0, 10);
   const { rows: pending } = await knex.raw(
-    `SELECT
+    `WITH paid AS (
+       SELECT bill_id, SUM(applied_cents)::integer AS paid_cents
+       FROM china_wire_transfer_application
+       GROUP BY bill_id
+     )
+     SELECT
        cfb.id, cfb.type, cfb.sort_order, cfb.document_type,
        cfb.invoice_number, cfb.po_number, cfb.po_ref_number,
        cfb.payee, cfb.description, cfb.amount_cents,
+       cfb.amount_cents AS original_amount_cents,
+       GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) AS bill_balance_cents,
        cfb.document_date, cfb.due_date,
        cfb.vendor_bill_id,
        vb.purchase_order_id AS po_id,
        (cfb.due_date IS NOT NULL AND cfb.due_date < ?) AS is_past_due
      FROM china_finance_bill cfb
      LEFT JOIN vendor_bill vb ON vb.id = cfb.vendor_bill_id
-     WHERE cfb.wire_transfer_id IS NULL
+     LEFT JOIN paid ON paid.bill_id = cfb.id
+     WHERE GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) > 0
      ORDER BY cfb.sort_order ASC`,
     [today]
   ) as { rows: Array<Record<string, unknown>> };
@@ -181,8 +199,10 @@ export const GET = async (
   const { rows: summary } = await knex.raw(`
     SELECT
       COALESCE(SUM(cfb.amount_cents), 0) AS total_expenses_cents,
-      COALESCE(SUM(CASE WHEN cfb.wire_transfer_id IS NOT NULL
-                   THEN cfb.amount_cents ELSE 0 END), 0) AS total_covered_cents,
+      COALESCE((
+        SELECT SUM(cwta.applied_cents)
+        FROM china_wire_transfer_application cwta
+      ), 0) AS total_covered_cents,
       COALESCE((
         SELECT SUM(cwt.received_amount_cents)
         FROM china_wire_transfer cwt

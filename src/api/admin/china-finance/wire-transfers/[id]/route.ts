@@ -4,6 +4,10 @@
  *
  * PATCH /admin/china-finance/wire-transfers/:id
  *   Updates wire (notes, sent_date, wire_amount_cents).
+ *
+ * DELETE /admin/china-finance/wire-transfers/:id
+ *   Deletes a wire created by mistake. Normal bill rows are released back to
+ *   pending; synthetic rows owned by the wire are deleted.
  */
 
 import type {
@@ -36,7 +40,21 @@ export const GET = async (
   if (wires.length === 0) return res.status(404).json({ message: "Wire transfer not found" });
 
   const { rows: bills } = await knex.raw(
-    `SELECT * FROM china_finance_bill WHERE wire_transfer_id = ? ORDER BY sort_order ASC`,
+    `WITH paid AS (
+       SELECT bill_id, SUM(applied_cents)::integer AS paid_cents
+       FROM china_wire_transfer_application
+       GROUP BY bill_id
+     )
+     SELECT
+       cfb.*,
+       cwta.applied_cents AS amount_cents,
+       cfb.amount_cents AS original_amount_cents,
+       GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) AS bill_balance_cents
+     FROM china_wire_transfer_application cwta
+     JOIN china_finance_bill cfb ON cfb.id = cwta.bill_id
+     LEFT JOIN paid ON paid.bill_id = cfb.id
+     WHERE cwta.wire_transfer_id = ?
+     ORDER BY cwta.sort_order ASC, cfb.sort_order ASC`,
     [id]
   ) as { rows: Array<Record<string, unknown>> };
 
@@ -74,4 +92,66 @@ export const PATCH = async (
   if (rows.length === 0) return res.status(404).json({ message: "Wire transfer not found" });
 
   return res.json({ wire_transfer: rows[0] });
+};
+
+export const DELETE = async (
+  req: AuthenticatedMedusaRequest,
+  res: MedusaResponse
+) => {
+  const knex = (req.scope as unknown as { resolve: (k: string) => unknown })
+    .resolve("__pg_connection__") as Knex;
+
+  const { id } = req.params;
+
+  const { rows: wires } = await knex.raw(
+    `SELECT id FROM china_wire_transfer WHERE id = ?`,
+    [id]
+  ) as { rows: Array<{ id: string }> };
+
+  if (wires.length === 0) {
+    return res.status(404).json({ message: "Wire transfer not found" });
+  }
+
+  await knex.raw(`BEGIN`);
+  try {
+    await knex.raw(
+      `DELETE FROM china_finance_bill
+       WHERE wire_transfer_id IS NULL
+         AND type = 'bank_fee'
+         AND description = ?`,
+      [`Wire transfer bank fee from wire ${id}`]
+    );
+
+    await knex.raw(
+      `DELETE FROM china_finance_bill
+       WHERE wire_transfer_id = ?
+         AND type IN ('opening_balance', 'bank_fee')`,
+      [id]
+    );
+
+    await knex.raw(
+      `UPDATE china_finance_bill
+       SET wire_transfer_id = NULL,
+           updated_at = now()
+       WHERE wire_transfer_id = ?`,
+      [id]
+    );
+
+    await knex.raw(
+      `DELETE FROM china_wire_transfer_application
+       WHERE wire_transfer_id = ?`,
+      [id]
+    );
+
+    await knex.raw(
+      `DELETE FROM china_wire_transfer WHERE id = ?`,
+      [id]
+    );
+
+    await knex.raw(`COMMIT`);
+    return res.json({ success: true });
+  } catch (err) {
+    await knex.raw(`ROLLBACK`);
+    throw err;
+  }
 };

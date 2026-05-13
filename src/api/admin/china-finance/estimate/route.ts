@@ -57,16 +57,29 @@ export const GET = async (
   }
 
   const { rows: bills } = await knex.raw(
-    `SELECT id, amount_cents, due_date, invoice_number, po_number, document_type
-     FROM china_finance_bill
-     WHERE wire_transfer_id IS NULL
+    `WITH paid AS (
+       SELECT bill_id, SUM(applied_cents)::integer AS paid_cents
+       FROM china_wire_transfer_application
+       GROUP BY bill_id
+     )
+     SELECT
+       cfb.id,
+       cfb.amount_cents,
+       GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) AS bill_balance_cents,
+       cfb.due_date,
+       cfb.invoice_number,
+       cfb.po_number,
+       cfb.document_type
+     FROM china_finance_bill cfb
+     LEFT JOIN paid ON paid.bill_id = cfb.id
+     WHERE GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) > 0
        AND due_date IS NOT NULL
        AND due_date <= ?
-     ORDER BY sort_order ASC`,
+     ORDER BY cfb.sort_order ASC`,
     [dueCutoff]
-  ) as { rows: Array<{ id: string; amount_cents: number; due_date: string; invoice_number: string | null; po_number: string | null; document_type: string }> };
+  ) as { rows: Array<{ id: string; amount_cents: number; bill_balance_cents: number; due_date: string; invoice_number: string | null; po_number: string | null; document_type: string }> };
 
-  const estimated_cents = bills.reduce((sum, b) => sum + b.amount_cents, 0);
+  const estimated_cents = bills.reduce((sum, b) => sum + b.bill_balance_cents, 0);
 
   return res.json({
     estimated_cents,
