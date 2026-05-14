@@ -1,4 +1,5 @@
 # EcoPowerTech Backend — CLAUDE.md
+*Last updated: 2026-05-13*
 
 ## 🌍 Arquitectura Global: El Rol del Backend
 El directorio `backend/` es el **núcleo compartido (backbone)** de todo el ecosistema EcoPowerTech. Es el sistema central de verdad para el inventario, órdenes, clientes, facturación de caja, pagos y sincronía contable.
