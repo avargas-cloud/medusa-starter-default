@@ -379,13 +379,14 @@ export async function PATCH(
   }
 
   if (body.lines !== undefined) {
+    // Diff-reconciliation by id (mirrors PO PATCH route, 2026-05-12). The
+    // old full delete + re-insert wiped qty_received to 0 and changed every
+    // line id on every PATCH — silently corrupting partially-received FOs.
     const oldLines = (await service.listFactoryOrderLines(
       { factory_order_id: id },
       { take: 1000, skip: 0 }
-    )) as Array<{ id: string }>;
-    if (oldLines.length > 0) {
-      await service.deleteFactoryOrderLines(oldLines.map((l) => l.id));
-    }
+    )) as Array<Record<string, unknown> & { id: string }>;
+    const oldIds = new Set(oldLines.map((l) => l.id));
 
     const normalized = body.lines.map(normalizeLine);
     const totals = computeTotals(normalized, {
@@ -399,25 +400,83 @@ export async function PATCH(
         (existing as { other_fees_cents?: number }).other_fees_cents,
     });
 
-    if (normalized.length > 0) {
-      await service.createFactoryOrderLines(
-        normalized.map((l, i) => ({
+    const toUpdate: Array<{ id: string; data: Record<string, unknown> }> = [];
+    const toInsert: Array<Record<string, unknown>> = [];
+    const keepIds = new Set<string>();
+
+    normalized.forEach((l, i) => {
+      const lineFields = {
+        product_variant_id: l.product_variant_id,
+        inventory_item_id: l.inventory_item_id,
+        sku_snapshot: l.sku_snapshot,
+        description_snapshot: l.description_snapshot,
+        qty_ordered: l.qty_ordered,
+        unit_cost_cents: l.unit_cost_cents,
+        tax_cents: l.tax_cents ?? 0,
+        total_cents: l.total_cents,
+        line_order: l.line_order ?? i,
+        notes: l.notes ?? null,
+      };
+      if (l.id && oldIds.has(l.id)) {
+        keepIds.add(l.id);
+        toUpdate.push({ id: l.id, data: lineFields });
+      } else {
+        toInsert.push({
           factory_order_id: id,
-          product_variant_id: l.product_variant_id,
-          inventory_item_id: l.inventory_item_id,
-          sku_snapshot: l.sku_snapshot,
-          description_snapshot: l.description_snapshot,
-          qty_ordered: l.qty_ordered,
+          ...lineFields,
           qty_received: 0,
           qty_cancelled: 0,
-          unit_cost_cents: l.unit_cost_cents,
-          tax_cents: l.tax_cents ?? 0,
-          total_cents: l.total_cents,
           status: "open",
-          line_order: l.line_order ?? i,
-          notes: l.notes ?? null,
-        }))
+        });
+      }
+    });
+
+    const toDeleteLines = oldLines.filter((l) => !keepIds.has(l.id));
+    const toDelete = toDeleteLines.map((l) => l.id);
+
+    // Per-item guard: a line with received units cannot be deleted, and
+    // qty_ordered cannot drop below qty_received. Mirrors PO route.ts.
+    {
+      type OldLine = Record<string, unknown> & { id: string };
+      const lineErrors: string[] = [];
+      for (const dl of toDeleteLines as OldLine[]) {
+        const qtyRecv = Number(dl.qty_received ?? 0);
+        if (qtyRecv > 0) {
+          lineErrors.push(
+            `"${dl.sku_snapshot ?? dl.id}" has ${qtyRecv} received unit(s) and cannot be deleted.`
+          );
+        }
+      }
+      for (const u of toUpdate) {
+        const old = (oldLines as OldLine[]).find((ol) => ol.id === u.id);
+        if (!old) continue;
+        const qtyRecv = Number(old.qty_received ?? 0);
+        const sku = old.sku_snapshot ?? old.id;
+        if (Number(u.data.qty_ordered) < qtyRecv) {
+          lineErrors.push(
+            `"${sku}": qty_ordered cannot go below qty_received (${qtyRecv}).`
+          );
+        }
+      }
+      if (lineErrors.length > 0) {
+        return res.status(409).json({
+          error: `Cannot apply line changes: ${lineErrors.join(" ")}`,
+          code: "line_locked",
+          details: lineErrors,
+        });
+      }
+    }
+
+    if (toDelete.length > 0) {
+      await service.deleteFactoryOrderLines(toDelete);
+    }
+    if (toUpdate.length > 0) {
+      await service.updateFactoryOrderLines(
+        toUpdate.map((u) => ({ id: u.id, ...u.data }))
       );
+    }
+    if (toInsert.length > 0) {
+      await service.createFactoryOrderLines(toInsert);
     }
 
     headerUpdate.subtotal_cents = totals.subtotal_cents;

@@ -6,11 +6,14 @@ const metadataSchema = z.record(z.string(), z.unknown());
 
 // No qb_item_list_id_snapshot — factory orders have no QB integration
 export const draftLineInputSchema = z.object({
+  // Optional: present for existing lines (sent back through PATCH); absent for new ones.
+  // Drives the diff-reconciliation in the PATCH route so qty_received is preserved.
+  id: z.string().min(1).optional(),
   product_variant_id: z.string().min(1, "product_variant_id is required"),
   inventory_item_id: z.string().min(1, "inventory_item_id is required"),
   sku_snapshot: z.string().min(1, "sku_snapshot is required"),
   description_snapshot: z.string().min(1, "description_snapshot is required"),
-  qty_ordered: z.number().int().positive().max(1_000_000),
+  qty_ordered: z.number().int().nonnegative().max(1_000_000),
   unit_cost_cents: z.number().int().min(0).max(1_000_000_000),
   tax_cents: z.number().int().min(0).max(1_000_000_000).optional().default(0),
   notes: z.string().max(1000).nullish(),

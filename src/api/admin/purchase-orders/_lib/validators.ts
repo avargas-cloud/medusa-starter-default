@@ -18,7 +18,7 @@ export const draftLineInputSchema = z.object({
   sku_snapshot: z.string().min(1, "sku_snapshot is required"),
   description_snapshot: z.string().min(1, "description_snapshot is required"),
   qb_item_list_id_snapshot: z.string().min(1).nullish(),
-  qty_ordered: z.number().int().positive().max(1_000_000),
+  qty_ordered: z.number().int().nonnegative().max(1_000_000),
   unit_cost_cents: z.number().finite().min(0).max(1_000_000_000),
   tax_cents: z.number().int().min(0).max(1_000_000_000).optional().default(0),
   notes: z.string().max(1000).nullish(),
