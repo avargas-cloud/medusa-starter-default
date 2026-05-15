@@ -40,8 +40,38 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     return res.status(500).json({ message: "DATABASE_URL not configured" });
   }
   const pool = getDbPool();
+  const lockClient = await pool.connect();
 
   try {
+    await lockClient.query("BEGIN");
+    await lockClient.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+      `complete-pickup:${invoice_id}`,
+    ]);
+
+    const markDeliveredWithFallback = async (
+      fulfillmentId: string,
+      deliveredAt: string
+    ) => {
+      const { markOrderFulfillmentAsDeliveredWorkflow } =
+        await import("@medusajs/core-flows");
+      try {
+        await markOrderFulfillmentAsDeliveredWorkflow(req.scope).run({
+          input: { orderId, fulfillmentId },
+        });
+      } catch (workflowErr: any) {
+        console.warn(
+          `[complete-pickup] mark delivered workflow refused (${workflowErr?.message?.slice(0, 100)}), using direct SQL fallback`
+        );
+        await pool.query(
+          `UPDATE fulfillment
+              SET delivered_at = COALESCE(delivered_at, $1::timestamptz),
+                  updated_at = NOW()
+            WHERE id = $2`,
+          [deliveredAt, fulfillmentId]
+        );
+      }
+    };
+
     // ── Step 0: Short-circuit if the invoice already has a live fulfillment ─
     // Cobro/checkout often creates the fulfillment up-front, so by the time
     // the cashier clicks "Mark as Picked Up" the order is already fulfilled
@@ -62,12 +92,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       );
       const ful = fulRow.rows[0];
       if (ful && !ful.canceled_at) {
-        const { markOrderFulfillmentAsDeliveredWorkflow } =
-          await import("@medusajs/core-flows");
         if (!ful.delivered_at) {
-          await markOrderFulfillmentAsDeliveredWorkflow(req.scope).run({
-            input: { orderId, fulfillmentId: existingFulId },
-          });
+          await markDeliveredWithFallback(
+            existingFulId,
+            new Date().toISOString()
+          );
         }
 
         const orderModule = req.scope.resolve(Modules.ORDER) as any;
@@ -94,6 +123,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           );
         }
 
+        await lockClient.query("COMMIT");
         return res.status(200).json({
           fulfillment_id: existingFulId,
           picked_up_at: pickedUpAt,
@@ -115,6 +145,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       [invoice_id]
     );
     if (!invItemsRes.rows.length) {
+      await lockClient.query("COMMIT");
       return res
         .status(400)
         .json({ message: "Invoice has no fulfillable items" });
@@ -126,6 +157,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       relations: ["items"],
     });
     if (!orderData?.items?.length) {
+      await lockClient.query("COMMIT");
       return res.status(404).json({ message: "Order has no items" });
     }
 
@@ -154,50 +186,70 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       }
     }
 
-    if (!fulfillmentItems.length) {
-      const existingFulfillmentRes = await pool.query<{
-        fulfillment_id: string;
-        delivered_at: Date | null;
-      }>(
-        `SELECT f.id AS fulfillment_id, f.delivered_at
-           FROM order_fulfillment ofu
-           JOIN fulfillment f ON f.id = ofu.fulfillment_id
-          WHERE ofu.order_id = $1
-            AND ofu.deleted_at IS NULL
-            AND f.deleted_at IS NULL
-            AND f.canceled_at IS NULL
-            AND EXISTS (
-              SELECT 1
-                FROM fulfillment_item fi
-                JOIN pos_invoice_item pii ON pii.invoice_id = $2
-                 AND pii.variant_id IS NOT NULL
-                 AND pii.deleted_at IS NULL
-                JOIN order_line_item oli ON oli.id = fi.line_item_id
-                 AND oli.variant_id = pii.variant_id
-               WHERE fi.fulfillment_id = f.id
-                 AND fi.deleted_at IS NULL
-            )
-          ORDER BY f.delivered_at DESC NULLS LAST, f.created_at DESC
-          LIMIT 1`,
-        [orderId, invoice_id]
-      );
-      const existingFulfillment = existingFulfillmentRes.rows[0];
-      if (!existingFulfillment) {
-        return res.status(400).json({
-          message:
-            "No unfulfilled order items matched the invoice — the order may already be fulfilled",
-        });
-      }
-
-      const { markOrderFulfillmentAsDeliveredWorkflow } =
-        await import("@medusajs/core-flows");
-      if (!existingFulfillment.delivered_at) {
-        await markOrderFulfillmentAsDeliveredWorkflow(req.scope).run({
-          input: { orderId, fulfillmentId: existingFulfillment.fulfillment_id },
-        });
-      }
-
+    // The order may already have a fulfillment for these invoice lines even
+    // when Medusa's fulfilled quantities are stale. Reuse it instead of
+    // creating a duplicate fulfillment that consumes stock a second time.
+    const matchingFulfillmentRes = await pool.query<{
+      fulfillment_id: string;
+      delivered_at: Date | null;
+    }>(
+      `WITH inv_lines AS (
+          SELECT variant_id, SUM(quantity)::numeric AS qty
+            FROM pos_invoice_item
+           WHERE invoice_id = $2
+             AND deleted_at IS NULL
+             AND variant_id IS NOT NULL
+           GROUP BY variant_id
+        ),
+        ful_lines AS (
+          SELECT f.id AS fulfillment_id,
+                 f.created_at,
+                 f.delivered_at,
+                 oli.variant_id,
+                 SUM(fi.quantity)::numeric AS qty
+            FROM order_fulfillment ofu
+            JOIN fulfillment f ON f.id = ofu.fulfillment_id
+             AND f.deleted_at IS NULL
+             AND f.canceled_at IS NULL
+            JOIN fulfillment_item fi ON fi.fulfillment_id = f.id
+             AND fi.deleted_at IS NULL
+            JOIN order_line_item oli ON oli.id = fi.line_item_id
+           WHERE ofu.order_id = $1
+             AND ofu.deleted_at IS NULL
+           GROUP BY f.id, f.created_at, f.delivered_at, oli.variant_id
+        ),
+        candidates AS (
+          SELECT fl.fulfillment_id,
+                 MAX(fl.created_at) AS created_at,
+                 MAX(fl.delivered_at) AS delivered_at,
+                 COUNT(*) FILTER (WHERE il.variant_id IS NULL) AS extra_lines
+            FROM ful_lines fl
+            LEFT JOIN inv_lines il ON il.variant_id = fl.variant_id
+           GROUP BY fl.fulfillment_id
+          HAVING NOT EXISTS (
+            SELECT 1
+              FROM inv_lines il
+              LEFT JOIN ful_lines fl2 ON fl2.fulfillment_id = fl.fulfillment_id
+               AND fl2.variant_id = il.variant_id
+             WHERE COALESCE(fl2.qty, 0) < il.qty
+          )
+        )
+        SELECT fulfillment_id, delivered_at
+          FROM candidates
+         ORDER BY extra_lines ASC, created_at ASC
+         LIMIT 1`,
+      [orderId, invoice_id]
+    );
+    const matchingFulfillment = matchingFulfillmentRes.rows[0];
+    if (matchingFulfillment) {
       const pickedUpAt = new Date().toISOString();
+      if (!matchingFulfillment.delivered_at) {
+        await markDeliveredWithFallback(
+          matchingFulfillment.fulfillment_id,
+          pickedUpAt
+        );
+      }
+
       const existingMetadata = (orderData.metadata ?? {}) as Record<
         string,
         unknown
@@ -220,13 +272,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       }
       await pool.query(
         `UPDATE pos_invoice SET fulfillment_id = $1 WHERE id = $2`,
-        [existingFulfillment.fulfillment_id, invoice_id]
+        [matchingFulfillment.fulfillment_id, invoice_id]
       );
 
+      await lockClient.query("COMMIT");
       return res.status(200).json({
-        fulfillment_id: existingFulfillment.fulfillment_id,
+        fulfillment_id: matchingFulfillment.fulfillment_id,
         picked_up_at: pickedUpAt,
         picked_up_by: nextMetadata.picked_up_by ?? null,
+      });
+    }
+
+    if (!fulfillmentItems.length) {
+      await lockClient.query("COMMIT");
+      return res.status(400).json({
+        message:
+          "No unfulfilled order items matched the invoice — the order may already be fulfilled",
       });
     }
 
@@ -283,22 +344,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     // ── Step 5: Create fulfillment ─────────────────────────────────────────
-    const {
-      createOrderFulfillmentWorkflow,
-      markOrderFulfillmentAsDeliveredWorkflow,
-    } = await import("@medusajs/core-flows");
+    const { createOrderFulfillmentWorkflow } =
+      await import("@medusajs/core-flows");
 
     let fulfillmentId: string | undefined;
     try {
-      const fulfillResult = await createOrderFulfillmentWorkflow(req.scope).run({
-        input: {
-          order_id: orderId,
-          items: fulfillmentItems,
-          location_id,
-          no_notification: true,
-          created_by: ((req as any).auth_context?.actor_id ?? "") as string,
-        },
-      });
+      const fulfillResult = await createOrderFulfillmentWorkflow(req.scope).run(
+        {
+          input: {
+            order_id: orderId,
+            items: fulfillmentItems,
+            location_id,
+            no_notification: true,
+            created_by: ((req as any).auth_context?.actor_id ?? "") as string,
+          },
+        }
+      );
       fulfillmentId = (fulfillResult.result as any)?.id;
     } catch (workflowErr: any) {
       console.warn(
@@ -457,16 +518,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     // ── Step 6: Mark as delivered ──────────────────────────────────────────
-    await markOrderFulfillmentAsDeliveredWorkflow(req.scope).run({
-      input: { orderId, fulfillmentId },
-    });
+    const pickedUpAt = new Date().toISOString();
+    await markDeliveredWithFallback(fulfillmentId, pickedUpAt);
 
     // ── Step 7: Update order.metadata ──────────────────────────────────────
     const existingMetadata = (orderData.metadata ?? {}) as Record<
       string,
       unknown
     >;
-    const pickedUpAt = new Date().toISOString();
     const nextMetadata: Record<string, unknown> = {
       ...existingMetadata,
       picked_up_at: pickedUpAt,
@@ -494,15 +553,23 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       );
     }
 
+    await lockClient.query("COMMIT");
     return res.status(200).json({
       fulfillment_id: fulfillmentId,
       picked_up_at: pickedUpAt,
       picked_up_by: nextMetadata.picked_up_by ?? null,
     });
   } catch (err: any) {
+    try {
+      await lockClient.query("ROLLBACK");
+    } catch {
+      /* lock cleanup best-effort */
+    }
     console.error(`[complete-pickup] ❌ ${err?.message}`, err?.stack);
     return res
       .status(500)
       .json({ message: err?.message ?? "complete-pickup failed" });
+  } finally {
+    lockClient.release();
   }
 }
