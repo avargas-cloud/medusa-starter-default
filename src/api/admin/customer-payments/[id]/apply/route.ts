@@ -109,14 +109,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // 5. Update invoice balance from the authoritative invoice_payments sum
     const totalPaid = await getAppliedInvoiceTotal(req.scope, invoice_id);
     const balanceDue = Math.max(0, invoiceTotal - totalPaid);
-    await invoiceService.updatePosInvoices(
-      { id: invoice_id },
-      {
-        amount_paid: totalPaid,
-        balance_due: balanceDue,
-        status: balanceDue <= 0 ? "paid" : "partial",
-      }
-    );
+    await invoiceService.updatePosInvoices({
+      id: invoice_id,
+      amount_paid: totalPaid,
+      balance_due: balanceDue,
+      status: balanceDue <= 0 ? "paid" : "partial",
+    });
 
     // 6. Register capture in Medusa native payment module so order.payment_status updates
     if (invoice.order_id) {

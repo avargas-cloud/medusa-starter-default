@@ -100,14 +100,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                 ? "paid"
                 : "partial";
 
-          await invoiceService.updatePosInvoices(
-            { id: app.invoice_id },
-            {
-              amount_paid: totalInvoicePaid,
-              balance_due: balanceDue,
-              status: newStatus,
-            }
-          );
+          await invoiceService.updatePosInvoices({
+            id: app.invoice_id,
+            amount_paid: totalInvoicePaid,
+            balance_due: balanceDue,
+            status: newStatus,
+          });
         } catch (invoiceErr: any) {
           logger.warn(
             `[void-payment] Could not restore invoice ${app.invoice_id}: ${invoiceErr.message}`

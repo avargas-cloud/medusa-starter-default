@@ -113,17 +113,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const balanceDue = Math.max(0, getNum(invoice.total) - totalInvoicePaid);
         const newInvoiceStatus = balanceDue <= 0 ? "paid" : "partial"; // Or possibly 'issued' if 0
 
-        await invoiceService.updatePosInvoices(
-          { id: application.invoice_id },
-          {
-            amount_paid: totalInvoicePaid,
-            balance_due: balanceDue,
-            status:
-              newInvoiceStatus === "partial" && totalInvoicePaid === 0
-                ? "issued"
-                : newInvoiceStatus,
-          }
-        );
+        await invoiceService.updatePosInvoices({
+          id: application.invoice_id,
+          amount_paid: totalInvoicePaid,
+          balance_due: balanceDue,
+          status:
+            newInvoiceStatus === "partial" && totalInvoicePaid === 0
+              ? "issued"
+              : newInvoiceStatus,
+        });
       }
     }
 
