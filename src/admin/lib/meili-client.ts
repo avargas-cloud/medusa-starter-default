@@ -9,24 +9,57 @@ import { MeiliSearch } from "meilisearch";
  */
 
 // @ts-ignore
-const HOST: string = import.meta.env?.VITE_MEILISEARCH_HOST || "";
+const RAW_HOST: string = import.meta.env?.VITE_MEILISEARCH_HOST || "";
 // @ts-ignore
 const API_KEY: string = import.meta.env?.VITE_MEILISEARCH_SEARCH_KEY || "";
 
-if (!HOST || !API_KEY) {
+function normalizeHost(host: string) {
+  const normalized = host.trim().replace(/^['"]+|['"]+$/g, "");
+
+  if (!normalized) {
+    return "";
+  }
+
+  try {
+    return new URL(normalized).toString().replace(/\/$/, "");
+  } catch {
+    return "";
+  }
+}
+
+const HOST = normalizeHost(RAW_HOST);
+const IS_CONFIGURED = Boolean(HOST && API_KEY);
+
+if (!IS_CONFIGURED) {
   console.warn(
     "[MeiliSearch] Missing environment variables. " +
       "Ensure VITE_MEILISEARCH_HOST and VITE_MEILISEARCH_SEARCH_KEY are set."
   );
 }
 
+type MeiliClient = {
+  index: MeiliSearch["index"];
+};
+
+function createUnconfiguredClient(): MeiliClient {
+  return {
+    index() {
+      throw new Error(
+        "MeiliSearch admin client is not configured. Set VITE_MEILISEARCH_HOST and VITE_MEILISEARCH_SEARCH_KEY, then rebuild the admin bundle."
+      );
+    },
+  };
+}
+
 /**
  * Configured MeiliSearch client instance
  */
-export const meiliClient = new MeiliSearch({
-  host: HOST,
-  apiKey: API_KEY,
-});
+export const meiliClient: MeiliClient = IS_CONFIGURED
+  ? new MeiliSearch({
+      host: HOST,
+      apiKey: API_KEY,
+    })
+  : createUnconfiguredClient();
 
 console.log(
   "[MeiliClient] Initialized with Host:",

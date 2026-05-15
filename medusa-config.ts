@@ -84,9 +84,9 @@ module.exports = defineConfig({
   },
   admin: {
     backendUrl:
-      process.env.NODE_ENV === "production"
-        ? "https://medusa-starter-default-production-b69e.up.railway.app"
-        : "http://localhost:9000",
+      process.env.MEDUSA_BACKEND_URL ||
+      process.env.BACKEND_URL ||
+      "https://medusa-starter-default-production-b69e.up.railway.app",
   },
   plugins: [
     // MinIO / S3 File Storage
