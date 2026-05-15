@@ -45,7 +45,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            SUM(fol.qty_ordered)::int                                            AS qty_ordered,
            SUM(fol.qty_received)::int                                           AS qty_received,
            SUM(${PENDING})::int                                                 AS qty_pending,
-           ROUND(SUM(${PENDING} * fol.unit_cost_cents / 100.0)::numeric, 2)    AS value
+           ROUND(SUM(${PENDING} * fol.unit_cost_cents / 100.0)::numeric, 2)    AS value,
+           ROUND(SUM(${PENDING} * COALESCE((pv.metadata->>'qb_avg_cost')::numeric, 0))::numeric, 2) AS landed_value
          ${BASE_FROM}
          GROUP BY 1
          ORDER BY value DESC`
@@ -59,7 +60,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            SUM(fol.qty_ordered)::int                                            AS qty_ordered,
            SUM(fol.qty_received)::int                                           AS qty_received,
            SUM(${PENDING})::int                                                 AS qty_pending,
-           ROUND(SUM(${PENDING} * fol.unit_cost_cents / 100.0)::numeric, 2)    AS value
+           ROUND(SUM(${PENDING} * fol.unit_cost_cents / 100.0)::numeric, 2)    AS value,
+           ROUND(SUM(${PENDING} * COALESCE((pv.metadata->>'qb_avg_cost')::numeric, 0))::numeric, 2) AS landed_value
          ${BASE_FROM}
          GROUP BY 1
          ORDER BY value DESC`
@@ -67,19 +69,21 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     ])
 
     const mapRow = (r: any) => ({
-      label:       r.label as string,
-      order_count: Number(r.order_count),
-      variants:    Number(r.variants),
-      qty_ordered: Number(r.qty_ordered),
-      qty_received:Number(r.qty_received),
-      qty_pending: Number(r.qty_pending),
-      value:       Number(r.value),
+      label:        r.label as string,
+      order_count:  Number(r.order_count),
+      variants:     Number(r.variants),
+      qty_ordered:  Number(r.qty_ordered),
+      qty_received: Number(r.qty_received),
+      qty_pending:  Number(r.qty_pending),
+      value:        Number(r.value),
+      landed_value: Number(r.landed_value),
     })
 
     const factoryRows = (byFactoryRes.rows as any[]).map(mapRow)
-    const totalPending = factoryRows.reduce((s, r) => s + r.qty_pending, 0)
-    const totalValue   = factoryRows.reduce((s, r) => s + r.value, 0)
-    const totalOrders  = factoryRows.reduce((s, r) => s + r.order_count, 0)
+    const totalPending      = factoryRows.reduce((s, r) => s + r.qty_pending, 0)
+    const totalValue        = factoryRows.reduce((s, r) => s + r.value, 0)
+    const totalLandedValue  = factoryRows.reduce((s, r) => s + r.landed_value, 0)
+    const totalOrders       = factoryRows.reduce((s, r) => s + r.order_count, 0)
 
     return res.json({
       by_factory:  factoryRows,
@@ -88,6 +92,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         order_count:  totalOrders,
         qty_pending:  totalPending,
         value:        Math.round(totalValue * 100) / 100,
+        landed_value: Math.round(totalLandedValue * 100) / 100,
       },
     })
   } catch (err) {

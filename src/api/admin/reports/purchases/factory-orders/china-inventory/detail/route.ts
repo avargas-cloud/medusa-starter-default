@@ -61,15 +61,23 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          COALESCE(t1.category, 'Uncategorized')                                  AS category,
          ${CHINA_AVAILABLE_QTY}::int                                              AS qty,
          COALESCE(
-           (pv.metadata->>'average_unit_cost')::numeric,
+           (pv.metadata->>'qb_purchase_cost')::numeric,
            (pv.metadata->>'qb_avg_cost')::numeric,
            0
          )                                                                        AS unit_cost,
          ROUND(${CHINA_AVAILABLE_QTY} * COALESCE(
-           (pv.metadata->>'average_unit_cost')::numeric,
+           (pv.metadata->>'qb_purchase_cost')::numeric,
            (pv.metadata->>'qb_avg_cost')::numeric,
            0
-         )::numeric, 2)                                                          AS total_value
+         )::numeric, 2)                                                          AS total_value,
+         COALESCE(
+           (pv.metadata->>'qb_avg_cost')::numeric,
+           0
+         )                                                                        AS landed_unit_cost,
+         ROUND(${CHINA_AVAILABLE_QTY} * COALESCE(
+           (pv.metadata->>'qb_avg_cost')::numeric,
+           0
+         )::numeric, 2)                                                          AS landed_value
        FROM inventory_level il
        JOIN inventory_item ii ON ii.id = il.inventory_item_id
        JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = ii.id
@@ -82,14 +90,16 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     )
 
     const rows = (result.rows as any[]).map(r => ({
-      variant_id:  r.variant_id as string,
-      sku:         r.sku as string,
-      description: r.description as string,
-      factory:     r.factory as string,
-      category:    r.category as string,
-      qty:         Number(r.qty),
-      unit_cost:   Number(r.unit_cost),
-      total_value: Number(r.total_value),
+      variant_id:      r.variant_id as string,
+      sku:             r.sku as string,
+      description:     r.description as string,
+      factory:         r.factory as string,
+      category:        r.category as string,
+      qty:             Number(r.qty),
+      unit_cost:       Number(r.unit_cost),
+      total_value:     Number(r.total_value),
+      landed_unit_cost: Number(r.landed_unit_cost),
+      landed_value:    Number(r.landed_value),
     }))
 
     return res.json({ rows, total: rows.length })

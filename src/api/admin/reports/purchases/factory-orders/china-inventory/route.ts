@@ -47,8 +47,13 @@ const REPORT_CTES = `
   )
 `
 
-const UNIT_COST = `COALESCE(
-  (pv.metadata->>'average_unit_cost')::numeric,
+const FACTORY_COST = `COALESCE(
+  (pv.metadata->>'qb_purchase_cost')::numeric,
+  (pv.metadata->>'qb_avg_cost')::numeric,
+  0
+)`
+
+const LANDED_COST = `COALESCE(
   (pv.metadata->>'qb_avg_cost')::numeric,
   0
 )`
@@ -80,7 +85,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            COALESCE(NULLIF(TRIM(p.metadata->>'qb_vendor_full_name'),''), 'Unknown') AS label,
            COUNT(DISTINCT pv.id)::int                                                AS variants,
            SUM(${CHINA_AVAILABLE_QTY})::int                                          AS qty,
-           ROUND(SUM(${CHINA_AVAILABLE_QTY} * ${UNIT_COST})::numeric, 2)             AS value
+           ROUND(SUM(${CHINA_AVAILABLE_QTY} * ${FACTORY_COST})::numeric, 2)           AS value,
+           ROUND(SUM(${CHINA_AVAILABLE_QTY} * ${LANDED_COST})::numeric, 2)           AS landed_value
          ${BASE_JOINS}
          GROUP BY 1
          HAVING SUM(${CHINA_AVAILABLE_QTY}) > 0
@@ -92,7 +98,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            COALESCE(t1.category, 'Uncategorized')                                   AS label,
            COUNT(DISTINCT pv.id)::int                                                AS variants,
            SUM(${CHINA_AVAILABLE_QTY})::int                                          AS qty,
-           ROUND(SUM(${CHINA_AVAILABLE_QTY} * ${UNIT_COST})::numeric, 2)             AS value
+           ROUND(SUM(${CHINA_AVAILABLE_QTY} * ${FACTORY_COST})::numeric, 2)          AS value,
+           ROUND(SUM(${CHINA_AVAILABLE_QTY} * ${LANDED_COST})::numeric, 2)           AS landed_value
          ${BASE_JOINS}
          GROUP BY 1
          HAVING SUM(${CHINA_AVAILABLE_QTY}) > 0
@@ -101,20 +108,27 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     ])
 
     const mapRow = (r: any) => ({
-      label:    r.label as string,
-      variants: Number(r.variants),
-      qty:      Number(r.qty),
-      value:    Number(r.value),
+      label:        r.label as string,
+      variants:     Number(r.variants),
+      qty:          Number(r.qty),
+      value:        Number(r.value),
+      landed_value: Number(r.landed_value),
     })
 
     const allRows = (byFactoryRes.rows as any[]).map(mapRow)
-    const totalQty   = allRows.reduce((s, r) => s + r.qty, 0)
-    const totalValue = allRows.reduce((s, r) => s + r.value, 0)
+    const totalQty          = allRows.reduce((s, r) => s + r.qty, 0)
+    const totalValue        = allRows.reduce((s, r) => s + r.value, 0)
+    const totalLandedValue  = allRows.reduce((s, r) => s + r.landed_value, 0)
 
     return res.json({
       by_factory:  allRows,
       by_category: (byCategoryRes.rows as any[]).map(mapRow),
-      totals: { variants: allRows.length, qty: totalQty, value: Math.round(totalValue * 100) / 100 },
+      totals: {
+        variants:     allRows.length,
+        qty:          totalQty,
+        value:        Math.round(totalValue * 100) / 100,
+        landed_value: Math.round(totalLandedValue * 100) / 100,
+      },
     })
   } catch (err) {
     console.error("[factory-orders/china-inventory]", err)
