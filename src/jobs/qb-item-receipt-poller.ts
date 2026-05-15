@@ -112,6 +112,42 @@ const submitDeleteToBridge = async (txnId: string): Promise<string> => {
   return json.operationId;
 };
 
+const submitModToBridge = async (
+  payload: Record<string, unknown>
+): Promise<string> => {
+  // ItemReceiptMod — payload carries txn_id + edit_sequence + full final
+  // line set (with qb_po_txn_line_id per line so the bridge re-emits
+  // LinkToTxn and preserves PO ↔ Receipt linkage). Bridge endpoint added
+  // in chunk 2.
+  const res = await fetch(`${bridgeUrl()}/api/item-receipts/mod`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey(),
+      "bypass-tunnel-reminder": "true",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok)
+    throw new Error(`Bridge HTTP ${res.status} — ${await res.text()}`);
+  const json = (await res.json()) as { operationId?: string; error?: string };
+  if (!json.operationId)
+    throw new Error(json.error ?? "Bridge returned no operationId");
+  return json.operationId;
+};
+
+// QB Desktop error code 3175 = stale EditSequence. Detected so chunk 4 can
+// trigger an automatic refresh; for now we just tag the row's last_error so
+// the admin UI can show a specific badge instead of a generic "QB error".
+const isEditSeqMismatch = (errMsg: string | null | undefined): boolean => {
+  if (!errMsg) return false;
+  return (
+    errMsg.includes("3175") ||
+    /edit\s*seq/i.test(errMsg) ||
+    /editsequence/i.test(errMsg)
+  );
+};
+
 const extractTxnId = (data: BridgeStatus): string | null => {
   const op = data.operation;
   if (!op) return null;
@@ -132,6 +168,24 @@ const extractRefNumber = (data: BridgeStatus): string | null => {
     (op?.result as any)?.QBXMLMsgsRs ??
     {};
   return msgs?.ItemReceiptAddRs?.ItemReceiptRet?.RefNumber ?? null;
+};
+
+// EditSequence is required to build ItemReceiptModRq later. Bridge is expected
+// to surface it on the op (top-level) or inside the QBXML response. Until the
+// bridge is updated in chunk 2, this returns null and that's fine — chunk 4
+// adds an EditSequence query fallback for receipts without one cached.
+const extractEditSequence = (data: BridgeStatus): string | null => {
+  const op = data.operation;
+  if ((op as any)?.editSequence) return (op as any).editSequence as string;
+  const msgs =
+    (op?.result as any)?.QBXML?.QBXMLMsgsRs ??
+    (op?.result as any)?.QBXMLMsgsRs ??
+    {};
+  return (
+    msgs?.ItemReceiptAddRs?.ItemReceiptRet?.EditSequence ??
+    msgs?.ItemReceiptModRs?.ItemReceiptRet?.EditSequence ??
+    null
+  );
 };
 
 export default async function qbItemReceiptPoller(container: MedusaContainer) {
@@ -155,6 +209,11 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
   let permaFailed = 0;
   let voidSubmitted = 0;
   let voidResolved = 0;
+  let modSubmitted = 0;
+  let modResolved = 0;
+  let modToError = 0;
+  let modRetried = 0;
+  let modPermaFailed = 0;
 
   // ── Phase A: Submit unsubmitted add rows ─────────────────────────────────
   const unsubmitted: any[] = await knex
@@ -285,6 +344,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       }
 
       const refNumber = extractRefNumber(data);
+      const editSequence = extractEditSequence(data);
 
       // Mark pipeline row synced
       await knex.raw(
@@ -298,21 +358,25 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
         [txnId, refNumber, row.id]
       );
 
-      // Back-fill QB data on the receipt header
+      // Back-fill QB data on the receipt header. qb_edit_sequence uses
+      // COALESCE so chunk-1 deployments don't clobber a previously cached
+      // value on retry if the bridge hasn't started returning EditSequence
+      // yet (chunk 2 work).
       await knex.raw(
         `UPDATE purchase_order_receipt
             SET qb_item_receipt_list_id = ?,
                 qb_item_receipt_txn_number = COALESCE(?, qb_item_receipt_txn_number),
+                qb_edit_sequence = COALESCE(?, qb_edit_sequence),
                 qb_synced_at = NOW(),
                 status = CASE WHEN status = 'pending' THEN 'applied' ELSE status END,
                 updated_at = NOW()
           WHERE id = ?`,
-        [txnId, refNumber, row.purchase_order_receipt_id]
+        [txnId, refNumber, editSequence, row.purchase_order_receipt_id]
       );
 
       resolved++;
       logger.info(
-        `${TAG} receipt ${row.purchase_order_receipt_id} synced → QB TxnID=${txnId}${refNumber ? ` Ref=${refNumber}` : ""}`
+        `${TAG} receipt ${row.purchase_order_receipt_id} synced → QB TxnID=${txnId}${refNumber ? ` Ref=${refNumber}` : ""}${editSequence ? ` EditSeq=${editSequence}` : ""}`
       );
     } catch (err: any) {
       logger.warn(`${TAG} poll failed for row ${row.id}: ${err.message}`);
@@ -513,6 +577,224 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     }
   }
 
+  // ── Phase F: Submit waiting MOD rows ─────────────────────────────────────
+  // mod_status='waiting' AND mod_operation_id IS NULL means the row was just
+  // enqueued by the update workflow and hasn't been handed to the bridge yet.
+  const modPending: any[] = await knex
+    .raw(
+      `SELECT id, purchase_order_receipt_id, mod_payload, mod_retries
+         FROM qb_item_receipt_pipeline
+        WHERE mod_status = 'waiting'
+          AND mod_operation_id IS NULL
+          AND mod_payload IS NOT NULL
+          AND (mod_next_retry_at IS NULL OR mod_next_retry_at <= NOW())
+          AND deleted_at IS NULL
+        LIMIT ?`,
+      [MAX_ROWS_PER_TICK]
+    )
+    .then((r: any) => r.rows);
+
+  if (modPending.length > 0) {
+    logger.info(`${TAG} phase F: submitting ${modPending.length} mod rows`);
+  }
+
+  for (const row of modPending) {
+    try {
+      const operationId = await submitModToBridge(
+        row.mod_payload as Record<string, unknown>
+      );
+      await knex.raw(
+        `UPDATE qb_item_receipt_pipeline
+            SET mod_status        = 'submitted',
+                mod_operation_id  = ?,
+                mod_last_error    = NULL,
+                mod_next_retry_at = NULL,
+                updated_at        = NOW()
+          WHERE id = ?`,
+        [operationId, row.id]
+      );
+      modSubmitted++;
+    } catch (err: any) {
+      await knex.raw(
+        `UPDATE qb_item_receipt_pipeline
+            SET mod_status        = 'error',
+                mod_last_error    = ?,
+                mod_next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
+                updated_at        = NOW()
+          WHERE id = ?`,
+        [err.message, row.id]
+      );
+      modToError++;
+      logger.error(
+        `${TAG} mod submit failed for row ${row.id}: ${err.message}`
+      );
+    }
+  }
+
+  // ── Phase G: Poll submitted MOD rows ─────────────────────────────────────
+  const modPolling: any[] = await knex
+    .raw(
+      `SELECT id, purchase_order_receipt_id, mod_operation_id
+         FROM qb_item_receipt_pipeline
+        WHERE mod_status = 'submitted'
+          AND mod_operation_id IS NOT NULL
+          AND deleted_at IS NULL
+        LIMIT ?`,
+      [MAX_ROWS_PER_TICK]
+    )
+    .then((r: any) => r.rows);
+
+  for (const row of modPolling) {
+    try {
+      const data = await pollBridge(row.mod_operation_id);
+      const opStatus = data.operation?.status;
+
+      if (!opStatus || opStatus === "queued" || opStatus === "processing")
+        continue;
+
+      if (opStatus === "expired") {
+        await knex.raw(
+          `UPDATE qb_item_receipt_pipeline
+              SET mod_status        = 'error',
+                  mod_last_error    = ?,
+                  mod_operation_id  = NULL,
+                  mod_next_retry_at = NOW() + INTERVAL '2 minutes',
+                  updated_at        = NOW()
+            WHERE id = ?`,
+          [data.operation?.error ?? "Bridge mod operation expired", row.id]
+        );
+        modToError++;
+        continue;
+      }
+
+      if (opStatus === "failed") {
+        const errMsg = data.operation?.error ?? "Bridge mod failed";
+        const tagged = isEditSeqMismatch(errMsg)
+          ? `[EditSeqMismatch] ${errMsg}`
+          : errMsg;
+        await knex.raw(
+          `UPDATE qb_item_receipt_pipeline
+              SET mod_status        = 'error',
+                  mod_last_error    = ?,
+                  mod_next_retry_at = NOW() + INTERVAL '${FIRST_ERROR_BACKOFF_MIN} minutes',
+                  updated_at        = NOW()
+            WHERE id = ?`,
+          [tagged, row.id]
+        );
+        modToError++;
+        if (isEditSeqMismatch(errMsg)) {
+          logger.warn(
+            `${TAG} mod row ${row.id} hit EditSeqMismatch — will retry; full recovery (re-query EditSequence) lands in chunk 4`
+          );
+        }
+        continue;
+      }
+
+      // Completed. Capture the new EditSequence for the next Mod and stamp
+      // the receipt synced. mod_payload is freed to keep the JSONB column
+      // lean (we don't need the frozen snapshot once the op succeeded).
+      const newEditSequence = extractEditSequence(data);
+
+      await knex.raw(
+        `UPDATE qb_item_receipt_pipeline
+            SET mod_status        = 'completed',
+                mod_synced_at     = NOW(),
+                mod_payload       = NULL,
+                mod_last_error    = NULL,
+                mod_next_retry_at = NULL,
+                updated_at        = NOW()
+          WHERE id = ?`,
+        [row.id]
+      );
+
+      if (newEditSequence) {
+        await knex.raw(
+          `UPDATE purchase_order_receipt
+              SET qb_edit_sequence = ?,
+                  updated_at       = NOW()
+            WHERE id = ?`,
+          [newEditSequence, row.purchase_order_receipt_id]
+        );
+      }
+
+      modResolved++;
+      logger.info(
+        `${TAG} receipt ${row.purchase_order_receipt_id} mod confirmed in QB${newEditSequence ? ` (new EditSeq=${newEditSequence})` : ""}`
+      );
+    } catch (err: any) {
+      logger.warn(`${TAG} mod poll failed for row ${row.id}: ${err.message}`);
+    }
+  }
+
+  // ── Phase H: Retry MOD error rows ────────────────────────────────────────
+  const modErrorRows: any[] = await knex
+    .raw(
+      `SELECT id, purchase_order_receipt_id, mod_payload, mod_retries,
+              mod_last_error
+         FROM qb_item_receipt_pipeline
+        WHERE mod_status = 'error'
+          AND mod_payload IS NOT NULL
+          AND mod_next_retry_at <= NOW()
+          AND deleted_at IS NULL
+        LIMIT ?`,
+      [MAX_ROWS_PER_TICK]
+    )
+    .then((r: any) => r.rows);
+
+  for (const row of modErrorRows) {
+    const newRetries = (row.mod_retries ?? 0) + 1;
+    const exhausted = newRetries >= MAX_RETRIES;
+
+    if (exhausted) {
+      await knex.raw(
+        `UPDATE qb_item_receipt_pipeline
+            SET mod_status        = 'failed_permanent',
+                mod_retries       = ?,
+                mod_next_retry_at = NULL,
+                updated_at        = NOW()
+          WHERE id = ?`,
+        [newRetries, row.id]
+      );
+      modPermaFailed++;
+      logger.error(
+        `${TAG} mod row ${row.id} failed_permanent after ${MAX_RETRIES} retries: ${row.mod_last_error}`
+      );
+      continue;
+    }
+
+    try {
+      const operationId = await submitModToBridge(
+        row.mod_payload as Record<string, unknown>
+      );
+      await knex.raw(
+        `UPDATE qb_item_receipt_pipeline
+            SET mod_status        = 'submitted',
+                mod_operation_id  = ?,
+                mod_retries       = ?,
+                mod_last_error    = NULL,
+                mod_next_retry_at = NULL,
+                updated_at        = NOW()
+          WHERE id = ?`,
+        [operationId, newRetries, row.id]
+      );
+      modRetried++;
+    } catch (err: any) {
+      const delay = backoffMs(newRetries);
+      await knex.raw(
+        `UPDATE qb_item_receipt_pipeline
+            SET mod_retries       = ?,
+                mod_last_error    = ?,
+                mod_next_retry_at = NOW() + (? * INTERVAL '1 millisecond'),
+                updated_at        = NOW()
+          WHERE id = ?`,
+        [newRetries, err.message, delay, row.id]
+      );
+      logger.warn(
+        `${TAG} mod retry ${newRetries}/${MAX_RETRIES} failed for row ${row.id}: ${err.message}`
+      );
+    }
+  }
+
   if (
     submitted ||
     resolved ||
@@ -520,12 +802,20 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     retried ||
     permaFailed ||
     voidSubmitted ||
-    voidResolved
+    voidResolved ||
+    modSubmitted ||
+    modResolved ||
+    modToError ||
+    modRetried ||
+    modPermaFailed
   ) {
     logger.info(
       `${TAG} tick: submitted=${submitted} resolved=${resolved} →error=${toError} ` +
         `retried=${retried} failed_permanent=${permaFailed} ` +
-        `void_submitted=${voidSubmitted} void_resolved=${voidResolved}`
+        `void_submitted=${voidSubmitted} void_resolved=${voidResolved} ` +
+        `mod_submitted=${modSubmitted} mod_resolved=${modResolved} ` +
+        `mod_→error=${modToError} mod_retried=${modRetried} ` +
+        `mod_failed_permanent=${modPermaFailed}`
     );
   }
 }

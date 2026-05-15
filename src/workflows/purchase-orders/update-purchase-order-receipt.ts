@@ -28,6 +28,7 @@ import {
 } from "@medusajs/framework/workflows-sdk";
 
 import { adjustReceiptStockStep } from "./steps/adjust-receipt-stock-step";
+import { enqueueQbItemReceiptModStep } from "./steps/enqueue-qb-item-receipt-mod-step";
 import { persistUpdateReceiptStep } from "./steps/persist-update-receipt-step";
 import { syncReceiptInventoryMeiliStep } from "../shared/steps/sync-receipt-inventory-meili-step";
 
@@ -46,6 +47,10 @@ export interface UpdatePoReceiptWorkflowInput {
   vendor_bill_number?: string | null;
   vendor_bill_number_changed: boolean;
   line_changes: UpdatePoReceiptWorkflowInputLine[];
+  // PATCH route sets to true when receipt.status === 'synced' AND something
+  // QB-visible changed. Triggers an ItemReceiptMod enqueue at the end of the
+  // workflow so QB Desktop stays in lockstep with Medusa.
+  enqueue_qb_mod: boolean;
 }
 
 export interface UpdatePoReceiptWorkflowOutput {
@@ -54,6 +59,8 @@ export interface UpdatePoReceiptWorkflowOutput {
   lines_updated: number;
   po_status_after: "submitted" | "partially_received" | "received";
   total_units_received: number;
+  qb_mod_enqueued: boolean;
+  qb_mod_pipeline_id: string | null;
 }
 
 export const updatePurchaseOrderReceiptWorkflow = createWorkflow(
@@ -97,13 +104,24 @@ export const updatePurchaseOrderReceiptWorkflow = createWorkflow(
     }));
     syncReceiptInventoryMeiliStep(meiliInput);
 
-    const response = transform({ adjusted, persisted }, (data) => ({
-      receipt_id: data.persisted.receipt_id,
-      adjusted_count: data.adjusted.adjusted.length,
-      lines_updated: data.persisted.lines_updated,
-      po_status_after: data.persisted.po_status_after,
-      total_units_received: data.persisted.total_units_received,
+    const modInput = transform({ input }, (data) => ({
+      receipt_id: data.input.receipt_id,
+      should_enqueue: data.input.enqueue_qb_mod,
     }));
+    const modResult = enqueueQbItemReceiptModStep(modInput);
+
+    const response = transform(
+      { adjusted, persisted, modResult },
+      (data) => ({
+        receipt_id: data.persisted.receipt_id,
+        adjusted_count: data.adjusted.adjusted.length,
+        lines_updated: data.persisted.lines_updated,
+        po_status_after: data.persisted.po_status_after,
+        total_units_received: data.persisted.total_units_received,
+        qb_mod_enqueued: data.modResult.enqueued,
+        qb_mod_pipeline_id: data.modResult.pipeline_id,
+      })
+    );
 
     return new WorkflowResponse(response);
   }

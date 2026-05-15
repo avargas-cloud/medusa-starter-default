@@ -270,18 +270,86 @@ export async function PATCH(
     });
   }
 
-  if (receipt.status !== "applied") {
-    if (receipt.status === "synced") {
-      return res.status(409).json({
-        error:
-          "Receipt is already synced to QuickBooks. Delete and recreate the receipt to make corrections.",
-        code: "not_editable_synced",
-      });
-    }
+  // ItemReceiptMod pipeline (chunk 3+). Gate behind env flag until the
+  // qb-bridge ships the ItemReceiptModRq builder (chunk 2). When disabled
+  // we keep the pre-Mod behavior: synced receipts can only be edited via
+  // delete-and-recreate.
+  const qbModEnabled = process.env.QB_ITEM_RECEIPT_MOD_ENABLED === "true";
+
+  if (receipt.status !== "applied" && receipt.status !== "synced") {
     return res.status(409).json({
-      error: `Cannot edit a receipt in status '${receipt.status}'. Only 'applied' receipts can be edited.`,
+      error: `Cannot edit a receipt in status '${receipt.status}'. Only 'applied' or 'synced' receipts can be edited.`,
       code: "not_editable",
     });
+  }
+  if (receipt.status === "synced" && !qbModEnabled) {
+    return res.status(409).json({
+      error:
+        "Receipt is already synced to QuickBooks. Delete and recreate the receipt to make corrections.",
+      code: "not_editable_synced",
+    });
+  }
+
+  // Cross-channel guards: refuse a Mod if the pipeline is in any state
+  // that would conflict with a fresh ItemReceiptModRq submission.
+  let qbModEnqueueWanted = false;
+  if (receipt.status === "synced") {
+    interface PipeRow {
+      id: string;
+      status: string | null;
+      void_status: string | null;
+      mod_status: string | null;
+    }
+    const pipeKnex = (req.scope as unknown as {
+      resolve: (k: string) => {
+        raw: (
+          sql: string,
+          b?: unknown[]
+        ) => Promise<{ rows: PipeRow[] }>;
+      };
+    }).resolve("__pg_connection__");
+    const pipeRes = await pipeKnex.raw(
+      `SELECT id, status, void_status, mod_status
+         FROM qb_item_receipt_pipeline
+        WHERE purchase_order_receipt_id = ?
+        LIMIT 1`,
+      [receiptId]
+    );
+    const pipe = pipeRes.rows?.[0] ?? null;
+    if (!pipe) {
+      return res.status(409).json({
+        error:
+          "Receipt is marked synced but has no QB pipeline row — refusing to Mod.",
+        code: "missing_pipeline_row",
+      });
+    }
+    if (pipe.status !== "synced") {
+      return res.status(409).json({
+        error: `QB Add pipeline for this receipt is in state '${pipe.status}', not 'synced' — wait for it to settle before editing.`,
+        code: "add_not_synced",
+      });
+    }
+    if (
+      pipe.void_status &&
+      pipe.void_status !== "completed" &&
+      pipe.void_status !== "failed_permanent"
+    ) {
+      return res.status(409).json({
+        error: `Receipt has a QB void in progress (void_status='${pipe.void_status}'). Cannot edit until void resolves.`,
+        code: "void_in_progress",
+      });
+    }
+    if (
+      pipe.mod_status === "waiting" ||
+      pipe.mod_status === "submitted" ||
+      pipe.mod_status === "error"
+    ) {
+      return res.status(409).json({
+        error: `A QB Mod is already pending for this receipt (mod_status='${pipe.mod_status}'). Wait for it to finish or retry from the pipeline view.`,
+        code: "mod_in_progress",
+      });
+    }
+    qbModEnqueueWanted = true;
   }
 
   // Resolve receipt lines + PO lines so we can compute deltas + validate.
@@ -357,6 +425,13 @@ export async function PATCH(
 
   const vendor_bill_number_changed = body.vendor_bill_number !== undefined;
 
+  // Only ship a Mod to QB if (a) we're editing a synced receipt AND
+  // (b) something QB cares about actually changed. Pure no-op PATCHes
+  // (e.g. the UI re-posting the same values) should not pollute the pipeline.
+  const hasQtyDelta = lineChanges.some((l) => l.delta !== 0);
+  const enqueue_qb_mod =
+    qbModEnqueueWanted && (hasQtyDelta || vendor_bill_number_changed);
+
   try {
     const { result } = await updatePurchaseOrderReceiptWorkflow(req.scope).run(
       {
@@ -369,6 +444,7 @@ export async function PATCH(
             : null,
           vendor_bill_number_changed,
           line_changes: lineChanges,
+          enqueue_qb_mod,
         },
       }
     );

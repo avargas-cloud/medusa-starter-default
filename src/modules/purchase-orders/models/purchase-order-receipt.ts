@@ -45,6 +45,7 @@ export const PurchaseOrderReceipt = model.define("purchase_order_receipt", {
   // QB sync — ItemReceiptAdd
   qb_item_receipt_list_id: model.text().nullable(), // TxnID
   qb_item_receipt_txn_number: model.text().nullable(),
+  qb_edit_sequence: model.text().nullable(), // required for ItemReceiptMod
   qb_synced_at: model.dateTime().nullable(),
 
   // Void lifecycle (independent of the add lifecycle)

@@ -52,4 +52,16 @@ export const QbItemReceiptPipeline = model.define("qb_item_receipt_pipeline", {
   void_last_error: model.text().nullable(),
   void_retries: model.number().default(0),
   void_next_retry_at: model.dateTime().nullable(),
+
+  // Mod lifecycle (independent of add + void). Runs ItemReceiptModRq when a
+  // synced receipt is edited. mod_payload is rehydrated from current DB state
+  // on each enqueue (not a delta) — preserves qb_po_txn_line_id per line so
+  // the bridge re-mands LinkToTxn and the PO ↔ Receipt linkage survives.
+  mod_status: model.text().nullable(),
+  mod_operation_id: model.text().nullable(),
+  mod_synced_at: model.dateTime().nullable(),
+  mod_last_error: model.text().nullable(),
+  mod_retries: model.number().default(0),
+  mod_next_retry_at: model.dateTime().nullable(),
+  mod_payload: model.json().nullable(),
 });
