@@ -11,6 +11,8 @@ El directorio `backend/` es el **núcleo compartido (backbone)** de todo el ecos
 **ATENCIÓN AGENTE:** Para reglas transversales de manejo de la terminal, lineamientos de confirmaciones en GitHub o cómo crear herramientas globales, DEBES usar el policy original en:
 👉 `../.agent/Agent-Policy.md`
 
+**Slash commands del workspace** (ej. `/finish`, `/test`, `/graphify`) viven en `../.claude/commands/` — el resolver de Claude Code los descubre solo si el cwd es la raíz del workspace. Si estás dentro de `backend/` y un `/comando` falla con "Unknown skill", `cd ..` al workspace antes de invocarlo.
+
 Toda la documentación debajo de esta línea es **exclusiva para desarrollo dentro de `backend/`**.
 
 ---
