@@ -5,6 +5,8 @@
  */
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+import { handlePosPaymentApplied } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-applied";
+import { writePipelineRow } from "../../../../../lib/quickbooks/pipeline/row-mutations";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
 import {
@@ -92,7 +94,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const now = new Date();
 
     // 3. Create the application
-    await financeService.createPaymentApplications({
+    const createdApplication = await financeService.createPaymentApplications({
       payment_id: id,
       invoice_id,
       order_id: invoice.order_id,
@@ -101,6 +103,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       applied_by: applied_by ?? null,
       metadata: metadata ?? null,
     });
+    const applicationId =
+      (createdApplication as any)?.id ??
+      (Array.isArray(createdApplication)
+        ? (createdApplication[0] as any)?.id
+        : null);
 
     // 4. Create the corresponding InvoicePayment so future recalculations stay consistent.
     await invoiceService.createInvoicePayments({
@@ -141,6 +148,56 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const updated = await financeService.retrieveCustomerPayment(id, {
       relations: ["applications"],
     });
+
+    // 8. QB Sync — enqueue apply_payment row + direct-exec handler so the
+    // consolidator updates the existing ReceivePayment in QuickBooks with
+    // AppliedToTxnAdd against this invoice. Mirrors the pattern used by
+    // src/api/admin/invoices/[id]/payments/route.ts.
+    const qbFlowEnabled = process.env.QB_ORDER_FLOW_ENABLED === "true";
+    if (qbFlowEnabled && invoice.order_id && applicationId) {
+      const medusaRefNumber = payment.display_id
+        ? `PAY-${payment.display_id}`
+        : null;
+
+      try {
+        await writePipelineRow({
+          orderId: invoice.order_id,
+          referenceId: applicationId,
+          referenceType: "payment_application",
+          step: "apply_payment",
+          status: "waiting",
+          medusaRefNumber,
+        });
+      } catch (rowErr: any) {
+        console.warn(
+          `[customer-payments/:id/apply] Could not write pipeline row: ${rowErr.message}`
+        );
+      }
+
+      setTimeout(async () => {
+        try {
+          await handlePosPaymentApplied({
+            event: {
+              name: "pos.payment.applied",
+              data: {
+                payment_id: id,
+                invoice_id,
+                order_id: invoice.order_id,
+                amount_applied: effectiveAmount,
+                application_id: applicationId,
+              },
+            } as any,
+            container: req.scope as any,
+            pluginOptions: {},
+          } as any);
+        } catch (execErr: any) {
+          console.error(
+            `[customer-payments/:id/apply] Direct exec QB sync failed: ${execErr.message}`
+          );
+        }
+      }, 100);
+    }
+
     return res.json({
       payment: updated,
       requested_amount: requestedAmount,
