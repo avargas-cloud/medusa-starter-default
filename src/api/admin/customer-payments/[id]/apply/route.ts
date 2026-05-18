@@ -1,7 +1,7 @@
 /**
  * POST /admin/customer-payments/:id/apply
  * Apply available balance to an invoice.
- * Body: { invoice_id: string, amount: number, applied_by?: string }
+ * Body: { invoice_id: string, amount: number, applied_by?: string, metadata?: object }
  */
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
@@ -15,7 +15,12 @@ import { registerMedusaPayment } from "../../../invoices/register-medusa-payment
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const id = req.params.id!;
-  const { invoice_id, amount, applied_by } = req.body as any;
+  const { invoice_id, amount, applied_by, metadata } = (req.body ?? {}) as {
+    invoice_id?: string;
+    amount?: number;
+    applied_by?: string;
+    metadata?: Record<string, unknown> | null;
+  };
 
   if (!invoice_id)
     return res.status(400).json({ error: "invoice_id is required" });
@@ -94,6 +99,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       amount_applied: effectiveAmount,
       applied_at: now,
       applied_by: applied_by ?? null,
+      metadata: metadata ?? null,
     });
 
     // 4. Create the corresponding InvoicePayment so future recalculations stay consistent.

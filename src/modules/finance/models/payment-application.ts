@@ -30,6 +30,7 @@ const PaymentApplication = model.define("payment_application", {
   voided_at: model.dateTime().nullable(),
   void_reason: model.text().nullable(),
   voided_by: model.text().nullable(),
+  metadata: model.json().nullable(), // checkout-event audit (transaction_id, capture_context, credits_consumed, ...)
 });
 
 export { PaymentApplication };
