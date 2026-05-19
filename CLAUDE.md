@@ -17,6 +17,61 @@ Toda la documentación debajo de esta línea es **exclusiva para desarrollo dent
 
 ---
 
+## 🧪 PREVIEW MODE — Snapshot-driven local backend
+
+> Activado cuando existe `backend/.env.development.local`. Loaded automáticamente por `loadEnv()` cuando `NODE_ENV=development`.
+
+**Qué es:** un backend Medusa idéntico al de prod pero apuntando a una DB local (container `pos-preview-postgres` en `127.0.0.1:5501`) que recibe un snapshot de prod cada 6 horas. Sirve por `http://127.0.0.1:9000`, expuesto a Vercel previews via `https://medusa.eptbridge.com` (Cloudflare Tunnel).
+
+**Qué NO está aislado** (todavía comparte con prod):
+- Redis (sesiones, cache, event bus) — un write en preview invalida cache de prod
+- MeiliSearch — un reindex en preview reescribe los índices de búsqueda de prod
+- MinIO — uploads de preview escriben al bucket prod
+- JWT/COOKIE secrets — mismo crypto que prod
+- QB Bridge — `QB_BRIDGE_URL` apunta a la VM de QuickBooks real
+- Email — SMTP de prod
+
+**Qué SÍ está aislado:**
+- DATABASE_URL → container local
+- WC_URL → `http://127.0.0.1:1` (puerto muerto, sync a WP queda noop)
+
+### 🔴 Reglas duras
+
+1. **NUNCA correr `medusa db:migrate` en preview mode**. La migración escribiría al snapshot local (inútil — se borra en el próximo refresh) o, peor, podría escribir a prod si el agente confunde el env file. Migraciones siempre van por Railway deploy normal.
+
+2. **NUNCA correr `yarn seed`, `yarn sync:meili`, o cualquier script de `scripts/{migrations,fix,sync}`** mientras el preview esté activo. Esos scripts asumen escribir a prod-shaped data y sus side effects (Meili, Redis, MinIO) sí impactan prod.
+
+3. **Verificá `NODE_ENV` antes de cualquier yarn**: `echo $NODE_ENV`. Si dice `production`, NO uses `.env.development.local`. El loadEnv solo lo carga en development.
+
+4. **El snapshot expira cada 6 horas**. Cron: `0 */6 * * *` ejecutando `scripts/refresh-prod-snapshot.sh`. Datos escritos a la DB local durante el preview window se pierden en el próximo refresh — ESPERADO.
+
+5. **Puerto 9000 está compartido entre prod-dev y preview**. No podés correr ambos a la vez. El bridge `avernuz-bridge` decide cuál spawneá (Phase 3 — todavía no implementado).
+
+### Comandos útiles
+
+| Acción | Comando |
+|---|---|
+| Refrescar snapshot manualmente | `scripts/refresh-prod-snapshot.sh` |
+| Ver último log de snapshot | `cat /tmp/prod-snapshot-$(date +%F).log` |
+| Inspeccionar DB local | `docker exec -it pos-preview-postgres psql -U postgres -d ecopowertech_preview` |
+| Parar el container local | `docker stop pos-preview-postgres` (cron sigue intentando) |
+| Quitarlo y empezar de cero | `docker rm -fv pos-preview-postgres && docker volume rm pos-preview-pg-data` |
+| Levantar Medusa en preview mode | `NODE_ENV=development yarn dev` |
+| Ver el cron del snapshot | `crontab -l` |
+
+### Verificación de aislamiento
+
+Antes de probar features destructivas en el preview, validá que tu DATABASE_URL en runtime es el local:
+
+```bash
+NODE_ENV=development node -e 'require("dotenv-flow").config(); console.log(process.env.DATABASE_URL)'
+# Debe terminar en :5501/ecopowertech_preview, NUNCA en interchange.proxy.rlwy.net.
+```
+
+Si ves la URL de Railway, abortá: el `.env.development.local` no se está cargando.
+
+---
+
 ## 🗺️ graphify — Knowledge Graph (OBLIGATORIO)
 
 El workspace tiene un grafo de conocimiento en `../graphify-out/` que cubre todos los proyectos incluyendo backend.

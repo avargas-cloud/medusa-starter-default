@@ -2,6 +2,9 @@
 .env
 .env.local
 .env.railway
+.env.development.local
+.env.development
+.env.backup
 .DS_Store
 /uploads
 /node_modules
