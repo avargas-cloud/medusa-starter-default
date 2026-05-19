@@ -398,10 +398,34 @@ export async function GET(
     }
   })();
 
+  // Surface the linked InventoryTransfer (if any) so the UI can hide the
+  // "Convert to Transfer" button once one exists. Voided ITs are ignored so a
+  // re-conversion is allowed after a void.
+  const linked_inventory_transfer = await (async () => {
+    try {
+      const knex = (req.scope as any).resolve("__pg_connection__");
+      const r: { rows: Array<{ id: string; number: string | null; status: string }> } =
+        await knex.raw(
+          `SELECT id, number, status
+             FROM inventory_transfer
+            WHERE linked_purchase_order_id = ?
+              AND status <> 'voided'
+              AND deleted_at IS NULL
+            ORDER BY created_at DESC
+            LIMIT 1`,
+          [id]
+        );
+      return r.rows[0] ?? null;
+    } catch {
+      return null;
+    }
+  })();
+
   return res.json({
     purchase_order: {
       ...po,
       linked_order_ids,
+      linked_inventory_transfer,
       lines: decoratedLines,
       receipts: decoratedReceipts,
       vendor,
