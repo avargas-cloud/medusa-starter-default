@@ -238,6 +238,10 @@ export async function POST(
       let itemsChanged = false;
       for (const item of newItems) {
         const existing = oldItems.find((o: any) => o.id === item.localId);
+        const hasAttachedImage = Object.prototype.hasOwnProperty.call(
+          item,
+          "attachedImage"
+        );
         if (existing) {
           const changed =
             item.effectiveUnitPrice !== (existing.unit_price ?? 0) ||
@@ -252,8 +256,9 @@ export async function POST(
               (existing.metadata?.price_list_label ?? "Default") ||
             item.title !== existing.title ||
             item.salesDescription !== existing.metadata?.sales_description ||
-            (item.attachedImage ?? null) !==
-              (existing.metadata?.attached_image ?? null);
+            (hasAttachedImage &&
+              (item.attachedImage ?? null) !==
+                (existing.metadata?.attached_image ?? null));
 
           if (changed) {
             await localFetch(
@@ -273,7 +278,9 @@ export async function POST(
                   price_list_label: item.priceListLabel,
                   custom_title: item.title,
                   custom_description: item.salesDescription,
-                  attached_image: item.attachedImage ?? null,
+                  ...(hasAttachedImage
+                    ? { attached_image: item.attachedImage ?? null }
+                    : {}),
                 }),
               }
             );
