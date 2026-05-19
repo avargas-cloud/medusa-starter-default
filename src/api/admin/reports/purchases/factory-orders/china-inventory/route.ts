@@ -3,6 +3,14 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 const CHINA_SLOC = 'sloc_01KQ14C1CFX30EDD722BF87HDM'
 const ROOT_CAT   = 'pcat_01KGAD1KQV29RKZZHEZ4N88B8H'
 
+// Inventory value = stocked - reserved.
+//
+// Earlier this report subtracted "pending transfers that had a bill linked"
+// (EXISTS china_finance_bill) — transfers without a bill were ignored, so
+// stock already committed to an outbound transfer kept inflating the value.
+// `inventory_level.reserved_quantity` already reflects EVERY active reservation
+// at the location (transfers, draft orders, etc.) so we use it directly and
+// drop the bill filter. Bills are surfaced separately as POs-without-bills.
 const REPORT_CTES = `
   tier1 AS (
     SELECT DISTINCT ON (pcp.product_id)
@@ -16,34 +24,6 @@ const REPORT_CTES = `
     JOIN product_category pc ON pc.id = pcp.product_category_id
     LEFT JOIN product_category pc2 ON pc2.id = pc.parent_category_id
     ORDER BY pcp.product_id, pc.name
-  ),
-  active_transfer AS (
-    SELECT
-      itl.product_variant_id,
-      SUM(GREATEST(0, itl.qty - COALESCE(itl.qty_received, 0)))::numeric AS qty_pending
-    FROM inventory_transfer it
-    JOIN inventory_transfer_line itl
-      ON itl.transfer_id = it.id
-     AND itl.deleted_at IS NULL
-    JOIN purchase_order po
-      ON po.id = it.linked_purchase_order_id
-     AND po.deleted_at IS NULL
-    WHERE it.deleted_at IS NULL
-      AND it.origin_country = 'CN'
-      AND it.status IN ('confirmed', 'shipped')
-      AND EXISTS (
-        SELECT 1
-        FROM china_finance_bill cfb
-        WHERE cfb.po_number = po.qb_purchase_order_txn_number
-           OR cfb.po_ref_number = po.number
-           OR cfb.vendor_bill_id IN (
-            SELECT vb.id
-            FROM vendor_bill vb
-            WHERE vb.purchase_order_id = po.id
-              AND vb.deleted_at IS NULL
-          )
-      )
-    GROUP BY itl.product_variant_id
   )
 `
 
@@ -60,7 +40,7 @@ const LANDED_COST = `COALESCE(
 
 const CHINA_AVAILABLE_QTY = `GREATEST(
   0,
-  il.stocked_quantity - COALESCE(atq.qty_pending, 0)
+  il.stocked_quantity - COALESCE(il.reserved_quantity, 0)
 )`
 
 const BASE_JOINS = `
@@ -70,15 +50,46 @@ const BASE_JOINS = `
   JOIN product_variant pv ON pv.id = pvii.variant_id AND pv.deleted_at IS NULL
   JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
   LEFT JOIN tier1 t1 ON t1.product_id = p.id
-  LEFT JOIN active_transfer atq ON atq.product_variant_id = pv.id
   WHERE il.location_id = '${CHINA_SLOC}' AND il.stocked_quantity > 0
+`
+
+// POs whose linked inventory transfer is active (origin CN, status
+// confirmed|shipped) but which have NO matching china_finance_bill row.
+// The match logic mirrors the previous active_transfer EXISTS clause:
+// bill matches by po_number, po_ref_number, or via vendor_bill linkage.
+const POS_WITHOUT_BILLS_SQL = `
+  SELECT DISTINCT
+    po.number                              AS po_number,
+    po.qb_purchase_order_txn_number        AS qb_po_number,
+    it.number                              AS transfer_number,
+    COALESCE(NULLIF(TRIM(po.vendor_name_snapshot), ''), 'Unknown') AS vendor_name
+  FROM inventory_transfer it
+  JOIN purchase_order po
+    ON po.id = it.linked_purchase_order_id
+   AND po.deleted_at IS NULL
+  WHERE it.deleted_at IS NULL
+    AND it.origin_country = 'CN'
+    AND it.status IN ('confirmed', 'shipped')
+    AND NOT EXISTS (
+      SELECT 1
+      FROM china_finance_bill cfb
+      WHERE cfb.po_number     = po.qb_purchase_order_txn_number
+         OR cfb.po_ref_number = po.number
+         OR cfb.vendor_bill_id IN (
+           SELECT vb.id
+           FROM vendor_bill vb
+           WHERE vb.purchase_order_id = po.id
+             AND vb.deleted_at IS NULL
+         )
+    )
+  ORDER BY po.number ASC
 `
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const pg = req.scope.resolve("__pg_connection__") as any
 
   try {
-    const [byFactoryRes, byCategoryRes] = await Promise.all([
+    const [byFactoryRes, byCategoryRes, posWithoutBillsRes] = await Promise.all([
       pg.raw(
         `WITH ${REPORT_CTES}
          SELECT
@@ -105,6 +116,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          HAVING SUM(${CHINA_AVAILABLE_QTY}) > 0
          ORDER BY value DESC, qty DESC`
       ),
+      pg.raw(POS_WITHOUT_BILLS_SQL),
     ])
 
     const mapRow = (r: any) => ({
@@ -120,6 +132,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const totalValue        = allRows.reduce((s, r) => s + r.value, 0)
     const totalLandedValue  = allRows.reduce((s, r) => s + r.landed_value, 0)
 
+    const posWithoutBills = (posWithoutBillsRes.rows as any[]).map((r) => ({
+      po_number:       String(r.po_number ?? ''),
+      qb_po_number:    r.qb_po_number != null ? String(r.qb_po_number) : null,
+      transfer_number: r.transfer_number != null ? String(r.transfer_number) : null,
+      vendor_name:     String(r.vendor_name ?? 'Unknown'),
+    }))
+
     return res.json({
       by_factory:  allRows,
       by_category: (byCategoryRes.rows as any[]).map(mapRow),
@@ -129,6 +148,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         value:        Math.round(totalValue * 100) / 100,
         landed_value: Math.round(totalLandedValue * 100) / 100,
       },
+      pos_without_bills: posWithoutBills,
     })
   } catch (err) {
     console.error("[factory-orders/china-inventory]", err)
