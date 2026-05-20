@@ -69,7 +69,14 @@ export async function syncCustomerToMeili(
       host: process.env.MEILISEARCH_HOST!,
       apiKey: process.env.MEILISEARCH_API_KEY!,
     });
-    await client.index("customers").updateDocuments([meiliDoc]);
+    // Pin the primary key explicitly. The customer doc carries multiple
+    // `*id` fields (id, list_id), so on a fresh index with no PK configured
+    // Meili can't auto-detect one and rejects the batch with
+    // `index_primary_key_multiple_candidates_found`. Passing it is a no-op
+    // once the index already has PK "id".
+    await client.index("customers").updateDocuments([meiliDoc], {
+      primaryKey: "id",
+    });
 
     log.info(
       `[MEILI-CUSTOMER-SYNC] ✅ ${customer.email} — Type: ${existingCustomerType}, Price: ${priceLevel}, Groups: ${meiliDoc.groups.join(", ") || "none"}`
