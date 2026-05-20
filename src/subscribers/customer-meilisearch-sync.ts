@@ -1,5 +1,6 @@
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
-import { Modules } from "@medusajs/utils";
+
+import { syncCustomerToMeili } from "../lib/meilisearch/sync-customer";
 
 /**
  * AUTO-SYNC CUSTOMER TO MEILISEARCH
@@ -79,66 +80,6 @@ async function resolveCustomerIdsFromLinkRowIds(
   }
 }
 
-async function syncCustomer(customerId: string, container: any, logger: any) {
-  try {
-    const customerModule = container.resolve(Modules.CUSTOMER);
-    const customer = await customerModule.retrieveCustomer(customerId, {
-      relations: ["groups"],
-    });
-    if (!customer) {
-      logger.warn(
-        `[MEILI-CUSTOMER-SYNC] ⚠️  Customer ${customerId} not found, skipping`
-      );
-      return;
-    }
-
-    const meta = (customer.metadata as any) || {};
-
-    const existingCustomerType =
-      meta.qb_customer_type || meta.customer_type || "Standard";
-
-    const groupNames = customer.groups?.map((g: any) => g.name) || [];
-    const hasWholesaleGroup = groupNames.includes("Wholesale");
-    const priceLevel =
-      meta.qb_price_level || meta.price_level || (hasWholesaleGroup ? "Wholesale" : "Retail");
-
-    const meiliDoc = {
-      id: customer.id,
-      email: (customer.email || "").toLowerCase(),
-      first_name: customer.first_name || "",
-      last_name: customer.last_name || "",
-      company_name: meta.company_name || (customer as any).company_name || "",
-      phone: customer.phone || "",
-      has_account: customer.has_account,
-      customer_type: existingCustomerType,
-      price_level: priceLevel,
-      status: customer.has_account ? "Registered" : "Guest",
-      list_id: meta.qb_list_id || "",
-      acquisition_channel: meta.acquisition_channel || "",
-      default_tax: meta.default_tax || null,
-      tax_exempt_reason: meta.tax_exempt_reason || null,
-      groups: groupNames,
-      updated_at: new Date(customer.updated_at).getTime(),
-      created_at: new Date(customer.created_at).getTime(),
-    };
-
-    const { MeiliSearch } = await import("meilisearch");
-    const client = new MeiliSearch({
-      host: process.env.MEILISEARCH_HOST!,
-      apiKey: process.env.MEILISEARCH_API_KEY!,
-    });
-    await client.index("customers").updateDocuments([meiliDoc]);
-
-    logger.info(
-      `[MEILI-CUSTOMER-SYNC] ✅ ${customer.email} — Type: ${existingCustomerType}, Price: ${priceLevel}, Groups: ${meiliDoc.groups.join(", ") || "none"}`
-    );
-  } catch (err: any) {
-    logger.error(
-      `[MEILI-CUSTOMER-SYNC] ❌ sync failed for ${customerId}: ${err.message}`
-    );
-  }
-}
-
 async function deleteCustomerDoc(customerId: string, logger: any) {
   try {
     const { MeiliSearch } = await import("meilisearch");
@@ -187,10 +128,10 @@ export default async function customerMeilisearchSubscriber({
   if (event.name === "customer.created" || event.name === "customer.updated") {
     const id = event.data?.id;
     if (typeof id === "string") {
-      await syncCustomer(id, container, logger);
+      await syncCustomerToMeili(id, container, logger);
     } else if (Array.isArray(id)) {
       for (const one of id) {
-        if (typeof one === "string") await syncCustomer(one, container, logger);
+        if (typeof one === "string") await syncCustomerToMeili(one, container, logger);
       }
     }
     return;
@@ -220,7 +161,7 @@ export default async function customerMeilisearchSubscriber({
     }
 
     for (const cid of customerIds) {
-      await syncCustomer(cid, container, logger);
+      await syncCustomerToMeili(cid, container, logger);
     }
     return;
   }

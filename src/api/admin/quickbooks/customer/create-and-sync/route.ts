@@ -1,7 +1,9 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
+import { Client } from "pg";
 
 import { ensureCustomerPipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
+import { syncCustomerToMeili } from "../../../../../lib/meilisearch/sync-customer";
 
 interface Body {
   // Core
@@ -33,6 +35,59 @@ interface Body {
   // of enqueueing a pipeline row. Used when the QB customer already exists
   // and we just need a Medusa mirror.
   existing_qb_list_id?: string;
+}
+
+/**
+ * Looks for an already-existing Medusa customer that this request would
+ * duplicate — first by QB ListID (when linking an existing QB customer),
+ * then by email. Returns the match or null. Non-throwing: a lookup failure
+ * falls through to normal creation rather than blocking the cashier.
+ */
+async function findExistingCustomer(
+  customerModule: any,
+  emailToSave: string,
+  rawEmail: string | undefined,
+  existingQbListId: string | undefined
+): Promise<{ id: string; email: string } | null> {
+  // 1. By QB ListID — metadata JSON filter needs raw SQL (not exposed by the
+  //    module's filter object).
+  if (existingQbListId?.trim()) {
+    const client = new Client({ connectionString: process.env.DATABASE_URL });
+    try {
+      await client.connect();
+      const { rows } = await client.query(
+        `SELECT id, email FROM customer
+           WHERE metadata->>'qb_list_id' = $1 AND deleted_at IS NULL
+           LIMIT 1`,
+        [existingQbListId.trim()]
+      );
+      if (rows[0]) return { id: rows[0].id, email: rows[0].email };
+    } catch (err: any) {
+      console.error(
+        `[create-and-sync] qb_list_id dup check failed: ${err.message}`
+      );
+    } finally {
+      await client.end().catch(() => {});
+    }
+  }
+
+  // 2. By email — only when a real email was supplied (skip dummy placeholders
+  //    that get a unique noemail-<ts>@ address generated per request).
+  if (rawEmail?.trim()) {
+    try {
+      const matches = await customerModule.listCustomers(
+        { email: emailToSave },
+        { take: 1 }
+      );
+      if (matches?.[0]) {
+        return { id: matches[0].id, email: matches[0].email };
+      }
+    } catch (err: any) {
+      console.error(`[create-and-sync] email dup check failed: ${err.message}`);
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -91,6 +146,42 @@ export async function POST(
 
   const customerModule = req.scope.resolve(Modules.CUSTOMER);
 
+  // ── Duplicate guard ─────────────────────────────────────────────────────
+  // Don't create a second Medusa mirror for a QB customer that's already
+  // linked (same qb_list_id), nor a second customer with the same email.
+  // If a match exists we link to it (re-index + return it) instead of
+  // creating a duplicate the cashier would have to clean up later.
+  const existing = await findExistingCustomer(
+    customerModule,
+    emailToSave,
+    body.email,
+    body.existing_qb_list_id
+  );
+  if (existing) {
+    // If we're linking to a QB ListID and the matched customer isn't carrying
+    // it yet (e.g. matched by email), write it so the "link" is real and
+    // idempotent — no duplicate, but the QB mapping actually lands.
+    if (body.existing_qb_list_id) {
+      const cust = await customerModule
+        .retrieveCustomer(existing.id)
+        .catch(() => null);
+      const meta = { ...((cust as any)?.metadata ?? {}) };
+      if (meta.qb_list_id !== body.existing_qb_list_id) {
+        meta.qb_list_id = body.existing_qb_list_id;
+        await customerModule.updateCustomers(existing.id, { metadata: meta });
+      }
+    }
+    await syncCustomerToMeili(existing.id, req.scope);
+    res.json({
+      success: true,
+      customerId: existing.id,
+      email: existing.email,
+      pipelineRowId: null,
+      status: "already_exists",
+    });
+    return;
+  }
+
   // Build address payload (only include if at least one field is set).
   const addr = body.address;
   const hasAddress =
@@ -144,6 +235,12 @@ export async function POST(
     });
     return;
   }
+
+  // Index the brand-new customer into MeiliSearch immediately. The direct
+  // module-service call above does NOT emit `customer.created`, so the
+  // auto-sync subscriber never fires — without this the customer wouldn't
+  // appear in POS search until the next full resync. Non-fatal.
+  await syncCustomerToMeili(customer.id, req.scope);
 
   // If linking to an existing QB customer, no pipeline enqueue needed.
   if (body.existing_qb_list_id) {

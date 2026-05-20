@@ -4,6 +4,8 @@ import { Client } from "pg";
 
 import { FINANCE_MODULE } from "../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../modules/invoices";
+import { syncCustomerToMeili } from "../../../../lib/meilisearch/sync-customer";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../workflows/sync-inventory-item-meilisearch";
 
 type PosDocType =
   | "estimate"
@@ -738,6 +740,12 @@ export async function PUT(
       existingMeta.qb_manually_mapped_note = AUDIT_NOTE;
 
       await customerModule.updateCustomers(internalId, { metadata: existingMeta });
+
+      // Re-index immediately so the freshly-mapped qb_list_id shows up in POS
+      // search. updateCustomers (direct module call) emits no event, so the
+      // auto-sync subscriber won't fire on its own. Non-fatal.
+      await syncCustomerToMeili(internalId, req.scope);
+
       res.json({ success: true, type, id: internalId });
       return;
     }
@@ -760,6 +768,21 @@ export async function PUT(
       await productModule.updateProductVariants(internalId, {
         metadata: existingMeta,
       });
+
+      // Re-index the variant into the MeiliSearch `inventory` index so the
+      // mapped item reflects immediately in POS Inventory search. The direct
+      // module update emits no product-variant event, so the lifecycle
+      // subscriber won't fire. Non-fatal — never block the mapping write.
+      try {
+        await syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+          input: { variantId: internalId },
+        });
+      } catch (err: any) {
+        console.error(
+          `[qb-metadata] Meili inventory reindex failed for variant ${internalId}: ${err.message}`
+        );
+      }
+
       res.json({ success: true, type, id: internalId });
       return;
     }
