@@ -123,6 +123,16 @@ export const sendToQbStep = createStep(
 
       const apiKey = process.env.QB_API_KEY || "";
 
+      // Bridge shape differs per route: POST /api/products (add) reads the QB
+      // fields from the TOP LEVEL of the body, while PUT /api/products/:id (mod)
+      // unwraps a nested `data`. Send each the shape it actually honors —
+      // sending nested to the add endpoint silently queues `{action,data}` as
+      // the item payload and the add fails.
+      const requestBody =
+        input.action === "add"
+          ? { action: "add", ...input.data }
+          : { action: input.action, data: input.data };
+
       const response = await fetch(reqUrl, {
         method,
         headers: {
@@ -130,10 +140,7 @@ export const sendToQbStep = createStep(
           "x-api-key": apiKey,
           "bypass-tunnel-reminder": "true",
         },
-        body: JSON.stringify({
-          action: input.action,
-          data: input.data,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {

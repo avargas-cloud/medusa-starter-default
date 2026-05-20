@@ -5,7 +5,7 @@ import {
 } from "@medusajs/framework/workflows-sdk";
 import { updateProductsWorkflow } from "@medusajs/medusa/core-flows";
 
-import { sendToQbStep } from "../qb/send-to-qb-step";
+import { sendToQbStep, type QbItemType } from "../qb/send-to-qb-step";
 import { syncProductToMeiliSearchWorkflow } from "../sync-product-meilisearch";
 
 import { applyShippingAttributesStep } from "./steps/apply-shipping-attributes-step";
@@ -29,9 +29,16 @@ export type UpdatePosProductInput = {
   readonly id: string;
   readonly variant_id: string;
 
-  // QB identity
-  qb_id: string;
-  qb_edit_sequence: string;
+  // QB identity. Absent when the product was created in Medusa but never synced
+  // to QuickBooks (e.g. the create-time QB add failed). In that case the edit is
+  // dispatched as a first-time "add" instead of a "mod".
+  qb_id?: string;
+  qb_edit_sequence?: string;
+
+  // Only consulted to build a first-time QB "add" payload — the route hydrates
+  // these from variant.metadata when qb_id is missing.
+  item_type?: QbItemType;
+  retail_price?: number;
 
   // ── Basic (available to pos_user view) ──────────────────────────────────
   title?: string;
@@ -170,6 +177,57 @@ export const updatePosProductWorkflow = createWorkflow(
     // to QuickBooks, so saving just those should not generate a QBXML op.
     const qbStepInput = transform({ input }, (data) => {
       const i = data.input;
+
+      // PrefVendorRef prefers ListID (stable) over FullName (renamable) — shared
+      // by both add and mod payloads.
+      const prefVendorRef = i.vendor_qb_id
+        ? { ListID: i.vendor_qb_id }
+        : i.vendor_full_name
+          ? { FullName: i.vendor_full_name }
+          : i.vendor
+            ? { FullName: i.vendor }
+            : undefined;
+
+      // No qb_id → the item was never created in QuickBooks. Build a first-time
+      // "add" with the full item definition (mirrors enqueue-qb-items-step
+      // buildQbPayload) instead of a "mod" that would 400 on a missing ListID.
+      if (!i.qb_id) {
+        const itemType: QbItemType = i.item_type ?? "Inventory";
+        const addData: Record<string, unknown> = {
+          Name: i.sku,
+          SalesDesc: i.salesDescription,
+          SalesPrice: i.retail_price ?? 0,
+          ItemType: itemType,
+        };
+        if (i.mpn) addData.ManufacturerPartNumber = i.mpn;
+        if (prefVendorRef) addData.PrefVendorRef = prefVendorRef;
+        if (i.income_account_full_name)
+          addData.IncomeAccountRef = { FullName: i.income_account_full_name };
+        if (itemType === "Inventory") {
+          addData.PurchaseDesc = i.salesDescription;
+          addData.PurchaseCost = i.cost ?? 0;
+          if (i.cogs_account_full_name)
+            addData.COGSAccountRef = { FullName: i.cogs_account_full_name };
+        } else if ((i.cost ?? 0) > 0) {
+          addData.PurchaseDesc = i.salesDescription;
+          addData.PurchaseCost = i.cost ?? 0;
+          if (i.cogs_account_full_name)
+            addData.ExpenseAccountRef = { FullName: i.cogs_account_full_name };
+        }
+
+        return {
+          action: "add" as const,
+          // Never skip — the whole point is that the item is missing from QB.
+          skip: false,
+          pipeline: {
+            variant_id: i.variant_id,
+            sku: i.sku ?? "",
+            item_type: itemType,
+          },
+          data: addData,
+        };
+      }
+
       const hasQbFields =
         i.sku !== undefined ||
         i.salesDescription !== undefined ||
@@ -203,13 +261,7 @@ export const updatePosProductWorkflow = createWorkflow(
           COGSAccountRef: i.cogs_account_full_name
             ? { FullName: i.cogs_account_full_name }
             : undefined,
-          PrefVendorRef: i.vendor_qb_id
-            ? { ListID: i.vendor_qb_id }
-            : i.vendor_full_name
-              ? { FullName: i.vendor_full_name }
-              : i.vendor
-                ? { FullName: i.vendor }
-                : undefined,
+          PrefVendorRef: prefVendorRef,
         },
       };
     });

@@ -100,6 +100,19 @@ const isEditSequenceError = (msg: string | null | undefined): boolean => {
 };
 
 /**
+ * QB rejects an item Add when the Name is already taken (statusCode 3100,
+ * "...the name ... is already in use"). This means the item exists in QB but
+ * Medusa lost (or never received) its ListID. Rather than retrying the add
+ * forever, we recover the existing ListID via an ItemQuery-by-name and convert
+ * the operation into a mod. Message-based detection only — 3100 is overloaded
+ * (it also covers transient "another update in progress" locks).
+ */
+const isNameInUseError = (msg: string | null | undefined): boolean => {
+  if (!msg) return false;
+  return msg.toLowerCase().includes("already in use");
+};
+
+/**
  * Re-emits the original add/mod operation to the bridge using op_action +
  * op_payload from the pipeline row. Returns the new operationId on success
  * or throws on bridge failure.
@@ -170,6 +183,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
   let resolved = 0;
   let failedToError = 0;
   let editSeqHydrated = 0;
+  let reconciled = 0;
 
   if (pending && pending.length > 0) {
     logger.info(
@@ -194,6 +208,8 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
         const data = await fetchBridgeStatus(row.qb_operation_id);
         const status = data.operation?.status;
         const isItemQuery = (row.op_payload as any)?.__iq_pending === true;
+        const isReconcileQuery =
+          (row.op_payload as any)?.__iq_reconcile === true;
 
         if (status === "expired" || status === "failed") {
           if (isItemQuery) {
@@ -207,6 +223,33 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
               qb_operation_id: null,
               op_payload: origPayload,
               next_retry_at: new Date(Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000),
+            });
+            failedToError++;
+            continue;
+          }
+
+          if (isReconcileQuery) {
+            // The reconcile ItemQuery didn't complete. Restore the add to error
+            // but keep an "already in use" marker so Phase B re-queries instead
+            // of resubmitting a doomed add. Count it as a retry so a perpetually
+            // failing query can't loop forever.
+            const origPayload = {
+              ...(row.op_payload ?? {}),
+            } as Record<string, unknown>;
+            delete origPayload.__iq_reconcile;
+            const newRetries = (row.retries ?? 0) + 1;
+            const isExhausted = newRetries >= MAX_RETRIES;
+            await catalog.updateQbItemPipelines({
+              id: row.id,
+              status: isExhausted ? "failed_permanent" : "error",
+              last_error: `Reconcile ItemQuery ${status} (item name already in use) — ${data.operation?.error ?? "unknown"}`,
+              qb_operation_id: null,
+              op_payload: origPayload,
+              retries: newRetries,
+              next_retry_at: isExhausted
+                ? null
+                : new Date(Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000),
+              failed_at: isExhausted ? new Date() : null,
             });
             failedToError++;
             continue;
@@ -288,6 +331,90 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
               qb_operation_id: null,
               op_payload: origPayload,
               next_retry_at: new Date(Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000),
+            });
+            failedToError++;
+          }
+          continue;
+        }
+
+        // Reconcile ItemQuery completed — the item already existed in QB. Recover
+        // its ListID/EditSequence, link it back onto the variant, and resubmit the
+        // user's edit as a mod (the add was a no-op once the name collided).
+        if (isReconcileQuery) {
+          const recoveredListId = extractListId(data);
+          const recoveredSeq = extractEditSequence(data);
+          const origPayload = {
+            ...(row.op_payload ?? {}),
+          } as Record<string, unknown>;
+          delete origPayload.__iq_reconcile;
+
+          if (!recoveredListId) {
+            // QB has no item by that name after all — fall back to retrying the
+            // add (no flag → Phase B resubmits as add).
+            await catalog.updateQbItemPipelines({
+              id: row.id,
+              status: "error",
+              last_error:
+                "Reconcile query returned no ListID — item not found by name; will retry as add",
+              qb_operation_id: null,
+              op_payload: origPayload,
+              next_retry_at: new Date(
+                Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000
+              ),
+            });
+            failedToError++;
+            continue;
+          }
+
+          // Link the existing QB item onto the variant so it's no longer orphaned.
+          await knex.raw(
+            `UPDATE product_variant
+               SET metadata = COALESCE(metadata, '{}'::jsonb)
+                 || jsonb_strip_nulls(jsonb_build_object(
+                      'quickbooks_id',    ?::text,
+                      'qb_edit_sequence', ?::text
+                    ))
+             WHERE id = ?`,
+            [recoveredListId, recoveredSeq, row.variant_id]
+          );
+
+          // Convert the add payload into a mod. The bridge ItemInventoryMod
+          // builder honors Name/MPN/SalesDesc/SalesPrice/PurchaseDesc/
+          // PurchaseCost/PrefVendorRef — all already present in the add payload.
+          const modPayload: Record<string, unknown> = {
+            ...origPayload,
+            ListID: recoveredListId,
+            EditSequence: recoveredSeq,
+          };
+
+          try {
+            const newOpId = await resubmitToBridge("mod", modPayload);
+            await catalog.updateQbItemPipelines({
+              id: row.id,
+              status: "waiting",
+              op_action: "mod",
+              qb_id: recoveredListId,
+              qb_operation_id: newOpId,
+              op_payload: modPayload,
+              last_error: null,
+              next_retry_at: null,
+            });
+            reconciled++;
+            logger.info(
+              `[qb-item-pipeline-poller] ${row.sku}: reconciled to existing QB item ${recoveredListId} → mod resubmitted (op=${newOpId})`
+            );
+          } catch (resubErr: any) {
+            await catalog.updateQbItemPipelines({
+              id: row.id,
+              status: "error",
+              op_action: "mod",
+              qb_id: recoveredListId,
+              last_error: resubErr.message,
+              qb_operation_id: null,
+              op_payload: modPayload,
+              next_retry_at: new Date(
+                Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000
+              ),
             });
             failedToError++;
           }
@@ -441,6 +568,53 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
         payload.PurchaseCost = 0;
       }
 
+      // Name-conflict reconcile — an add failed because an item with that Name
+      // already exists in QB (we have no ListID). Query QB by FullName so Phase A
+      // can recover the ListID, link it to the variant, and resubmit as a mod.
+      if (
+        row.op_action === "add" &&
+        !row.qb_id &&
+        isNameInUseError(row.last_error)
+      ) {
+        const fullName = (payload.Name as string | undefined) ?? row.sku;
+        if (fullName) {
+          log("name already in use — querying QB by FullName to reconcile");
+          try {
+            const iqRes = await fetch(
+              `${bridgeUrl()}/api/products?FullName=${encodeURIComponent(fullName)}`,
+              {
+                headers: {
+                  "x-api-key": apiKey(),
+                  "bypass-tunnel-reminder": "true",
+                },
+              }
+            );
+            if (iqRes.ok) {
+              const iqJson = (await iqRes.json()) as { operationId?: string };
+              if (iqJson.operationId) {
+                await catalog.updateQbItemPipelines({
+                  id: row.id,
+                  status: "waiting",
+                  qb_operation_id: iqJson.operationId,
+                  op_payload: { ...payload, __iq_reconcile: true },
+                  last_error: null,
+                  next_retry_at: null,
+                });
+                log(
+                  `reconcile ItemQuery queued (op=${iqJson.operationId}) — Phase A will link + resubmit as mod`
+                );
+                continue;
+              }
+            }
+            log(`reconcile ItemQuery init failed (HTTP ${iqRes.status})`);
+          } catch (iqErr: any) {
+            log(`reconcile ItemQuery exception: ${iqErr.message}`);
+          }
+          // Couldn't queue the query — fall through to the generic resubmit,
+          // which re-attempts the add and re-triggers reconcile next tick.
+        }
+      }
+
       // EditSequence async fallback — submit ItemQuery, let Phase A pick up the result
       // on the next poller tick (avoids blocking the cron while waiting for QB COM).
       if (
@@ -516,12 +690,19 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
     }
   }
 
-  if (resolved || failedToError || retried || permaFailed || editSeqHydrated) {
+  if (
+    resolved ||
+    failedToError ||
+    retried ||
+    permaFailed ||
+    editSeqHydrated ||
+    reconciled
+  ) {
     logger.info(
       `[qb-item-pipeline-poller] tick complete: ` +
         `resolved=${resolved} failed→error=${failedToError} ` +
         `retried=${retried} editSeq_hydrated=${editSeqHydrated} ` +
-        `failed_permanent=${permaFailed}`
+        `reconciled=${reconciled} failed_permanent=${permaFailed}`
     );
   }
 }

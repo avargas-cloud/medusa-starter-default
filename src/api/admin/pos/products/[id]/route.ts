@@ -20,7 +20,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     // the first variant of the product for backwards compatibility.
     const { data: variants } = await query.graph({
       entity: "product_variant",
-      fields: ["id", "product_id", "metadata"],
+      fields: ["id", "product_id", "sku", "metadata"],
       filters: bodyVariantId ? { id: bodyVariantId } : { product_id: id },
     });
 
@@ -29,20 +29,28 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     }
 
     const variant = variants[0] as any;
-    const qbId = variant.metadata?.quickbooks_id;
-    const qbEditSequence = variant.metadata?.qb_edit_sequence;
+    const meta = (variant.metadata ?? {}) as Record<string, unknown>;
+    const qbId =
+      typeof meta.quickbooks_id === "string" && meta.quickbooks_id.trim()
+        ? (meta.quickbooks_id as string)
+        : undefined;
+    const qbEditSequence =
+      typeof meta.qb_edit_sequence === "string"
+        ? (meta.qb_edit_sequence as string)
+        : undefined;
 
-    if (!qbId) {
-      return res.status(400).json({
-        error:
-          "This product is not linked to Quickbooks (Missing qb_id). Please create it properly first.",
-      });
-    }
-
-    // EditSequence may be missing (legacy/orphan record). Don't block — the
-    // pipeline worker has an EditSequence auto-fallback that hydrates it via
-    // ItemQuery and retries the Mod automatically (F2).
-    if (!qbEditSequence) {
+    // No quickbooks_id → the item was created in Medusa but never synced to QB
+    // (the create-time add failed). Treat the edit as a first-time "add" instead
+    // of blocking, hydrating the full item definition from variant.metadata.
+    const isNew = !qbId;
+    if (isNew) {
+      logger.warn(
+        `[pos-product] variant ${variant.id} has no quickbooks_id — dispatching edit as a first-time QB add (item was never synced).`
+      );
+    } else if (!qbEditSequence) {
+      // EditSequence may be missing (legacy/orphan record). Don't block — the
+      // pipeline worker has an EditSequence auto-fallback that hydrates it via
+      // ItemQuery and retries the Mod automatically (F2).
       logger.warn(
         `Missing qb_edit_sequence for variant ${variant.id}. Worker will hydrate via ItemQuery fallback before retrying.`
       );
@@ -64,6 +72,37 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       qb_edit_sequence: qbEditSequence || "",
       ...restBody,
     };
+
+    // For a first-time add, QB needs the complete item definition. Anything the
+    // user just edited (already merged via restBody) wins; stored metadata only
+    // fills the gaps so the add doesn't fail on missing required refs.
+    if (isNew) {
+      const asNumber = (v: unknown): number | undefined =>
+        typeof v === "number" ? v : undefined;
+      const asString = (v: unknown): string | undefined =>
+        typeof v === "string" && v.trim() ? v : undefined;
+
+      inputPayload.item_type =
+        (asString(meta.qb_item_type) as UpdatePosProductInput["item_type"]) ??
+        "Inventory";
+      inputPayload.sku = inputPayload.sku ?? asString(variant.sku);
+      inputPayload.retail_price =
+        inputPayload.retail_price ?? asNumber(meta.qb_retail_price);
+      inputPayload.salesDescription =
+        inputPayload.salesDescription ?? asString(meta.sales_description);
+      inputPayload.cost = inputPayload.cost ?? asNumber(meta.qb_purchase_cost);
+      inputPayload.mpn = inputPayload.mpn ?? asString(meta.mpn);
+      inputPayload.income_account_full_name =
+        inputPayload.income_account_full_name ??
+        asString(meta.qb_income_account_full_name);
+      inputPayload.cogs_account_full_name =
+        inputPayload.cogs_account_full_name ??
+        asString(meta.qb_cogs_account_full_name);
+      inputPayload.vendor_full_name =
+        inputPayload.vendor_full_name ?? asString(meta.qb_vendor_full_name);
+      inputPayload.vendor_qb_id =
+        inputPayload.vendor_qb_id ?? asString(meta.qb_vendor_list_id);
+    }
 
     const { result, errors } = await updatePosProductWorkflow(req.scope).run({
       input: inputPayload,
