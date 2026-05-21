@@ -146,7 +146,11 @@ export const createPosProductV2Workflow = createWorkflow(
         return {
           title: v.title ?? v.sku,
           sku: v.sku,
-          barcode: v.barcode,
+          // Coerce blank barcode to undefined → Medusa stores NULL. The unique
+          // partial index IDX_product_variant_barcode_unique allows many NULLs
+          // but only ONE empty string "", so an empty "" from the form would
+          // collide with any prior barcode-less variant ("barcode already exists").
+          barcode: v.barcode?.trim() || undefined,
           material: v.material,
           hs_code: v.hs_code,
           origin_country: v.country_of_origin,

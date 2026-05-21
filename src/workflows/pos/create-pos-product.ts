@@ -37,7 +37,10 @@ export const createPosProductWorkflow = createWorkflow(
               {
                 title: "Default Unit",
                 sku: input.sku,
-                barcode: input.barcode,
+                // Blank barcode → undefined (Medusa stores NULL). An empty ""
+                // collides with the unique partial index on barcode (only one
+                // "" allowed; NULLs are unlimited). Mirrors the v2 workflow.
+                barcode: input.barcode?.trim() || undefined,
                 weight: input.weight,
                 material: input.material,
                 hs_code: input.hs_code,
