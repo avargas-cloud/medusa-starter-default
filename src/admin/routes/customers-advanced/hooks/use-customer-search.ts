@@ -1,8 +1,6 @@
 import { toast } from "@medusajs/ui";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { meiliClient } from "../../../lib/meili-client";
-import { CUSTOMERS_INDEX } from "../../../lib/meili-types";
 import type { MeiliCustomer } from "../../../lib/meili-types";
 
 const ITEMS_PER_PAGE = 20;
@@ -75,7 +73,6 @@ export const useCustomerSearch = ({
     ],
     queryFn: async () => {
       const offset = currentPage * ITEMS_PER_PAGE;
-      const index = meiliClient.index(CUSTOMERS_INDEX);
 
       // Build filter string
       const filters: string[] = [];
@@ -88,13 +85,26 @@ export const useCustomerSearch = ({
         filters.push(`price_level = "${priceLevelFilter}"`);
       }
 
-      const searchResults = await index.search(searchQuery || "", {
-        limit: ITEMS_PER_PAGE,
-        offset: offset,
-        sort: [sortBy],
-        filter: filters.length > 0 ? filters.join(" AND ") : undefined,
-        attributesToHighlight: ["company_name", "email", "list_id"],
+      // Server-side proxy: keeps the MeiliSearch key (and customer PII access)
+      // out of the browser bundle. See /admin/search/customers route.
+      const response = await fetch("/admin/search/customers", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          q: searchQuery || "",
+          limit: ITEMS_PER_PAGE,
+          offset,
+          sort: [sortBy],
+          filter: filters.length > 0 ? filters.join(" AND ") : undefined,
+        }),
       });
+
+      if (!response.ok) {
+        throw new Error("Failed to load customers: customer search failed");
+      }
+
+      const searchResults = await response.json();
 
       return {
         hits: searchResults.hits as MeiliCustomer[],

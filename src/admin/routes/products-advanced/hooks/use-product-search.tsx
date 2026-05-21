@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { meiliClient, PRODUCTS_INDEX } from "../../../lib/meili-client";
 import type { MeiliProduct } from "../../../lib/meili-types";
 
 const ITEMS_PER_PAGE = 20;
@@ -43,7 +42,6 @@ export const useProductSearch = ({
     ],
     queryFn: async () => {
       const offset = currentPage * ITEMS_PER_PAGE;
-      const index = meiliClient.index(PRODUCTS_INDEX);
 
       // Build filter string for MeiliSearch
       const filters: string[] = [];
@@ -56,13 +54,26 @@ export const useProductSearch = ({
         filters.push(`status = "${statusFilter}"`);
       }
 
-      const searchResults = await index.search(searchQuery || "", {
-        limit: ITEMS_PER_PAGE,
-        offset: offset,
-        attributesToHighlight: ["title", "variant_sku"],
-        sort: sortBy ? [sortBy] : undefined,
-        filter: filters.length > 0 ? filters.join(" AND ") : undefined,
+      // Server-side proxy: the MeiliSearch host + key live in backend runtime
+      // env, never in the admin bundle. See /admin/search/products route.
+      const response = await fetch("/admin/search/products", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          q: searchQuery || "",
+          limit: ITEMS_PER_PAGE,
+          offset,
+          sort: sortBy ? [sortBy] : undefined,
+          filter: filters.length > 0 ? filters.join(" AND ") : undefined,
+        }),
       });
+
+      if (!response.ok) {
+        throw new Error("Error loading products: product search failed");
+      }
+
+      const searchResults = await response.json();
 
       return {
         hits: searchResults.hits as MeiliProduct[],
