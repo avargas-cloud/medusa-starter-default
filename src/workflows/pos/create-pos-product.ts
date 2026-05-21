@@ -1,6 +1,7 @@
 import {
   createWorkflow,
   WorkflowResponse,
+  transform,
 } from "@medusajs/framework/workflows-sdk";
 import { createProductsWorkflow } from "@medusajs/medusa/core-flows";
 
@@ -25,6 +26,15 @@ export type CreatePosProductInput = {
 export const createPosProductWorkflow = createWorkflow(
   "create-pos-product",
   function (input: CreatePosProductInput) {
+    // Blank barcode → undefined (Medusa stores NULL). An empty "" collides with
+    // the unique partial index on barcode (only one "" allowed; NULLs unlimited).
+    // Must run inside transform(): in the raw workflow body `input` is a deferred
+    // proxy, so calling .trim() on it throws at load time ("trim is not a function").
+    const cleanBarcode = transform(
+      { input },
+      (data) => data.input.barcode?.trim() || undefined
+    );
+
     // 1. Create Product and Variant natively via Core Flow
     const products = createProductsWorkflow.runAsStep({
       input: {
@@ -37,10 +47,7 @@ export const createPosProductWorkflow = createWorkflow(
               {
                 title: "Default Unit",
                 sku: input.sku,
-                // Blank barcode → undefined (Medusa stores NULL). An empty ""
-                // collides with the unique partial index on barcode (only one
-                // "" allowed; NULLs are unlimited). Mirrors the v2 workflow.
-                barcode: input.barcode?.trim() || undefined,
+                barcode: cleanBarcode,
                 weight: input.weight,
                 material: input.material,
                 hs_code: input.hs_code,
