@@ -91,28 +91,73 @@ docker exec -e PGURL="${PROD_DATABASE_URL}" "${CONTAINER}" \
 DUMP_SIZE=$(docker exec "${CONTAINER}" du -h /tmp/prod.dump | cut -f1)
 echo "      dump size: ${DUMP_SIZE}"
 
-# Step 2 — drop and recreate the target DB cleanly.
-echo "[2/3] reset local DB..."
-docker exec "${CONTAINER}" psql -U postgres -d postgres <<'SQL'
-DROP DATABASE IF EXISTS ecopowertech_preview WITH (FORCE);
-CREATE DATABASE ecopowertech_preview;
+# Step 2 — reset a SIDE (staging) database, then restore into it.
+# Why staging instead of restoring straight into ecopowertech_preview:
+# the preview Medusa backend (supervised by nodemon) stays connected and
+# re-runs its migrations the instant its pool reconnects after a DROP. If we
+# restore directly, Medusa races pg_restore and recreates the same enums /
+# tables / primary keys concurrently → thousands of "already exists" /
+# "multiple primary keys" errors → pg_restore exits non-zero → `set -e`
+# aborts the script before the "Snapshot refresh finished:" line is printed,
+# which is why the dashboard showed "never". Nobody is connected to the
+# staging DB, so its restore is clean; we swap it in at the end.
+STAGING_DB="ecopowertech_preview_staging"
+STAGING_URL_IN_CONTAINER="postgres://postgres:preview@127.0.0.1:5432/${STAGING_DB}"
+
+echo "[2/4] reset staging DB (${STAGING_DB})..."
+# NOTE: `docker exec -i` is REQUIRED — without -i, stdin is not attached and
+# the heredoc never reaches psql, so DROP/CREATE silently no-op (this was the
+# original "never resets" bug that made every restore land on a populated DB).
+docker exec -i "${CONTAINER}" psql -U postgres -d postgres <<SQL
+DROP DATABASE IF EXISTS ${STAGING_DB} WITH (FORCE);
+CREATE DATABASE ${STAGING_DB};
 SQL
 
-# Step 3 — restore. Parallel jobs speed up large dumps.
-echo "[3/3] pg_restore into local..."
+# Step 3 — restore into staging. Parallel jobs speed up large dumps.
+# pg_restore can exit non-zero on ignorable warnings (extensions, COMMENTS),
+# so we capture the code instead of letting `set -e` kill the run, then gate
+# the swap on a sanity check below.
+echo "[3/4] pg_restore into ${STAGING_DB}..."
+set +e
 docker exec "${CONTAINER}" \
   pg_restore \
     --no-owner \
     --no-privileges \
     --jobs=4 \
-    --dbname="${LOCAL_DB_URL_IN_CONTAINER}" \
+    --dbname="${STAGING_URL_IN_CONTAINER}" \
     /tmp/prod.dump
+RESTORE_RC=$?
+set -e
+if [[ ${RESTORE_RC} -ne 0 ]]; then
+  echo "      pg_restore exited ${RESTORE_RC} (tolerating ignorable errors; verifying table count next)"
+fi
+
+# Sanity gate — never swap in an obviously broken restore. A healthy prod
+# snapshot has 200+ public tables; refuse below a conservative floor and
+# leave the current preview DB untouched.
+TABLE_COUNT=$(docker exec "${CONTAINER}" psql -U postgres -d "${STAGING_DB}" -A -t \
+  -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" | tr -d '[:space:]')
+echo "      staging public tables: ${TABLE_COUNT}"
+if [[ -z "${TABLE_COUNT}" ]] || [[ "${TABLE_COUNT}" -lt 50 ]]; then
+  echo "ERROR: staging restore looks broken (${TABLE_COUNT} tables) — leaving current preview DB intact."
+  docker exec "${CONTAINER}" rm -f /tmp/prod.dump
+  exit 6
+fi
+
+# Step 4 — swap staging in. FORCE-drop the live DB (kicks the backend's
+# connections; its pool reconnects to the renamed DB) then rename staging.
+# Restore already finished, so there is no writer to race anymore.
+echo "[4/4] swap ${STAGING_DB} → ecopowertech_preview..."
+docker exec -i "${CONTAINER}" psql -U postgres -d postgres <<SQL
+DROP DATABASE IF EXISTS ecopowertech_preview WITH (FORCE);
+ALTER DATABASE ${STAGING_DB} RENAME TO ecopowertech_preview;
+SQL
 
 # Clean up dump file inside the container.
 docker exec "${CONTAINER}" rm -f /tmp/prod.dump
 
 echo "Quick row counts:"
-docker exec "${CONTAINER}" psql -U postgres -d ecopowertech_preview -A -t <<'SQL'
+docker exec -i "${CONTAINER}" psql -U postgres -d ecopowertech_preview -A -t <<'SQL'
 SELECT 'order: ' || count(*) FROM "order";
 SELECT 'product: ' || count(*) FROM product;
 SELECT 'customer: ' || count(*) FROM customer;
