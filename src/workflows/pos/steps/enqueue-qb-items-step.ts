@@ -2,6 +2,7 @@ import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../modules/quickbooks-catalog";
 import { buildPrefVendorRef } from "../../../lib/quickbooks/pref-vendor-ref";
+import { upsertItemPipelineRow } from "../../../lib/quickbooks/upsert-item-pipeline-row";
 
 export type QbItemType = "Inventory" | "Service" | "NonInventory";
 
@@ -111,14 +112,19 @@ export const enqueueQbItemsStep = createStep(
         const bridge = await postToBridge(payload);
 
         if (bridge.error || !bridge.operationId) {
-          const row = await catalog.createQbItemPipelines({
-            variant_id: item.variant_id,
-            sku: item.sku,
-            item_type: item.item_type,
-            status: "error",
-            last_error: bridge.error ?? "Bridge returned no operationId",
-            op_payload: payload,
-          });
+          const row = await upsertItemPipelineRow(
+            catalog,
+            {
+              variant_id: item.variant_id,
+              sku: item.sku,
+              item_type: item.item_type,
+              op_action: "add",
+              status: "error",
+              last_error: bridge.error ?? "Bridge returned no operationId",
+              op_payload: payload,
+            },
+            logger as any
+          );
           logger.warn(
             `[createPosProductV2] Variant ${item.sku} failed to enqueue: ${bridge.error}`
           );
@@ -133,13 +139,19 @@ export const enqueueQbItemsStep = createStep(
           continue;
         }
 
-        const row = await catalog.createQbItemPipelines({
-          variant_id: item.variant_id,
-          sku: item.sku,
-          item_type: item.item_type,
-          status: "waiting",
-          qb_operation_id: bridge.operationId,
-        });
+        const row = await upsertItemPipelineRow(
+          catalog,
+          {
+            variant_id: item.variant_id,
+            sku: item.sku,
+            item_type: item.item_type,
+            op_action: "add",
+            status: "waiting",
+            op_payload: payload,
+            qb_operation_id: bridge.operationId,
+          },
+          logger as any
+        );
 
         results.push({
           variant_id: item.variant_id,
@@ -152,14 +164,19 @@ export const enqueueQbItemsStep = createStep(
         logger.error(
           `[createPosProductV2] Variant ${item.sku} exception: ${err.message}`
         );
-        const row = await catalog.createQbItemPipelines({
-          variant_id: item.variant_id,
-          sku: item.sku,
-          item_type: item.item_type,
-          status: "error",
-          last_error: err.message,
-          op_payload: payload,
-        });
+        const row = await upsertItemPipelineRow(
+          catalog,
+          {
+            variant_id: item.variant_id,
+            sku: item.sku,
+            item_type: item.item_type,
+            op_action: "add",
+            status: "error",
+            last_error: err.message,
+            op_payload: payload,
+          },
+          logger as any
+        );
         results.push({
           variant_id: item.variant_id,
           sku: item.sku,

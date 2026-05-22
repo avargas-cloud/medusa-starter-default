@@ -2,6 +2,7 @@ import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../modules/quickbooks-catalog";
+import { upsertItemPipelineRow } from "../../lib/quickbooks/upsert-item-pipeline-row";
 
 export type QbItemType = "Inventory" | "Service" | "NonInventory";
 
@@ -92,15 +93,21 @@ export const sendToQbStep = createStep(
       }
 
       try {
-        const row = await catalog.createQbItemPipelines({
-          variant_id: input.pipeline.variant_id,
-          sku: resolvedSku,
-          item_type: input.pipeline.item_type,
-          op_action: input.action,
-          op_payload: input.data,
-          qb_id: input.action === "mod" ? (input.data?.ListID ?? null) : null,
-          status: "waiting",
-        });
+        // Dedup: an `add` reuses its existing open row for this variant instead
+        // of stacking duplicates; a `mod` always inserts a fresh row.
+        const row = await upsertItemPipelineRow(
+          catalog,
+          {
+            variant_id: input.pipeline.variant_id,
+            sku: resolvedSku,
+            item_type: input.pipeline.item_type,
+            op_action: input.action,
+            op_payload: input.data,
+            qb_id: input.action === "mod" ? (input.data?.ListID ?? null) : null,
+            status: "waiting",
+          },
+          logger as any
+        );
         pipelineRowId = row.id;
       } catch (e: any) {
         // A failed pipeline insert must not block the bridge call — but log it
