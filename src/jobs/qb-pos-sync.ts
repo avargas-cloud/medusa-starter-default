@@ -12,6 +12,7 @@ import {
   getSoTxnId,
   getLatestInvoiceTxnId,
 } from "../lib/quickbooks/qb-metadata-types";
+import { promoteStaleWaitingSalesOrders } from "../lib/quickbooks/pipeline/promote-stale-sales-orders";
 import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger";
 import { FINANCE_MODULE } from "../modules/finance";
 // 1.5.4: handleDraftOrderCreated import removed — POS wake-up now flips
@@ -128,6 +129,17 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
         });
         processedOrders++;
       }
+    }
+
+    // 1b. Rescue ORPHANED 'waiting' Sales Order rows whose order is already past
+    // the 24h ceiling that section 1 keys off. See promoteStaleWaitingSalesOrders.
+    const rescuedSoRows = await promoteStaleWaitingSalesOrders(client);
+    if (rescuedSoRows.length > 0) {
+      logger.info(
+        `${LOG_PREFIX} ⏯️ Rescued ${rescuedSoRows.length} orphaned 'waiting' Sales Order row(s) → 'pending': ${rescuedSoRows
+          .map((r: any) => r.medusa_ref_number || r.order_id)
+          .join(", ")}`
+      );
     }
 
     // 2. Fetch eligible POS Draft Orders (Estimates)
@@ -273,10 +285,10 @@ export default async function qbPosSyncHandler(container: MedusaContainer) {
     }
 
     logger.info(
-      `${LOG_PREFIX} ✅ POS Async Sync complete. Created ${processedOrders} Sales Orders and ${processedDrafts} Estimates.`
+      `${LOG_PREFIX} ✅ POS Async Sync complete. Created ${processedOrders} Sales Orders, rescued ${rescuedSoRows.length} waiting SO(s), and ${processedDrafts} Estimates.`
     );
     await QbSyncLogger.complete(logId, {
-      message: `Created ${processedOrders} Sales Orders and ${processedDrafts} Estimates. Retried ${retriedPayments} payments.`,
+      message: `Created ${processedOrders} Sales Orders, rescued ${rescuedSoRows.length} orphaned waiting SO(s), and ${processedDrafts} Estimates. Retried ${retriedPayments} payments.`,
       db: client,
     });
   } catch (err: any) {

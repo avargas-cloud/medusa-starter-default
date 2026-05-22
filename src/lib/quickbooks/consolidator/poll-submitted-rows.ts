@@ -16,6 +16,7 @@ import {
   claimAndResetForResubmit,
   invalidateEditSequenceCache,
 } from "../qb-pipeline";
+import { enqueueEstimateDeactivateIfNeeded } from "../pipeline/enqueue-estimate-deactivate";
 import { buildEstimatePatch } from "../qb-metadata-types";
 import { resubmitByStep, type ResubmitRow } from "./resubmit-by-step";
 
@@ -797,6 +798,20 @@ export async function pollSubmittedRows(
           } catch (voidDepErr: any) {
             logger.warn(
               `${LOG_PREFIX} ⚠️ Error querying waiting void rows: ${voidDepErr.message}`
+            );
+          }
+        }
+
+        // sales_order confirmed → deactivate the order's converted Estimate so it
+        // drops off QB's "Open Estimates" list. See enqueueEstimateDeactivateIfNeeded.
+        if (txnId && row.step === "sales_order" && row.order_id) {
+          try {
+            await enqueueEstimateDeactivateIfNeeded(row.order_id, (m) =>
+              logger.info(`${LOG_PREFIX} ${m}`)
+            );
+          } catch (deactEnqErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Could not enqueue estimate_deactivate for order ${row.order_id}: ${deactEnqErr.message}`
             );
           }
         }

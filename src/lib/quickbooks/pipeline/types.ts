@@ -11,6 +11,7 @@ export type PipelineStep =
   | "refund_payment"
   | "void_estimate"
   | "estimate_cancel"
+  | "estimate_deactivate"
   | "void_invoice"
   | "void_sales_receipt"
   | "void_sales_order"

@@ -4,6 +4,7 @@ import { Modules } from "@medusajs/utils";
 import { getDbPool } from "../../../api/utils/db-pool";
 import {
   cancelEstimateInQb,
+  deactivateEstimateInQb,
 } from "../client/estimates";
 import { transferDocumentCustomer } from "../client/transfer";
 import {
@@ -312,6 +313,50 @@ export async function resubmitByStep(
           await failPipelineRow(
             row.id,
             cancelResult.error ?? "cancelEstimateInQb failed"
+          );
+        }
+        break;
+      }
+
+      case "estimate_deactivate": {
+        // Deactivate (IsActive=false) the QB Estimate that was converted into
+        // this order's Sales Order. QBXML has no SO↔Estimate link, so the SO is
+        // rebuilt from scratch and the original Estimate would otherwise linger
+        // as "open"; we close it here so it drops out of QB's Open Estimates
+        // list. Line amounts are PRESERVED (deactivate, not cancel/zero-out) so
+        // the historical estimate stays intact. txnId rides on the pipeline row.
+        const estDeactTxnId = row.qb_txn_id ?? null;
+        if (!estDeactTxnId) {
+          await failPipelineRow(
+            row.id,
+            "estimate_deactivate: row has no qb_txn_id — nothing to deactivate"
+          );
+          break;
+        }
+        const deactResult = await deactivateEstimateInQb(
+          estDeactTxnId,
+          undefined,
+          (m: string) => logger.info(m)
+        );
+        if (deactResult.success && deactResult.data?.operationId) {
+          const deactPool = getDbPool();
+          await deactPool.query(
+            `UPDATE qb_order_pipeline
+                  SET status = 'submitted',
+                      bridge_op_id = $2,
+                      qb_txn_id = $3,
+                      submitted_at = NOW(),
+                      updated_at = NOW()
+                WHERE id = $1`,
+            [row.id, deactResult.data.operationId, estDeactTxnId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ estimate_deactivate ${row.id} submitted op=${deactResult.data.operationId} txn=${estDeactTxnId}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            deactResult.error ?? "deactivateEstimateInQb failed"
           );
         }
         break;
