@@ -25,14 +25,14 @@ jest.mock("@medusajs/framework/workflows-sdk", () => ({
 // ─── Workflow dependency mock ──────────────────────────────────────────────────
 // Factory uses inline jest.fn() — can't reference outer vars here (hoisting).
 
-jest.mock("../../../sync-inventory-item-meilisearch", () => ({
+jest.mock("../../../../workflows/sync-inventory-item-meilisearch", () => ({
   syncInventoryItemToMeiliSearchWorkflow: jest.fn(),
 }));
 
 // ─── Imports (after mocks) ────────────────────────────────────────────────────
 
-import { syncInventoryItemToMeiliSearchWorkflow } from "../../../sync-inventory-item-meilisearch";
-import { syncReceiptInventoryMeiliStep } from "../sync-receipt-inventory-meili-step";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../workflows/sync-inventory-item-meilisearch";
+import { syncReceiptInventoryMeiliStep } from "../../../../workflows/shared/steps/sync-receipt-inventory-meili-step";
 
 // ─── Typed references ─────────────────────────────────────────────────────────
 

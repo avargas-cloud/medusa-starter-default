@@ -10,13 +10,13 @@
 
 // ─── Step mocks ───────────────────────────────────────────────────────────────
 
-jest.mock("../steps/contra-apply-receipt-stock-step", () => ({
+jest.mock("../../../workflows/purchase-orders/steps/contra-apply-receipt-stock-step", () => ({
   contraApplyReceiptStockStep: jest.fn(),
 }));
-jest.mock("../steps/persist-delete-receipt-step", () => ({
+jest.mock("../../../workflows/purchase-orders/steps/persist-delete-receipt-step", () => ({
   persistDeleteReceiptStep: jest.fn(),
 }));
-jest.mock("../../shared/steps/sync-receipt-inventory-meili-step", () => ({
+jest.mock("../../../workflows/shared/steps/sync-receipt-inventory-meili-step", () => ({
   syncReceiptInventoryMeiliStep: jest.fn(),
 }));
 
@@ -35,11 +35,11 @@ jest.mock("@medusajs/framework/workflows-sdk", () => ({
 
 // ─── Imports after mocks ──────────────────────────────────────────────────────
 
-import { contraApplyReceiptStockStep } from "../steps/contra-apply-receipt-stock-step";
-import { persistDeleteReceiptStep } from "../steps/persist-delete-receipt-step";
-import { syncReceiptInventoryMeiliStep } from "../../shared/steps/sync-receipt-inventory-meili-step";
-import { deletePurchaseOrderReceiptWorkflow } from "../delete-purchase-order-receipt";
-import type { DeletePoReceiptWorkflowInput } from "../delete-purchase-order-receipt";
+import { contraApplyReceiptStockStep } from "../../../workflows/purchase-orders/steps/contra-apply-receipt-stock-step";
+import { persistDeleteReceiptStep } from "../../../workflows/purchase-orders/steps/persist-delete-receipt-step";
+import { syncReceiptInventoryMeiliStep } from "../../../workflows/shared/steps/sync-receipt-inventory-meili-step";
+import { deletePurchaseOrderReceiptWorkflow } from "../../../workflows/purchase-orders/delete-purchase-order-receipt";
+import type { DeletePoReceiptWorkflowInput } from "../../../workflows/purchase-orders/delete-purchase-order-receipt";
 
 // ─── Typed mock references ────────────────────────────────────────────────────
 

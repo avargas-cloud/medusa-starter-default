@@ -41,6 +41,13 @@ interface InventoryServiceLike {
     location_id: string,
     adjustment: number
   ) => Promise<void>;
+  createInventoryLevels: (
+    data: Array<{
+      inventory_item_id: string;
+      location_id: string;
+      stocked_quantity?: number;
+    }>
+  ) => Promise<unknown>;
 }
 
 export const adjustFoReceiptStockStep = createStep(
@@ -68,6 +75,20 @@ export const adjustFoReceiptStockStep = createStep(
         throw new Error(
           `Cannot reduce qty on receipt line ${line.receipt_line_id}: stock=${preStock}, edit would result in ${preStock + line.delta}.`
         );
+      }
+
+      // Defense in depth: a positive receipt into a location must always be
+      // possible. If the item has no inventory_level here yet (e.g. a product
+      // created without a China level), create one at 0 before adjusting —
+      // adjustInventory throws on a missing level.
+      if (levels.length === 0 && line.delta > 0) {
+        await inventoryService.createInventoryLevels([
+          {
+            inventory_item_id: line.inventory_item_id,
+            location_id: input.location_id,
+            stocked_quantity: 0,
+          },
+        ]);
       }
 
       await inventoryService.adjustInventory(

@@ -10,16 +10,16 @@
 
 // ─── Step mocks (inline jest.fn() — no external var references) ───────────────
 
-jest.mock("../steps/allocate-fo-receipt-sequence-step", () => ({
+jest.mock("../../../workflows/factory-orders/steps/allocate-fo-receipt-sequence-step", () => ({
   allocateFoReceiptSequenceStep: jest.fn(),
 }));
-jest.mock("../steps/apply-fo-receipt-stock-step", () => ({
+jest.mock("../../../workflows/factory-orders/steps/apply-fo-receipt-stock-step", () => ({
   applyFoReceiptStockStep: jest.fn(),
 }));
-jest.mock("../steps/persist-fo-receipt-step", () => ({
+jest.mock("../../../workflows/factory-orders/steps/persist-fo-receipt-step", () => ({
   persistFoReceiptStep: jest.fn(),
 }));
-jest.mock("../../shared/steps/sync-receipt-inventory-meili-step", () => ({
+jest.mock("../../../workflows/shared/steps/sync-receipt-inventory-meili-step", () => ({
   syncReceiptInventoryMeiliStep: jest.fn(),
 }));
 
@@ -38,12 +38,12 @@ jest.mock("@medusajs/framework/workflows-sdk", () => ({
 
 // ─── Imports after mocks ──────────────────────────────────────────────────────
 
-import { allocateFoReceiptSequenceStep } from "../steps/allocate-fo-receipt-sequence-step";
-import { applyFoReceiptStockStep } from "../steps/apply-fo-receipt-stock-step";
-import { persistFoReceiptStep } from "../steps/persist-fo-receipt-step";
-import { syncReceiptInventoryMeiliStep } from "../../shared/steps/sync-receipt-inventory-meili-step";
-import { receiveFactoryOrderWorkflow } from "../receive-factory-order";
-import type { ReceiveFactoryOrderWorkflowInput } from "../receive-factory-order";
+import { allocateFoReceiptSequenceStep } from "../../../workflows/factory-orders/steps/allocate-fo-receipt-sequence-step";
+import { applyFoReceiptStockStep } from "../../../workflows/factory-orders/steps/apply-fo-receipt-stock-step";
+import { persistFoReceiptStep } from "../../../workflows/factory-orders/steps/persist-fo-receipt-step";
+import { syncReceiptInventoryMeiliStep } from "../../../workflows/shared/steps/sync-receipt-inventory-meili-step";
+import { receiveFactoryOrderWorkflow } from "../../../workflows/factory-orders/receive-factory-order";
+import type { ReceiveFactoryOrderWorkflowInput } from "../../../workflows/factory-orders/receive-factory-order";
 
 // ─── Typed mock references ────────────────────────────────────────────────────
 

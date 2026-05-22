@@ -10,19 +10,19 @@
 
 // ─── Step mocks ───────────────────────────────────────────────────────────────
 
-jest.mock("../steps/allocate-receipt-sequence-step", () => ({
+jest.mock("../../../workflows/purchase-orders/steps/allocate-receipt-sequence-step", () => ({
   allocateReceiptSequenceStep: jest.fn(),
 }));
-jest.mock("../steps/apply-receipt-stock-step", () => ({
+jest.mock("../../../workflows/purchase-orders/steps/apply-receipt-stock-step", () => ({
   applyReceiptStockStep: jest.fn(),
 }));
-jest.mock("../steps/persist-receipt-step", () => ({
+jest.mock("../../../workflows/purchase-orders/steps/persist-receipt-step", () => ({
   persistReceiptStep: jest.fn(),
 }));
-jest.mock("../steps/enqueue-qb-item-receipt-step", () => ({
+jest.mock("../../../workflows/purchase-orders/steps/enqueue-qb-item-receipt-step", () => ({
   enqueueQbItemReceiptStep: jest.fn(),
 }));
-jest.mock("../../shared/steps/sync-receipt-inventory-meili-step", () => ({
+jest.mock("../../../workflows/shared/steps/sync-receipt-inventory-meili-step", () => ({
   syncReceiptInventoryMeiliStep: jest.fn(),
 }));
 
@@ -41,13 +41,13 @@ jest.mock("@medusajs/framework/workflows-sdk", () => ({
 
 // ─── Imports after mocks ──────────────────────────────────────────────────────
 
-import { allocateReceiptSequenceStep } from "../steps/allocate-receipt-sequence-step";
-import { applyReceiptStockStep } from "../steps/apply-receipt-stock-step";
-import { persistReceiptStep } from "../steps/persist-receipt-step";
-import { enqueueQbItemReceiptStep } from "../steps/enqueue-qb-item-receipt-step";
-import { syncReceiptInventoryMeiliStep } from "../../shared/steps/sync-receipt-inventory-meili-step";
-import { receivePurchaseOrderWorkflow } from "../receive-purchase-order";
-import type { ReceivePurchaseOrderWorkflowInput } from "../receive-purchase-order";
+import { allocateReceiptSequenceStep } from "../../../workflows/purchase-orders/steps/allocate-receipt-sequence-step";
+import { applyReceiptStockStep } from "../../../workflows/purchase-orders/steps/apply-receipt-stock-step";
+import { persistReceiptStep } from "../../../workflows/purchase-orders/steps/persist-receipt-step";
+import { enqueueQbItemReceiptStep } from "../../../workflows/purchase-orders/steps/enqueue-qb-item-receipt-step";
+import { syncReceiptInventoryMeiliStep } from "../../../workflows/shared/steps/sync-receipt-inventory-meili-step";
+import { receivePurchaseOrderWorkflow } from "../../../workflows/purchase-orders/receive-purchase-order";
+import type { ReceivePurchaseOrderWorkflowInput } from "../../../workflows/purchase-orders/receive-purchase-order";
 
 // ─── Typed mock references ────────────────────────────────────────────────────
 

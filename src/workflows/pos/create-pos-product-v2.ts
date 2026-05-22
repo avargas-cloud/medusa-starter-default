@@ -10,6 +10,7 @@ import { syncProductToMeiliSearchWorkflow } from "../sync-product-meilisearch";
 import { updateInventoryIncrementalWorkflow } from "../update-inventory-incremental";
 
 import { applyShippingAttributesStep } from "./steps/apply-shipping-attributes-step";
+import { ensureMiamiLevelsStep } from "./steps/ensure-miami-levels-step";
 import { applyWholesalePricesStep } from "./steps/apply-wholesale-prices-step";
 import { enqueueQbItemsStep, QbItemType } from "./steps/enqueue-qb-items-step";
 import { linkQbVendorStep } from "./steps/link-qb-vendor-step";
@@ -227,6 +228,16 @@ export const createPosProductV2Workflow = createWorkflow(
     });
 
     const productRef = transform({ products }, (data) => data.products[0]);
+
+    // createProductsWorkflow creates the inventory_item for each managed
+    // variant but NOT an inventory_level at any location, leaving the item
+    // unstockable (PO receive throws "Inventory level ... not found"). Create
+    // a Miami level at 0 so the product can be received/sold immediately.
+    const miamiLevelsInput = transform({ input, productRef }, (data) => ({
+      product_id: (data.productRef as { id?: string } | undefined)?.id ?? "",
+      manage_inventory: data.input.item_type === "Inventory",
+    }));
+    ensureMiamiLevelsStep(miamiLevelsInput);
 
     const wholesalePrices = transform({ input, productRef }, (data) => {
       const variants = (data.productRef as any)?.variants ?? [];

@@ -281,7 +281,11 @@ export async function POST(
 
     return res.json({ receipt: result });
   } catch (err) {
+    // The request body already passed validation above; a failure here is a
+    // runtime workflow error (missing inventory level, QB enqueue, etc.), not
+    // a malformed request. Surface 422 with the real message so the operator
+    // sees the actual cause instead of a generic 400.
     const message = err instanceof Error ? err.message : "Failed to receive";
-    return res.status(400).json({ error: message, code: "receive_failed" });
+    return res.status(422).json({ error: message, code: "receive_failed" });
   }
 }
