@@ -61,6 +61,29 @@ export const updateDraftSchema = z.object({
 
 export const submitSchema = z.object({});
 
+// ── Tracking ──────────────────────────────────────────────────────────────
+// Inbound shipment tracking attached to a PO. Provider/url are computed on the
+// frontend (carrier auto-detect lives in lib/tracking.ts); the backend stores
+// the snapshot verbatim. tracking_url may be empty for untrackable carriers
+// (e.g. ocean freight).
+
+export const addTrackingSchema = z.object({
+  provider: z.string().trim().min(1).max(50),
+  tracking_number: z.string().trim().min(1).max(200),
+  tracking_url: z.string().trim().max(2000).nullish(),
+});
+
+export const updateTrackingSchema = z.object({
+  tracking_id: z.string().trim().min(1),
+  provider: z.string().trim().min(1).max(50),
+  tracking_number: z.string().trim().min(1).max(200),
+  tracking_url: z.string().trim().max(2000).nullish(),
+});
+
+export const deleteTrackingSchema = z.object({
+  tracking_id: z.string().trim().min(1),
+});
+
 export const receiveLineSchema = z.object({
   po_line_id: z.string().min(1),
   qty_received_now: z.number().int().positive().max(1_000_000),
@@ -154,5 +177,8 @@ export type DeleteReceiptInput = z.infer<typeof deleteReceiptSchema>;
 export type UpdateReceiptInput = z.infer<typeof updateReceiptSchema>;
 export type UpdateReceiptLineQty = z.infer<typeof updateReceiptLineQtySchema>;
 export type ListQuery = z.infer<typeof listQuerySchema>;
+export type AddTrackingInput = z.infer<typeof addTrackingSchema>;
+export type UpdateTrackingInput = z.infer<typeof updateTrackingSchema>;
+export type DeleteTrackingInput = z.infer<typeof deleteTrackingSchema>;
 
 export const ALLOWED_STATUS_VALUES = PURCHASE_ORDER_STATUSES;

@@ -106,4 +106,13 @@ export const PurchaseOrder = model.define("purchase_order", {
   // Free-form metadata bag — currently used for receiving worksheet snapshots
   // (metadata.receiving_drafts[]). Stored as JSONB.
   metadata: model.json().nullable(),
+
+  // Inbound shipment tracking — JSON array of tracking entries attached to the
+  // PO (one PO can ship in multiple boxes / carriers). Local-only logistics,
+  // never synced to QuickBooks. Each entry:
+  //   { id, provider, tracking_number, tracking_url, created_at,
+  //     created_by_user_id }
+  // Editable at any non-terminal lifecycle stage via the sibling
+  // /admin/purchase-orders/:id/tracking route.
+  tracking: model.json().nullable(),
 });
