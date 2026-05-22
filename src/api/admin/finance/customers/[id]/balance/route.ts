@@ -40,15 +40,30 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const availableCreditsList: any[] = [];
 
     unappliedPayments.forEach((p: any) => {
-      if (p.status === "available" || p.status === "partially_applied") {
-        const totalApplied = p.applications
+      // A credit is still spendable when it carries a positive remaining
+      // balance — even after a *partial* refund. We mirror the canonical
+      // remaining formula used by the refund route
+      // (admin/customer-payments/:id/refund):
+      //   remaining = amount - active applications - metadata.refund_amount
+      // 'partial_refunded' must be included or a partially-refunded store
+      // credit vanishes entirely from available credit. 'refunded'/'voided'/
+      // 'applied' net to <= 0 here and are dropped by the > 0 guard below.
+      if (
+        p.status === "available" ||
+        p.status === "partially_applied" ||
+        p.status === "partial_refunded"
+      ) {
+        const totalApplied = (p.applications ?? [])
           .filter((app: any) => !app.voided_at)
           .reduce(
             (sum: number, app: any) => sum + Number(app.amount_applied),
             0
           );
 
-        const remainingAmountCents = Number(p.amount) - totalApplied;
+        const refundedCents = Number(p.metadata?.refund_amount ?? 0);
+
+        const remainingAmountCents =
+          Number(p.amount) - totalApplied - refundedCents;
 
         if (remainingAmountCents > 0) {
           availableCreditCents += remainingAmountCents;
