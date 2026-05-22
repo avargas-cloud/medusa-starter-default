@@ -22,6 +22,13 @@ export interface OrderForMeili {
   created_at: Date | string | null;
   updated_at: Date | string | null;
   metadata: Record<string, unknown> | null;
+  summary?: {
+    current_order_total?: number | string | null;
+  } | null;
+  payment_collections?: Array<{
+    captured_amount?: number | string | null;
+    refunded_amount?: number | string | null;
+  }> | null;
   customer?: {
     first_name?: string | null;
     last_name?: string | null;
@@ -40,6 +47,21 @@ export interface OrderForMeili {
   sales_channel?: { id?: string | null; name?: string | null } | null;
 }
 
+/**
+ * Effective payment status — mirrors the POS UI's getEffectivePaymentStatus()
+ * (store-pos/app/(pos)/orders/utils.ts). The native Medusa `payment_status`
+ * is NOT enough: a "deposited" or "fully_paid" order is derived from captured
+ * payment-collection amounts + the referential_deposit metadata, not from the
+ * native field. Tabs filter on these derived values, so they MUST be computed
+ * at index time for Meili to return the same truth the UI shows.
+ */
+export type EffectivePaymentStatus =
+  | "not_paid"
+  | "deposited"
+  | "fully_paid"
+  | "captured"
+  | "voided";
+
 export interface OrderMeiliDoc {
   id: string;
   display_id: number;
@@ -55,8 +77,16 @@ export interface OrderMeiliDoc {
   status: string;
   payment_status: string;
   fulfillment_status: string;
+  // Derived flags — computed identically to the POS UI helpers so each tab
+  // maps to a single filterable boolean and Meili returns the true full set.
+  effective_payment: EffectivePaymentStatus;
+  is_unpaid: boolean;
+  is_open: boolean;
+  is_closed: boolean;
+  is_separated: boolean;
   is_canceled: boolean;
   is_voided: boolean;
+  is_web: boolean;
   is_web_order: boolean;
   sales_rep_initials: string;
   sales_channel_id: string;
@@ -84,6 +114,82 @@ function ts(v: Date | string | null | undefined): number {
   if (!v) return 0;
   const t = v instanceof Date ? v.getTime() : new Date(v).getTime();
   return Number.isFinite(t) ? t : 0;
+}
+
+const OPEN_FULFILLMENT = new Set([
+  "not_fulfilled",
+  "partially_fulfilled",
+  "partially_shipped",
+  "partially_delivered",
+]);
+const CLOSED_FULFILLMENT = new Set(["fulfilled", "shipped", "delivered"]);
+
+// --- Effective payment computation (port of store-pos orders/utils.ts) ---
+
+function getOrderTotal(order: OrderForMeili): number | null {
+  const meta = (order.metadata || {}) as Record<string, unknown>;
+  const posTotal = asNum(meta.pos_total);
+  if (posTotal > 0) return posTotal;
+
+  const orderTotal = asNum(order.total);
+  if (orderTotal > 0) return orderTotal;
+
+  const summaryTotal = order.summary?.current_order_total;
+  if (summaryTotal != null) {
+    const summaryNum = asNum(summaryTotal);
+    const captured = (order.payment_collections || []).reduce(
+      (sum, pc) => sum + asNum(pc?.captured_amount),
+      0
+    );
+    const ps = asString(order.payment_status);
+    if (
+      captured > summaryNum &&
+      (ps === "captured" || ps === "partially_captured")
+    ) {
+      return captured;
+    }
+    return summaryNum;
+  }
+  return null;
+}
+
+function getPaidAmount(order: OrderForMeili): number | null {
+  const meta = (order.metadata || {}) as Record<string, unknown>;
+  const referentialDeposit = asNum(meta.referential_deposit);
+  let nativePaid: number | null = null;
+
+  const collections = order.payment_collections || [];
+  if (collections.length > 0) {
+    nativePaid = collections.reduce(
+      (sum, pc) => sum + (asNum(pc?.captured_amount) - asNum(pc?.refunded_amount)),
+      0
+    );
+  }
+  const ps = asString(order.payment_status);
+  if (nativePaid == null && ps === "captured") nativePaid = getOrderTotal(order);
+  if (nativePaid == null && (ps === "not_paid" || ps === "refunded")) {
+    nativePaid = 0;
+  }
+
+  if (referentialDeposit > 0) return Math.max(nativePaid ?? 0, referentialDeposit);
+  return nativePaid;
+}
+
+function getEffectivePaymentStatus(
+  order: OrderForMeili
+): EffectivePaymentStatus {
+  const meta = (order.metadata || {}) as Record<string, unknown>;
+  if (meta.qb_sync_status === "voided") return "voided";
+  if (asString(order.payment_status) === "captured") return "captured";
+
+  const paidAmount = getPaidAmount(order) ?? 0;
+  const total = getOrderTotal(order) ?? 0;
+
+  if (paidAmount > 0 && total > 0 && paidAmount + 0.01 >= total) {
+    return "fully_paid";
+  }
+  if (paidAmount > 0) return "deposited";
+  return "not_paid";
 }
 
 export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
@@ -129,15 +235,32 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
     .map((inv) => asString(inv?.ref_number))
     .filter(Boolean);
 
-  const isCanceled = order.canceled_at != null;
-  const isVoided =
-    typeof meta.voided_at === "string" || meta.voided_at instanceof Date;
+  const fulfillmentStatus = asString(order.fulfillment_status);
 
-  // A "web order" in this codebase is anything from a sales channel other
-  // than the POS one. The frontend's isWebOrder() helper uses the same
-  // logic.
+  // Match the POS UI helpers exactly (orders/utils.ts):
+  //   isCanceled = status==='canceled' || fulfillment_status==='canceled'
+  //   isVoided   = metadata.qb_sync_status === 'voided'
+  const isCanceled =
+    asString(order.status) === "canceled" ||
+    fulfillmentStatus === "canceled" ||
+    order.canceled_at != null;
+  const isVoided = meta.qb_sync_status === "voided";
+
+  // A "web order" is anything NOT from the POS sales channel and not flagged
+  // pos_created. Mirrors the frontend isWebOrder() helper.
   const salesChannelId = asString(order.sales_channel?.id);
+  const isWeb =
+    !!salesChannelId &&
+    salesChannelId !== POS_SC_ID &&
+    meta.pos_created !== true;
+  // Legacy field kept for backwards compatibility (channel-only check).
   const isWebOrder = !!salesChannelId && salesChannelId !== POS_SC_ID;
+
+  const effectivePayment = getEffectivePaymentStatus(order);
+  const isOpen = OPEN_FULFILLMENT.has(fulfillmentStatus);
+  const isClosed = CLOSED_FULFILLMENT.has(fulfillmentStatus);
+  const isSeparated =
+    !!meta.is_separated && !CLOSED_FULFILLMENT.has(fulfillmentStatus);
 
   const displayId = order.display_id ?? 0;
 
@@ -155,9 +278,15 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
     qb_invoice_refs: qbInvoiceRefs,
     status: asString(order.status),
     payment_status: asString(order.payment_status),
-    fulfillment_status: asString(order.fulfillment_status),
+    fulfillment_status: fulfillmentStatus,
+    effective_payment: effectivePayment,
+    is_unpaid: effectivePayment === "not_paid",
+    is_open: isOpen,
+    is_closed: isClosed,
+    is_separated: isSeparated,
     is_canceled: isCanceled,
     is_voided: isVoided,
+    is_web: isWeb,
     is_web_order: isWebOrder,
     sales_rep_initials: salesRepInitials,
     sales_channel_id: salesChannelId,
