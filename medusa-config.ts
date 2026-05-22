@@ -4,6 +4,19 @@ import { loadEnv, defineConfig } from "@medusajs/framework/utils";
 console.log("🔵 Loading medusa-config.ts");
 console.log("🔵 CWD:", process.cwd());
 loadEnv(process.env.NODE_ENV || "development", process.cwd());
+
+// Vercel preview deployments get a fresh per-deploy hash origin under our Vercel team
+// (e.g. ecopowertech-store-<hash>-avargas-clouds-projects.vercel.app, and the same for
+// the web project). These can't be enumerated in the env vars, so we append a regex
+// that allows any preview under our team. Medusa's CORS parser treats a comma-separated
+// entry wrapped in slashes as a RegExp. Keeping it in code means every preview works
+// without editing Railway env on each deploy.
+const VERCEL_PREVIEW_CORS =
+  "/^https:\\/\\/[a-z0-9-]+-avargas-clouds-projects\\.vercel\\.app$/";
+
+function withVercelPreviews(base: string): string {
+  return base ? `${base},${VERCEL_PREVIEW_CORS}` : VERCEL_PREVIEW_CORS;
+}
 console.log("🔵 REDIS_URL:", process.env.REDIS_URL ? "FOUND" : "MISSING");
 console.log("🔵 DATABASE_URL:", process.env.DATABASE_URL ? "FOUND" : "MISSING");
 console.log(
@@ -50,23 +63,30 @@ module.exports = defineConfig({
     http: {
       // ✅ CORS: All origins must come from environment variables.
       // Set STORE_CORS, ADMIN_CORS, AUTH_CORS on Railway — no hardcoded fallbacks in production.
-      storeCors:
+      // Vercel preview deployments get a fresh per-deploy hash origin
+      // (ecopowertech-store-<hash>-avargas-clouds-projects.vercel.app) that can't be
+      // listed statically. We append a regex so every preview's browser-side /admin/*
+      // and /auth/* fetches pass CORS without touching the env vars on each deploy.
+      storeCors: withVercelPreviews(
         process.env.STORE_CORS ||
-        (process.env.NODE_ENV === "production"
-          ? "" // Must be set via STORE_CORS env var on Railway
-          : "http://localhost:4321,https://localhost:4321,http://localhost:8000,https://docs.medusajs.com,http://localhost:3001"),
+          (process.env.NODE_ENV === "production"
+            ? "" // Must be set via STORE_CORS env var on Railway
+            : "http://localhost:4321,https://localhost:4321,http://localhost:8000,https://docs.medusajs.com,http://localhost:3001")
+      ),
 
-      adminCors:
+      adminCors: withVercelPreviews(
         process.env.ADMIN_CORS ||
-        (process.env.NODE_ENV === "production"
-          ? "" // Must be set via ADMIN_CORS env var on Railway
-          : "http://localhost:5173,http://localhost:9000,http://localhost:3001"),
+          (process.env.NODE_ENV === "production"
+            ? "" // Must be set via ADMIN_CORS env var on Railway
+            : "http://localhost:5173,http://localhost:9000,http://localhost:3001")
+      ),
 
-      authCors:
+      authCors: withVercelPreviews(
         process.env.AUTH_CORS ||
-        (process.env.NODE_ENV === "production"
-          ? "" // Must be set via AUTH_CORS env var on Railway
-          : "http://localhost:4321,https://localhost:4321,http://localhost:5173,http://localhost:9000,http://localhost:3001"),
+          (process.env.NODE_ENV === "production"
+            ? "" // Must be set via AUTH_CORS env var on Railway
+            : "http://localhost:4321,https://localhost:4321,http://localhost:5173,http://localhost:9000,http://localhost:3001")
+      ),
 
       jwtSecret: process.env.JWT_SECRET || "supersecret",
       cookieSecret: process.env.COOKIE_SECRET || "supersecret",
