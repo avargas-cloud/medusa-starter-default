@@ -6,6 +6,7 @@ import {
 import { createProductsWorkflow } from "@medusajs/medusa/core-flows";
 
 import { sendToQbStep } from "../qb/send-to-qb-step";
+import { buildPrefVendorRef } from "../../lib/quickbooks/pref-vendor-ref";
 
 export type CreatePosProductInput = {
   title: string;
@@ -72,22 +73,29 @@ export const createPosProductWorkflow = createWorkflow(
 
     const product = products[0];
 
-    // 2. Send the creation to QuickBooks Bridge
+    // 2. Build the QB payload inside transform(): `input` is a deferred proxy in
+    // the workflow body, so the PrefVendorRef guard (which must never emit an
+    // internal qb_vendor.id as a ListID) has to run on resolved values.
+    const qbData = transform({ input }, (data) => {
+      const i = data.input;
+      return {
+        Name: i.sku,
+        SalesDesc: i.salesDescription,
+        PurchaseDesc: i.salesDescription,
+        SalesPrice: 0.0, // POS doesn't set selling price yet, edit later
+        PurchaseCost: i.cost,
+        PrefVendorRef: buildPrefVendorRef({
+          vendorIdOrListId: i.vendor_qb_id,
+          vendorFullName: i.vendor,
+        }),
+        ManufacturerPartNumber: i.mpn || undefined,
+      };
+    });
+
+    // 3. Send the creation to QuickBooks Bridge
     const qbResponse = sendToQbStep({
       action: "add",
-      data: {
-        Name: input.sku,
-        SalesDesc: input.salesDescription,
-        PurchaseDesc: input.salesDescription,
-        SalesPrice: 0.0, // POS doesn't set selling price yet, edit later
-        PurchaseCost: input.cost,
-        PrefVendorRef: input.vendor_qb_id
-          ? { ListID: input.vendor_qb_id }
-          : input.vendor
-            ? { FullName: input.vendor }
-            : undefined,
-        ManufacturerPartNumber: input.mpn || undefined,
-      },
+      data: qbData,
     });
 
     // We could theoretically write back the operation ID to the variant here if needed

@@ -1,6 +1,7 @@
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../modules/quickbooks-catalog";
+import { buildPrefVendorRef } from "../../../lib/quickbooks/pref-vendor-ref";
 
 export type QbItemType = "Inventory" | "Service" | "NonInventory";
 
@@ -31,8 +32,6 @@ type BridgeResponse = {
 const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
 const API_KEY = process.env.QB_API_KEY || "";
 
-const isQbListId = (id: string): boolean => /^[0-9A-Fa-f]+-\d+$/.test(id);
-
 const buildQbPayload = (item: EnqueueQbItemInput) => {
   const base: Record<string, unknown> = {
     Name: item.sku,
@@ -42,11 +41,11 @@ const buildQbPayload = (item: EnqueueQbItemInput) => {
   };
 
   if (item.mpn) base.ManufacturerPartNumber = item.mpn;
-  const vid = item.vendor_list_id;
-  if (vid && isQbListId(vid))
-    base.PrefVendorRef = { ListID: vid };
-  else if (item.vendor_full_name)
-    base.PrefVendorRef = { FullName: item.vendor_full_name };
+  const prefVendorRef = buildPrefVendorRef({
+    vendorIdOrListId: item.vendor_list_id,
+    vendorFullName: item.vendor_full_name,
+  });
+  if (prefVendorRef) base.PrefVendorRef = prefVendorRef;
   if (item.income_account_full_name)
     base.IncomeAccountRef = { FullName: item.income_account_full_name };
 

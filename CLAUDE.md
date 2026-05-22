@@ -153,6 +153,8 @@ yarn sync:meili   # Suministro forzado a Search index
 Nunca escribas `.ts` sueltos en el roor. Los helpers y arreglos los debes guardar ordenadamente:
 `src/scripts/{checks, verify, debug, tests, diagnostics, migrations, sync, fix}/script-name.ts`
 
+**Unit specs (`*.unit.spec.ts`): NUNCA dentro de dirs de recurso** (`src/{workflows,jobs,api,subscribers,modules}/**/__tests__/`). `medusa develop` importa todo archivo cuyo path contenga ese substring → ejecuta `describe`/`jest` en runtime → crashea el boot local (`describe is not defined`, puerto 9000 muerto; prod inmune porque el build excluye specs). Poné los specs en `src/__tests__/<nombre>/` — jest los detecta igual (`**/src/**/__tests__/**/*.unit.spec.ts`).
+
 ### 4. Type Safety Extrema
 El proyecto usa TypeScript restrictivo. Cero uso de `: any`. Cero de "implicit returns". Si un tipo no existe en en paquete oficial `@medusajs/types`, constrúyelo localmente simulando sus interfaces base.
 

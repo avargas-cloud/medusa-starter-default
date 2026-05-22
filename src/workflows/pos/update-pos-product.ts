@@ -7,6 +7,7 @@ import { updateProductsWorkflow } from "@medusajs/medusa/core-flows";
 
 import { sendToQbStep, type QbItemType } from "../qb/send-to-qb-step";
 import { syncProductToMeiliSearchWorkflow } from "../sync-product-meilisearch";
+import { buildPrefVendorRef } from "../../lib/quickbooks/pref-vendor-ref";
 
 import { applyShippingAttributesStep } from "./steps/apply-shipping-attributes-step";
 import { linkQbVendorStep } from "./steps/link-qb-vendor-step";
@@ -179,14 +180,13 @@ export const updatePosProductWorkflow = createWorkflow(
       const i = data.input;
 
       // PrefVendorRef prefers ListID (stable) over FullName (renamable) — shared
-      // by both add and mod payloads.
-      const prefVendorRef = i.vendor_qb_id
-        ? { ListID: i.vendor_qb_id }
-        : i.vendor_full_name
-          ? { FullName: i.vendor_full_name }
-          : i.vendor
-            ? { FullName: i.vendor }
-            : undefined;
+      // by both add and mod payloads. buildPrefVendorRef guards against ever
+      // sending an internal qb_vendor.id as a ListID (QB Error 3000); it falls
+      // back to FullName so QB still resolves the vendor by name.
+      const prefVendorRef = buildPrefVendorRef({
+        vendorIdOrListId: i.vendor_qb_id,
+        vendorFullName: i.vendor_full_name ?? i.vendor,
+      });
 
       // No qb_id → the item was never created in QuickBooks. Build a first-time
       // "add" with the full item definition (mirrors enqueue-qb-items-step
