@@ -26,15 +26,7 @@ import {
   deleteTrackingSchema,
   updateTrackingSchema,
 } from "../../_lib/validators";
-
-interface TrackingEntry {
-  id: string;
-  provider: string;
-  tracking_number: string;
-  tracking_url: string;
-  created_at: string;
-  created_by_user_id: string | null;
-}
+import type { TrackingEntry } from "../../../../../lib/carrier-tracking/types";
 
 interface PoHeaderLike {
   id: string;
@@ -116,6 +108,11 @@ export async function POST(
     tracking_url: parsed.data.tracking_url ?? "",
     created_at: new Date().toISOString(),
     created_by_user_id: userId,
+    // Carrier ETA fields — filled by the refresh endpoint / cron.
+    carrier_eta: null,
+    carrier_status: "pending",
+    carrier_eta_fetched_at: null,
+    carrier_detail: null,
   };
 
   const next = [...parseTracking(existing.tracking), entry];
@@ -174,6 +171,11 @@ export async function PUT(
           provider: parsed.data.provider,
           tracking_number: parsed.data.tracking_number,
           tracking_url: parsed.data.tracking_url ?? "",
+          // Number/provider may have changed → old ETA is stale, re-fetch.
+          carrier_eta: null,
+          carrier_status: "pending" as const,
+          carrier_eta_fetched_at: null,
+          carrier_detail: null,
         }
       : t
   );
