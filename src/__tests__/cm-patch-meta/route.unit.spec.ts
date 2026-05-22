@@ -7,28 +7,28 @@
 
 // ─── Mock external deps BEFORE importing the route ───────────────────────────
 
-jest.mock("../../../../../../../lib/quickbooks/qb-pipeline", () => ({
+jest.mock("../../lib/quickbooks/qb-pipeline", () => ({
   writePipelineRow: jest.fn().mockResolvedValue("pipeline-row-id"),
 }));
 
-jest.mock("../../../../../../../lib/quickbooks/client/credit-memos", () => ({
+jest.mock("../../lib/quickbooks/client/credit-memos", () => ({
   updateCreditMemoInQb: jest.fn(),
 }));
 
-jest.mock("../../../../../../../lib/quickbooks/qb-config", () => ({
+jest.mock("../../lib/quickbooks/qb-config", () => ({
   getQbConfig: jest.fn(),
 }));
 
-jest.mock("../../../../../../../modules/credit_memos", () => ({
+jest.mock("../../modules/credit_memos", () => ({
   CREDIT_MEMO_MODULE: "CREDIT_MEMO_MODULE",
 }));
 
 // ─── Imports (after mocks) ────────────────────────────────────────────────────
 
-import { updateCreditMemoInQb } from "../../../../../../../lib/quickbooks/client/credit-memos";
-import { getQbConfig } from "../../../../../../../lib/quickbooks/qb-config";
-import { writePipelineRow } from "../../../../../../../lib/quickbooks/qb-pipeline";
-import { PATCH } from "../route";
+import { updateCreditMemoInQb } from "../../lib/quickbooks/client/credit-memos";
+import { getQbConfig } from "../../lib/quickbooks/qb-config";
+import { writePipelineRow } from "../../lib/quickbooks/qb-pipeline";
+import { PATCH } from "../../api/admin/pos/credit_memos/[id]/patch-meta/route";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

@@ -23,7 +23,7 @@ jest.mock("../../workflows/update-inventory-incremental", () => ({
   }),
 }));
 
-import qbItemPipelinePoller from "../qb-item-pipeline-poller";
+import qbItemPipelinePoller from "../../jobs/qb-item-pipeline-poller";
 
 const BRIDGE = "http://bridge.test";
 

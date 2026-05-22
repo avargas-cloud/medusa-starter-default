@@ -1,5 +1,5 @@
 /**
- * Unit tests for POST /admin/search/products
+ * Unit tests for POST /admin/search/customers
  *
  * Type: mock-based unit test (no DB, no MeiliSearch network calls).
  * The `meilisearch` module is fully mocked; we assert the route forwards the
@@ -15,7 +15,7 @@ jest.mock("meilisearch", () => ({
   MeiliSearch: jest.fn().mockImplementation(() => ({ index: mockIndex })),
 }));
 
-import { POST } from "../route";
+import { POST } from "../../api/admin/search/customers/route";
 
 const flushPromises = () => new Promise((r) => setTimeout(r, 0));
 
@@ -32,38 +32,38 @@ function buildRes() {
 }
 
 const MEILI_RESULT = {
-  hits: [{ id: "prod_1", title: "Widget", variant_sku: ["SKU-1"] }],
+  hits: [{ id: "cus_1", company_name: "Acme", email: "a@acme.com" }],
   estimatedTotalHits: 1,
-  processingTimeMs: 3,
-  query: "widget",
+  processingTimeMs: 2,
+  query: "acme",
 };
 
-describe("POST /admin/search/products", () => {
+describe("POST /admin/search/customers", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockIndex.mockReturnValue({ search: mockSearch });
     mockSearch.mockResolvedValue(MEILI_RESULT);
   });
 
-  it("searches the `products` index and returns the raw Meili result", async () => {
+  it("searches the `customers` index and returns the raw Meili result", async () => {
     const req = buildReq({
-      q: "widget",
-      offset: 20,
+      q: "acme",
+      offset: 0,
       limit: 20,
-      filter: 'status = "published"',
-      sort: ["title:asc"],
+      filter: 'customer_type = "wholesale"',
+      sort: ["company_name:asc"],
     });
     const res = buildRes();
     await POST(req, res);
     await flushPromises();
 
-    expect(mockIndex).toHaveBeenCalledWith("products");
-    expect(mockSearch).toHaveBeenCalledWith("widget", {
-      offset: 20,
+    expect(mockIndex).toHaveBeenCalledWith("customers");
+    expect(mockSearch).toHaveBeenCalledWith("acme", {
+      offset: 0,
       limit: 20,
-      filter: 'status = "published"',
-      sort: ["title:asc"],
-      attributesToHighlight: ["title", "variant_sku"],
+      filter: 'customer_type = "wholesale"',
+      sort: ["company_name:asc"],
+      attributesToHighlight: ["company_name", "email", "list_id"],
     });
     expect(res.json).toHaveBeenCalledWith(MEILI_RESULT);
   });
@@ -79,7 +79,7 @@ describe("POST /admin/search/products", () => {
       limit: 20,
       filter: undefined,
       sort: undefined,
-      attributesToHighlight: ["title", "variant_sku"],
+      attributesToHighlight: ["company_name", "email", "list_id"],
     });
   });
 
