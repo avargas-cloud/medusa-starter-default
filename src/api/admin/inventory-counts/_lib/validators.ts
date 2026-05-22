@@ -51,14 +51,14 @@ export const approvalDecisionSchema = z
         message: "override_delta is required when action='override'",
       });
     }
-    if (
-      (d.action === "override" || d.action === "skip") &&
-      (!d.override_note || !d.override_note.trim())
-    ) {
+    // A skip must always be justified. An override (manager recount/correction)
+    // may carry a note for the audit trail but does not require one — the manager
+    // is the final authority and corrections are common on otherwise-good lines.
+    if (d.action === "skip" && (!d.override_note || !d.override_note.trim())) {
       ctx.addIssue({
         code: "custom",
         path: ["override_note"],
-        message: "override_note is required for override/skip actions",
+        message: "override_note is required for skip actions",
       });
     }
   });
