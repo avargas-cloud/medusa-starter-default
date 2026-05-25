@@ -221,13 +221,25 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     });
 
     // Write upfront pipeline row + direct exec (bypasses BullMQ outbox).
-    // skip_qb_sync=true is set by the terminal route — QB will be handled
-    // by the invoice route once the invoice is created (avoids a duplicate
-    // "payment" QB row alongside the "sales_receipt" row).
+    // skip_qb_sync=true is set by the terminal route — QB sync will be driven
+    // by the invoice route once Invoice vs SR is decided (avoids duplicating
+    // a standalone ReceivePayment alongside a SalesReceipt's embedded payment).
+    //
+    // The 'waiting' row is written unconditionally (even with skip_qb_sync=true)
+    // so every cpay has an anchor in qb_order_pipeline from creation. Without
+    // this anchor, an abandoned CompleteOrderModal (cobro succeeded → cashier
+    // never reached /admin/invoices) leaves an orphan cpay with metadata
+    // qb_sync_status='pending' and zero pipeline rows. That state blocks Force
+    // Sync AND breaks any subsequent /customer-payments/:id/apply because
+    // handlePosPaymentApplied can't resolve a source row (see Yeni 2498
+    // incident 2026-05-23). The 'waiting' row is invisible to the consolidator
+    // (only 'pending' is picked up) so SR semantics are preserved — the
+    // invoice route transitions waiting→pending in Invoice mode or
+    // skipPaymentRowByReference marks it skipped in SR mode.
     console.info(
       `[finance/payments] payment=${payment.id} skip_qb_sync=${skip_qb_sync} QB_ORDER_FLOW_ENABLED=${process.env.QB_ORDER_FLOW_ENABLED}`
     );
-    if (process.env.QB_ORDER_FLOW_ENABLED === "true" && !skip_qb_sync) {
+    if (process.env.QB_ORDER_FLOW_ENABLED === "true") {
       const orderId: string | null = (metadata as any)?.order_id ?? null;
       try {
         await writePipelineRow({
@@ -244,21 +256,23 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         );
       }
 
-      // 1.5.9: pipeline-only — enqueue 'payment' for consolidator pickup.
-      try {
-        const {
-          writePipelineRow: enqueueFinPay,
-        } = require("../../../../lib/quickbooks/qb-pipeline");
-        await enqueueFinPay({
-          referenceId: payment.id,
-          referenceType: "payment",
-          step: "payment",
-          status: "pending",
-        });
-      } catch (enqErr: any) {
-        console.error(
-          `[finance/payments] Enqueue payment failed: ${enqErr.message}`
-        );
+      if (!skip_qb_sync) {
+        // 1.5.9: pipeline-only — enqueue 'payment' for consolidator pickup.
+        try {
+          const {
+            writePipelineRow: enqueueFinPay,
+          } = require("../../../../lib/quickbooks/qb-pipeline");
+          await enqueueFinPay({
+            referenceId: payment.id,
+            referenceType: "payment",
+            step: "payment",
+            status: "pending",
+          });
+        } catch (enqErr: any) {
+          console.error(
+            `[finance/payments] Enqueue payment failed: ${enqErr.message}`
+          );
+        }
       }
     }
 

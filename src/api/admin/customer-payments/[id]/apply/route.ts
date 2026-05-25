@@ -5,6 +5,7 @@
  */
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+import { getDbPool } from "../../../../utils/db-pool";
 import { handlePosPaymentApplied } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-applied";
 import { writePipelineRow } from "../../../../../lib/quickbooks/pipeline/row-mutations";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
@@ -158,6 +159,57 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       const medusaRefNumber = payment.display_id
         ? `PAY-${payment.display_id}`
         : null;
+
+      // ORPHAN CPAY GUARD (2026-05-23 Yeni 2498 incident):
+      // If the source cpay is unsynced AND not embedded in a Sales Receipt,
+      // make sure there's a 'pending' payment pipeline row for it before we
+      // enqueue apply_payment. Without this, handlePosPaymentApplied can't
+      // resolve a source row (resolveSourcePipelineRowId returns null) and
+      // writes status='failed' with "Payment not yet synced to QB...". This
+      // happens when CompleteOrderModal aborted mid-flow (cobro succeeded,
+      // cpay created via /admin/finance/payments with skip_qb_sync=true, but
+      // /admin/invoices was never called) and the cashier recovered by
+      // creating the invoice via a different path + Apply Credit.
+      const srEmbedded =
+        (payment as any).metadata?.qb_source === "sales_receipt" ||
+        (payment as any).metadata?.is_sales_receipt_payment === true ||
+        (payment as any).metadata?.qb_sync_status === "pending_sr";
+      const paymentTxnId = (payment as any).metadata?.qb_txn_id as
+        | string
+        | undefined;
+      if (!paymentTxnId && !srEmbedded) {
+        try {
+          const pool = getDbPool();
+          const { rows: existing } = await pool.query(
+            `SELECT id, status FROM qb_order_pipeline
+              WHERE reference_id = $1 AND step = 'payment'
+              ORDER BY created_at DESC LIMIT 1`,
+            [id]
+          );
+          const needsPromotion =
+            existing.length === 0 ||
+            existing[0].status === "waiting" ||
+            existing[0].status === "failed" ||
+            existing[0].status === "skipped";
+          if (needsPromotion) {
+            await writePipelineRow({
+              orderId: invoice.order_id,
+              referenceId: id,
+              referenceType: "customer_payment",
+              step: "payment",
+              status: "pending",
+              medusaRefNumber,
+            });
+            console.info(
+              `[customer-payments/:id/apply] Promoted orphan cpay ${id} payment row to pending (no qb_txn_id, not SR-embedded)`
+            );
+          }
+        } catch (promoteErr: any) {
+          console.warn(
+            `[customer-payments/:id/apply] Could not promote orphan payment row for ${id}: ${promoteErr.message}`
+          );
+        }
+      }
 
       try {
         await writePipelineRow({
