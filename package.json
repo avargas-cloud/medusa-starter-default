@@ -44,6 +44,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@googleapis/gmail": "^16.1.1",
+    "@mailchimp/mailchimp_marketing": "^3.0.80",
     "@medusajs/admin-sdk": "^2.13.0",
     "@medusajs/auth-google": "^2.13.1",
     "@medusajs/cli": "^2.13.1",
@@ -72,10 +73,10 @@
     "passport": "^0.6.0",
     "passport-google-oauth20": "^2.0.0",
     "playwright-core": "^1.59.1",
+    "postgres": "^3.4.8",
     "resend": "^6.10.0",
     "scrypt-kdf": "^4.0.0",
-    "typeorm": "^0.3.16",
-    "postgres": "^3.4.8"
+    "typeorm": "^0.3.16"
   },
   "devDependencies": {
     "@medusajs/test-utils": "^2.13.0",
@@ -84,6 +85,7 @@
     "@types/adm-zip": "^0.5.8",
     "@types/glob": "^9.0.0",
     "@types/jest": "^29.5.13",
+    "@types/mailchimp__mailchimp_marketing": "^3.0.22",
     "@types/multer": "^2.0.0",
     "@types/node": "^20.12.11",
     "@types/nodemailer": "^7.0.11",
