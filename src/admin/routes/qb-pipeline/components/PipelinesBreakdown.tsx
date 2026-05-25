@@ -1,5 +1,5 @@
 import { ArrowPath } from "@medusajs/icons";
-import { Badge, Heading, IconButton, Text } from "@medusajs/ui";
+import { Badge, Container, Heading, IconButton, Text } from "@medusajs/ui";
 import { useCallback, useEffect, useState } from "react";
 
 type Bucket = "pending" | "processing" | "completed" | "failed" | "skipped";
@@ -79,7 +79,7 @@ export const PipelinesBreakdown = () => {
   }, [load]);
 
   return (
-    <div className="rounded-lg border border-ui-border-base bg-ui-bg-subtle p-4">
+    <Container className="p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <Heading level="h2" className="text-base">
@@ -159,7 +159,7 @@ export const PipelinesBreakdown = () => {
           </tbody>
         </table>
       </div>
-    </div>
+    </Container>
   );
 };
 
