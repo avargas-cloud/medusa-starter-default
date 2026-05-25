@@ -45,15 +45,16 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const pg = req.scope.resolve("__pg_connection__") as any;
 
   try {
+    // knex's pg.raw uses ? placeholders (positional), not $1/$2.
     const filters: string[] = ["i.deleted_at IS NULL"];
     const params: (string | number)[] = [];
     if (from) {
       params.push(from);
-      filters.push(`i.created_at >= $${params.length}::timestamptz`);
+      filters.push(`i.created_at >= ?::timestamptz`);
     }
     if (to) {
       params.push(to);
-      filters.push(`i.created_at <= $${params.length}::timestamptz`);
+      filters.push(`i.created_at <= ?::timestamptz`);
     }
     const where = filters.join(" AND ");
 
