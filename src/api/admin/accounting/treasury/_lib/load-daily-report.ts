@@ -19,9 +19,11 @@ interface SalesAggregateRow {
   lines_missing_avg_cost_count: string | null;
   stale_cost_count: string | null;
   missing_origin_tag_count: string | null;
+  unit_cost_fallback_count: string | null;
   sample_lines_missing_avg_cost: string[] | null;
   sample_stale_cost: string[] | null;
   sample_missing_origin_tag: string[] | null;
+  sample_unit_cost_fallback: string[] | null;
 }
 
 interface CashRow {
@@ -97,13 +99,25 @@ export async function loadDailyReport(
          --   2. pv.metadata.avg_landed_cost_cents — authoritative local AVCO,
          --      updated by every vendor-bill confirm (Miami receipt). Was
          --      backfilled from qb_avg_cost at rollout, so it covers history.
-         --   3. pv.metadata.qb_avg_cost — legacy QB sync. Safety net only;
-         --      anything received since the local AVCO shipped is in (2).
+         --   3. pv.metadata.qb_avg_cost — legacy QB sync. Safety net.
+         --   4. pv.metadata.qb_purchase_cost — raw vendor unit cost from QB
+         --      (NO landing/freight/tariff). Last-resort approximation so we
+         --      don't have to exclude the line.
          COALESCE(
            pii.average_unit_cost,
            NULLIF(pv.metadata->>'avg_landed_cost_cents', '')::numeric / 100.0,
-           NULLIF(pv.metadata->>'qb_avg_cost', '')::numeric
+           NULLIF(pv.metadata->>'qb_avg_cost', '')::numeric,
+           NULLIF(pv.metadata->>'qb_purchase_cost', '')::numeric
          ) AS effective_unit_cost,
+         -- True when the line had no avg-cost data and we fell back to the
+         -- non-landed purchase cost. Used to emit an info-level note
+         -- distinct from the "truly excluded" warning.
+         (
+           pii.average_unit_cost IS NULL
+           AND NULLIF(pv.metadata->>'avg_landed_cost_cents', '') IS NULL
+           AND NULLIF(pv.metadata->>'qb_avg_cost', '') IS NULL
+           AND NULLIF(pv.metadata->>'qb_purchase_cost', '') IS NOT NULL
+         ) AS used_unit_cost_fallback,
          (p.metadata->>'is_sourced_via_agent') AS origin_flag,
          p.id AS product_id,
          pi.subtotal AS inv_subtotal,
@@ -144,6 +158,11 @@ export async function loadDailyReport(
          COALESCE(ARRAY_AGG(sample_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
        FROM (SELECT sample_id FROM lines WHERE effective_unit_cost IS NULL LIMIT 20) x
      ),
+     unit_cost_fallback AS (
+       SELECT COUNT(*)::bigint AS c,
+         COALESCE(ARRAY_AGG(sample_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
+       FROM (SELECT sample_id FROM lines WHERE used_unit_cost_fallback LIMIT 20) x
+     ),
      stale_cost AS (
        SELECT COUNT(*)::bigint AS c,
          COALESCE(ARRAY_AGG(sample_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
@@ -172,14 +191,17 @@ export async function loadDailyReport(
        mc.c   AS lines_missing_avg_cost_count,
        sc.c   AS stale_cost_count,
        mo.c   AS missing_origin_tag_count,
+       uf.c   AS unit_cost_fallback_count,
        mc.ids AS sample_lines_missing_avg_cost,
        sc.ids AS sample_stale_cost,
-       mo.ids AS sample_missing_origin_tag
+       mo.ids AS sample_missing_origin_tag,
+       uf.ids AS sample_unit_cost_fallback
      FROM inv_totals it
      CROSS JOIN cogs c
      CROSS JOIN missing_cost mc
      CROSS JOIN stale_cost sc
-     CROSS JOIN missing_origin mo`,
+     CROSS JOIN missing_origin mo
+     CROSS JOIN unit_cost_fallback uf`,
     [dayStart, dayEnd, dayStart]
   );
 
@@ -238,9 +260,11 @@ export async function loadDailyReport(
     lines_missing_avg_cost_count: "0",
     stale_cost_count: "0",
     missing_origin_tag_count: "0",
+    unit_cost_fallback_count: "0",
     sample_lines_missing_avg_cost: [],
     sample_stale_cost: [],
     sample_missing_origin_tag: [],
+    sample_unit_cost_fallback: [],
   };
   const cash: CashRow = cashResult.rows[0] ?? {
     gross_payments_cents: "0",
@@ -291,13 +315,24 @@ export async function loadDailyReport(
   });
 
   const warnings: TreasuryWarning[] = [];
+  if (toInt(sales.unit_cost_fallback_count) > 0) {
+    warnings.push({
+      code: "LINES_USED_UNIT_COST_FALLBACK",
+      severity: "info",
+      count: toInt(sales.unit_cost_fallback_count),
+      sample_ids: sales.sample_unit_cost_fallback ?? [],
+      detail:
+        "No avg cost available — used the raw purchase unit cost (without landing/freight/tariff) as an approximation.",
+    });
+  }
   if (toInt(sales.lines_missing_avg_cost_count) > 0) {
     warnings.push({
       code: "LINES_MISSING_AVG_COST",
       severity: "warning",
       count: toInt(sales.lines_missing_avg_cost_count),
       sample_ids: sales.sample_lines_missing_avg_cost ?? [],
-      detail: "Invoice lines with no average_unit_cost snapshot were excluded from COGS.",
+      detail:
+        "No cost data of any kind available for these lines — excluded from COGS.",
     });
   }
   if (toInt(sales.stale_cost_count) > 0) {

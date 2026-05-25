@@ -7,6 +7,7 @@ export type { TreasuryBucketCode, BucketSplit };
 
 export type TreasuryWarningCode =
   | "LINES_MISSING_AVG_COST"
+  | "LINES_USED_UNIT_COST_FALLBACK"
   | "STALE_COST"
   | "PRODUCT_MISSING_ORIGIN_TAG"
   | "BUCKET_WITHOUT_BANK_MAPPING"
