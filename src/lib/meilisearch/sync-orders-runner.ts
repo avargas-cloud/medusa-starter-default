@@ -30,6 +30,12 @@ const ORDER_FIELDS = [
   "shipping_address.phone",
   "sales_channel.id",
   "sales_channel.name",
+  // Needed so buildOrderDoc can compute fulfillment_status locally —
+  // query.graph silently drops the top-level fulfillment_status field.
+  "fulfillments.packed_at",
+  "fulfillments.shipped_at",
+  "fulfillments.delivered_at",
+  "fulfillments.canceled_at",
 ];
 
 export interface SyncResult {

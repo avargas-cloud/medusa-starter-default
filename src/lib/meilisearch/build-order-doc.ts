@@ -45,6 +45,17 @@ export interface OrderForMeili {
     phone?: string | null;
   } | null;
   sales_channel?: { id?: string | null; name?: string | null } | null;
+  // Raw fulfillments rows so we can compute fulfillment_status ourselves.
+  // query.graph({entity: "order", fields: ["fulfillment_status"]}) returns
+  // nothing for that field — it's a derived value on the orders module
+  // service, not a column. Computing it here keeps the Meili doc in sync
+  // with what the POS UI shows.
+  fulfillments?: Array<{
+    packed_at?: Date | string | null;
+    shipped_at?: Date | string | null;
+    delivered_at?: Date | string | null;
+    canceled_at?: Date | string | null;
+  }> | null;
 }
 
 /**
@@ -127,6 +138,35 @@ const OPEN_FULFILLMENT = new Set([
   "partially_delivered",
 ]);
 const CLOSED_FULFILLMENT = new Set(["fulfilled", "shipped", "delivered"]);
+
+/**
+ * Mirrors Medusa's order-module derivation of `fulfillment_status`. Needed
+ * because query.graph silently drops the field — it isn't a real column,
+ * just a computed getter on the orders module service. Without this, every
+ * Meili doc had fulfillment_status="" so is_open and is_closed were both
+ * false for all 591 orders → the Closed tab badge showed 0.
+ */
+function computeFulfillmentStatus(
+  fulfillments: OrderForMeili["fulfillments"]
+): string {
+  const active = (fulfillments ?? []).filter((f) => !f.canceled_at);
+  if (active.length === 0) return "not_fulfilled";
+
+  const delivered = active.filter((f) => !!f.delivered_at).length;
+  const shipped = active.filter((f) => !!f.shipped_at && !f.delivered_at).length;
+  const packed = active.filter(
+    (f) => !!f.packed_at && !f.shipped_at && !f.delivered_at
+  ).length;
+  const total = active.length;
+
+  if (delivered === total) return "delivered";
+  if (delivered > 0) return "partially_delivered";
+  if (shipped + delivered === total) return "shipped";
+  if (shipped + delivered > 0) return "partially_shipped";
+  if (packed + shipped + delivered === total) return "fulfilled";
+  if (packed + shipped + delivered > 0) return "partially_fulfilled";
+  return "not_fulfilled";
+}
 
 // --- Effective payment computation (port of store-pos orders/utils.ts) ---
 
@@ -239,7 +279,12 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
     .map((inv) => asString(inv?.ref_number))
     .filter(Boolean);
 
-  const fulfillmentStatus = asString(order.fulfillment_status);
+  // Prefer the native field if it actually came through (e.g. when the doc
+  // is built from /admin/orders REST output). Fall back to the local compute
+  // when query.graph delivered nothing — that's the path used by both the
+  // backfill script and the subscriber, where the field arrives empty.
+  const nativeStatus = asString(order.fulfillment_status);
+  const fulfillmentStatus = nativeStatus || computeFulfillmentStatus(order.fulfillments);
 
   // Match the POS UI helpers exactly (orders/utils.ts):
   //   isCanceled = status==='canceled' || fulfillment_status==='canceled'
