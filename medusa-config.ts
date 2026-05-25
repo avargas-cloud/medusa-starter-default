@@ -674,10 +674,13 @@ module.exports = defineConfig({
                 "is_web_order",
                 "sales_rep_initials",
                 "sales_channel_id",
+                "created_at_ts",
+                "effective_date_ts",
               ],
               sortableAttributes: [
                 "display_id",
                 "created_at_ts",
+                "effective_date_ts",
                 "total_cents",
               ],
               displayedAttributes: ["id"],

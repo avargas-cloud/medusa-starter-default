@@ -92,6 +92,10 @@ export interface OrderMeiliDoc {
   sales_channel_id: string;
   total_cents: number;
   created_at_ts: number;
+  // Mirrors POS UI getEffectiveDate(): falls back to metadata.order_placed_at
+  // before created_at so the date-range filter on /admin/orders/counts matches
+  // the dataset the orders page actually displays.
+  effective_date_ts: number;
   updated_at_ts: number;
 }
 
@@ -292,6 +296,9 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
     sales_channel_id: salesChannelId,
     total_cents: Math.round(asNum(order.total) * 100),
     created_at_ts: ts(order.created_at),
+    effective_date_ts:
+      ts((meta.order_placed_at as string | Date | null | undefined) ?? null) ||
+      ts(order.created_at),
     updated_at_ts: ts(order.updated_at),
   };
 }
