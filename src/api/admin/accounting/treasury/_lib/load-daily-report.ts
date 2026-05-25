@@ -92,6 +92,18 @@ export async function loadDailyReport(
          pii.quantity,
          pii.average_unit_cost,
          pii.average_unit_cost_synced_at,
+         -- Cost fallback (priority order):
+         --   1. pii.average_unit_cost — snapshot at invoice issue.
+         --   2. pv.metadata.avg_landed_cost_cents — authoritative local AVCO,
+         --      updated by every vendor-bill confirm (Miami receipt). Was
+         --      backfilled from qb_avg_cost at rollout, so it covers history.
+         --   3. pv.metadata.qb_avg_cost — legacy QB sync. Safety net only;
+         --      anything received since the local AVCO shipped is in (2).
+         COALESCE(
+           pii.average_unit_cost,
+           NULLIF(pv.metadata->>'avg_landed_cost_cents', '')::numeric / 100.0,
+           NULLIF(pv.metadata->>'qb_avg_cost', '')::numeric
+         ) AS effective_unit_cost,
          (p.metadata->>'is_sourced_via_agent') AS origin_flag,
          p.id AS product_id,
          pi.subtotal AS inv_subtotal,
@@ -116,13 +128,13 @@ export async function loadDailyReport(
      cogs AS (
        SELECT
          COALESCE(SUM(
-           CASE WHEN origin_flag = 'true'
-             THEN ROUND(quantity * average_unit_cost * 100)
+           CASE WHEN origin_flag = 'true' AND effective_unit_cost IS NOT NULL
+             THEN ROUND(quantity * effective_unit_cost * 100)
              ELSE 0 END
          ), 0)::bigint AS cogs_china_cents,
          COALESCE(SUM(
-           CASE WHEN origin_flag IS DISTINCT FROM 'true' AND average_unit_cost IS NOT NULL
-             THEN ROUND(quantity * average_unit_cost * 100)
+           CASE WHEN origin_flag IS DISTINCT FROM 'true' AND effective_unit_cost IS NOT NULL
+             THEN ROUND(quantity * effective_unit_cost * 100)
              ELSE 0 END
          ), 0)::bigint AS cogs_local_cents
        FROM lines
@@ -130,7 +142,7 @@ export async function loadDailyReport(
      missing_cost AS (
        SELECT COUNT(*)::bigint AS c,
          COALESCE(ARRAY_AGG(sample_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
-       FROM (SELECT sample_id FROM lines WHERE average_unit_cost IS NULL LIMIT 5) x
+       FROM (SELECT sample_id FROM lines WHERE effective_unit_cost IS NULL LIMIT 20) x
      ),
      stale_cost AS (
        SELECT COUNT(*)::bigint AS c,
@@ -140,7 +152,7 @@ export async function loadDailyReport(
          WHERE average_unit_cost IS NOT NULL
            AND (average_unit_cost_synced_at IS NULL
                 OR average_unit_cost_synced_at < (?::timestamptz - INTERVAL '${STALE_COST_THRESHOLD_DAYS} days'))
-         LIMIT 5
+         LIMIT 20
        ) x
      ),
      missing_origin AS (
@@ -149,7 +161,7 @@ export async function loadDailyReport(
        FROM (
          SELECT sample_id FROM lines
          WHERE product_id IS NOT NULL AND origin_flag IS NULL
-         LIMIT 5
+         LIMIT 20
        ) x
      )
      SELECT
@@ -300,7 +312,7 @@ export async function loadDailyReport(
   if (toInt(sales.missing_origin_tag_count) > 0) {
     warnings.push({
       code: "PRODUCT_MISSING_ORIGIN_TAG",
-      severity: "warning",
+      severity: "info",
       count: toInt(sales.missing_origin_tag_count),
       sample_ids: sales.sample_missing_origin_tag ?? [],
       detail: "Products without is_sourced_via_agent metadata were treated as local.",
