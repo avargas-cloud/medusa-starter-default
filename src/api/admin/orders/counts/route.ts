@@ -44,15 +44,13 @@ function parseTs(v: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-// Uses created_at_ts (always present on every doc) rather than the newer
-// effective_date_ts so this endpoint is safe to deploy before a full Meili
-// reindex. Once every order has been reindexed with the
-// metadata.order_placed_at fallback, switch to effective_date_ts for exact
-// alignment with the UI's getEffectiveDate().
+// Mirrors the UI's getEffectiveDate() (metadata.order_placed_at fallback to
+// created_at). Backfilled via sync-meili-orders on 2026-05-25; the subscriber
+// keeps it fresh on every order event from here on.
 function dateFilters(from: number | null, to: number | null): string[] {
   const out: string[] = [];
-  if (from !== null) out.push(`created_at_ts >= ${from}`);
-  if (to !== null) out.push(`created_at_ts <= ${to}`);
+  if (from !== null) out.push(`effective_date_ts >= ${from}`);
+  if (to !== null) out.push(`effective_date_ts <= ${to}`);
   return out;
 }
 
