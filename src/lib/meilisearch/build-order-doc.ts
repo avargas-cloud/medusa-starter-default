@@ -146,7 +146,7 @@ const CLOSED_FULFILLMENT = new Set(["fulfilled", "shipped", "delivered"]);
  * Meili doc had fulfillment_status="" so is_open and is_closed were both
  * false for all 591 orders → the Closed tab badge showed 0.
  */
-function computeFulfillmentStatus(
+export function computeFulfillmentStatus(
   fulfillments: OrderForMeili["fulfillments"]
 ): string {
   const active = (fulfillments ?? []).filter((f) => !f.canceled_at);

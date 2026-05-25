@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { computeFulfillmentStatus } from "../../../../lib/meilisearch/build-order-doc";
 
 /**
  * GET /admin/orders/filter?tab=<tab>&payment=<effective>&limit=<n>
@@ -51,6 +52,14 @@ const HYDRATE_FIELDS = [
   "shipping_methods.name",
   "shipping_methods.amount",
   "shipping_methods.tax_total",
+  // Needed so we can compute fulfillment_status server-side before
+  // returning — query.graph silently drops the top-level field, so the
+  // hydrated rows ship to the client with fulfillment_status missing and
+  // every UI predicate (isOpen / isClosed) evaluates false.
+  "fulfillments.packed_at",
+  "fulfillments.shipped_at",
+  "fulfillments.delivered_at",
+  "fulfillments.canceled_at",
 ];
 
 const TAB_FILTER: Record<string, string> = {
@@ -128,8 +137,21 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       filters: { id: ids },
     });
 
+    // Stamp fulfillment_status onto each row using the same compute that the
+    // Meili indexer uses. query.graph drops the top-level fulfillment_status,
+    // so without this the client sees `undefined` and isOpen/isClosed both
+    // return false — orders pulled in by the tab filter would be invisible.
+    const enriched = (hydrated || []).map((o: Record<string, unknown>) => ({
+      ...o,
+      fulfillment_status:
+        (o.fulfillment_status as string | undefined) ||
+        computeFulfillmentStatus(
+          o.fulfillments as Parameters<typeof computeFulfillmentStatus>[0]
+        ),
+    }));
+
     return res.json({
-      orders: hydrated || [],
+      orders: enriched,
       estimatedTotalHits,
     });
   } catch (err: any) {
