@@ -8,6 +8,7 @@ import { PipelineTable } from "../qb-sync/components/PipelineTable";
 import { CustomerSyncPipelineSection } from "./components/CustomerSyncPipelineSection";
 import { InventoryAdjustmentPipelineSection } from "./components/InventoryAdjustmentPipelineSection";
 import { ItemPipelineSection } from "./components/ItemPipelineSection";
+import { PipelinesBreakdown } from "./components/PipelinesBreakdown";
 import { PurchaseOrderPipelineSection } from "./components/PurchaseOrderPipelineSection";
 import { VendorPipelineSection } from "./components/VendorPipelineSection";
 import { WaitingOrdersSection } from "./components/WaitingOrdersSection";
@@ -25,6 +26,8 @@ const QbPipelinePage = () => {
       </div>
 
       <BridgeStatus />
+
+      <PipelinesBreakdown />
 
       <Tabs defaultValue="operations">
         <Tabs.List className="gap-1">
