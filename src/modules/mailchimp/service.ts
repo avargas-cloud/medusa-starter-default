@@ -164,6 +164,93 @@ class MailchimpModuleService extends MedusaService({}) {
       tags: tags.map((name) => ({ name, status: "active" as const })),
     });
   }
+
+  /**
+   * Migrate an existing Mailchimp member to a new email address. PATCHes the
+   * record identified by the OLD email's hash with `email_address: NEW`,
+   * which Mailchimp treats as a single in-place email change (no duplicate
+   * member created).
+   *
+   * Returns:
+   *  - action="email_changed" on success
+   *  - action="created"  if the old member didn't exist (we fall back to
+   *    upsertMember so the new email at least gets a record)
+   *  - action="skipped_compliance" if the old member is in an opt-out state
+   *    (we still PATCH merge_fields, but Mailchimp may reject the email
+   *    change on cleaned/archived records — log and continue)
+   *  - action="error" on any other failure
+   */
+  async changeMemberEmail(
+    oldEmail: string,
+    payload: MailchimpUpsertPayload
+  ): Promise<MailchimpSyncResult> {
+    const oldHash = subscriberHash(oldEmail);
+    const newHash = subscriberHash(payload.email);
+    const audienceId = getAudienceId();
+    const client = getClient();
+
+    // Sanity: same address? Fall back to regular upsert (no-op rename).
+    if (oldHash === newHash) {
+      return this.upsertMember(payload);
+    }
+
+    let existing: MailchimpMember | null;
+    try {
+      existing = await this.getMember(oldEmail);
+    } catch (err: unknown) {
+      return {
+        email: payload.email,
+        subscriberHash: newHash,
+        action: "error",
+        status: null,
+        isOptedOut: false,
+        error: `getMember(old) failed: ${(err as Error).message}`,
+      };
+    }
+
+    // Old member doesn't exist → fall back to creating the new one fresh.
+    if (!existing) {
+      return this.upsertMember(payload);
+    }
+
+    const isOptedOut = OPTED_OUT_STATUSES.has(existing.status);
+
+    try {
+      // PATCH with both new email AND merge_fields. Mailchimp updates the
+      // record in-place — old hash now resolves to nothing, new hash to
+      // the (now-renamed) member.
+      await client.lists.updateListMember(audienceId, oldHash, {
+        email_address: payload.email,
+        merge_fields: payload.mergeFields as Record<string, unknown>,
+      });
+
+      if (!isOptedOut && payload.tags.length > 0) {
+        // Tags now belong to the new-hash member.
+        await this.syncTags(payload.email, payload.tags);
+      }
+
+      return {
+        email: payload.email,
+        subscriberHash: newHash,
+        action: isOptedOut ? "skipped_compliance" : "email_changed",
+        status: existing.status,
+        isOptedOut,
+      };
+    } catch (err: unknown) {
+      // Most common failure: Mailchimp rejects the email change because the
+      // new address collides with an existing member, or the old member is
+      // in a permanent compliance state. Surface clearly and don't fall
+      // through to a create — that would just orphan another record.
+      return {
+        email: payload.email,
+        subscriberHash: newHash,
+        action: "error",
+        status: existing.status,
+        isOptedOut,
+        error: `email change failed: ${(err as Error).message}`,
+      };
+    }
+  }
 }
 
 export default MailchimpModuleService;

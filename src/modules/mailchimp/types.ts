@@ -61,7 +61,7 @@ export interface MailchimpUpsertPayload {
 export interface MailchimpSyncResult {
   email: string;
   subscriberHash: string;
-  action: "created" | "updated" | "skipped_compliance" | "error";
+  action: "created" | "updated" | "skipped_compliance" | "email_changed" | "error";
   /** Status the member had AFTER our call. `null` when action === "error". */
   status: MailchimpMemberStatus | null;
   /** True when member is in an opt-out state and we did NOT touch their subscription. */
@@ -73,8 +73,16 @@ export interface MailchimpSyncResult {
 export interface MailchimpSyncMetadata {
   synced_at: string; // ISO timestamp
   subscriber_hash: string;
+  /**
+   * Lowercase email at time of last sync. Required to handle email-change
+   * gracefully: when the POS edits a customer's email, we PATCH the OLD
+   * member (identified by its hash) with the new email — Mailchimp keeps a
+   * single member record. Without this, the subscriber would create a NEW
+   * Mailchimp member and orphan the old one.
+   */
+  last_email: string;
   last_status: MailchimpMemberStatus | null;
-  last_action: MailchimpSyncResult["action"];
+  last_action: MailchimpSyncResult["action"] | "email_changed";
   is_opted_out: boolean;
   last_error?: string | null;
 }

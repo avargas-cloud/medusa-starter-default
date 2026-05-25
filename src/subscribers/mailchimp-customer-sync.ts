@@ -112,11 +112,20 @@ export default async function mailchimpCustomerSync({
     const mailchimpService = container.resolve<MailchimpModuleService>(
       MAILCHIMP_MODULE
     );
-    const result = await mailchimpService.upsertMember(payload);
+
+    // Email-change detection: if we have a tracker AND the email differs
+    // from what we last synced, route to changeMemberEmail so the OLD
+    // Mailchimp member is migrated in-place (no orphan record).
+    const previousEmail = existingTracker?.last_email;
+    const result =
+      previousEmail && previousEmail !== payload.email
+        ? await mailchimpService.changeMemberEmail(previousEmail, payload)
+        : await mailchimpService.upsertMember(payload);
 
     const tracker: MailchimpSyncMetadata = {
       synced_at: new Date().toISOString(),
       subscriber_hash: result.subscriberHash,
+      last_email: payload.email,
       last_status: result.status,
       last_action: result.action,
       is_opted_out: result.isOptedOut,

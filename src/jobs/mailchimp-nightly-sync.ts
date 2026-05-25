@@ -147,6 +147,7 @@ export default async function mailchimpNightlySync(
       created: 0,
       updated: 0,
       skipped_compliance: 0,
+      email_changed: 0,
       error: 0,
       errors: 0, // duplicate counter for stats[action]==='error' indexing
     };
@@ -182,6 +183,7 @@ export default async function mailchimpNightlySync(
         const tracker: MailchimpSyncMetadata = {
           synced_at: new Date().toISOString(),
           subscriber_hash: result.subscriberHash,
+          last_email: payload.email,
           last_status: result.status,
           last_action: result.action,
           is_opted_out: result.isOptedOut,

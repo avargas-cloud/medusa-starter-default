@@ -135,6 +135,7 @@ export default async function fixTypoEmailsMay25({ container }: ExecArgs): Promi
       const tracker: MailchimpSyncMetadata = {
         synced_at: new Date().toISOString(),
         subscriber_hash: mcResult.subscriberHash,
+        last_email: payload.email,
         last_status: mcResult.status,
         last_action: mcResult.action,
         is_opted_out: mcResult.isOptedOut,
