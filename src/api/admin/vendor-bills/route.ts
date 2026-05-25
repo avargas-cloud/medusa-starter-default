@@ -76,6 +76,9 @@ interface VendorBillListRow {
   item_subtotal_cents: string | null;
   line_count: string; // bigint from COUNT — convert to number
   total_landed_cents: string | null; // bigint from SUM — convert to number
+  service_bill_total_landed_cents: string | null;
+  freight_bill_total_landed_cents: string | null;
+  tariff_bill_total_landed_cents: string | null;
   billed_receipt_ids: string[] | null;
   po_number: string | null;
   po_qb_ref_number: string | null;
@@ -174,6 +177,21 @@ export async function GET(
        COALESCE(agg.line_count, 0)         AS line_count,
        COALESCE(agg.item_subtotal_cents, 0) AS item_subtotal_cents,
        COALESCE(agg.total_landed_cents, 0) AS total_landed_cents,
+       CASE WHEN vb.service_vendor_bill_id IS NOT NULL THEN (
+         SELECT COALESCE(SUM(vbl2.landed_unit_cost_cents * vbl2.qty), 0)::bigint
+         FROM vendor_bill_line vbl2
+         WHERE vbl2.vendor_bill_id = vb.service_vendor_bill_id AND vbl2.deleted_at IS NULL
+       ) END AS service_bill_total_landed_cents,
+       CASE WHEN vb.freight_vendor_bill_id IS NOT NULL THEN (
+         SELECT COALESCE(SUM(vbl2.landed_unit_cost_cents * vbl2.qty), 0)::bigint
+         FROM vendor_bill_line vbl2
+         WHERE vbl2.vendor_bill_id = vb.freight_vendor_bill_id AND vbl2.deleted_at IS NULL
+       ) END AS freight_bill_total_landed_cents,
+       CASE WHEN vb.tariff_vendor_bill_id IS NOT NULL THEN (
+         SELECT COALESCE(SUM(vbl2.landed_unit_cost_cents * vbl2.qty), 0)::bigint
+         FROM vendor_bill_line vbl2
+         WHERE vbl2.vendor_bill_id = vb.tariff_vendor_bill_id AND vbl2.deleted_at IS NULL
+       ) END AS tariff_bill_total_landed_cents,
        COALESCE(agg.billed_receipt_ids, ARRAY[]::text[]) AS billed_receipt_ids,
        po."number"                         AS po_number,
        po.qb_purchase_order_txn_number      AS po_qb_ref_number,
@@ -208,6 +226,18 @@ export async function GET(
     line_count: Number(r.line_count),
     item_subtotal_cents: Number(r.item_subtotal_cents ?? 0),
     total_landed_cents: Number(r.total_landed_cents ?? 0),
+    service_bill_total_landed_cents:
+      r.service_bill_total_landed_cents === null
+        ? null
+        : Number(r.service_bill_total_landed_cents),
+    freight_bill_total_landed_cents:
+      r.freight_bill_total_landed_cents === null
+        ? null
+        : Number(r.freight_bill_total_landed_cents),
+    tariff_bill_total_landed_cents:
+      r.tariff_bill_total_landed_cents === null
+        ? null
+        : Number(r.tariff_bill_total_landed_cents),
   }));
 
   return res.json({ vendor_bills: rows, count });
