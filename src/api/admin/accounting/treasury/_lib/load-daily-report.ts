@@ -88,6 +88,7 @@ export async function loadDailyReport(
     `WITH lines AS (
        SELECT
          pii.id AS line_id,
+         COALESCE(NULLIF(pv.sku, ''), pii.id) AS sample_id,
          pii.quantity,
          pii.average_unit_cost,
          pii.average_unit_cost_synced_at,
@@ -128,14 +129,14 @@ export async function loadDailyReport(
      ),
      missing_cost AS (
        SELECT COUNT(*)::bigint AS c,
-         COALESCE(ARRAY_AGG(line_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
-       FROM (SELECT line_id FROM lines WHERE average_unit_cost IS NULL LIMIT 5) x
+         COALESCE(ARRAY_AGG(sample_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
+       FROM (SELECT sample_id FROM lines WHERE average_unit_cost IS NULL LIMIT 5) x
      ),
      stale_cost AS (
        SELECT COUNT(*)::bigint AS c,
-         COALESCE(ARRAY_AGG(line_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
+         COALESCE(ARRAY_AGG(sample_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
        FROM (
-         SELECT line_id FROM lines
+         SELECT sample_id FROM lines
          WHERE average_unit_cost IS NOT NULL
            AND (average_unit_cost_synced_at IS NULL
                 OR average_unit_cost_synced_at < (?::timestamptz - INTERVAL '${STALE_COST_THRESHOLD_DAYS} days'))
@@ -144,9 +145,9 @@ export async function loadDailyReport(
      ),
      missing_origin AS (
        SELECT COUNT(*)::bigint AS c,
-         COALESCE(ARRAY_AGG(line_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
+         COALESCE(ARRAY_AGG(sample_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
        FROM (
-         SELECT line_id FROM lines
+         SELECT sample_id FROM lines
          WHERE product_id IS NOT NULL AND origin_flag IS NULL
          LIMIT 5
        ) x
