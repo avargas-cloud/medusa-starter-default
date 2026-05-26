@@ -14,14 +14,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
   try {
     const result = await pg.raw(
-      `SELECT * FROM (
+      `WITH gross AS (
          SELECT
            pii.variant_id,
            pii.sku,
            MIN(pii.description)                                            AS description,
            MIN(p.title)                                                    AS product_title,
            SUM(pii.quantity - pii.refunded_quantity)::int                  AS qty_sold,
-           SUM(${NET_ITEM_REVENUE})::bigint                                AS revenue,
+           SUM(${NET_ITEM_REVENUE})::bigint                                AS gross_revenue,
            SUM(${COST_DOLLARS})::bigint                                    AS cogs,
            COUNT(DISTINCT pii.invoice_id)::int                             AS invoice_count
          FROM pos_invoice_item pii
@@ -32,6 +32,33 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          LEFT JOIN product p ON p.id = pv.product_id
          WHERE pii.deleted_at IS NULL AND pii.variant_id IS NOT NULL ${regionWhere}
          GROUP BY pii.variant_id, pii.sku
+       ),
+       cm_refunds AS (
+         SELECT
+           cmi.variant_id,
+           cmi.sku,
+           SUM(cmi.line_total)::bigint AS cm_refunded
+         FROM pos_credit_memo cm
+         JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
+         WHERE cm.deleted_at IS NULL
+           AND cm.status = 'completed'
+           AND cmi.variant_id IS NOT NULL
+           AND COALESCE(cm.completed_at, cm.created_at) >= ?
+           AND COALESCE(cm.completed_at, cm.created_at) <  ?
+         GROUP BY cmi.variant_id, cmi.sku
+       )
+       SELECT * FROM (
+         SELECT
+           COALESCE(g.variant_id, r.variant_id)            AS variant_id,
+           COALESCE(g.sku, r.sku)                          AS sku,
+           g.description,
+           g.product_title,
+           COALESCE(g.qty_sold, 0)::int                    AS qty_sold,
+           (COALESCE(g.gross_revenue, 0) - COALESCE(r.cm_refunded, 0))::bigint AS revenue,
+           COALESCE(g.cogs, 0)::bigint                     AS cogs,
+           COALESCE(g.invoice_count, 0)::int               AS invoice_count
+         FROM gross g
+         FULL OUTER JOIN cm_refunds r ON r.variant_id = g.variant_id
          UNION ALL
          SELECT
            NULL::text                                                       AS variant_id,
@@ -55,7 +82,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND ic.applied_at >= ? AND ic.applied_at < ?
        ) t
        ORDER BY revenue DESC`,
-      [range.from, range.to, range.from, range.to]
+      [range.from, range.to, range.from, range.to, range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map((r) => {

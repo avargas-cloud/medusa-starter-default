@@ -32,13 +32,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          JOIN product_category pc ON pc.id = pcp.product_category_id
          LEFT JOIN product_category pc2 ON pc2.id = pc.parent_category_id
          ORDER BY pcp.product_id, pc.name
-       )
-       SELECT * FROM (
+       ),
+       gross AS (
          SELECT
            COALESCE(pt.category, 'Uncategorized')                        AS category,
            pt.category_id                                                 AS category_id,
            SUM(pii.quantity - pii.refunded_quantity)::int                 AS qty_sold,
-           SUM(${NET_ITEM_REVENUE})::bigint                               AS revenue,
+           SUM(${NET_ITEM_REVENUE})::bigint                               AS gross_revenue,
            SUM(${COST_DOLLARS})::bigint                                   AS cogs,
            COUNT(DISTINCT pii.invoice_id)::int                            AS invoice_count
          FROM pos_invoice_item pii
@@ -50,6 +50,34 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          LEFT JOIN product_tier1 pt ON pt.product_id = p.id
          WHERE pii.deleted_at IS NULL ${regionWhere}
          GROUP BY 1, 2
+       ),
+       cm_refunds AS (
+         SELECT
+           COALESCE(pt.category, 'Uncategorized')                        AS category,
+           pt.category_id                                                 AS category_id,
+           SUM(cmi.line_total)::bigint                                   AS cm_refunded
+         FROM pos_credit_memo cm
+         JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
+         LEFT JOIN product_variant pv ON pv.id = cmi.variant_id
+         LEFT JOIN product_tier1 pt ON pt.product_id = pv.product_id
+         WHERE cm.deleted_at IS NULL
+           AND cm.status = 'completed'
+           AND COALESCE(cm.completed_at, cm.created_at) >= ?
+           AND COALESCE(cm.completed_at, cm.created_at) <  ?
+         GROUP BY 1, 2
+       )
+       SELECT * FROM (
+         SELECT
+           COALESCE(g.category, r.category)                              AS category,
+           COALESCE(g.category_id, r.category_id)                        AS category_id,
+           COALESCE(g.qty_sold, 0)::int                                  AS qty_sold,
+           (COALESCE(g.gross_revenue, 0) - COALESCE(r.cm_refunded, 0))::bigint AS revenue,
+           COALESCE(g.cogs, 0)::bigint                                   AS cogs,
+           COALESCE(g.invoice_count, 0)::int                             AS invoice_count
+         FROM gross g
+         FULL OUTER JOIN cm_refunds r
+           ON r.category = g.category
+           AND COALESCE(r.category_id, '') = COALESCE(g.category_id, '')
          UNION ALL
          SELECT
            'Inventory Adjustment'                                       AS category,
@@ -71,7 +99,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND ic.applied_at >= ? AND ic.applied_at < ?
        ) t
        ORDER BY revenue DESC`,
-      [ROOT_CAT, ROOT_CAT, ROOT_CAT, ROOT_CAT, range.from, range.to, range.from, range.to]
+      [ROOT_CAT, ROOT_CAT, ROOT_CAT, ROOT_CAT, range.from, range.to, range.from, range.to, range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map((r) => {
