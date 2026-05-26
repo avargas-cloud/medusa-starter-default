@@ -1,5 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
+import { NET_ITEM_REVENUE } from "../../_lib/sales-revenue"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -17,17 +18,18 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          GROUP BY 1
        )
        SELECT
-         EXTRACT(DOW  FROM issued_at AT TIME ZONE 'America/New_York')::int AS day,
-         EXTRACT(HOUR FROM issued_at AT TIME ZONE 'America/New_York')::int AS hour,
-         SUM(total)::bigint AS revenue,
-         COUNT(*)::int      AS invoice_count,
+         EXTRACT(DOW  FROM i.issued_at AT TIME ZONE 'America/New_York')::int AS day,
+         EXTRACT(HOUR FROM i.issued_at AT TIME ZONE 'America/New_York')::int AS hour,
+         SUM(${NET_ITEM_REVENUE})::bigint     AS revenue,
+         COUNT(DISTINCT i.id)::int            AS invoice_count,
          wc.day_count
-       FROM pos_invoice
+       FROM pos_invoice i
+       JOIN pos_invoice_item pii ON pii.invoice_id = i.id AND pii.deleted_at IS NULL
        JOIN weekday_counts wc
-         ON wc.day = EXTRACT(DOW FROM issued_at AT TIME ZONE 'America/New_York')::int
-       WHERE deleted_at IS NULL
-         AND status NOT IN ('draft','voided')
-         AND issued_at >= ? AND issued_at < ?
+         ON wc.day = EXTRACT(DOW FROM i.issued_at AT TIME ZONE 'America/New_York')::int
+       WHERE i.deleted_at IS NULL
+         AND i.status NOT IN ('draft','voided')
+         AND i.issued_at >= ? AND i.issued_at < ?
        GROUP BY 1, 2, wc.day_count
        ORDER BY 1, 2`,
       [range.from, range.to, range.from, range.to]

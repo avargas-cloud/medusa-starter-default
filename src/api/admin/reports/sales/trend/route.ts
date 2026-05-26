@@ -2,6 +2,11 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
 import { autoBucket, bucketTrunc } from "../../_lib/auto-bucket"
 import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
+import {
+  NET_ITEM_REVENUE,
+  SALES_ACTIVE_STATUSES_SQL,
+  SALES_DATE_FILTER_SQL,
+} from "../../_lib/sales-revenue"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -15,14 +20,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const result = await pg.raw(
       `SELECT
          ${trunc}                              AS bucket,
-         SUM(pii.total)::bigint               AS revenue,
+         SUM(${NET_ITEM_REVENUE})::bigint     AS revenue,
          SUM(${COST_DOLLARS})::bigint           AS cogs
        FROM pos_invoice i
        JOIN pos_invoice_item pii ON pii.invoice_id = i.id AND pii.deleted_at IS NULL
        ${COGS_JOIN}
        WHERE i.deleted_at IS NULL
-         AND i.status NOT IN ('draft','voided')
-         AND i.issued_at >= ? AND i.issued_at < ?
+         AND ${SALES_ACTIVE_STATUSES_SQL}
+         AND ${SALES_DATE_FILTER_SQL}
        GROUP BY 1
        ORDER BY 1`,
       [range.from, range.to]
