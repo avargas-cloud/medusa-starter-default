@@ -1,12 +1,20 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../_lib/date-range"
-import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
+import {
+  NET_ITEM_REVENUE,
+  SALES_ACTIVE_STATUSES_SQL,
+  SALES_DATE_FILTER_SQL,
+  fetchCmRefundsCentsForPeriod,
+} from "../../_lib/sales-revenue"
 
 const ROOT_CAT = 'pcat_01KGAD1KQV29RKZZHEZ4N88B8H'
 
+// One category per product. Products in multiple tier1 categories used to
+// duplicate invoice_item rows in the join and inflate revenue/cost totals.
 const TIER1_CTE = `
   product_tier1 AS (
-    SELECT DISTINCT pcp.product_id,
+    SELECT DISTINCT ON (pcp.product_id)
+      pcp.product_id,
       COALESCE(
         CASE WHEN pc.parent_category_id = '${ROOT_CAT}' THEN pc.name END,
         CASE WHEN pc2.parent_category_id = '${ROOT_CAT}' THEN pc2.name END,
@@ -15,6 +23,7 @@ const TIER1_CTE = `
     FROM product_category_product pcp
     JOIN product_category pc ON pc.id = pcp.product_category_id
     LEFT JOIN product_category pc2 ON pc2.id = pc.parent_category_id
+    ORDER BY pcp.product_id, category
   )
 `
 
@@ -28,6 +37,8 @@ const COST_EXPR = `
        ELSE 0 END
 `
 
+// Aligned with canonical sales filter (sales-revenue.ts): every active invoice
+// by issued_at. Net Sales = gross − CM refunds (subtracted from totals below).
 const BASE_FROM = `
   FROM pos_invoice_item pii
   JOIN pos_invoice i
@@ -38,8 +49,8 @@ const BASE_FROM = `
     ON p.id = pv.product_id AND p.deleted_at IS NULL
   LEFT JOIN product_tier1 pt ON pt.product_id = p.id
   WHERE pii.deleted_at IS NULL
-    AND i.status IN ('paid', 'partially_refunded')
-    AND i.created_at >= ? AND i.created_at < ?
+    AND ${SALES_ACTIVE_STATUSES_SQL}
+    AND ${SALES_DATE_FILTER_SQL}
 `
 
 const VENDOR_EXPR = `
@@ -56,7 +67,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const pg = req.scope.resolve("__pg_connection__") as any
 
   try {
-    const [totalsResult, byCatResult, byVendorResult] = await Promise.all([
+    const [totalsResult, byCatResult, byVendorResult, refundCents] = await Promise.all([
       pg.raw(
         `WITH ${TIER1_CTE}
          SELECT
@@ -89,14 +100,17 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          ORDER BY revenue_cents DESC`,
         [range.from, range.to]
       ),
+      fetchCmRefundsCentsForPeriod(pg, range.from, range.to),
     ])
 
     const t = totalsResult.rows[0]
-    const revenueCents = Number(t?.revenue_cents ?? 0)
-    const costCents    = Number(t?.cost_cents ?? 0)
-    const profitCents  = revenueCents - costCents
-    const totalItems   = Number(t?.total_items ?? 0)
-    const costedItems  = Number(t?.costed_items ?? 0)
+    const grossRevenueCents = Number(t?.revenue_cents ?? 0)
+    const refundCentsNum    = Number(refundCents ?? 0)
+    const revenueCents      = grossRevenueCents - refundCentsNum  // net sales
+    const costCents         = Number(t?.cost_cents ?? 0)
+    const profitCents       = revenueCents - costCents
+    const totalItems        = Number(t?.total_items ?? 0)
+    const costedItems       = Number(t?.costed_items ?? 0)
 
     const mapRows = (rows: any[]) =>
       rows.map(r => {
@@ -114,11 +128,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
     return res.json({
       totals: {
-        revenue:      revenueCents / 100,
-        cost:         costCents / 100,
-        profit:       profitCents / 100,
-        margin_pct:   revenueCents > 0 ? Math.round((profitCents / revenueCents) * 1000) / 10 : 0,
-        coverage_pct: totalItems > 0 ? Math.round((costedItems / totalItems) * 1000) / 10 : 0,
+        revenue:        revenueCents / 100,             // net (gross − refunds)
+        gross_revenue:  grossRevenueCents / 100,
+        refunded:       refundCentsNum / 100,
+        cost:           costCents / 100,
+        profit:         profitCents / 100,
+        margin_pct:     revenueCents > 0 ? Math.round((profitCents / revenueCents) * 1000) / 10 : 0,
+        coverage_pct:   totalItems > 0 ? Math.round((costedItems / totalItems) * 1000) / 10 : 0,
       },
       by_category: mapRows(byCatResult.rows),
       by_vendor:   mapRows(byVendorResult.rows),
