@@ -41,9 +41,11 @@ export const GET = async (
 
   const { rows: bills } = await knex.raw(
     `WITH paid AS (
-       SELECT bill_id, SUM(applied_cents)::integer AS paid_cents
-       FROM china_wire_transfer_application
-       GROUP BY bill_id
+       SELECT cwta.bill_id, SUM(cwta.applied_cents)::integer AS paid_cents
+       FROM china_wire_transfer_application cwta
+       JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
+       WHERE cwt.status = 'confirmed'
+       GROUP BY cwta.bill_id
      )
      SELECT
        cfb.*,

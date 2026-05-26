@@ -28,6 +28,7 @@ const createWireSchema = z.object({
   include_opening_balance: z.boolean().optional(),
   bank_fee_from_previous_cents: z.number().int().min(0).optional(),
   notes: z.string().max(1000).optional(),
+  status: z.enum(["draft", "confirmed"]).optional(),
 });
 
 type BillAllocationCandidate = {
@@ -80,7 +81,10 @@ export const POST = async (
     include_opening_balance,
     bank_fee_from_previous_cents,
     notes,
+    status: wireStatusInput,
   } = parsed.data;
+  const wireStatus = wireStatusInput ?? "confirmed";
+  const isDraft = wireStatus === "draft";
 
   if (bill_ids.length === 0 && !include_opening_balance) {
     return res.status(400).json({ message: "Select at least one bill" });
@@ -90,12 +94,15 @@ export const POST = async (
   }
 
   // Verify bills exist and still have an open balance.
+  // Only confirmed wires consume bill balance — drafts are reservations only.
   const { rows: bills } = bill_ids.length > 0
     ? await knex.raw(
       `WITH paid AS (
-         SELECT bill_id, SUM(applied_cents)::integer AS paid_cents
-         FROM china_wire_transfer_application
-         GROUP BY bill_id
+         SELECT cwta.bill_id, SUM(cwta.applied_cents)::integer AS paid_cents
+         FROM china_wire_transfer_application cwta
+         JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
+         WHERE cwt.status = 'confirmed'
+         GROUP BY cwta.bill_id
        )
        SELECT
          cfb.id,
@@ -147,8 +154,16 @@ export const POST = async (
     await db.raw(
       `INSERT INTO china_wire_transfer
          (id, status, sent_date, wire_amount_cents, received_amount_cents, confirmed_date, notes)
-       VALUES (?, 'confirmed', ?, ?, ?, ?, ?)`,
-      [wireId, sent_date, wire_amount_cents, wire_amount_cents, sent_date, notes ?? null]
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        wireId,
+        wireStatus,
+        sent_date,
+        wire_amount_cents,
+        isDraft ? null : wire_amount_cents,
+        isDraft ? null : sent_date,
+        notes ?? null,
+      ]
     );
 
     let applicationSort = 1;
@@ -214,9 +229,11 @@ export const POST = async (
     const selectedBills = [...bills].sort((a, b) => a.sort_order - b.sort_order);
     const { rows: extraBills } = await db.raw(
       `WITH paid AS (
-         SELECT bill_id, SUM(applied_cents)::integer AS paid_cents
-         FROM china_wire_transfer_application
-         GROUP BY bill_id
+         SELECT cwta.bill_id, SUM(cwta.applied_cents)::integer AS paid_cents
+         FROM china_wire_transfer_application cwta
+         JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
+         WHERE cwt.status = 'confirmed'
+         GROUP BY cwta.bill_id
        )
        SELECT
          cfb.id,

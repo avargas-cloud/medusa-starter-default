@@ -161,11 +161,16 @@ export const GET = async (
   await syncVeetchBills(knex);
 
   // Bills applied to wire transfers, grouped by wire.
+  // `paid` (used to compute bill_balance_cents) counts only confirmed wires,
+  // so a bill applied to a draft still shows as unpaid until the draft is
+  // confirmed.
   const { rows: confirmedBills } = await knex.raw(`
     WITH paid AS (
-      SELECT bill_id, SUM(applied_cents)::integer AS paid_cents
-      FROM china_wire_transfer_application
-      GROUP BY bill_id
+      SELECT cwta.bill_id, SUM(cwta.applied_cents)::integer AS paid_cents
+      FROM china_wire_transfer_application cwta
+      JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
+      WHERE cwt.status = 'confirmed'
+      GROUP BY cwta.bill_id
     )
     SELECT
       cfb.id, cfb.type, cfb.sort_order, cfb.document_type,
@@ -228,12 +233,16 @@ export const GET = async (
   const confirmed = Array.from(wireMap.values());
 
   // Pending bills have a positive remaining balance, ordered by document date.
+  // Draft wires are reservations only — they do NOT reduce the bill's pending
+  // balance until they are confirmed.
   const today = new Date().toISOString().slice(0, 10);
   const { rows: pending } = await knex.raw(
     `WITH paid AS (
-       SELECT bill_id, SUM(applied_cents)::integer AS paid_cents
-       FROM china_wire_transfer_application
-       GROUP BY bill_id
+       SELECT cwta.bill_id, SUM(cwta.applied_cents)::integer AS paid_cents
+       FROM china_wire_transfer_application cwta
+       JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
+       WHERE cwt.status = 'confirmed'
+       GROUP BY cwta.bill_id
      )
      SELECT
        cfb.id, cfb.type, cfb.sort_order, cfb.document_type,
