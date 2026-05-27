@@ -1,62 +1,44 @@
 #!/bin/bash
 
-# dev.sh - Development Start Script
-# Starts Medusa Server (connects to Railway services)
+# dev.sh — Railway dev backend (port 9090, connects to Railway prod DB/Redis).
+# Counterpart: dev-preview.sh runs the preview snapshot backend on :9000.
+# Wrappers: ../back (this script) · ../back-preview (preview snapshot).
 
-# Cleanup function to kill background processes on exit
+set -e
+
 cleanup() {
     echo "🛑 Shutting down..."
     exit
 }
-
-# Trap SIGINT (Ctrl+C)
 trap cleanup SIGINT
 
-echo "🚀 Starting Development Environment..."
+export PORT=9090
+
+# CRITICAL: Wipe any stale shell exports that could shadow .env values.
+# Medusa's loadEnv() only loads .env.{staging|production|test} + .env — it does
+# NOT load .env.development.local or .env.preview. If a previous shell sourced
+# .env.preview, its DATABASE_URL/REDIS_URL/etc. would leak into this process and
+# silently override .env. The unset below guarantees .env wins.
+unset DATABASE_URL REDIS_URL NODE_ENV
+unset QB_BRIDGE_URL QB_API_KEY QB_ORDER_FLOW_ENABLED QB_DRY_RUN QB_INTEGRATION
+
+echo "🚀 Starting Railway dev backend on :$PORT"
+echo "📡 Connecting to Railway Postgres + Railway Redis (per .env)"
 
 # Clean up any old Medusa processes (safe - only kills medusa-related)
-echo "🧹 Cleaning up old Medusa processes..."
-pkill -9 -f "medusa develop" 2>/dev/null || true
-pkill -9 -f "nodemon.*medusa" 2>/dev/null || true
-
-# Also free port 9000 if anything is using it
-PORT_PID=$(lsof -ti:9000 2>/dev/null || true)
-if [ ! -z "$PORT_PID" ]; then
-    echo "   Freeing port 9000 (PID: $PORT_PID)..."
+echo "🧹 Cleaning up old Medusa processes on :$PORT..."
+pkill -9 -f "medusa develop.*$PORT" 2>/dev/null || true
+PORT_PID=$(lsof -ti:$PORT 2>/dev/null || true)
+if [ -n "$PORT_PID" ]; then
+    echo "   Freeing port $PORT (PID: $PORT_PID)..."
     kill -9 $PORT_PID 2>/dev/null || true
 fi
 sleep 1
 
-# Show which database and Redis are configured
-DB_LOCAL=false
-REDIS_LOCAL=false
-
-if grep -q "localhost:5432" .env 2>/dev/null; then
-    DB_LOCAL=true
-fi
-
-if grep -q "localhost:6379" .env 2>/dev/null; then
-    REDIS_LOCAL=true
-fi
-
-if [ "$DB_LOCAL" = true ] && [ "$REDIS_LOCAL" = true ]; then
-    echo "🔵 Using LOCAL PostgreSQL + LOCAL Redis"
-elif [ "$DB_LOCAL" = true ] && [ "$REDIS_LOCAL" = false ]; then
-    echo "🔵 Using LOCAL PostgreSQL + Railway Redis"
-elif [ "$DB_LOCAL" = false ] && [ "$REDIS_LOCAL" = true ]; then
-    echo "📡 Using RAILWAY PostgreSQL + LOCAL Redis"
-else
-    echo "📡 Using RAILWAY services (PostgreSQL + Redis)"
-fi
-
-
-# Force QB vars from .env to prevent stale shell exports from overriding them.
-# .env is the single source of truth. Falls back to Cloudflare URL if not set.
-unset QB_BRIDGE_URL QB_API_KEY QB_ORDER_FLOW_ENABLED QB_DRY_RUN QB_INTEGRATION
+# Read QB_BRIDGE_URL from .env (Cloudflare URL by default).
 QB_BRIDGE_URL="$(grep -m1 '^QB_BRIDGE_URL=' .env 2>/dev/null | cut -d'=' -f2-)"
 export QB_BRIDGE_URL="${QB_BRIDGE_URL:-https://qb.eptbridge.com}"
 
-# Start Medusa with explicit nodemon config
 echo "🛍️  Starting Medusa Server... (QB Bridge: $QB_BRIDGE_URL)"
 exec npx nodemon \
   --watch src \

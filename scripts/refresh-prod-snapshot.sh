@@ -4,7 +4,7 @@
 # =============================================================================
 # Dumps the Railway production Postgres database and restores it into the
 # local pos-preview-postgres container, so the preview backend (NODE_ENV=
-# development with .env.development.local) has a recent copy of prod data
+# development with .env.preview) has a recent copy of prod data
 # to render against. Intended to run every 6 hours via cron.
 #
 # pg_dump and pg_restore are run from INSIDE the local container, so the

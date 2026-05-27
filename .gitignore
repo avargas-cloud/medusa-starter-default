@@ -4,6 +4,7 @@
 .env.railway
 .env.development.local
 .env.development
+.env.preview
 .env.backup
 .DS_Store
 /uploads
