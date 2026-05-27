@@ -90,7 +90,7 @@ export async function loadDailyReport(
     `WITH lines AS (
        SELECT
          pii.id AS line_id,
-         COALESCE(NULLIF(pv.sku, ''), pii.id) AS sample_id,
+         COALESCE(NULLIF(pii.sku, ''), NULLIF(pv.sku, ''), pii.id) AS sample_id,
          pii.quantity,
          pii.average_unit_cost,
          pii.average_unit_cost_synced_at,
