@@ -14,6 +14,7 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+import { randomUUID } from "crypto";
 import { z } from "zod";
 
 type Knex = { raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }> };
@@ -22,7 +23,87 @@ const updateWireSchema = z.object({
   sent_date: z.string().date().optional(),
   wire_amount_cents: z.number().int().min(1).optional(),
   notes: z.string().max(1000).optional(),
+  bank_fee_included_cents: z.number().int().min(0).optional(),
 }).refine((d) => Object.keys(d).length > 0, { message: "No fields to update" });
+
+// Reconcile the synthetic bank_fee bill row attached to a wire.
+// - When the target is 0: drop the bill and its application.
+// - When > 0 and the row exists: UPDATE the amount and the application's applied_cents.
+// - When > 0 and the row is missing: INSERT a new bill + application pair.
+async function reconcileWireBankFee(
+  knex: Knex,
+  wireId: string,
+  targetCents: number,
+  sentDate: string | null
+): Promise<void> {
+  const { rows: existing } = await knex.raw(
+    `SELECT id, sort_order FROM china_finance_bill
+       WHERE wire_transfer_id = ? AND document_type = 'bank_fee'
+       ORDER BY sort_order ASC
+       LIMIT 1`,
+    [wireId]
+  ) as { rows: Array<{ id: string; sort_order: number }> };
+  const current = existing[0];
+
+  if (targetCents === 0) {
+    if (!current) return;
+    await knex.raw(
+      `DELETE FROM china_wire_transfer_application
+         WHERE wire_transfer_id = ? AND bill_id = ?`,
+      [wireId, current.id]
+    );
+    await knex.raw(`DELETE FROM china_finance_bill WHERE id = ?`, [current.id]);
+    return;
+  }
+
+  if (current) {
+    await knex.raw(
+      `UPDATE china_finance_bill
+         SET amount_cents = ?, updated_at = now()
+       WHERE id = ?`,
+      [targetCents, current.id]
+    );
+    await knex.raw(
+      `UPDATE china_wire_transfer_application
+         SET applied_cents = ?
+       WHERE wire_transfer_id = ? AND bill_id = ?`,
+      [targetCents, wireId, current.id]
+    );
+    return;
+  }
+
+  const { rows: maxSortRows } = await knex.raw(
+    `SELECT COALESCE(MAX(sort_order), 0) AS max_so FROM china_finance_bill`
+  ) as { rows: [{ max_so: number }] };
+  const { rows: maxAppRows } = await knex.raw(
+    `SELECT COALESCE(MAX(sort_order), 0) AS max_so
+       FROM china_wire_transfer_application WHERE wire_transfer_id = ?`,
+    [wireId]
+  ) as { rows: [{ max_so: number }] };
+
+  const feeBillId = randomUUID();
+  await knex.raw(
+    `INSERT INTO china_finance_bill
+       (id, type, sort_order, wire_transfer_id, document_type,
+        payee, description, amount_cents, document_date)
+     VALUES (?, 'bank_fee', ?, ?, 'bank_fee',
+             'Bank Fee', ?, ?, ?)`,
+    [
+      feeBillId,
+      maxSortRows[0].max_so + 1,
+      wireId,
+      `Wire transfer bank fee from wire ${wireId}`,
+      targetCents,
+      sentDate,
+    ]
+  );
+  await knex.raw(
+    `INSERT INTO china_wire_transfer_application
+       (id, wire_transfer_id, bill_id, applied_cents, sort_order)
+     VALUES (?, ?, ?, ?, ?)`,
+    [randomUUID(), wireId, feeBillId, targetCents, maxAppRows[0].max_so + 1]
+  );
+}
 
 export const GET = async (
   req: AuthenticatedMedusaRequest,
@@ -76,7 +157,7 @@ export const PATCH = async (
     .resolve("__pg_connection__") as Knex;
 
   const { id } = req.params;
-  const { sent_date, wire_amount_cents, notes } = parsed.data;
+  const { sent_date, wire_amount_cents, notes, bank_fee_included_cents } = parsed.data;
 
   const setClauses: string[] = ["updated_at = now()"];
   const bindings: unknown[] = [];
@@ -92,6 +173,11 @@ export const PATCH = async (
   ) as { rows: Array<Record<string, unknown>> };
 
   if (rows.length === 0) return res.status(404).json({ message: "Wire transfer not found" });
+
+  if (bank_fee_included_cents !== undefined && id) {
+    const wireRow = rows[0] as { sent_date: string | null };
+    await reconcileWireBankFee(knex, id, bank_fee_included_cents, wireRow.sent_date);
+  }
 
   return res.json({ wire_transfer: rows[0] });
 };
