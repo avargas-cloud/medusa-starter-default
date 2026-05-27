@@ -116,4 +116,5 @@ export interface PreviewApprovalLine {
   will_block: boolean;
   block_reason: InventoryCountLineBlockReason | null;
   qb_account_list_id: string;
+  unit_cost: number | null;
 }

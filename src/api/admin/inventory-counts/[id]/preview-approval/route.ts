@@ -85,6 +85,43 @@ export async function GET(
     stockByItem.set(lvl.inventory_item_id, lvl.stocked_quantity ?? 0);
   }
 
+  // Resolve unit cost per variant. Same precedence used elsewhere for
+  // inventory-adjustment COGS (reports/sales/summary fetchInventoryAdjCogs):
+  // average_unit_cost → fallback qb_avg_cost (both in dollars).
+  const variantIds = Array.from(
+    new Set(lines.map((l) => l.product_variant_id).filter((id): id is string => !!id))
+  );
+  const costByVariant = new Map<string, number | null>();
+  if (variantIds.length > 0) {
+    const pg = req.scope.resolve("__pg_connection__") as {
+      raw: (
+        sql: string,
+        bindings?: unknown[]
+      ) => Promise<{ rows: Array<Record<string, unknown>> }>;
+    };
+    const result = await pg.raw(
+      `SELECT id,
+              COALESCE(
+                (metadata->>'average_unit_cost')::numeric,
+                (metadata->>'qb_avg_cost')::numeric
+              ) AS unit_cost
+         FROM product_variant
+        WHERE id = ANY(?)`,
+      [variantIds]
+    );
+    for (const row of result.rows) {
+      const raw = row.unit_cost;
+      const n =
+        raw === null || raw === undefined || raw === ""
+          ? null
+          : Number(raw);
+      costByVariant.set(
+        String(row.id),
+        n !== null && Number.isFinite(n) ? n : null
+      );
+    }
+  }
+
   const previewLines: PreviewApprovalLine[] = lines.map((l) => {
     const current = stockByItem.get(l.inventory_item_id) ?? 0;
     const delta = l.delta_original ?? 0;
@@ -103,10 +140,18 @@ export async function GET(
       block_reason: willBlock ? "projected_negative" : null,
       qb_account_list_id:
         l.qb_account_list_id ?? count.default_qb_account_list_id,
+      unit_cost: costByVariant.get(l.product_variant_id) ?? null,
     };
   });
 
   const applyLines = previewLines.filter((l) => !l.will_block);
+  const cost_impact_dollars = applyLines.reduce(
+    (acc, l) => acc + l.delta_original * (l.unit_cost ?? 0),
+    0
+  );
+  const cost_impact_has_missing = applyLines.some(
+    (l) => l.delta_original !== 0 && l.unit_cost === null
+  );
   const summary = {
     total_lines: previewLines.length,
     will_apply: applyLines.length,
@@ -118,6 +163,8 @@ export async function GET(
       .filter((l) => l.delta_original < 0)
       .reduce((acc, l) => acc + l.delta_original, 0),
     net_delta_units: applyLines.reduce((acc, l) => acc + l.delta_original, 0),
+    cost_impact_dollars,
+    cost_impact_has_missing,
   };
 
   return res.json({
