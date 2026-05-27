@@ -3,7 +3,10 @@ import {
   transform,
   WorkflowResponse,
 } from "@medusajs/framework/workflows-sdk";
-import { updateProductsWorkflow } from "@medusajs/medusa/core-flows";
+import {
+  updateProductsWorkflow,
+  updateProductVariantsWorkflow,
+} from "@medusajs/medusa/core-flows";
 
 import { sendToQbStep, type QbItemType } from "../qb/send-to-qb-step";
 import { syncProductToMeiliSearchWorkflow } from "../sync-product-meilisearch";
@@ -81,9 +84,11 @@ const pruneUndefined = <T extends Record<string, unknown>>(
 export const updatePosProductWorkflow = createWorkflow(
   "update-pos-product",
   function (input: UpdatePosProductInput) {
-    // Build the product + variant update payload conditionally so we don't
-    // wipe fields the caller didn't include (pos_user submits a subset;
-    // admin submits the full form).
+    // Build product-level and variant-level patches independently. They go to
+    // SEPARATE workflows: passing a `variants` array to updateProductsWorkflow
+    // is interpreted as the authoritative variant SET (siblings get hard-
+    // deleted). updateProductVariantsWorkflow is scoped to the listed variants
+    // and never touches siblings — that's the safe path for per-variant edits.
     const productsInput = transform({ input }, (data) => {
       const i = data.input;
 
@@ -109,6 +114,11 @@ export const updatePosProductWorkflow = createWorkflow(
       if (Object.keys(productMetaPatch).length > 0) {
         productPatch.metadata = productMetaPatch;
       }
+      return [productPatch];
+    });
+
+    const variantsInput = transform({ input }, (data) => {
+      const i = data.input;
 
       const variantPatch: Record<string, unknown> = { id: i.variant_id };
       if (i.sku !== undefined) variantPatch.sku = i.sku;
@@ -133,15 +143,15 @@ export const updatePosProductWorkflow = createWorkflow(
         variantPatch.metadata = variantMetaPatch;
       }
 
-      const productEntry: Record<string, unknown> = { ...productPatch };
-      if (Object.keys(variantPatch).length > 1) {
-        productEntry.variants = [variantPatch];
-      }
-      return [productEntry];
+      return [variantPatch];
     });
 
     updateProductsWorkflow.runAsStep({
       input: { products: productsInput as any },
+    });
+
+    updateProductVariantsWorkflow.runAsStep({
+      input: { product_variants: variantsInput as any },
     });
 
     // Shipping dims land on inventory_item — step is a no-op when nothing given.
