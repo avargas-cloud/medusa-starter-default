@@ -17,6 +17,7 @@ type Knex = { raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknow
 const confirmSchema = z.object({
   received_amount_cents: z.number().int().min(0),
   confirmed_date: z.string().date(),
+  sent_date: z.string().date().optional(),
 });
 
 export const PATCH = async (
@@ -32,7 +33,7 @@ export const PATCH = async (
     .resolve("__pg_connection__") as Knex;
 
   const { id } = req.params;
-  const { received_amount_cents, confirmed_date } = parsed.data;
+  const { received_amount_cents, confirmed_date, sent_date } = parsed.data;
 
   const { rows: existing } = await knex.raw(
     `SELECT id, status, wire_amount_cents FROM china_wire_transfer WHERE id = ?`, [id]
@@ -46,16 +47,23 @@ export const PATCH = async (
 
   const bank_fee_cents = wire.wire_amount_cents - received_amount_cents;
 
+  // sent_date is optional — drafts are scheduled with an estimated date,
+  // and the actual send date may differ. When the caller passes it, we
+  // overwrite the estimate; otherwise the original draft date stays.
+  const setSentDate = sent_date !== undefined;
   const { rows } = await knex.raw(
     `UPDATE china_wire_transfer
        SET status = 'confirmed',
            received_amount_cents = ?,
            bank_fee_cents = ?,
            confirmed_date = ?,
+           ${setSentDate ? "sent_date = ?," : ""}
            updated_at = now()
      WHERE id = ?
      RETURNING *`,
-    [received_amount_cents, bank_fee_cents, confirmed_date, id]
+    setSentDate
+      ? [received_amount_cents, bank_fee_cents, confirmed_date, sent_date, id]
+      : [received_amount_cents, bank_fee_cents, confirmed_date, id]
   ) as { rows: [Record<string, unknown>] };
 
   return res.json({ wire_transfer: rows[0] });
