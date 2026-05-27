@@ -154,9 +154,15 @@ export async function loadDailyReport(
        FROM lines
      ),
      missing_cost AS (
+       -- Custom line items (typed descriptions, no variant_id) by design have
+       -- no cost — exclude them so this warning surfaces real products only.
        SELECT COUNT(*)::bigint AS c,
          COALESCE(ARRAY_AGG(sample_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
-       FROM (SELECT sample_id FROM lines WHERE effective_unit_cost IS NULL LIMIT 20) x
+       FROM (
+         SELECT sample_id FROM lines
+         WHERE effective_unit_cost IS NULL AND product_id IS NOT NULL
+         LIMIT 20
+       ) x
      ),
      unit_cost_fallback AS (
        SELECT COUNT(*)::bigint AS c,
