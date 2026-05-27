@@ -5,6 +5,10 @@ import {
   updatePosProductWorkflow,
   type UpdatePosProductInput,
 } from "../../../../../workflows/pos/update-pos-product";
+import {
+  updatePosProductFullWorkflow,
+  type UpdatePosProductFullInput,
+} from "../../../../../workflows/pos/update-pos-product-full";
 import { updateSingleProductWorkflow } from "../../../../../workflows/update-single-product";
 
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
@@ -12,8 +16,58 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   const query = req.scope.resolve(ContainerRegistrationKeys.QUERY);
 
   try {
-    const id = req.params.id;
-    const bodyVariantId = (req.body as { variant_id?: string })?.variant_id;
+    const id = req.params.id as string;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const bodyVariantId = body.variant_id as string | undefined;
+
+    // ── Product mode: body carries a variants[] array ──────────────────────
+    // Triggered by the EditItemModal "Producto" toggle. Dispatches to the
+    // full-product workflow which handles per-variant create/update/delete
+    // explicitly (no Medusa authoritative-array semantics → no sibling wipe).
+    if (Array.isArray(body.variants)) {
+      const fullInput: UpdatePosProductFullInput = {
+        id,
+        title: body.title as string | undefined,
+        category_ids: body.category_ids as string[] | undefined,
+        image_urls: body.image_urls as string[] | undefined,
+        income_account_full_name: body.income_account_full_name as
+          | string
+          | undefined,
+        cogs_account_full_name: body.cogs_account_full_name as
+          | string
+          | undefined,
+        vendor_full_name: body.vendor_full_name as string | undefined,
+        vendor_qb_id: body.vendor_qb_id as string | undefined,
+        shipping_attributes: body.shipping_attributes as
+          | UpdatePosProductFullInput["shipping_attributes"]
+          | undefined,
+        variants: body.variants as UpdatePosProductFullInput["variants"],
+        delete_variant_ids: body.delete_variant_ids as string[] | undefined,
+      };
+
+      const { result: fullResult, errors: fullErrors } =
+        await updatePosProductFullWorkflow(req.scope).run({
+          input: fullInput,
+          throwOnError: false,
+        });
+
+      if (fullErrors && fullErrors.length > 0) {
+        logger.error(
+          `Failed to update POS product (full mode): ${JSON.stringify(fullErrors)}`
+        );
+        return res.status(400).json({
+          error: fullErrors[0]?.error?.message || "Failed to update product",
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        mode: "product",
+        result: fullResult,
+      });
+    }
+
+    // ── Single-variant mode (default, existing behavior) ──────────────────
 
     // Resolve the EXACT variant the UI opened. If the modal passed variant_id,
     // filter by it directly (multi-variant products). Otherwise fall back to
