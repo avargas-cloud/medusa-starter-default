@@ -192,6 +192,7 @@ export async function handleDraftOrderCreated(
       entity: "order",
       fields: [
         "id",
+        "created_at",
         "sales_channel_id",
         "metadata",
         "subtotal",
@@ -364,6 +365,11 @@ export async function handleDraftOrderCreated(
       (draftOrder.metadata?.document_number as string) ||
       `E${draftOrder.display_id}`,
     salesRep: parseSalesRepInitials(draftOrder.metadata?.sales_rep),
+    // Source date for the QB <TxnDate>. Captured from the Medusa draft order
+    // so QB books on day-0 even if the bridge retries the next day.
+    date: (draftOrder as any).created_at
+      ? new Date((draftOrder as any).created_at).toISOString()
+      : undefined,
   });
 
   if (result.error) {

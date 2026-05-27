@@ -2,6 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 
 import { parseSalesRepInitials } from "../../../../../../lib/quickbooks/parse-sales-rep";
+import { getBusinessDateString } from "../../../../../../lib/quickbooks/order-flow-core";
 import { getQbConfig } from "../../../../../../lib/quickbooks/qb-config";
 import { resolveTaxListid } from "../../../../../../lib/quickbooks/resolve-tax-listid";
 import {
@@ -685,7 +686,9 @@ export async function PATCH(
               medusaRefNumber: cmNumber ?? null,
               payload: {
                 customerId: check.qbListId,
-                date: new Date().toISOString().split("T")[0],
+                date: getBusinessDateString(
+                  (creditMemo as any).created_at ?? null
+                ),
                 memo: `POS Return ${cmNumber ?? ""}`.trim(),
                 items: qbItems,
                 salesTaxCode: cmSalesTaxCode,

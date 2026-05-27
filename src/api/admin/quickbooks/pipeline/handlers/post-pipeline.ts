@@ -594,6 +594,7 @@ export async function POST(
             // resolves customer + submits to bridge next tick.
             const {
               ensureCustomerInQb,
+              getBusinessDateString,
             } = require("../../../../../lib/quickbooks/order-flow-core");
             const custResult = await ensureCustomerInQb(
               cmCustomer,
@@ -626,9 +627,9 @@ export async function POST(
             const cmSalesRepRef = parseSalesRepInitials(cm.sales_rep);
             const cmRetryPayload = {
               customerId: custResult.qbCustomerId,
-              date: cm.completed_at
-                ? new Date(cm.completed_at).toISOString().split("T")[0]
-                : new Date().toISOString().split("T")[0],
+              date: getBusinessDateString(
+                cm.completed_at ?? cm.created_at ?? null
+              ),
               memo: `POS Return ${cm.credit_memo_number || ""}`.trim(),
               items: qbItems,
               ...(cm.is_tax_exempt === true ? { taxExempt: true } : {}),

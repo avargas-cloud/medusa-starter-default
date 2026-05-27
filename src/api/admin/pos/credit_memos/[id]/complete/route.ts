@@ -5,6 +5,7 @@ import { Modules } from "@medusajs/utils";
 
 // 1.5.8: createCreditMemoInQb import removed — route enqueues now.
 import { parseSalesRepInitials } from "../../../../../../lib/quickbooks/parse-sales-rep";
+import { getBusinessDateString } from "../../../../../../lib/quickbooks/order-flow-core";
 import { getQbConfig } from "../../../../../../lib/quickbooks/qb-config";
 import { resolveTaxListid } from "../../../../../../lib/quickbooks/resolve-tax-listid";
 import {
@@ -352,7 +353,9 @@ export async function POST(
               qbRefNumber: creditMemo.credit_memo_number ?? null,
               payload: {
                 customerId: qbCustomerId,
-                date: new Date().toISOString().split("T")[0],
+                date: getBusinessDateString(
+                  (creditMemo as any).created_at ?? null
+                ),
                 memo: `POS Return ${creditMemo.credit_memo_number || ""}`.trim(),
                 items: qbItems,
                 salesTaxCode: cmSalesTaxCode,

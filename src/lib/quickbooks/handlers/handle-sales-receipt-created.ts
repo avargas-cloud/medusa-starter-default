@@ -255,18 +255,22 @@ export async function handleSalesReceiptCreated(
   let invoiceShippingAmount: number | undefined;
   let invoicePaymentMethod: string | undefined;
   let invoiceCardBrand: string | undefined;
+  // Source date for the QB Sales Receipt <TxnDate>. Captured from pos_invoice
+  // (cashier close moment) so QB books on day-0 even if the bridge retries
+  // the next day.
+  let receiptDate: string | Date | null = null;
 
   try {
     // Fallback for invoice_id when called by the consolidator (which only passes order_id)
-    let sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method, card_brand FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
+    let sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method, card_brand, created_at, issued_at FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
     let params: any[] = [data.fulfillment_id];
 
     if (data.invoice_id) {
-      sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method, card_brand FROM pos_invoice WHERE id = $1 LIMIT 1`;
+      sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method, card_brand, created_at, issued_at FROM pos_invoice WHERE id = $1 LIMIT 1`;
       params = [data.invoice_id];
     } else if (!data.fulfillment_id && orderId) {
       // Cron resubmit path — only order_id available
-      sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method, card_brand FROM pos_invoice WHERE order_id = $1 ORDER BY issued_at DESC LIMIT 1`;
+      sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method, card_brand, created_at, issued_at FROM pos_invoice WHERE order_id = $1 ORDER BY issued_at DESC LIMIT 1`;
       params = [orderId];
     }
 
@@ -291,8 +295,15 @@ export async function handleSalesReceiptCreated(
       if (!data.invoice_id && row.id) {
         data.invoice_id = row.id;
       }
+      receiptDate = row.issued_at ?? row.created_at ?? null;
     }
   } catch (e) {}
+
+  // Final fallback: the order itself. Keeps QB <TxnDate> stable even if the
+  // pos_invoice lookup failed. Never falls through to "now".
+  if (!receiptDate) {
+    receiptDate = order.created_at ?? null;
+  }
 
   let prebuiltItems: any[] | undefined;
   let salesTaxCode: string | undefined;
@@ -427,6 +438,7 @@ export async function handleSalesReceiptCreated(
     qbTaxItemListid,
     salesRep: parseSalesRepInitials(order.metadata?.sales_rep),
     memo,
+    receiptDate,
     onSubmitted: async (operationId) => {
       await writePipelineRow({
         orderId,

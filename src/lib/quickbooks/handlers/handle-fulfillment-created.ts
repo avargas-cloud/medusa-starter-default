@@ -293,13 +293,17 @@ export async function handleFulfillmentCreated(
   let memo: string | undefined;
   let invoiceShippingAmount: number | undefined;
   let invoiceDiscountAmount: number | undefined;
+  // Source date for the QB <TxnDate>. Prefer the pos_invoice's issued_at /
+  // created_at (when the cashier closed the sale or the invoice was generated)
+  // so QB books on day-0 even if the bridge retries the next day.
+  let invoiceDate: string | Date | null = null;
 
   try {
-    let sql = `SELECT invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, discount FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
+    let sql = `SELECT invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, discount, created_at, issued_at FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
     let params: any[] = [data.fulfillment_id];
 
     if (data.invoice_id) {
-      sql = `SELECT invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, discount FROM pos_invoice WHERE id = $1 LIMIT 1`;
+      sql = `SELECT invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, discount, created_at, issued_at FROM pos_invoice WHERE id = $1 LIMIT 1`;
       params = [data.invoice_id];
     }
 
@@ -320,8 +324,37 @@ export async function handleFulfillmentCreated(
         // invoices this is intentionally different from order.discount_total.
         invoiceDiscountAmount = Number(row.discount) / 100;
       }
+      invoiceDate = row.issued_at ?? row.created_at ?? null;
     }
   } catch (e) {}
+
+  // For non-POS fulfillments (no pos_invoice row), try the fulfillment's own
+  // created_at — that's the moment the package was marked shipped.
+  if (!invoiceDate && data.fulfillment_id) {
+    try {
+      const query = _container.resolve(ContainerRegistrationKeys.QUERY);
+      const {
+        data: [fulfillment],
+      } = await query.graph({
+        entity: "fulfillment",
+        fields: ["created_at"],
+        filters: { id: data.fulfillment_id },
+      });
+      if (fulfillment?.created_at) {
+        invoiceDate = fulfillment.created_at;
+      }
+    } catch (e: any) {
+      logger.warn(
+        `${LOG_PREFIX} Could not fetch fulfillment.created_at for date: ${e.message}`
+      );
+    }
+  }
+
+  // Final fallback: the order itself. Keeps QB <TxnDate> stable even if the
+  // pos_invoice/fulfillment lookups fail. Never falls through to "now".
+  if (!invoiceDate) {
+    invoiceDate = order.created_at ?? null;
+  }
 
   let prebuiltItems: any[] | undefined;
   let salesTaxCode: string | undefined;
@@ -524,6 +557,7 @@ export async function handleFulfillmentCreated(
     qbTaxItemListid,
     salesRep: parseSalesRepInitials(order.metadata?.sales_rep),
     memo,
+    invoiceDate,
     onSubmitted: async (operationId) => {
       await writePipelineRow({
         orderId,

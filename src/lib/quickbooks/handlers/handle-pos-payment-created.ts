@@ -6,6 +6,7 @@ import { createCreditMemoInQb } from "../client";
 import {
   processPaymentCaptureInQb,
   ensureCustomerInQb,
+  getBusinessDateString,
 } from "../order-flow-core";
 import {
   resolveQbPaymentMethodForPayment,
@@ -228,7 +229,7 @@ export async function handlePosPaymentCreated({
 
       const cmResult = await createCreditMemoInQb({
         customerId: qbCustomerId as string,
-        date: new Date().toISOString().split("T")[0],
+        date: getBusinessDateString((payment as any).created_at ?? null),
         memo: `Manual Refund / Deposit Return`,
         items: [
           {

@@ -985,6 +985,12 @@ export async function processInvoiceInQb(invoice: {
   salesRep?: string;
   refNumber?: string; // Custom Invoice Number
   memo?: string;
+  /**
+   * Source date for the QB <TxnDate>. Should be the fulfillment/pos_invoice
+   * created_at — NOT "now" — so retries after QB bridge outages still book
+   * to the original business day. When omitted, QB will default to today.
+   */
+  invoiceDate?: string | Date | null;
   onSubmitted?: (operationId: string) => Promise<void>; // Persist bridge_op_id before polling
 }): Promise<{
   enabled: boolean;
@@ -1020,7 +1026,7 @@ export async function processInvoiceInQb(invoice: {
 
   const invResult = await createInvoiceInQb({
     customerId: invoice.qbCustomerId,
-    date: getDateString(),
+    date: getBusinessDateString(invoice.invoiceDate),
     LinkToTxnID: invoice.qbSoTxnId,
     items: invoice.prebuiltItems,
     salesTaxCode: invoice.salesTaxCode,
@@ -1163,6 +1169,12 @@ export async function processSalesReceiptInQb(receipt: {
   salesRep?: string;
   refNumber?: string;
   memo?: string;
+  /**
+   * Source date for the QB <TxnDate>. Should be the pos_invoice created_at
+   * (cashier close time) — NOT "now" — so retries after QB bridge outages
+   * still book to the original business day.
+   */
+  receiptDate?: string | Date | null;
 }): Promise<{
   enabled: boolean;
   operationId?: string;
@@ -1194,7 +1206,7 @@ export async function processSalesReceiptInQb(receipt: {
 
   const srResult = await createSalesReceiptInQb({
     customerId: receipt.qbCustomerId,
-    date: getDateString(),
+    date: getBusinessDateString(receipt.receiptDate),
     items: receipt.prebuiltItems || [],
     salesTaxCode: receipt.salesTaxCode,
     qbTaxItemListid: receipt.qbTaxItemListid,
@@ -1666,9 +1678,33 @@ export async function processDeactivateEstimateInQb(draft: {
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
+// QB document dates should reflect the local business calendar of the
+// store, not UTC. Florida is America/New_York; override via env if the
+// company books in another timezone.
+const QB_DOC_TIMEZONE = process.env.QB_DOC_TIMEZONE || "America/New_York";
+
+/**
+ * Returns YYYY-MM-DD for the given instant in the store's local timezone.
+ * Falls back to "today" only when no source date is supplied. Callers that
+ * represent a real business event (order/fulfillment/pos_invoice) MUST pass
+ * the source date so QB <TxnDate> stays stable across retries.
+ */
+export function getBusinessDateString(date?: string | Date | null): string {
+  const d = date ? new Date(date) : new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: QB_DOC_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const y = parts.find((p) => p.type === "year")?.value;
+  const m = parts.find((p) => p.type === "month")?.value;
+  const dd = parts.find((p) => p.type === "day")?.value;
+  return `${y}-${m}-${dd}`;
+}
+
+// Thin wrapper so existing SO/Estimate call sites keep compiling.
+// Prefer getBusinessDateString in new code.
 function getDateString(date?: string | Date): string {
-  if (date) {
-    return new Date(date).toISOString().split("T")[0] as string;
-  }
-  return new Date().toISOString().split("T")[0] as string;
+  return getBusinessDateString(date);
 }
