@@ -14,6 +14,7 @@ import { applyShippingAttributesStep } from "./steps/apply-shipping-attributes-s
 import { createProductVariantsStep } from "./steps/create-product-variants-step";
 import { deleteProductVariantsStep } from "./steps/delete-product-variants-step";
 import { ensureMiamiLevelsStep } from "./steps/ensure-miami-levels-step";
+import { ensureOptionValuesStep } from "./steps/ensure-option-values-step";
 
 /**
  * Product-mode update workflow — applies a full snapshot of a POS product
@@ -159,7 +160,20 @@ export const updatePosProductFullWorkflow = createWorkflow(
       input: { product_variants: variantUpdates as any },
     });
 
-    // ── 3. Create brand-new variants (no id) ──────────────────────────────
+    // ── 3a. Pre-flight: register any option values used by new variants ──
+    // Medusa's createProductVariants rejects unknown option values. The
+    // EditItem "Product" UI surfaces every globally-registered value of an
+    // attribute (e.g. all Color Options), so the picked value may not yet
+    // exist on this product's product_option. This step adds it first.
+    const newVariantOptionsInput = transform({ input }, (data) => ({
+      product_id: data.input.id,
+      new_variant_options: data.input.variants
+        .filter((v) => !v.id)
+        .map((v) => v.options ?? {}),
+    }));
+    ensureOptionValuesStep(newVariantOptionsInput);
+
+    // ── 3b. Create brand-new variants (no id) ─────────────────────────────
     const newVariantsInput = transform({ input }, (data) => ({
       product_id: data.input.id,
       variants: data.input.variants
