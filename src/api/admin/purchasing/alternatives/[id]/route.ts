@@ -159,15 +159,27 @@ export async function GET(
         GROUP BY pol.sku_snapshot
       ) open_po_usa ON open_po_usa.sku_snapshot = pv.sku
       LEFT JOIN (
-        SELECT pol.sku_snapshot,
-               SUM(GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled))::int AS on_order
-        FROM purchase_order_line pol
-        JOIN purchase_order po ON po.id = pol.purchase_order_id AND po.deleted_at IS NULL
-        WHERE po.status IN ('submitted', 'partially_received')
-          AND pol.status IN ('open', 'partial')
-          AND pol.deleted_at IS NULL
-          AND BTRIM(po.stock_location_id, E' \\t\\n\\r') = $3
-        GROUP BY pol.sku_snapshot
+        SELECT sku_snapshot, SUM(on_order)::int AS on_order
+        FROM (
+          SELECT pol.sku_snapshot,
+                 GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled) AS on_order
+          FROM purchase_order_line pol
+          JOIN purchase_order po ON po.id = pol.purchase_order_id AND po.deleted_at IS NULL
+          WHERE po.status IN ('submitted', 'partially_received')
+            AND pol.status IN ('open', 'partial')
+            AND pol.deleted_at IS NULL
+            AND BTRIM(po.stock_location_id, E' \\t\\n\\r') = $3
+          UNION ALL
+          SELECT fol.sku_snapshot,
+                 GREATEST(0, fol.qty_ordered - fol.qty_received - fol.qty_cancelled) AS on_order
+          FROM factory_order_line fol
+          JOIN factory_order fo ON fo.id = fol.factory_order_id AND fo.deleted_at IS NULL
+          WHERE fo.status IN ('submitted', 'partially_received')
+            AND fol.status IN ('open', 'partial')
+            AND fol.deleted_at IS NULL
+            AND BTRIM(fo.stock_location_id, E' \\t\\n\\r') = $3
+        ) combined
+        GROUP BY sku_snapshot
       ) open_po_china ON open_po_china.sku_snapshot = pv.sku
       LEFT JOIN (
         SELECT daily.variant_id,

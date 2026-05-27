@@ -92,19 +92,33 @@ export async function runPurchasingSnapshot(
         [USA_LOC, CHINA_LOC]
       ),
       db.query<{ sku: string; on_order_usa: string; on_order_china: string }>(
-        `SELECT pol.sku_snapshot AS sku,
-                SUM(CASE WHEN BTRIM(po.stock_location_id, E' \\t\\n\\r') = $1
-                         THEN GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)
-                         ELSE 0 END) AS on_order_usa,
-                SUM(CASE WHEN BTRIM(po.stock_location_id, E' \\t\\n\\r') = $2
-                         THEN GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)
-                         ELSE 0 END) AS on_order_china
-         FROM purchase_order_line pol
-         JOIN purchase_order po ON po.id = pol.purchase_order_id AND po.deleted_at IS NULL
-         WHERE po.status IN ('submitted', 'partially_received')
-           AND pol.status IN ('open', 'partial')
-           AND pol.deleted_at IS NULL
-         GROUP BY pol.sku_snapshot`,
+        `SELECT sku, SUM(on_order_usa) AS on_order_usa, SUM(on_order_china) AS on_order_china
+         FROM (
+           SELECT pol.sku_snapshot AS sku,
+                  CASE WHEN BTRIM(po.stock_location_id, E' \\t\\n\\r') = $1
+                       THEN GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)
+                       ELSE 0 END AS on_order_usa,
+                  CASE WHEN BTRIM(po.stock_location_id, E' \\t\\n\\r') = $2
+                       THEN GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)
+                       ELSE 0 END AS on_order_china
+           FROM purchase_order_line pol
+           JOIN purchase_order po ON po.id = pol.purchase_order_id AND po.deleted_at IS NULL
+           WHERE po.status IN ('submitted', 'partially_received')
+             AND pol.status IN ('open', 'partial')
+             AND pol.deleted_at IS NULL
+           UNION ALL
+           SELECT fol.sku_snapshot AS sku,
+                  0 AS on_order_usa,
+                  CASE WHEN BTRIM(fo.stock_location_id, E' \\t\\n\\r') = $2
+                       THEN GREATEST(0, fol.qty_ordered - fol.qty_received - fol.qty_cancelled)
+                       ELSE 0 END AS on_order_china
+           FROM factory_order_line fol
+           JOIN factory_order fo ON fo.id = fol.factory_order_id AND fo.deleted_at IS NULL
+           WHERE fo.status IN ('submitted', 'partially_received')
+             AND fol.status IN ('open', 'partial')
+             AND fol.deleted_at IS NULL
+         ) combined
+         GROUP BY sku`,
         [USA_LOC, CHINA_LOC]
       ),
       db.query<{ variant_id: string; production_days: string }>(
@@ -662,20 +676,35 @@ export async function recalculateForVariants(
           on_order_usa: string;
           on_order_china: string;
         }>(
-          `SELECT pol.sku_snapshot AS sku,
-                SUM(CASE WHEN BTRIM(po.stock_location_id, E' \\t\\n\\r') = $2
+          `SELECT sku, SUM(on_order_usa) AS on_order_usa, SUM(on_order_china) AS on_order_china
+           FROM (
+             SELECT pol.sku_snapshot AS sku,
+                    CASE WHEN BTRIM(po.stock_location_id, E' \\t\\n\\r') = $2
                          THEN GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)
-                         ELSE 0 END) AS on_order_usa,
-                SUM(CASE WHEN BTRIM(po.stock_location_id, E' \\t\\n\\r') = $3
+                         ELSE 0 END AS on_order_usa,
+                    CASE WHEN BTRIM(po.stock_location_id, E' \\t\\n\\r') = $3
                          THEN GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled)
-                         ELSE 0 END) AS on_order_china
-         FROM purchase_order_line pol
-         JOIN purchase_order po ON po.id = pol.purchase_order_id AND po.deleted_at IS NULL
-         WHERE po.status IN ('submitted', 'partially_received')
-           AND pol.status IN ('open', 'partial')
-           AND pol.deleted_at IS NULL
-           AND pol.sku_snapshot = ANY($1::text[])
-         GROUP BY pol.sku_snapshot`,
+                         ELSE 0 END AS on_order_china
+             FROM purchase_order_line pol
+             JOIN purchase_order po ON po.id = pol.purchase_order_id AND po.deleted_at IS NULL
+             WHERE po.status IN ('submitted', 'partially_received')
+               AND pol.status IN ('open', 'partial')
+               AND pol.deleted_at IS NULL
+               AND pol.sku_snapshot = ANY($1::text[])
+             UNION ALL
+             SELECT fol.sku_snapshot AS sku,
+                    0 AS on_order_usa,
+                    CASE WHEN BTRIM(fo.stock_location_id, E' \\t\\n\\r') = $3
+                         THEN GREATEST(0, fol.qty_ordered - fol.qty_received - fol.qty_cancelled)
+                         ELSE 0 END AS on_order_china
+             FROM factory_order_line fol
+             JOIN factory_order fo ON fo.id = fol.factory_order_id AND fo.deleted_at IS NULL
+             WHERE fo.status IN ('submitted', 'partially_received')
+               AND fol.status IN ('open', 'partial')
+               AND fol.deleted_at IS NULL
+               AND fol.sku_snapshot = ANY($1::text[])
+           ) combined
+           GROUP BY sku`,
           [skusForPo, USA_LOC, CHINA_LOC]
         ),
         db.query<{ variant_id: string }>(
