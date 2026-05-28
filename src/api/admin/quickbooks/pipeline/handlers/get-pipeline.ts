@@ -154,10 +154,18 @@ export async function GET(
             LEFT JOIN pos_credit_memo cm ON p.reference_type = 'credit_memo' AND cm.id = p.reference_id
             LEFT JOIN "order" cm_ord ON cm_ord.id = cm.order_id
             LEFT JOIN qb_order_pipeline dep ON dep.id = p.depends_on
+            -- apply_payment rows may key reference_id on the payment_application id
+            -- (current convention, reference_type='payment_application') or directly
+            -- on the customer_payment id (legacy). Resolve the application first so the
+            -- SOURCE/TARGET joins below work for both shapes (COALESCE fallbacks).
+            LEFT JOIN payment_application pa_ref
+                ON p.step = 'apply_payment'
+                AND p.reference_type = 'payment_application'
+                AND pa_ref.id = p.reference_id
             -- apply_payment SOURCE: cpay → its payment OR credit_memo pipeline row
             LEFT JOIN customer_payment cp_src
                 ON p.step = 'apply_payment'
-                AND cp_src.id = p.reference_id
+                AND cp_src.id = COALESCE(pa_ref.payment_id, p.reference_id)
             LEFT JOIN pos_credit_memo cm_for_cp
                 ON cp_src.type = 'credit_memo'
                 AND cm_for_cp.credit_memo_number = cp_src.reference
@@ -186,7 +194,7 @@ export async function GET(
             LEFT JOIN qb_order_pipeline target_dep
                 ON p.step = 'apply_payment'
                 AND target_dep.step = 'invoice'
-                AND target_dep.reference_id = papp.invoice_id
+                AND target_dep.reference_id = COALESCE(pa_ref.invoice_id, papp.invoice_id)
             ${where}
             ORDER BY ${sortBy === "updated_at" ? "COALESCE(p.updated_at, p.created_at)" : "p.created_at"} DESC
             LIMIT $${p} OFFSET $${p + 1}
