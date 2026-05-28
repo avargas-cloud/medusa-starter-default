@@ -86,22 +86,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const sorted = (filtered as any[]).sort(
       (a, b) => toTime(b.created_at) - toTime(a.created_at)
   );
-  const displaySeqById = new Map<string, number>();
-  [...sorted]
-    .sort((a, b) => {
-      const byCreated = toTime(a.created_at) - toTime(b.created_at);
-      if (byCreated !== 0) return byCreated;
-      return String(a.id).localeCompare(String(b.id));
-    })
-    .forEach((row, index) => {
-      displaySeqById.set(String(row.id), index + 1);
-    });
 
   return res.json({
-    rows: sorted.slice(offset, offset + limit).map((row) => ({
-      ...row,
-      display_seq: displaySeqById.get(String(row.id)) ?? null,
-    })),
+    rows: sorted.slice(offset, offset + limit),
     counts,
     pagination: {
       total: sorted.length,

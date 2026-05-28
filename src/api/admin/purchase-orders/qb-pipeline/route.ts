@@ -36,6 +36,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         SELECT
           pipe.id                                        AS id,
           pipe.seq                                       AS seq,
+          pipe.seq::text                                 AS seq_label,
           pipe.purchase_order_id                         AS parent_id,
           po.number                                      AS po_number,
           po.draft_number                                AS draft_number,
@@ -65,7 +66,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         -- ── ItemReceipt ADD pipeline (always emit one row) ───────────────
         SELECT
           qbp.id                                         AS id,
-          NULL::int                                      AS seq,
+          qbp.seq                                        AS seq,
+          ('R' || qbp.seq::text)                         AS seq_label,
           qbp.purchase_order_id                          AS parent_id,
           po.number                                      AS po_number,
           NULL::text                                     AS draft_number,
@@ -92,7 +94,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         -- ── ItemReceipt VOID/DELETE pipeline (only when void_status is set)
         SELECT
           qbp.id || '__void'                             AS id,
-          NULL::int                                      AS seq,
+          qbp.seq                                        AS seq,
+          ('R' || qbp.seq::text)                         AS seq_label,
           qbp.purchase_order_id                          AS parent_id,
           po.number                                      AS po_number,
           NULL::text                                     AS draft_number,
@@ -141,13 +144,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
     const [{ rows }, countResult, summaryResult] = await Promise.all([
       client.query(
-        `SELECT numbered.*
-           FROM (
-             SELECT scoped.*,
-                    ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS display_seq
-             FROM (${feedSql}) scoped
-             ${where}
-           ) numbered
+        `SELECT scoped.*
+           FROM (${feedSql}) scoped
+           ${where}
           ORDER BY created_at DESC, id DESC
           LIMIT $${p} OFFSET $${p + 1}`,
         [...values, limit, offset]

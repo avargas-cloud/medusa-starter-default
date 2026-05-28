@@ -23,7 +23,7 @@ type PoStep =
 interface PoRow {
   id: string;
   seq: number | null;
-  display_seq: number | null;
+  seq_label: string | null;
   parent_id: string;
   po_number: string | null;
   draft_number: string | null;
@@ -150,7 +150,7 @@ function PipelinePoRow({
         {/* Seq */}
         <td className="px-3 py-2 whitespace-nowrap">
           <span className="font-mono text-[11px] text-ui-fg-muted">
-            #{row.display_seq ?? row.seq ?? "—"}
+            #{row.seq_label ?? "—"}
           </span>
         </td>
 

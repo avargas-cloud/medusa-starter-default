@@ -35,9 +35,6 @@ type CustomerRow = PipelineRow & {
   acquisition_channel: string;
   qb_list_id: string | null;
   customer_created_at: string | null;
-  /** Independent Customer Sync index (1, 2, 3…) computed locally — NOT the
-   * shared qb_order_pipeline.seq. Oldest row = #1. */
-  display_seq: number;
 };
 
 const STATUS_FILTERS = [
@@ -169,16 +166,6 @@ export const CustomerSyncPipelineSection = () => {
         }
       }
 
-      // display_seq: customer-sync-tab-only counter (#1 = oldest).
-      // Computed over the combined pipeline array sorted by seq ASC,
-      // then the rows stay in DESC order for UI consumption.
-      const seqToDisplay = new Map<number, number>();
-      [...pipeline]
-        .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
-        .forEach((r, i) => {
-          if (typeof r.seq === "number") seqToDisplay.set(r.seq, i + 1);
-        });
-
       const enriched: CustomerRow[] = pipeline.map((r) => {
         const info = r.reference_id ? customerMap.get(r.reference_id) : null;
         return {
@@ -189,7 +176,6 @@ export const CustomerSyncPipelineSection = () => {
           acquisition_channel: info?.acq ?? "",
           qb_list_id: info?.list_id ?? null,
           customer_created_at: info?.created_at ?? null,
-          display_seq: seqToDisplay.get(r.seq) ?? 0,
         };
       });
       setRows(enriched);
@@ -358,7 +344,7 @@ export const CustomerSyncPipelineSection = () => {
                     <Fragment key={r.id}>
                       <Table.Row>
                         <Table.Cell className="font-mono text-sm text-ui-fg-subtle">
-                          #{r.display_seq}
+                          #{r.seq}
                         </Table.Cell>
                         <Table.Cell>
                           <div className="flex flex-col">

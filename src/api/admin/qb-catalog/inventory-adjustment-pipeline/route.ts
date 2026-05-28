@@ -58,6 +58,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     SELECT
       old.id,
       old.seq,
+      ('L' || old.seq::text)        AS seq_label,
       old.inventory_count_id        AS count_id,
       NULL::text                    AS count_number_col,
       old.payload,
@@ -83,6 +84,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     SELECT
       ia.id::text,
       ia.seq,
+      ia.seq::text                  AS seq_label,
       ia.order_id                   AS count_id,
       ia.medusa_ref_number          AS count_number_col,
       ia.payload,
@@ -166,6 +168,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     return {
       id: r.id as string,
       seq: r.seq as number,
+      seq_label: String(r.seq_label),
       status: (r.ui_status ?? "waiting") as UiAddStatus,
       void_status: (r.ui_void_status ?? null) as UiVoidStatus,
       count_id: (r.count_id as string) ?? null,

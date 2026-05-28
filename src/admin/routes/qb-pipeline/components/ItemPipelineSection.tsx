@@ -17,7 +17,6 @@ type PipelineStatus = "waiting" | "synced" | "error" | "failed_permanent";
 type PipelineRow = {
   id: string;
   seq: number;
-  display_seq: number | null;
   variant_id: string;
   sku: string;
   item_type: "Inventory" | "Service" | "NonInventory";
@@ -268,7 +267,7 @@ export const ItemPipelineSection = () => {
                   <Fragment key={r.id}>
                   <Table.Row>
                     <Table.Cell className="font-mono text-sm text-ui-fg-subtle">
-                      #{r.display_seq ?? r.seq ?? "—"}
+                      #{r.seq ?? "—"}
                     </Table.Cell>
                     <Table.Cell className="font-mono text-sm">
                       {r.sku}
