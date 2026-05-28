@@ -13,6 +13,7 @@ import {
 type PipelineStatus =
   | "pending"
   | "submitted"
+  | "processing"
   | "confirmed"
   | "failed"
   | "fixed"
@@ -57,6 +58,7 @@ interface PipelineRow {
 interface PipelineCounts {
   pending?: number;
   submitted?: number;
+  processing?: number;
   confirmed?: number;
   failed?: number;
   fixed?: number;
@@ -104,6 +106,7 @@ function StatusBadge({ status }: { status: PipelineStatus }) {
   const map: Record<PipelineStatus, { color: BadgeColor; label: string }> = {
     pending: { color: "orange", label: "Pending" },
     submitted: { color: "blue", label: "Submitted" },
+    processing: { color: "blue", label: "Processing" },
     confirmed: { color: "green", label: "Confirmed" },
     failed: { color: "red", label: "Failed" },
     fixed: { color: "grey", label: "Fixed" },
@@ -186,7 +189,7 @@ function PipelineRow({
             ? "bg-red-50/5"
             : row.status === "pending"
               ? "bg-yellow-50/5"
-              : row.status === "submitted"
+              : row.status === "submitted" || row.status === "processing"
                 ? "bg-blue-50/5"
                 : row.status === "waiting"
                   ? "bg-purple-50/5"
@@ -518,7 +521,10 @@ export function PipelineTable() {
 
   // Auto-refresh every 10s while pending/submitted rows exist
   useEffect(() => {
-    const hasPending = (counts.pending ?? 0) > 0 || (counts.submitted ?? 0) > 0;
+    const hasPending =
+      (counts.pending ?? 0) > 0 ||
+      (counts.submitted ?? 0) > 0 ||
+      (counts.processing ?? 0) > 0;
     if (intervalRef.current) clearInterval(intervalRef.current);
     if (hasPending) {
       intervalRef.current = setInterval(() => fetchPipeline(true), 10_000);
@@ -526,7 +532,7 @@ export function PipelineTable() {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [counts.pending, counts.submitted, fetchPipeline]);
+  }, [counts.pending, counts.submitted, counts.processing, fetchPipeline]);
 
   const handleRetry = async (id: string) => {
     setRetryingId(id);
@@ -616,6 +622,7 @@ export function PipelineTable() {
               { key: "waiting", label: "Waiting", color: "purple" },
               { key: "pending", label: "Pending", color: "orange" },
               { key: "submitted", label: "Submitted", color: "blue" },
+              { key: "processing", label: "Processing", color: "blue" },
               { key: "confirmed", label: "Confirmed", color: "green" },
               { key: "failed", label: "Failed", color: "red" },
               { key: "fixed", label: "Fixed", color: "grey" },
@@ -661,6 +668,7 @@ export function PipelineTable() {
             <option value="waiting">Waiting</option>
             <option value="pending">Pending</option>
             <option value="submitted">Submitted</option>
+            <option value="processing">Processing</option>
             <option value="confirmed">Confirmed</option>
             <option value="failed">Failed</option>
             <option value="fixed">Fixed</option>
