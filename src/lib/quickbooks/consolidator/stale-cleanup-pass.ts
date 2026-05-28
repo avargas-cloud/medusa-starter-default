@@ -14,10 +14,18 @@ export async function runTimeoutPass(logger: any): Promise<void> {
   try {
     const { rows: timedOutRows, rowCount } = await pool.query(`
             UPDATE qb_order_pipeline
-            SET    status     = 'failed',
-                   updated_at = NOW(),
-                   error      = 'Timed out before submitted state (>20 min) — no response from QB bridge',
-                   failed_at  = NOW()
+            SET    status        = 'failed',
+                   updated_at    = NOW(),
+                   error         = 'Timed out before submitted state (>20 min) — no response from QB bridge',
+                   failed_at     = NOW(),
+                   -- Schedule auto-retry so the row doesn't sit failed-forever.
+                   -- Same backoff envelope as get-pipeline auto-timeout: 2 min,
+                   -- capped at 5 retries (beyond that it needs manual triage).
+                   next_retry_at = CASE
+                     WHEN COALESCE(retry_count, 0) < 5
+                       THEN NOW() + INTERVAL '2 minutes'
+                     ELSE NULL
+                   END
             WHERE  status IN ('pending', 'processing')
               AND  COALESCE(updated_at, created_at) < NOW() - INTERVAL '20 minutes'
             RETURNING id, step, order_id
