@@ -11,13 +11,44 @@ import { validateDraftOrderCustomer } from "./middlewares/validate-draft-order-c
 
 // Inline CORS middleware for /pos/* routes.
 // Reads STORE_CORS env var — same origins as the storefront.
-// No external `cors` npm dep needed.
-const posAllowedOrigins = new Set(
-  (process.env.STORE_CORS || "http://localhost:3001,http://localhost:3000")
+// Each entry may be a literal origin OR a regex wrapped in slashes
+// (e.g. `/^https?:\/\/.+\.vercel\.app$/`), mirroring Medusa's
+// parseCorsOrigins so preview wildcards work the same way as /store/*.
+type CorsRule = { kind: "literal"; value: string } | { kind: "regex"; value: RegExp };
+
+function parsePosCorsEntries(raw: string): CorsRule[] {
+  return raw
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
+    .map<CorsRule>((entry) => {
+      const m = entry.match(/^([/~@;%#'])(.*?)\1([gimsuy]*)$/);
+      if (m) {
+        try {
+          return { kind: "regex", value: new RegExp(m[2] ?? "", m[3] ?? "") };
+        } catch {
+          /* fall through to literal */
+        }
+      }
+      return { kind: "literal", value: entry };
+    });
+}
+
+const posAllowedOrigins = parsePosCorsEntries(
+  process.env.STORE_CORS || "http://localhost:3001,http://localhost:3000"
 );
+
+function originAllowed(origin: string): boolean {
+  if (!origin) return false;
+  for (const rule of posAllowedOrigins) {
+    if (rule.kind === "literal") {
+      if (rule.value === origin) return true;
+    } else if (rule.value.test(origin)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function posCorsMiddleware(
   req: MedusaRequest,
@@ -25,7 +56,7 @@ function posCorsMiddleware(
   next: MedusaNextFunction
 ) {
   const origin = req.headers.origin ?? "";
-  if (posAllowedOrigins.has(origin)) {
+  if (originAllowed(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader(

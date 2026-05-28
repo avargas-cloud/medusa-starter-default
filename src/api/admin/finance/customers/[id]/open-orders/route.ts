@@ -52,7 +52,19 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         o.status::text AS status,
         o.currency_code,
         o.created_at,
+        -- Real order total comes from order_summary.totals.original_order_total
+        -- (matches the value rendered on the orders list — includes tax, shipping,
+        -- discounts). Falls back to the line-item sum if no summary row exists
+        -- (extremely old orders that predate the summary migration).
         COALESCE(
+          (
+            SELECT ROUND(((os.totals->>'original_order_total')::numeric) * 100)::bigint
+            FROM order_summary os
+            WHERE os.order_id = o.id AND os.deleted_at IS NULL
+              AND (os.totals->>'original_order_total') IS NOT NULL
+            ORDER BY os.version DESC
+            LIMIT 1
+          ),
           (
             SELECT SUM(ROUND(oli.unit_price * oi.quantity * 100))::bigint
             FROM order_item oi
