@@ -153,7 +153,9 @@ export function computeFulfillmentStatus(
   if (active.length === 0) return "not_fulfilled";
 
   const delivered = active.filter((f) => !!f.delivered_at).length;
-  const shipped = active.filter((f) => !!f.shipped_at && !f.delivered_at).length;
+  const shipped = active.filter(
+    (f) => !!f.shipped_at && !f.delivered_at
+  ).length;
   const packed = active.filter(
     (f) => !!f.packed_at && !f.shipped_at && !f.delivered_at
   ).length;
@@ -205,17 +207,20 @@ function getPaidAmount(order: OrderForMeili): number | null {
   const collections = order.payment_collections || [];
   if (collections.length > 0) {
     nativePaid = collections.reduce(
-      (sum, pc) => sum + (asNum(pc?.captured_amount) - asNum(pc?.refunded_amount)),
+      (sum, pc) =>
+        sum + (asNum(pc?.captured_amount) - asNum(pc?.refunded_amount)),
       0
     );
   }
   const ps = asString(order.payment_status);
-  if (nativePaid == null && ps === "captured") nativePaid = getOrderTotal(order);
+  if (nativePaid == null && ps === "captured")
+    nativePaid = getOrderTotal(order);
   if (nativePaid == null && (ps === "not_paid" || ps === "refunded")) {
     nativePaid = 0;
   }
 
-  if (referentialDeposit > 0) return Math.max(nativePaid ?? 0, referentialDeposit);
+  if (referentialDeposit > 0)
+    return Math.max(nativePaid ?? 0, referentialDeposit);
   return nativePaid;
 }
 
@@ -284,26 +289,22 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
   // when query.graph delivered nothing — that's the path used by both the
   // backfill script and the subscriber, where the field arrives empty.
   const nativeStatus = asString(order.fulfillment_status);
-  const fulfillmentStatus = nativeStatus || computeFulfillmentStatus(order.fulfillments);
+  const fulfillmentStatus =
+    nativeStatus || computeFulfillmentStatus(order.fulfillments);
 
   // Match the POS UI helpers exactly (orders/utils.ts):
   //   isCanceled = status==='canceled' || fulfillment_status==='canceled'
   //   isVoided   = metadata.qb_sync_status === 'voided'
   const isCanceled =
-    asString(order.status) === "canceled" ||
-    fulfillmentStatus === "canceled" ||
-    order.canceled_at != null;
+    asString(order.status) === "canceled" || fulfillmentStatus === "canceled";
   const isVoided = meta.qb_sync_status === "voided";
 
   // A "web order" is anything NOT from the POS sales channel and not flagged
   // pos_created. Mirrors the frontend isWebOrder() helper.
   const salesChannelId = asString(order.sales_channel?.id);
-  const isWeb =
-    !!salesChannelId &&
-    salesChannelId !== POS_SC_ID &&
-    meta.pos_created !== true;
+  const isWeb = salesChannelId !== POS_SC_ID && meta.pos_created !== true;
   // Legacy field kept for backwards compatibility (channel-only check).
-  const isWebOrder = !!salesChannelId && salesChannelId !== POS_SC_ID;
+  const isWebOrder = salesChannelId !== POS_SC_ID;
 
   const effectivePayment = getEffectivePaymentStatus(order);
   const isOpen = OPEN_FULFILLMENT.has(fulfillmentStatus);
