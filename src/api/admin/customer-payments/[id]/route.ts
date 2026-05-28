@@ -62,20 +62,52 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       }
     }
 
+    // Enrich applications with order.metadata.document_number so the
+    // Credit Statement can label rows as "Deposit for Order S#####"
+    // instead of the raw UUID slice.
+    const orderIds = [
+      ...new Set(applications.map((a: any) => a.order_id).filter(Boolean)),
+    ];
+    const docNumberByOrder = new Map<string, string | null>();
+    if (orderIds.length) {
+      try {
+        const { getDbPool } = require("../../../../api/utils/db-pool");
+        const pool = getDbPool();
+        const { rows: orderRows } = await pool.query(
+          `SELECT id, NULLIF(metadata->>'document_number','') AS document_number
+           FROM "order" WHERE id = ANY($1::text[])`,
+          [orderIds]
+        );
+        for (const r of orderRows) docNumberByOrder.set(r.id, r.document_number);
+      } catch {
+        /* non-fatal */
+      }
+    }
+
     const enrichedApps = applications.map((a: any) => ({
       ...a,
       invoice: a.invoice_id ? (invoiceMap[a.invoice_id] ?? null) : null,
+      order_document_number: a.order_id
+        ? (docNumberByOrder.get(a.order_id) ?? null)
+        : null,
     }));
 
-    // Compute balances
+    // Compute balances.
+    // Business rule: only applications bound to an invoice count as
+    // "applied". Order-only applications (invoice_id IS NULL with an
+    // order_id) are "reserved" — they consume the credit but should never
+    // appear as Applied on the payment because no real revenue line exists
+    // yet. available = amount − applied − reserved − refunded.
     const activeApps = enrichedApps.filter((a: any) => !a.voided_at);
-    const amountApplied = activeApps.reduce(
-      (s: number, a: any) => s + Number(a.amount_applied ?? 0),
-      0
-    );
+    const amountApplied = activeApps
+      .filter((a: any) => !!a.invoice_id)
+      .reduce((s: number, a: any) => s + Number(a.amount_applied ?? 0), 0);
+    const amountReserved = activeApps
+      .filter((a: any) => !a.invoice_id && a.order_id)
+      .reduce((s: number, a: any) => s + Number(a.amount_applied ?? 0), 0);
     const availableBalance = Math.max(
       0,
-      Number(payment.amount) - amountApplied
+      Number(payment.amount) - amountApplied - amountReserved
     );
 
     // For credit_memo payments, look up the originating pos_credit_memo
@@ -105,6 +137,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         applications: enrichedApps,
         customer,
         amount_applied: amountApplied,
+        amount_reserved: amountReserved,
         available_balance: availableBalance,
         source_credit_memo: sourceCreditMemo,
       },

@@ -140,10 +140,17 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       }).catch(() => {}); // non-fatal
     }
 
-    // 7. Update payment status
-    const newApplied = alreadyApplied + effectiveAmount;
-    const newAvailable = Math.max(0, Number(payment.amount) - newApplied);
-    const newStatus = newAvailable <= 0 ? "applied" : "partially_applied";
+    // 7. Update payment status — ONLY count invoice-bound applications toward
+    //    the "applied" / "partially_applied" status. Order-only applications
+    //    reserve credit but are not "applied" until their invoice is issued.
+    const invoiceAppliedExisting = activeApps
+      .filter((a: any) => !!a.invoice_id)
+      .reduce((s: number, a: any) => s + Number(a.amount_applied ?? 0), 0);
+    const newInvoiceApplied = invoiceAppliedExisting + effectiveAmount;
+    const newStatus =
+      newInvoiceApplied >= Number(payment.amount)
+        ? "applied"
+        : "partially_applied";
     await financeService.updateCustomerPayments({ id, status: newStatus });
 
     const updated = await financeService.retrieveCustomerPayment(id, {
@@ -250,6 +257,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       }, 100);
     }
 
+    const newAvailable = Math.max(
+      0,
+      Number(payment.amount) - (alreadyApplied + effectiveAmount)
+    );
     return res.json({
       payment: updated,
       requested_amount: requestedAmount,

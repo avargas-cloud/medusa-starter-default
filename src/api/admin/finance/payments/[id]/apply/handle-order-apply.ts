@@ -102,15 +102,13 @@ export async function handleOrderApply(
     applied_by: applied_by || null,
   });
 
-  // 4. Update CustomerPayment status.
-  const isFullyApplied =
-    total_applied + effectiveAmount >= getNum(payment.amount);
-  const newPaymentStatus = isFullyApplied ? "applied" : "partially_applied";
-
-  await financeService.updateCustomerPayments({
-    id: payment.id,
-    status: newPaymentStatus,
-  });
+  // 4. Do NOT change customer_payment.status for an order-only link.
+  //    Business rule: "applied" / "partially_applied" reflect consumption by
+  //    INVOICES only. Order-only applications reserve credit but the payment
+  //    keeps its prior status (typically 'available'). The status will flip
+  //    later when the PosInvoice is generated and the rebind subscriber
+  //    converts the application to invoice-bound.
+  void total_applied; // intentionally unused — kept for signature stability
 
   // 5. Register in Medusa native Payment Module so the order shows the deposit.
   //    Non-fatal — Finance Ledger remains the source of truth.
