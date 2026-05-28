@@ -38,6 +38,7 @@ export const ProductTable = ({
               <Table.HeaderCell>Title</Table.HeaderCell>
               <Table.HeaderCell>Handle</Table.HeaderCell>
               <Table.HeaderCell>SKUs</Table.HeaderCell>
+              <Table.HeaderCell>Categories</Table.HeaderCell>
               <Table.HeaderCell className="w-32">Status</Table.HeaderCell>
             </Table.Row>
           </Table.Header>
@@ -121,6 +122,28 @@ export const ProductTable = ({
                             +{product.variant_sku.length - 3}
                           </Badge>
                         )}
+                      </div>
+                    </Link>
+                  </Table.Cell>
+
+                  {/* Categories */}
+                  <Table.Cell>
+                    <Link
+                      to={`/products/${product.id}`}
+                      className="flex items-center w-full h-full hover:text-ui-fg-interactive transition-colors"
+                    >
+                      <div className="flex gap-1 flex-wrap max-w-[320px]">
+                        {product.category_handles
+                          ?.filter((h: string) => h !== "by-categories")
+                          .map((handle: string) => (
+                            <Badge
+                              key={handle}
+                              size="small"
+                              className="font-mono"
+                            >
+                              {handle}
+                            </Badge>
+                          ))}
                       </div>
                     </Link>
                   </Table.Cell>
