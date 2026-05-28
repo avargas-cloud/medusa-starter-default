@@ -10,6 +10,7 @@ import {
   getEffectiveOrderDiscount,
 } from "../order-flow-core";
 import { parseSalesRepInitials } from "../parse-sales-rep";
+import { invoiceLineDiscountCents } from "../force-sync-doc-payload";
 import {
   buildInvoicePatch,
   getEstimateTxnId,
@@ -368,11 +369,21 @@ export async function handleFulfillmentCreated(
   // when the POS invoice carries its own discount/shipping snapshot.
   const qbConfig = await getQbConfig();
   {
-    const orderDiscountTotal =
-      invoiceDiscountAmount !== undefined
-        ? invoiceDiscountAmount
-        : getEffectiveOrderDiscount(order);
     const isPartialAgainstSo = linkedTxnId === qbSoTxnId && isPartial;
+
+    // Item-level (per-line) discounts must be BAKED INTO the QB line prices,
+    // NOT emitted as a separate order-level Discount line. The POS sends gross
+    // unit prices in the snapshot (fulfillment_unit_price) plus a per-line
+    // discount descriptor (metadata.line_discount); pos_invoice.discount lumps
+    // every per-line discount together with any true order-level promotion.
+    // Here we (a) net each line down by its own discount so buildQbItems emits
+    // the discounted unit price, and (b) accumulate the per-line discount total
+    // so we can subtract it from invoiceDiscountAmount below — leaving ONLY the
+    // genuine order-level promotion (if any) for buildQbOrderDiscountLines.
+    // Mirrors the force-sync path (src/api/admin/pos/sync/route.ts) which was
+    // already correct. Without this, invoices showed full prices + a bogus
+    // "Order Discount" equal to the summed item discounts (QB Inv 18791).
+    let lineDiscountTotalCents = 0;
 
     const activeItems = (order.items || [])
       .filter((item: any) => {
@@ -397,20 +408,75 @@ export async function handleFulfillmentCreated(
         }
         return (item.quantity ?? 0) > 0;
       })
-      .map((item: any) => ({
-        ...item,
-        quantity: item.fulfillment_quantity ?? item.quantity,
-        unit_price:
+      .map((item: any) => {
+        const quantity = item.fulfillment_quantity ?? item.quantity;
+        // Original (pre-item-discount) resolution — preserved verbatim for
+        // lines WITHOUT a per-line POS discount so non-POS fulfillments and
+        // order-adjustment-based discounts are untouched.
+        const baseUnitPrice =
           item.fulfillment_unit_price !== undefined
             ? getFloat(item.fulfillment_unit_price)
-            : getFloat(item.unit_price),
-        subtotal:
+            : getFloat(item.unit_price);
+        const baseSubtotal =
           item.fulfillment_total !== undefined
             ? getFloat(item.fulfillment_total)
             : item.subtotal !== undefined
               ? getFloat(item.subtotal)
-              : undefined,
-      }));
+              : undefined;
+
+        // Per-line POS discount descriptor (set by the POS at sale time). When
+        // present, the snapshot price is GROSS, so net the line down here.
+        const lineDiscount = item.metadata?.line_discount as
+          | { type?: string | null; value?: number | string | null }
+          | null
+          | undefined;
+        const grossUnitPrice =
+          item.fulfillment_unit_price !== undefined
+            ? getFloat(item.fulfillment_unit_price)
+            : getFloat(item.metadata?.original_unit_price ?? item.unit_price);
+        const grossTotalCents = Math.round(grossUnitPrice * quantity * 100);
+        // Computed exactly as pos_invoice.discount was (percent-on-gross /
+        // fixed-per-unit) via the shared helper, so the subtraction below
+        // cancels item-level discounts to the cent.
+        const lineDiscountCents = invoiceLineDiscountCents(
+          {
+            discount_type: lineDiscount?.type ?? null,
+            discount_value: lineDiscount?.value ?? null,
+            quantity,
+          },
+          null,
+          grossTotalCents
+        );
+        lineDiscountTotalCents += lineDiscountCents;
+
+        if (lineDiscountCents > 0) {
+          return {
+            ...item,
+            quantity,
+            unit_price: grossUnitPrice,
+            // Net line subtotal → buildQbItems derives the discounted per-unit
+            // price (subtotal / qty) and bakes the item discount into the line.
+            subtotal: Math.max(0, grossTotalCents - lineDiscountCents) / 100,
+          };
+        }
+
+        return {
+          ...item,
+          quantity,
+          unit_price: baseUnitPrice,
+          subtotal: baseSubtotal,
+        };
+      });
+
+    // Order-level discount ONLY. When the invoice carries a snapshot discount
+    // (pos_invoice.discount), strip the per-line discounts already baked into
+    // the lines above; the remainder is the true order-level promotion. For
+    // non-POS fulfillments (no snapshot) fall back to the order's effective
+    // order-level discount, which excludes item-level discounts by design.
+    const orderDiscountTotal =
+      invoiceDiscountAmount !== undefined
+        ? Math.max(0, invoiceDiscountAmount - lineDiscountTotalCents / 100)
+        : getEffectiveOrderDiscount(order);
 
     const productTaxableMap = await resolveProductTaxableMap(
       _container.resolve("__pg_connection__"),
