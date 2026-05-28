@@ -25,6 +25,7 @@ import {
   buildQbItems,
   buildQbOrderDiscountLines,
   buildShippingQbItem,
+  getBusinessDateString,
   getEffectiveOrderDiscount,
   processEstimateInQb,
 } from "../lib/quickbooks/order-flow-core";
@@ -367,9 +368,9 @@ export async function handleDraftOrderCreated(
     salesRep: parseSalesRepInitials(draftOrder.metadata?.sales_rep),
     // Source date for the QB <TxnDate>. Captured from the Medusa draft order
     // so QB books on day-0 even if the bridge retries the next day.
-    date: (draftOrder as any).created_at
-      ? new Date((draftOrder as any).created_at).toISOString()
-      : undefined,
+    // Must be YYYY-MM-DD in America/New_York — QB Desktop rejects full ISO
+    // timestamps with Error 3020 ("error converting the date value").
+    date: getBusinessDateString((draftOrder as any).created_at ?? null),
   });
 
   if (result.error) {
