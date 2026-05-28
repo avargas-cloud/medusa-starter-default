@@ -1,7 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
-import { FINANCE_MODULE } from "../../../../../../modules/finance";
-import { INVOICE_MODULE } from "../../../../../../modules/invoices";
+import { getDbPool } from "../../../../../utils/db-pool";
 
 /**
  * GET /admin/finance/customers/:id/open-orders
@@ -15,6 +14,13 @@ import { INVOICE_MODULE } from "../../../../../../modules/invoices";
  *   • status NOT IN ('draft','canceled','cancelled')
  *   • Order has NO non-voided PosInvoice (would otherwise be in invoice list)
  *   • Outstanding > 0 (total minus active PaymentApplications)
+ *
+ * Why raw SQL: Medusa v2 query.graph does not consistently populate the
+ * synthetic `total` field on the order entity — it depends on which loaders
+ * are wired, and an unloaded total comes back as undefined, which would make
+ * every order look like it has zero outstanding and get filtered out. The
+ * line-item × quantity sum is the authoritative computation used by other
+ * endpoints in this codebase.
  */
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const customerId = req.params.id;
@@ -23,86 +29,86 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   }
 
   try {
-    const financeService = req.scope.resolve(FINANCE_MODULE);
-    const invoiceService = req.scope.resolve(INVOICE_MODULE);
-    const query = req.scope.resolve("query");
+    const pool = getDbPool();
 
-    // 1. Fetch Medusa orders for this customer (non-draft, non-canceled).
-    const { data: orders } = await query.graph({
-      entity: "order",
-      fields: [
-        "id",
-        "display_id",
-        "status",
-        "total",
-        "currency_code",
-        "created_at",
-        "metadata",
-      ],
-      filters: { customer_id: customerId },
-    });
-
-    const eligibleOrders = (orders ?? []).filter((o: any) => {
-      const s = String(o.status ?? "").toLowerCase();
-      return s !== "draft" && s !== "canceled" && s !== "cancelled";
-    });
-
-    if (eligibleOrders.length === 0) {
-      return res.json({ open_orders: [] });
+    interface OrderRow {
+      id: string;
+      display_id: number | null;
+      document_number: string | null;
+      status: string;
+      currency_code: string;
+      created_at: Date | string;
+      total_cents: string | number | null;
+      applied_cents: string | number | null;
+      has_active_invoice: boolean;
     }
 
-    const orderIds = eligibleOrders.map((o: any) => o.id);
-
-    // 2. Drop orders that already have a non-voided PosInvoice — those go via
-    //    the invoice flow.
-    const invoices = await invoiceService.listPosInvoices(
-      { order_id: orderIds },
-      { take: 1000 }
+    const { rows } = await pool.query<OrderRow>(
+      `
+      SELECT
+        o.id,
+        o.display_id,
+        NULLIF(o.metadata->>'document_number','')::text AS document_number,
+        o.status::text AS status,
+        o.currency_code,
+        o.created_at,
+        COALESCE(
+          (
+            SELECT SUM(ROUND(oli.unit_price * oi.quantity * 100))::bigint
+            FROM order_item oi
+            JOIN order_line_item oli ON oli.id = oi.item_id AND oli.deleted_at IS NULL
+            WHERE oi.order_id = o.id
+          ),
+          0
+        ) AS total_cents,
+        COALESCE(
+          (
+            SELECT SUM(pa.amount_applied)::bigint
+            FROM payment_application pa
+            WHERE pa.order_id = o.id
+              AND pa.voided_at IS NULL
+              AND pa.deleted_at IS NULL
+          ),
+          0
+        ) AS applied_cents,
+        EXISTS (
+          SELECT 1 FROM pos_invoice pi
+          WHERE pi.order_id = o.id
+            AND COALESCE(pi.status, '') NOT IN ('voided','draft')
+        ) AS has_active_invoice
+      FROM "order" o
+      WHERE o.customer_id = $1
+        AND o.deleted_at IS NULL
+        AND COALESCE(o.is_draft_order, false) = false
+        AND o.status::text NOT IN ('draft','canceled','cancelled','archived')
+      ORDER BY o.created_at DESC
+      LIMIT 200
+      `,
+      [customerId]
     );
-    const invoicedOrderIds = new Set(
-      invoices
-        .filter((inv: any) => inv.status !== "voided")
-        .map((inv: any) => inv.order_id)
-    );
 
-    // 3. Sum active PaymentApplications per order_id to compute outstanding.
-    const applications = await financeService.listPaymentApplications(
-      { order_id: orderIds },
-      { take: 5000 }
-    );
-    const appliedByOrder = new Map<string, number>();
-    for (const app of applications) {
-      if ((app as any).voided_at) continue;
-      const oid = (app as any).order_id;
-      appliedByOrder.set(
-        oid,
-        (appliedByOrder.get(oid) ?? 0) + Number((app as any).amount_applied)
-      );
-    }
-
-    // order.total is in cents (BigNumber). Match invoice convention.
-    const open_orders = eligibleOrders
-      .filter((o: any) => !invoicedOrderIds.has(o.id))
-      .map((o: any) => {
-        const total = Number(o.total) || 0;
-        const applied = appliedByOrder.get(o.id) ?? 0;
+    const open_orders = rows
+      .filter((r) => !r.has_active_invoice)
+      .map((r) => {
+        const total = Number(r.total_cents) || 0;
+        const applied = Number(r.applied_cents) || 0;
         const outstanding = Math.max(0, total - applied);
         return {
-          id: o.id,
-          display_id: o.display_id ?? null,
-          status: o.status,
+          id: r.id,
+          display_id: r.display_id ?? null,
+          document_number: r.document_number ?? null,
+          status: r.status,
           total_cents: total,
           applied_cents: applied,
           outstanding_cents: outstanding,
-          currency_code: o.currency_code ?? "usd",
-          created_at: o.created_at,
+          currency_code: r.currency_code ?? "usd",
+          created_at:
+            r.created_at instanceof Date
+              ? r.created_at.toISOString()
+              : String(r.created_at),
         };
       })
-      .filter((o: any) => o.outstanding_cents > 0)
-      .sort(
-        (a: any, b: any) =>
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
+      .filter((o) => o.outstanding_cents > 0);
 
     return res.json({ open_orders });
   } catch (err: any) {
