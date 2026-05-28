@@ -6,26 +6,7 @@ import {
   SALES_DATE_FILTER_SQL,
   fetchCmRefundsCentsForPeriod,
 } from "../../_lib/sales-revenue"
-
-const ROOT_CAT = 'pcat_01KGAD1KQV29RKZZHEZ4N88B8H'
-
-// One category per product. Products in multiple tier1 categories used to
-// duplicate invoice_item rows in the join and inflate revenue/cost totals.
-const TIER1_CTE = `
-  product_tier1 AS (
-    SELECT DISTINCT ON (pcp.product_id)
-      pcp.product_id,
-      COALESCE(
-        CASE WHEN pc.parent_category_id = '${ROOT_CAT}' THEN pc.name END,
-        CASE WHEN pc2.parent_category_id = '${ROOT_CAT}' THEN pc2.name END,
-        'Uncategorized'
-      ) AS category
-    FROM product_category_product pcp
-    JOIN product_category pc ON pc.id = pcp.product_category_id
-    LEFT JOIN product_category pc2 ON pc2.id = pc.parent_category_id
-    ORDER BY pcp.product_id, category
-  )
-`
+import { TIER1_CTE } from "../../_lib/category-tier1"
 
 // pos_invoice.discount already includes ALL discounts (inline item % + promo codes).
 // NET_ITEM_REVENUE distributes that total proportionally — do NOT subtract adjustments again.
@@ -69,7 +50,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   try {
     const [totalsResult, byCatResult, byVendorResult, refundCents] = await Promise.all([
       pg.raw(
-        `WITH ${TIER1_CTE}
+        `WITH RECURSIVE ${TIER1_CTE}
          SELECT
            SUM(${NET_REVENUE_EXPR})::bigint                               AS revenue_cents,
            SUM(${COST_EXPR})::bigint                                      AS cost_cents,
@@ -79,7 +60,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         [range.from, range.to]
       ),
       pg.raw(
-        `WITH ${TIER1_CTE}
+        `WITH RECURSIVE ${TIER1_CTE}
          SELECT
            COALESCE(pt.category, 'Uncategorized')    AS label,
            SUM(${NET_REVENUE_EXPR})::bigint           AS revenue_cents,
@@ -90,7 +71,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         [range.from, range.to]
       ),
       pg.raw(
-        `WITH ${TIER1_CTE}
+        `WITH RECURSIVE ${TIER1_CTE}
          SELECT
            ${VENDOR_EXPR}                             AS label,
            SUM(${NET_REVENUE_EXPR})::bigint           AS revenue_cents,

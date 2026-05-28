@@ -3,6 +3,7 @@ import { parseDateRange } from "../../_lib/date-range"
 import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
 import { parseRegion, regionClause } from "../../_lib/region-filter"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
+import { TIER1_CTE } from "../../_lib/category-tier1"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -11,23 +12,10 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const pg = req.scope.resolve("__pg_connection__") as any
   const region = parseRegion(req)
   const regionWhere = regionClause(region)
-  const ROOT_CAT = 'pcat_01KGAD1KQV29RKZZHEZ4N88B8H'
 
   try {
     const result = await pg.raw(
-      `WITH product_tier1 AS (
-         SELECT DISTINCT ON (pcp.product_id)
-           pcp.product_id,
-           COALESCE(
-             CASE WHEN pc.parent_category_id = ? THEN pc.name END,
-             CASE WHEN pc2.parent_category_id = ? THEN pc2.name END,
-             'Uncategorized'
-           ) AS category
-         FROM product_category_product pcp
-         JOIN product_category pc ON pc.id = pcp.product_category_id
-         LEFT JOIN product_category pc2 ON pc2.id = pc.parent_category_id
-         ORDER BY pcp.product_id, pc.name
-       ),
+      `WITH RECURSIVE ${TIER1_CTE},
        gross AS (
          SELECT
            pii.variant_id,
@@ -100,7 +88,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND ic.applied_at >= ? AND ic.applied_at < ?
        ) t
        ORDER BY revenue DESC`,
-      [ROOT_CAT, ROOT_CAT, range.from, range.to, range.from, range.to, range.from, range.to]
+      [range.from, range.to, range.from, range.to, range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map((r) => {

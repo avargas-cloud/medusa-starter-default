@@ -1,25 +1,12 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-
-const ROOT_CAT = 'pcat_01KGAD1KQV29RKZZHEZ4N88B8H'
+import { TIER1_CTE } from "../../../../_lib/category-tier1"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const pg = req.scope.resolve("__pg_connection__") as any
 
   try {
     const result = await pg.raw(
-      `WITH tier1 AS (
-         SELECT DISTINCT ON (pcp.product_id)
-           pcp.product_id,
-           COALESCE(
-             CASE WHEN pc.parent_category_id = '${ROOT_CAT}' THEN pc.name END,
-             CASE WHEN pc2.parent_category_id = '${ROOT_CAT}' THEN pc2.name END,
-             'Uncategorized'
-           ) AS category
-         FROM product_category_product pcp
-         JOIN product_category pc ON pc.id = pcp.product_category_id
-         LEFT JOIN product_category pc2 ON pc2.id = pc.parent_category_id
-         ORDER BY pcp.product_id, pc.name
-       )
+      `WITH RECURSIVE ${TIER1_CTE}
        SELECT
          fo.number                                                                  AS fo_number,
          COALESCE(NULLIF(TRIM(fo.metadata->>'manufacturer_vendor_short_name'),''), fo.vendor_name_snapshot) AS factory,
@@ -40,7 +27,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          ON fol.factory_order_id = fo.id AND fol.deleted_at IS NULL AND fol.status != 'cancelled'
        LEFT JOIN product_variant pv ON pv.id = fol.product_variant_id AND pv.deleted_at IS NULL
        LEFT JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
-       LEFT JOIN tier1 t1 ON t1.product_id = p.id
+       LEFT JOIN product_tier1 t1 ON t1.product_id = p.id
        WHERE fo.deleted_at IS NULL AND fo.status IN ('submitted','partially_received')
          AND GREATEST(fol.qty_ordered - fol.qty_received - COALESCE(fol.qty_cancelled,0), 0) > 0
        ORDER BY total_value DESC, fo.number, fol.sku_snapshot`

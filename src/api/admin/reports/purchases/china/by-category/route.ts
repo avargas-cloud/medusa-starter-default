@@ -1,7 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { parseDateRange } from "../../../_lib/date-range"
-
-const ROOT_CAT = 'pcat_01KGAD1KQV29RKZZHEZ4N88B8H'
+import { TIER1_CTE } from "../../../_lib/category-tier1"
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
@@ -11,7 +10,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
   try {
     const result = await pg.raw(
-      `WITH vb_costs AS (
+      `WITH RECURSIVE ${TIER1_CTE},
+       vb_costs AS (
          SELECT
            vbl.product_variant_id,
            vb.purchase_order_id,
@@ -25,17 +25,6 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND vbl.line_type = 'product' AND vbl.deleted_at IS NULL
          WHERE vb.status = 'confirmed' AND vb.deleted_at IS NULL
          GROUP BY vbl.product_variant_id, vb.purchase_order_id
-       ),
-       product_tier1 AS (
-         SELECT DISTINCT pcp.product_id,
-           COALESCE(
-             CASE WHEN pc.parent_category_id = ? THEN pc.name END,
-             CASE WHEN pc2.parent_category_id = ? THEN pc2.name END,
-             'Uncategorized'
-           ) AS category
-         FROM product_category_product pcp
-         JOIN product_category pc ON pc.id = pcp.product_category_id
-         LEFT JOIN product_category pc2 ON pc2.id = pc.parent_category_id
        )
        SELECT
          COALESCE(pt.category, 'Uncategorized')                                    AS category,
@@ -60,7 +49,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          AND COALESCE(po.ordered_at, po.created_at) >= ? AND COALESCE(po.ordered_at, po.created_at) < ?
        GROUP BY 1
        ORDER BY product_cost_cents DESC`,
-      [ROOT_CAT, ROOT_CAT, range.from, range.to]
+      [range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map(r => ({

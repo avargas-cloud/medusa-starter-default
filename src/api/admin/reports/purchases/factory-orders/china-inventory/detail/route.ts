@@ -1,7 +1,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { TIER1_CTE } from "../../../../_lib/category-tier1"
 
 const CHINA_SLOC = 'sloc_01KQ14C1CFX30EDD722BF87HDM'
-const ROOT_CAT   = 'pcat_01KGAD1KQV29RKZZHEZ4N88B8H'
 const CHINA_AVAILABLE_QTY = `GREATEST(
   0,
   il.stocked_quantity - COALESCE(atq.qty_pending, 0)
@@ -12,19 +12,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
   try {
     const result = await pg.raw(
-      `WITH tier1 AS (
-         SELECT DISTINCT ON (pcp.product_id)
-           pcp.product_id,
-           COALESCE(
-             CASE WHEN pc.parent_category_id = '${ROOT_CAT}' THEN pc.name END,
-             CASE WHEN pc2.parent_category_id = '${ROOT_CAT}' THEN pc2.name END,
-             'Uncategorized'
-           ) AS category
-         FROM product_category_product pcp
-         JOIN product_category pc ON pc.id = pcp.product_category_id
-         LEFT JOIN product_category pc2 ON pc2.id = pc.parent_category_id
-         ORDER BY pcp.product_id, pc.name
-       ),
+      `WITH RECURSIVE ${TIER1_CTE},
        active_transfer AS (
          SELECT
            itl.product_variant_id,
@@ -83,7 +71,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = ii.id
        JOIN product_variant pv ON pv.id = pvii.variant_id AND pv.deleted_at IS NULL
        JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
-       LEFT JOIN tier1 t1 ON t1.product_id = p.id
+       LEFT JOIN product_tier1 t1 ON t1.product_id = p.id
        LEFT JOIN active_transfer atq ON atq.product_variant_id = pv.id
        WHERE il.location_id = '${CHINA_SLOC}' AND ${CHINA_AVAILABLE_QTY} > 0
        ORDER BY total_value DESC, factory, sku`
