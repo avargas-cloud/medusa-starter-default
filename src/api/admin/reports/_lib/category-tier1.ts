@@ -22,6 +22,10 @@
  */
 export const TIER1_ROOT_CAT = "pcat_01KGAD1KQV29RKZZHEZ4N88B8H"
 
+// Special case: "Switches, Dimmers & Outlets" is too broad — drill one level
+// deeper so reports show the brand (LEGRAND / LUTRON) instead.
+const SDO_CAT = "pcat_01KGAD1KQZXKDX7ZTZW5R8S9F1"
+
 export const TIER1_CTE = `cat_ancestry AS (
   (
     SELECT
@@ -62,6 +66,8 @@ product_tier1 AS (
     cat_id   AS category_id,
     cat_name AS category
   FROM cat_ancestry
-  WHERE parent_category_id = '${TIER1_ROOT_CAT}'
-  ORDER BY product_id, depth ASC
+  WHERE parent_category_id IN ('${TIER1_ROOT_CAT}', '${SDO_CAT}')
+  ORDER BY product_id,
+    CASE WHEN parent_category_id = '${SDO_CAT}' THEN 0 ELSE 1 END,
+    depth ASC
 )`
