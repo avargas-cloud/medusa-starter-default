@@ -139,6 +139,24 @@ const isNameInUseError = (msg: string | null | undefined): boolean => {
 };
 
 /**
+ * In-flight ItemQuery markers. `__iq_pending` (EditSequence refresh for a mod)
+ * and `__iq_reconcile` (name-in-use → recover ListID for an add) are MUTUALLY
+ * EXCLUSIVE recovery modes. They must never co-exist, and must never survive
+ * into a resubmitted op_payload: a stale marker makes Phase A treat a completed
+ * mod as an unfinished query/reconcile and re-submit it forever (infinite mod
+ * loop — see ESP-NFA30W0460 / seq 117, 2026-05-28). Always strip both before
+ * resubmitting, and strip the old one before setting a new one.
+ */
+const IQ_MARKERS = ["__iq_pending", "__iq_reconcile"] as const;
+const stripIqMarkers = (
+  payload: Record<string, unknown> | null | undefined
+): Record<string, unknown> => {
+  const clean = { ...(payload ?? {}) };
+  for (const marker of IQ_MARKERS) delete clean[marker];
+  return clean;
+};
+
+/**
  * Re-emits the original add/mod operation to the bridge using op_action +
  * op_payload from the pipeline row. Returns the new operationId on success
  * or throws on bridge failure.
@@ -240,8 +258,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
         if (status === "expired" || status === "failed") {
           if (isItemQuery) {
             // ItemQuery didn't complete — restore error so Phase B retries with stale EditSequence.
-            const origPayload = { ...(row.op_payload ?? {}) } as Record<string, unknown>;
-            delete origPayload.__iq_pending;
+            const origPayload = stripIqMarkers(row.op_payload);
             await catalog.updateQbItemPipelines({
               id: row.id,
               status: "error",
@@ -259,10 +276,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
             // but keep an "already in use" marker so Phase B re-queries instead
             // of resubmitting a doomed add. Count it as a retry so a perpetually
             // failing query can't loop forever.
-            const origPayload = {
-              ...(row.op_payload ?? {}),
-            } as Record<string, unknown>;
-            delete origPayload.__iq_reconcile;
+            const origPayload = stripIqMarkers(row.op_payload);
             const newRetries = (row.retries ?? 0) + 1;
             const isExhausted = newRetries >= MAX_RETRIES;
             await catalog.updateQbItemPipelines({
@@ -312,17 +326,26 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
         // ItemQuery completed — extract fresh EditSequence and resubmit the original mod.
         if (isItemQuery) {
           const freshSeq = extractEditSequence(data) ?? (data.operation as any)?.editSequence ?? null;
-          const origPayload = { ...(row.op_payload ?? {}) } as Record<string, unknown>;
-          delete origPayload.__iq_pending;
+          const origPayload = stripIqMarkers(row.op_payload);
 
           if (!freshSeq) {
+            // The query completed but carried no EditSequence (e.g. item not
+            // found, or a field we can't parse). Count this as a retry so an
+            // unrecoverable item eventually lands in failed_permanent instead
+            // of re-querying every backoff window forever.
+            const newRetries = (row.retries ?? 0) + 1;
+            const isExhausted = newRetries >= MAX_RETRIES;
             await catalog.updateQbItemPipelines({
               id: row.id,
-              status: "error",
+              status: isExhausted ? "failed_permanent" : "error",
               last_error: "ItemQuery completed but returned no EditSequence — will retry with stale",
               qb_operation_id: null,
               op_payload: origPayload,
-              next_retry_at: new Date(Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000),
+              retries: newRetries,
+              next_retry_at: isExhausted
+                ? null
+                : new Date(Date.now() + FIRST_ERROR_BACKOFF_MIN * 60_000),
+              failed_at: isExhausted ? new Date() : null,
             });
             failedToError++;
             continue;
@@ -369,10 +392,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
         if (isReconcileQuery) {
           const recoveredListId = extractListId(data);
           const recoveredSeq = extractEditSequence(data);
-          const origPayload = {
-            ...(row.op_payload ?? {}),
-          } as Record<string, unknown>;
-          delete origPayload.__iq_reconcile;
+          const origPayload = stripIqMarkers(row.op_payload);
 
           if (!recoveredListId) {
             // QB has no item by that name after all — fall back to retrying the
@@ -584,14 +604,19 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
 
       const payload: Record<string, unknown> = { ...(row.op_payload ?? {}) };
 
-      // Price/cost fallback: if payload is missing SalesPrice or PurchaseCost,
-      // default to 0 so QB doesn't reject with error 3045.
-      if (payload.SalesPrice === undefined || payload.SalesPrice === null) {
-        payload.SalesPrice = 0;
-        log("SalesPrice missing in payload — defaulted to 0");
-      }
-      if (payload.PurchaseCost === undefined || payload.PurchaseCost === null) {
-        payload.PurchaseCost = 0;
+      // Price/cost fallback — ADD ONLY. On a create, QB rejects a missing price
+      // with error 3045, so default to 0. On a MOD we must NOT do this: the
+      // bridge item-mod builder omits undefined SalesPrice/PurchaseCost so QB
+      // keeps its existing value, but forcing 0 here overwrites a real price
+      // with 0 (this is what zeroed ESP-NFA30W0460 during the retry loop).
+      if (row.op_action === "add") {
+        if (payload.SalesPrice === undefined || payload.SalesPrice === null) {
+          payload.SalesPrice = 0;
+          log("SalesPrice missing in add payload — defaulted to 0");
+        }
+        if (payload.PurchaseCost === undefined || payload.PurchaseCost === null) {
+          payload.PurchaseCost = 0;
+        }
       }
 
       // Name-conflict reconcile — an add failed because an item with that Name
@@ -622,7 +647,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
                   id: row.id,
                   status: "waiting",
                   qb_operation_id: iqJson.operationId,
-                  op_payload: { ...payload, __iq_reconcile: true },
+                  op_payload: { ...stripIqMarkers(payload), __iq_reconcile: true },
                   last_error: null,
                   next_retry_at: null,
                 });
@@ -660,7 +685,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
                 id: row.id,
                 status: "waiting",
                 qb_operation_id: iqJson.operationId,
-                op_payload: { ...payload, __iq_pending: true },
+                op_payload: { ...stripIqMarkers(payload), __iq_pending: true },
                 last_error: null,
                 next_retry_at: null,
               });
