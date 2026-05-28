@@ -42,6 +42,9 @@ const syncProductDocStep = createStep(
           "metadata",
           "variants.id",
           "variants.sku",
+          "categories.handle",
+          "categories.parent_category.handle",
+          "categories.parent_category.parent_category.handle",
         ],
         filters: { id: productId },
       });
@@ -61,6 +64,15 @@ const syncProductDocStep = createStep(
       });
       const index = client.index("products");
 
+      const allCategoryHandles = new Set<string>();
+      product.categories?.forEach((c: any) => {
+        if (c?.handle) allCategoryHandles.add(c.handle);
+        if (c?.parent_category?.handle)
+          allCategoryHandles.add(c.parent_category.handle);
+        if (c?.parent_category?.parent_category?.handle)
+          allCategoryHandles.add(c.parent_category.parent_category.handle);
+      });
+
       const document = {
         id: product.id,
         title: product.title,
@@ -72,6 +84,7 @@ const syncProductDocStep = createStep(
         metadata: product.metadata || {},
         metadata_material: (product.metadata as any)?.material || null,
         metadata_category: (product.metadata as any)?.category || null,
+        category_handles: Array.from(allCategoryHandles),
         status: product.status,
       };
 
