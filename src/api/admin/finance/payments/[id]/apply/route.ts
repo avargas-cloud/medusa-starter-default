@@ -10,18 +10,33 @@ import {
   getNum,
 } from "../../../../invoices/payment-balance";
 import { registerMedusaPayment } from "../../../../invoices/register-medusa-payment";
+import { handleOrderApply } from "./handle-order-apply";
 
 /**
  * POST /admin/finance/payments/:id/apply
- * Applies an available CustomerPayment to a specific invoice.
- * This also triggers the creation of an InvoicePayment on the target invoice.
+ * Applies an available CustomerPayment to a specific PosInvoice OR Medusa Order.
+ *
+ * Payload (one of invoice_id | order_id required):
+ *   { invoice_id, amount_applied, applied_by }  → applies to a PosInvoice (full flow:
+ *       creates PaymentApplication, InvoicePayment, updates PosInvoice, enqueues QB).
+ *   { order_id, amount_applied, applied_by }    → applies as a deposit on a Medusa Order
+ *       (no invoice yet). Creates PaymentApplication with invoice_id=NULL. Auto-rebind
+ *       to the PosInvoice happens later via the payment-application-rebind subscriber.
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const paymentId = req.params.id!;
-  const { invoice_id, amount_applied, applied_by } = req.body as any;
+  const { invoice_id, order_id, amount_applied, applied_by } = req.body as any;
 
-  if (!invoice_id) {
-    return res.status(400).json({ error: "invoice_id is required" });
+  if (!invoice_id && !order_id) {
+    return res
+      .status(400)
+      .json({ error: "Either invoice_id or order_id is required" });
+  }
+  if (invoice_id && order_id) {
+    return res.status(400).json({
+      error:
+        "Provide either invoice_id OR order_id, not both. Submit two requests to apply to both.",
+    });
   }
   if (!amount_applied || amount_applied <= 0) {
     return res
@@ -49,7 +64,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     if (payment.source === "web") {
       return res.status(403).json({
         error:
-          "Web checkout payments are automatically applied to their source orders and cannot be manually applied to invoices.",
+          "Web checkout payments are automatically applied to their source orders and cannot be manually applied.",
       });
     }
 
@@ -64,6 +79,23 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       return res.status(400).json({
         error: "This payment has no available balance to apply.",
       });
+    }
+
+    // Order-only branch: delegate to helper and short-circuit. Returns the
+    // same response shape as the invoice branch.
+    if (order_id && !invoice_id) {
+      return handleOrderApply(
+        {
+          scope: req.scope,
+          payment,
+          order_id,
+          amount_applied,
+          applied_by: applied_by ?? null,
+          available_amount: availableAmount,
+          total_applied: totalApplied,
+        },
+        res
+      );
     }
 
     // 2. Fetch the target invoice to get order_id and ensure it exists

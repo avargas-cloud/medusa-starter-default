@@ -2,6 +2,10 @@ import {
   computeSplits,
   type TreasuryBucketCode,
 } from "./compute-splits";
+import {
+  loadSalesByApplication,
+  STALE_COST_THRESHOLD_DAYS as APP_STALE_COST_THRESHOLD_DAYS,
+} from "./load-sales-by-application";
 import type {
   TreasuryBucketView,
   TreasuryDailyReport,
@@ -9,22 +13,7 @@ import type {
   TreasuryWarning,
 } from "../daily/types";
 
-export const STALE_COST_THRESHOLD_DAYS = 30;
-
-interface SalesAggregateRow {
-  gross_revenue_pre_tax_cents: string | null;
-  tax_collected_cents: string | null;
-  cogs_china_cents: string | null;
-  cogs_local_cents: string | null;
-  lines_missing_avg_cost_count: string | null;
-  stale_cost_count: string | null;
-  missing_origin_tag_count: string | null;
-  unit_cost_fallback_count: string | null;
-  sample_lines_missing_avg_cost: string[] | null;
-  sample_stale_cost: string[] | null;
-  sample_missing_origin_tag: string[] | null;
-  sample_unit_cost_fallback: string[] | null;
-}
+export const STALE_COST_THRESHOLD_DAYS = APP_STALE_COST_THRESHOLD_DAYS;
 
 interface CashRow {
   gross_payments_cents: string | null;
@@ -86,130 +75,7 @@ export async function loadDailyReport(
   const dayStart = `${date} 00:00:00`;
   const dayEnd = `${date} 23:59:59.999999`;
 
-  const salesResult = await pg.raw(
-    `WITH lines AS (
-       SELECT
-         pii.id AS line_id,
-         COALESCE(NULLIF(pii.sku, ''), NULLIF(pv.sku, ''), pii.id) AS sample_id,
-         pii.quantity,
-         pii.average_unit_cost,
-         pii.average_unit_cost_synced_at,
-         -- Cost fallback (priority order):
-         --   1. pii.average_unit_cost — snapshot at invoice issue.
-         --   2. pv.metadata.avg_landed_cost_cents — authoritative local AVCO,
-         --      updated by every vendor-bill confirm (Miami receipt). Was
-         --      backfilled from qb_avg_cost at rollout, so it covers history.
-         --   3. pv.metadata.qb_avg_cost — legacy QB sync. Safety net.
-         --   4. pv.metadata.qb_purchase_cost — raw vendor unit cost from QB
-         --      (NO landing/freight/tariff). Last-resort approximation so we
-         --      don't have to exclude the line.
-         COALESCE(
-           pii.average_unit_cost,
-           NULLIF(pv.metadata->>'avg_landed_cost_cents', '')::numeric / 100.0,
-           NULLIF(pv.metadata->>'qb_avg_cost', '')::numeric,
-           NULLIF(pv.metadata->>'qb_purchase_cost', '')::numeric
-         ) AS effective_unit_cost,
-         -- True when the line had no avg-cost data and we fell back to the
-         -- non-landed purchase cost. Used to emit an info-level note
-         -- distinct from the "truly excluded" warning.
-         (
-           pii.average_unit_cost IS NULL
-           AND NULLIF(pv.metadata->>'avg_landed_cost_cents', '') IS NULL
-           AND NULLIF(pv.metadata->>'qb_avg_cost', '') IS NULL
-           AND NULLIF(pv.metadata->>'qb_purchase_cost', '') IS NOT NULL
-         ) AS used_unit_cost_fallback,
-         (p.metadata->>'is_sourced_via_agent') AS origin_flag,
-         p.id AS product_id,
-         pi.subtotal AS inv_subtotal,
-         pi.tax      AS inv_tax,
-         pi.id       AS inv_id
-       FROM pos_invoice pi
-       JOIN pos_invoice_item pii ON pii.invoice_id = pi.id
-       LEFT JOIN product_variant pv ON pv.id = pii.variant_id
-       LEFT JOIN product p ON p.id = pv.product_id
-       WHERE pi.created_at >= ?
-         AND pi.created_at <= ?
-         AND COALESCE(pi.status, '') NOT IN ('draft','voided','cancelled')
-     ),
-     inv_totals AS (
-       SELECT
-         COALESCE(SUM(inv_subtotal), 0)::bigint AS gross_revenue_pre_tax_cents,
-         COALESCE(SUM(inv_tax), 0)::bigint      AS tax_collected_cents
-       FROM (
-         SELECT DISTINCT inv_id, inv_subtotal, inv_tax FROM lines
-       ) s
-     ),
-     cogs AS (
-       SELECT
-         COALESCE(SUM(
-           CASE WHEN origin_flag = 'true' AND effective_unit_cost IS NOT NULL
-             THEN ROUND(quantity * effective_unit_cost * 100)
-             ELSE 0 END
-         ), 0)::bigint AS cogs_china_cents,
-         COALESCE(SUM(
-           CASE WHEN origin_flag IS DISTINCT FROM 'true' AND effective_unit_cost IS NOT NULL
-             THEN ROUND(quantity * effective_unit_cost * 100)
-             ELSE 0 END
-         ), 0)::bigint AS cogs_local_cents
-       FROM lines
-     ),
-     missing_cost AS (
-       -- Custom line items (typed descriptions, no variant_id) by design have
-       -- no cost — exclude them so this warning surfaces real products only.
-       SELECT COUNT(*)::bigint AS c,
-         COALESCE(ARRAY_AGG(sample_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
-       FROM (
-         SELECT sample_id FROM lines
-         WHERE effective_unit_cost IS NULL AND product_id IS NOT NULL
-         LIMIT 20
-       ) x
-     ),
-     unit_cost_fallback AS (
-       SELECT COUNT(*)::bigint AS c,
-         COALESCE(ARRAY_AGG(sample_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
-       FROM (SELECT sample_id FROM lines WHERE used_unit_cost_fallback LIMIT 20) x
-     ),
-     stale_cost AS (
-       SELECT COUNT(*)::bigint AS c,
-         COALESCE(ARRAY_AGG(sample_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
-       FROM (
-         SELECT sample_id FROM lines
-         WHERE average_unit_cost IS NOT NULL
-           AND (average_unit_cost_synced_at IS NULL
-                OR average_unit_cost_synced_at < (?::timestamptz - INTERVAL '${STALE_COST_THRESHOLD_DAYS} days'))
-         LIMIT 20
-       ) x
-     ),
-     missing_origin AS (
-       SELECT COUNT(*)::bigint AS c,
-         COALESCE(ARRAY_AGG(sample_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
-       FROM (
-         SELECT sample_id FROM lines
-         WHERE product_id IS NOT NULL AND origin_flag IS NULL
-         LIMIT 20
-       ) x
-     )
-     SELECT
-       it.gross_revenue_pre_tax_cents,
-       it.tax_collected_cents,
-       c.cogs_china_cents,
-       c.cogs_local_cents,
-       mc.c   AS lines_missing_avg_cost_count,
-       sc.c   AS stale_cost_count,
-       mo.c   AS missing_origin_tag_count,
-       uf.c   AS unit_cost_fallback_count,
-       mc.ids AS sample_lines_missing_avg_cost,
-       sc.ids AS sample_stale_cost,
-       mo.ids AS sample_missing_origin_tag,
-       uf.ids AS sample_unit_cost_fallback
-     FROM inv_totals it
-     CROSS JOIN cogs c
-     CROSS JOIN missing_cost mc
-     CROSS JOIN stale_cost sc
-     CROSS JOIN missing_origin mo
-     CROSS JOIN unit_cost_fallback uf`,
-    [dayStart, dayEnd, dayStart]
-  );
+  const sales = await loadSalesByApplication(pg, dayStart, dayEnd);
 
   const cashResult = await pg.raw(
     `WITH lwc AS (
@@ -258,20 +124,6 @@ export async function loadDailyReport(
      ORDER BY tb.display_order, tb.code`
   );
 
-  const sales: SalesAggregateRow = salesResult.rows[0] ?? {
-    gross_revenue_pre_tax_cents: "0",
-    tax_collected_cents: "0",
-    cogs_china_cents: "0",
-    cogs_local_cents: "0",
-    lines_missing_avg_cost_count: "0",
-    stale_cost_count: "0",
-    missing_origin_tag_count: "0",
-    unit_cost_fallback_count: "0",
-    sample_lines_missing_avg_cost: [],
-    sample_stale_cost: [],
-    sample_missing_origin_tag: [],
-    sample_unit_cost_fallback: [],
-  };
   const cash: CashRow = cashResult.rows[0] ?? {
     gross_payments_cents: "0",
     refunds_cents: "0",
