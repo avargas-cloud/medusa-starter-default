@@ -17,6 +17,10 @@ import {
   invalidateEditSequenceCache,
 } from "../qb-pipeline";
 import { enqueueEstimateDeactivateIfNeeded } from "../pipeline/enqueue-estimate-deactivate";
+import {
+  isEditSequenceStaleError,
+  refreshEditSequenceForRow,
+} from "./refresh-edit-sequence";
 import { buildEstimatePatch } from "../qb-metadata-types";
 import { resubmitByStep, type ResubmitRow } from "./resubmit-by-step";
 
@@ -915,6 +919,31 @@ export async function pollSubmittedRows(
             row.qb_txn_id as string
           ).catch(() => {});
         }
+
+        // Auto-heal: when the failure is a stale EditSequence on a *_mod step
+        // and the retry budget still has room, fetch the current EditSequence
+        // from QB and write it onto the owning row (e.g. pos_credit_memo).
+        // Without this, the next consolidator tick reads the same stale value
+        // from the DB fallback and the row spins in a 3200/3210 retry loop.
+        if (
+          decision.nextRetryAt &&
+          row.qb_txn_id &&
+          isEditSequenceStaleError(errMsg)
+        ) {
+          await refreshEditSequenceForRow(
+            row.step as string,
+            row.qb_txn_id as string,
+            (row.reference_id as string | null) ?? null,
+            logger
+          ).catch((healErr: unknown) => {
+            const msg =
+              healErr instanceof Error ? healErr.message : String(healErr);
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Auto-heal threw for row ${row.id}: ${msg}`
+            );
+          });
+        }
+
         logger.warn(
           `${LOG_PREFIX} ❌ Row ${row.id} (${row.step}) → ${decision.newStatus} (${decision.classification.class}, retry ${decision.newRetries}): ${errMsg}`
         );
