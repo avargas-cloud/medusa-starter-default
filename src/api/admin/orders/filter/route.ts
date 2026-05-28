@@ -87,7 +87,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const tab = (req.query.tab as string | undefined)?.trim();
   const payment = (req.query.payment as string | undefined)?.trim();
 
-  const filters: string[] = ['status != "draft"'];
+  // Exclude POS estimates via the canonical is_draft_order boolean (is_draft).
+  // status != "draft" was fragile — canceled estimates keep is_draft_order=true
+  // but status="canceled", so they slipped past the string check.
+  const filters: string[] = ["is_draft = false"];
   if (tab && TAB_FILTER[tab]) filters.push(TAB_FILTER[tab]);
   if (payment && VALID_PAYMENTS.has(payment)) {
     filters.push(`effective_payment = "${payment}"`);

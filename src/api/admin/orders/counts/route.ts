@@ -68,7 +68,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     const index = meili.index(ORDERS_INDEX);
 
     const dateF = dateFilters(from, to);
-    const baseFilters: string[] = ['status != "draft"', ...dateF];
+    // Exclude POS estimates: key off the canonical is_draft_order boolean
+    // (is_draft), not status != "draft" — a draft order's status can drift
+    // (e.g. canceled estimates keep is_draft_order=true but status="canceled").
+    const baseFilters: string[] = ["is_draft = false", ...dateF];
 
     // Tab counts honor showCancelled: when off, exclude is_canceled/is_voided.
     const tabBase = showCancelled

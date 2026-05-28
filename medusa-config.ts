@@ -665,6 +665,7 @@ module.exports = defineConfig({
                 "fulfillment_status",
                 "effective_payment",
                 "is_unpaid",
+                "is_draft",
                 "is_open",
                 "is_closed",
                 "is_separated",

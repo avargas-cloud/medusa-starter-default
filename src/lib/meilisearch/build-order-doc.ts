@@ -14,6 +14,9 @@ export interface OrderForMeili {
   id: string;
   display_id: number | null;
   status: string | null;
+  // Draft orders back POS estimates. They must never surface in the /orders
+  // tabs (estimates have their own page sourced from /admin/draft-orders).
+  is_draft_order?: boolean | null;
   payment_status?: string | null;
   fulfillment_status?: string | null;
   email: string | null;
@@ -92,6 +95,8 @@ export interface OrderMeiliDoc {
   // maps to a single filterable boolean and Meili returns the true full set.
   effective_payment: EffectivePaymentStatus;
   is_unpaid: boolean;
+  // True for draft orders (POS estimates) — every /orders tab filters these out.
+  is_draft: boolean;
   is_open: boolean;
   is_closed: boolean;
   is_separated: boolean;
@@ -307,6 +312,8 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
   const isWebOrder = salesChannelId !== POS_SC_ID;
 
   const effectivePayment = getEffectivePaymentStatus(order);
+  const isDraft =
+    order.is_draft_order === true || asString(order.status) === "draft";
   const isOpen = OPEN_FULFILLMENT.has(fulfillmentStatus);
   const isClosed = CLOSED_FULFILLMENT.has(fulfillmentStatus);
   const isSeparated =
@@ -331,6 +338,7 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
     fulfillment_status: fulfillmentStatus,
     effective_payment: effectivePayment,
     is_unpaid: effectivePayment === "not_paid",
+    is_draft: isDraft,
     is_open: isOpen,
     is_closed: isClosed,
     is_separated: isSeparated,

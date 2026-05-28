@@ -81,7 +81,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       limit,
       attributesToRetrieve: ["id", "display_id"],
       sort: ["created_at_ts:desc"],
-      filter: 'status != "draft"',
+      filter: "is_draft = false",
     });
 
     const ids: string[] = meiliRes.hits

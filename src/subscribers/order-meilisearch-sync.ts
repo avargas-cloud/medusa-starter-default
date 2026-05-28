@@ -15,6 +15,12 @@ import {
  * Events handled:
  *   • order.placed / order.updated / order.canceled
  *       → upsert the affected order
+ *   • delivery.created
+ *       → a fulfillment was marked delivered. Payload carries the
+ *         FULFILLMENT id (not the order id), so we resolve the owning
+ *         order first, then upsert. Without this the doc reindexed on
+ *         order.fulfillment_created races the delivered_at write and can
+ *         stick at is_open=true even after the order is delivered.
  *   • order.archived / order.deleted
  *       → drop from index
  *   • customer.updated
@@ -32,6 +38,7 @@ const ORDER_FIELDS = [
   "id",
   "display_id",
   "status",
+  "is_draft_order",
   "payment_status",
   "fulfillment_status",
   "email",
@@ -131,6 +138,32 @@ async function deleteOrders(
   }
 }
 
+async function resolveOrderIdsFromFulfillments(
+  fulfillmentIds: string[],
+  container: any,
+  logger: any
+): Promise<string[]> {
+  if (fulfillmentIds.length === 0) return [];
+  try {
+    const query = container.resolve("query");
+    const { data } = await query.graph({
+      entity: "order",
+      fields: ["id"],
+      filters: { fulfillments: { id: fulfillmentIds } },
+    });
+    return (data ?? [])
+      .map((o: any) => o?.id)
+      .filter((id: unknown): id is string => typeof id === "string" && !!id);
+  } catch (err: any) {
+    logger.warn(
+      `[MEILI-ORDER-SYNC] ⚠️ could not resolve orders for fulfillments [${fulfillmentIds.join(
+        ","
+      )}]: ${err?.message}`
+    );
+    return [];
+  }
+}
+
 async function syncOrdersForCustomer(
   customerId: string,
   container: any,
@@ -203,6 +236,19 @@ export default async function orderMeilisearchSubscriber({
     return;
   }
 
+  // delivery.created carries the FULFILLMENT id, not the order id — resolve
+  // the owning order before reindexing.
+  if (event.name === "delivery.created") {
+    const fulfillmentIds = extractIds(event.data);
+    const resolved = await resolveOrderIdsFromFulfillments(
+      fulfillmentIds,
+      container,
+      logger
+    );
+    await syncOrders(resolved, container, logger);
+    return;
+  }
+
   const orderIds = extractIds(event.data);
   if (orderIds.length === 0) {
     logger.warn(
@@ -231,6 +277,7 @@ export const config: SubscriberConfig = {
     "order.canceled",
     "order.payment_captured",
     "order.fulfillment_created",
+    "delivery.created",
     "order.customer_transferred",
     "order.archived",
     "order.deleted",
