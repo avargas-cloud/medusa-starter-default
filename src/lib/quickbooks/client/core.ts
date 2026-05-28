@@ -10,6 +10,13 @@ export const DRY_RUN = process.env.QB_DRY_RUN === "true";
 export const POLL_INTERVAL_MS = 20_000;
 export const MAX_POLL_ATTEMPTS = 20;
 
+// Wall-clock cap for a single bridge HTTP call. Without this, node fetch hangs
+// indefinitely when the tunnel/proxy/QBWC stalls — the consolidator awaits forever,
+// the row sits in 'processing' until stale-cleanup, and the whole batch behind it
+// blocks (resubmitByStep is sequential). 60s covers a normal QBWC handshake with
+// margin; anything longer is a real outage that should surface as a retryable error.
+export const BRIDGE_FETCH_TIMEOUT_MS = 60_000;
+
 // ─── Internal fetch helper ─────────────────────────────────────────────────────
 
 export async function bridgeFetch(
@@ -18,16 +25,31 @@ export async function bridgeFetch(
   body?: object
 ): Promise<any> {
   const url = `${BRIDGE_URL}${path}`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), BRIDGE_FETCH_TIMEOUT_MS);
 
-  const res = await fetch(url, {
-    method,
-    headers: {
-      "x-api-key": API_KEY,
-      "Content-Type": "application/json",
-      "bypass-tunnel-reminder": "true",
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: {
+        "x-api-key": API_KEY,
+        "Content-Type": "application/json",
+        "bypass-tunnel-reminder": "true",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: ctrl.signal,
+    });
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(
+        `Bridge ${method} ${path} → timed out after ${BRIDGE_FETCH_TIMEOUT_MS}ms`
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
