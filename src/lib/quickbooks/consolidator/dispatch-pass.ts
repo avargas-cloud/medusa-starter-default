@@ -126,3 +126,43 @@ export async function runWakeDependentsPass(
     logger.warn(`${LOG_PREFIX} ⚠️ Wake-dependents pass error: ${msg}`);
   }
 }
+
+/**
+ * Orphaned-waiting rescue pass: a 'payment' row written as 'waiting' with NO depends_on
+ * can never be recovered by either other pass — runWakeDependentsPass requires
+ * depends_on→confirmed (its JOIN never matches a NULL), and runPendingDispatchPass only
+ * claims 'pending'. Such a row is the residue of a lost in-process dispatch (e.g. a
+ * fire-and-forget setTimeout killed by a process restart). Once it is older than the
+ * grace window — long past any legitimate in-flight timer — promote it to 'pending' so
+ * the dispatch pass picks it up on the next tick.
+ *
+ * Scoped to step='payment' on purpose: handlePosPaymentCreated is fully idempotent and
+ * guards every skip case (already-synced, SR-embedded, $0 anchor, refund), so promoting
+ * is always safe. Other steps that park as 'waiting' (invoice/sales_receipt placeholders)
+ * have their own promotion path in qb-pos-sync and must not be force-dispatched here.
+ */
+export async function runOrphanedWaitingPass(logger: any): Promise<void> {
+  const pool = getDbPool();
+  try {
+    const { rows: promoted } = await pool.query(
+      `UPDATE qb_order_pipeline
+          SET status     = 'pending',
+              updated_at = NOW(),
+              error      = NULL
+        WHERE status      = 'waiting'
+          AND depends_on  IS NULL
+          AND step        = 'payment'
+          AND created_at  < NOW() - INTERVAL '3 minutes'
+        RETURNING id, reference_id`
+    );
+    if (promoted.length > 0) {
+      logger.info(
+        `${LOG_PREFIX} 🩹 Promoted ${promoted.length} orphaned waiting payment row(s) to pending`
+      );
+    }
+  } catch (orphanErr: unknown) {
+    const msg =
+      orphanErr instanceof Error ? orphanErr.message : String(orphanErr);
+    logger.warn(`${LOG_PREFIX} ⚠️ Orphaned-waiting pass error: ${msg}`);
+  }
+}

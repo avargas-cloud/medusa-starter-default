@@ -9,6 +9,7 @@ import {
 import {
   runPendingDispatchPass,
   runWakeDependentsPass,
+  runOrphanedWaitingPass,
 } from "../lib/quickbooks/consolidator/dispatch-pass";
 import {
   pollSubmittedRows,
@@ -81,6 +82,8 @@ export default async function qbPipelineConsolidator(
   await runCustomerDataExtPass(container, logger);
 
   // ── Phase D: dispatch pending + wake waiting rows ──────────────────────────
+  // Orphan rescue first so any promoted row is dispatched within the same tick.
+  await runOrphanedWaitingPass(logger);
   await runPendingDispatchPass(container, logger);
   await runWakeDependentsPass(container, logger);
 

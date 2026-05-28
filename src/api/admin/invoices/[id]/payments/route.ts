@@ -9,8 +9,6 @@
 
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
-import { handlePosPaymentApplied } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-applied";
-import { handlePosPaymentCreated } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-created";
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
@@ -137,7 +135,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     });
 
     // 3. Create the PaymentApplication linking the payment to the invoice
-    await financeService.createPaymentApplications({
+    const paymentApplication = await financeService.createPaymentApplications({
       payment_id: customerPayment.id,
       invoice_id: id,
       invoice_number: String((invoice as any).invoice_number || ""),
@@ -195,51 +193,49 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     const updated = await invoiceService.retrievePosInvoice(id);
 
-    // 7. QB Sync — direct exec (mirrors invoices/route.ts pattern; subscriber removed for pos.payment.created)
+    // 7. QB Sync — durable pipeline enqueue (no fire-and-forget setTimeout).
+    // The 'payment' row is written 'pending' so the consolidator's pending-dispatch
+    // pass pushes the ReceivePayment to QB durably (≤1 min) and survives process
+    // restarts. The 'apply_payment' row is enqueued 'pending' as well;
+    // handlePosPaymentApplied self-requeues it as 'waiting' on the payment row until
+    // the ReceivePayment confirms, after which the wake-dependents pass applies it to
+    // the invoice automatically.
+    //
+    // Previously this used status:'waiting' + a setTimeout handler call. A lost timer
+    // (process restart mid-flight) stranded the 'payment' row in 'waiting' with no
+    // depends_on — a state neither consolidator pass can recover (pending-dispatch
+    // only claims 'pending'; wake-dependents needs depends_on→confirmed).
     if (qbFlowEnabled) {
-      const applicationForEmit = {
-        payment_id: customerPayment.id,
-        invoice_id: id,
-        order_id: invoice.order_id,
-        amount_applied: amount,
-      };
       try {
         await writePipelineRow({
           orderId: invoice.order_id,
           referenceId: customerPayment.id,
           referenceType: "customer_payment",
           step: "payment",
-          status: "waiting",
+          status: "pending",
           medusaRefNumber: nextPayNum ? `PAY-${nextPayNum}` : null,
+        });
+
+        await writePipelineRow({
+          orderId: invoice.order_id,
+          referenceId: paymentApplication.id,
+          referenceType: "payment_application",
+          step: "apply_payment",
+          status: "pending",
+          medusaRefNumber: nextPayNum ? `PAY-${nextPayNum}` : null,
+          payload: {
+            payment_id: customerPayment.id,
+            invoice_id: id,
+            order_id: invoice.order_id,
+            amount_applied: amount,
+            application_id: paymentApplication.id,
+          },
         });
       } catch (rowErr: any) {
         console.warn(
-          `[invoices/:id/payments] Could not write pipeline row: ${rowErr.message}`
+          `[invoices/:id/payments] Could not enqueue QB pipeline rows: ${rowErr.message}`
         );
       }
-
-      setTimeout(async () => {
-        try {
-          await handlePosPaymentCreated({
-            event: {
-              name: "pos.payment.created",
-              data: { id: customerPayment.id },
-            },
-            container: req.scope as any,
-            pluginOptions: {},
-          });
-          await new Promise((r) => setTimeout(r, 250));
-          await handlePosPaymentApplied({
-            event: { name: "pos.payment.applied", data: applicationForEmit },
-            container: req.scope as any,
-            pluginOptions: {},
-          });
-        } catch (execErr: any) {
-          console.error(
-            `[invoices/:id/payments] Direct exec QB sync failed: ${execErr.message}`
-          );
-        }
-      }, 100);
     }
 
     return res.json({
