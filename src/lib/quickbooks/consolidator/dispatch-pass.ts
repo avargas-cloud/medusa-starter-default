@@ -44,8 +44,20 @@ export async function runPendingDispatchPass(
       logger.info(
         `${LOG_PREFIX} Processing ${pendingMutations.length} pending estimate_cancel/credit_memo_mod row(s)...`
       );
-      for (const r of pendingMutations) {
-        await resubmitByStep(r as ResubmitRow, container, logger);
+      // Parallel dispatch: a stuck handler on one row no longer blocks the rest
+      // of the batch. With bridgeFetch's 60s timeout, the worst-case tick is
+      // bounded regardless of batch size. Use allSettled so a thrown handler
+      // doesn't reject the whole pass.
+      const results = await Promise.allSettled(
+        pendingMutations.map((r) =>
+          resubmitByStep(r as ResubmitRow, container, logger)
+        )
+      );
+      const failed = results.filter((r) => r.status === "rejected");
+      if (failed.length > 0) {
+        logger.warn(
+          `${LOG_PREFIX} ⚠️ ${failed.length}/${pendingMutations.length} dispatch handlers threw — see individual handler logs`
+        );
       }
     }
   } catch (mutPassErr: unknown) {
@@ -85,18 +97,27 @@ export async function runWakeDependentsPass(
       logger.info(
         `${LOG_PREFIX} ⏯️ Woke ${awakenedRows.length} waiting row(s) whose dependencies confirmed`
       );
-      for (const r of awakenedRows) {
-        await resubmitByStep(
-          {
-            id: r.id,
-            order_id: r.order_id,
-            reference_id: r.reference_id,
-            reference_type: r.reference_type,
-            step: r.step,
-            qb_txn_id: r.qb_txn_id,
-          } as ResubmitRow,
-          container,
-          logger
+      // Parallel dispatch (see runPendingDispatchPass for rationale).
+      const results = await Promise.allSettled(
+        awakenedRows.map((r) =>
+          resubmitByStep(
+            {
+              id: r.id,
+              order_id: r.order_id,
+              reference_id: r.reference_id,
+              reference_type: r.reference_type,
+              step: r.step,
+              qb_txn_id: r.qb_txn_id,
+            } as ResubmitRow,
+            container,
+            logger
+          )
+        )
+      );
+      const failed = results.filter((r) => r.status === "rejected");
+      if (failed.length > 0) {
+        logger.warn(
+          `${LOG_PREFIX} ⚠️ ${failed.length}/${awakenedRows.length} wake handlers threw — see individual handler logs`
         );
       }
     }
