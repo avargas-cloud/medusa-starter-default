@@ -36,7 +36,7 @@ export const TIER1_CTE = `cat_ancestry AS (
       0                          AS depth
     FROM product p
     JOIN product_category pc ON pc.id = p.metadata->>'primary_category_id'
-    WHERE p.deleted_at IS NULL AND p.metadata ? 'primary_category_id'
+    WHERE p.deleted_at IS NULL AND p.metadata->>'primary_category_id' IS NOT NULL
     UNION ALL
     SELECT
       pcp.product_id,
@@ -46,7 +46,7 @@ export const TIER1_CTE = `cat_ancestry AS (
       0
     FROM product_category_product pcp
     JOIN product p ON p.id = pcp.product_id AND p.deleted_at IS NULL
-                   AND NOT (p.metadata ? 'primary_category_id')
+                   AND p.metadata->>'primary_category_id' IS NULL
     JOIN product_category pc ON pc.id = pcp.product_category_id
   )
   UNION ALL
