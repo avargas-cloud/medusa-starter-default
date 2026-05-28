@@ -54,6 +54,32 @@ const fetchBridgeStatus = async (
   return _result.data as BridgeStatusResponse;
 };
 
+// Generic fallback: walk any QBXML `*Rs` → first `*Ret` → return the named field.
+// The explicit Add/Mod lookups below don't enumerate `ItemQueryRs.Item*Ret`, which
+// is the shape returned by the EditSequence-recovery / reconcile ItemQuery. Mirrors
+// the bridge's own extractQBIds walk so a query response yields ListID/EditSequence.
+const walkRetField = (
+  msgs: Record<string, unknown>,
+  field: string
+): string | null => {
+  for (const rsKey of Object.keys(msgs)) {
+    if (!rsKey.endsWith("Rs")) continue;
+    const rs = msgs[rsKey];
+    if (!rs || typeof rs !== "object") continue;
+    for (const [retKey, retVal] of Object.entries(
+      rs as Record<string, unknown>
+    )) {
+      if (!retKey.endsWith("Ret")) continue;
+      const ret = Array.isArray(retVal) ? retVal[0] : retVal;
+      const value = (ret as Record<string, unknown> | null | undefined)?.[
+        field
+      ];
+      if (typeof value === "string" && value) return value;
+    }
+  }
+  return null;
+};
+
 const extractListId = (data: BridgeStatusResponse): string | null => {
   const op = data.operation;
   if (!op) return null;
@@ -67,7 +93,7 @@ const extractListId = (data: BridgeStatusResponse): string | null => {
     msgs?.ItemInventoryModRs?.ItemInventoryRet?.ListID ??
     msgs?.ItemServiceModRs?.ItemServiceRet?.ListID ??
     msgs?.ItemNonInventoryModRs?.ItemNonInventoryRet?.ListID ??
-    null
+    walkRetField(msgs as Record<string, unknown>, "ListID")
   );
 };
 
@@ -82,7 +108,7 @@ const extractEditSequence = (data: BridgeStatusResponse): string | null => {
     msgs?.ItemInventoryModRs?.ItemInventoryRet?.EditSequence ??
     msgs?.ItemServiceModRs?.ItemServiceRet?.EditSequence ??
     msgs?.ItemNonInventoryModRs?.ItemNonInventoryRet?.EditSequence ??
-    null
+    walkRetField(msgs as Record<string, unknown>, "EditSequence")
   );
 };
 
