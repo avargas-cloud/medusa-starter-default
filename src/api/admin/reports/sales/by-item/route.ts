@@ -11,15 +11,30 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const pg = req.scope.resolve("__pg_connection__") as any
   const region = parseRegion(req)
   const regionWhere = regionClause(region)
+  const ROOT_CAT = 'pcat_01KGAD1KQV29RKZZHEZ4N88B8H'
 
   try {
     const result = await pg.raw(
-      `WITH gross AS (
+      `WITH product_tier1 AS (
+         SELECT DISTINCT ON (pcp.product_id)
+           pcp.product_id,
+           COALESCE(
+             CASE WHEN pc.parent_category_id = ? THEN pc.name END,
+             CASE WHEN pc2.parent_category_id = ? THEN pc2.name END,
+             'Uncategorized'
+           ) AS category
+         FROM product_category_product pcp
+         JOIN product_category pc ON pc.id = pcp.product_category_id
+         LEFT JOIN product_category pc2 ON pc2.id = pc.parent_category_id
+         ORDER BY pcp.product_id, pc.name
+       ),
+       gross AS (
          SELECT
            pii.variant_id,
            pii.sku,
            MIN(pii.description)                                            AS description,
            MIN(p.title)                                                    AS product_title,
+           MIN(COALESCE(pt.category, 'Uncategorized'))                     AS category,
            SUM(pii.quantity - pii.refunded_quantity)::int                  AS qty_sold,
            SUM(${NET_ITEM_REVENUE})::bigint                                AS gross_revenue,
            SUM(${COST_DOLLARS})::bigint                                    AS cogs,
@@ -30,6 +45,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND i.issued_at >= ? AND i.issued_at < ?
          ${COGS_JOIN}
          LEFT JOIN product p ON p.id = pv.product_id
+         LEFT JOIN product_tier1 pt ON pt.product_id = p.id
          WHERE pii.deleted_at IS NULL AND pii.variant_id IS NOT NULL ${regionWhere}
          GROUP BY pii.variant_id, pii.sku
        ),
@@ -53,6 +69,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            COALESCE(g.sku, r.sku)                          AS sku,
            g.description,
            g.product_title,
+           COALESCE(g.category, 'Uncategorized')           AS category,
            COALESCE(g.qty_sold, 0)::int                    AS qty_sold,
            (COALESCE(g.gross_revenue, 0) - COALESCE(r.cm_refunded, 0))::bigint AS revenue,
            COALESCE(g.cogs, 0)::bigint                     AS cogs,
@@ -65,6 +82,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            '__INVENTORY_ADJ__'                                              AS sku,
            'Inventory Adjustment'                                           AS description,
            'Inventory Adjustment'                                           AS product_title,
+           'Inventory Adjustment'                                           AS category,
            0::int                                                           AS qty_sold,
            0::bigint                                                        AS revenue,
            COALESCE(SUM(
@@ -82,7 +100,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND ic.applied_at >= ? AND ic.applied_at < ?
        ) t
        ORDER BY revenue DESC`,
-      [range.from, range.to, range.from, range.to, range.from, range.to]
+      [ROOT_CAT, ROOT_CAT, range.from, range.to, range.from, range.to, range.from, range.to]
     )
 
     const rows = (result.rows as any[]).map((r) => {
@@ -94,6 +112,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         sku:           r.sku,
         description:   r.description,
         product_title: r.product_title,
+        category:      r.category ?? 'Uncategorized',
         qty_sold:      Number(r.qty_sold),
         revenue,
         gross_profit:  profit,
