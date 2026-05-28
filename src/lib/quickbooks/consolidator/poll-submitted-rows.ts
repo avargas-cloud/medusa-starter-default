@@ -934,7 +934,8 @@ export async function pollSubmittedRows(
             row.step as string,
             row.qb_txn_id as string,
             (row.reference_id as string | null) ?? null,
-            logger
+            logger,
+            row.id as string
           ).catch((healErr: unknown) => {
             const msg =
               healErr instanceof Error ? healErr.message : String(healErr);

@@ -31,7 +31,8 @@ export async function refreshEditSequenceForRow(
   step: PipelineStep,
   txnId: string,
   referenceId: string | null,
-  logger: { info: (m: string) => void; warn: (m: string) => void }
+  logger: { info: (m: string) => void; warn: (m: string) => void },
+  pipelineRowId?: string | null
 ): Promise<string | null> {
   const LOG_PREFIX = "[QB-AUTO-HEAL]";
 
@@ -108,6 +109,30 @@ export async function refreshEditSequenceForRow(
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn(`${LOG_PREFIX} Could not cache new EditSequence: ${msg}`);
+  }
+
+  // 4. Skip the exponential backoff. failOrRetryPipelineRow ran first and
+  //    parked the row at NOW + 10min (or whatever the backoff slot dictated),
+  //    but the cause is fixed — there is no transient bridge condition to wait
+  //    on. Reset next_retry_at to NOW so the next consolidator tick picks it
+  //    up immediately instead of sitting idle for minutes.
+  if (pipelineRowId) {
+    const pool = getDbPool();
+    try {
+      await pool.query(
+        `UPDATE qb_order_pipeline
+            SET next_retry_at = NOW(),
+                updated_at    = NOW()
+          WHERE id = $1 AND status = 'failed'`,
+        [pipelineRowId]
+      );
+      logger.info(
+        `${LOG_PREFIX} ⚡ Rescheduled row ${pipelineRowId} for immediate retry`
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`${LOG_PREFIX} Could not reschedule row: ${msg}`);
+    }
   }
 
   return freshEditSeq;
