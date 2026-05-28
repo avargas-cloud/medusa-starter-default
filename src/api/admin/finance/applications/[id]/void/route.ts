@@ -74,13 +74,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const activeApplications = currentPaymentDesc.applications.filter(
       (app: any) => !app.voided_at
     );
-    const totalStillApplied = activeApplications.reduce(
-      (sum: number, app: any) => sum + Number(app.amount_applied),
-      0
-    );
+    // Status reflects INVOICE-bound consumption only. Order-only links
+    // reserve credit but do not count as 'applied'.
+    const invoiceApplied = activeApplications
+      .filter((a: any) => !!a.invoice_id)
+      .reduce((sum: number, a: any) => sum + Number(a.amount_applied), 0);
 
     const newPaymentStatus =
-      totalStillApplied === 0 ? "available" : "partially_applied";
+      invoiceApplied === 0 ? "available" : "partially_applied";
 
     await financeService.updateCustomerPayments({
       id: currentPaymentDesc.id,
