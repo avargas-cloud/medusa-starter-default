@@ -106,7 +106,7 @@ function StatusBadge({ status }: { status: PipelineStatus }) {
   const map: Record<PipelineStatus, { color: BadgeColor; label: string }> = {
     pending: { color: "orange", label: "Pending" },
     submitted: { color: "blue", label: "Submitted" },
-    processing: { color: "blue", label: "Processing" },
+    processing: { color: "blue", label: "Submitting" },
     confirmed: { color: "green", label: "Confirmed" },
     failed: { color: "red", label: "Failed" },
     fixed: { color: "grey", label: "Fixed" },
@@ -619,22 +619,69 @@ export function PipelineTable() {
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           {(
             [
-              { key: "waiting", label: "Waiting", color: "purple" },
-              { key: "pending", label: "Pending", color: "orange" },
-              { key: "submitted", label: "Submitted", color: "blue" },
-              { key: "processing", label: "Processing", color: "blue" },
-              { key: "confirmed", label: "Confirmed", color: "green" },
-              { key: "failed", label: "Failed", color: "red" },
-              { key: "fixed", label: "Fixed", color: "grey" },
-              { key: "skipped", label: "Skipped", color: "grey" },
-            ] as { key: string; label: string; color: BadgeColor }[]
-          ).map(({ key, label, color }) => {
+              {
+                key: "waiting",
+                label: "Waiting",
+                color: "purple",
+                tip: "Blocked by a dependency (e.g. customer sync) — auto-resumes when ready",
+              },
+              {
+                key: "pending",
+                label: "Pending",
+                color: "orange",
+                tip: "Queued for the consolidator's next dispatch pass",
+              },
+              {
+                key: "processing",
+                label: "Submitting",
+                color: "blue",
+                tip: "Consolidator claimed the row and is sending it to the QB bridge (seconds)",
+              },
+              {
+                key: "submitted",
+                label: "Submitted",
+                color: "blue",
+                tip: "Bridge accepted the request — waiting for QuickBooks Desktop response (minutes)",
+              },
+              {
+                key: "confirmed",
+                label: "Confirmed",
+                color: "green",
+                tip: "QuickBooks accepted the document",
+              },
+              {
+                key: "failed",
+                label: "Failed",
+                color: "red",
+                tip: "Bridge or QB returned an error — retryable",
+              },
+              {
+                key: "fixed",
+                label: "Fixed",
+                color: "grey",
+                tip: "Manually acknowledged — resolved outside the pipeline",
+              },
+              {
+                key: "skipped",
+                label: "Skipped",
+                color: "grey",
+                tip: "Intentional no-op (e.g. nothing to sync)",
+              },
+            ] as {
+              key: string;
+              label: string;
+              color: BadgeColor;
+              tip: string;
+            }[]
+          ).map(({ key, label, color, tip }) => {
             const count = counts[key as keyof PipelineCounts] ?? 0;
             if (count === 0) return null;
             return (
-              <Badge key={key} color={color} size="xsmall">
-                {label} {count}
-              </Badge>
+              <span key={key} title={tip}>
+                <Badge color={color} size="xsmall">
+                  {label} {count}
+                </Badge>
+              </span>
             );
           })}
           {Object.values(counts).every((v) => !v || v === 0) && (
@@ -667,8 +714,8 @@ export function PipelineTable() {
             <option value="all">All Statuses</option>
             <option value="waiting">Waiting</option>
             <option value="pending">Pending</option>
+            <option value="processing">Submitting</option>
             <option value="submitted">Submitted</option>
-            <option value="processing">Processing</option>
             <option value="confirmed">Confirmed</option>
             <option value="failed">Failed</option>
             <option value="fixed">Fixed</option>
