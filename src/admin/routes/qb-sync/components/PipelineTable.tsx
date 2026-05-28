@@ -651,7 +651,10 @@ export function PipelineTable() {
           />
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setPage(0);
+            }}
             className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base"
           >
             <option value="all">All Statuses</option>
@@ -665,7 +668,10 @@ export function PipelineTable() {
           </select>
           <select
             value={stepFilter}
-            onChange={(e) => setStepFilter(e.target.value)}
+            onChange={(e) => {
+              setStepFilter(e.target.value);
+              setPage(0);
+            }}
             className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base"
           >
             <option value="all">All Steps</option>
@@ -681,9 +687,10 @@ export function PipelineTable() {
           </select>
           <select
             value={sortBy}
-            onChange={(e) =>
-              setSortBy(e.target.value as "created_at" | "updated_at")
-            }
+            onChange={(e) => {
+              setSortBy(e.target.value as "created_at" | "updated_at");
+              setPage(0);
+            }}
             className="text-xs border border-ui-border-base rounded px-2 py-1 bg-ui-bg-base text-ui-fg-base"
           >
             <option value="created_at">Sort: Created At</option>
