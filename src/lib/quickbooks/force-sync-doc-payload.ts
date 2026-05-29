@@ -11,6 +11,9 @@ type InvoiceSnapshotItem = {
   quantity?: number | string | null;
   unit_price?: number | string | null;
   total?: number | string | null;
+  // Frozen net (round-then-multiply) persisted at invoice creation. When present,
+  // the sync uses it verbatim instead of recomputing the discount. NULL on legacy rows.
+  net_total_cents?: number | string | null;
   discount_type?: "percent" | "fixed" | string | null;
   discount_value?: number | string | null;
 };
@@ -47,15 +50,28 @@ export function invoiceLineDiscountCents(
     return 0;
   }
 
+  const qty = Number(item.quantity || 0);
+
   if (discountType === "percent") {
-    return Math.min(
-      grossTotalCents,
-      Math.round((grossTotalCents * discountValue) / 100)
+    // ROUND-THEN-MULTIPLY (2026-05-29): round the discounted UNIT price to the
+    // cent first, then × qty, so net/qty yields a clean rate (rate × qty ===
+    // amount, calculator-clean). Mirrors the POS computeTotals exactly, so a
+    // freshly-created document is correct from the root even if its stored
+    // net_total_cents is somehow absent. Existing documents are protected by the
+    // frozen net_total_cents backfill — this recompute never runs for them.
+    if (qty <= 0) return 0;
+    const unitCents = Math.round(grossTotalCents / qty);
+    // (100 - value)/100, not (1 - value/100): avoids binary-float mis-rounding
+    // (e.g. 115*0.9 = 103.4999… → 103 instead of 104). max(0,…) guards >100%.
+    const discountedUnitCents = Math.max(
+      0,
+      Math.round((unitCents * (100 - discountValue)) / 100)
     );
+    const netCents = discountedUnitCents * qty;
+    return Math.min(grossTotalCents, Math.max(0, grossTotalCents - netCents));
   }
 
   if (discountType === "fixed") {
-    const qty = Number(item.quantity || 0);
     return Math.min(grossTotalCents, Math.round(discountValue * 100) * qty);
   }
 
@@ -122,13 +138,22 @@ export function buildInvoiceForceSyncActiveItems(
     .map((item) => {
       const parentItem = takeBestParentItem(parentItemsByVariant, item);
       const grossTotalCents = Number(item.total || 0);
-      const discountCents = invoiceLineDiscountCents(
-        item,
-        parentItem,
-        grossTotalCents
-      );
-      totalLineDiscountCents += discountCents;
-      const netTotalCents = Math.max(0, grossTotalCents - discountCents);
+      // Prefer the frozen net (round-then-multiply) stored at invoice creation.
+      // Legacy invoices (net_total_cents NULL) fall back to the original recompute,
+      // so they reproduce their original amount untouched — forward-only by design.
+      const storedNet =
+        item.net_total_cents != null && item.net_total_cents !== ""
+          ? Number(item.net_total_cents)
+          : null;
+      const netTotalCents =
+        storedNet != null && Number.isFinite(storedNet)
+          ? Math.max(0, storedNet)
+          : Math.max(
+              0,
+              grossTotalCents -
+                invoiceLineDiscountCents(item, parentItem, grossTotalCents)
+            );
+      totalLineDiscountCents += grossTotalCents - netTotalCents;
 
       return {
         ...(parentItem || {}),

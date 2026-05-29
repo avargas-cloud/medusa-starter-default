@@ -88,7 +88,8 @@ interface CreateInvoiceBody {
     description: string;
     quantity: number;
     unit_price: number; // cents
-    total: number; // cents
+    total: number; // cents (GROSS line: unit_price × qty)
+    net_total?: number; // cents — frozen post-line-discount, pre-order-discount net (round-then-multiply)
     attached_image?: string | null; // base64 JPEG (96x96 @ 0.6) — snapshotted from order line item
     discount_type?: "percent" | "fixed" | null;
     discount_value?: number | null;
@@ -425,6 +426,25 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       .filter((id): id is string => !!id);
     const costMap = await getVariantAvgCostBatch(req.scope, variantIds);
 
+    // Net (post-line-discount) cents for a line. Prefer what the POS sent; if absent
+    // (an older POS build, or a non-POS API caller), compute it with the same
+    // round-then-multiply convention from gross + descriptor. NEVER fall back to gross —
+    // doing so would strip the discount when the line is synced to QuickBooks.
+    const resolveNetTotalCents = (it: (typeof body.items)[number]): number => {
+      if (it.net_total != null) return Math.round(it.net_total);
+      const grossCents = Math.round(it.total || 0);
+      const qty = Number(it.quantity || 0);
+      const value = Number(it.discount_value ?? 0);
+      if (!it.discount_type || !(value > 0) || qty <= 0) return grossCents;
+      if (it.discount_type === "percent") {
+        const unitCents = Math.round(grossCents / qty);
+        const discUnit = Math.max(0, Math.round((unitCents * (100 - value)) / 100));
+        return discUnit * qty;
+      }
+      // fixed: a flat amount off each unit
+      return Math.max(0, grossCents - Math.min(grossCents, Math.round(value * 100) * qty));
+    };
+
     await invoiceService.createPosInvoiceItems(
       body.items.map((it) => {
         const cost = it.variant_id ? costMap.get(it.variant_id) : undefined;
@@ -436,6 +456,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           quantity: it.quantity,
           unit_price: it.unit_price,
           total: it.total,
+          // Frozen net (round-then-multiply), always populated for new invoices so the
+          // QB sync's NULL-guard only ever fires for legacy (pre-column) rows.
+          net_total_cents: resolveNetTotalCents(it),
           attached_image: it.attached_image ?? null,
           average_unit_cost: cost?.cost ?? null,
           average_unit_cost_synced_at: cost?.synced_at ?? null,

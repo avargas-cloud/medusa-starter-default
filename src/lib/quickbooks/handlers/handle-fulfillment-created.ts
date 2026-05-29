@@ -385,6 +385,33 @@ export async function handleFulfillmentCreated(
     // "Order Discount" equal to the summed item discounts (QB Inv 18791).
     let lineDiscountTotalCents = 0;
 
+    // Frozen net (round-then-multiply) per line, loaded from the invoice snapshot.
+    // Keyed by `${variant_id|sku}|${grossCents}` so same-variant lines at different
+    // prices stay distinct (grossCents === pos_invoice_item.total). Populated only for
+    // invoices issued after net_total_cents existed; legacy invoices yield an empty
+    // map → the recompute below stays authoritative and the doc is untouched.
+    const netByLine = new Map<string, number>();
+    if (data.invoice_id) {
+      try {
+        const netPool = getDbPool();
+        const { rows: netRows } = await netPool.query(
+          `SELECT variant_id, sku, total, net_total_cents
+             FROM pos_invoice_item
+            WHERE invoice_id = $1 AND deleted_at IS NULL AND net_total_cents IS NOT NULL`,
+          [data.invoice_id]
+        );
+        for (const r of netRows) {
+          const grossCents = Math.round(Number(r.total || 0));
+          const key = `${r.variant_id ?? r.sku ?? "custom"}|${grossCents}`;
+          netByLine.set(key, Number(r.net_total_cents));
+        }
+      } catch (e: any) {
+        logger.warn(
+          `${LOG_PREFIX} net_total_cents lookup failed (legacy recompute used): ${e.message}`
+        );
+      }
+    }
+
     const activeItems = (order.items || [])
       .filter((item: any) => {
         const fi = fulfillmentItems.find((i: any) => {
@@ -438,7 +465,7 @@ export async function handleFulfillmentCreated(
         // Computed exactly as pos_invoice.discount was (percent-on-gross /
         // fixed-per-unit) via the shared helper, so the subtraction below
         // cancels item-level discounts to the cent.
-        const lineDiscountCents = invoiceLineDiscountCents(
+        const lineDiscountCentsComputed = invoiceLineDiscountCents(
           {
             discount_type: lineDiscount?.type ?? null,
             discount_value: lineDiscount?.value ?? null,
@@ -447,6 +474,18 @@ export async function handleFulfillmentCreated(
           null,
           grossTotalCents
         );
+
+        // Prefer the frozen net (round-then-multiply) when this invoice line carries
+        // one — existing documents are protected here, via their backfilled frozen
+        // value. When absent, the recompute above is itself round-then-multiply, so a
+        // missing freeze still yields the correct number. The baked discount is
+        // gross − net either way, so the order-level subtraction below stays correct.
+        const netKey = `${item.variant_id ?? item.variant?.sku ?? "custom"}|${grossTotalCents}`;
+        const storedNet = netByLine.get(netKey);
+        const hasStoredNet = storedNet != null && Number.isFinite(storedNet);
+        const lineDiscountCents = hasStoredNet
+          ? Math.max(0, grossTotalCents - Math.max(0, storedNet as number))
+          : lineDiscountCentsComputed;
         lineDiscountTotalCents += lineDiscountCents;
 
         if (lineDiscountCents > 0) {
