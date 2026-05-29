@@ -52,7 +52,12 @@ export function buildInventoryDocsForVariants(
   // China is intentionally excluded — orders ship from Miami; China is shown
   // separately via `chinaStock`.
   miamiStockMap: Map<string, number> = new Map(),
-  miamiReservedMap: Map<string, number> = new Map()
+  miamiReservedMap: Map<string, number> = new Map(),
+  // variant.id → vendor display name, from the canonical qb_vendor ↔ variant
+  // remote link (see loadVendorNamesByVariantId). The legacy
+  // variant.metadata.qb_vendor_name is being phased out, so the link is the
+  // source of truth; we only fall back to the legacy field when unmapped.
+  vendorNameByVariantId: Map<string, string> = new Map()
 ): MeiliInventoryDoc[] {
   const docs: MeiliInventoryDoc[] = [];
 
@@ -89,6 +94,12 @@ export function buildInventoryDocsForVariants(
 
     const vmeta = (variant?.metadata || {}) as AnyRec;
 
+    // Prefer the canonical vendor link; fall back to the legacy metadata field.
+    const vendorName =
+      vendorNameByVariantId.get(variant.id) ||
+      (vmeta.qb_vendor_name as string) ||
+      null;
+
     // variant.thumbnail is set explicitly per-variant when a specific finish
     // image is needed. Falls back to the product-level thumbnail.
     // Intentionally skips variant.images[0] — that array can contain secondary
@@ -120,7 +131,7 @@ export function buildInventoryDocsForVariants(
         purchaseCost: (vmeta.qb_purchase_cost as number) || null,
         cost: (vmeta.qb_avg_cost as number) || null,
         avg_landed_cost: (vmeta.avg_landed_cost_cents as number) || null,
-        vendorName: (vmeta.qb_vendor_name as string) || null,
+        vendorName,
         mpn: (vmeta.mpn as string) || null,
         chinaStock: 0,
         options: mappedOptions,
@@ -163,7 +174,7 @@ export function buildInventoryDocsForVariants(
         purchaseCost: (vmeta.qb_purchase_cost as number) || null,
         cost: (vmeta.qb_avg_cost as number) || null,
         avg_landed_cost: (vmeta.avg_landed_cost_cents as number) || null,
-        vendorName: (vmeta.qb_vendor_name as string) || null,
+        vendorName,
         mpn: (vmeta.mpn as string) || null,
         chinaStock: chinaStockMap.get(inventory.id) ?? 0,
         options: mappedOptions,

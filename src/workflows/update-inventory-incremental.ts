@@ -11,6 +11,7 @@ import {
   buildInventoryDocsForVariants,
   INVENTORY_DOC_FIELDS,
 } from "../lib/meilisearch/build-inventory-docs";
+import { loadVendorNamesByVariantId } from "../lib/meilisearch/load-vendor-names";
 
 interface UpdateInventoryIncrementalInput {
   variantId?: string;
@@ -134,12 +135,18 @@ const updateInventoryIncrementalStep = createStep(
 
       // 3. Transform to inventory docs using the shared full-sync logic.
       // This keeps `totalStock` Miami-only and exposes China separately.
+      const vendorNameByVariantId = await loadVendorNamesByVariantId(
+        container,
+        variants.map((v: any) => v.id)
+      );
+
       const inventoryItems = buildInventoryDocsForVariants(
         variants,
         pricesByPriceSet,
         chinaStockMap,
         miamiStockMap,
-        miamiReservedMap
+        miamiReservedMap,
+        vendorNameByVariantId
       ).filter((item) => item.variantId && item.productId);
 
       if (inventoryItems.length === 0) {

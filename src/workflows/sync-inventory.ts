@@ -12,6 +12,7 @@ import {
   buildInventoryDocsForVariants,
   INVENTORY_DOC_FIELDS,
 } from "../lib/meilisearch/build-inventory-docs";
+import { loadVendorNamesByVariantId } from "../lib/meilisearch/load-vendor-names";
 import { safeSyncIndex } from "../lib/meilisearch/safe-sync";
 
 export const syncInventoryToMeiliStep = createStep(
@@ -108,13 +109,17 @@ export const syncInventoryToMeiliStep = createStep(
       `✅ [sync-inventory] Loaded ${allVariants.length} variants in ${Date.now() - t0}ms`
     );
 
+    // Vendor names from the canonical qb_vendor ↔ variant link (all variants).
+    const vendorNameByVariantId = await loadVendorNamesByVariantId(container);
+
     // ─── Transform ALL in RAM ─────────────────────────────────────────────────
     const meiliInventoryItems = buildInventoryDocsForVariants(
       allVariants,
       pricesByPriceSet,
       chinaStockMap,
       miamiStockMap,
-      miamiReservedMap
+      miamiReservedMap,
+      vendorNameByVariantId
     );
 
     const validItems = meiliInventoryItems.filter(

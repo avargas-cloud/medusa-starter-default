@@ -10,6 +10,7 @@ import {
   buildInventoryDocsForVariants,
   INVENTORY_DOC_FIELDS,
 } from "../lib/meilisearch/build-inventory-docs";
+import { loadVendorNamesByVariantId } from "../lib/meilisearch/load-vendor-names";
 import { CHINA_LOC, USA_LOC } from "../lib/locations";
 
 /**
@@ -214,12 +215,18 @@ const syncInventoryItemToMeiliStep = createStep(
       }
     }
 
+    const vendorNameByVariantId = await loadVendorNamesByVariantId(
+      container,
+      variants.map((v: any) => v.id)
+    );
+
     const docs = buildInventoryDocsForVariants(
       variants,
       pricesByPriceSet,
       chinaStockMap,
       miamiStockMap,
-      miamiReservedMap
+      miamiReservedMap,
+      vendorNameByVariantId
     );
     if (docs.length === 0) {
       return new StepResponse({ synced: 0, deleted: 0 });
