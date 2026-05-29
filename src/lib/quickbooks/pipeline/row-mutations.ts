@@ -270,6 +270,7 @@ export async function writePipelineRow(
              CASE WHEN $5 = 'submitted' THEN NOW() ELSE NULL END,
              CASE WHEN $5 = 'confirmed' THEN NOW() ELSE NULL END,
              CASE WHEN $5 = 'failed'    THEN NOW() ELSE NULL END)
+         ON CONFLICT DO NOTHING
          RETURNING id`,
     [
       input.orderId ?? null,
@@ -289,7 +290,22 @@ export async function writePipelineRow(
     ]
   );
 
-  return rows[0].id as string;
+  if (rows.length > 0) return rows[0].id as string;
+
+  // ON CONFLICT DO NOTHING fired: a partial unique index rejected this INSERT
+  // (only the apply_payment papp_ uniqueness exists today — other steps have no
+  // unique constraint so they never reach here). A concurrent enqueue won the
+  // race; return the existing row instead of throwing.
+  const { rows: conflictExisting } = await pool.query(
+    `SELECT id FROM qb_order_pipeline
+      WHERE step = $1 AND reference_id = $2
+      ORDER BY created_at DESC LIMIT 1`,
+    [input.step, input.referenceId ?? null]
+  );
+  if (conflictExisting.length > 0) return conflictExisting[0].id as string;
+  throw new Error(
+    `writePipelineRow: INSERT conflicted but no existing row found (step=${input.step}, reference_id=${input.referenceId})`
+  );
 }
 
 /**
@@ -407,6 +423,7 @@ export async function requeueApplyPaymentWaiting(input: {
     `INSERT INTO qb_order_pipeline
         (order_id, reference_id, reference_type, step, status, depends_on, medusa_ref_number)
        VALUES ($1, $2, $5, 'apply_payment', 'waiting', $3, $4)
+       ON CONFLICT DO NOTHING
        RETURNING id`,
     [
       input.orderId,
@@ -416,7 +433,20 @@ export async function requeueApplyPaymentWaiting(input: {
       input.referenceType ?? "customer_payment",
     ]
   );
-  return { rowId: inserted[0].id as string, mode: "inserted" };
+  if (inserted.length > 0) {
+    return { rowId: inserted[0].id as string, mode: "inserted" };
+  }
+
+  // ON CONFLICT DO NOTHING fired: the papp_ partial unique index rejected this
+  // INSERT because a concurrent enqueue already created the row (TOCTOU race
+  // between the UPDATE above and this INSERT). Return the existing row.
+  const { rows: raced } = await pool.query(
+    `SELECT id FROM qb_order_pipeline
+      WHERE step = 'apply_payment' AND order_id = $1 AND reference_id = $2
+      ORDER BY created_at DESC LIMIT 1`,
+    [input.orderId, input.referenceId]
+  );
+  return { rowId: raced[0]?.id ?? null, mode: "noop" };
 }
 
 export type ApplyPaymentRef = {
