@@ -59,6 +59,14 @@ export interface OrderForMeili {
     delivered_at?: Date | string | null;
     canceled_at?: Date | string | null;
   }> | null;
+  // Line items + their fulfilled qty. Needed so computeFulfillmentStatus can
+  // replicate Medusa's `hasUnfulfilledItems` guard: an order whose fulfillments
+  // are all delivered is still only partially_delivered if any line item was
+  // never (fully) fulfilled. Without these, a partial order reads as delivered.
+  items?: Array<{
+    quantity?: number | string | null;
+    detail?: { fulfilled_quantity?: number | string | null } | null;
+  }> | null;
 }
 
 /**
@@ -152,7 +160,8 @@ const CLOSED_FULFILLMENT = new Set(["fulfilled", "shipped", "delivered"]);
  * false for all 591 orders → the Closed tab badge showed 0.
  */
 export function computeFulfillmentStatus(
-  fulfillments: OrderForMeili["fulfillments"]
+  fulfillments: OrderForMeili["fulfillments"],
+  items?: OrderForMeili["items"]
 ): string {
   const active = (fulfillments ?? []).filter((f) => !f.canceled_at);
   if (active.length === 0) return "not_fulfilled";
@@ -166,12 +175,33 @@ export function computeFulfillmentStatus(
   ).length;
   const total = active.length;
 
-  if (delivered === total) return "delivered";
-  if (delivered > 0) return "partially_delivered";
-  if (shipped + delivered === total) return "shipped";
-  if (shipped + delivered > 0) return "partially_shipped";
-  if (packed + shipped + delivered === total) return "fulfilled";
-  if (packed + shipped + delivered > 0) return "partially_fulfilled";
+  // Mirror Medusa core (getLastFulfillmentStatus): a fully-delivered set of
+  // fulfillments is still only partially_[STATUS] when any line item has not
+  // been fully fulfilled — e.g. one fulfillment covers 20/140 of a line, the
+  // other 120 were never fulfilled. Without this guard such an order reads as
+  // "delivered" instead of "partially_delivered". If item data is unavailable
+  // (older callers), default to false so behavior is unchanged.
+  const hasUnfulfilledItems = (items ?? []).some((i) => {
+    const ordered = Number(i?.quantity ?? 0);
+    const fulfilled = Number(i?.detail?.fulfilled_quantity ?? 0);
+    return fulfilled < ordered;
+  });
+
+  if (delivered > 0) {
+    return delivered === total && !hasUnfulfilledItems
+      ? "delivered"
+      : "partially_delivered";
+  }
+  if (shipped + delivered > 0) {
+    return shipped + delivered === total && !hasUnfulfilledItems
+      ? "shipped"
+      : "partially_shipped";
+  }
+  if (packed + shipped + delivered > 0) {
+    return packed + shipped + delivered === total && !hasUnfulfilledItems
+      ? "fulfilled"
+      : "partially_fulfilled";
+  }
   return "not_fulfilled";
 }
 
@@ -295,7 +325,7 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
   // backfill script and the subscriber, where the field arrives empty.
   const nativeStatus = asString(order.fulfillment_status);
   const fulfillmentStatus =
-    nativeStatus || computeFulfillmentStatus(order.fulfillments);
+    nativeStatus || computeFulfillmentStatus(order.fulfillments, order.items);
 
   // Match the POS UI helpers exactly (orders/utils.ts):
   //   isCanceled = status==='canceled' || fulfillment_status==='canceled'

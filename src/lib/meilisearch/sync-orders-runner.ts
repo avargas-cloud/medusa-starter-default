@@ -37,6 +37,11 @@ const ORDER_FIELDS = [
   "fulfillments.shipped_at",
   "fulfillments.delivered_at",
   "fulfillments.canceled_at",
+  // Line-item fulfilled qty — lets computeFulfillmentStatus demote a
+  // fully-delivered fulfillment set to partially_delivered when some line
+  // items were never fulfilled (mirrors Medusa's hasUnfulfilledItems guard).
+  "items.quantity",
+  "items.detail.fulfilled_quantity",
 ];
 
 export interface SyncResult {

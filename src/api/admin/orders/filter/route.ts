@@ -60,6 +60,11 @@ const HYDRATE_FIELDS = [
   "fulfillments.shipped_at",
   "fulfillments.delivered_at",
   "fulfillments.canceled_at",
+  // Line-item fulfilled qty — lets computeFulfillmentStatus demote a
+  // fully-delivered fulfillment set to partially_delivered when some line
+  // items were never fulfilled (mirrors Medusa's hasUnfulfilledItems guard).
+  "items.quantity",
+  "items.detail.fulfilled_quantity",
 ];
 
 const TAB_FILTER: Record<string, string> = {
@@ -149,7 +154,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       fulfillment_status:
         (o.fulfillment_status as string | undefined) ||
         computeFulfillmentStatus(
-          o.fulfillments as Parameters<typeof computeFulfillmentStatus>[0]
+          o.fulfillments as Parameters<typeof computeFulfillmentStatus>[0],
+          o.items as Parameters<typeof computeFulfillmentStatus>[1]
         ),
     }));
 
