@@ -1,7 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 
 import { FINANCE_MODULE } from "../../../../../modules/finance";
-import { INVOICE_MODULE } from "../../../../../modules/invoices";
 
 export interface AppliedPaymentDto {
   application_id: string;
@@ -17,13 +16,6 @@ export interface AppliedPaymentDto {
   amount_applied_cents: number;
   voided: boolean;
   void_reason: string | null;
-  /**
-   * 'invoice' → application bound to THIS invoice (real settlement).
-   * 'order_deposit' → order-only application (invoice_id NULL) on this
-   *   invoice's order: a deposit/payment reserved against the order but not yet
-   *   applied to the invoice. Shown so staff see money already collected.
-   */
-  scope: "invoice" | "order_deposit";
 }
 
 function toCents(val: unknown): number {
@@ -73,8 +65,7 @@ interface RawPaymentApplication {
 }
 
 export function mapAppliedPayment(
-  app: RawPaymentApplication,
-  scope: "invoice" | "order_deposit" = "invoice"
+  app: RawPaymentApplication
 ): AppliedPaymentDto {
   const payment = app.payment ?? null;
   return {
@@ -91,7 +82,6 @@ export function mapAppliedPayment(
     amount_applied_cents: toCents(app.amount_applied),
     voided: Boolean(app.voided_at),
     void_reason: app.void_reason ?? null,
-    scope,
   };
 }
 
@@ -107,42 +97,24 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       config?: Record<string, unknown>
     ) => Promise<RawPaymentApplication[]>;
   };
-  const invoiceService = req.scope.resolve(INVOICE_MODULE) as {
-    retrievePosInvoice: (id: string) => Promise<{ order_id?: string | null }>;
-  };
 
   try {
-    // 1. Applications bound to THIS invoice (real settlements).
+    // Applications bound to THIS invoice (real settlements) only. Order-only
+    // deposits (invoice_id NULL) are NOT settlements — they appear in the
+    // modal's Store Credits list (selectable to apply), not here. Including
+    // them here showed the same deposit twice (Applied + Store Credit).
     const invoiceApps = await financeService.listPaymentApplications(
       { invoice_id: id },
       { relations: ["payment"] }
     );
 
-    // 2. Order-only deposits on this invoice's order (invoice_id NULL): money
-    //    collected against the order but not yet applied to the invoice. We show
-    //    these too so the card isn't empty when a deposit already exists.
-    let orderDepositApps: RawPaymentApplication[] = [];
-    const invoice = await invoiceService
-      .retrievePosInvoice(id)
-      .catch(() => null);
-    const orderId = invoice?.order_id ?? null;
-    if (orderId) {
-      orderDepositApps = await financeService
-        .listPaymentApplications(
-          { order_id: orderId, invoice_id: null },
-          { relations: ["payment"] }
-        )
-        .catch(() => [] as RawPaymentApplication[]);
-    }
-
-    const applied_payments = [
-      ...invoiceApps.map((a) => mapAppliedPayment(a, "invoice")),
-      ...orderDepositApps.map((a) => mapAppliedPayment(a, "order_deposit")),
-    ].sort((a, b) => {
-      const aTime = a.applied_at ?? a.captured_at ?? "";
-      const bTime = b.applied_at ?? b.captured_at ?? "";
-      return bTime.localeCompare(aTime);
-    });
+    const applied_payments = invoiceApps
+      .map(mapAppliedPayment)
+      .sort((a, b) => {
+        const aTime = a.applied_at ?? a.captured_at ?? "";
+        const bTime = b.applied_at ?? b.captured_at ?? "";
+        return bTime.localeCompare(aTime);
+      });
 
     return res.json({ applied_payments });
   } catch (err) {
