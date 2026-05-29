@@ -133,16 +133,77 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     );
     const overflowAmount = requestedAmount - effectiveAmount;
 
-    // 3. Create the PaymentApplication record in Finance module
-    const application = await financeService.createPaymentApplications({
-      payment_id: paymentId,
-      invoice_id: invoice_id,
-      invoice_number: String((invoice as any).invoice_number || ""),
-      order_id: invoice.order_id,
-      amount_applied: effectiveAmount,
-      applied_at: new Date(),
-      applied_by: applied_by || null,
-    });
+    // 3. Bind the payment to the invoice.
+    //    If this payment already carries an ORDER-ONLY application (invoice_id
+    //    NULL) for THIS invoice's order — e.g. a deposit captured against the
+    //    order — CONVERT it to invoice-bound instead of creating a second row.
+    //    Creating a new row would leave two non-voided applications (order-only
+    //    + invoice-bound) for the same cash, double-counting it in Treasury.
+    //    Converting preserves the frozen cost_snapshot captured at deposit time.
+    const orderOnlyForOrder = (payment.applications ?? []).find(
+      (a: any) =>
+        !a.voided_at &&
+        (a.invoice_id === null || a.invoice_id === undefined) &&
+        a.order_id === invoice.order_id
+    );
+
+    let application: any;
+    if (orderOnlyForOrder) {
+      const existingAmount = Number(orderOnlyForOrder.amount_applied);
+      const convertAmount = Math.min(effectiveAmount, existingAmount);
+
+      if (convertAmount >= existingAmount) {
+        // Convert the whole order-only reservation to invoice-bound.
+        application = await financeService.updatePaymentApplications({
+          id: orderOnlyForOrder.id,
+          invoice_id: invoice_id,
+          invoice_number: String((invoice as any).invoice_number || ""),
+        });
+      } else {
+        // Partial: peel off an invoice-bound share, keep the remainder order-only.
+        application = await financeService.createPaymentApplications({
+          payment_id: paymentId,
+          invoice_id: invoice_id,
+          invoice_number: String((invoice as any).invoice_number || ""),
+          order_id: invoice.order_id,
+          amount_applied: convertAmount,
+          applied_at: new Date(),
+          applied_by: applied_by || null,
+          cost_snapshot: orderOnlyForOrder.cost_snapshot ?? null,
+        });
+        await financeService.updatePaymentApplications({
+          id: orderOnlyForOrder.id,
+          amount_applied: existingAmount - convertAmount,
+        });
+      }
+
+      // If the cashier applied MORE than the existing reservation covered, the
+      // surplus becomes a fresh invoice-bound application (extra credit on the
+      // same payment beyond the order-only reservation).
+      const surplus = effectiveAmount - convertAmount;
+      if (surplus > 0) {
+        await financeService.createPaymentApplications({
+          payment_id: paymentId,
+          invoice_id: invoice_id,
+          invoice_number: String((invoice as any).invoice_number || ""),
+          order_id: invoice.order_id,
+          amount_applied: surplus,
+          applied_at: new Date(),
+          applied_by: applied_by || null,
+        });
+      }
+    } else {
+      // No existing reservation — create the invoice-bound application directly.
+      application = await financeService.createPaymentApplications({
+        payment_id: paymentId,
+        invoice_id: invoice_id,
+        invoice_number: String((invoice as any).invoice_number || ""),
+        order_id: invoice.order_id,
+        amount_applied: effectiveAmount,
+        applied_at: new Date(),
+        applied_by: applied_by || null,
+      });
+    }
 
     // 4. Update the CustomerPayment status
     const isFullyApplied =

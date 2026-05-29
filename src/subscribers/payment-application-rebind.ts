@@ -34,6 +34,21 @@ export default async function paymentApplicationRebindHandler({
   container,
 }: SubscriberArgs<InvoiceCreatedData>) {
   const logger = container.resolve("logger");
+
+  // DISABLED by default 2026-05-29 — business rule: store credits / deposits are
+  // NEVER auto-applied. The cashier must explicitly SELECT a credit to apply it.
+  // Auto-binding a deposit to its invoice on pos.invoice.created violated that
+  // rule. Binding now happens only through the manual apply route, which CONVERTS
+  // an existing order-only application to invoice-bound (see
+  // finance/payments/[id]/apply/route.ts), so there is no double-count. Set
+  // PAY_REBIND_AUTO_APPLY=true to restore the old auto-rebind behavior.
+  if (process.env.PAY_REBIND_AUTO_APPLY !== "true") {
+    logger.info(
+      "[PAY-REBIND] auto-rebind disabled — credits are applied manually only."
+    );
+    return;
+  }
+
   const data = event.data ?? {};
   const invoiceId = data.invoice_id ?? data.id;
   const orderId = data.order_id;

@@ -59,13 +59,18 @@ export async function GET(
       customer_id: string;
       payment_credit: string;
     }>(
+      // Only INVOICE-BOUND applications (invoice_id IS NOT NULL) consume credit.
+      // Order-only applications (invoice_id IS NULL) are soft reservations against
+      // an order, not settlements, so they must NOT reduce available credit here —
+      // mirrors the per-customer balance endpoint (finance/customers/:id/balance).
       `SELECT
                 cp.customer_id,
                 COALESCE(SUM(
                     cp.amount - COALESCE(
                         (SELECT SUM(pa.amount_applied)
                          FROM payment_application pa
-                         WHERE pa.payment_id = cp.id AND pa.voided_at IS NULL),
+                         WHERE pa.payment_id = cp.id AND pa.voided_at IS NULL
+                           AND pa.invoice_id IS NOT NULL),
                         0
                     )
                 ), 0) / 100.0 AS payment_credit

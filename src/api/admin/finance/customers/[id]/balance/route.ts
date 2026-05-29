@@ -44,17 +44,24 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       // balance — even after a *partial* refund. We mirror the canonical
       // remaining formula used by the refund route
       // (admin/customer-payments/:id/refund):
-      //   remaining = amount - active applications - metadata.refund_amount
+      //   remaining = amount - INVOICE-BOUND applications - metadata.refund_amount
       // 'partial_refunded' must be included or a partially-refunded store
-      // credit vanishes entirely from available credit. 'refunded'/'voided'/
-      // 'applied' net to <= 0 here and are dropped by the > 0 guard below.
-      if (
-        p.status === "available" ||
-        p.status === "partially_applied" ||
-        p.status === "partial_refunded"
-      ) {
+      // credit vanishes entirely from available credit.
+      // 'applied' is included too: a deposit whose only application is ORDER-ONLY
+      // (invoice_id IS NULL — a soft reservation, not a settlement) may carry
+      // status='applied' yet still be fully spendable. The remaining>0 guard
+      // below drops genuinely invoice-consumed payments. Only 'voided' and full
+      // 'refunded' are excluded outright (they net to <= 0 anyway).
+      if (p.status !== "voided" && p.status !== "refunded") {
+        // Only INVOICE-BOUND applications (invoice_id NOT NULL) truly consume the
+        // credit. Order-only applications (invoice_id IS NULL) are a soft
+        // reservation against an order, not a final settlement — the deposit must
+        // still appear as available credit in the payment modals (and gets
+        // converted to invoice-bound by the rebind subscriber when the invoice is
+        // issued). Counting them here is what made deposits vanish from the
+        // RELATED/ADDITIONAL credit lists.
         const totalApplied = (p.applications ?? [])
-          .filter((app: any) => !app.voided_at)
+          .filter((app: any) => !app.voided_at && app.invoice_id != null)
           .reduce(
             (sum: number, app: any) => sum + Number(app.amount_applied),
             0
