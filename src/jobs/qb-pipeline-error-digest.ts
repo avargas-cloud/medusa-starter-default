@@ -186,7 +186,11 @@ export default async function qbPipelineErrorDigest(
     order_display_id: number | null;
   }>;
 
-  // ── 2. Item pipeline (qb_item_pipeline) — raw SQL so we can filter by updated_at
+  // ── 2. Item pipeline (qb_item_pipeline) — raw SQL so we can filter by updated_at.
+  // Includes (a) recent error/failed rows AND (b) STUCK rows: anything non-terminal
+  // older than 2h. (b) is the seq-120 blind spot — an actively-looping row keeps
+  // updated_at fresh, so an updated_at-only filter never surfaces it; created_at +
+  // submit_count do. submit_count > 1 with status=waiting is the loop fingerprint.
   const itemRes = await knex.raw(
     `SELECT
        id,
@@ -197,12 +201,17 @@ export default async function qbPipelineErrorDigest(
        qb_id,
        last_error,
        retries,
+       submit_count,
+       recovery_mode,
        created_at,
        updated_at
      FROM qb_item_pipeline
-     WHERE status IN ('error', 'failed_permanent')
-       AND updated_at >= ?
-       AND deleted_at IS NULL
+     WHERE deleted_at IS NULL
+       AND (
+         (status IN ('error', 'failed_permanent') AND updated_at >= ?)
+         OR (status NOT IN ('synced', 'failed_permanent')
+             AND created_at < now() - interval '2 hours')
+       )
      ORDER BY updated_at DESC
      LIMIT 500`,
     [windowSinceIso]
@@ -216,6 +225,8 @@ export default async function qbPipelineErrorDigest(
     qb_id: string | null;
     last_error: string | null;
     retries: number;
+    submit_count: number | null;
+    recovery_mode: string | null;
     created_at: string;
     updated_at: string;
   }>;
@@ -311,14 +322,25 @@ export default async function qbPipelineErrorDigest(
     {
       title: "Item Pipeline",
       description:
-        "Failed QB sync of product items (create + edit). Auto-retry exhausted rows are marked failed_permanent.",
+        "Failed + STUCK QB sync of product items (create + edit). Exhausted rows are failed_permanent; non-terminal rows older than 2h (incl. resubmit loops, shown as submit×N) are surfaced even if recently updated.",
       admin_path: "/qb-pipeline",
       rows: itemErrors.map((r) => ({
         id: r.id,
         medusa_ref: r.sku ?? "",
         qb_ref: r.qb_list_id ?? r.qb_id ?? "",
-        step: r.op_action ?? "",
-        error: r.last_error,
+        // Fold loop fingerprint into the step cell: action · submitN× · recovery.
+        step: [
+          r.op_action ?? "",
+          (r.submit_count ?? 0) > 1 ? `submit${r.submit_count}×` : "",
+          r.recovery_mode && r.recovery_mode !== "none" ? r.recovery_mode : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        error:
+          r.last_error ??
+          (r.status !== "error" && r.status !== "failed_permanent"
+            ? `Stuck in '${r.status}' since ${new Date(r.created_at).toLocaleString("en-US")}`
+            : null),
         retries: r.retries ?? 0,
         status: r.status,
         created_at: r.created_at,

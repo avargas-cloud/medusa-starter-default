@@ -28,7 +28,17 @@ export const QbItemPipeline = model.define("qb_item_pipeline", {
   item_type: model.text().default("Inventory"), // Inventory | Service | NonInventory
   status: model.text().default("waiting"), // waiting | synced | error | failed_permanent
   last_error: model.text().nullable(),
-  retries: model.number().default(0),
+  last_error_code: model.text().nullable(), // structured QB/bridge error code (e.g. "3200")
+  retries: model.number().default(0), // increments on resubmit FAILURE only
+  // Recovery state lives in a SCALAR column, never in op_payload: a scalar update
+  // replaces (no JSONB deep-merge), so it can't get stuck "on" the way the old
+  // __iq_pending/__iq_reconcile JSON markers did (seq 120 incident, 2026-05-29).
+  recovery_mode: model.text().default("none"), // none | editseq_query | reconcile_query
+  // submit_count increments on EVERY bridge dispatch (success OR failure), unlike
+  // retries. It's the only signal that catches a row that resubmits successfully
+  // each tick but never completes (retries stays 0). A hard cap demotes it.
+  submit_count: model.number().default(0),
+  last_submitted_at: model.dateTime().nullable(),
   next_retry_at: model.dateTime().nullable(),
   failed_at: model.dateTime().nullable(),
   resolved_at: model.dateTime().nullable(),
