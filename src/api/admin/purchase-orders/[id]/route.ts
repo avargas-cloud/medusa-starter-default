@@ -553,6 +553,7 @@ export async function PATCH(
       { take: 1000, skip: 0 }
     )) as Array<Record<string, unknown> & { id: string }>;
     const oldIds = new Set(oldLines.map((l) => l.id));
+    const oldById = new Map(oldLines.map((l) => [l.id, l]));
 
     const normalized = body.lines.map(normalizeLine);
     if (!requiresQbMod) {
@@ -591,7 +592,18 @@ export async function PATCH(
       };
       if (l.id && oldIds.has(l.id)) {
         keepIds.add(l.id);
-        toUpdate.push({ id: l.id, data: lineFields });
+        // Recompute this line's receive status against the (possibly new)
+        // qty_ordered. Editing a line's quantity does NOT touch qty_received,
+        // so a line edited down to its received count must flip open/partial
+        // → complete. Mirrors persist-receipt-step.ts line-status logic.
+        const qtyRecv = Number(oldById.get(l.id)?.qty_received ?? 0);
+        const lineStatus =
+          qtyRecv === 0
+            ? "open"
+            : qtyRecv < Number(lineFields.qty_ordered)
+              ? "partial"
+              : "complete";
+        toUpdate.push({ id: l.id, data: { ...lineFields, status: lineStatus } });
       } else {
         toInsert.push({
           purchase_order_id: id,
@@ -706,6 +718,25 @@ export async function PATCH(
     headerUpdate.total_cents = totals.total_cents;
     headerUpdate.total_lines = totals.total_lines;
     headerUpdate.total_units_ordered = totals.total_units_ordered;
+
+    // Recompute header receive status. Editing lines never changes
+    // total_units_received (received lines can't be deleted and qty_ordered
+    // can't drop below qty_received — see per-item guard above), but reducing
+    // qty_ordered can make a partially_received PO become fully received.
+    // Without this, a PO edited down to its received count stays stuck in
+    // 'partially_received' / "open" forever. Mirrors persist-receipt-step.ts.
+    const RECEIVE_LIFECYCLE = ["submitted", "partially_received", "received"];
+    if (RECEIVE_LIFECYCLE.includes(existing.status)) {
+      const totalReceived = Number(
+        (existing as { total_units_received?: number }).total_units_received ?? 0
+      );
+      if (totalReceived > 0) {
+        headerUpdate.status =
+          totalReceived >= totals.total_units_ordered
+            ? "received"
+            : "partially_received";
+      }
+    }
   } else {
     // If only shipping/tax/fees changed, refresh total_cents
     const touchesExtras =
