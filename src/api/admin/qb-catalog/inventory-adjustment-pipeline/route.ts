@@ -84,7 +84,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     SELECT
       ia.id::text,
       ia.seq,
-      ia.seq::text                  AS seq_label,
+      ia.tab_seq::text              AS seq_label,
       ia.order_id                   AS count_id,
       ia.medusa_ref_number          AS count_number_col,
       ia.payload,

@@ -16,6 +16,7 @@ import { model } from "@medusajs/utils";
  */
 export const QbItemPipeline = model.define("qb_item_pipeline", {
   id: model.id({ prefix: "qbitp" }).primaryKey(),
+  seq: model.number().nullable(), // DB BIGSERIAL auto-generated — do not pass on insert
   variant_id: model.text(), // Medusa product_variant.id
   sku: model.text(),
   op_action: model.text().default("add"), // 'add' | 'mod'

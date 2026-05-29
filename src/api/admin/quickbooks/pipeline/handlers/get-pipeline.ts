@@ -113,6 +113,7 @@ export async function GET(
       `
             SELECT
                 p.seq,
+                p.tab_seq,
                 p.id,
                 p.order_id,
                 p.reference_id,

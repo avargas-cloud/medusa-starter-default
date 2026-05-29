@@ -15,6 +15,7 @@ import { PAGE_SIZE, PipelinePagination } from "./PipelinePagination";
 type PipelineRow = {
   id: string;
   seq: number;
+  tab_seq: number | null;
   reference_id: string | null;
   step: string;
   status: string;
@@ -344,7 +345,7 @@ export const CustomerSyncPipelineSection = () => {
                     <Fragment key={r.id}>
                       <Table.Row>
                         <Table.Cell className="font-mono text-sm text-ui-fg-subtle">
-                          #{r.seq}
+                          #{r.tab_seq ?? "—"}
                         </Table.Cell>
                         <Table.Cell>
                           <div className="flex flex-col">
