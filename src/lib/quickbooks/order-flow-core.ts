@@ -437,12 +437,23 @@ export function buildQbItems(
       // Both item-level discounts (per-item promotions) and order-level distributed discounts
       // are reflected here. Price is always per-unit in dollars for QB.
       const originalTotal = (item.unit_price || 0) * item.quantity;
-      const effectiveUnitPrice =
+      const hasLineDiscount =
         item.subtotal !== undefined &&
         item.subtotal < originalTotal &&
-        item.subtotal > 0
-          ? Number((item.subtotal / item.quantity).toFixed(2)) // discounted subtotal ÷ qty
-          : item.unit_price || 0; // no discount → original unit price
+        item.subtotal > 0;
+      const effectiveUnitPrice = hasLineDiscount
+        ? Number((item.subtotal! / item.quantity).toFixed(2)) // discounted subtotal ÷ qty (display rate only)
+        : item.unit_price || 0; // no discount → original unit price
+      // Send the EXACT line total as Amount. The bridge emits <Amount> and
+      // omits <Rate>, so QB honors this total and back-computes the per-unit
+      // rate for display. Deriving amount from the ROUNDED effectiveUnitPrice
+      // drifts from Medusa whenever a per-item % discount yields fractional
+      // cents (65.99 × 0.8 = 52.792 → rate 52.79 → 52.79 × 20 = 1055.80, but
+      // Medusa's true line total is 1055.84). Using item.subtotal keeps them
+      // identical. Non-discounted lines fall back to unit_price × qty (exact).
+      const lineAmount = hasLineDiscount
+        ? Number(item.subtotal!.toFixed(2))
+        : Number((effectiveUnitPrice * item.quantity).toFixed(2));
       // Service / non-inventory items must NOT carry InventorySiteRef (QB
       // error 3140). Flag explicitly via variant metadata so the bridge can
       // skip the tag on both *Add and *Mod operations.
@@ -489,7 +500,7 @@ export function buildQbItems(
           productId: item.variant!.metadata!.quickbooks_id as string,
           quantity: item.quantity,
           price: effectiveUnitPrice,
-          amount: Number((effectiveUnitPrice * item.quantity).toFixed(2)),
+          amount: lineAmount,
           unitOfMeasure:
             (item.variant?.metadata?.quickbooks_uom as string) || undefined,
           desc: sanitizeForQb(
