@@ -3,9 +3,12 @@ import { parseDateRange } from "../../_lib/date-range"
 import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
 import { NET_ITEM_REVENUE } from "../../_lib/revenue-expr"
 
-// Revenue per POS user is NET (gross − credit memos completed in the period,
-// attributed to cm.sales_rep). Joined to invoice grouping by resolved
-// display name so a staff member who only issued refunds still surfaces.
+// Revenue per sales rep is NET (gross − credit memos completed in the period).
+// Gross is attributed to the order's assigned sales rep (order.metadata.sales_rep),
+// refunds to cm.sales_rep — the same basis QuickBooks and the invoices list use,
+// so all three views reconcile. Attribution is the assigned rep, NOT i.created_by
+// (the cashier who issued the invoice). A rep who only issued refunds still
+// surfaces via the FULL OUTER JOIN below.
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const range = parseDateRange(req)
   if (!range) return res.status(400).json({ error: "from and to are required" })
@@ -17,9 +20,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       `WITH gross AS (
          SELECT
            COALESCE(
-             NULLIF(TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')), ''),
-             i.created_by,
-             'Unknown'
+             NULLIF(TRIM(o.metadata->'sales_rep'->>'name'), ''),
+             'Unassigned Agent'
            )                                                AS pos_user,
            COUNT(DISTINCT i.id)::int                        AS invoice_count,
            COUNT(DISTINCT i.customer_id)::int               AS customer_count,
@@ -28,7 +30,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            SUM(${COST_DOLLARS})::bigint                     AS cogs
          FROM pos_invoice i
          JOIN pos_invoice_item pii ON pii.invoice_id = i.id AND pii.deleted_at IS NULL
-         LEFT JOIN "user" u ON u.email = i.created_by
+         LEFT JOIN "order" o ON o.id = i.order_id
          ${COGS_JOIN}
          WHERE i.deleted_at IS NULL
            AND i.status NOT IN ('draft','voided')
@@ -37,7 +39,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        ),
        cm_refunds AS (
          SELECT
-           COALESCE(cm.sales_rep->>'name', 'Unknown')      AS pos_user,
+           COALESCE(NULLIF(TRIM(cm.sales_rep->>'name'), ''), 'Unassigned Agent') AS pos_user,
            SUM(COALESCE(cm.subtotal,
                         GREATEST(cm.total - COALESCE(cm.tax,0) - COALESCE(cm.shipping,0), 0))
               )::bigint AS cm_refunded
