@@ -1,4 +1,5 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import type { Logger } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import {
@@ -10,6 +11,40 @@ import {
   type UpdatePosProductFullInput,
 } from "../../../../../workflows/pos/update-pos-product-full";
 import { updateSingleProductWorkflow } from "../../../../../workflows/update-single-product";
+import { updateInventoryIncrementalWorkflow } from "../../../../../workflows/update-inventory-incremental";
+
+/**
+ * Fire-and-forget reindex of BOTH MeiliSearch indexes a product lives in:
+ *   • "products"  — full-text product index (web / generic search)
+ *   • "inventory" — the index the POS inventory list reads (sku, stock, price)
+ *
+ * The POS edit modal mutates fields (notably `sku`) that the cashier must see
+ * immediately on the list, so the "inventory" index MUST be refreshed here.
+ * Relying on the product-variant.updated subscriber alone left the inventory
+ * index stale (e.g. a renamed SKU kept showing the old value on the list).
+ */
+function reindexProductMeili(
+  scope: MedusaRequest["scope"],
+  productId: string,
+  logger: Logger
+): void {
+  void updateSingleProductWorkflow(scope)
+    .run({ input: { productId } })
+    .catch((e: any) =>
+      logger.error(
+        `[pos-product] Meili "products" sync failed for ${productId}:`,
+        e?.message
+      )
+    );
+  void updateInventoryIncrementalWorkflow(scope)
+    .run({ input: { productId } })
+    .catch((e: any) =>
+      logger.error(
+        `[pos-product] Meili "inventory" sync failed for ${productId}:`,
+        e?.message
+      )
+    );
+}
 
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   const logger = req.scope.resolve("logger");
@@ -59,6 +94,10 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
           error: fullErrors[0]?.error?.message || "Failed to update product",
         });
       }
+
+      // Keep both search indexes honest — product mode can rename SKUs,
+      // titles, and add/remove variants the cashier must see on the list.
+      reindexProductMeili(req.scope, id, logger);
 
       return res.status(200).json({
         success: true,
@@ -174,14 +213,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     //   qb_op_queued: true       → "Item updated — QB sync queued"
     //   skipped_qb:   true       → "Saved locally — no QB metadata changes"
     const productId = req.params.id as string;
-    void updateSingleProductWorkflow(req.scope)
-      .run({ input: { productId } })
-      .catch((e) =>
-        logger.error(
-          `[pos-product] Meili sync failed for ${productId}:`,
-          e?.message
-        )
-      );
+    reindexProductMeili(req.scope, productId, logger);
 
     return res.status(200).json({
       success: true,
