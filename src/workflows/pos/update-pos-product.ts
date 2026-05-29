@@ -39,8 +39,9 @@ export type UpdatePosProductInput = {
   qb_id?: string;
   qb_edit_sequence?: string;
 
-  // Only consulted to build a first-time QB "add" payload — the route hydrates
-  // these from variant.metadata when qb_id is missing.
+  // item_type only matters for a first-time "add" (the route hydrates it from
+  // variant.metadata when qb_id is missing). retail_price is sent on BOTH add
+  // and mod so QB's SalesPrice stays in sync with the POS edit modal.
   item_type?: QbItemType;
   retail_price?: number;
 
@@ -80,6 +81,106 @@ const pruneUndefined = <T extends Record<string, unknown>>(
   Object.fromEntries(
     Object.entries(obj).filter(([, v]) => v !== undefined)
   ) as Partial<T>;
+
+/**
+ * Pure builder for the QuickBooks step payload from a POS product edit.
+ * Extracted (and exported) so the add/mod shape — especially SalesPrice
+ * handling — is unit-testable without running the whole workflow.
+ *
+ * No `qb_id` → the item was never created in QB, so build a first-time "add"
+ * (a "mod" would 400 on a missing ListID). Otherwise build a "mod".
+ *
+ * SalesPrice: the POS edit modal always carries the price, so send it on a mod
+ * whenever `retail_price` is present (including an explicit 0). When it's
+ * undefined the key drops out and the bridge omits it, leaving QB's price
+ * untouched — we must NEVER coerce it to 0 here (that zeroed real prices during
+ * the qb-item-pipeline retry loop).
+ */
+export const buildQbStepInput = (i: UpdatePosProductInput) => {
+  // PrefVendorRef prefers ListID (stable) over FullName (renamable) — shared by
+  // both add and mod. buildPrefVendorRef guards against ever sending an internal
+  // qb_vendor.id as a ListID (QB Error 3000); it falls back to FullName.
+  const prefVendorRef = buildPrefVendorRef({
+    vendorIdOrListId: i.vendor_qb_id,
+    vendorFullName: i.vendor_full_name ?? i.vendor,
+  });
+
+  if (!i.qb_id) {
+    const itemType: QbItemType = i.item_type ?? "Inventory";
+    const addData: Record<string, unknown> = {
+      Name: i.sku,
+      SalesDesc: i.salesDescription,
+      SalesPrice: i.retail_price ?? 0,
+      ItemType: itemType,
+    };
+    if (i.mpn) addData.ManufacturerPartNumber = i.mpn;
+    if (prefVendorRef) addData.PrefVendorRef = prefVendorRef;
+    if (i.income_account_full_name)
+      addData.IncomeAccountRef = { FullName: i.income_account_full_name };
+    if (itemType === "Inventory") {
+      addData.PurchaseDesc = i.salesDescription;
+      addData.PurchaseCost = i.cost ?? 0;
+      if (i.cogs_account_full_name)
+        addData.COGSAccountRef = { FullName: i.cogs_account_full_name };
+    } else if ((i.cost ?? 0) > 0) {
+      addData.PurchaseDesc = i.salesDescription;
+      addData.PurchaseCost = i.cost ?? 0;
+      if (i.cogs_account_full_name)
+        addData.ExpenseAccountRef = { FullName: i.cogs_account_full_name };
+    }
+
+    return {
+      action: "add" as const,
+      // Never skip — the whole point is that the item is missing from QB.
+      skip: false,
+      pipeline: {
+        variant_id: i.variant_id,
+        sku: i.sku ?? "",
+        item_type: itemType,
+      },
+      data: addData,
+    };
+  }
+
+  const hasQbFields =
+    i.sku !== undefined ||
+    i.salesDescription !== undefined ||
+    i.retail_price !== undefined ||
+    i.cost !== undefined ||
+    i.mpn !== undefined ||
+    i.income_account_full_name !== undefined ||
+    i.cogs_account_full_name !== undefined ||
+    i.vendor_qb_id !== undefined ||
+    i.vendor_full_name !== undefined ||
+    i.vendor !== undefined;
+
+  return {
+    action: "mod" as const,
+    skip: !hasQbFields,
+    pipeline: {
+      variant_id: i.variant_id,
+      sku: i.sku ?? "",
+      item_type: "Inventory" as const,
+    },
+    data: {
+      ListID: i.qb_id,
+      EditSequence: i.qb_edit_sequence,
+      Name: i.sku,
+      SalesDesc: i.salesDescription,
+      SalesPrice: i.retail_price,
+      PurchaseDesc: i.salesDescription,
+      PurchaseCost: i.cost,
+      ManufacturerPartNumber: i.mpn || undefined,
+      SalesIncomeAccountRef: i.income_account_full_name
+        ? { FullName: i.income_account_full_name }
+        : undefined,
+      COGSAccountRef: i.cogs_account_full_name
+        ? { FullName: i.cogs_account_full_name }
+        : undefined,
+      PrefVendorRef: prefVendorRef,
+    },
+  };
+};
 
 export const updatePosProductWorkflow = createWorkflow(
   "update-pos-product",
@@ -186,95 +287,9 @@ export const updatePosProductWorkflow = createWorkflow(
     // Only dispatch to QB when at least one QB-relevant field changed. Fields
     // like image_urls, category_ids, and shipping_attributes do NOT round-trip
     // to QuickBooks, so saving just those should not generate a QBXML op.
-    const qbStepInput = transform({ input }, (data) => {
-      const i = data.input;
-
-      // PrefVendorRef prefers ListID (stable) over FullName (renamable) — shared
-      // by both add and mod payloads. buildPrefVendorRef guards against ever
-      // sending an internal qb_vendor.id as a ListID (QB Error 3000); it falls
-      // back to FullName so QB still resolves the vendor by name.
-      const prefVendorRef = buildPrefVendorRef({
-        vendorIdOrListId: i.vendor_qb_id,
-        vendorFullName: i.vendor_full_name ?? i.vendor,
-      });
-
-      // No qb_id → the item was never created in QuickBooks. Build a first-time
-      // "add" with the full item definition (mirrors enqueue-qb-items-step
-      // buildQbPayload) instead of a "mod" that would 400 on a missing ListID.
-      if (!i.qb_id) {
-        const itemType: QbItemType = i.item_type ?? "Inventory";
-        const addData: Record<string, unknown> = {
-          Name: i.sku,
-          SalesDesc: i.salesDescription,
-          SalesPrice: i.retail_price ?? 0,
-          ItemType: itemType,
-        };
-        if (i.mpn) addData.ManufacturerPartNumber = i.mpn;
-        if (prefVendorRef) addData.PrefVendorRef = prefVendorRef;
-        if (i.income_account_full_name)
-          addData.IncomeAccountRef = { FullName: i.income_account_full_name };
-        if (itemType === "Inventory") {
-          addData.PurchaseDesc = i.salesDescription;
-          addData.PurchaseCost = i.cost ?? 0;
-          if (i.cogs_account_full_name)
-            addData.COGSAccountRef = { FullName: i.cogs_account_full_name };
-        } else if ((i.cost ?? 0) > 0) {
-          addData.PurchaseDesc = i.salesDescription;
-          addData.PurchaseCost = i.cost ?? 0;
-          if (i.cogs_account_full_name)
-            addData.ExpenseAccountRef = { FullName: i.cogs_account_full_name };
-        }
-
-        return {
-          action: "add" as const,
-          // Never skip — the whole point is that the item is missing from QB.
-          skip: false,
-          pipeline: {
-            variant_id: i.variant_id,
-            sku: i.sku ?? "",
-            item_type: itemType,
-          },
-          data: addData,
-        };
-      }
-
-      const hasQbFields =
-        i.sku !== undefined ||
-        i.salesDescription !== undefined ||
-        i.cost !== undefined ||
-        i.mpn !== undefined ||
-        i.income_account_full_name !== undefined ||
-        i.cogs_account_full_name !== undefined ||
-        i.vendor_qb_id !== undefined ||
-        i.vendor_full_name !== undefined ||
-        i.vendor !== undefined;
-
-      return {
-        action: "mod" as const,
-        skip: !hasQbFields,
-        pipeline: {
-          variant_id: i.variant_id,
-          sku: i.sku ?? "",
-          item_type: "Inventory" as const,
-        },
-        data: {
-          ListID: i.qb_id,
-          EditSequence: i.qb_edit_sequence,
-          Name: i.sku,
-          SalesDesc: i.salesDescription,
-          PurchaseDesc: i.salesDescription,
-          PurchaseCost: i.cost,
-          ManufacturerPartNumber: i.mpn || undefined,
-          SalesIncomeAccountRef: i.income_account_full_name
-            ? { FullName: i.income_account_full_name }
-            : undefined,
-          COGSAccountRef: i.cogs_account_full_name
-            ? { FullName: i.cogs_account_full_name }
-            : undefined,
-          PrefVendorRef: prefVendorRef,
-        },
-      };
-    });
+    const qbStepInput = transform({ input }, (data) =>
+      buildQbStepInput(data.input)
+    );
 
     const qbResponse = sendToQbStep(qbStepInput);
 
