@@ -412,16 +412,50 @@ export async function handleFulfillmentCreated(
       }
     }
 
+    // Match each order line to a fulfillment line WITH CONSUMPTION so two
+    // order lines that share a variant (the same SKU added twice at different
+    // prices) cannot both claim the SAME fulfillment line. The previous
+    // `fulfillmentItems.find(... item_id OR variant_id OR sku ...)` returned
+    // the FIRST same-variant line for every order row: the loose variant_id
+    // key matched before the precise per-line id was even compared on the next
+    // candidate, so QB received duplicate identical lines (order 1970 / Inv
+    // 20535 sent 3×$171.99 + 2×$139.99 both as 3×$171.99).
+    //
+    // Phase 1 globally claims every precise line-item-id match first, so a
+    // later loose match can't steal a line that another order row matches
+    // exactly. Phase 2 fills the remaining rows by variant/sku, consuming each
+    // fulfillment line once.
+    const claimedFulfillmentIdx = new Set<number>();
+    const preciseFiByOrderItemId = new Map<string, any>();
+    for (const item of order.items || []) {
+      const idx = fulfillmentItems.findIndex(
+        (i: any, n: number) =>
+          !claimedFulfillmentIdx.has(n) &&
+          ((i.item_id && i.item_id === item.id) ||
+            (i.id && i.id === item.id))
+      );
+      if (idx !== -1) {
+        claimedFulfillmentIdx.add(idx);
+        preciseFiByOrderItemId.set(item.id, fulfillmentItems[idx]);
+      }
+    }
+    const claimFulfillmentItem = (item: any): any => {
+      const precise = preciseFiByOrderItemId.get(item.id);
+      if (precise) return precise;
+      const idx = fulfillmentItems.findIndex(
+        (i: any, n: number) =>
+          !claimedFulfillmentIdx.has(n) &&
+          ((i.variant_id && i.variant_id === item.variant_id) ||
+            (i.sku && item.variant?.sku && i.sku === item.variant.sku))
+      );
+      if (idx === -1) return null;
+      claimedFulfillmentIdx.add(idx);
+      return fulfillmentItems[idx];
+    };
+
     const activeItems = (order.items || [])
       .filter((item: any) => {
-        const fi = fulfillmentItems.find((i: any) => {
-          if (i.item_id && i.item_id === item.id) return true;
-          if (i.id && i.id === item.id) return true;
-          if (i.variant_id && i.variant_id === item.variant_id) return true;
-          if (i.sku && item.variant?.sku && i.sku === item.variant.sku)
-            return true;
-          return false;
-        });
+        const fi = claimFulfillmentItem(item);
 
         if (fi) {
           item.fulfillment_quantity = fi.quantity;
