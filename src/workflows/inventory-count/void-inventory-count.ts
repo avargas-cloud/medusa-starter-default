@@ -26,6 +26,7 @@ import {
   type ContraApplyStockStepInput,
 } from "./steps/contra-apply-stock-step";
 import { persistVoidResultsStep } from "./steps/persist-void-results-step";
+import { syncReceiptInventoryMeiliStep } from "../shared/steps/sync-receipt-inventory-meili-step";
 
 export interface VoidInventoryCountWorkflowInput {
   count_id: string;
@@ -64,6 +65,18 @@ export const voidInventoryCountWorkflow = createWorkflow(
       affected_line_ids: affectedLineIds,
       pipeline_row_ids: input.pipeline_row_ids_to_void,
     });
+
+    // Mirror approve-inventory-count: a void contra-applies stock, so the
+    // MeiliSearch inventory index must be refreshed for every reversed item.
+    // (The inventory_level trigger also covers this, but the explicit step
+    // gives instant parity instead of waiting for the ~1-min queue pass.)
+    const meiliInput = transform({ reversed }, (data) => ({
+      inventory_item_ids: Array.from(
+        new Set(data.reversed.reversed.map((r) => r.inventory_item_id))
+      ),
+    }));
+
+    syncReceiptInventoryMeiliStep(meiliInput);
 
     const response = transform({ input, reversed, persisted }, (data) => ({
       count_id: data.input.count_id,

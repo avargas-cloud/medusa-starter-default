@@ -19,17 +19,20 @@ import postgres from "postgres";
 import type { EntityReconciler } from "../lib/meilisearch/drift-reconciler";
 import { customerReconciler } from "../lib/meilisearch/reconcilers/customer-reconciler";
 import { productReconciler } from "../lib/meilisearch/reconcilers/product-reconciler";
+import { inventoryReconciler } from "../lib/meilisearch/reconcilers/inventory-reconciler";
 
 export const config = {
   name: "meili-sync-queue-processor",
   schedule: "*/1 * * * *", // Every 1 minute — Medusa cron's minimum.
 };
 
-/** entity_type → reconciler. Add product/order/pos_invoice etc. here as
- *  their triggers are wired up. */
+/** entity_type → reconciler. Add order/pos_invoice etc. here as
+ *  their triggers are wired up. The `inventory_item` key matches the
+ *  entity_type enqueued by the inventory_level trigger (AddInventoryMeiliSyncTriggers). */
 const RECONCILERS: Record<string, EntityReconciler> = {
   customer: customerReconciler,
   product: productReconciler,
+  inventory_item: inventoryReconciler,
 };
 
 /** Max rows pulled per pass — safety cap, won't process more than this even

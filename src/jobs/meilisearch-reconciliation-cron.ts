@@ -16,6 +16,7 @@ import postgres from "postgres";
 import { reconcileEntity, type ReconcilerStats } from "../lib/meilisearch/drift-reconciler";
 import { customerReconciler } from "../lib/meilisearch/reconcilers/customer-reconciler";
 import { productReconciler } from "../lib/meilisearch/reconcilers/product-reconciler";
+import { inventoryReconciler } from "../lib/meilisearch/reconcilers/inventory-reconciler";
 
 export const config = {
   name: "meilisearch-reconciliation",
@@ -24,7 +25,7 @@ export const config = {
   schedule: "*/5 * * * *",
 };
 
-const RECONCILERS = [customerReconciler, productReconciler];
+const RECONCILERS = [customerReconciler, productReconciler, inventoryReconciler];
 
 /** Cap on rows scanned per entity per pass — protects against runaway. */
 const MAX_ROWS_PER_PASS = 500;
