@@ -146,13 +146,22 @@ const isNameInUseError = (msg: string | null | undefined): boolean => {
  * mod as an unfinished query/reconcile and re-submit it forever (infinite mod
  * loop — see ESP-NFA30W0460 / seq 117, 2026-05-28). Always strip both before
  * resubmitting, and strip the old one before setting a new one.
+ *
+ * We set each marker to `false` rather than `delete`-ing the key: the
+ * `updateQbItemPipelines` service DEEP-MERGES the `op_payload` JSONB column, so
+ * a deleted key is silently re-hydrated from the stored value and survives
+ * forever (this is what kept seq 120 / LUX-LR24950 looping even after the
+ * 7c70e9a9 strip fix — the bridge received a clean payload but the DB row never
+ * lost the marker). A value change (`true` → `false`) DOES persist through the
+ * merge, and every reader guards on `=== true`, so `false` reads as "no marker".
+ * The bridge ignores unknown keys, so carrying `__iq_*: false` is harmless.
  */
 const IQ_MARKERS = ["__iq_pending", "__iq_reconcile"] as const;
 const stripIqMarkers = (
   payload: Record<string, unknown> | null | undefined
 ): Record<string, unknown> => {
   const clean = { ...(payload ?? {}) };
-  for (const marker of IQ_MARKERS) delete clean[marker];
+  for (const marker of IQ_MARKERS) clean[marker] = false;
   return clean;
 };
 
