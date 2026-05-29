@@ -6,6 +6,7 @@ import {
   loadSalesByApplication,
   STALE_COST_THRESHOLD_DAYS as APP_STALE_COST_THRESHOLD_DAYS,
 } from "./load-sales-by-application";
+import { loadUnattributedPayments } from "./load-unattributed-payments";
 import type {
   TreasuryBucketView,
   TreasuryDailyReport,
@@ -76,6 +77,11 @@ export async function loadDailyReport(
   const dayEnd = `${date} 23:59:59.999999`;
 
   const sales = await loadSalesByApplication(pg, dayStart, dayEnd);
+  const unattributedPayments = await loadUnattributedPayments(
+    pg,
+    dayStart,
+    dayEnd
+  );
 
   const cashResult = await pg.raw(
     `WITH lwc AS (
@@ -248,12 +254,28 @@ export async function loadDailyReport(
       detail: "Refunds cleared today for prior-day sales — Operating absorbs the COGS pull-back.",
     });
   }
+  if (unattributedPayments.length > 0) {
+    const unattributedCents = unattributedPayments.reduce(
+      (sum, p) => sum + p.unapplied_cents,
+      0
+    );
+    warnings.push({
+      code: "UNATTRIBUTED_PAYMENTS",
+      severity: "warning",
+      count: unattributedPayments.length,
+      sample_ids: unattributedPayments
+        .slice(0, 20)
+        .map((p) => (p.display_id ? `PAY-${p.display_id}` : p.payment_id)),
+      detail: `$${(unattributedCents / 100).toFixed(2)} of today's cash is not linked to an order/invoice — counted as cash but not as a sale. Link these to attribute revenue & COGS.`,
+    });
+  }
 
   return {
     distribution_date: date,
     totals,
     splits,
     warnings,
+    unattributed_payments: unattributedPayments,
     reconciliation: result.reconciliation,
     generated_at: new Date().toISOString(),
   };

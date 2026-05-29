@@ -14,7 +14,8 @@ export type TreasuryWarningCode =
   | "NO_COGS_DATA_FOR_DAY"
   | "NET_CASH_BELOW_TAX"
   | "CROSS_DAY_REFUND_DETECTED"
-  | "FOREIGN_CURRENCY_DETECTED";
+  | "FOREIGN_CURRENCY_DETECTED"
+  | "UNATTRIBUTED_PAYMENTS";
 
 export interface TreasuryWarning {
   code: TreasuryWarningCode;
@@ -46,6 +47,20 @@ export interface TreasurySplitWithBucket extends BucketSplit {
   bucket: TreasuryBucketView;
 }
 
+export interface UnattributedPaymentView {
+  payment_id: string;
+  display_id: number | null;
+  customer_id: string | null;
+  amount_cents: number;
+  applied_cents: number;
+  unapplied_cents: number;
+  method: string | null;
+  source: string | null;
+  status: string | null;
+  has_locked_order: boolean;
+  received_at: string;
+}
+
 export interface TreasuryDailyReport {
   distribution_date: string;
   totals: {
@@ -59,6 +74,7 @@ export interface TreasuryDailyReport {
   };
   splits: TreasurySplitWithBucket[];
   warnings: TreasuryWarning[];
+  unattributed_payments: UnattributedPaymentView[];
   reconciliation: {
     sum_of_splits_cents: number;
     net_cash_received_cents: number;

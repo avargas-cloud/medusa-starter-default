@@ -31,6 +31,15 @@ const PaymentApplication = model.define("payment_application", {
   void_reason: model.text().nullable(),
   voided_by: model.text().nullable(),
   metadata: model.json().nullable(), // checkout-event audit (transaction_id, capture_context, credits_consumed, ...)
+  /**
+   * Frozen per-line cost basis captured when this application is attributed to
+   * an order, so order-only COGS in Treasury does not drift when product
+   * average cost changes later (e.g. receiving POs). NULL for legacy rows and
+   * for invoice-bound rows (which use pos_invoice_item.average_unit_cost).
+   * Shape: { captured_at: string, lines: Array<{ line_id, variant_id, sku,
+   *          quantity, unit_cost_cents, is_china }> }. See buildOrderCostSnapshot.
+   */
+  cost_snapshot: model.json().nullable(),
 });
 
 export { PaymentApplication };

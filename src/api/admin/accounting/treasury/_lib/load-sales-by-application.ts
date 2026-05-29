@@ -67,7 +67,8 @@ export async function loadSalesByApplication(
         pa.payment_id,
         pa.invoice_id,
         pa.order_id,
-        pa.amount_applied
+        pa.amount_applied,
+        pa.cost_snapshot
       FROM payment_application pa
       JOIN customer_payment cp ON cp.id = pa.payment_id
       WHERE pa.voided_at IS NULL
@@ -129,9 +130,19 @@ export async function loadSalesByApplication(
         oi.quantity                                                AS quantity,
         NULL::numeric                                              AS average_unit_cost,
         NULL::timestamptz                                          AS average_unit_cost_synced_at,
-        ${ORDER_COST_FALLBACK_EXPR}                                AS effective_unit_cost,
+        -- Prefer the per-line cost frozen on the application at attribution
+        -- time (cost_snapshot, in cents → dollars); fall back to LIVE metadata
+        -- only for legacy rows without a snapshot. This is what stops a closed
+        -- day's COGS from drifting when POs are received later.
+        COALESCE(cs.snap_unit_cost_cents / 100.0, ${ORDER_COST_FALLBACK_EXPR}) AS effective_unit_cost,
         FALSE                                                      AS used_unit_cost_fallback,
-        (p.metadata->>'is_sourced_via_agent')                      AS origin_flag,
+        -- Origin is also frozen in the snapshot (is_china) so re-tagging a
+        -- product can't retroactively reclassify a closed day's COGS.
+        CASE
+          WHEN cs.snap_is_china IS NOT NULL
+            THEN (CASE WHEN cs.snap_is_china THEN 'true' ELSE 'false' END)
+          ELSE (p.metadata->>'is_sourced_via_agent')
+        END                                                        AS origin_flag,
         p.id                                                       AS product_id
       FROM apps_day ad
       JOIN "order" o            ON o.id = ad.order_id
@@ -143,6 +154,16 @@ export async function loadSalesByApplication(
         JOIN order_line_item oli2 ON oli2.id = oi2.item_id AND oli2.deleted_at IS NULL
         WHERE oi2.order_id = o.id
       ) order_totals ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT
+          (snap->>'unit_cost_cents')::numeric AS snap_unit_cost_cents,
+          (snap->>'is_china')::boolean        AS snap_is_china
+        FROM jsonb_array_elements(
+          COALESCE(ad.cost_snapshot->'lines', '[]'::jsonb)
+        ) snap
+        WHERE snap->>'line_id' = oli.id
+        LIMIT 1
+      ) cs ON TRUE
       LEFT JOIN product_variant pv ON pv.id = oli.variant_id
       LEFT JOIN product p          ON p.id = pv.product_id
       WHERE ad.invoice_id IS NULL

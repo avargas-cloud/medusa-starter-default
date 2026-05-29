@@ -2,6 +2,7 @@ import { SubscriberArgs, type SubscriberConfig } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
 
 import { FINANCE_MODULE } from "../modules/finance";
+import { buildOrderCostSnapshot } from "../lib/finance/build-order-cost-snapshot";
 
 /**
  * Subscriber: payment.captured
@@ -100,10 +101,13 @@ export default async function financePaymentCapturedHandler({
 
   // 4. Create the ledger entry
   // Amounts in Medusa v2 are already in the smallest currency unit (cents) — no conversion needed.
+  // Web payments are immediately "applied" to their source order (model doc: web =
+  // immediately applied) — they never go through the PosInvoice flow.
   try {
-    await financeService.createCustomerPayments({
+    const amountCents = Number(payment.amount);
+    const customerPayment = await financeService.createCustomerPayments({
       customer_id: order.customer_id as string,
-      amount: Number(payment.amount),
+      amount: amountCents,
       method: "card",
       reference: payment.provider_id || null,
       received_at: payment.captured_at
@@ -112,11 +116,38 @@ export default async function financePaymentCapturedHandler({
       created_by: "system",
       source: "web",
       type: "payment",
-      status: "available",
+      status: "applied",
       medusa_payment_id: paymentId,
       medusa_payment_synced: true,
       locked_order_id: order.id,
     });
+
+    // 5. Link the payment to its order via a real order-only PaymentApplication
+    //    (invoice_id = NULL). Web orders never get a PosInvoice, so this stays
+    //    order-only permanently — making the sale visible to Treasury (revenue +
+    //    COGS) instead of dumping the cash into Operating. We freeze the per-line
+    //    cost basis now (cost_snapshot) so the closed day's COGS won't drift when
+    //    POs are received later. No QB enqueue (order-only never posts to QB).
+    try {
+      const pg = container.resolve("__pg_connection__") as Parameters<
+        typeof buildOrderCostSnapshot
+      >[0];
+      const costSnapshot = await buildOrderCostSnapshot(pg, order.id as string);
+      await financeService.createPaymentApplications({
+        payment_id: (customerPayment as { id: string }).id,
+        invoice_id: null,
+        invoice_number: null,
+        order_id: order.id as string,
+        amount_applied: amountCents,
+        applied_at: new Date(),
+        applied_by: "system:web-capture",
+        cost_snapshot: costSnapshot,
+      });
+    } catch (linkErr: any) {
+      console.error(
+        `[financePaymentCapturedHandler] Payment ${paymentId} recorded but order-link (PaymentApplication) failed: ${linkErr.message}`
+      );
+    }
 
     console.log(
       `[financePaymentCapturedHandler] Mirrored payment ${paymentId} → customer ${order.customer_id}, order ${order.id}`

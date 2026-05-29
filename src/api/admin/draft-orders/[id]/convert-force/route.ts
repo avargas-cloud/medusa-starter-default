@@ -7,6 +7,8 @@ import {
 } from "@medusajs/utils";
 
 import { getDbPool } from "../../../../utils/db-pool";
+import { FINANCE_MODULE } from "../../../../../modules/finance";
+import { buildOrderCostSnapshot } from "../../../../../lib/finance/build-order-cost-snapshot";
 
 /**
  * POST /admin/draft-orders/:id/convert-force
@@ -313,6 +315,56 @@ export async function POST(
       return void res
         .status(500)
         .json({ message: cvErr?.message ?? "Conversion failed natively" });
+    }
+
+    // ── Step 4b: Link deposits captured against this (now-real) order ─────
+    // Deposits taken while this was an Estimate (draft) could NOT create a
+    // PaymentApplication at capture time — handle-order-apply rejects draft
+    // orders, so the link was deferred (frontend leaves only locked_order_id).
+    // The order id is unchanged by conversion, so we can now create the real
+    // order-only application (invoice_id = NULL) and freeze the cost basis,
+    // making the deposit visible to Treasury without drifting. Idempotent:
+    // skips deposits already fully linked. No QB enqueue (order-only).
+    try {
+      const financeService = req.scope.resolve(FINANCE_MODULE);
+      const deposits = await financeService.listCustomerPayments(
+        { locked_order_id: id, type: "payment" },
+        { relations: ["applications"] }
+      );
+      const active = (deposits ?? []).filter(
+        (d: any) => d.status !== "voided"
+      );
+      if (active.length > 0) {
+        const pgConn = req.scope.resolve("__pg_connection__") as Parameters<
+          typeof buildOrderCostSnapshot
+        >[0];
+        const costSnapshot = await buildOrderCostSnapshot(pgConn, id);
+        for (const dep of active) {
+          const applied = (dep.applications ?? [])
+            .filter((a: any) => !a.voided_at)
+            .reduce((s: number, a: any) => s + Number(a.amount_applied), 0);
+          const remaining = Number(dep.amount) - applied;
+          if (remaining > 0) {
+            await financeService.createPaymentApplications({
+              payment_id: dep.id,
+              invoice_id: null,
+              invoice_number: null,
+              order_id: id,
+              amount_applied: remaining,
+              applied_at: new Date(),
+              applied_by: "system:convert-link",
+              cost_snapshot: costSnapshot,
+            });
+            console.log(
+              `[convert-force] ✅ Linked deposit ${dep.id} (${remaining}c) to converted order ${id}`
+            );
+          }
+        }
+      }
+    } catch (linkErr: any) {
+      console.warn(
+        `[convert-force] ⚠️ Deposit-link soft-failed: ${linkErr?.message}`
+      );
     }
 
     // ── Step 5: Fix payment collection total (post-conversion) ───────────

@@ -15,6 +15,7 @@
 import type { MedusaResponse } from "@medusajs/framework/http";
 
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
+import { buildOrderCostSnapshot } from "../../../../../../lib/finance/build-order-cost-snapshot";
 import { registerMedusaPayment } from "../../../../invoices/register-medusa-payment";
 import { getNum } from "../../../../invoices/payment-balance";
 
@@ -92,6 +93,20 @@ export async function handleOrderApply(
   const overflowAmount = requestedAmount - effectiveAmount;
 
   // 3. Create PaymentApplication with invoice_id=NULL (order-only link).
+  //    Freeze the per-line cost basis now so Treasury's order-only COGS for the
+  //    cash day doesn't drift when POs are received later. Best-effort: a
+  //    snapshot failure must not block recording the deposit.
+  let costSnapshot: Awaited<ReturnType<typeof buildOrderCostSnapshot>> | null =
+    null;
+  try {
+    const pg = scope.resolve("__pg_connection__") as Parameters<
+      typeof buildOrderCostSnapshot
+    >[0];
+    costSnapshot = await buildOrderCostSnapshot(pg, order_id);
+  } catch {
+    costSnapshot = null;
+  }
+
   const application = await financeService.createPaymentApplications({
     payment_id: payment.id,
     invoice_id: null,
@@ -100,6 +115,7 @@ export async function handleOrderApply(
     amount_applied: effectiveAmount,
     applied_at: new Date(),
     applied_by: applied_by || null,
+    cost_snapshot: costSnapshot,
   });
 
   // 4. Do NOT change customer_payment.status for an order-only link.
