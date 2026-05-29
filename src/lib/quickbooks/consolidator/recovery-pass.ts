@@ -8,6 +8,84 @@ import {
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
 /**
+ * Steps whose re-dispatch is IDEMPOTENT in QuickBooks — MOD / VOID / toggle /
+ * cancel / deactivate. Re-running them re-fetches the current EditSequence or
+ * re-applies a no-op-safe change, so a duplicate QB document is impossible.
+ * ADD steps (estimate, sales_order, sales_receipt, invoice, credit_memo,
+ * payment, apply_payment, inventory_adjustment) are intentionally NOT here: a
+ * blind re-submit could create a duplicate QB document if the original bridge
+ * op was created just before a crash. Those stay on the conservative 20-minute
+ * runTimeoutPass (dup-safe fast recovery for ADDs needs a bridge idempotency
+ * ledger — future work).
+ */
+const IDEMPOTENT_REDISPATCH_STEPS = [
+  "invoice_update",
+  "sales_receipt_update",
+  "credit_memo_mod",
+  "estimate_cancel",
+  "estimate_deactivate",
+  "so_close",
+  "so_reopen",
+  "transfer_customer",
+  "void_invoice",
+  "void_sales_receipt",
+  "void_sales_order",
+  "void_credit_memo",
+  "void_check",
+  "void_inventory_adjustment",
+];
+
+/**
+ * Orphaned-processing recovery (Workstream B2).
+ *
+ * A 'processing' row with NO bridge_op_id was claimed by dispatch but never
+ * reached 'submitted' — typically a server reset mid-dispatch (e.g. a Railway
+ * deploy) killed the worker. runTimeoutPass eventually rescues these, but only
+ * after 20 minutes. This recovers IDEMPOTENT steps faster (>8 min) by resetting
+ * them to 'pending' so the next dispatch re-claims them.
+ *
+ * The 8-minute threshold is deliberately above the worst-case MOD snapshot-fetch
+ * poll (~6.7 min = POLL_INTERVAL_MS 20s × MAX_POLL_ATTEMPTS 20) so a LIVE MOD
+ * still polling its EditSequence is never reset out from under itself. Capped at
+ * retry_count < 5 to avoid loops.
+ */
+export async function runOrphanedProcessingRecovery(
+  logger: any
+): Promise<void> {
+  const pool = getDbPool();
+  try {
+    const { rows, rowCount } = await pool.query(
+      `UPDATE qb_order_pipeline
+          SET status        = 'pending',
+              bridge_op_id  = NULL,
+              error         = NULL,
+              retry_count   = COALESCE(retry_count, 0) + 1,
+              next_retry_at = NOW(),
+              updated_at    = NOW()
+        WHERE status = 'processing'
+          AND bridge_op_id IS NULL
+          AND step = ANY($1::text[])
+          AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '8 minutes'
+          AND COALESCE(retry_count, 0) < 5
+        RETURNING id, step, order_id`,
+      [IDEMPOTENT_REDISPATCH_STEPS]
+    );
+    if (rowCount && rowCount > 0) {
+      for (const r of rows) {
+        logger.info(
+          `${LOG_PREFIX} 🔄 Orphan recovery: re-queued processing ${r.step} row ${r.id} (order ${r.order_id}) — idempotent step, no bridge_op_id, >8min`
+        );
+      }
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(
+      `${LOG_PREFIX} ⚠️ Orphaned-processing recovery error: ${msg}`
+    );
+  }
+}
+
+/**
  * Recovery pass: orphaned waiting refund_payment rows whose depends_on
  * write_check is already confirmed (e.g. server restarted mid-confirmation).
  * Re-enqueues the receive-payment bridge call and marks the row submitted.

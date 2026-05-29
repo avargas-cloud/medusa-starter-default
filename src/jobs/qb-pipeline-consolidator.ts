@@ -18,6 +18,7 @@ import {
 import {
   runRefundPaymentRecovery,
   runSoToggleRecovery,
+  runOrphanedProcessingRecovery,
 } from "../lib/quickbooks/consolidator/recovery-pass";
 import {
   runTimeoutPass,
@@ -76,6 +77,9 @@ export default async function qbPipelineConsolidator(
   // ── Phase B: recovery passes ───────────────────────────────────────────────
   await runRefundPaymentRecovery(logger);
   await runSoToggleRecovery(logger);
+  // Re-queue idempotent-step rows orphaned in 'processing' by a mid-dispatch
+  // reset (>8 min) so Phase D below re-dispatches them this same tick.
+  await runOrphanedProcessingRecovery(logger);
 
   // ── Phase C: customer creation passes ─────────────────────────────────────
   await runCustomerPass(container, logger);
