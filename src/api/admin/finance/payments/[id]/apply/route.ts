@@ -68,22 +68,33 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       });
     }
 
-    // Calculate available balance
-    const totalApplied = payment.applications
+    // Two notions of "applied":
+    //  • invoice-bound applications are REAL consumption (settled into an invoice)
+    //  • order-only applications are convertible reservations, NOT consumption
+    // A deposit fully reserved against its order (every deposit, post-refactor)
+    // is still 100% spendable toward that order's invoice — it gets CONVERTED
+    // (see CONVERT-ON-APPLY below), not stacked. So order-only rows must NOT
+    // reduce the balance available to apply onto an invoice; otherwise a
+    // fully-reserved deposit shows 0 available and the apply is rejected.
+    const invoiceBoundApplied = payment.applications
+      .filter((app: any) => !app.voided_at && app.invoice_id != null)
+      .reduce((sum: number, app: any) => sum + Number(app.amount_applied), 0);
+
+    const totalReserved = payment.applications
       .filter((app: any) => !app.voided_at)
       .reduce((sum: number, app: any) => sum + Number(app.amount_applied), 0);
 
-    const availableAmount = Number(payment.amount) - totalApplied;
-
-    if (availableAmount <= 0) {
-      return res.status(400).json({
-        error: "This payment has no available balance to apply.",
-      });
-    }
-
     // Order-only branch: delegate to helper and short-circuit. Returns the
-    // same response shape as the invoice branch.
+    // same response shape as the invoice branch. Reserving MORE deposit can't
+    // exceed what's already reserved, so this branch guards against the full
+    // total (order-only + invoice-bound).
     if (order_id && !invoice_id) {
+      const reserveAvailable = Number(payment.amount) - totalReserved;
+      if (reserveAvailable <= 0) {
+        return res.status(400).json({
+          error: "This payment has no available balance to reserve.",
+        });
+      }
       return handleOrderApply(
         {
           scope: req.scope,
@@ -91,11 +102,21 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           order_id,
           amount_applied,
           applied_by: applied_by ?? null,
-          available_amount: availableAmount,
-          total_applied: totalApplied,
+          available_amount: reserveAvailable,
+          total_applied: totalReserved,
         },
         res
       );
+    }
+
+    // Settling onto an invoice: order-only reservations are convertible, so only
+    // invoice-bound consumption reduces what's available to apply.
+    const availableAmount = Number(payment.amount) - invoiceBoundApplied;
+
+    if (availableAmount <= 0) {
+      return res.status(400).json({
+        error: "This payment has no available balance to apply.",
+      });
     }
 
     // 2. Fetch the target invoice to get order_id and ensure it exists
@@ -206,8 +227,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     // 4. Update the CustomerPayment status
+    // effectiveAmount is the amount now invoice-bound (freshly created or
+    // converted from an order-only reservation), so add it to prior invoice-bound
+    // consumption only — never to the order-only row it may have just converted,
+    // which would double-count and wrongly flip status to "applied".
     const isFullyApplied =
-      totalApplied + effectiveAmount >= Number(payment.amount);
+      invoiceBoundApplied + effectiveAmount >= Number(payment.amount);
     const newPaymentStatus = isFullyApplied ? "applied" : "partially_applied";
 
     await financeService.updateCustomerPayments({
