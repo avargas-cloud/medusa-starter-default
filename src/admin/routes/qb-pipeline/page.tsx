@@ -1,6 +1,7 @@
 import { defineRouteConfig } from "@medusajs/admin-sdk";
 import { Bolt } from "@medusajs/icons";
 import { Heading, Tabs, Text } from "@medusajs/ui";
+import { useCallback, useRef, useState } from "react";
 
 import { BridgeStatus } from "../qb-sync/components/BridgeStatus";
 import { PipelineTable } from "../qb-sync/components/PipelineTable";
@@ -13,9 +14,48 @@ import { PurchaseOrderPipelineSection } from "./components/PurchaseOrderPipeline
 import { VendorPipelineSection } from "./components/VendorPipelineSection";
 import { WaitingOrdersSection } from "./components/WaitingOrdersSection";
 
+/**
+ * Walks up from `el` to find the nearest scrollable ancestor so we can
+ * preserve its scroll position across tab switches. Falls back to `window`.
+ */
+const findScrollParent = (el: HTMLElement | null): HTMLElement | Window => {
+  let node = el?.parentElement ?? null;
+  while (node) {
+    const { overflowY } = getComputedStyle(node);
+    if (
+      (overflowY === "auto" || overflowY === "scroll") &&
+      node.scrollHeight > node.clientHeight
+    ) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return window;
+};
+
 const QbPipelinePage = () => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [activeTab, setActiveTab] = useState("operations");
+
+  // Switching tabs would otherwise jump the screen: Radix focuses the new
+  // trigger (browser scrolls it into view) and the new content's differing
+  // height clamps the scroll position. Capture and restore the scroll offset
+  // so the viewport stays put.
+  const handleTabChange = useCallback((next: string) => {
+    const scroller = findScrollParent(containerRef.current);
+    const top = scroller instanceof Window ? window.scrollY : scroller.scrollTop;
+    setActiveTab(next);
+    requestAnimationFrame(() => {
+      if (scroller instanceof Window) {
+        window.scrollTo({ top });
+      } else {
+        scroller.scrollTop = top;
+      }
+    });
+  }, []);
+
   return (
-    <div className="flex flex-col gap-4 p-6">
+    <div ref={containerRef} className="flex flex-col gap-4 p-6">
       <div>
         <Heading level="h1">QuickBooks Pipelines</Heading>
         <Text className="text-ui-fg-subtle mt-1">
@@ -29,7 +69,7 @@ const QbPipelinePage = () => {
 
       <PipelinesBreakdown />
 
-      <Tabs defaultValue="operations">
+      <Tabs value={activeTab} onValueChange={handleTabChange}>
         <Tabs.List className="gap-1">
           <Tabs.Trigger
             value="operations"
