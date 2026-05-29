@@ -7,11 +7,6 @@ import {
   runCustomerDataExtPass,
 } from "../lib/quickbooks/consolidator/customer-pass";
 import {
-  runPendingDispatchPass,
-  runWakeDependentsPass,
-  runOrphanedWaitingPass,
-} from "../lib/quickbooks/consolidator/dispatch-pass";
-import {
   pollSubmittedRows,
   type SubmittedRow,
 } from "../lib/quickbooks/consolidator/poll-submitted-rows";
@@ -78,18 +73,18 @@ export default async function qbPipelineConsolidator(
   await runRefundPaymentRecovery(logger);
   await runSoToggleRecovery(logger);
   // Re-queue idempotent-step rows orphaned in 'processing' by a mid-dispatch
-  // reset (>8 min) so Phase D below re-dispatches them this same tick.
+  // reset (>8 min); the standalone qb-pipeline-dispatcher job re-dispatches them.
   await runOrphanedProcessingRecovery(logger);
 
   // ── Phase C: customer creation passes ─────────────────────────────────────
   await runCustomerPass(container, logger);
   await runCustomerDataExtPass(container, logger);
 
-  // ── Phase D: dispatch pending + wake waiting rows ──────────────────────────
-  // Orphan rescue first so any promoted row is dispatched within the same tick.
-  await runOrphanedWaitingPass(logger);
-  await runPendingDispatchPass(container, logger);
-  await runWakeDependentsPass(container, logger);
+  // ── Phase D (dispatch) lives in its own job now ────────────────────────────
+  // runOrphanedWaitingPass / runPendingDispatchPass / runWakeDependentsPass moved
+  // to src/jobs/qb-pipeline-dispatcher.ts so a slow MOD dispatch (synchronous
+  // EditSequence-fetch poll, up to ~400s) can't starve the cleanup/recovery/
+  // customer passes below or skip the next tick.
 
   // ── Phase E: stale / timeout cleanup ──────────────────────────────────────
   await runTimeoutPass(logger);
