@@ -49,6 +49,7 @@ const STATUS_BUCKET: Record<string, Bucket> = {
   failed_permanent: "failed",
   // intentional no-op
   skipped: "skipped",
+  cancelled: "skipped",
 };
 
 const bucketOf = (status: string | null | undefined): Bucket | null => {
@@ -107,9 +108,26 @@ export async function GET(_req: MedusaRequest, res: MedusaResponse): Promise<voi
       `SELECT status, COUNT(*) AS count FROM qb_inventory_adjustment_pipeline
         WHERE deleted_at IS NULL GROUP BY status`
     );
+    // Purchase pipeline = the SAME three-source union the "Purchase Pipeline"
+    // tab renders (see admin/purchase-orders/qb-pipeline/route.ts): PO rows +
+    // ItemReceipt add (status) + ItemReceipt void/delete (void_status, only
+    // when the void lifecycle has started). Counting only the PO table here
+    // undercounted — ItemReceipt errors never reached the breakdown.
     const purchases = await client.query<StatusRow>(
-      `SELECT status, COUNT(*) AS count FROM qb_purchase_order_pipeline
-        WHERE deleted_at IS NULL GROUP BY status`
+      `SELECT status, COUNT(*) AS count FROM (
+         SELECT status
+           FROM qb_purchase_order_pipeline
+          WHERE deleted_at IS NULL
+         UNION ALL
+         SELECT status
+           FROM qb_item_receipt_pipeline
+          WHERE deleted_at IS NULL
+         UNION ALL
+         SELECT void_status AS status
+           FROM qb_item_receipt_pipeline
+          WHERE deleted_at IS NULL AND void_status IS NOT NULL
+       ) feed
+       GROUP BY status`
     );
     const vendors = await client.query<StatusRow>(
       `SELECT status, COUNT(*) AS count FROM qb_vendor_pipeline
@@ -135,7 +153,7 @@ export async function GET(_req: MedusaRequest, res: MedusaResponse): Promise<voi
         "inventory-adjustments",
         inventory.rows
       ),
-      build("purchase_orders", "Purchase Orders", "po-pipeline", purchases.rows),
+      build("purchase_orders", "Purchases", "po-pipeline", purchases.rows),
       build("vendors", "Vendors", "vendors", vendors.rows),
       build("customers", "Customer Sync", "customer-sync", customers.rows),
     ];
