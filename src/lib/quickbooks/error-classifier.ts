@@ -57,7 +57,13 @@ export interface QbErrorClassification {
 
 // Patterns intentionally tight — broad regexes (like `3[12]00`) caused the
 // PO-1015/PO-1016 zombie loop by lumping unrelated errors together.
-const RX_LOCK = /modified by another user|list has been modified|\b3170\b/i;
+// 3175 ("…already in use. The transaction could not be locked.") is a LOCK, not
+// a duplicate — but its message contains "already in use", which RX_DUPLICATE
+// also matches. LOCK is evaluated before DUPLICATE in classifyQbError, so adding
+// 3175 / "could not be locked" here routes it to the transient lock class (retry
+// with backoff) instead of being mis-classified as a terminal duplicate.
+const RX_LOCK =
+  /modified by another user|list has been modified|could not be locked|\b3170\b|\b3175\b/i;
 const RX_EDIT_SEQ = /edit\s*sequence|editsequence|\b3210\b/i;
 const RX_DUPLICATE = /already (exists|in use)|\b3200\b/i;
 const RX_NOT_FOUND =
