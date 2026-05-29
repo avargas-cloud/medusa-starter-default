@@ -15,6 +15,7 @@ import { createProductVariantsStep } from "./steps/create-product-variants-step"
 import { deleteProductVariantsStep } from "./steps/delete-product-variants-step";
 import { ensureMiamiLevelsStep } from "./steps/ensure-miami-levels-step";
 import { ensureOptionValuesStep } from "./steps/ensure-option-values-step";
+import { syncInventoryItemSkuStep } from "./steps/sync-inventory-item-sku-step";
 
 /**
  * Product-mode update workflow — applies a full snapshot of a POS product
@@ -221,6 +222,17 @@ export const updatePosProductFullWorkflow = createWorkflow(
       };
     });
     applyShippingAttributesStep(shippingInput);
+
+    // ── 5b. Mirror existing-variant SKU edits onto inventory_item.sku ─────
+    // The POS inventory Meili doc reads inventory_item.sku; without this a
+    // renamed SKU in product mode keeps showing the old value on the list.
+    // New variants already get the right inventory_item.sku at creation time.
+    const skuSyncInput = transform({ input }, (data) => ({
+      variants: data.input.variants
+        .filter((v) => !!v.id && v.sku !== undefined)
+        .map((v) => ({ variant_id: v.id!, sku: v.sku })),
+    }));
+    syncInventoryItemSkuStep(skuSyncInput);
 
     // ── 6. Re-sync the product to MeiliSearch ─────────────────────────────
     const meiliInput = transform({ input }, (data) => ({

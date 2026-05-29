@@ -14,6 +14,7 @@ import { buildPrefVendorRef } from "../../lib/quickbooks/pref-vendor-ref";
 
 import { applyShippingAttributesStep } from "./steps/apply-shipping-attributes-step";
 import { linkQbVendorStep } from "./steps/link-qb-vendor-step";
+import { syncInventoryItemSkuStep } from "./steps/sync-inventory-item-sku-step";
 
 /**
  * Canonical field layout (post mass-sync):
@@ -267,6 +268,14 @@ export const updatePosProductWorkflow = createWorkflow(
       };
     });
     applyShippingAttributesStep(shippingStepInput);
+
+    // Keep inventory_item.sku in lockstep with the variant SKU edit. The POS
+    // inventory Meili doc reads inventory_item.sku, so without this the list
+    // keeps showing the pre-edit SKU. No-ops when sku wasn't changed.
+    const skuSyncInput = transform({ input }, (data) => ({
+      variants: [{ variant_id: data.input.variant_id, sku: data.input.sku }],
+    }));
+    syncInventoryItemSkuStep(skuSyncInput);
 
     // Re-link variant ↔ qb-vendor when admin changes vendor_qb_id. Step no-ops
     // on empty links array.
