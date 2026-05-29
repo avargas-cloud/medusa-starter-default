@@ -316,8 +316,15 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
     order.is_draft_order === true || asString(order.status) === "draft";
   const isOpen = OPEN_FULFILLMENT.has(fulfillmentStatus);
   const isClosed = CLOSED_FULFILLMENT.has(fulfillmentStatus);
+  // A separated (layaway) order leaves the Separated view once it is no longer
+  // an open order: either fulfilled/shipped/delivered OR fully invoiced (every
+  // remaining line billed — also covers an order edited down until nothing is
+  // left to dispatch). meta.fully_invoiced is maintained by the order Meili
+  // sync subscriber on invoice + order-edit events.
   const isSeparated =
-    !!meta.is_separated && !CLOSED_FULFILLMENT.has(fulfillmentStatus);
+    !!meta.is_separated &&
+    !CLOSED_FULFILLMENT.has(fulfillmentStatus) &&
+    meta.fully_invoiced !== true;
 
   const displayId = order.display_id ?? 0;
 

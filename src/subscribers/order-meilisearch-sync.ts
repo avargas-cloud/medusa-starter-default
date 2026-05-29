@@ -1,9 +1,11 @@
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
+import { Modules } from "@medusajs/utils";
 
 import {
   buildOrderDoc,
   type OrderForMeili,
 } from "../lib/meilisearch/build-order-doc";
+import { loadFullyInvoicedForOrder } from "../lib/invoices/load-fully-invoiced";
 
 /**
  * AUTO-SYNC ORDER → MEILISEARCH
@@ -164,6 +166,51 @@ async function resolveOrderIdsFromFulfillments(
   }
 }
 
+/**
+ * Recomputes the `fully_invoiced` flag for an order and persists it onto
+ * order.metadata (merging, never clobbering). Driven by pos.invoice.created /
+ * pos.invoice.voided so a separated (layaway) order drops out of the
+ * "Separated" tab/badge once it has been completely billed — being fully
+ * invoiced means it is no longer an open order, regardless of fulfillment.
+ * Also fires on order.updated, covering an order edited down until every
+ * remaining line is already billed. The caller reindexes afterward regardless.
+ */
+async function stampFullyInvoiced(
+  orderId: string,
+  container: any,
+  logger: any
+): Promise<void> {
+  try {
+    const orderModule = container.resolve(Modules.ORDER);
+    const order = await orderModule.retrieveOrder(orderId, {
+      select: ["id", "metadata"],
+    });
+    const meta = (order?.metadata ?? {}) as Record<string, unknown>;
+
+    // The flag is ONLY consumed by the Separated derivation (is_separated &&
+    // !closed && !fully_invoiced). For non-separated orders it's irrelevant, so
+    // skip the invoice load entirely — keeps order.updated cheap (it fires on
+    // every edit step). Marking an order separated emits order.updated, so a
+    // newly-separated order is still picked up on its next event.
+    if (!meta.is_separated) return;
+
+    const fullyInvoiced = await loadFullyInvoicedForOrder(orderId, container);
+    if (meta.fully_invoiced === fullyInvoiced) return;
+
+    await orderModule.updateOrders(orderId, {
+      metadata: { ...meta, fully_invoiced: fullyInvoiced },
+    });
+    logger.info(
+      `[MEILI-ORDER-SYNC] order ${orderId} fully_invoiced → ${fullyInvoiced}`
+    );
+  } catch (err: any) {
+    // Non-fatal — the reindex still runs with whatever flag is already stored.
+    logger.warn(
+      `[MEILI-ORDER-SYNC] ⚠️ could not stamp fully_invoiced for ${orderId}: ${err?.message}`
+    );
+  }
+}
+
 async function syncOrdersForCustomer(
   customerId: string,
   container: any,
@@ -236,6 +283,26 @@ export default async function orderMeilisearchSubscriber({
     return;
   }
 
+  // Invoice events carry { order_id } (not the order id in `id`). Recompute
+  // and persist the order's fully_invoiced flag, then reindex so the Separated
+  // tab/badge drops fully-billed layaway orders.
+  if (
+    event.name === "pos.invoice.created" ||
+    event.name === "pos.invoice.voided"
+  ) {
+    const orderId =
+      typeof event.data?.order_id === "string" ? event.data.order_id : "";
+    if (!orderId) {
+      logger.warn(
+        `[MEILI-ORDER-SYNC] ${event.name} missing order_id — skipping`
+      );
+      return;
+    }
+    await stampFullyInvoiced(orderId, container, logger);
+    await syncOrders([orderId], container, logger);
+    return;
+  }
+
   // delivery.created carries the FULFILLMENT id, not the order id — resolve
   // the owning order before reindexing.
   if (event.name === "delivery.created") {
@@ -263,6 +330,15 @@ export default async function orderMeilisearchSubscriber({
   }
 
   if (UPSERT_EVENTS.has(event.name)) {
+    // Recompute fully_invoiced before reindexing. stampFullyInvoiced self-gates
+    // on is_separated, so this is a no-op for the vast majority of orders.
+    // Covers the "order edited down until nothing's left to dispatch" case:
+    // editing quantities fires order.updated (not an invoice event), and the
+    // now-smaller line quantities may already be fully covered by prior
+    // partial invoices → the order drops out of Separated.
+    for (const id of orderIds) {
+      await stampFullyInvoiced(id, container, logger);
+    }
     await syncOrders(orderIds, container, logger);
     return;
   }
@@ -282,5 +358,8 @@ export const config: SubscriberConfig = {
     "order.archived",
     "order.deleted",
     "customer.updated",
+    // Recompute the persisted fully_invoiced flag (drives the Separated tab).
+    "pos.invoice.created",
+    "pos.invoice.voided",
   ],
 };
