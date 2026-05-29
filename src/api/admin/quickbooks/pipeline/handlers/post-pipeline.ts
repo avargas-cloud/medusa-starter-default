@@ -311,8 +311,12 @@ export async function POST(
               connectionString: process.env.DATABASE_URL,
             });
             await applyClient.connect();
+            // row.reference_id may be a payment_application id (papp_, current
+            // keying) OR a customer_payment id (cpay_, legacy) — match either.
             const { rows: appRows } = await applyClient.query(
-              `SELECT payment_id, invoice_id, order_id, amount_applied FROM payment_application WHERE payment_id = $1 AND voided_at IS NULL LIMIT 1`,
+              `SELECT id, payment_id, invoice_id, order_id, amount_applied
+                 FROM payment_application
+                WHERE (id = $1 OR payment_id = $1) AND voided_at IS NULL LIMIT 1`,
               [row.reference_id]
             );
             await applyClient.end();
@@ -321,10 +325,13 @@ export async function POST(
               event: {
                 name: "pos.payment.applied",
                 data: {
-                  payment_id: row.reference_id,
+                  payment_id: appRow?.payment_id ?? row.reference_id,
                   invoice_id: appRow?.invoice_id ?? null,
                   order_id: appRow?.order_id ?? row.order_id,
                   amount_applied: appRow?.amount_applied ?? 0,
+                  // Pass the canonical papp_ key so the handler never falls back
+                  // to the customer_payment key and creates a duplicate row.
+                  application_id: appRow?.id ?? undefined,
                 },
               },
               container: req.scope as unknown,

@@ -11,6 +11,7 @@ import {
   writePipelineRow,
   cacheEditSequence,
   requeueApplyPaymentWaiting,
+  resolveCanonicalApplyPaymentRef,
 } from "../qb-pipeline";
 import { getDbPool } from "../../../api/utils/db-pool";
 
@@ -121,10 +122,41 @@ export async function handlePosPaymentApplied({
   const medusaPayRef = (payment as any).display_id
     ? `PAY-${(payment as any).display_id}`
     : null;
-  const applyReferenceId = application_id || payment_id;
-  const applyReferenceType = application_id
-    ? "payment_application"
-    : "customer_payment";
+  // Canonical keying: apply_payment rows MUST key reference_id by
+  // payment_application.id (papp_) so the dedup in writePipelineRow /
+  // requeueApplyPaymentWaiting matches across ALL callers. Some callers (notably
+  // the pipeline Retry endpoint, post-pipeline.ts) emit this event WITHOUT
+  // application_id; falling straight back to payment_id (cpay_) created a
+  // DUPLICATE apply_payment row alongside the route's papp_ row (the dual-keying
+  // bug). resolveCanonicalApplyPaymentRef recovers the papp_ id when missing.
+  let applyRef;
+  try {
+    applyRef = await resolveCanonicalApplyPaymentRef({
+      applicationId: application_id,
+      paymentId: payment_id,
+      invoiceId: invoice_id,
+    });
+  } catch (refErr: any) {
+    logger.warn(
+      `${LOG_PREFIX} resolveCanonicalApplyPaymentRef failed for ${payment_id}/${invoice_id}: ${refErr.message} — using legacy customer_payment key`
+    );
+    applyRef = {
+      referenceId: payment_id,
+      referenceType: "customer_payment" as const,
+      resolvedFromLookup: false,
+    };
+  }
+  if (applyRef.resolvedFromLookup) {
+    logger.info(
+      `${LOG_PREFIX} Recovered missing application_id → ${applyRef.referenceId} for payment ${payment_id} / invoice ${invoice_id} (prevents cpay_/papp_ duplicate)`
+    );
+  } else if (applyRef.referenceType === "customer_payment") {
+    logger.warn(
+      `${LOG_PREFIX} No payment_application for payment ${payment_id} / invoice ${invoice_id} — using legacy customer_payment key; dedup may not catch a concurrent papp_ row`
+    );
+  }
+  const applyReferenceId = applyRef.referenceId;
+  const applyReferenceType = applyRef.referenceType;
 
   // ── Source dependency check ──────────────────────────────────────────────
   // The cpay carries the source TxnID (a Payment TxnID for type='payment',

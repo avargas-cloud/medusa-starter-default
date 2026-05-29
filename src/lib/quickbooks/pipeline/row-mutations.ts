@@ -419,6 +419,62 @@ export async function requeueApplyPaymentWaiting(input: {
   return { rowId: inserted[0].id as string, mode: "inserted" };
 }
 
+export type ApplyPaymentRef = {
+  referenceId: string;
+  referenceType: "payment_application" | "customer_payment";
+  /** true when the papp_ id was recovered via DB lookup (application_id was missing). */
+  resolvedFromLookup: boolean;
+};
+
+/**
+ * Resolves the CANONICAL (reference_id, reference_type) for an apply_payment
+ * pipeline row. apply_payment rows MUST key reference_id by
+ * payment_application.id (papp_) so the dedup in writePipelineRow /
+ * requeueApplyPaymentWaiting matches across ALL callers. The dual-keying bug
+ * was: a caller without application_id fell back to payment_id (cpay_),
+ * producing a duplicate row alongside the route's papp_ row.
+ *
+ * Resolution order:
+ *   1. application_id present → papp_ (no lookup).
+ *   2. application_id missing → look up payment_application by (payment_id,
+ *      invoice_id) → papp_.
+ *   3. no application exists → legacy customer_payment key (cpay_), non-regressive
+ *      for edge payments that never produced an application.
+ */
+export async function resolveCanonicalApplyPaymentRef(input: {
+  applicationId?: string | null;
+  paymentId: string;
+  invoiceId: string;
+}): Promise<ApplyPaymentRef> {
+  if (input.applicationId) {
+    return {
+      referenceId: input.applicationId,
+      referenceType: "payment_application",
+      resolvedFromLookup: false,
+    };
+  }
+  const pool = getDbPool();
+  const { rows } = await pool.query(
+    `SELECT id FROM payment_application
+      WHERE payment_id = $1 AND invoice_id = $2 AND voided_at IS NULL
+      ORDER BY created_at DESC LIMIT 1`,
+    [input.paymentId, input.invoiceId]
+  );
+  const papp = (rows[0]?.id as string | undefined) ?? null;
+  if (papp) {
+    return {
+      referenceId: papp,
+      referenceType: "payment_application",
+      resolvedFromLookup: true,
+    };
+  }
+  return {
+    referenceId: input.paymentId,
+    referenceType: "customer_payment",
+    resolvedFromLookup: false,
+  };
+}
+
 /**
  * Skips a single waiting/pending pipeline row by its customer_payment reference_id.
  * Used as a defensive cleanup when we detect a payment was absorbed by a Sales Receipt.
