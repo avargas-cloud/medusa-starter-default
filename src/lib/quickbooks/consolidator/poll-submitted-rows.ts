@@ -90,7 +90,19 @@ export async function pollSubmittedRows(
           msgs?.CreditMemoAddRs?.CreditMemoRet?.RefNumber ||
           null;
 
-        await confirmPipelineRow(row.id, txnId, refNumber, op.result ?? null);
+        const wonConfirm = await confirmPipelineRow(
+          row.id,
+          txnId,
+          refNumber,
+          op.result ?? null
+        );
+        // CAS: if another poller (consolidator Phase A vs the standalone
+        // submitted-poller) already confirmed this row, skip ALL dependent
+        // side-effects below (wake-dependents, metadata writes) so they never
+        // run twice.
+        if (!wonConfirm) {
+          continue;
+        }
 
         // EditSequence: prefer the top-level field (set by bridge since fix),
         // fall back to digging into the raw result for older ops

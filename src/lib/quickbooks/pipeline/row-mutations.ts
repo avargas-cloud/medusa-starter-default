@@ -445,14 +445,23 @@ export async function skipPaymentRowByReference(
 /**
  * Marks a submitted pipeline row as confirmed after the bridge returns success.
  */
+/**
+ * Confirms a pipeline row (CAS). The `status <> 'confirmed'` guard makes the
+ * transition idempotent: when two pollers race the SAME submitted row (e.g. the
+ * consolidator's Phase A and the standalone qb-pipeline-submitted-poller), only
+ * the first UPDATE matches a row and returns it. Returns `true` for the winner,
+ * `false` if the row was already confirmed by a concurrent run. Callers MUST
+ * gate dependent side-effects (wake-dependents, metadata writes) on the winner
+ * so they never run twice.
+ */
 export async function confirmPipelineRow(
   rowId: string,
   qbTxnId: string | null,
   qbRefNumber: string | null,
   qbResult: object | null
-): Promise<void> {
+): Promise<boolean> {
   const pool = getDbPool();
-  await pool.query(
+  const { rows } = await pool.query(
     `UPDATE qb_order_pipeline
          SET status        = 'confirmed',
              updated_at    = NOW(),
@@ -461,9 +470,11 @@ export async function confirmPipelineRow(
              qb_ref_number = COALESCE($3, qb_ref_number),
              qb_result     = COALESCE($4::jsonb, qb_result),
              error         = NULL
-         WHERE id = $1`,
+         WHERE id = $1 AND status <> 'confirmed'
+         RETURNING id`,
     [rowId, qbTxnId, qbRefNumber, qbResult ? JSON.stringify(qbResult) : null]
   );
+  return rows.length > 0;
 }
 
 /**
