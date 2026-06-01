@@ -50,6 +50,9 @@ export async function createSalesReceiptInQb(
         price: item.price,
         amount: item.amount,
         desc: item.desc,
+        ...(item.noSite ? { noSite: true } : {}),
+        ...(item.qbItemType ? { qbItemType: item.qbItemType } : {}),
+        ...(item.taxable === false ? { taxable: false } : {}),
       })),
     });
 
