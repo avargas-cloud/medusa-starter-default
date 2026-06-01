@@ -168,7 +168,17 @@ const refreshNullPoLineIds = async (
     .then((r: any) => r.rows);
 
   const anyFresh = freshRows.some((r) => r.qb_txn_line_id !== null);
-  if (!anyFresh) return payload;
+  if (!anyFresh) {
+    // QB still hasn't confirmed the PO amendment — all line IDs remain null.
+    // Log a warning so the admin UI / Railway logs surface this and operators
+    // can investigate. The receipt will still be submitted unlinked; once QB
+    // confirms the PO, a subsequent manual mod or re-submit can re-link it.
+    logger.warn(
+      `${tag} row ${rowId}: ${nullIds.length} line(s) still have no qb_txn_line_id after DB refresh` +
+      ` — PO amendment may not be confirmed in QB yet; receipt will be submitted unlinked`
+    );
+    return payload;
+  }
 
   const freshById = new Map(freshRows.map((r) => [r.id, r.qb_txn_line_id]));
   const refreshedLines = lines.map((l) => ({
