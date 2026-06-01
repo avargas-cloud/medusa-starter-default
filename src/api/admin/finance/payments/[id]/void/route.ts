@@ -1,4 +1,5 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { Modules } from "@medusajs/utils";
 
 import { handlePosPaymentVoided } from "../../../../../../lib/quickbooks/handlers/handle-pos-payment-voided";
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
@@ -126,6 +127,34 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         qb_sync_status: "voiding",
       },
     });
+
+    // 3.5. Restore order referential_deposit if payment was locked to an order
+    const lockedOrderId = (payment as any).locked_order_id as string | undefined;
+    if (lockedOrderId) {
+      try {
+        const orderModule = req.scope.resolve(Modules.ORDER);
+        const [order] = await orderModule.listOrders(
+          { id: lockedOrderId },
+          { select: ["id", "metadata"] }
+        );
+        if (order) {
+          const existingMeta = ((order as any).metadata as Record<string, unknown>) ?? {};
+          const currentDeposit = Number(existingMeta.referential_deposit ?? 0);
+          const voidedDollars = (payment as any).amount / 100;
+          const newDeposit = Math.max(0, Number((currentDeposit - voidedDollars).toFixed(2)));
+          await orderModule.updateOrders(lockedOrderId, {
+            metadata: { ...existingMeta, referential_deposit: newDeposit },
+          });
+          logger.info(
+            `[void-payment] Restored referential_deposit for order ${lockedOrderId}: ${currentDeposit} → ${newDeposit}`
+          );
+        }
+      } catch (orderErr: any) {
+        logger.warn(
+          `[void-payment] Could not restore referential_deposit for order ${lockedOrderId}: ${orderErr.message}`
+        );
+      }
+    }
 
     // 4. Fire QB Bridge void (direct exec, bypasses BullMQ — same pattern as payment creation)
     if (process.env.QB_ORDER_FLOW_ENABLED === "true") {
