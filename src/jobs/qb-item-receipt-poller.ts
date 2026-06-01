@@ -136,6 +136,62 @@ const submitModToBridge = async (
   return json.operationId;
 };
 
+/**
+ * Refreshes null qb_po_txn_line_id values in a pipeline payload before
+ * submitting to the bridge. Race condition: PO amendment lines get their
+ * qb_txn_line_id written back AFTER the receipt was frozen in the payload.
+ * Without this, the builder skips <LinkToTxn> and the receipt lands in QB
+ * unlinked from its PO. Also persists the refreshed payload so future
+ * retries don't re-submit with stale nulls.
+ */
+const refreshNullPoLineIds = async (
+  knex: any,
+  logger: any,
+  tag: string,
+  payload: Record<string, unknown>,
+  rowId: string,
+  payloadColumn: "payload" | "mod_payload"
+): Promise<Record<string, unknown>> => {
+  const lines = payload.lines as Array<Record<string, unknown>> | undefined;
+  if (!payload.qb_po_list_id || !lines?.length) return payload;
+
+  const nullIds = lines
+    .filter((l) => l.qb_po_txn_line_id === null || l.qb_po_txn_line_id === undefined)
+    .map((l) => l.po_line_id as string);
+  if (!nullIds.length) return payload;
+
+  const freshRows: Array<{ id: string; qb_txn_line_id: string | null }> = await knex
+    .raw(
+      `SELECT id, qb_txn_line_id FROM purchase_order_line WHERE id = ANY(?::text[])`,
+      [nullIds]
+    )
+    .then((r: any) => r.rows);
+
+  const anyFresh = freshRows.some((r) => r.qb_txn_line_id !== null);
+  if (!anyFresh) return payload;
+
+  const freshById = new Map(freshRows.map((r) => [r.id, r.qb_txn_line_id]));
+  const refreshedLines = lines.map((l) => ({
+    ...l,
+    qb_po_txn_line_id:
+      (l.qb_po_txn_line_id as string | null) ??
+      freshById.get(l.po_line_id as string) ??
+      null,
+  }));
+
+  const refreshedPayload = { ...payload, lines: refreshedLines };
+
+  await knex.raw(
+    `UPDATE qb_item_receipt_pipeline SET ${payloadColumn} = ?::jsonb, updated_at = NOW() WHERE id = ?`,
+    [JSON.stringify(refreshedPayload), rowId]
+  );
+
+  logger.info(
+    `${tag} row ${rowId}: refreshed ${nullIds.length} null qb_po_txn_line_id(s) from DB before submit`
+  );
+  return refreshedPayload;
+};
+
 // QB Desktop error code 3175 = stale EditSequence. Detected so chunk 4 can
 // trigger an automatic refresh; for now we just tag the row's last_error so
 // the admin UI can show a specific badge instead of a generic "QB error".
@@ -236,9 +292,10 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
 
   for (const row of unsubmitted) {
     try {
-      const operationId = await submitAddToBridge(
-        row.payload as Record<string, unknown>
+      const freshPayload = await refreshNullPoLineIds(
+        knex, logger, TAG, row.payload as Record<string, unknown>, row.id, "payload"
       );
+      const operationId = await submitAddToBridge(freshPayload);
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
             SET qb_operation_id = ?, updated_at = NOW()
@@ -421,9 +478,10 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     }
 
     try {
-      const operationId = await submitAddToBridge(
-        row.payload as Record<string, unknown>
+      const freshPayload = await refreshNullPoLineIds(
+        knex, logger, TAG, row.payload as Record<string, unknown>, row.id, "payload"
       );
+      const operationId = await submitAddToBridge(freshPayload);
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
             SET status = 'waiting',
@@ -600,9 +658,10 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
 
   for (const row of modPending) {
     try {
-      const operationId = await submitModToBridge(
-        row.mod_payload as Record<string, unknown>
+      const freshModPayload = await refreshNullPoLineIds(
+        knex, logger, TAG, row.mod_payload as Record<string, unknown>, row.id, "mod_payload"
       );
+      const operationId = await submitModToBridge(freshModPayload);
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
             SET mod_status        = 'submitted',
@@ -763,9 +822,10 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     }
 
     try {
-      const operationId = await submitModToBridge(
-        row.mod_payload as Record<string, unknown>
+      const freshModPayload = await refreshNullPoLineIds(
+        knex, logger, TAG, row.mod_payload as Record<string, unknown>, row.id, "mod_payload"
       );
+      const operationId = await submitModToBridge(freshModPayload);
       await knex.raw(
         `UPDATE qb_item_receipt_pipeline
             SET mod_status        = 'submitted',

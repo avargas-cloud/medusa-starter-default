@@ -230,6 +230,19 @@ export async function POST(
     });
   }
 
+  // Race condition guard: if PO is already in QB but some lines still have
+  // no qb_txn_line_id (PO amendment not yet confirmed by QB poller), the
+  // frozen payload will have nulls → ItemReceipt sent without <LinkToTxn>.
+  // The qb-item-receipt-poller refreshes nulls before submitting (safety net).
+  if (po.qb_purchase_order_list_id) {
+    const nullLinkCount = workflowLines.filter((l) => !l.qb_po_txn_line_id).length;
+    if (nullLinkCount > 0) {
+      console.warn(
+        `[PO receive] ${po.number}: ${nullLinkCount}/${workflowLines.length} lines have no qb_txn_line_id — ItemReceipt PO link will self-heal via poller safety net`
+      );
+    }
+  }
+
   const receivedAt = body.received_at ? new Date(body.received_at) : new Date();
   const stockLocationId = body.stock_location_id ?? po.stock_location_id;
   const qbMemo =
