@@ -495,14 +495,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           const inventoryItemId = invRes.rows[0]?.inventory_item_id;
           if (!inventoryItemId) continue;
 
-          // Release existing reservations for this line item
-          const existing = await inventoryModule.listReservationItems(
-            { line_item_id: reqItem.id },
-            { take: 10, select: ["id"] }
+          // Release existing reservations for this line item.
+          // Raw SQL because inventoryModule.listReservationItems { line_item_id }
+          // filter is unreliable in Medusa v2 (may return empty when rows exist).
+          const resvRows = await pool.query<{ id: string }>(
+            `SELECT id FROM reservation_item WHERE line_item_id = $1 AND deleted_at IS NULL`,
+            [reqItem.id]
           );
-          if (existing.length > 0) {
+          if (resvRows.rows.length > 0) {
             await inventoryModule.deleteReservationItems(
-              existing.map((r: any) => r.id)
+              resvRows.rows.map((r) => r.id)
             );
           }
 

@@ -150,11 +150,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           // 0C. Re-create the Reservation Item strictly bound to the un-fulfilled line item
           // Guard: skip if an active reservation already exists for this line item
           // to prevent double-reservation on void of a partially-fulfilled order.
-          const existingResv = await inventoryModule.listReservationItems(
-            { line_item_id: reqItem.line_item_id },
-            { take: 1, select: ["id"] }
+          // Uses raw SQL because inventoryModule.listReservationItems { line_item_id }
+          // filter is unreliable in Medusa v2 (may return empty even when rows exist).
+          const existingResvRows = await pool.query<{ id: string }>(
+            `SELECT id FROM reservation_item WHERE line_item_id = $1 AND deleted_at IS NULL LIMIT 1`,
+            [reqItem.line_item_id]
           );
-          if (existingResv.length > 0) {
+          if (existingResvRows.rows.length > 0) {
             console.log(
               `[VOID INVOICE] Reservation already exists for line_item ${reqItem.line_item_id}, skipping recreation`
             );
@@ -218,7 +220,6 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           const { createReservationsWorkflow } = await import(
             "@medusajs/core-flows"
           );
-          const invModNF = req.scope.resolve(Modules.INVENTORY) as any;
           for (const posItem of invItemsRes.rows) {
             if (!posItem.quantity || !posItem.variant_id) continue;
             const orderItem = orderItemsRes.rows.find(
@@ -236,11 +237,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
               invLinkRes.rows[0]?.inventory_item_id;
             if (!inventoryItemId) continue;
             // Guard: skip if an active reservation already exists for this line item
-            const existingResvNF = await invModNF.listReservationItems(
-              { line_item_id: orderItem.line_item_id },
-              { take: 1, select: ["id"] }
+            const existingResvNFRows = await pool.query<{ id: string }>(
+              `SELECT id FROM reservation_item WHERE line_item_id = $1 AND deleted_at IS NULL LIMIT 1`,
+              [orderItem.line_item_id]
             );
-            if (existingResvNF.length > 0) {
+            if (existingResvNFRows.rows.length > 0) {
               console.log(
                 `[VOID INVOICE] Reservation already exists for line_item ${orderItem.line_item_id} (no-fulfillment path), skipping`
               );
