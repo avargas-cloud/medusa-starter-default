@@ -114,6 +114,10 @@ export async function POST(
     });
   }
 
+  // Wrap all DB queries and workflow execution together so any unexpected DB
+  // error (schema drift, network blip, binding mismatch) returns 422 with a
+  // useful message instead of a naked 500.
+  try {
   const poLines = (await service.listPurchaseOrderLines(
     { id: uniqueLineIds },
     { take: uniqueLineIds.length }
@@ -250,7 +254,7 @@ export async function POST(
   const itCheckRows = (
     await knex.raw(
       `SELECT id, status FROM inventory_transfer
-        WHERE linked_purchase_order_id = $1
+        WHERE linked_purchase_order_id = ?
           AND deleted_at IS NULL
           AND status NOT IN ('received', 'voided', 'cancelled')
         LIMIT 1`,
@@ -270,7 +274,6 @@ export async function POST(
   const qbMemo =
     body.qb_memo ?? `${po.number} bill#${body.vendor_bill_number ?? "—"}`;
 
-  try {
     const { result } = await receivePurchaseOrderWorkflow(req.scope).run({
       input: {
         po_id: id,
@@ -316,10 +319,9 @@ export async function POST(
 
     return res.json({ receipt: result });
   } catch (err) {
-    // The request body already passed validation above; a failure here is a
-    // runtime workflow error (missing inventory level, QB enqueue, etc.), not
-    // a malformed request. Surface 422 with the real message so the operator
-    // sees the actual cause instead of a generic 400.
+    // Covers both validation DB queries (knex.raw) and the workflow execution.
+    // Surface 422 with the real message so the operator sees the actual cause
+    // instead of a naked 500.
     const message = err instanceof Error ? err.message : "Failed to receive";
     return res.status(422).json({ error: message, code: "receive_failed" });
   }
