@@ -1,5 +1,6 @@
 import type { SubscriberArgs, SubscriberConfig } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
+import { Client } from "pg";
 
 import {
   buildOrderDoc,
@@ -99,6 +100,57 @@ async function syncOrders(
         `[MEILI-ORDER-SYNC] no orders returned for ids: ${orderIds.join(",")}`
       );
       return;
+    }
+
+    // SQL fallback: query.graph intermittently returns fulfillments=[] due to a
+    // race condition on the order_fulfillment link. For any order that came back
+    // without fulfillments, fetch them directly from the DB before building the doc.
+    const missingFulfillments = (data as OrderForMeili[]).filter(
+      (o) => !o.fulfillments || o.fulfillments.length === 0
+    );
+    if (missingFulfillments.length > 0) {
+      try {
+        const db = new Client({ connectionString: process.env.DATABASE_URL });
+        await db.connect();
+        const ids = missingFulfillments.map((o) => o.id);
+        const res = await db.query<{
+          order_id: string;
+          packed_at: Date | null;
+          shipped_at: Date | null;
+          delivered_at: Date | null;
+          canceled_at: Date | null;
+        }>(
+          `SELECT ofu.order_id, f.packed_at, f.shipped_at, f.delivered_at, f.canceled_at
+           FROM order_fulfillment ofu
+           JOIN fulfillment f ON f.id = ofu.fulfillment_id
+           WHERE ofu.order_id = ANY($1::text[])
+             AND ofu.deleted_at IS NULL
+             AND f.deleted_at IS NULL`,
+          [ids]
+        );
+        await db.end();
+
+        // Group rows by order_id and patch the order objects
+        const byOrder = new Map<string, typeof res.rows>();
+        for (const row of res.rows) {
+          if (!byOrder.has(row.order_id)) byOrder.set(row.order_id, []);
+          byOrder.get(row.order_id)!.push(row);
+        }
+        for (const order of missingFulfillments) {
+          const rows = byOrder.get(order.id);
+          if (rows && rows.length > 0) {
+            (order as any).fulfillments = rows;
+            logger.info(
+              `[MEILI-ORDER-SYNC] SQL fallback: ${rows.length} fulfillment(s) patched for order ${order.id}`
+            );
+          }
+        }
+      } catch (sqlErr: any) {
+        logger.warn(
+          `[MEILI-ORDER-SYNC] SQL fulfillment fallback failed: ${sqlErr?.message}`
+        );
+        // Non-fatal — continue with whatever query.graph returned
+      }
     }
 
     const docs = (data as OrderForMeili[]).map((o) => buildOrderDoc(o));
