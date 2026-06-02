@@ -2,7 +2,7 @@ import { Modules } from "@medusajs/utils";
 import type { MedusaContainer } from "@medusajs/framework/types";
 import type { EntityReconciler } from "../drift-reconciler";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../workflows/sync-inventory-item-meilisearch";
-import { USA_LOC } from "../../locations";
+import { CHINA_LOC, USA_LOC } from "../../locations";
 
 /**
  * Reconciler for the MeiliSearch `inventory` index.
@@ -43,24 +43,37 @@ async function buildExpectedInventoryDoc(
     >;
   };
 
-  const levels = await inventoryService.listInventoryLevels(
-    { location_id: USA_LOC, inventory_item_id: inventoryItemId },
-    { take: 1 }
-  );
+  // Fetch BOTH locations so the reconciler can also detect chinaStock drift,
+  // not just Miami. Mirrors build-inventory-docs.ts exactly:
+  //   totalStock    = Miami stocked_quantity (0 if no Miami level — G4 fix)
+  //   totalReserved = Miami reserved_quantity
+  //   chinaStock    = max(0, China stocked - China reserved)  (0 if none)
+  const [miamiLevels, chinaLevels] = await Promise.all([
+    inventoryService.listInventoryLevels(
+      { location_id: USA_LOC, inventory_item_id: inventoryItemId },
+      { take: 1 }
+    ),
+    inventoryService.listInventoryLevels(
+      { location_id: CHINA_LOC, inventory_item_id: inventoryItemId },
+      { take: 1 }
+    ),
+  ]);
 
-  // No Miami level → item doesn't exist, or is China-only. We skip it here
-  // (return null) rather than emit {totalStock:0} which would cause perpetual
-  // false-drift against a legitimate China-based doc. China-only items are
-  // still kept fresh by the PRIMARY mechanism — the inventory_level trigger
-  // enqueues on ANY location change (incl. China) → the 1-min queue processor
-  // rebuilds the full doc via syncOne. This cron is only the Miami safety net.
-  const level = levels?.[0];
-  if (!level) return null;
+  const miami = miamiLevels?.[0];
+  const china = chinaLevels?.[0];
+
+  // Neither location → item truly absent; skip (don't false-flag drift).
+  if (!miami && !china) return null;
+
+  const chinaStock = china
+    ? Math.max(0, (china.stocked_quantity ?? 0) - (china.reserved_quantity ?? 0))
+    : 0;
 
   return {
     id: inventoryItemId,
-    totalStock: level.stocked_quantity ?? 0,
-    totalReserved: level.reserved_quantity ?? 0,
+    totalStock: miami?.stocked_quantity ?? 0,
+    totalReserved: miami?.reserved_quantity ?? 0,
+    chinaStock,
   };
 }
 
@@ -69,7 +82,7 @@ export const inventoryReconciler: EntityReconciler = {
   // and the key registered in the queue processor's RECONCILERS map.
   entityType: "inventory_item",
   meiliIndex: "inventory",
-  comparableFields: ["totalStock", "totalReserved"],
+  comparableFields: ["totalStock", "totalReserved", "chinaStock"],
   buildExpectedDoc: buildExpectedInventoryDoc,
   syncOne: async (id, container) => {
     // Delegate to the canonical single-item workflow so the doc is rebuilt
