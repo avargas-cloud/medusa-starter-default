@@ -25,7 +25,7 @@ import type {
 
 import { deletePurchaseOrderReceiptWorkflow } from "../../../../../../workflows/purchase-orders/delete-purchase-order-receipt";
 import { updatePurchaseOrderReceiptWorkflow } from "../../../../../../workflows/purchase-orders/update-purchase-order-receipt";
-import { onPoReceiveReversed } from "../../../../../../lib/inventory-transfer-link";
+import { onPoReceiveApplied, onPoReceiveReversed } from "../../../../../../lib/inventory-transfer-link";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
 import { getActorUserId, UnauthenticatedError } from "../../../_lib/auth";
 import { zodErrorToBody } from "../../../_lib/format";
@@ -215,6 +215,7 @@ interface PoLineRow {
   id: string;
   qty_ordered: number;
   qty_received: number;
+  product_variant_id: string;
 }
 
 /**
@@ -365,6 +366,7 @@ export async function PATCH(
     receipt_line_id: string;
     po_line_id: string;
     inventory_item_id: string;
+    product_variant_id: string;
     new_qty: number;
     delta: number;
   }> = [];
@@ -417,6 +419,7 @@ export async function PATCH(
         receipt_line_id: rl.id,
         po_line_id: pol.id,
         inventory_item_id: rl.inventory_item_id,
+        product_variant_id: pol.product_variant_id,
         new_qty: change.new_qty,
         delta,
       });
@@ -448,6 +451,52 @@ export async function PATCH(
         },
       }
     );
+
+    // Transfer-to-USA China delta: mirror what PO receive/delete does.
+    // Positive delta = effectively "received more" → decrement China stock.
+    // Negative delta = effectively "unreceived some" → restore China stock.
+    const activeDeltas = lineChanges.filter((l) => l.delta !== 0);
+    if (activeDeltas.length > 0) {
+      const updateKnex = (req.scope as unknown as {
+        resolve: (k: string) => {
+          raw: (sql: string, b?: unknown[]) => Promise<{ rows: unknown[] }>;
+        };
+      }).resolve("__pg_connection__");
+
+      const posDeltas = activeDeltas.filter((l) => l.delta > 0);
+      const negDeltas = activeDeltas.filter((l) => l.delta < 0);
+
+      if (posDeltas.length > 0) {
+        await onPoReceiveApplied(
+          updateKnex,
+          id,
+          posDeltas.map((l) => ({
+            inventory_item_id: l.inventory_item_id,
+            product_variant_id: l.product_variant_id,
+            qty: l.delta,
+          }))
+        );
+      }
+      if (negDeltas.length > 0) {
+        await onPoReceiveReversed(
+          updateKnex,
+          id,
+          negDeltas.map((l) => ({
+            inventory_item_id: l.inventory_item_id,
+            product_variant_id: l.product_variant_id,
+            qty: -l.delta,
+          }))
+        );
+      }
+      // Re-sync MeiliSearch after China stock changes
+      await Promise.allSettled(
+        activeDeltas.map((l) =>
+          syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+            input: { inventoryItemId: l.inventory_item_id },
+          })
+        )
+      );
+    }
 
     return res.json({ update: result });
   } catch (err) {
