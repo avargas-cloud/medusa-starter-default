@@ -355,7 +355,21 @@ export async function handleSalesReceiptCreated(
     .filter((item: any) => (item.quantity ?? 0) > 0)
     .map((item: any) => {
       const quantity = item.quantity;
-      const grossUnitPrice = getFloat(item.unit_price);
+      // item.unit_price is the NET (post per-item-discount) price; the GROSS
+      // lives in metadata.original_unit_price. Treating the net as gross and
+      // re-applying line_discount below double-discounts the line (e.g. 42.53
+      // → 38.28) and leaves a rounding residue that spawns a phantom
+      // "Order Discount" line. Mirror handle-fulfillment-created.ts (the
+      // Invoice path) which already resolves gross from original_unit_price.
+      // Guard on > 0 (not ??) so a present-but-invalid original_unit_price
+      // ("" / 0) falls back to unit_price instead of zeroing the line. Legacy
+      // lines (no original_unit_price) stored a gross unit_price, so the
+      // fallback stays correct for them.
+      const originalGrossUnitPrice = getFloat(item.metadata?.original_unit_price);
+      const grossUnitPrice =
+        originalGrossUnitPrice > 0
+          ? originalGrossUnitPrice
+          : getFloat(item.unit_price);
       const grossTotalCents = Math.round(grossUnitPrice * quantity * 100);
 
       const lineDiscount = item.metadata?.line_discount as

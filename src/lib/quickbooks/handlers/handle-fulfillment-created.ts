@@ -498,10 +498,17 @@ export async function handleFulfillmentCreated(
           | { type?: string | null; value?: number | string | null }
           | null
           | undefined;
+        // Guard on > 0 (not ??) so a present-but-invalid original_unit_price
+        // ("" / 0) falls back to unit_price instead of zeroing the line.
+        const originalGrossUnitPrice = getFloat(
+          item.metadata?.original_unit_price
+        );
         const grossUnitPrice =
           item.fulfillment_unit_price !== undefined
             ? getFloat(item.fulfillment_unit_price)
-            : getFloat(item.metadata?.original_unit_price ?? item.unit_price);
+            : originalGrossUnitPrice > 0
+              ? originalGrossUnitPrice
+              : getFloat(item.unit_price);
         const grossTotalCents = Math.round(grossUnitPrice * quantity * 100);
         // Computed exactly as pos_invoice.discount was (percent-on-gross /
         // fixed-per-unit) via the shared helper, so the subtraction below
