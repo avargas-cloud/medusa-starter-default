@@ -168,6 +168,21 @@ export default async function meiliSyncQueueProcessor(
     logger.info(
       `[meili-queue] claimed=${claimed.length} groups=${groups.size} synced=${stats.synced} deleted=${stats.deleted} skipped=${stats.skipped} errors=${stats.errors}`
     );
+
+    // Dead-letter alert: rows that exhausted all retries stay in the queue
+    // with processed_at=NULL forever. Log a warning so ops can investigate.
+    const deadRows = await sql<{ count: string }[]>`
+      SELECT COUNT(*)::text AS count
+      FROM meili_sync_queue
+      WHERE processed_at IS NULL
+        AND attempt_count >= ${MAX_ATTEMPTS}
+    `;
+    const deadCount = parseInt(deadRows[0]?.count ?? "0", 10);
+    if (deadCount > 0) {
+      logger.warn(
+        `[meili-queue] ⚠️  ${deadCount} dead-letter row(s) stuck (attempt_count >= ${MAX_ATTEMPTS}, processed_at IS NULL) — manual investigation required`
+      );
+    }
   } finally {
     await sql.end();
   }

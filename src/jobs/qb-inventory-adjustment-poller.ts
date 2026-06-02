@@ -1,3 +1,11 @@
+/**
+ * @deprecated This poller targets qb_inventory_adjustment_pipeline (legacy table).
+ * Since 2026-05 all inventory adjustments go through qb_order_pipeline
+ * (step='inventory_adjustment'). Stale-row cleanup for those rows is handled
+ * by qb-pipeline-consolidator.ts (runStaleSubmittedCleanup / runStalePendingCleanup).
+ * This job is harmless (old table has 1 legacy row in 'synced' status) but can
+ * be deleted once that row is confirmed as no longer needed.
+ */
 import { MedusaContainer } from "@medusajs/framework/types";
 import { pollBridgeStatus } from "../lib/quickbooks/bridge-fetch";
 import {

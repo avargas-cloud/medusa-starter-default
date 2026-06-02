@@ -8,6 +8,9 @@ export interface AdjustmentGroupPayload {
   count_memo: string;
   qb_account_list_id: string;
   qb_inventory_site_list_id?: string;
+  /** Frozen at enqueue time (YYYY-MM-DD). Used as QB TxnDate so late-synced
+   *  or retried adjustments land on the approval date, not today. */
+  txn_date?: string;
   lines: Array<{
     line_id: string;
     inventory_item_id: string;
@@ -101,7 +104,7 @@ export async function postInventoryAdjustmentToQb(
       external_id: pipelineRowId,
       ref_number: buildRefNumber(payload),
       memo: buildMemo(payload),
-      txn_date: new Date().toISOString().slice(0, 10),
+      txn_date: payload.txn_date ?? new Date().toISOString().slice(0, 10),
       account_list_id: payload.qb_account_list_id,
       inventory_site_list_id:
         payload.qb_inventory_site_list_id ?? DEFAULT_INVENTORY_SITE_LIST_ID,

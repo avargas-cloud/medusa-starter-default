@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
 
 import { parseSalesRepInitials } from "../../../../../lib/quickbooks/parse-sales-rep";
 import { withQbSerialized } from "../../../../../lib/quickbooks/qb-serializer";
@@ -643,11 +644,8 @@ export async function POST(
         ),
       ];
       if (variantIds.length > 0) {
-        const {
-          updateInventoryIncrementalWorkflow,
-        } = require("../../../../../workflows/update-inventory-incremental");
         for (const variantId of variantIds) {
-          await updateInventoryIncrementalWorkflow(req.scope).run({
+          await syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
             input: { variantId },
           });
         }

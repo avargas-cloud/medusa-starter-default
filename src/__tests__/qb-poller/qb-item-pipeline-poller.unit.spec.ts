@@ -17,8 +17,8 @@ jest.mock("../../workflows/sync-product-meilisearch", () => ({
     run: jest.fn().mockResolvedValue({}),
   }),
 }));
-jest.mock("../../workflows/update-inventory-incremental", () => ({
-  updateInventoryIncrementalWorkflow: () => ({
+jest.mock("../../workflows/sync-inventory-item-meilisearch", () => ({
+  syncInventoryItemToMeiliSearchWorkflow: () => ({
     run: jest.fn().mockResolvedValue({}),
   }),
 }));

@@ -7,7 +7,7 @@ import { createProductsWorkflow } from "@medusajs/medusa/core-flows";
 
 import { updateProductAttributesWorkflow } from "../product-attributes/update-product-attributes";
 import { syncProductToMeiliSearchWorkflow } from "../sync-product-meilisearch";
-import { updateInventoryIncrementalWorkflow } from "../update-inventory-incremental";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../sync-inventory-item-meilisearch";
 
 import { applyShippingAttributesStep } from "./steps/apply-shipping-attributes-step";
 import { ensureMiamiLevelsStep } from "./steps/ensure-miami-levels-step";
@@ -365,7 +365,7 @@ export const createPosProductV2Workflow = createWorkflow(
       productId: (data.productRef as any)?.id as string,
     }));
     syncProductToMeiliSearchWorkflow.runAsStep({ input: meiliInput });
-    updateInventoryIncrementalWorkflow.runAsStep({ input: meiliInput });
+    syncInventoryItemToMeiliSearchWorkflow.runAsStep({ input: meiliInput });
 
     return new WorkflowResponse({
       product: productRef,

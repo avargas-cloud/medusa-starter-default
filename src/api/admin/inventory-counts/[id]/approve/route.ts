@@ -30,7 +30,7 @@ interface InventoryServiceLike {
   listInventoryLevels: (
     filters: Record<string, unknown>,
     options?: { take?: number }
-  ) => Promise<Array<{ inventory_item_id: string; stocked_quantity: number }>>;
+  ) => Promise<Array<{ inventory_item_id: string; stocked_quantity: number; reserved_quantity: number }>>;
 }
 
 export async function POST(
@@ -103,9 +103,13 @@ export async function POST(
     },
     { take: 5000 }
   );
+  // Use available (stocked - reserved) so the projected-negative guard in
+  // classify-lines-step blocks deltas that would drive available stock negative,
+  // not just physical stock. Prevents oversell during approval windows.
   const stockByItem = new Map<string, number>();
   for (const lvl of levels) {
-    stockByItem.set(lvl.inventory_item_id, lvl.stocked_quantity ?? 0);
+    const available = Math.max(0, (lvl.stocked_quantity ?? 0) - (lvl.reserved_quantity ?? 0));
+    stockByItem.set(lvl.inventory_item_id, available);
   }
 
   const workflowInput = {
@@ -128,6 +132,7 @@ export async function POST(
       qb_account_list_id_default: count.default_qb_account_list_id,
     })),
     decisions,
+    skip_qb_sync: (count as Record<string, unknown>).skip_qb_sync === true,
   };
 
   const { result } = await approveInventoryCountWorkflow(req.scope).run({

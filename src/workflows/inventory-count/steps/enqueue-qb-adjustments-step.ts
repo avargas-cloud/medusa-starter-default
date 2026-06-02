@@ -68,6 +68,7 @@ export const enqueueQbAdjustmentsStep = createStep(
         count_number: input.count_number,
         count_memo: input.count_memo,
         qb_account_list_id: accountListId,
+        txn_date: new Date().toISOString().slice(0, 10),
         lines: lines.map((l) => {
           const a = appliedByLineId.get(l.line_id);
           return {

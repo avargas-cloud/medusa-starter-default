@@ -1,6 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
-import { updateInventoryIncrementalWorkflow } from "../../../../../workflows/update-inventory-incremental";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
 
 /**
  * INCREMENTAL SYNC ENDPOINT: Update Inventory
@@ -21,18 +21,11 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   }
 
   try {
-    const { result } = (await updateInventoryIncrementalWorkflow(req.scope).run(
-      {
-        input: { variantId, productId },
-      }
-    )) as {
-      result: { success: boolean; itemsUpdated?: number; reason?: string };
-    };
-
-    return res.json({
-      success: result.success,
-      itemsUpdated: result.itemsUpdated,
+    await syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+      input: { variantId, productId },
     });
+
+    return res.json({ success: true });
   } catch (error: any) {
     console.error("[MEILI-UPDATE-INVENTORY] Error:", error);
     return res.status(500).json({

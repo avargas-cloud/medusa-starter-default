@@ -11,7 +11,7 @@ import {
   type UpdatePosProductFullInput,
 } from "../../../../../workflows/pos/update-pos-product-full";
 import { updateSingleProductWorkflow } from "../../../../../workflows/update-single-product";
-import { updateInventoryIncrementalWorkflow } from "../../../../../workflows/update-inventory-incremental";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
 
 /**
  * Fire-and-forget reindex of BOTH MeiliSearch indexes a product lives in:
@@ -36,7 +36,7 @@ function reindexProductMeili(
         e?.message
       )
     );
-  void updateInventoryIncrementalWorkflow(scope)
+  void syncInventoryItemToMeiliSearchWorkflow(scope)
     .run({ input: { productId } })
     .catch((e: any) =>
       logger.error(

@@ -52,6 +52,12 @@ export const InventoryCount = model.define("inventory_count", {
   voided_by_user_id: model.text().nullable(),
   void_reason: model.text().nullable(),
 
+  // Origin — 'manual' (cashier-driven), 'qb_sync', 'china_sync'
+  source: model.text().default("manual"),
+
+  // When true the approve workflow skips QB pipeline enqueue (count came FROM QB)
+  skip_qb_sync: model.boolean().default(false),
+
   // Denormalized counters refreshed at submit/approve for cheap list rendering
   total_lines: model.number().default(0),
   total_lines_applied: model.number().default(0),

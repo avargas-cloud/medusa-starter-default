@@ -146,12 +146,11 @@ export function buildInventoryDocsForVariants(
     for (const invItem of variant.inventory_items) {
       const inventory = invItem?.inventory;
       if (!inventory?.id) continue;
-      const miamiStock = miamiStockMap.has(inventory.id)
-        ? (miamiStockMap.get(inventory.id) ?? 0)
-        : (inventory.stocked_quantity || 0);
-      const miamiReserved = miamiReservedMap.has(inventory.id)
-        ? (miamiReservedMap.get(inventory.id) ?? 0)
-        : (inventory.reserved_quantity || 0);
+      // Use 0 as fallback when the Miami inventory_level row is absent —
+      // falling back to inventory.stocked_quantity (aggregate across ALL
+      // locations) would silently include China stock in totalStock.
+      const miamiStock = miamiStockMap.get(inventory.id) ?? 0;
+      const miamiReserved = miamiReservedMap.get(inventory.id) ?? 0;
       docs.push({
         id: inventory.id,
         sku: inventory.sku || variant.sku || "",

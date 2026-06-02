@@ -8,7 +8,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../modules/quickbooks-catalog";
 import { syncProductToMeiliSearchWorkflow } from "../workflows/sync-product-meilisearch";
-import { updateInventoryIncrementalWorkflow } from "../workflows/update-inventory-incremental";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../workflows/sync-inventory-item-meilisearch";
 
 // Read at call time so tests can override QB_BRIDGE_URL after module load.
 const bridgeUrl = (): string =>
@@ -632,7 +632,7 @@ export default async function qbItemPipelinePoller(container: MedusaContainer) {
                 input: { productId },
                 throwOnError: false,
               });
-              await updateInventoryIncrementalWorkflow(container).run({
+              await syncInventoryItemToMeiliSearchWorkflow(container).run({
                 input: { productId },
                 throwOnError: false,
               });

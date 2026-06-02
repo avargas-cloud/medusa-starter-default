@@ -44,6 +44,8 @@ export interface ApproveInventoryCountWorkflowInput {
   total_lines: number;
   lines: ClassifyLineInput[];
   decisions: ClassifyDecision[];
+  /** When true, skip QB pipeline enqueue (count inventory already came FROM QB) */
+  skip_qb_sync: boolean;
 }
 
 export interface ApproveInventoryCountWorkflowOutput {
@@ -86,13 +88,17 @@ export const approveInventoryCountWorkflow = createWorkflow(
       overrides: classified.overrides,
     });
 
-    const queued = enqueueQbAdjustmentsStep({
-      count_id: input.count_id,
-      count_number: input.count_number,
-      count_memo: input.count_memo,
-      toApply: classified.toApply,
-      applied: stock.applied,
-    });
+    // When skip_qb_sync=true (count originated from QB) pass empty arrays so
+    // enqueueQbAdjustmentsStep short-circuits — no feedback loop back to QB.
+    const qbInput = transform({ input, classified, stock }, (data) => ({
+      count_id: data.input.count_id,
+      count_number: data.input.count_number,
+      count_memo: data.input.count_memo,
+      toApply: data.input.skip_qb_sync ? [] : data.classified.toApply,
+      applied: data.input.skip_qb_sync ? [] : data.stock.applied,
+    }));
+
+    const queued = enqueueQbAdjustmentsStep(qbInput);
 
     const meiliInput = transform({ stock, queued }, (data) => ({
       inventory_item_ids: Array.from(

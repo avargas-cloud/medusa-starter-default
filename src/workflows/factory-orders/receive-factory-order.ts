@@ -18,6 +18,7 @@ import { allocateFoReceiptSequenceStep } from "./steps/allocate-fo-receipt-seque
 import { applyFoReceiptStockStep } from "./steps/apply-fo-receipt-stock-step";
 import { persistFoReceiptStep } from "./steps/persist-fo-receipt-step";
 import { syncReceiptInventoryMeiliStep } from "../shared/steps/sync-receipt-inventory-meili-step";
+import { CHINA_LOC } from "../../lib/locations";
 
 export interface ReceiveFactoryOrderWorkflowInputLine {
   fo_line_id: string;
@@ -53,6 +54,18 @@ export const receiveFactoryOrderWorkflow = createWorkflow(
   function (
     input: ReceiveFactoryOrderWorkflowInput
   ): WorkflowResponse<ReceiveFactoryOrderWorkflowOutput> {
+    // Defense-in-depth: FO receipts must always land at China Warehouse.
+    // The API layer enforces this unconditionally, but assert here as a
+    // backstop against accidental callers passing the wrong location.
+    transform({ input }, (data) => {
+      if (data.input.stock_location_id !== CHINA_LOC) {
+        throw new Error(
+          `receive-factory-order: stock_location_id must be China Warehouse (${CHINA_LOC}), got ${data.input.stock_location_id}`
+        );
+      }
+      return null;
+    });
+
     const seq = allocateFoReceiptSequenceStep({});
 
     const stockInput = transform({ input }, (data) => ({
