@@ -222,7 +222,27 @@ export default async function syncQbInventory({ container, args }: ExecArgs) {
     return; // Or allow continuing if in testing with mocked data
   }
 
-  // 5. Processing Updates
+  // 5. Guard: void any open inventory counts for items about to be overwritten.
+  const allInventoryItemIds = qbVariants
+    .map((v: any) => v.inventory_items?.[0]?.inventory_item_id)
+    .filter(Boolean) as string[];
+  if (!isDryRun) {
+    const voided = await cancelOpenCountsForItems(
+      knex,
+      allInventoryItemIds,
+      "QB big sync (sync-qb-inventory)"
+    );
+    if (voided.length > 0) {
+      logger.warn(
+        `⚠️  Auto-voided ${voided.length} open inventory count(s) whose deltas would have been invalidated by this sync:`
+      );
+      for (const v of voided) {
+        logger.warn(`   • ${v.count_number ?? v.count_id} (${v.lines_affected} line(s))`);
+      }
+    }
+  }
+
+  // 6. Processing Updates
   logger.info("\n🔄 Processing Updates...");
   let updatedStock = 0;
   let missingInQb = 0;
