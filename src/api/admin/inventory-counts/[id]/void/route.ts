@@ -25,12 +25,12 @@ import {
 import { zodErrorToBody } from "../../_lib/format";
 import { getInventoryCountService } from "../../_lib/service-resolver";
 import { voidSchema } from "../../_lib/validators";
+import { getDbPool } from "../../../../utils/db-pool";
 
 interface PipelineRowLite {
   id: string;
   status: string;
-  qb_list_id: string | null;
-  void_status: string | null;
+  qb_txn_id: string | null;
 }
 
 export async function POST(
@@ -93,19 +93,23 @@ export async function POST(
       delta_applied: l.delta_applied ?? 0,
     }));
 
-  // Pipeline rows that already reached QB (have qb_list_id, status='synced')
-  // are the ones we need to void in QB. Rows still in error/waiting/processing
-  // are dropped from the QB-side flow — we can't void what was never sent.
-  const pipelineRows = (await service.listQbInventoryAdjustmentPipelines(
-    { inventory_count_id: id },
-    { take: 100 }
-  )) as PipelineRowLite[];
+  // Find inventory_adjustment rows in qb_order_pipeline that were confirmed
+  // by QB (status='confirmed', qb_txn_id populated). Only confirmed rows have
+  // the qb_txn_id needed by voidInventoryAdjustmentInQb. Rows still pending /
+  // submitted / failed were never synced to QB — nothing to void there.
+  const pool = getDbPool();
+  const { rows: pipelineRows } = await pool.query<PipelineRowLite>(
+    `SELECT id, status, qb_txn_id
+       FROM qb_order_pipeline
+      WHERE order_id = $1
+        AND step = 'inventory_adjustment'
+      ORDER BY created_at ASC`,
+    [id]
+  );
 
   const rowsToVoid = pipelineRows
-    .filter(
-      (r) => r.status === "synced" && !!r.qb_list_id && r.void_status === null
-    )
-    .map((r) => r.id);
+    .filter((r) => r.status === "confirmed" && r.qb_txn_id !== null)
+    .map((r) => ({ id: r.id, qb_txn_id: r.qb_txn_id! }));
 
   try {
     const { result } = await voidInventoryCountWorkflow(req.scope).run({
@@ -115,7 +119,7 @@ export async function POST(
         void_reason,
         stock_location_id: count.stock_location_id,
         lines_to_reverse: linesToReverse,
-        pipeline_row_ids_to_void: rowsToVoid,
+        pipeline_rows_to_void: rowsToVoid,
       },
     });
 

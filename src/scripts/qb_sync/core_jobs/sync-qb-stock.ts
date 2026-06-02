@@ -1,6 +1,7 @@
 import { ExecArgs } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 import { IInventoryService, IStockLocationService } from "@medusajs/types";
+import { cancelOpenCountsForItems } from "../../../lib/cancel-open-counts-for-items";
 
 // Config
 const BRIDGE_URL = "https://qb.eptbridge.com";
@@ -15,6 +16,7 @@ const MAX_POLL_ATTEMPTS = 20; // 10 minutes max
  */
 export default async function syncQbStock({ container }: ExecArgs) {
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
+  const knex = container.resolve(ContainerRegistrationKeys.PG_CONNECTION);
   const inventoryService: IInventoryService = container.resolve(
     Modules.INVENTORY
   );
@@ -119,7 +121,27 @@ export default async function syncQbStock({ container }: ExecArgs) {
     return;
   }
 
-  // 5. Update ONLY Stock (with comparison)
+  // 5. Guard: void any open inventory counts for items about to be overwritten.
+  //    A submitted count stores a frozen delta vs the old stock; if we overwrite
+  //    stocked_quantity the delta becomes stale and would corrupt inventory on approve.
+  const allInventoryItemIds = qbVariants
+    .map((v: any) => v.inventory_items?.[0]?.inventory_item_id)
+    .filter(Boolean) as string[];
+  const voided = await cancelOpenCountsForItems(
+    knex,
+    allInventoryItemIds,
+    "QB stock sync (sync-qb-stock)"
+  );
+  if (voided.length > 0) {
+    logger.warn(
+      `⚠️  Auto-voided ${voided.length} open inventory count(s) whose deltas would have been invalidated by this sync:`
+    );
+    for (const v of voided) {
+      logger.warn(`   • ${v.count_number ?? v.count_id} (${v.lines_affected} line(s))`);
+    }
+  }
+
+  // 6. Update ONLY Stock (with comparison)
   logger.info("\n📦 Processing Stock Updates...");
   let updatedStock = 0;
   let skippedNoChange = 0;

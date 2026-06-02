@@ -39,6 +39,13 @@ interface InventoryServiceLike {
     location_id: string,
     adjustment: number
   ) => Promise<void>;
+  createInventoryLevels: (
+    data: Array<{
+      inventory_item_id: string;
+      location_id: string;
+      stocked_quantity?: number;
+    }>
+  ) => Promise<unknown>;
 }
 
 export const applyFoReceiptStockStep = createStep(
@@ -65,6 +72,19 @@ export const applyFoReceiptStockStep = createStep(
         { take: 1 }
       );
       const preStock = levels[0]?.stocked_quantity ?? 0;
+
+      // Guard: if no inventory_level row exists for this item at this location
+      // (e.g. new SKU never received in China before), create one at 0 first —
+      // adjustInventory throws on a missing level. Mirrors adjust-fo-receipt-stock-step.
+      if (levels.length === 0) {
+        await inventoryService.createInventoryLevels([
+          {
+            inventory_item_id: line.inventory_item_id,
+            location_id: input.location_id,
+            stocked_quantity: 0,
+          },
+        ]);
+      }
 
       await inventoryService.adjustInventory(
         line.inventory_item_id,

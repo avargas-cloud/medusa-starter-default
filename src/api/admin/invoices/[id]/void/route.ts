@@ -148,29 +148,41 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           );
 
           // 0C. Re-create the Reservation Item strictly bound to the un-fulfilled line item
-          try {
-            const { createReservationsWorkflow } =
-              await import("@medusajs/core-flows");
-            await createReservationsWorkflow(req.scope).run({
-              input: {
-                reservations: [
-                  {
-                    inventory_item_id: inventoryItemId,
-                    location_id: locationId,
-                    quantity: qtyToRevert,
-                    line_item_id: reqItem.line_item_id,
-                    allow_backorder: true,
-                    description: `Auto-restored via Void of Invoice ${invoice.invoice_number || invoice.id}`,
-                  },
-                ],
-              },
-            });
-            console.log(`[VOID INVOICE] createReservationsWorkflow Success`);
-          } catch (err) {
-            console.error(
-              "[Void Invoice] Could not recreate reservation item silently:",
-              err
+          // Guard: skip if an active reservation already exists for this line item
+          // to prevent double-reservation on void of a partially-fulfilled order.
+          const existingResv = await inventoryModule.listReservationItems(
+            { line_item_id: reqItem.line_item_id },
+            { take: 1, select: ["id"] }
+          );
+          if (existingResv.length > 0) {
+            console.log(
+              `[VOID INVOICE] Reservation already exists for line_item ${reqItem.line_item_id}, skipping recreation`
             );
+          } else {
+            try {
+              const { createReservationsWorkflow } =
+                await import("@medusajs/core-flows");
+              await createReservationsWorkflow(req.scope).run({
+                input: {
+                  reservations: [
+                    {
+                      inventory_item_id: inventoryItemId,
+                      location_id: locationId,
+                      quantity: qtyToRevert,
+                      line_item_id: reqItem.line_item_id,
+                      allow_backorder: true,
+                      description: `Auto-restored via Void of Invoice ${invoice.invoice_number || invoice.id}`,
+                    },
+                  ],
+                },
+              });
+              console.log(`[VOID INVOICE] createReservationsWorkflow Success`);
+            } catch (err) {
+              console.error(
+                "[Void Invoice] Could not recreate reservation item silently:",
+                err
+              );
+            }
           }
         }
       }
@@ -206,6 +218,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           const { createReservationsWorkflow } = await import(
             "@medusajs/core-flows"
           );
+          const invModNF = req.scope.resolve(Modules.INVENTORY) as any;
           for (const posItem of invItemsRes.rows) {
             if (!posItem.quantity || !posItem.variant_id) continue;
             const orderItem = orderItemsRes.rows.find(
@@ -222,6 +235,17 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             const inventoryItemId =
               invLinkRes.rows[0]?.inventory_item_id;
             if (!inventoryItemId) continue;
+            // Guard: skip if an active reservation already exists for this line item
+            const existingResvNF = await invModNF.listReservationItems(
+              { line_item_id: orderItem.line_item_id },
+              { take: 1, select: ["id"] }
+            );
+            if (existingResvNF.length > 0) {
+              console.log(
+                `[VOID INVOICE] Reservation already exists for line_item ${orderItem.line_item_id} (no-fulfillment path), skipping`
+              );
+              continue;
+            }
             try {
               await createReservationsWorkflow(req.scope).run({
                 input: {

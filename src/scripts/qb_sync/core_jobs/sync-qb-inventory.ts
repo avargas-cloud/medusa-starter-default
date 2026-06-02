@@ -1,5 +1,6 @@
 import { ExecArgs } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
+import { cancelOpenCountsForItems } from "../../../lib/cancel-open-counts-for-items";
 // Fix: Use IInventoryService instead of Internal
 import {
   IProductModuleService,
@@ -16,6 +17,7 @@ const MAX_POLL_ATTEMPTS = 20; // 10 minutes max
 
 export default async function syncQbInventory({ container, args }: ExecArgs) {
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
+  const knex = container.resolve(ContainerRegistrationKeys.PG_CONNECTION);
   const productModule: IProductModuleService = container.resolve(
     Modules.PRODUCT
   );

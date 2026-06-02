@@ -9,10 +9,14 @@ import type {
   MedusaResponse,
 } from "@medusajs/framework/http";
 
+import { Modules } from "@medusajs/utils";
+
 import { getActorUserId, UnauthenticatedError } from "../../_lib/auth";
 import { zodErrorToBody } from "../../_lib/format";
 import { getFactoryOrdersService } from "../../_lib/service-resolver";
 import { voidSchema } from "../../_lib/validators";
+import { getDbPool } from "../../../../utils/db-pool";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
 
 interface FoLine {
   id: string;
@@ -49,7 +53,11 @@ export async function POST(
 
   const fo = (await service
     .retrieveFactoryOrder(id)
-    .catch(() => null)) as unknown as { id: string; status: string } | null;
+    .catch(() => null)) as unknown as {
+    id: string;
+    status: string;
+    stock_location_id: string;
+  } | null;
   if (!fo) {
     return res
       .status(404)
@@ -84,6 +92,51 @@ export async function POST(
 
   if (lineUpdates.length > 0) {
     await service.updateFactoryOrderLines(lineUpdates);
+  }
+
+  // Reverse China inventory for all quantities already received on this FO.
+  // Receipts that were individually deleted already had their stock reversed
+  // by delete-factory-order-receipt workflow — exclude voided receipts.
+  const pool = getDbPool();
+  const { rows: receivedItems } = await pool.query<{
+    inventory_item_id: string;
+    total_received: number;
+  }>(
+    `SELECT frl.inventory_item_id, SUM(frl.qty_received_now)::int AS total_received
+       FROM factory_order_receipt_line frl
+       JOIN factory_order_receipt fr ON fr.id = frl.factory_order_receipt_id
+      WHERE fr.factory_order_id = $1
+        AND fr.deleted_at IS NULL
+        AND frl.deleted_at IS NULL
+        AND fr.status NOT IN ('voided')
+      GROUP BY frl.inventory_item_id
+      HAVING SUM(frl.qty_received_now) > 0`,
+    [id]
+  );
+
+  if (receivedItems.length > 0) {
+    const inventoryModule = req.scope.resolve(Modules.INVENTORY) as any;
+    for (const item of receivedItems) {
+      try {
+        await inventoryModule.adjustInventory(
+          item.inventory_item_id,
+          fo.stock_location_id,
+          -item.total_received
+        );
+      } catch (invErr: any) {
+        console.warn(
+          `[FO void] inventory reversal failed for ${item.inventory_item_id}: ${invErr?.message}`
+        );
+      }
+    }
+    // Sync MeiliSearch chinaStock for all reversed items
+    await Promise.allSettled(
+      receivedItems.map(({ inventory_item_id }) =>
+        syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+          input: { inventoryItemId: inventory_item_id },
+        })
+      )
+    );
   }
 
   const [updated] = await service.updateFactoryOrders([

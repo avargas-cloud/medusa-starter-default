@@ -23,6 +23,7 @@ export interface ClassifyLineInput {
   inventory_item_id: string;
   sku: string;
   qty_at_count_time: number;
+  qty_counted: number;
   delta_original: number;
   current_stock_now: number;
   qb_account_list_id_line: string | null; // line override

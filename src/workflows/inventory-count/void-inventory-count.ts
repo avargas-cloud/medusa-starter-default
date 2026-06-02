@@ -25,7 +25,10 @@ import {
   contraApplyStockStep,
   type ContraApplyStockStepInput,
 } from "./steps/contra-apply-stock-step";
-import { persistVoidResultsStep } from "./steps/persist-void-results-step";
+import {
+  persistVoidResultsStep,
+  type PipelineRowToVoid,
+} from "./steps/persist-void-results-step";
 import { syncReceiptInventoryMeiliStep } from "../shared/steps/sync-receipt-inventory-meili-step";
 
 export interface VoidInventoryCountWorkflowInput {
@@ -34,7 +37,7 @@ export interface VoidInventoryCountWorkflowInput {
   void_reason: string;
   stock_location_id: string;
   lines_to_reverse: ContraApplyStockStepInput["lines"];
-  pipeline_row_ids_to_void: string[];
+  pipeline_rows_to_void: PipelineRowToVoid[];
 }
 
 export interface VoidInventoryCountWorkflowOutput {
@@ -63,7 +66,7 @@ export const voidInventoryCountWorkflow = createWorkflow(
       voided_by_user_id: input.voided_by_user_id,
       void_reason: input.void_reason,
       affected_line_ids: affectedLineIds,
-      pipeline_row_ids: input.pipeline_row_ids_to_void,
+      pipeline_rows: input.pipeline_rows_to_void,
     });
 
     // Mirror approve-inventory-count: a void contra-applies stock, so the

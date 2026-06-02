@@ -243,6 +243,28 @@ export async function POST(
     }
   }
 
+  // Guard: if this PO is linked to a China→Miami inventory transfer, require
+  // the transfer to be in 'shipped' status before receiving. If the IT is still
+  // 'confirmed', onPoReceiveApplied silently skips the China stock decrement →
+  // Miami increases but China never decreases → phantom double-count.
+  const itCheckRows = (
+    await knex.raw(
+      `SELECT id, status FROM inventory_transfer
+        WHERE linked_purchase_order_id = $1
+          AND deleted_at IS NULL
+          AND status NOT IN ('received', 'voided', 'cancelled')
+        LIMIT 1`,
+      [id]
+    )
+  ).rows as Array<{ id: string; status: string }>;
+  const pendingTransfer = itCheckRows[0];
+  if (pendingTransfer && pendingTransfer.status !== "shipped") {
+    return res.status(409).json({
+      error: `This PO is linked to an inventory transfer (${pendingTransfer.id}) currently in '${pendingTransfer.status}' status. Mark the transfer as shipped before receiving to ensure China stock is correctly decremented.`,
+      code: "transfer_not_shipped",
+    });
+  }
+
   const receivedAt = body.received_at ? new Date(body.received_at) : new Date();
   const stockLocationId = body.stock_location_id ?? po.stock_location_id;
   const qbMemo =

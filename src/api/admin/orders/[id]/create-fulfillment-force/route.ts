@@ -3,6 +3,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
 
 import { getDbPool } from "../../../../utils/db-pool";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
 
 /**
  * POST /admin/orders/:id/create-fulfillment-force
@@ -468,6 +469,71 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       return res.status(500).json({
         message: `Fulfillment ${fulfillment.id} created but could not be linked to order ${orderId}; orphan deleted to keep state consistent.`,
       });
+    }
+
+    // ── Inventory: release reservations + decrement stock (Strategy 2 only) ──
+    // Strategy 1 handles this inside createOrderFulfillmentWorkflow
+    // (adjustInventoryLevelsStep + deleteReservationsStep). Strategy 2 bypasses
+    // the workflow so we do it manually to keep stock counts accurate.
+    if (pool) {
+      const inventoryModule = req.scope.resolve(Modules.INVENTORY) as any;
+      const meiliSyncIds: string[] = [];
+
+      for (const reqItem of items) {
+        try {
+          const orderItem = orderData?.items?.find(
+            (i: any) => i.id === reqItem.id
+          );
+          const variantId = orderItem?.variant_id;
+          if (!variantId) continue;
+
+          const invRes = await pool.query<{ inventory_item_id: string }>(
+            `SELECT inventory_item_id FROM product_variant_inventory_item
+             WHERE variant_id = $1 AND deleted_at IS NULL LIMIT 1`,
+            [variantId]
+          );
+          const inventoryItemId = invRes.rows[0]?.inventory_item_id;
+          if (!inventoryItemId) continue;
+
+          // Release existing reservations for this line item
+          const existing = await inventoryModule.listReservationItems(
+            { line_item_id: reqItem.id },
+            { take: 10, select: ["id"] }
+          );
+          if (existing.length > 0) {
+            await inventoryModule.deleteReservationItems(
+              existing.map((r: any) => r.id)
+            );
+          }
+
+          // Decrement physical stock
+          await inventoryModule.adjustInventory(
+            inventoryItemId,
+            location_id,
+            -reqItem.quantity
+          );
+
+          meiliSyncIds.push(inventoryItemId);
+          console.log(
+            `[create-fulfillment-force] ✅ Inventory decremented ${reqItem.quantity} for item ${inventoryItemId}`
+          );
+        } catch (invErr: any) {
+          console.warn(
+            `[create-fulfillment-force] inventory decrement failed for item ${reqItem.id}: ${invErr?.message}`
+          );
+        }
+      }
+
+      // Belt-and-suspenders Meili sync (PG trigger is backstop, this is inline)
+      if (meiliSyncIds.length > 0) {
+        await Promise.allSettled(
+          meiliSyncIds.map((inventoryItemId) =>
+            syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+              input: { inventoryItemId },
+            })
+          )
+        );
+      }
     }
 
     // ── fulfilled_quantity fix (Strategy 2 only) ──────────────────────────

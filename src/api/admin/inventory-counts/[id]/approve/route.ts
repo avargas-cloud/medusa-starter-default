@@ -121,6 +121,7 @@ export async function POST(
       inventory_item_id: l.inventory_item_id,
       sku: l.sku,
       qty_at_count_time: l.qty_at_count_time ?? 0,
+      qty_counted: l.qty_counted ?? 0,
       delta_original: l.delta_original ?? 0,
       current_stock_now: stockByItem.get(l.inventory_item_id) ?? 0,
       qb_account_list_id_line: l.qb_account_list_id,
