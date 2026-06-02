@@ -58,5 +58,5 @@ export default async function purchasingSnapshotOnEvent({
 }
 
 export const config: SubscriberConfig = {
-  event: ["order.completed", "order.canceled"],
+  event: ["order.completed", "order.canceled", "pos.order.fulfilled"],
 };

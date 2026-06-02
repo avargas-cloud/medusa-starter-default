@@ -1211,16 +1211,25 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           )
         );
       const isShipping = shippingMethods.length > 0 && !isPickup;
-      const fulfillmentStatus: string =
-        orderForStatus?.fulfillment_status ?? "";
+      // query.graph silently drops the computed fulfillment_status getter.
+      // Use SQL to check whether all order items are fulfilled instead.
+      let isFullyFulfilled = false;
+      try {
+        const fulfillCheckForStatus = await pgConnection.raw(
+          `SELECT COUNT(*) FILTER (WHERE oi.fulfilled_quantity < oi.quantity) AS unfulfilled
+           FROM order_item oi WHERE oi.order_id = ?`,
+          [body.order_id]
+        );
+        isFullyFulfilled =
+          Number(fulfillCheckForStatus.rows[0]?.unfulfilled ?? 1) === 0;
+      } catch {
+        /* fail-open: default to Approved */
+      }
 
       let derivedOrderStatus: string;
       if (isShipping) {
         derivedOrderStatus = "Ready to Ship";
-      } else if (
-        body.fulfillment_id &&
-        ["fulfilled", "delivered"].includes(fulfillmentStatus)
-      ) {
+      } else if (body.fulfillment_id && isFullyFulfilled) {
         derivedOrderStatus = "Fulfilled";
       } else {
         derivedOrderStatus = "Approved";
@@ -1267,6 +1276,88 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       `[invoice] pos.invoice.created emit failed: ${emitErr?.message}`
     );
   }
+
+  // Auto-complete order in Medusa native once fully fulfilled + fully paid.
+  // Non-fatal by design — the 201 is already in flight. The 1500ms delay lets
+  // Medusa's query-graph projection catch up before completeOrderWorkflow reads
+  // payment_status internally (it checks payment_collection.status = captured).
+  // ⚠️ Capture scope + pgConnection before setTimeout — req may be GC'd after response.
+  const scopeForClose = req.scope;
+  const pgConnForClose = pgConnection;
+  const orderIdForClose = body.order_id;
+
+  setTimeout(async () => {
+    try {
+      // Guard 0: quick bail — only attempt on fully-paid invoices
+      // balance_due is a local variable: body.total - body.amount_paid (both cents)
+      if (balance_due > 0) return;
+
+      // Guard 1: order must still be 'pending' (not already completed / cancelled)
+      const orderModForClose = scopeForClose.resolve(Modules.ORDER) as any;
+      const orderForClose = await orderModForClose.retrieveOrder(
+        orderIdForClose,
+        { select: ["id", "status"] }
+      );
+      if (orderForClose?.status !== "pending") return;
+
+      // Guard 2: all order_item rows are fully fulfilled
+      const fulfillCheck = await pgConnForClose.raw(
+        `SELECT COUNT(*) FILTER (WHERE oi.fulfilled_quantity < oi.quantity) AS unfulfilled
+         FROM order_item oi WHERE oi.order_id = ?`,
+        [orderIdForClose]
+      );
+      if (Number(fulfillCheck.rows[0]?.unfulfilled ?? 1) > 0) return;
+
+      // Guard 3: fully paid via pos_invoices (both columns in cents — same table, no scale issue)
+      const paidCheck = await pgConnForClose.raw(
+        `SELECT COALESCE(SUM(amount_paid), 0) AS paid_cents,
+                COALESCE(SUM(total), 0)       AS invoiced_cents
+         FROM pos_invoice
+         WHERE order_id = ? AND status != 'voided'`,
+        [orderIdForClose]
+      );
+      const paidCents = Number(paidCheck.rows[0]?.paid_cents ?? 0);
+      const invoicedCents = Number(paidCheck.rows[0]?.invoiced_cents ?? 1);
+      // 1-cent tolerance for rounding; also skip if nothing has been invoiced
+      if (invoicedCents === 0 || paidCents < invoicedCents - 1) return;
+
+      // Guard 4: no draft/open credit memos (fail-open — skip if query fails)
+      try {
+        const cmCheck = await pgConnForClose.raw(
+          `SELECT COUNT(*) AS draft_cm FROM pos_credit_memo
+           WHERE order_id = ? AND status NOT IN ('completed', 'voided')`,
+          [orderIdForClose]
+        );
+        if (Number(cmCheck.rows[0]?.draft_cm ?? 0) > 0) return;
+      } catch {
+        return; // fail-open: can't verify credit memos, skip completion
+      }
+
+      // All guards passed → complete the order natively in Medusa
+      const { completeOrderWorkflow } = await import("@medusajs/core-flows");
+      // ⚠️ input shape is { orderIds: string[] } — plural array, NOT orderId
+      await completeOrderWorkflow(scopeForClose).run({
+        input: { orderIds: [orderIdForClose] },
+      });
+      console.log(`[invoice] ✅ order ${orderIdForClose} auto-completed in Medusa`);
+
+      // Emit custom event so purchasing-snapshot-on-event fires immediately
+      try {
+        const eventBusForClose = scopeForClose.resolve(Modules.EVENT_BUS);
+        await eventBusForClose.emit({
+          name: "pos.order.fulfilled",
+          data: { id: orderIdForClose },
+        });
+      } catch {
+        /* non-fatal */
+      }
+    } catch (closeErr: any) {
+      // Explicitly non-fatal — order stays pending, Fix C backfill will catch it
+      console.warn(
+        `[invoice] completeOrderWorkflow skipped: ${closeErr?.message?.slice(0, 120)}`
+      );
+    }
+  }, 1500);
 
   return res.status(201).json({ invoice: full });
 }
