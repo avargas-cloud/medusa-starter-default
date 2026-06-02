@@ -69,9 +69,15 @@ export async function POST(
               });
               const firstLevel = levels?.[0];
               if (firstLevel) {
+                // Only reverse what was actually restocked: complete/route.ts
+                // adds (item.quantity - item.damaged_qty); void must mirror that.
+                const restockableQty = Math.max(
+                  0,
+                  (item.quantity ?? 0) - (item.damaged_qty || 0)
+                );
                 const newQty = Math.max(
                   0,
-                  (firstLevel.stocked_quantity ?? 0) - (item.quantity ?? 0)
+                  (firstLevel.stocked_quantity ?? 0) - restockableQty
                 );
                 await inventoryService.updateInventoryLevels({
                   id: firstLevel.id,

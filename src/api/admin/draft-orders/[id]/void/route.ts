@@ -76,6 +76,19 @@ export async function POST(
         input: { order_id: orderId },
       });
     } catch (cancelErr: any) {
+      // cancelOrderWorkflow throws when active fulfillments exist.
+      // Surface a user-friendly 409 so POS shows actionable guidance.
+      if (
+        cancelErr.message?.toLowerCase().includes("fulfillment") ||
+        cancelErr.message?.includes("All fulfillments must be canceled")
+      ) {
+        res.status(409).json({
+          error:
+            "Cannot void estimate — it has active fulfillments. Void the invoice first, then retry.",
+          code: "has_active_fulfillments",
+        });
+        return;
+      }
       console.error(
         "[VoidEstimate] cancelOrderWorkflow failed:",
         cancelErr.message

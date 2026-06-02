@@ -3,8 +3,9 @@
  *   - per-line qty_received_now — re-balances inventory + FO line counters.
  *
  * Pipeline:
- *   1. adjustFoReceiptStockStep       — applies +/- deltas on inventory_levels
- *   2. persistUpdateFoReceiptStep     — writes receipt lines, recomputes counters
+ *   1. adjustFoReceiptStockStep           — applies +/- deltas on inventory_levels
+ *   2. persistUpdateFoReceiptStep         — writes receipt lines, recomputes counters
+ *   3. syncReceiptInventoryMeiliStep      — refreshes MeiliSearch chinaStock inline
  */
 
 import {
@@ -15,6 +16,7 @@ import {
 
 import { adjustFoReceiptStockStep } from "./steps/adjust-fo-receipt-stock-step";
 import { persistUpdateFoReceiptStep } from "./steps/persist-update-fo-receipt-step";
+import { syncReceiptInventoryMeiliStep } from "../shared/steps/sync-receipt-inventory-meili-step";
 
 export interface UpdateFoReceiptWorkflowInputLine {
   receipt_line_id: string;
@@ -70,6 +72,15 @@ export const updateFactoryOrderReceiptWorkflow = createWorkflow(
     }));
 
     const persisted = persistUpdateFoReceiptStep(persistInput);
+
+    // Sync MeiliSearch chinaStock for all touched items inline (belt-and-suspenders;
+    // PG trigger is backstop but this gives instant parity after a receipt edit).
+    const meiliInput = transform({ input }, (data) => ({
+      inventory_item_ids: Array.from(
+        new Set(data.input.line_changes.map((l) => l.inventory_item_id))
+      ),
+    }));
+    syncReceiptInventoryMeiliStep(meiliInput);
 
     const response = transform({ adjusted, persisted }, (data) => ({
       receipt_id: data.persisted.receipt_id,
