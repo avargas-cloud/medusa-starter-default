@@ -594,24 +594,55 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           [invoice.fulfillment_id]
         );
 
+        // If this fulfillment was already SHIPPED, voiding it must also roll back
+        // shipped_quantity. Medusa never reverses shipped_quantity on cancel, so a
+        // void-then-refulfill leaves shipped_quantity stuck at its old value, and the
+        // next shipment is blocked by "Cannot ship more items than what was fulfilled"
+        // (shipped >= fulfilled). We only decrement when shipped_at is set so we never
+        // under-count an unshipped fulfillment. (Fixed 2026-06-02 — invoice 20561.)
+        const fulShipRes = await pool.query<{ shipped_at: Date | null }>(
+          `SELECT shipped_at FROM fulfillment WHERE id = $1 LIMIT 1`,
+          [invoice.fulfillment_id]
+        );
+        const fulfillmentWasShipped = !!fulShipRes.rows[0]?.shipped_at;
+
         // 2. Reverse the counts in Medusa's high-precision JSONB schema
         for (const fItem of fItems.rows) {
           // Reverse fulfilled quantity
           await pool.query(
             `
-                        UPDATE order_item 
-                        SET 
+                        UPDATE order_item
+                        SET
                             fulfilled_quantity = GREATEST(0, fulfilled_quantity - $1::numeric),
                             raw_fulfilled_quantity = jsonb_set(
-                                raw_fulfilled_quantity, 
-                                '{value}', 
-                                to_jsonb(GREATEST(0, (raw_fulfilled_quantity->>'value')::numeric - $1::numeric)::text), 
+                                raw_fulfilled_quantity,
+                                '{value}',
+                                to_jsonb(GREATEST(0, (raw_fulfilled_quantity->>'value')::numeric - $1::numeric)::text),
                                 false
                             )
                         WHERE item_id = $2
                      `,
             [fItem.quantity, fItem.line_item_id]
           );
+
+          // Reverse shipped quantity (only if this fulfillment had been shipped)
+          if (fulfillmentWasShipped) {
+            await pool.query(
+              `
+                        UPDATE order_item
+                        SET
+                            shipped_quantity = GREATEST(0, shipped_quantity - $1::numeric),
+                            raw_shipped_quantity = jsonb_set(
+                                raw_shipped_quantity,
+                                '{value}',
+                                to_jsonb(GREATEST(0, (raw_shipped_quantity->>'value')::numeric - $1::numeric)::text),
+                                false
+                            )
+                        WHERE item_id = $2
+                     `,
+              [fItem.quantity, fItem.line_item_id]
+            );
+          }
 
           // The allocated (reservation) quantity is natively restored by createReservationsWorkflow in Step 0C.
           // We previously ran a manual SQL update here that caused duplicate allocations.
