@@ -1,6 +1,6 @@
 import { ExecArgs } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
-import { cancelOpenCountsForItems } from "../../../lib/cancel-open-counts-for-items";
+import { applyBulkInventorySync } from "../../../lib/apply-bulk-inventory-sync";
 // Fix: Use IInventoryService instead of Internal
 import {
   IProductModuleService,
@@ -17,7 +17,6 @@ const MAX_POLL_ATTEMPTS = 20; // 10 minutes max
 
 export default async function syncQbInventory({ container, args }: ExecArgs) {
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
-  const knex = container.resolve(ContainerRegistrationKeys.PG_CONNECTION);
   const productModule: IProductModuleService = container.resolve(
     Modules.PRODUCT
   );
@@ -222,27 +221,16 @@ export default async function syncQbInventory({ container, args }: ExecArgs) {
     return; // Or allow continuing if in testing with mocked data
   }
 
-  // 5. Guard: void any open inventory counts for items about to be overwritten.
-  const allInventoryItemIds = qbVariants
-    .map((v: any) => v.inventory_items?.[0]?.inventory_item_id)
-    .filter(Boolean) as string[];
-  if (!isDryRun) {
-    const voided = await cancelOpenCountsForItems(
-      knex,
-      allInventoryItemIds,
-      "QB big sync (sync-qb-inventory)"
-    );
-    if (voided.length > 0) {
-      logger.warn(
-        `⚠️  Auto-voided ${voided.length} open inventory count(s) whose deltas would have been invalidated by this sync:`
-      );
-      for (const v of voided) {
-        logger.warn(`   • ${v.count_number ?? v.count_id} (${v.lines_affected} line(s))`);
-      }
-    }
-  }
+  // 5. Collect stock items for bulk sync (applied after the price-update loop)
+  const stockSyncItems: Array<{
+    inventory_item_id: string;
+    variant_id: string;
+    sku: string;
+    product_title: string;
+    qty_new: number;
+  }> = [];
 
-  // 6. Processing Updates
+  // 6. Processing Updates (prices only — stock handled via applyBulkInventorySync below)
   logger.info("\n🔄 Processing Updates...");
   let updatedStock = 0;
   let missingInQb = 0;
@@ -279,51 +267,15 @@ export default async function syncQbInventory({ container, args }: ExecArgs) {
     let inventoryItemId = variant.inventory_items?.[0]?.inventory_item_id;
 
     if (inventoryItemId) {
-      if (!isNaN(newStock)) {
-        if (isDryRun) {
-          // Only log DRY run differences, but we'd need to fetch the level to know for sure.
-          // Let's just log it if we really need to, but skip to keep logs clean
-        } else {
-          try {
-            const levels = await inventoryService.listInventoryLevels({
-              inventory_item_id: inventoryItemId,
-              location_id: locationId,
-            });
-
-            if (levels.length > 0) {
-              const currentStock = levels[0].stocked_quantity;
-              if (currentStock === newStock) {
-                // No change, skip database mutation AND log
-                continue;
-              }
-
-              logger.info(
-                `   🔄 [${variantTitle}] Updating Stock: ${currentStock} -> ${newStock}`
-              );
-              await inventoryService.updateInventoryLevels({
-                id: levels[0].id,
-                inventory_item_id: inventoryItemId,
-                location_id: locationId,
-                stocked_quantity: newStock,
-              });
-            } else {
-              logger.info(
-                `   ✨ [${variantTitle}] Creating new level with Stock: ${newStock}`
-              );
-              await inventoryService.createInventoryLevels({
-                inventory_item_id: inventoryItemId,
-                location_id: locationId,
-                stocked_quantity: newStock,
-                incoming_quantity: 0,
-              });
-            }
-            updatedStock++;
-          } catch (err: any) {
-            logger.error(
-              `   ❌ Inventory Update Failed for ${variantTitle}: ${err.message}`
-            );
-          }
-        }
+      if (!isNaN(newStock) && !isDryRun) {
+        stockSyncItems.push({
+          inventory_item_id: inventoryItemId,
+          variant_id: variant.id,
+          sku: variant.sku,
+          product_title: (variant as any).title || variant.sku,
+          qty_new: newStock,
+        });
+        updatedStock++;
       }
     } else {
       logger.warn(
@@ -332,12 +284,28 @@ export default async function syncQbInventory({ container, args }: ExecArgs) {
     }
   }
 
+  // Apply stock changes via inventory count module (audit trail, no QB re-enqueue)
+  let stockResult = { applied: 0, blocked: 0, skipped_no_change: 0, voided_prior_counts: 0, count_id: null as string | null };
+  if (!isDryRun && stockSyncItems.length > 0) {
+    stockResult = await applyBulkInventorySync(container, {
+      items: stockSyncItems,
+      memo: `QB Big Sync ${new Date().toISOString().slice(0, 10)}`,
+      location_id: locationId,
+      source: "qb_sync",
+    });
+  }
+
   logger.info(`\n${"=".repeat(50)}`);
   logger.info("✅ SYNC SUMMARY");
   logger.info(`${"=".repeat(50)}`);
   logger.info(`Total Linked Variants: ${qbVariants.length}`);
   logger.info(`Found in QB:           ${qbVariants.length - missingInQb}`);
   logger.info(`Missing in QB:         ${missingInQb}`);
-  logger.info(`Updated Inventory:     ${updatedStock}`);
+  logger.info(`Stock candidates:      ${updatedStock}`);
+  logger.info(`Stock applied:         ${stockResult.applied}`);
+  logger.info(`Stock blocked:         ${stockResult.blocked}`);
+  logger.info(`Stock unchanged:       ${stockResult.skipped_no_change}`);
+  logger.info(`Prior counts voided:   ${stockResult.voided_prior_counts}`);
+  if (stockResult.count_id) logger.info(`Audit count:           ${stockResult.count_id}`);
   logger.info(`${"=".repeat(50)}\n`);
 }

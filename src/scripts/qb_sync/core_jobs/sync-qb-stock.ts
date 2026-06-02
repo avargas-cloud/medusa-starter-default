@@ -1,7 +1,7 @@
 import { ExecArgs } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
-import { IInventoryService, IStockLocationService } from "@medusajs/types";
-import { cancelOpenCountsForItems } from "../../../lib/cancel-open-counts-for-items";
+import { IStockLocationService } from "@medusajs/types";
+import { applyBulkInventorySync } from "../../../lib/apply-bulk-inventory-sync";
 
 // Config
 const BRIDGE_URL = "https://qb.eptbridge.com";
@@ -16,10 +16,6 @@ const MAX_POLL_ATTEMPTS = 20; // 10 minutes max
  */
 export default async function syncQbStock({ container }: ExecArgs) {
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
-  const knex = container.resolve(ContainerRegistrationKeys.PG_CONNECTION);
-  const inventoryService: IInventoryService = container.resolve(
-    Modules.INVENTORY
-  );
   const stockLocationService: IStockLocationService = container.resolve(
     Modules.STOCK_LOCATION
   );
@@ -121,103 +117,47 @@ export default async function syncQbStock({ container }: ExecArgs) {
     return;
   }
 
-  // 5. Guard: void any open inventory counts for items about to be overwritten.
-  //    A submitted count stores a frozen delta vs the old stock; if we overwrite
-  //    stocked_quantity the delta becomes stale and would corrupt inventory on approve.
-  const allInventoryItemIds = qbVariants
-    .map((v: any) => v.inventory_items?.[0]?.inventory_item_id)
-    .filter(Boolean) as string[];
-  const voided = await cancelOpenCountsForItems(
-    knex,
-    allInventoryItemIds,
-    "QB stock sync (sync-qb-stock)"
-  );
-  if (voided.length > 0) {
-    logger.warn(
-      `⚠️  Auto-voided ${voided.length} open inventory count(s) whose deltas would have been invalidated by this sync:`
-    );
-    for (const v of voided) {
-      logger.warn(`   • ${v.count_number ?? v.count_id} (${v.lines_affected} line(s))`);
-    }
-  }
-
-  // 6. Update ONLY Stock (with comparison)
-  logger.info("\n📦 Processing Stock Updates...");
-  let updatedStock = 0;
-  let skippedNoChange = 0;
-  let skippedNoInventory = 0;
+  // 5. Build sync item list from QB data
+  logger.info("\n📦 Building stock sync list from QB data...");
   let missingInQb = 0;
+  let skippedNoInventory = 0;
+  const syncItems: Array<{
+    inventory_item_id: string;
+    variant_id: string;
+    sku: string;
+    product_title: string;
+    qty_new: number;
+  }> = [];
 
   const qbMap = new Map(qbData.map((item: any) => [item.ListID, item]));
 
   for (const variant of qbVariants) {
     const qbId = (variant.metadata as any)?.quickbooks_id;
     const qbItem = qbMap.get(qbId);
+    if (!qbItem) { missingInQb++; continue; }
 
-    if (!qbItem) {
-      missingInQb++;
-      logger.warn(`   ⚠️ ${variant.sku} not found in QB Response.`);
-      continue;
-    }
+    const qty_new = parseInt(qbItem.QuantityOnHand);
+    if (isNaN(qty_new)) { logger.warn(`   ⚠️ ${variant.sku}: Invalid stock in QB`); continue; }
 
-    const newStock = parseInt(qbItem.QuantityOnHand);
+    const inventory_item_id = variant.inventory_items?.[0]?.inventory_item_id;
+    if (!inventory_item_id) { skippedNoInventory++; continue; }
 
-    let inventoryItemId = variant.inventory_items?.[0]?.inventory_item_id;
-
-    if (!inventoryItemId) {
-      skippedNoInventory++;
-      logger.warn(`   ❌ ${variant.sku}: No Inventory Item linked.`);
-      continue;
-    }
-
-    if (isNaN(newStock)) {
-      logger.warn(`   ⚠️ ${variant.sku}: Invalid stock in QB`);
-      continue;
-    }
-
-    // Get current stock to compare
-    try {
-      const levels = await inventoryService.listInventoryLevels({
-        inventory_item_id: inventoryItemId,
-        location_id: locationId,
-      });
-
-      if (levels.length > 0) {
-        const currentStock = levels[0].stocked_quantity;
-
-        // Compare: Skip if unchanged
-        if (currentStock === newStock) {
-          skippedNoChange++;
-          continue;
-        }
-
-        // Update existing level
-        await inventoryService.updateInventoryLevels({
-          id: levels[0].id,
-          inventory_item_id: inventoryItemId,
-          location_id: locationId,
-          stocked_quantity: newStock,
-        });
-      } else {
-        // Create new level (first time)
-        await inventoryService.createInventoryLevels({
-          inventory_item_id: inventoryItemId,
-          location_id: locationId,
-          stocked_quantity: newStock,
-          incoming_quantity: 0,
-        });
-      }
-      updatedStock++;
-
-      if (updatedStock % 25 === 0) {
-        logger.info(`   ✅ Progress: ${updatedStock} stock levels updated...`);
-      }
-    } catch (err: any) {
-      logger.error(
-        `   ❌ ${variant.sku}: Stock Update Failed - ${err.message}`
-      );
-    }
+    syncItems.push({
+      inventory_item_id,
+      variant_id: variant.id,
+      sku: variant.sku,
+      product_title: (variant as any).title || variant.sku,
+      qty_new,
+    });
   }
+
+  // 6. Apply via inventory count module (creates audit trail, skips QB re-enqueue)
+  const syncResult = await applyBulkInventorySync(container, {
+    items: syncItems,
+    memo: `QB Stock Sync ${new Date().toISOString().slice(0, 10)}`,
+    location_id: locationId,
+    source: "qb_sync",
+  });
 
   logger.info(`\n${"=".repeat(50)}`);
   logger.info("✅ STOCK SYNC SUMMARY");
@@ -225,8 +165,11 @@ export default async function syncQbStock({ container }: ExecArgs) {
   logger.info(`Total Linked Variants: ${qbVariants.length}`);
   logger.info(`Found in QB:           ${qbVariants.length - missingInQb}`);
   logger.info(`Missing in QB:         ${missingInQb}`);
-  logger.info(`Updated Stock:         ${updatedStock}`);
-  logger.info(`Skipped (Unchanged):   ${skippedNoChange}`);
   logger.info(`Skipped (No Inv):      ${skippedNoInventory}`);
+  logger.info(`Skipped (Unchanged):   ${syncResult.skipped_no_change}`);
+  logger.info(`Applied:               ${syncResult.applied}`);
+  logger.info(`Blocked:               ${syncResult.blocked}`);
+  logger.info(`Prior counts voided:   ${syncResult.voided_prior_counts}`);
+  if (syncResult.count_id) logger.info(`Audit count:           ${syncResult.count_id}`);
   logger.info(`${"=".repeat(50)}\n`);
 }
