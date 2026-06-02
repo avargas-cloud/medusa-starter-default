@@ -28,6 +28,7 @@ import {
 import { handleFulfillmentCreated } from "./handle-fulfillment-created";
 import { LOG_PREFIX, getQbConfig, getFloat } from "./utils";
 import { resolveTaxListid } from "../resolve-tax-listid";
+import { invoiceLineDiscountCents } from "../force-sync-doc-payload";
 
 export async function handleSalesReceiptCreated(
   data: any,
@@ -253,6 +254,7 @@ export async function handleSalesReceiptCreated(
   const pool = getDbPool();
   let memo: string | undefined;
   let invoiceShippingAmount: number | undefined;
+  let invoiceDiscountAmount: number | undefined;
   let invoicePaymentMethod: string | undefined;
   let invoiceCardBrand: string | undefined;
   // Source date for the QB Sales Receipt <TxnDate>. Captured from pos_invoice
@@ -262,15 +264,15 @@ export async function handleSalesReceiptCreated(
 
   try {
     // Fallback for invoice_id when called by the consolidator (which only passes order_id)
-    let sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method, card_brand, created_at, issued_at FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
+    let sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, discount, payment_method, card_brand, created_at, issued_at FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
     let params: any[] = [data.fulfillment_id];
 
     if (data.invoice_id) {
-      sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method, card_brand, created_at, issued_at FROM pos_invoice WHERE id = $1 LIMIT 1`;
+      sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, discount, payment_method, card_brand, created_at, issued_at FROM pos_invoice WHERE id = $1 LIMIT 1`;
       params = [data.invoice_id];
     } else if (!data.fulfillment_id && orderId) {
       // Cron resubmit path — only order_id available
-      sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, payment_method, card_brand, created_at, issued_at FROM pos_invoice WHERE order_id = $1 ORDER BY issued_at DESC LIMIT 1`;
+      sql = `SELECT id, invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, discount, payment_method, card_brand, created_at, issued_at FROM pos_invoice WHERE order_id = $1 ORDER BY issued_at DESC LIMIT 1`;
       params = [orderId];
     }
 
@@ -283,6 +285,10 @@ export async function handleSalesReceiptCreated(
       if (row.shipping !== undefined && row.shipping !== null) {
         // pos_invoice.shipping is stored in cents — convert to dollars for QB
         invoiceShippingAmount = Number(row.shipping) / 100;
+      }
+      if (row.discount !== undefined && row.discount !== null) {
+        // pos_invoice.discount is the invoice-level snapshot in cents
+        invoiceDiscountAmount = Number(row.discount) / 100;
       }
       if (row.payment_method) {
         invoicePaymentMethod = String(row.payment_method);
@@ -308,22 +314,119 @@ export async function handleSalesReceiptCreated(
   let prebuiltItems: any[] | undefined;
   let salesTaxCode: string | undefined;
   const qbConfig = await getQbConfig();
-  const orderDiscountTotal = getEffectiveOrderDiscount(order);
+
+  // ── Per-line discount baking + taxable snapshot (mirrors Invoice handler) ──
+  // Load frozen net_total_cents and taxable from pos_invoice_item so:
+  //   (a) per-line POS discounts are baked into QB unit prices (G2 fix), and
+  //   (b) taxable reflects the value at invoice creation, not the current
+  //       catalog state (G1 fix — column auto-set by DB trigger at INSERT).
+  let lineDiscountTotalCents = 0;
+  const netByLine = new Map<string, number>();
+  const snapshotTaxableByVariantId = new Map<string, boolean>();
+
+  if (data.invoice_id) {
+    try {
+      const netPool = getDbPool();
+      const { rows: netRows } = await netPool.query(
+        `SELECT variant_id, sku, total, net_total_cents, taxable
+           FROM pos_invoice_item
+          WHERE invoice_id = $1 AND deleted_at IS NULL AND net_total_cents IS NOT NULL`,
+        [data.invoice_id]
+      );
+      for (const r of netRows) {
+        const grossCents = Math.round(Number(r.total || 0));
+        const key = `${r.variant_id ?? r.sku ?? "custom"}|${grossCents}`;
+        netByLine.set(key, Number(r.net_total_cents));
+        if (r.variant_id != null && r.taxable != null) {
+          snapshotTaxableByVariantId.set(
+            String(r.variant_id),
+            r.taxable === true || r.taxable === "true" || r.taxable === 1
+          );
+        }
+      }
+    } catch (e: any) {
+      logger.warn(
+        `${LOG_PREFIX} net_total_cents/taxable lookup failed (legacy recompute used): ${e.message}`
+      );
+    }
+  }
 
   const activeItems = (order.items || [])
     .filter((item: any) => (item.quantity ?? 0) > 0)
-    .map((item: any) => ({
-      ...item,
-      unit_price: getFloat(item.unit_price),
-      subtotal:
-        item.subtotal !== undefined ? getFloat(item.subtotal) : undefined,
-    }));
+    .map((item: any) => {
+      const quantity = item.quantity;
+      const grossUnitPrice = getFloat(item.unit_price);
+      const grossTotalCents = Math.round(grossUnitPrice * quantity * 100);
+
+      const lineDiscount = item.metadata?.line_discount as
+        | { type?: string | null; value?: number | string | null }
+        | null
+        | undefined;
+      const lineDiscountCentsComputed = invoiceLineDiscountCents(
+        {
+          discount_type: lineDiscount?.type ?? null,
+          discount_value: lineDiscount?.value ?? null,
+          quantity,
+        },
+        null,
+        grossTotalCents
+      );
+
+      const netKey = `${item.variant_id ?? item.variant?.sku ?? "custom"}|${grossTotalCents}`;
+      const storedNet = netByLine.get(netKey);
+      const hasStoredNet = storedNet != null && Number.isFinite(storedNet);
+      const lineDiscountCents = hasStoredNet
+        ? Math.max(0, grossTotalCents - Math.max(0, storedNet as number))
+        : lineDiscountCentsComputed;
+      lineDiscountTotalCents += lineDiscountCents;
+
+      if (lineDiscountCents > 0) {
+        return {
+          ...item,
+          quantity,
+          unit_price: grossUnitPrice,
+          subtotal: Math.max(0, grossTotalCents - lineDiscountCents) / 100,
+        };
+      }
+      return {
+        ...item,
+        quantity,
+        unit_price: grossUnitPrice,
+        subtotal: item.subtotal !== undefined ? getFloat(item.subtotal) : undefined,
+      };
+    });
 
   const productTaxableMap = await resolveProductTaxableMap(
     _container.resolve("__pg_connection__"),
     activeItems
   );
+  // Override productTaxableMap entries with snapshot taxable values from
+  // pos_invoice_item (written by DB trigger from product.taxable at insert time).
+  // Takes precedence over the live catalog re-resolve so a product whose taxable
+  // flag changed after the invoice was issued still arrives in QB correctly.
+  for (const item of activeItems) {
+    const variantId = item.variant_id ?? item.variant?.id;
+    const productId =
+      (item.variant as any)?.product_id ?? (item as any).product_id;
+    if (variantId && productId && snapshotTaxableByVariantId.has(variantId)) {
+      const snap = snapshotTaxableByVariantId.get(variantId)!;
+      const existing = productTaxableMap[productId];
+      productTaxableMap[productId] =
+        typeof existing === "object" && existing !== null
+          ? { ...existing, taxable: snap }
+          : { taxable: snap };
+    }
+  }
+
   prebuiltItems = buildQbItems(activeItems, order.metadata, productTaxableMap);
+
+  // Order-level discount ONLY. Strip per-line discounts already baked above so
+  // the Discount line in QB is only the true order-level promotion (G3 fix).
+  // Falls back to getEffectiveOrderDiscount for orders without a pos_invoice row.
+  const orderDiscountTotal =
+    invoiceDiscountAmount !== undefined
+      ? Math.max(0, invoiceDiscountAmount - lineDiscountTotalCents / 100)
+      : getEffectiveOrderDiscount(order);
 
   if (orderDiscountTotal > 0) {
     const orderSubtotal = getFloat(order.subtotal);

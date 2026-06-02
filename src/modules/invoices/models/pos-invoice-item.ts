@@ -27,6 +27,9 @@ const PosInvoiceItem = model.define("pos_invoice_item", {
   // Snapshot of variant.metadata.qb_avg_cost_synced_at at issue time.
   // Lets reports show cost freshness ("based on a sync from N days ago").
   average_unit_cost_synced_at: model.dateTime().nullable(),
+  // Snapshotted at invoice creation by DB trigger (trg_pos_invoice_item_taxable_default)
+  // which resolves product.taxable via variant→product JOIN. True = taxable (default).
+  taxable: model.boolean().default(true),
   // Per-item discount snapshotted at invoice creation — self-contained, never
   // derived from the live order. NULL = no discount on this line.
   discount_type: model.text().nullable(),   // 'percent' | 'fixed'

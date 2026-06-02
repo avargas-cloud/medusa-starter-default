@@ -391,11 +391,12 @@ export async function handleFulfillmentCreated(
     // invoices issued after net_total_cents existed; legacy invoices yield an empty
     // map → the recompute below stays authoritative and the doc is untouched.
     const netByLine = new Map<string, number>();
+    const snapshotTaxableByVariantId = new Map<string, boolean>();
     if (data.invoice_id) {
       try {
         const netPool = getDbPool();
         const { rows: netRows } = await netPool.query(
-          `SELECT variant_id, sku, total, net_total_cents
+          `SELECT variant_id, sku, total, net_total_cents, taxable
              FROM pos_invoice_item
             WHERE invoice_id = $1 AND deleted_at IS NULL AND net_total_cents IS NOT NULL`,
           [data.invoice_id]
@@ -404,6 +405,12 @@ export async function handleFulfillmentCreated(
           const grossCents = Math.round(Number(r.total || 0));
           const key = `${r.variant_id ?? r.sku ?? "custom"}|${grossCents}`;
           netByLine.set(key, Number(r.net_total_cents));
+          if (r.variant_id != null && r.taxable != null) {
+            snapshotTaxableByVariantId.set(
+              String(r.variant_id),
+              r.taxable === true || r.taxable === "true" || r.taxable === 1
+            );
+          }
         }
       } catch (e: any) {
         logger.warn(
@@ -555,6 +562,23 @@ export async function handleFulfillmentCreated(
       _container.resolve("__pg_connection__"),
       activeItems
     );
+    // Override with snapshot taxable values from pos_invoice_item (written by
+    // DB trigger at invoice creation from product.taxable). This ensures QB
+    // gets the taxable flag as it was when the invoice was issued, not the
+    // current catalog state.
+    for (const item of activeItems) {
+      const variantId = item.variant_id ?? item.variant?.id;
+      const productId =
+        (item.variant as any)?.product_id ?? (item as any).product_id;
+      if (variantId && productId && snapshotTaxableByVariantId.has(variantId)) {
+        const snap = snapshotTaxableByVariantId.get(variantId)!;
+        const existing = productTaxableMap[productId];
+        productTaxableMap[productId] =
+          typeof existing === "object" && existing !== null
+            ? { ...existing, taxable: snap }
+            : { taxable: snap };
+      }
+    }
     prebuiltItems = buildQbItems(activeItems, order.metadata, productTaxableMap);
 
     if (orderDiscountTotal > 0) {
