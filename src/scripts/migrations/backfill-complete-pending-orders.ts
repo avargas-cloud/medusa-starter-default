@@ -62,10 +62,12 @@ export default async function backfillCompletePendingOrders({
        WHERE o.status = 'pending'
          AND o.deleted_at IS NULL
          AND o.is_draft_order = false
-         -- Guard 2: all items fulfilled
+         -- Guard 2: all CURRENT-version items fulfilled (ignore stale lower-version
+         -- order_item rows left by order edits / void+re-fulfill — see route.ts Guard 2)
          AND NOT EXISTS (
            SELECT 1 FROM order_item oi
-           WHERE oi.order_id = o.id AND oi.fulfilled_quantity < oi.quantity
+           WHERE oi.order_id = o.id AND oi.version = o.version
+             AND oi.fulfilled_quantity < oi.quantity
          )
          -- Guard 3: fully paid (cents vs cents)
          AND (

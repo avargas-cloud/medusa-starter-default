@@ -1300,10 +1300,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       );
       if (orderForClose?.status !== "pending") return;
 
-      // Guard 2: all order_item rows are fully fulfilled
+      // Guard 2: all CURRENT-version order_item rows are fully fulfilled.
+      // ⚠️ Filter by oi.version = order.version — order edits / void+re-fulfill
+      // leave stale lower-version order_item rows (fulfilled_quantity=0) that are
+      // NOT part of the live order. Counting them blocked legitimately-complete
+      // multi-version orders from ever closing (e.g. orders #1354, #1870, #2034).
       const fulfillCheck = await pgConnForClose.raw(
         `SELECT COUNT(*) FILTER (WHERE oi.fulfilled_quantity < oi.quantity) AS unfulfilled
-         FROM order_item oi WHERE oi.order_id = ?`,
+         FROM order_item oi
+         JOIN "order" o ON o.id = oi.order_id
+         WHERE oi.order_id = ? AND oi.version = o.version`,
         [orderIdForClose]
       );
       if (Number(fulfillCheck.rows[0]?.unfulfilled ?? 1) > 0) return;
