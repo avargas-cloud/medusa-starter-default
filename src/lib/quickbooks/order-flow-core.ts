@@ -34,6 +34,7 @@
 
 import { buildQbCustomerName } from "./build-customer-name";
 import { createSalesReceiptInQb } from "./client/sales-receipts";
+import { getFloat } from "./handlers/utils";
 import {
   checkBridgeHealth,
   createCustomerInQb,
@@ -433,17 +434,26 @@ export function buildQbItems(
   const productLines = (items || [])
     .filter((item) => item.variant?.metadata?.quickbooks_id)
     .map((item) => {
-      // Use discounted unit price if item has adjustments (item.subtotal < unit_price * qty).
+      // Coerce numerics up-front. query.graph can hand back computed money
+      // fields (unit_price/subtotal) as STRINGS or BigNumber-shaped objects
+      // ({ numeric_, raw_ }) rather than plain numbers — calling .toFixed()
+      // on those crashes ("item.subtotal.toFixed is not a function", e.g.
+      // Estimate E2070). getFloat() normalizes all three shapes to a number.
+      const unitPrice = getFloat(item.unit_price);
+      const quantity = getFloat(item.quantity);
+      const subtotal =
+        item.subtotal === undefined || item.subtotal === null
+          ? undefined
+          : getFloat(item.subtotal);
+      // Use discounted unit price if item has adjustments (subtotal < unit_price * qty).
       // Both item-level discounts (per-item promotions) and order-level distributed discounts
       // are reflected here. Price is always per-unit in dollars for QB.
-      const originalTotal = (item.unit_price || 0) * item.quantity;
+      const originalTotal = unitPrice * quantity;
       const hasLineDiscount =
-        item.subtotal !== undefined &&
-        item.subtotal < originalTotal &&
-        item.subtotal > 0;
+        subtotal !== undefined && subtotal < originalTotal && subtotal > 0;
       const effectiveUnitPrice = hasLineDiscount
-        ? Number((item.subtotal! / item.quantity).toFixed(2)) // discounted subtotal ÷ qty (display rate only)
-        : item.unit_price || 0; // no discount → original unit price
+        ? Number((subtotal! / quantity).toFixed(2)) // discounted subtotal ÷ qty (display rate only)
+        : unitPrice; // no discount → original unit price
       // Send the EXACT line total as Amount. The bridge emits <Amount> and
       // omits <Rate>, so QB honors this total and back-computes the per-unit
       // rate for display. Deriving amount from the ROUNDED effectiveUnitPrice
@@ -452,8 +462,8 @@ export function buildQbItems(
       // Medusa's true line total is 1055.84). Using item.subtotal keeps them
       // identical. Non-discounted lines fall back to unit_price × qty (exact).
       const lineAmount = hasLineDiscount
-        ? Number(item.subtotal!.toFixed(2))
-        : Number((effectiveUnitPrice * item.quantity).toFixed(2));
+        ? Number(subtotal!.toFixed(2))
+        : Number((effectiveUnitPrice * quantity).toFixed(2));
       // Service / non-inventory items must NOT carry InventorySiteRef (QB
       // error 3140). Flag explicitly via variant metadata so the bridge can
       // skip the tag on both *Add and *Mod operations.
@@ -498,7 +508,7 @@ export function buildQbItems(
             : 9999,
         qbItem: {
           productId: item.variant!.metadata!.quickbooks_id as string,
-          quantity: item.quantity,
+          quantity,
           price: effectiveUnitPrice,
           amount: lineAmount,
           unitOfMeasure:
