@@ -487,6 +487,48 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           });
         }
 
+        // ── SO-LINK GUARD ──────────────────────────────────────────────────
+        // A full force-sync rebuilds the invoice lines (InvoiceMod) which SEVERS the
+        // per-line LinkToTxn that ties this invoice to its Sales Order in QuickBooks:
+        // QBXML InvoiceLineMod cannot re-emit LinkToTxn (unlike ItemReceiptMod), so any
+        // line-rebuilding Mod unlinks the SO (confirmed on inv 18816 / SO 6352).
+        // Such invoices are created correctly at issuance (InvoiceAdd + LinkToTxn), so a
+        // re-sync should never be needed; when a line/amount truly must change, the only
+        // SO-safe path is void + recreate from the Sales Order. Lightweight sales-rep / tax
+        // edits use /admin/invoices/:id/sync-qb-rep + /update-tax (they don't touch lines).
+        // Standalone invoices (no SO) and Sales Receipts are unaffected.
+        const invoiceAlreadyInQb = !!(
+          invoice.metadata?.qb_txn_id || invoice.metadata?.qb_invoice_txn_id
+        );
+        const isSalesReceiptInvoice = !!(
+          invoice.metadata?.qb_sales_receipt_txn_id ||
+          invoice.metadata?.is_sales_receipt === true ||
+          invoice.metadata?.is_sales_receipt === "true"
+        );
+        if (invoiceAlreadyInQb && !isSalesReceiptInvoice) {
+          const {
+            data: [parentOrderGuard],
+          } = await query.graph({
+            entity: "order",
+            fields: ["metadata"],
+            filters: { id: invoice.order_id },
+          });
+          if (getSoTxnId(parentOrderGuard?.metadata || {})) {
+            logger.warn(
+              `${LOG_PREFIX} 🔒 Blocked force-sync of SO-linked invoice ${id} (would sever the SO LinkToTxn).`
+            );
+            return res.status(409).json({
+              error:
+                "This invoice is linked to a Sales Order in QuickBooks. A full re-sync " +
+                "rebuilds the invoice lines and would break the SO link (QBXML InvoiceLineMod " +
+                "cannot re-establish LinkToTxn). Line/amount corrections must be made via " +
+                "void + recreate from the Sales Order. For sales-rep or tax edits, use Save " +
+                "(sync-qb-rep / update-tax) — those don't touch the linked lines.",
+              code: "SO_LINKED_INVOICE_RESYNC_BLOCKED",
+            });
+          }
+        }
+
         // Serialized: CREATE and EDIT share the same lock per order.
         withQbSerialized(
           `invoice:${invoice.order_id}`,

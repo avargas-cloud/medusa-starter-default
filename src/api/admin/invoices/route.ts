@@ -309,7 +309,54 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const nextInvNum = seqRes.rows[0].seq || seqRes.rows[0].SEQ;
   const qb_metadata_ref_number = `${nextInvNum}`;
 
-  const balance_due = body.total - body.amount_paid;
+  // Net (post-line-discount, pre-order-discount) cents for a line. Prefer what the
+  // POS sent; if absent (older POS build / non-POS caller) recompute with the same
+  // round-then-multiply convention from gross + descriptor. NEVER fall back to gross —
+  // that would strip the discount when the line is synced to QuickBooks.
+  const resolveNetTotalCents = (it: CreateInvoiceBody["items"][number]): number => {
+    if (it.net_total != null) return Math.round(it.net_total);
+    const grossCents = Math.round(it.total || 0);
+    const qty = Number(it.quantity || 0);
+    const value = Number(it.discount_value ?? 0);
+    if (!it.discount_type || !(value > 0) || qty <= 0) return grossCents;
+    if (it.discount_type === "percent") {
+      const unitCents = Math.round(grossCents / qty);
+      const discUnit = Math.max(0, Math.round((unitCents * (100 - value)) / 100));
+      return discUnit * qty;
+    }
+    // fixed: a flat amount off each unit
+    return Math.max(0, grossCents - Math.min(grossCents, Math.round(value * 100) * qty));
+  };
+
+  // Derive the header summary FROM the (immutable) line items so it can never drift from
+  // the printed/QB-synced detail. `discount` is the COMBINED discount (per-line + order-level)
+  // — the convention the QB sync handler and every historical invoice rely on (it strips the
+  // per-line portion to recover the order-level promotion). Therefore:
+  //     subtotal = Σ(line GROSS) − combined discount   (=== Σ net − order-level)
+  // and the invariant subtotal + discount === Σ(line gross) holds by construction.
+  // Lines-derived numbers are authoritative; body.* is the fallback only when no items are
+  // present (rare non-POS callers).
+  const hasItems = !!body.items?.length;
+  const grossSumCents = hasItems
+    ? body.items.reduce((sum, it) => sum + Math.round(it.total || 0), 0)
+    : body.subtotal + (body.discount ?? 0);
+  const netSumCents = hasItems
+    ? body.items.reduce((sum, it) => sum + resolveNetTotalCents(it), 0)
+    : body.subtotal;
+  const combinedDiscountCents = body.discount ?? 0;
+  // Guard: a combined discount can never be smaller than the per-line portion it must contain.
+  const perLineDiscountCents = Math.max(0, grossSumCents - netSumCents);
+  const safeDiscountCents = Math.max(combinedDiscountCents, perLineDiscountCents);
+  const derivedSubtotal = Math.max(0, grossSumCents - safeDiscountCents);
+  const derivedTotal = derivedSubtotal + (body.shipping ?? 0) + body.tax;
+  const derivedUntaxed = derivedSubtotal + (body.shipping ?? 0);
+  if (hasItems && Math.abs(derivedTotal - body.total) > 1) {
+    console.warn(
+      `[invoice] header/items total divergence corrected: client sent total=${body.total} subtotal=${body.subtotal} discount=${combinedDiscountCents}, derived total=${derivedTotal} subtotal=${derivedSubtotal} (gross=${grossSumCents} net=${netSumCents}). Using items-derived values.`
+    );
+  }
+
+  const balance_due = derivedTotal - body.amount_paid;
 
   // Normalize payment_method + card_brand into the canonical split format.
   //   New callers send:  payment_method='credit_card'|'debit_card'|'cash'|... card_brand=<brand>|null
@@ -395,12 +442,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     fulfillment_id: body.fulfillment_id ?? null,
     customer_id: body.customer_id,
     status: initialStatus as "issued" | "paid" | "partial",
-    subtotal: body.subtotal,
-    discount: body.discount ?? 0,
+    subtotal: derivedSubtotal,
+    discount: safeDiscountCents,
     shipping: body.shipping ?? 0,
     tax: body.tax,
-    untaxed_total: body.total - body.tax,
-    total: body.total,
+    untaxed_total: derivedUntaxed,
+    total: derivedTotal,
     amount_paid: body.amount_paid,
     balance_due,
     payment_method: resolvedPaymentMethod as any,
