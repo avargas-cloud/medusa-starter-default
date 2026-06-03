@@ -87,6 +87,14 @@ export async function listReceiptsCrossFo(
       0
     );
 
+    // Real factory/manufacturer (distinct from the buying-agent vendor, e.g.
+    // Veetech). Mirrors the FO editor's Manufacturer field.
+    const meta = (fo?.metadata ?? {}) as Record<string, unknown>;
+    const manufacturer =
+      (meta.manufacturer_vendor_short_name as string) ||
+      (meta.manufacturer_vendor_name as string) ||
+      null;
+
     return {
       ...r,
       total_units_received: totalUnitsReceived,
@@ -95,6 +103,7 @@ export async function listReceiptsCrossFo(
       vendor_snapshot: fo?.vendor_name_snapshot
         ? { name: fo.vendor_name_snapshot as string }
         : null,
+      manufacturer,
     };
   });
 
