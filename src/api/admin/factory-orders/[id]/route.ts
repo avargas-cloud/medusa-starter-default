@@ -327,7 +327,14 @@ export async function PATCH(
       .json({ error: "Factory order not found", code: "not_found" });
   }
 
-  const TERMINAL_STATUSES = ["received", "closed", "cancelled", "voided"];
+  // FO editability mirrors the Purchase Order (2026-06-03): draft, submitted,
+  // partially_received AND received all allow line edits, gated only by the
+  // per-item guard below (a received line can't be deleted, qty_ordered can't
+  // drop below qty_received). Only the truly terminal states are frozen.
+  // Editing qty_ordered never moves inventory — stock only moves on receive —
+  // so allowing received-FO edits is inventory-safe. The reservation guard for
+  // the receipt side lives in the FO receipt workflows.
+  const FROZEN_STATUSES = ["closed", "cancelled", "voided"];
   const {
     po_status: bodyPoStatus,
     shipping_method: bodyShippingMethod,
@@ -335,9 +342,9 @@ export async function PATCH(
     ...bodyRest
   } = body;
   const hasNonStatusChanges = Object.values(bodyRest).some((v) => v !== undefined);
-  if (hasNonStatusChanges && TERMINAL_STATUSES.includes(existing.status)) {
+  if (hasNonStatusChanges && FROZEN_STATUSES.includes(existing.status)) {
     return res.status(409).json({
-      error: `Cannot edit a Factory Order in status '${existing.status}'. Terminal FOs are frozen.`,
+      error: `Cannot edit a Factory Order in status '${existing.status}'. Closed/cancelled/voided FOs are frozen.`,
       code: "not_editable",
     });
   }
@@ -388,6 +395,8 @@ export async function PATCH(
     )) as Array<Record<string, unknown> & { id: string }>;
     const oldIds = new Set(oldLines.map((l) => l.id));
 
+    const oldById = new Map(oldLines.map((l) => [l.id, l]));
+
     const normalized = body.lines.map(normalizeLine);
     const totals = computeTotals(normalized, {
       shipping_cents:
@@ -419,7 +428,19 @@ export async function PATCH(
       };
       if (l.id && oldIds.has(l.id)) {
         keepIds.add(l.id);
-        toUpdate.push({ id: l.id, data: lineFields });
+        // Recompute this line's receive status against the (possibly new)
+        // qty_ordered. Editing qty_ordered does NOT touch qty_received, so a
+        // line edited down to its received count must flip open/partial →
+        // complete (and a received line edited up flips complete → partial).
+        // Mirrors purchase-orders PATCH + persist-fo-receipt-step.
+        const qtyRecv = Number(oldById.get(l.id)?.qty_received ?? 0);
+        const lineStatus =
+          qtyRecv === 0
+            ? "open"
+            : qtyRecv < Number(lineFields.qty_ordered)
+              ? "partial"
+              : "complete";
+        toUpdate.push({ id: l.id, data: { ...lineFields, status: lineStatus } });
       } else {
         toInsert.push({
           factory_order_id: id,
@@ -457,6 +478,20 @@ export async function PATCH(
             `"${sku}": qty_ordered cannot go below qty_received (${qtyRecv}).`
           );
         }
+        // Identity freeze: once a line has received units, stock has already
+        // moved for THAT item — the line cannot be re-pointed to a different
+        // product/variant/inventory_item (would desync receipts, stock history
+        // and on-order math). Only qty/cost/description stay editable.
+        if (qtyRecv > 0) {
+          if (
+            u.data.product_variant_id !== old.product_variant_id ||
+            u.data.inventory_item_id !== old.inventory_item_id
+          ) {
+            lineErrors.push(
+              `"${sku}": cannot change the product/variant of a line with ${qtyRecv} received unit(s).`
+            );
+          }
+        }
       }
       if (lineErrors.length > 0) {
         return res.status(409).json({
@@ -486,6 +521,27 @@ export async function PATCH(
     headerUpdate.total_cents = totals.total_cents;
     headerUpdate.total_lines = totals.total_lines;
     headerUpdate.total_units_ordered = totals.total_units_ordered;
+
+    // Recompute header receive status. Editing lines never changes
+    // total_units_received (received lines can't be deleted and qty_ordered
+    // can't drop below qty_received — see per-item guard above). But:
+    //  - lowering qty_ordered on a partially_received FO down to its received
+    //    count makes it fully `received`;
+    //  - raising qty_ordered on a `received` FO makes it `partially_received`
+    //    again.
+    // Without this the FO status freezes out of sync. Mirrors the PO route.
+    const RECEIVE_LIFECYCLE = ["submitted", "partially_received", "received"];
+    if (RECEIVE_LIFECYCLE.includes(existing.status)) {
+      const totalReceived = Number(
+        (existing as { total_units_received?: number }).total_units_received ?? 0
+      );
+      if (totalReceived > 0) {
+        headerUpdate.status =
+          totalReceived >= totals.total_units_ordered
+            ? "received"
+            : "partially_received";
+      }
+    }
   } else {
     const touchesExtras =
       body.shipping_cents !== undefined ||

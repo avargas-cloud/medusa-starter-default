@@ -71,6 +71,50 @@ export const syncInventoryToMeiliStep = createStep(
       );
     }
 
+    // ─── BULK: Load on-order balances into RAM once ─────────────────────────
+    // USA = open Purchase Orders, China = open Factory Orders. Keyed by
+    // inventory_item_id. Independent of chinaStock (current availability).
+    const onOrderUsaMap = new Map<string, number>();
+    const onOrderChinaMap = new Map<string, number>();
+    try {
+      const knex = (
+        container as unknown as {
+          resolve: (k: string) => {
+            raw: (
+              sql: string
+            ) => Promise<{ rows: Array<{ item: string; qty: number }> }>;
+          };
+        }
+      ).resolve("__pg_connection__");
+      const usa = await knex.raw(
+        `SELECT pol.inventory_item_id AS item,
+                SUM(GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled))::int AS qty
+           FROM purchase_order_line pol
+           JOIN purchase_order po ON po.id = pol.purchase_order_id AND po.deleted_at IS NULL
+          WHERE pol.deleted_at IS NULL
+            AND pol.inventory_item_id IS NOT NULL
+            AND po.status IN ('submitted', 'partially_received')
+          GROUP BY pol.inventory_item_id`
+      );
+      for (const r of usa.rows) onOrderUsaMap.set(r.item, Number(r.qty) || 0);
+      const china = await knex.raw(
+        `SELECT fol.inventory_item_id AS item,
+                SUM(GREATEST(0, fol.qty_ordered - fol.qty_received - fol.qty_cancelled))::int AS qty
+           FROM factory_order_line fol
+           JOIN factory_order fo ON fo.id = fol.factory_order_id AND fo.deleted_at IS NULL
+          WHERE fol.deleted_at IS NULL
+            AND fol.inventory_item_id IS NOT NULL
+            AND fo.status IN ('submitted', 'partially_received')
+          GROUP BY fol.inventory_item_id`
+      );
+      for (const r of china.rows) onOrderChinaMap.set(r.item, Number(r.qty) || 0);
+      console.log(
+        `📦 [sync-inventory] Loaded on-order: ${onOrderUsaMap.size} USA(PO) + ${onOrderChinaMap.size} China(FO) items`
+      );
+    } catch (e: any) {
+      console.warn("[sync-inventory] Could not load on-order balances:", e.message);
+    }
+
     // ─── BULK: Load all price list prices into RAM once ─────────────────────
     const pricesByPriceSet = new Map<string, Record<string, number>>();
     try {
@@ -119,7 +163,9 @@ export const syncInventoryToMeiliStep = createStep(
       chinaStockMap,
       miamiStockMap,
       miamiReservedMap,
-      vendorNameByVariantId
+      vendorNameByVariantId,
+      onOrderUsaMap,
+      onOrderChinaMap
     );
 
     const validItems = meiliInventoryItems.filter(
@@ -144,6 +190,8 @@ export const syncInventoryToMeiliStep = createStep(
           "vendorName",
           "productId",
           "variantId",
+          "onOrderUsa",
+          "onOrderChina",
         ],
         sortableAttributes: [
           "title",
@@ -151,6 +199,8 @@ export const syncInventoryToMeiliStep = createStep(
           "totalStock",
           "totalReserved",
           "chinaStock",
+          "onOrderUsa",
+          "onOrderChina",
           "price",
           "updated_at",
           "created_at",

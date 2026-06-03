@@ -1,6 +1,8 @@
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 import { Modules } from "@medusajs/utils";
 
+import { atomicStockMove, type KnexLike } from "./atomic-stock-move";
+
 export interface ContraApplyFoReceiptStockStepInputLine {
   receipt_line_id: string;
   fo_line_id: string;
@@ -35,7 +37,13 @@ interface InventoryServiceLike {
   listInventoryLevels: (
     filters: Record<string, unknown>,
     options?: { take?: number }
-  ) => Promise<Array<{ inventory_item_id: string; stocked_quantity: number }>>;
+  ) => Promise<
+    Array<{
+      inventory_item_id: string;
+      stocked_quantity: number;
+      reserved_quantity?: number;
+    }>
+  >;
   adjustInventory: (
     inventory_item_id: string,
     location_id: string,
@@ -52,6 +60,9 @@ export const contraApplyFoReceiptStockStep = createStep(
     const inventoryService = container.resolve(
       Modules.INVENTORY
     ) as unknown as InventoryServiceLike;
+    const knex = (
+      container as unknown as { resolve: (k: string) => KnexLike }
+    ).resolve("__pg_connection__");
 
     const reversed: FoReceiptReversedDelta[] = [];
 
@@ -63,19 +74,30 @@ export const contraApplyFoReceiptStockStep = createStep(
         { take: 1 }
       );
       const preStock = levels[0]?.stocked_quantity ?? 0;
+      const reserved = levels[0]?.reserved_quantity ?? 0;
       const reverseBy = -line.qty_applied;
 
-      if (preStock + reverseBy < 0) {
-        throw new Error(
-          `Cannot void receipt line ${line.receipt_line_id}: reversing qty_applied=${line.qty_applied} on stock=${preStock} would result in negative stock. Manual reconciliation required.`
-        );
-      }
-
-      await inventoryService.adjustInventory(
+      // Atomic, availability-guarded reversal (see atomicStockMove). Voiding a
+      // receipt removes stocked_quantity; if those units are already reserved
+      // (transfers / draft orders / sales), the guard rejects (rowCount 0) so
+      // the reservation isn't stranded. Block; unwind the reservation first.
+      const ok = await atomicStockMove(
+        knex,
         line.inventory_item_id,
         input.location_id,
         reverseBy
       );
+      if (!ok) {
+        const newStock = preStock + reverseBy;
+        if (newStock < 0) {
+          throw new Error(
+            `Cannot void receipt line ${line.receipt_line_id}: reversing qty_applied=${line.qty_applied} on stock=${preStock} would result in negative stock. Manual reconciliation required.`
+          );
+        }
+        throw new Error(
+          `RESERVED_BLOCK: Cannot void receipt line ${line.receipt_line_id} (item ${line.inventory_item_id}): China stocked=${preStock}, reserved=${reserved}; reversing ${line.qty_applied} would leave ${newStock} stocked, below ${reserved} reserved (negative availability). Unwind the reservation/transfer/sale first.`
+        );
+      }
 
       reversed.push({
         receipt_line_id: line.receipt_line_id,
@@ -95,16 +117,18 @@ export const contraApplyFoReceiptStockStep = createStep(
   async (compensationContext, { container }) => {
     if (!compensationContext) return;
 
-    const inventoryService = container.resolve(
-      Modules.INVENTORY
-    ) as unknown as InventoryServiceLike;
+    const knex = (
+      container as unknown as { resolve: (k: string) => KnexLike }
+    ).resolve("__pg_connection__");
 
     for (const r of compensationContext.reversed) {
       try {
-        await inventoryService.adjustInventory(
+        await atomicStockMove(
+          knex,
           r.inventory_item_id,
           compensationContext.location_id,
-          -r.reversed_qty
+          -r.reversed_qty,
+          false
         );
       } catch (err) {
         console.error(

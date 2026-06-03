@@ -1,6 +1,8 @@
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 import { Modules } from "@medusajs/utils";
 
+import { atomicStockMove, type KnexLike } from "./atomic-stock-move";
+
 export interface AdjustFoReceiptStockStepInputLine {
   receipt_line_id: string;
   fo_line_id: string;
@@ -35,7 +37,13 @@ interface InventoryServiceLike {
   listInventoryLevels: (
     filters: Record<string, unknown>,
     options?: { take?: number }
-  ) => Promise<Array<{ inventory_item_id: string; stocked_quantity: number }>>;
+  ) => Promise<
+    Array<{
+      inventory_item_id: string;
+      stocked_quantity: number;
+      reserved_quantity?: number;
+    }>
+  >;
   adjustInventory: (
     inventory_item_id: string,
     location_id: string,
@@ -50,6 +58,7 @@ interface InventoryServiceLike {
   ) => Promise<unknown>;
 }
 
+
 export const adjustFoReceiptStockStep = createStep(
   "adjust-fo-receipt-stock",
   async (
@@ -59,6 +68,9 @@ export const adjustFoReceiptStockStep = createStep(
     const inventoryService = container.resolve(
       Modules.INVENTORY
     ) as unknown as InventoryServiceLike;
+    const knex = (
+      container as unknown as { resolve: (k: string) => KnexLike }
+    ).resolve("__pg_connection__");
 
     const adjusted: FoReceiptAdjustedDelta[] = [];
 
@@ -70,17 +82,11 @@ export const adjustFoReceiptStockStep = createStep(
         { take: 1 }
       );
       const preStock = levels[0]?.stocked_quantity ?? 0;
+      const reserved = levels[0]?.reserved_quantity ?? 0;
 
-      if (line.delta < 0 && preStock + line.delta < 0) {
-        throw new Error(
-          `Cannot reduce qty on receipt line ${line.receipt_line_id}: stock=${preStock}, edit would result in ${preStock + line.delta}.`
-        );
-      }
-
-      // Defense in depth: a positive receipt into a location must always be
-      // possible. If the item has no inventory_level here yet (e.g. a product
-      // created without a China level), create one at 0 before adjusting —
-      // adjustInventory throws on a missing level.
+      // A positive receipt into a location must always be possible: if the item
+      // has no inventory_level here yet, create one at 0 (in sync via the
+      // module) before the atomic move (a raw UPDATE would no-op on 0 rows).
       if (levels.length === 0 && line.delta > 0) {
         await inventoryService.createInventoryLevels([
           {
@@ -91,11 +97,25 @@ export const adjustFoReceiptStockStep = createStep(
         ]);
       }
 
-      await inventoryService.adjustInventory(
+      // Atomic availability-guarded move (see atomicStockMove). rowCount 0 ⇒
+      // the guard rejected — only possible for a decrement.
+      const ok = await atomicStockMove(
+        knex,
         line.inventory_item_id,
         input.location_id,
         line.delta
       );
+      if (!ok) {
+        const newStock = preStock + line.delta;
+        if (newStock < 0) {
+          throw new Error(
+            `Cannot reduce qty on receipt line ${line.receipt_line_id}: stock=${preStock}, edit would result in ${newStock}.`
+          );
+        }
+        throw new Error(
+          `RESERVED_BLOCK: Cannot reduce receipt line ${line.receipt_line_id} (item ${line.inventory_item_id}): China stocked=${preStock}, reserved=${reserved}; reducing by ${-line.delta} would leave ${newStock} stocked, below ${reserved} reserved (negative availability). Unwind the reservation/transfer/sale first.`
+        );
+      }
 
       adjusted.push({
         receipt_line_id: line.receipt_line_id,
@@ -114,15 +134,19 @@ export const adjustFoReceiptStockStep = createStep(
   },
   async (compensationContext, { container }) => {
     if (!compensationContext) return;
-    const inventoryService = container.resolve(
-      Modules.INVENTORY
-    ) as unknown as InventoryServiceLike;
+    const knex = (
+      container as unknown as { resolve: (k: string) => KnexLike }
+    ).resolve("__pg_connection__");
     for (const a of compensationContext.adjusted) {
       try {
-        await inventoryService.adjustInventory(
+        // Unconditional reverse (compensation must always apply); keeps the
+        // numeric + raw_* columns in sync via the same atomic move.
+        await atomicStockMove(
+          knex,
           a.inventory_item_id,
           compensationContext.location_id,
-          -a.delta_applied
+          -a.delta_applied,
+          false
         );
       } catch (err) {
         console.error(

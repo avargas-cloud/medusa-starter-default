@@ -34,6 +34,11 @@ export interface MeiliInventoryDoc {
   vendorName: string | null;
   mpn: string | null;
   chinaStock: number;
+  // Open inbound balance (qty_ordered − received − cancelled) on documents in
+  // status submitted/partially_received. USA = Purchase Orders, China = Factory
+  // Orders. Independent of chinaStock (current availability) — never net them.
+  onOrderUsa: number;
+  onOrderChina: number;
   options: { title: string; value: string }[];
   category_handles: string[];
   status: string;
@@ -57,7 +62,11 @@ export function buildInventoryDocsForVariants(
   // remote link (see loadVendorNamesByVariantId). The legacy
   // variant.metadata.qb_vendor_name is being phased out, so the link is the
   // source of truth; we only fall back to the legacy field when unmapped.
-  vendorNameByVariantId: Map<string, string> = new Map()
+  vendorNameByVariantId: Map<string, string> = new Map(),
+  // Open on-order balances keyed by inventory_item_id. USA = open Purchase
+  // Orders, China = open Factory Orders. Default 0 when absent.
+  onOrderUsaMap: Map<string, number> = new Map(),
+  onOrderChinaMap: Map<string, number> = new Map()
 ): MeiliInventoryDoc[] {
   const docs: MeiliInventoryDoc[] = [];
 
@@ -134,6 +143,8 @@ export function buildInventoryDocsForVariants(
         vendorName,
         mpn: (vmeta.mpn as string) || null,
         chinaStock: 0,
+        onOrderUsa: 0,
+        onOrderChina: 0,
         options: mappedOptions,
         category_handles: Array.from(allCategoryHandles),
         status: product?.status || "draft",
@@ -176,6 +187,8 @@ export function buildInventoryDocsForVariants(
         vendorName,
         mpn: (vmeta.mpn as string) || null,
         chinaStock: chinaStockMap.get(inventory.id) ?? 0,
+        onOrderUsa: onOrderUsaMap.get(inventory.id) ?? 0,
+        onOrderChina: onOrderChinaMap.get(inventory.id) ?? 0,
         options: mappedOptions,
         category_handles: Array.from(allCategoryHandles),
         status: product?.status || "draft",

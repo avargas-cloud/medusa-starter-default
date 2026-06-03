@@ -215,6 +215,54 @@ const syncInventoryItemToMeiliStep = createStep(
       }
     }
 
+    // On-order balances: USA = open Purchase Orders, China = open Factory
+    // Orders. Keyed by inventory_item_id (100%-populated on both line tables).
+    const onOrderUsaMap = new Map<string, number>();
+    const onOrderChinaMap = new Map<string, number>();
+    if (inventoryItemIds.size > 0) {
+      try {
+        const knex = (
+          container as unknown as {
+            resolve: (k: string) => {
+              raw: (
+                sql: string,
+                bindings?: unknown[]
+              ) => Promise<{ rows: Array<{ item: string; qty: number }> }>;
+            };
+          }
+        ).resolve("__pg_connection__");
+        const ids = Array.from(inventoryItemIds);
+        const usa = await knex.raw(
+          `SELECT pol.inventory_item_id AS item,
+                  SUM(GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled))::int AS qty
+             FROM purchase_order_line pol
+             JOIN purchase_order po ON po.id = pol.purchase_order_id AND po.deleted_at IS NULL
+            WHERE pol.deleted_at IS NULL
+              AND pol.inventory_item_id = ANY(?)
+              AND po.status IN ('submitted', 'partially_received')
+            GROUP BY pol.inventory_item_id`,
+          [ids]
+        );
+        for (const r of usa.rows) onOrderUsaMap.set(r.item, Number(r.qty) || 0);
+        const china = await knex.raw(
+          `SELECT fol.inventory_item_id AS item,
+                  SUM(GREATEST(0, fol.qty_ordered - fol.qty_received - fol.qty_cancelled))::int AS qty
+             FROM factory_order_line fol
+             JOIN factory_order fo ON fo.id = fol.factory_order_id AND fo.deleted_at IS NULL
+            WHERE fol.deleted_at IS NULL
+              AND fol.inventory_item_id = ANY(?)
+              AND fo.status IN ('submitted', 'partially_received')
+            GROUP BY fol.inventory_item_id`,
+          [ids]
+        );
+        for (const r of china.rows) onOrderChinaMap.set(r.item, Number(r.qty) || 0);
+      } catch (e: any) {
+        logger.warn(
+          `[syncInventoryItemToMeili] on-order fetch failed: ${e.message}`
+        );
+      }
+    }
+
     const vendorNameByVariantId = await loadVendorNamesByVariantId(
       container,
       variants.map((v: any) => v.id)
@@ -226,7 +274,9 @@ const syncInventoryItemToMeiliStep = createStep(
       chinaStockMap,
       miamiStockMap,
       miamiReservedMap,
-      vendorNameByVariantId
+      vendorNameByVariantId,
+      onOrderUsaMap,
+      onOrderChinaMap
     );
     if (docs.length === 0) {
       return new StepResponse({ synced: 0, deleted: 0 });

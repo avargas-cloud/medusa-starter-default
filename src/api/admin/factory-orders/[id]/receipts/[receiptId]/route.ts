@@ -27,6 +27,24 @@ interface ReceiptRow {
   voided_at: Date | null;
 }
 
+/**
+ * Medusa's workflow engine can reject with a plain serialized object
+ * `{ message }` rather than a real Error instance, so `instanceof Error`
+ * misses it and the meaningful step message (e.g. RESERVED_BLOCK) is lost.
+ * Pull the message out defensively.
+ */
+function errMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (
+    err &&
+    typeof err === "object" &&
+    typeof (err as { message?: unknown }).message === "string"
+  ) {
+    return (err as { message: string }).message;
+  }
+  return fallback;
+}
+
 interface ReceiptLineRow {
   id: string;
   factory_order_receipt_id: string;
@@ -113,7 +131,7 @@ export async function DELETE(
     });
     return res.json({ delete: result });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to delete receipt";
+    const message = errMessage(err, "Failed to delete receipt");
     return res.status(400).json({ error: message, code: "delete_failed" });
   }
 }
@@ -203,7 +221,7 @@ export async function PATCH(
     });
     return res.json({ update: result });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to update receipt";
+    const message = errMessage(err, "Failed to update receipt");
     return res.status(400).json({ error: message, code: "update_failed" });
   }
 }
