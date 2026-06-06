@@ -20,11 +20,14 @@ const g = (id: string, label: string, position: number): ObjectiveGroup => ({
 
 // Starter sub-groups for Sourcing (editable in the Field Builder).
 const SOURCING_GROUPS: ObjectiveGroup[] = [
-  g("g_linear", "Linear / Strips", 10),
-  g("g_panels", "Panels & Troffers", 20),
-  g("g_downlights", "Downlights", 30),
-  g("g_drivers", "Drivers / PSU", 40),
-  g("g_controls", "Controls", 50),
+  g("g_strips_neon", "LED Strips and Neon", 10),
+  g("g_panels", "LED Panels", 20),
+  g("g_drivers", "Drivers", 30),
+  g("g_easyled", "Easyled Related", 40),
+  g("g_controllers", "Controllers", 50),
+  g("g_channels", "LED Channels", 60),
+  g("g_innovation", "Innovation", 70),
+  g("g_other", "Other", 80),
 ];
 
 const f = (
