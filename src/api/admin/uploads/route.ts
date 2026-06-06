@@ -37,6 +37,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   let prefix = "";
   if (context === "products") prefix = "context_products_";
   if (context === "categories") prefix = "context_categories_";
+  if (context === "trip") prefix = "context_trip_";
 
   // Convert Multer file format to Medusa's expected format
   const filesWithContext = files.map((f) => ({
