@@ -81,6 +81,7 @@ export default async function seedTripObjectives({ container }: ExecArgs) {
       field_schema: cat.field_schema,
       status_set: cat.status_set,
       default_status_key: cat.default_status_key,
+      groups: cat.groups,
       is_active: true,
     });
     logger.info(

@@ -34,6 +34,7 @@ type UpdateObjectiveBody = {
   status_key?: string;
   priority?: string;
   category_id?: string;
+  group_id?: string | null;
   reference_image_url?: string | null;
   reference_image_key?: string | null;
   reference_image_thumb_url?: string | null;
@@ -66,6 +67,7 @@ export async function PATCH(
     "status_key",
     "priority",
     "category_id",
+    "group_id",
     "reference_image_url",
     "reference_image_key",
     "reference_image_thumb_url",

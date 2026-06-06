@@ -30,6 +30,7 @@ export interface CategoryDTO {
   field_schema: unknown;
   status_set: unknown;
   default_status_key: string | null;
+  groups: unknown;
   position: number;
   is_active: boolean;
 }
@@ -38,6 +39,7 @@ export interface ObjectiveDTO {
   id: string;
   trip_id: string;
   category_id: string;
+  group_id: string | null;
   title: string;
   description: string | null;
   status_key: string | null;

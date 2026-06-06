@@ -13,6 +13,9 @@ export const TripObjective = model.define("trip_objective", {
   trip_id: model.text(),
   category_id: model.text(),
 
+  // Optional sub-group within the category (id from category.groups).
+  group_id: model.text().nullable(),
+
   title: model.text(),
   description: model.text().nullable(),
 

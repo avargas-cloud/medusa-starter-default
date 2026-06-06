@@ -31,6 +31,7 @@ type UpdateCategoryBody = {
   field_schema?: unknown;
   status_set?: unknown;
   default_status_key?: string;
+  groups?: unknown;
   position?: number;
   is_active?: boolean;
 };
@@ -51,6 +52,7 @@ export async function PATCH(
     "field_schema",
     "status_set",
     "default_status_key",
+    "groups",
     "position",
     "is_active",
   ] as const) {

@@ -75,6 +75,13 @@ export interface ObjectiveQuote {
   position?: number;
 }
 
+/** A user-defined sub-group to organize entries within a type. */
+export interface ObjectiveGroup {
+  id: string;
+  label: string;
+  position: number;
+}
+
 /** One status option in a category's pipeline. */
 export interface StatusDef {
   key: string;

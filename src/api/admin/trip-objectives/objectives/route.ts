@@ -64,6 +64,7 @@ type CreateObjectiveBody = {
   category_id?: string;
   category?: string;
   trip_id?: string;
+  group_id?: string;
   title?: string;
   description?: string;
   status_key?: string;
@@ -116,6 +117,7 @@ export async function POST(
   const objective = await service.createTripObjectives({
     trip_id: tripId,
     category_id: categoryId,
+    group_id: body.group_id ?? null,
     title: body.title,
     description: body.description ?? null,
     status_key: statusKey,

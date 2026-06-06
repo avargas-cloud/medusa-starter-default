@@ -33,6 +33,7 @@ type CreateCategoryBody = {
   field_schema?: unknown;
   status_set?: unknown;
   default_status_key?: string;
+  groups?: unknown;
   position?: number;
 };
 
@@ -62,6 +63,7 @@ export async function POST(
     field_schema: body.field_schema ?? [],
     status_set: body.status_set ?? [],
     default_status_key: body.default_status_key ?? null,
+    groups: body.groups ?? [],
     position: typeof body.position === "number" ? body.position : 0,
     is_active: true,
   });

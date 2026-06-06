@@ -28,6 +28,10 @@ export const TripObjectiveCategory = model.define("trip_objective_category", {
   status_set: model.json().nullable(),
   default_status_key: model.text().nullable(),
 
+  // User-defined sub-groups to organize entries within this type
+  // (e.g. Sourcing → "Linear", "Panels", "Drivers"). [{ id, label, position }]
+  groups: model.json().nullable(),
+
   position: model.number().default(0),
   is_active: model.boolean().default(true),
 });

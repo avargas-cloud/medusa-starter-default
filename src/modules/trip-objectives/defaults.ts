@@ -10,7 +10,22 @@
  * route; this file is only the initial seed.
  */
 
-import type { FieldDef, StatusDef } from "./types";
+import type { FieldDef, ObjectiveGroup, StatusDef } from "./types";
+
+const g = (id: string, label: string, position: number): ObjectiveGroup => ({
+  id,
+  label,
+  position,
+});
+
+// Starter sub-groups for Sourcing (editable in the Field Builder).
+const SOURCING_GROUPS: ObjectiveGroup[] = [
+  g("g_linear", "Linear / Strips", 10),
+  g("g_panels", "Panels & Troffers", 20),
+  g("g_downlights", "Downlights", 30),
+  g("g_drivers", "Drivers / PSU", 40),
+  g("g_controls", "Controls", 50),
+];
 
 const f = (
   key: string,
@@ -87,6 +102,11 @@ const SOURCING_STATUS: StatusDef[] = [
 // ── NEGOTIATION ──────────────────────────────────────────────────────────────
 const NEGOTIATION_FIELDS: FieldDef[] = [
   f("counterparty", "Contraparte (fábrica)", "text", 10, { group: "General" }),
+  f("speech", "Speech / Script", "textarea", 15, {
+    group: "Speech / Script",
+    placeholder:
+      "Lo que le queremos decir: apertura, puntos clave, precio objetivo, concesiones, objeciones esperadas, cierre…",
+  }),
   f("currency", "Moneda", "select", 20, { group: "Precio", options: CURRENCY }),
   f("current_price", "Precio actual", "currency", 30, { group: "Precio" }),
   f("asking_price", "Precio pedido", "currency", 40, { group: "Precio" }),
@@ -137,12 +157,13 @@ export interface DefaultCategory {
   field_schema: FieldDef[];
   status_set: StatusDef[];
   default_status_key: string;
+  groups: ObjectiveGroup[];
 }
 
 export const DEFAULT_CATEGORIES: DefaultCategory[] = [
-  { slug: "sourcing", label: "Sourcing", icon_key: "search", color_token: "blue", position: 10, field_schema: SOURCING_FIELDS, status_set: SOURCING_STATUS, default_status_key: "identified" },
-  { slug: "negotiation", label: "Negotiation", icon_key: "handshake", color_token: "amber", position: 20, field_schema: NEGOTIATION_FIELDS, status_set: NEGOTIATION_STATUS, default_status_key: "open" },
-  { slug: "decisions", label: "Decisions", icon_key: "lock", color_token: "violet", position: 30, field_schema: DECISIONS_FIELDS, status_set: DECISIONS_STATUS, default_status_key: "pending" },
+  { slug: "sourcing", label: "Sourcing", icon_key: "search", color_token: "blue", position: 10, field_schema: SOURCING_FIELDS, status_set: SOURCING_STATUS, default_status_key: "identified", groups: SOURCING_GROUPS },
+  { slug: "negotiation", label: "Negotiation", icon_key: "handshake", color_token: "amber", position: 20, field_schema: NEGOTIATION_FIELDS, status_set: NEGOTIATION_STATUS, default_status_key: "open", groups: [] },
+  { slug: "decisions", label: "Decisions", icon_key: "lock", color_token: "violet", position: 30, field_schema: DECISIONS_FIELDS, status_set: DECISIONS_STATUS, default_status_key: "pending", groups: [] },
 ];
 
 export const DEFAULT_TRIP = {
