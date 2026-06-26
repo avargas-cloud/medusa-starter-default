@@ -319,6 +319,13 @@ const UPSERT_EVENTS = new Set([
   "order.payment_captured",
   "order.fulfillment_created",
   "order.customer_transferred",
+  // Native completion (completeOrderWorkflow) flips status pending→completed
+  // WITHOUT firing order.updated. Pickup orders complete from complete-pickup,
+  // others from invoices/route.ts (Fix B). Both also emit pos.order.fulfilled.
+  // Without reindexing here the doc sticks at status='pending' and the POS
+  // keeps showing the order in the Open tab.
+  "order.completed",
+  "pos.order.fulfilled",
 ]);
 
 export default async function orderMeilisearchSubscriber({
@@ -405,6 +412,8 @@ export const config: SubscriberConfig = {
     "order.canceled",
     "order.payment_captured",
     "order.fulfillment_created",
+    "order.completed",
+    "pos.order.fulfilled",
     "delivery.created",
     "order.customer_transferred",
     "order.archived",
