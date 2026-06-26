@@ -371,19 +371,36 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         relations: ["items", "shipping_address", "shipping_methods"],
       });
       const shippingMethod = freshOrderData?.shipping_methods?.[0];
-      const fallbackItems = fulfillmentItems.map((reqItem) => {
-        const orderItem = freshOrderData?.items?.find(
-          (item: any) => item.id === reqItem.id
-        );
-        const sku = orderItem?.variant_sku ?? orderItem?.sku ?? null;
-        return {
-          title: orderItem?.title ?? "Item",
-          sku,
-          barcode: orderItem?.variant_barcode ?? sku ?? "",
-          quantity: reqItem.quantity,
-          line_item_id: reqItem.id,
-        };
-      });
+      const fallbackItems = await Promise.all(
+        fulfillmentItems.map(async (reqItem) => {
+          const orderItem = freshOrderData?.items?.find(
+            (item: any) => item.id === reqItem.id
+          );
+          const sku = orderItem?.variant_sku ?? orderItem?.sku ?? null;
+          // Resolve inventory_item_id so a later native ship (createOrderShipmentWorkflow)
+          // can match the fulfillment item to its inventory item. Without it, managed
+          // variants make Medusa throw a TypeError → 500 "An unknown error occurred"
+          // when a pickup order is later given delivery tracking.
+          let inventoryItemId: string | null = null;
+          const variantId = orderItem?.variant_id ?? null;
+          if (variantId) {
+            const invRes = await pool.query<{ inventory_item_id: string }>(
+              `SELECT inventory_item_id FROM product_variant_inventory_item
+                 WHERE variant_id = $1 AND deleted_at IS NULL LIMIT 1`,
+              [variantId]
+            );
+            inventoryItemId = invRes.rows[0]?.inventory_item_id ?? null;
+          }
+          return {
+            title: orderItem?.title ?? "Item",
+            sku,
+            barcode: orderItem?.variant_barcode ?? sku ?? "",
+            quantity: reqItem.quantity,
+            line_item_id: reqItem.id,
+            ...(inventoryItemId ? { inventory_item_id: inventoryItemId } : {}),
+          };
+        })
+      );
 
       const dbProviders: string[] = [];
       try {

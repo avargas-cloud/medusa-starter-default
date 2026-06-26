@@ -301,21 +301,38 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     const shippingMethod = orderData?.shipping_methods?.[0];
 
-    const fulfillmentItems = items.map(
-      (reqItem: { id: string; quantity: number }) => {
+    const invPool = getDbPool();
+    const fulfillmentItems = await Promise.all(
+      items.map(async (reqItem: { id: string; quantity: number }) => {
         const orderItem = orderData?.items?.find(
           (i: any) => i.id === reqItem.id
         );
         const sku = orderItem?.variant_sku ?? orderItem?.sku ?? null;
         const barcode = orderItem?.variant_barcode ?? sku ?? "";
+        // Resolve inventory_item_id from the variant→inventory link. Native ship
+        // (createOrderShipmentWorkflow → prepareRegisterShipmentData) divides the
+        // fulfillment qty by the matched inventory item's required_quantity; if the
+        // fulfillment item lacks inventory_item_id for a managed variant, .find()
+        // returns undefined and Medusa throws a TypeError → 500 "An unknown error".
+        let inventoryItemId: string | null = null;
+        const variantId = orderItem?.variant_id ?? null;
+        if (variantId) {
+          const invRes = await invPool.query<{ inventory_item_id: string }>(
+            `SELECT inventory_item_id FROM product_variant_inventory_item
+               WHERE variant_id = $1 AND deleted_at IS NULL LIMIT 1`,
+            [variantId]
+          );
+          inventoryItemId = invRes.rows[0]?.inventory_item_id ?? null;
+        }
         return {
           title: orderItem?.title ?? "Item",
           sku,
           barcode,
           quantity: reqItem.quantity,
           line_item_id: reqItem.id,
+          ...(inventoryItemId ? { inventory_item_id: inventoryItemId } : {}),
         };
-      }
+      })
     );
 
     console.log(
