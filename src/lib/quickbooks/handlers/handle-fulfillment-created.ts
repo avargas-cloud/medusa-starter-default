@@ -370,6 +370,12 @@ export async function handleFulfillmentCreated(
   const qbConfig = await getQbConfig();
   {
     const isPartialAgainstSo = linkedTxnId === qbSoTxnId && isPartial;
+    // True whenever this invoice links to a QB Sales Order — FULL or partial.
+    // The per-line LinkToTxnLineID mapping below must run for both: a full
+    // conversion that ships explicit items WITHOUT per-line links makes the
+    // bridge drop the SO link entirely (buildInvoiceAdd only emits a header
+    // <LinkToTxnID> in its items-less branch), leaving the SO open forever.
+    const linksToSo = !!linkedTxnId && linkedTxnId === qbSoTxnId;
 
     // Item-level (per-line) discounts must be BAKED INTO the QB line prices,
     // NOT emitted as a separate order-level Discount line. The POS sends gross
@@ -634,32 +640,76 @@ export async function handleFulfillmentCreated(
       );
     }
 
-    if (isPartialAgainstSo) {
+    if (linksToSo) {
       const {
         getSalesOrderDetailsFromQb,
       } = require("../../quickbooks/qb-bridge-client");
       const soDetails = await getSalesOrderDetailsFromQb(linkedTxnId);
 
       if (soDetails.success && soDetails.linesByProductId) {
-        logger.info(
-          `[QB-DEBUG] linesByProductId: ${JSON.stringify(soDetails.linesByProductId)}`
+        // Consume each SO TxnLineID at most once. linesByProductId is
+        // Record<productId, TxnLineID[]> (sorted ascending). Copy into mutable
+        // queues so two invoice lines that share a productId each claim a
+        // DISTINCT SO line. The previous code assigned the WHOLE array to
+        // item.LinkToTxnLineID, which only "worked" for single-element arrays
+        // (["x"].toString() === "x") and serialized duplicates as
+        // "<TxnLineID>id1,id2</TxnLineID>" — corrupting the link.
+        const txnLineQueue: Record<string, string[]> = Object.fromEntries(
+          Object.entries(soDetails.linesByProductId).map(([k, v]) => [
+            k,
+            [...(v as string[])],
+          ])
         );
-        logger.info(
-          `[QB-DEBUG] prebuiltItems: ${JSON.stringify(prebuiltItems)}`
-        );
-        prebuiltItems.forEach((item: any) => {
+        const unlinkedSoLines: any[] = [];
+        for (const item of prebuiltItems) {
           const pid = item.productId;
-          if (pid && soDetails.linesByProductId![pid]) {
-            item.LinkToTxnLineID = soDetails.linesByProductId![pid];
+          // No productId → shipping / order-discount / subtotal line. These are
+          // invoice-only extras and ride along as fresh ItemRef lines.
+          if (!pid) continue;
+          const queue = txnLineQueue[pid];
+          if (queue && queue.length > 0) {
+            // Single TxnLineID string — NOT the array.
+            item.LinkToTxnLineID = queue.shift();
+          } else if (soDetails.linesByProductId![pid]) {
+            // The SO HAS this product but every SO line for it is already
+            // consumed → the invoice carries more lines for this product than
+            // the SO does (split line / quantity mismatch). Cannot link cleanly.
+            unlinkedSoLines.push(item);
           }
-        });
+          // pid not on the SO at all → genuine invoice-only line, leave fresh.
+        }
+
+        const linkedCount = prebuiltItems.filter(
+          (i) => (i as any).LinkToTxnLineID
+        ).length;
         logger.info(
-          `${LOG_PREFIX} Successfully mapped ${prebuiltItems.filter((i) => i.LinkToTxnLineID).length} TxnLineIDs for Partial Invoice!`
+          `${LOG_PREFIX} Mapped ${linkedCount} line(s) to SO ${linkedTxnId} (isPartial=${isPartial}, unlinkable=${unlinkedSoLines.length})`
         );
+
+        // Fail-closed (FULL conversions only): if any SO-backed product line
+        // could not be linked, refuse to create a standalone/half-linked
+        // invoice — that is exactly what leaves the SO open forever (the bug
+        // this fixes). The outer consolidator catch marks the row 'failed' with
+        // this message, surfacing it in QB diagnostics for manual resolution.
+        // Partial invoices are exempt (fewer lines by design).
+        if (!isPartial && unlinkedSoLines.length > 0) {
+          const pids = unlinkedSoLines.map((i) => i.productId).join(", ");
+          throw new Error(
+            `Full SO→Invoice conversion (order ${orderId}): ${unlinkedSoLines.length} SO-backed line(s) could not be linked to SO ${linkedTxnId} (productIds: ${pids}). Refusing to create an unlinked invoice that would leave the SO open. Resolve the line/quantity mismatch and retry.`
+          );
+        }
       } else {
         logger.warn(
-          `${LOG_PREFIX} ⚠️ Failed to fetch SO details for Partial Invoice TxnLineIDs: ${soDetails.error}`
+          `${LOG_PREFIX} ⚠️ Failed to fetch SO details for TxnLineID mapping: ${soDetails.error}`
         );
+        // For a FULL conversion, proceeding here would silently create an
+        // unlinked invoice and orphan the SO — fail-closed instead. Partials
+        // keep the legacy warn-and-proceed behavior (unchanged).
+        if (!isPartial) {
+          throw new Error(
+            `Full SO→Invoice conversion (order ${orderId}): could not fetch SO ${linkedTxnId} details to build per-line links (${soDetails.error}). Refusing to create an unlinked invoice.`
+          );
+        }
       }
     }
 
