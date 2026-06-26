@@ -5,6 +5,89 @@ import { Modules } from "@medusajs/utils";
 import { getDbPool } from "../../../../utils/db-pool";
 
 /**
+ * Auto-complete the order natively in Medusa once it is fully fulfilled +
+ * fully paid. Mirrors the guarded completion in `admin/invoices/route.ts`
+ * (Fix B). For pickup orders the invoice is created BEFORE the fulfillment
+ * exists, so the invoice-route completion attempt fails Guard 2 and the order
+ * stays `pending`. The fulfillment only lands here, on "Mark as Picked Up",
+ * so this is the moment to (re)attempt the close. Non-fatal by design.
+ */
+async function tryCompleteOrder(
+  scope: MedusaRequest["scope"],
+  pool: ReturnType<typeof getDbPool>,
+  orderId: string
+): Promise<void> {
+  try {
+    const orderModule = scope.resolve(Modules.ORDER) as any;
+    const order = await orderModule.retrieveOrder(orderId, {
+      select: ["id", "status"],
+    });
+    // Guard 1: only attempt while still pending (not completed / cancelled)
+    if (order?.status !== "pending") return;
+
+    // Guard 2: all CURRENT-version order_item rows fully fulfilled.
+    // Filter by oi.version = order.version — order edits / void+re-fulfill leave
+    // stale lower-version rows (fulfilled_quantity=0) that aren't part of the
+    // live order; counting them would block multi-version orders forever.
+    const fulfillCheck = await pool.query(
+      `SELECT COUNT(*) FILTER (WHERE oi.fulfilled_quantity < oi.quantity) AS unfulfilled
+         FROM order_item oi
+         JOIN "order" o ON o.id = oi.order_id
+        WHERE oi.order_id = $1 AND oi.version = o.version`,
+      [orderId]
+    );
+    if (Number(fulfillCheck.rows[0]?.unfulfilled ?? 1) > 0) return;
+
+    // Guard 3: fully paid via pos_invoices (both columns in cents — same table)
+    const paidCheck = await pool.query(
+      `SELECT COALESCE(SUM(amount_paid), 0) AS paid_cents,
+              COALESCE(SUM(total), 0)       AS invoiced_cents
+         FROM pos_invoice
+        WHERE order_id = $1 AND status != 'voided'`,
+      [orderId]
+    );
+    const paidCents = Number(paidCheck.rows[0]?.paid_cents ?? 0);
+    const invoicedCents = Number(paidCheck.rows[0]?.invoiced_cents ?? 1);
+    if (invoicedCents === 0 || paidCents < invoicedCents - 1) return;
+
+    // Guard 4: no draft/open credit memos (fail-open — skip if query fails)
+    try {
+      const cmCheck = await pool.query(
+        `SELECT COUNT(*) AS draft_cm FROM pos_credit_memo
+          WHERE order_id = $1 AND status NOT IN ('completed', 'voided')`,
+        [orderId]
+      );
+      if (Number(cmCheck.rows[0]?.draft_cm ?? 0) > 0) return;
+    } catch {
+      return; // fail-open: can't verify credit memos, skip completion
+    }
+
+    // All guards passed → complete the order natively in Medusa
+    const { completeOrderWorkflow } = await import("@medusajs/core-flows");
+    // ⚠️ input shape is { orderIds: string[] } — plural array, NOT orderId
+    await completeOrderWorkflow(scope).run({ input: { orderIds: [orderId] } });
+    console.log(`[complete-pickup] ✅ order ${orderId} auto-completed in Medusa`);
+
+    // Emit custom event so purchasing-snapshot-on-event fires immediately
+    try {
+      const eventBus = scope.resolve(Modules.EVENT_BUS);
+      await eventBus.emit({
+        name: "pos.order.fulfilled",
+        data: { id: orderId },
+      });
+    } catch {
+      /* non-fatal */
+    }
+  } catch (completeErr: any) {
+    // Explicitly non-fatal — order stays pending, the close-eligible backfill
+    // (scripts/fix/close-eligible-pending-orders.ts) will catch it later.
+    console.warn(
+      `[complete-pickup] completeOrderWorkflow skipped: ${completeErr?.message?.slice(0, 120)}`
+    );
+  }
+}
+
+/**
  * POST /admin/orders/:id/complete-pickup
  *
  * Atomically closes a "pickup pending" invoice:
@@ -111,8 +194,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           picked_up_at: pickedUpAt,
           picked_up_by: picked_up_by ?? existingMetadata.picked_up_by ?? null,
         };
-        delete nextMetadata.pickup_pending;
-        delete nextMetadata.pickup_pending_invoice_id;
+        // ⚠️ Medusa update* deep-merges JSONB → `delete` never persists (the key
+        // re-hydrates from the stored value). Set false/null to actually clear,
+        // otherwise the "Mark as Picked Up" button keeps showing.
+        nextMetadata.pickup_pending = false;
+        nextMetadata.pickup_pending_invoice_id = null;
         try {
           await orderModule.updateOrders([
             { id: orderId, metadata: nextMetadata },
@@ -124,6 +210,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
 
         await lockClient.query("COMMIT");
+        await tryCompleteOrder(req.scope, pool, orderId);
         return res.status(200).json({
           fulfillment_id: existingFulId,
           picked_up_at: pickedUpAt,
@@ -259,8 +346,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         picked_up_at: pickedUpAt,
         picked_up_by: picked_up_by ?? existingMetadata.picked_up_by ?? null,
       };
-      delete nextMetadata.pickup_pending;
-      delete nextMetadata.pickup_pending_invoice_id;
+      // ⚠️ Medusa update* deep-merges JSONB → `delete` never persists; set
+      // false/null to actually clear the pickup_pending flag.
+      nextMetadata.pickup_pending = false;
+      nextMetadata.pickup_pending_invoice_id = null;
       try {
         await orderModule.updateOrders([
           { id: orderId, metadata: nextMetadata },
@@ -276,6 +365,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       );
 
       await lockClient.query("COMMIT");
+      await tryCompleteOrder(req.scope, pool, orderId);
       return res.status(200).json({
         fulfillment_id: matchingFulfillment.fulfillment_id,
         picked_up_at: pickedUpAt,
@@ -548,8 +638,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       picked_up_at: pickedUpAt,
       picked_up_by: picked_up_by ?? existingMetadata.picked_up_by ?? null,
     };
-    delete nextMetadata.pickup_pending;
-    delete nextMetadata.pickup_pending_invoice_id;
+    // ⚠️ Medusa update* deep-merges JSONB → `delete` never persists; set
+    // false/null to actually clear the pickup_pending flag.
+    nextMetadata.pickup_pending = false;
+    nextMetadata.pickup_pending_invoice_id = null;
     try {
       await orderModule.updateOrders([{ id: orderId, metadata: nextMetadata }]);
     } catch (metaErr: any) {
@@ -571,6 +663,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     await lockClient.query("COMMIT");
+    await tryCompleteOrder(req.scope, pool, orderId);
     return res.status(200).json({
       fulfillment_id: fulfillmentId,
       picked_up_at: pickedUpAt,
