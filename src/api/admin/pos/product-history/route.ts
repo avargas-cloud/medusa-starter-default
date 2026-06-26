@@ -113,8 +113,16 @@ export async function GET(
           COALESCE(c.email, o.email, '') AS customer_email
         FROM reservation_item ri
         JOIN order_line_item oli ON oli.id = ri.line_item_id AND oli.variant_id = ?
-        JOIN order_item oi ON oi.item_id = oli.id
-          AND oi.version = (SELECT MAX(oi2.version) FROM order_item oi2 WHERE oi2.order_id = oi.order_id)
+        -- item_id -> order_id is invariant across order_item versions, so we
+        -- only need ONE row per line item. A correlated MAX(version) subquery
+        -- forced a seq scan that ran ~11k times (~22s); LATERAL LIMIT 1 hits
+        -- IDX_order_item_item_id and returns the same order_id in <5ms.
+        JOIN LATERAL (
+          SELECT itm.order_id
+          FROM order_item itm
+          WHERE itm.item_id = oli.id AND itm.deleted_at IS NULL
+          LIMIT 1
+        ) oi ON true
         JOIN "order" o ON o.id = oi.order_id
         LEFT JOIN customer c ON c.id = o.customer_id
         WHERE ri.deleted_at IS NULL
