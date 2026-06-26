@@ -21,6 +21,7 @@ import type {
   BlockedLine,
   ClassifiedLine,
   OverriddenAuditEntry,
+  OverriddenZeroLine,
   SkippedLine,
   VerifiedLine,
 } from "./classify-lines-step";
@@ -34,6 +35,7 @@ export interface PersistApprovalResultsStepInput {
   blocked: BlockedLine[];
   skipped: SkippedLine[];
   verified: VerifiedLine[];
+  overriddenZero: OverriddenZeroLine[];
   overrides: OverriddenAuditEntry[];
 }
 
@@ -86,6 +88,9 @@ export const persistApprovalResultsStep = createStep(
         projected_stock: a.new_stock,
         qb_account_list_id: accountByLineId.get(a.line_id) ?? null,
         override_note: override?.override_note ?? null,
+        // Derived from the REAL post-apply stock (a.new_stock), not the
+        // pre-apply projection — stock can move between classify and apply.
+        resulted_negative: a.new_stock < 0,
       });
     }
 
@@ -114,6 +119,21 @@ export const persistApprovalResultsStep = createStep(
         delta_applied: 0,
         qty_at_apply_time: v.qty_at_apply_time,
         projected_stock: v.qty_at_apply_time, // unchanged
+        resulted_negative: false,
+      });
+    }
+
+    // Override that deliberately zeroed a real variance → audited as
+    // 'overridden' (no stock move, no QB push), never silent 'verified'.
+    for (const o of input.overriddenZero) {
+      lineUpdates.push({
+        id: o.line_id,
+        status: "overridden",
+        delta_applied: 0,
+        qty_at_apply_time: o.qty_at_apply_time,
+        projected_stock: o.qty_at_apply_time, // unchanged
+        override_note: o.override_note,
+        resulted_negative: false,
       });
     }
 
@@ -121,19 +141,28 @@ export const persistApprovalResultsStep = createStep(
       await service.updateInventoryCountLines(lineUpdates);
     }
 
-    const totalApplied = input.applied.length;
-    const totalVerified = input.verified.length;
-    const totalBlocked = input.blocked.length;
-    const totalSkipped = input.skipped.length;
-    // Verified lines count as "successfully processed" for status purposes
-    const totalProcessed = totalApplied + totalVerified;
-    const fullySuccess =
-      totalBlocked === 0 &&
-      totalSkipped === 0 &&
-      totalProcessed === input.total_lines;
-    const finalStatus: "approved" | "partially_applied" = fullySuccess
-      ? "approved"
-      : "partially_applied";
+    // Counters + final status are computed from ALL lines of the count, not
+    // just this approval pass — a count can be approved across multiple passes
+    // (partially_applied → re-approve), and the header must reflect the full
+    // picture. (Pre-fix this overwrote with only the current pass, leaving
+    // total_lines_applied=0 on multi-pass counts.)
+    const allLines = (await service.listInventoryCountLines(
+      { inventory_count_id: input.count_id },
+      { take: 5000 }
+    )) as Array<{ status: string }>;
+
+    const countBy = (statuses: string[]) =>
+      allLines.filter((l) => statuses.includes(l.status)).length;
+
+    const totalApplied = countBy(["applied", "overridden"]);
+    const totalVerified = countBy(["verified"]);
+    const totalBlocked = countBy(["blocked"]);
+    const totalSkipped = countBy(["skipped"]);
+    const totalPending = countBy(["pending"]);
+
+    // Every line resolved (none pending/blocked) → approved, else partial.
+    const finalStatus: "approved" | "partially_applied" =
+      totalPending === 0 && totalBlocked === 0 ? "approved" : "partially_applied";
 
     await service.updateInventoryCounts([
       {
@@ -152,6 +181,7 @@ export const persistApprovalResultsStep = createStep(
       ...input.blocked.map((b) => b.line_id),
       ...input.skipped.map((s) => s.line_id),
       ...input.verified.map((v) => v.line_id),
+      ...input.overriddenZero.map((o) => o.line_id),
     ];
 
     return new StepResponse(
@@ -185,6 +215,7 @@ export const persistApprovalResultsStep = createStep(
           qb_account_list_id: null,
           override_note: null,
           block_reason: null,
+          resulted_negative: false,
         }))
       );
     }

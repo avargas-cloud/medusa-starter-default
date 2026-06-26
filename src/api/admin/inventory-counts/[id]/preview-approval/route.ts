@@ -126,7 +126,7 @@ export async function GET(
     const current = stockByItem.get(l.inventory_item_id) ?? 0;
     const delta = l.delta_original ?? 0;
     const projected = current + delta;
-    const willBlock = projected < 0;
+    const willGoNegative = projected < 0;
     return {
       line_id: l.id,
       sku: l.sku,
@@ -136,15 +136,17 @@ export async function GET(
       delta_original: delta,
       current_stock_now: current,
       projected_stock: projected,
-      will_block: willBlock,
-      block_reason: willBlock ? "projected_negative" : null,
+      // Informational only — never blocks. delta_original is applied as-is.
+      will_go_negative: willGoNegative,
+      block_reason: null,
       qb_account_list_id:
         l.qb_account_list_id ?? count.default_qb_account_list_id,
       unit_cost: costByVariant.get(l.product_variant_id) ?? null,
     };
   });
 
-  const applyLines = previewLines.filter((l) => !l.will_block);
+  // Every line with a non-zero delta will apply (no negative block anymore).
+  const applyLines = previewLines.filter((l) => l.delta_original !== 0);
   const cost_impact_dollars = applyLines.reduce(
     (acc, l) => acc + l.delta_original * (l.unit_cost ?? 0),
     0
@@ -155,7 +157,7 @@ export async function GET(
   const summary = {
     total_lines: previewLines.length,
     will_apply: applyLines.length,
-    will_block: previewLines.filter((l) => l.will_block).length,
+    will_go_negative: previewLines.filter((l) => l.will_go_negative).length,
     positive_delta_units: applyLines
       .filter((l) => l.delta_original > 0)
       .reduce((acc, l) => acc + l.delta_original, 0),

@@ -103,13 +103,13 @@ export async function POST(
     },
     { take: 5000 }
   );
-  // Use available (stocked - reserved) so the projected-negative guard in
-  // classify-lines-step blocks deltas that would drive available stock negative,
-  // not just physical stock. Prevents oversell during approval windows.
+  // Use physical stocked_quantity (NOT available) — the adjustment operates on
+  // stocked, the delta is movement-invariant, and reservations must not change
+  // the correction. This matches preview-approval so the manager sees exactly
+  // what will be applied. Negative results are allowed (flagged downstream).
   const stockByItem = new Map<string, number>();
   for (const lvl of levels) {
-    const available = Math.max(0, (lvl.stocked_quantity ?? 0) - (lvl.reserved_quantity ?? 0));
-    stockByItem.set(lvl.inventory_item_id, available);
+    stockByItem.set(lvl.inventory_item_id, lvl.stocked_quantity ?? 0);
   }
 
   const workflowInput = {

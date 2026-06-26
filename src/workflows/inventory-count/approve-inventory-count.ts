@@ -85,6 +85,7 @@ export const approveInventoryCountWorkflow = createWorkflow(
       blocked: classified.toBlock,
       skipped: classified.toSkip,
       verified: classified.toVerified,
+      overriddenZero: classified.toOverriddenZero,
       overrides: classified.overrides,
     });
 

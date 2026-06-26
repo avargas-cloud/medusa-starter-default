@@ -55,6 +55,7 @@ export interface InventoryCountLineDto {
   status: InventoryCountLineStatus;
   block_reason: InventoryCountLineBlockReason | null;
   override_note: string | null;
+  resulted_negative: boolean;
   qb_account_list_id: string | null;
   qb_line_index: number | null;
   qb_synced_at: string | null;
@@ -113,7 +114,9 @@ export interface PreviewApprovalLine {
   delta_original: number;
   current_stock_now: number;
   projected_stock: number;
-  will_block: boolean;
+  // Informational only — applying delta_original would drive on-hand below 0.
+  // Allowed (not blocked); surfaced so the manager is aware before approving.
+  will_go_negative: boolean;
   block_reason: InventoryCountLineBlockReason | null;
   qb_account_list_id: string;
   unit_cost: number | null;

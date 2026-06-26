@@ -57,10 +57,11 @@ async function fetchInventoryAdjCogs(pg: any, from: string, to: string): Promise
      ), 0) AS adj_cogs
      FROM inventory_count ic
      JOIN inventory_count_line icl ON icl.inventory_count_id = ic.id
-       AND icl.deleted_at IS NULL AND icl.status = 'applied' AND icl.delta_applied != 0
+       AND icl.deleted_at IS NULL
+       AND icl.status IN ('applied', 'overridden') AND icl.delta_applied != 0
      LEFT JOIN product_variant pv ON pv.id = icl.product_variant_id
      WHERE ic.deleted_at IS NULL AND ic.voided_at IS NULL
-       AND ic.status = 'approved'
+       AND ic.status IN ('approved', 'partially_applied')
        AND ic.applied_at >= ? AND ic.applied_at < ?`,
     [from, to]
   )

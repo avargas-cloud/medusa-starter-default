@@ -50,10 +50,13 @@ export type QbInvAdjPipelineStatus =
   (typeof QB_INV_ADJ_PIPELINE_STATUSES)[number];
 
 /**
- * Manager decisions per line at approval time. Only "skip" and "override" are
- * permitted: the projected-negative guard NEVER allows force-applying a delta
- * that would leave stock negative — the entire purpose of the adjustment is
- * to fix negatives, not to create them.
+ * Manager decisions per line at approval time:
+ *   apply    — apply delta_original as-is (default). Negative results allowed.
+ *   skip     — exclude the line from this approval (note required).
+ *   override — recount-as-of-today: manager types the real quantity now; the
+ *              effective delta becomes (newCount − current_stock). An override
+ *              that lands on delta=0 over a line with a real variance is a
+ *              deliberate "discard the count" decision, audited as 'overridden'.
  */
 export const APPROVAL_LINE_ACTIONS = ["apply", "skip", "override"] as const;
 export type ApprovalLineAction = (typeof APPROVAL_LINE_ACTIONS)[number];

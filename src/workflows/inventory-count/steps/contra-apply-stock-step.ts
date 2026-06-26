@@ -72,15 +72,10 @@ export const contraApplyStockStep = createStep(
       const preStock = levels[0]?.stocked_quantity ?? 0;
       const reverseBy = -line.delta_applied;
 
-      // Hard rule: voiding cannot leave stock negative either. If the
-      // current floor stock is below what we would need to subtract, we
-      // skip the reversal and surface the issue — manual intervention
-      // required, the void cannot proceed silently with broken parity.
-      if (preStock + reverseBy < 0) {
-        throw new Error(
-          `Cannot void line ${line.line_id}: reversing delta_applied=${line.delta_applied} on stock=${preStock} would result in negative stock. Manual reconciliation required.`
-        );
-      }
+      // Negative on-hand is allowed system-wide (a unit can be sold before its
+      // PO receipt is recorded; QB Desktop permits it), so a void reverses the
+      // delta literally and keeps exact parity even if the result is negative —
+      // consistent with the apply path, which no longer blocks on negativity.
 
       await inventoryService.adjustInventory(
         line.inventory_item_id,

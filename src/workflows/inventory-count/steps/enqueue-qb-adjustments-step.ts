@@ -54,6 +54,12 @@ export const enqueueQbAdjustmentsStep = createStep(
 
     const groupsByAccount = new Map<string, ClassifiedLine[]>();
     for (const line of input.toApply) {
+      // Never enqueue a zero-delta adjustment (e.g. an override that landed on
+      // the current stock) — it's a no-op for QB and would emit a pointless
+      // InventoryAdjustment with new_quantity == current.
+      const applied = appliedByLineId.get(line.line_id);
+      const delta = applied?.delta_applied ?? line.effective_delta;
+      if (delta === 0) continue;
       const list = groupsByAccount.get(line.qb_account_list_id) ?? [];
       list.push(line);
       groupsByAccount.set(line.qb_account_list_id, list);
