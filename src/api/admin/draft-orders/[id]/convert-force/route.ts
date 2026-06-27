@@ -136,6 +136,68 @@ export async function POST(
   };
 
   try {
+    // ── Idempotent duplicate guard ────────────────────────────────────────────
+    // A double-submit creates two drafts that BOTH reach convert-force; each
+    // consumes a gapless S-number and becomes a duplicate confirmed order
+    // (S10617/S10618 etc). The frontend re-entry ref-guard stops the concurrent
+    // double-click; this covers network retries / multi-tab where the 2nd request
+    // arrives AFTER the 1st committed. If an identical confirmed order (same
+    // customer + same line fingerprint) was created in the last 45s, return THAT
+    // existing order instead of converting this draft into a second one.
+    try {
+      const dedupPool = getDbPool();
+      const dupRes = await dedupPool.query(
+        `WITH draft AS (
+           SELECT o.customer_id,
+                  string_agg(COALESCE(oli.variant_id, oli.title) || ':' || oi.quantity::text, ','
+                             ORDER BY COALESCE(oli.variant_id, oli.title), oi.quantity::text) AS fp
+             FROM "order" o
+             JOIN order_item oi ON oi.order_id = o.id AND oi.version = o.version
+             JOIN order_line_item oli ON oli.id = oi.item_id
+            WHERE o.id = $1
+            GROUP BY o.customer_id
+         ),
+         cand AS (
+           SELECT o.id, o.display_id, o.metadata->>'document_number' AS docnum, o.created_at,
+                  string_agg(COALESCE(oli.variant_id, oli.title) || ':' || oi.quantity::text, ','
+                             ORDER BY COALESCE(oli.variant_id, oli.title), oi.quantity::text) AS fp
+             FROM "order" o
+             JOIN order_item oi ON oi.order_id = o.id AND oi.version = o.version
+             JOIN order_line_item oli ON oli.id = oi.item_id
+            WHERE o.is_draft_order = false
+              AND o.id <> $1
+              AND o.deleted_at IS NULL
+              AND o.created_at > NOW() - INTERVAL '45 seconds'
+              AND o.customer_id IS NOT DISTINCT FROM (SELECT customer_id FROM draft)
+            GROUP BY o.id
+         )
+         SELECT cand.id, cand.display_id, cand.docnum
+           FROM cand JOIN draft ON cand.fp = draft.fp
+          ORDER BY cand.created_at DESC
+          LIMIT 1`,
+        [id]
+      );
+      const dup = dupRes.rows[0];
+      if (dup) {
+        console.warn(
+          `[convert-force] ⚠️ Duplicate convert blocked for draft ${id} — returning existing order ${dup.docnum} (${dup.id})`
+        );
+        return void res.status(200).json({
+          order: {
+            id: dup.id,
+            display_id: dup.display_id,
+            metadata: { document_number: dup.docnum },
+          },
+          deduplicated: true,
+        });
+      }
+    } catch (dedupErr: any) {
+      // Non-fatal — never block a real conversion because the guard query failed.
+      console.warn(
+        `[convert-force] dedup check failed (non-fatal): ${dedupErr?.message}`
+      );
+    }
+
     // ── Step 1 & 2: Fetch draft order items and stock location concurrently ───────────
     const [{ data: orderData }, { data: locationData }] = await Promise.all([
       query.graph({

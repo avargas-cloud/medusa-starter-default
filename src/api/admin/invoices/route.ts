@@ -1361,18 +1361,30 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       );
       if (Number(fulfillCheck.rows[0]?.unfulfilled ?? 1) > 0) return;
 
-      // Guard 3: fully paid via pos_invoices (both columns in cents — same table, no scale issue)
+      // Guard 3: fully paid. pos_invoice.amount_paid is 0 for deposit/BAMS-paid
+      // orders (captured deposit never applied to the invoice row), so also
+      // consider the order's captured payment_collection. captured_amount is in
+      // DOLLARS; pos_invoice totals are in CENTS — convert before comparing.
       const paidCheck = await pgConnForClose.raw(
-        `SELECT COALESCE(SUM(amount_paid), 0) AS paid_cents,
-                COALESCE(SUM(total), 0)       AS invoiced_cents
-         FROM pos_invoice
-         WHERE order_id = ? AND status != 'voided'`,
-        [orderIdForClose]
+        `SELECT
+           COALESCE((SELECT SUM(amount_paid) FROM pos_invoice
+                      WHERE order_id = ? AND status != 'voided'), 0) AS paid_cents,
+           COALESCE((SELECT SUM(total) FROM pos_invoice
+                      WHERE order_id = ? AND status != 'voided'), 0) AS invoiced_cents,
+           COALESCE((SELECT SUM(pc.captured_amount - COALESCE(pc.refunded_amount, 0))
+                       FROM order_payment_collection opc
+                       JOIN payment_collection pc ON pc.id = opc.payment_collection_id
+                      WHERE opc.order_id = ?), 0) AS captured_dollars`,
+        [orderIdForClose, orderIdForClose, orderIdForClose]
       );
       const paidCents = Number(paidCheck.rows[0]?.paid_cents ?? 0);
       const invoicedCents = Number(paidCheck.rows[0]?.invoiced_cents ?? 1);
+      const capturedCents = Math.round(
+        Number(paidCheck.rows[0]?.captured_dollars ?? 0) * 100
+      );
+      const effectivePaidCents = Math.max(paidCents, capturedCents);
       // 1-cent tolerance for rounding; also skip if nothing has been invoiced
-      if (invoicedCents === 0 || paidCents < invoicedCents - 1) return;
+      if (invoicedCents === 0 || effectivePaidCents < invoicedCents - 1) return;
 
       // Guard 4: no draft/open credit memos (fail-open — skip if query fails)
       try {

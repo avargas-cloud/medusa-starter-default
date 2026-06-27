@@ -57,10 +57,16 @@ export default async function closeEligiblePendingOrders({
            WHERE oi.order_id = o.id AND oi.version = o.version
              AND oi.fulfilled_quantity < oi.quantity
          )
-         -- Guard 3: fully paid (cents vs cents, 1¢ tolerance)
-         AND (
-           SELECT COALESCE(SUM(pi.amount_paid), 0)
-           FROM pos_invoice pi WHERE pi.order_id = o.id AND pi.status != 'voided'
+         -- Guard 3: fully paid. Deposit/BAMS-paid orders have amount_paid=0 (the
+         -- captured deposit is never applied to the invoice row), so the paid side
+         -- is max(SUM amount_paid cents, captured payment_collection ×100).
+         AND GREATEST(
+           (SELECT COALESCE(SUM(pi.amount_paid), 0)
+              FROM pos_invoice pi WHERE pi.order_id = o.id AND pi.status != 'voided'),
+           (SELECT COALESCE(ROUND(SUM(pc.captured_amount - COALESCE(pc.refunded_amount, 0)) * 100), 0)
+              FROM order_payment_collection opc
+              JOIN payment_collection pc ON pc.id = opc.payment_collection_id
+             WHERE opc.order_id = o.id)
          ) >= (
            SELECT COALESCE(SUM(pi2.total), 1)
            FROM pos_invoice pi2 WHERE pi2.order_id = o.id AND pi2.status != 'voided'
