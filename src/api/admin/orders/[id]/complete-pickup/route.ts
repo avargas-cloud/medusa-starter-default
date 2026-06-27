@@ -196,6 +196,34 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       );
       const ful = fulRow.rows[0];
       if (ful && !ful.canceled_at) {
+        // Self-heal an orphan: if the invoice-bound fulfillment lost its
+        // order_fulfillment link (see Step 5.5), re-create it so the order shows
+        // as fulfilled/delivered and leaves the Unfulfilled tab.
+        try {
+          const linkExists = await pool.query(
+            `SELECT 1 FROM order_fulfillment
+              WHERE order_id = $1 AND fulfillment_id = $2 AND deleted_at IS NULL
+              LIMIT 1`,
+            [orderId, existingFulId]
+          );
+          if (linkExists.rowCount === 0) {
+            const { ulid } = await import("ulid");
+            await pool.query(
+              `INSERT INTO order_fulfillment (id, order_id, fulfillment_id, created_at, updated_at)
+               VALUES ($1, $2, $3, NOW(), NOW())
+               ON CONFLICT DO NOTHING`,
+              [`ordful_${ulid()}`, orderId, existingFulId]
+            );
+            console.warn(
+              `[complete-pickup] ensure-link (short-circuit): relinked orphan ${existingFulId} → order ${orderId}`
+            );
+          }
+        } catch (linkErr: any) {
+          console.warn(
+            `[complete-pickup] ensure-link (short-circuit) failed (non-fatal): ${linkErr?.message}`
+          );
+        }
+
         if (!ful.delivered_at) {
           await markDeliveredWithFallback(
             existingFulId,
@@ -632,6 +660,40 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     if (!fulfillmentId) {
       throw new Error("Fulfillment creation returned no id");
+    }
+
+    // ── Step 5.5: Guarantee the order↔fulfillment link exists ────────────────
+    // A fulfillment can end up created + bound to the invoice but WITHOUT an
+    // order_fulfillment row (native workflow link lost, or the fallback link
+    // insert failed) → an ORPHAN delivered fulfillment. markDelivered-native
+    // can't see it (so delivered_at lands via the SQL fallback) and the
+    // /invoices Unfulfilled tab classifier — which reads order.fulfillments via
+    // query.graph — never finds it, so the invoice is misread as unfulfilled
+    // forever (e.g. S10688 / inv 20669). Idempotently ensure the link BEFORE
+    // delivering/binding so no orphan is ever produced.
+    try {
+      const linkExists = await pool.query(
+        `SELECT 1 FROM order_fulfillment
+          WHERE order_id = $1 AND fulfillment_id = $2 AND deleted_at IS NULL
+          LIMIT 1`,
+        [orderId, fulfillmentId]
+      );
+      if (linkExists.rowCount === 0) {
+        const { ulid } = await import("ulid");
+        await pool.query(
+          `INSERT INTO order_fulfillment (id, order_id, fulfillment_id, created_at, updated_at)
+           VALUES ($1, $2, $3, NOW(), NOW())
+           ON CONFLICT DO NOTHING`,
+          [`ordful_${ulid()}`, orderId, fulfillmentId]
+        );
+        console.warn(
+          `[complete-pickup] ensure-link: inserted missing order_fulfillment for ${fulfillmentId} → order ${orderId}`
+        );
+      }
+    } catch (linkErr: any) {
+      console.warn(
+        `[complete-pickup] ensure-link safety net failed (non-fatal): ${linkErr?.message}`
+      );
     }
 
     // Patch fulfilled_quantity so order.fulfillment_status reflects reality.
