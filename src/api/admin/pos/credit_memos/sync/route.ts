@@ -161,7 +161,36 @@ export async function POST(
         };
       });
 
-    if (action === "create" || id === "new" || !id || id.startsWith("new:")) {
+    // Resolve whether this is a genuine create. A real (non-placeholder) id must
+    // NEVER mint a new CM-# — that's how a frontend race produced duplicate
+    // credit memos. If `action: "create"` arrives with a persisted-looking id,
+    // coerce to UPDATE when that memo exists, else reject (don't allocate a
+    // sequence number for an unknown explicit id).
+    const isPlaceholderId =
+      !id || id === "new" || (typeof id === "string" && id.startsWith("new:"));
+    let shouldCreate = action === "create" || isPlaceholderId;
+
+    if (shouldCreate && !isPlaceholderId) {
+      const pgConnection = req.scope.resolve("__pg_connection__") as any;
+      const existing = await pgConnection("pos_credit_memo")
+        .where({ id })
+        .first("id");
+      if (existing) {
+        logger.warn(
+          `[credit_memos sync] action=create received with existing id ${id} — coercing to UPDATE to prevent a duplicate credit memo.`
+        );
+        shouldCreate = false;
+      } else {
+        res.status(400).json({
+          success: false,
+          message:
+            "Refusing to create a credit memo with an explicit non-placeholder id.",
+        });
+        return;
+      }
+    }
+
+    if (shouldCreate) {
       const pgConnection = req.scope.resolve("__pg_connection__") as any;
       const seqRes = await pgConnection.raw(
         `SELECT nextval('custom_credit_memo_seq') AS seq`
