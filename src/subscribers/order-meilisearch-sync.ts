@@ -362,9 +362,10 @@ export default async function orderMeilisearchSubscriber({
     return;
   }
 
-  // delivery.created carries the FULFILLMENT id, not the order id — resolve
-  // the owning order before reindexing.
-  if (event.name === "delivery.created") {
+  // delivery.created / shipment.created carry the FULFILLMENT id (not the order
+  // id) — resolve the owning order before reindexing. (shipment.created fires
+  // when the Tracking button ships a fulfillment; its data.id is the fulfillment.)
+  if (event.name === "delivery.created" || event.name === "shipment.created") {
     const fulfillmentIds = extractIds(event.data);
     const resolved = await resolveOrderIdsFromFulfillments(
       fulfillmentIds,
@@ -414,6 +415,12 @@ export const config: SubscriberConfig = {
     "order.fulfillment_created",
     "order.completed",
     "pos.order.fulfilled",
+    // Adding tracking ships a fulfillment (createShipmentWorkflow →
+    // "shipment.created"). Its payload carries the FULFILLMENT id (not the order
+    // id), so it's resolved like delivery.created below. Without it the order's
+    // fulfillment_status change to "shipped" never reindexes (same gap the
+    // pickup flow had) → the Tracking button leaves the Meili doc stale.
+    "shipment.created",
     "delivery.created",
     "order.customer_transferred",
     "order.archived",
