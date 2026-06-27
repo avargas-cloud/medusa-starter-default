@@ -17,7 +17,9 @@ async function tryCompleteOrder(
   pool: ReturnType<typeof getDbPool>,
   orderId: string
 ): Promise<void> {
-  try {
+  // Inner: attempt native completion (guarded, early-returns). Whether or not it
+  // completes, the reindex below ALWAYS fires.
+  const attemptComplete = async (): Promise<void> => {
     const orderModule = scope.resolve(Modules.ORDER) as any;
     const order = await orderModule.retrieveOrder(orderId, {
       select: ["id", "status"],
@@ -79,23 +81,30 @@ async function tryCompleteOrder(
     // ⚠️ input shape is { orderIds: string[] } — plural array, NOT orderId
     await completeOrderWorkflow(scope).run({ input: { orderIds: [orderId] } });
     console.log(`[complete-pickup] ✅ order ${orderId} auto-completed in Medusa`);
+  };
 
-    // Emit custom event so purchasing-snapshot-on-event fires immediately
-    try {
-      const eventBus = scope.resolve(Modules.EVENT_BUS);
-      await eventBus.emit({
-        name: "pos.order.fulfilled",
-        data: { id: orderId },
-      });
-    } catch {
-      /* non-fatal */
-    }
+  try {
+    await attemptComplete();
   } catch (completeErr: any) {
     // Explicitly non-fatal — order stays pending, the close-eligible backfill
     // (scripts/fix/close-eligible-pending-orders.ts) will catch it later.
     console.warn(
       `[complete-pickup] completeOrderWorkflow skipped: ${completeErr?.message?.slice(0, 120)}`
     );
+  }
+
+  // ALWAYS emit pos.order.fulfilled so the order-meilisearch-sync subscriber
+  // reindexes the order — this is how "Mark as Picked Up" moves the order out of
+  // the Open tab IMMEDIATELY. Fires whether or not native completion happened
+  // (the delivery itself changed fulfillment state) and whether markDelivered
+  // used the native workflow OR the SQL fallback (the fallback emits no
+  // delivery.created event, so without this the Meili doc stays stale).
+  // purchasing-snapshot-on-event also listens to this — both are idempotent.
+  try {
+    const eventBus = scope.resolve(Modules.EVENT_BUS);
+    await eventBus.emit({ name: "pos.order.fulfilled", data: { id: orderId } });
+  } catch {
+    /* non-fatal */
   }
 }
 
