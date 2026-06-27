@@ -344,17 +344,21 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
   const effectivePayment = getEffectivePaymentStatus(order);
   const isDraft =
     order.is_draft_order === true || asString(order.status) === "draft";
-  const isOpen = OPEN_FULFILLMENT.has(fulfillmentStatus);
-  const isClosed = CLOSED_FULFILLMENT.has(fulfillmentStatus);
+  // A natively-completed order is DONE regardless of its (sometimes stale /
+  // race-prone) fulfillment_status. Without this, a completed order whose
+  // fulfillment_status computed to "partially_delivered" stuck in the Open tab
+  // forever (e.g. S10374). order.status='completed' is the authoritative
+  // "this order is closed" signal, so it must force is_closed / clear is_open.
+  const isCompleted = asString(order.status) === "completed";
+  const isClosed = isCompleted || CLOSED_FULFILLMENT.has(fulfillmentStatus);
+  const isOpen = !isClosed && OPEN_FULFILLMENT.has(fulfillmentStatus);
   // A separated (layaway) order leaves the Separated view once it is no longer
   // an open order: either fulfilled/shipped/delivered OR fully invoiced (every
   // remaining line billed — also covers an order edited down until nothing is
   // left to dispatch). meta.fully_invoiced is maintained by the order Meili
   // sync subscriber on invoice + order-edit events.
   const isSeparated =
-    !!meta.is_separated &&
-    !CLOSED_FULFILLMENT.has(fulfillmentStatus) &&
-    meta.fully_invoiced !== true;
+    !!meta.is_separated && !isClosed && meta.fully_invoiced !== true;
 
   const displayId = order.display_id ?? 0;
 

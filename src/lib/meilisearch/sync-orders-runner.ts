@@ -79,6 +79,60 @@ export async function syncAllOrdersToMeili(
 
   log.info(`[sync-meili-orders] Loaded ${orders.length} orders`);
 
+  // Deterministic enrichment. Under bulk load, query.graph intermittently
+  // returns fulfillments=[] (link race) or stale items.detail.fulfilled_quantity,
+  // which makes computeFulfillmentStatus mislabel a fully-delivered order as
+  // "partially_delivered" and strand it in the Open tab (e.g. S10374). Override
+  // both fulfillments and current-version line quantities from authoritative SQL
+  // so the reindex is race-free.
+  try {
+    const { Client } = await import("pg");
+    const db = new Client({ connectionString: process.env.DATABASE_URL });
+    await db.connect();
+    const [fulRes, itemRes] = await Promise.all([
+      db.query(
+        `SELECT ofu.order_id, f.packed_at, f.shipped_at, f.delivered_at, f.canceled_at
+           FROM order_fulfillment ofu
+           JOIN fulfillment f ON f.id = ofu.fulfillment_id
+          WHERE ofu.deleted_at IS NULL AND f.deleted_at IS NULL`
+      ),
+      db.query(
+        `SELECT oi.order_id, oi.quantity, oi.fulfilled_quantity
+           FROM order_item oi
+           JOIN "order" o ON o.id = oi.order_id AND o.version = oi.version`
+      ),
+    ]);
+    await db.end();
+
+    const fulByOrder = new Map<string, unknown[]>();
+    for (const r of fulRes.rows) {
+      const list = fulByOrder.get(r.order_id) ?? [];
+      list.push(r);
+      fulByOrder.set(r.order_id, list);
+    }
+    const itemsByOrder = new Map<string, unknown[]>();
+    for (const r of itemRes.rows) {
+      const list = itemsByOrder.get(r.order_id) ?? [];
+      list.push({
+        quantity: r.quantity,
+        detail: { fulfilled_quantity: r.fulfilled_quantity },
+      });
+      itemsByOrder.set(r.order_id, list);
+    }
+    for (const o of orders as any[]) {
+      o.fulfillments = fulByOrder.get(o.id) ?? [];
+      const items = itemsByOrder.get(o.id);
+      if (items) o.items = items;
+    }
+    log.info(
+      `[sync-meili-orders] SQL-enriched fulfillments/items for ${orders.length} orders`
+    );
+  } catch (sqlErr: any) {
+    (log.warn ?? log.info)(
+      `[sync-meili-orders] SQL enrichment skipped (using query.graph data): ${sqlErr?.message}`
+    );
+  }
+
   const docs = (orders as OrderForMeili[]).map((o) => buildOrderDoc(o));
 
   const { MeiliSearch } = await import("meilisearch");
