@@ -17,6 +17,16 @@ const VALID_SEQUENCES = [
   "custom_vendor_bill_seq",
 ];
 
+// These document numbers moved from non-transactional sequences to gapless
+// counter ROWS in document_number_counter (Phase 2 idempotency, migration
+// 1779500000000). The sequence names remain the UI keys; reads/writes are
+// transparently retargeted to the counter rows so the admin card keeps working.
+const SEQ_TO_COUNTER: Record<string, string> = {
+  custom_medusa_invoice_seq: "medusa_invoice",
+  custom_invoice_seq: "qb_invoice",
+  custom_sales_receipt_seq: "qb_sales_receipt",
+};
+
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const pg = req.scope.resolve("__pg_connection__") as any;
   const results: Record<string, number | null> = {};
@@ -24,6 +34,17 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
     for (const seq of VALID_SEQUENCES) {
       try {
+        const counterName = SEQ_TO_COUNTER[seq];
+        if (counterName) {
+          // Counter row stores the LAST issued value — parity with a sequence's
+          // last_value when is_called=true.
+          const r = await pg.raw(
+            `SELECT value FROM document_number_counter WHERE name = ?`,
+            [counterName]
+          );
+          results[seq] = r.rows[0] ? Number(r.rows[0].value) : null;
+          continue;
+        }
         // last_value provides the current sequence count WITHOUT incrementing it
         const result = await pg.raw(`SELECT last_value FROM ${seq}`);
         results[seq] =
@@ -65,6 +86,21 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         return res.status(400).json({
           error: `Invalid value for sequence ${seq}. Must be a positive integer.`,
         });
+      }
+
+      const counterName = SEQ_TO_COUNTER[seq];
+      if (counterName) {
+        // newValue is the NEXT number to issue; the counter stores the LAST
+        // issued, so store newValue - 1 (next = value + 1 = newValue).
+        await pg.raw(
+          `UPDATE document_number_counter SET value = ?, updated_at = now() WHERE name = ?`,
+          [newValue - 1, counterName]
+        );
+        updated[seq] = newValue;
+        console.log(
+          `[Sequences] Manually updated counter ${counterName} → next value ${newValue}`
+        );
+        continue;
       }
 
       // Update the sequence safely

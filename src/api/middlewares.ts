@@ -6,6 +6,7 @@ import type {
 import { defineMiddlewares } from "@medusajs/medusa";
 
 import { addCategoryBreadcrumbs } from "./middlewares/add-category-breadcrumbs";
+import { idempotency } from "./middlewares/idempotency";
 import { syncCustomerMeili } from "./middlewares/sync-customer-meili";
 import { validateDraftOrderCustomer } from "./middlewares/validate-draft-order-customer";
 
@@ -142,6 +143,28 @@ export default defineMiddlewares({
       matcher: "/admin/draft-orders",
       method: ["POST"],
       middlewares: [validateDraftOrderCustomer],
+    },
+    // ── Idempotency-Key dedup (Phase 3a) — blocks same-key double-submit on
+    // these create routes. No-op unless the client sends an Idempotency-Key.
+    {
+      matcher: "/admin/trip-objectives/objectives",
+      method: ["POST"],
+      middlewares: [idempotency("admin.trip-objectives.objectives")],
+    },
+    {
+      matcher: "/admin/customer-payments",
+      method: ["POST"],
+      middlewares: [idempotency("admin.customer-payments")],
+    },
+    {
+      matcher: "/admin/china-finance/wire-transfers",
+      method: ["POST"],
+      middlewares: [idempotency("admin.china-finance.wire-transfers")],
+    },
+    {
+      matcher: "/admin/qb-catalog/vendors",
+      method: ["POST"],
+      middlewares: [idempotency("admin.qb-catalog.vendors")],
     },
   ],
 });

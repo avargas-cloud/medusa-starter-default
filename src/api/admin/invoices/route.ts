@@ -18,6 +18,14 @@ import {
   skipPendingPaymentRows,
 } from "../../../lib/quickbooks/qb-pipeline";
 import { getVariantAvgCostBatch } from "../../../lib/cost/get-variant-avg-cost";
+import {
+  allocateNextNumber,
+  buildInvoiceRequestHash,
+  claimInvoiceCreate,
+  finalizeInvoiceCreate,
+  resolveInvoiceDedupKey,
+  type TxManager,
+} from "../../../lib/invoices/document-numbering";
 import { FINANCE_MODULE } from "../../../modules/finance";
 import { INVOICE_MODULE } from "../../../modules/invoices";
 
@@ -290,24 +298,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     );
   }
 
-  // Fetch strictly continuous sequential document number from PostgreSQL
+  // pgConnection is used for many raw reads/writes later in this route.
   const pgConnection = req.scope.resolve("__pg_connection__") as any;
 
-  // 1. Get Medusa Invoice Sequence
-  const medusaSeqRes = await pgConnection.raw(
-    `SELECT nextval('custom_medusa_invoice_seq') AS seq`
-  );
-  const invoice_number = `${medusaSeqRes.rows[0].seq || medusaSeqRes.rows[0].SEQ}`;
-
-  // 2. Get QB RefNumber Sequence
-  const targetSeq = body.is_sales_receipt
-    ? "custom_sales_receipt_seq"
-    : "custom_invoice_seq";
-  const seqRes = await pgConnection.raw(
-    `SELECT nextval('${targetSeq}') AS seq`
-  );
-  const nextInvNum = seqRes.rows[0].seq || seqRes.rows[0].SEQ;
-  const qb_metadata_ref_number = `${nextInvNum}`;
+  // Gapless document numbers are allocated TRANSACTIONALLY in Step 1 below
+  // (lib/invoices/document-numbering) — never via nextval(), which burns a
+  // number on rollback. invoice_number is referenced throughout the route; the
+  // QB ref number lives only inside the create transaction.
+  let invoice_number = "";
 
   // Net (post-line-discount, pre-order-discount) cents for a line. Prefer what the
   // POS sent; if absent (older POS build / non-POS caller) recompute with the same
@@ -432,89 +430,153 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
   }
 
-  // Step 1: Create the invoice (no nested items — hasMany must be created separately)
+  // Validate BEFORE allocating a number / opening the tx (Codex review): a 400
+  // must never strand a burned number or a committed half-invoice.
+  if (body.amount_paid > 0 && !resolvedPaymentMethod) {
+    return res.status(400).json({
+      error:
+        "payment_method is required when amount_paid > 0 (skip-payment invoices must send amount_paid: 0)",
+    });
+  }
+
   const initialStatus =
     balance_due <= 0 ? "paid" : body.amount_paid > 0 ? "partial" : "issued";
 
-  const invoice = await invoiceService.createPosInvoices({
-    invoice_number,
+  // Snapshot avg unit cost (read) BEFORE the tx so the counter lock is held
+  // only for the inserts. Custom lines without variant_id legitimately get NULL.
+  const itemVariantIds = (body.items ?? [])
+    .map((it) => it.variant_id)
+    .filter((id): id is string => !!id);
+  const costMap = await getVariantAvgCostBatch(req.scope, itemVariantIds);
+
+  // Dedup identity — built AFTER Path B may have flipped is_sales_receipt.
+  const requestHash = buildInvoiceRequestHash({
     order_id: body.order_id,
-    fulfillment_id: body.fulfillment_id ?? null,
     customer_id: body.customer_id,
-    status: initialStatus as "issued" | "paid" | "partial",
-    subtotal: derivedSubtotal,
-    discount: safeDiscountCents,
-    shipping: body.shipping ?? 0,
-    tax: body.tax,
-    untaxed_total: derivedUntaxed,
-    total: derivedTotal,
+    fulfillment_id: body.fulfillment_id ?? null,
+    is_sales_receipt: !!body.is_sales_receipt,
     amount_paid: body.amount_paid,
-    balance_due,
-    payment_method: resolvedPaymentMethod as any,
-    card_brand: resolvedCardBrand,
-    issued_at: new Date(),
-    paid_at: balance_due <= 0 ? new Date() : null,
-    notes: body.notes ?? null,
-    created_by: body.created_by ?? null,
-    shipping_address: body.shipping_address ?? null,
-    metadata: {
-      is_sales_receipt: !!body.is_sales_receipt,
-      qb_ref_number: qb_metadata_ref_number,
-    },
+    total: derivedTotal,
+    payment_method: resolvedPaymentMethod ?? null,
+    items: body.items ?? [],
+  });
+  const dedupKey = resolveInvoiceDedupKey({
+    idempotencyKeyHeader: (req.headers["idempotency-key"] as string) ?? null,
+    terminalPaymentId: body.terminal_payment_id ?? null,
+    requestHash,
   });
 
-  // Step 2: Create line items linked to the invoice
-  if (body.items?.length) {
-    // Snapshot avg unit cost from variant.metadata.qb_avg_cost so margin
-    // reports can be computed later without re-fetching (cost may drift).
-    // Custom lines without variant_id legitimately get NULL.
-    const variantIds = body.items
-      .map((it) => it.variant_id)
-      .filter((id): id is string => !!id);
-    const costMap = await getVariantAvgCostBatch(req.scope, variantIds);
+  type CoreResult =
+    | { kind: "created"; invoice: any }
+    | { kind: "existing"; invoiceId: string }
+    | { kind: "conflict" }
+    | { kind: "in_progress" };
 
-    // Net (post-line-discount) cents for a line. Prefer what the POS sent; if absent
-    // (an older POS build, or a non-POS API caller), compute it with the same
-    // round-then-multiply convention from gross + descriptor. NEVER fall back to gross —
-    // doing so would strip the discount when the line is synced to QuickBooks.
-    const resolveNetTotalCents = (it: (typeof body.items)[number]): number => {
-      if (it.net_total != null) return Math.round(it.net_total);
-      const grossCents = Math.round(it.total || 0);
-      const qty = Number(it.quantity || 0);
-      const value = Number(it.discount_value ?? 0);
-      if (!it.discount_type || !(value > 0) || qty <= 0) return grossCents;
-      if (it.discount_type === "percent") {
-        const unitCents = Math.round(grossCents / qty);
-        const discUnit = Math.max(0, Math.round((unitCents * (100 - value)) / 100));
-        return discUnit * qty;
-      }
-      // fixed: a flat amount off each unit
-      return Math.max(0, grossCents - Math.min(grossCents, Math.round(value * 100) * qty));
-    };
+  // ── Step 1: transactional, gapless, idempotent invoice + items create ─────
+  // ONE physical transaction: claim dedup → allocate the 2 counters this doc
+  // needs → insert header + items → finalize claim. A rollback advances no
+  // counter (no gaps, no collision) and leaves no orphan. All cross-module side
+  // effects (payments, finance, QB, events, reservation release) stay BELOW,
+  // after commit, and remain idempotent.
+  const core: CoreResult = await invoiceService.withTransaction(async (ctx) => {
+    const em = ctx.transactionManager as unknown as TxManager;
 
-    await invoiceService.createPosInvoiceItems(
-      body.items.map((it) => {
-        const cost = it.variant_id ? costMap.get(it.variant_id) : undefined;
-        return {
-          invoice_id: (invoice as any).id,
-          variant_id: it.variant_id ?? null,
-          sku: it.sku ?? null,
-          description: it.description,
-          quantity: it.quantity,
-          unit_price: it.unit_price,
-          total: it.total,
-          // Frozen net (round-then-multiply), always populated for new invoices so the
-          // QB sync's NULL-guard only ever fires for legacy (pre-column) rows.
-          net_total_cents: resolveNetTotalCents(it),
-          attached_image: it.attached_image ?? null,
-          average_unit_cost: cost?.cost ?? null,
-          average_unit_cost_synced_at: cost?.synced_at ?? null,
-          discount_type: it.discount_type ?? null,
-          discount_value: it.discount_value ?? null,
-        };
-      })
+    const claim = await claimInvoiceCreate(em, dedupKey, requestHash);
+    if (claim.status === "existing")
+      return { kind: "existing", invoiceId: claim.invoiceId };
+    if (claim.status === "conflict") return { kind: "conflict" };
+    if (claim.status === "in_progress") return { kind: "in_progress" };
+
+    // claimed → allocate exactly the two counters this document class needs.
+    invoice_number = String(await allocateNextNumber(em, "medusa_invoice"));
+    const qb_metadata_ref_number = String(
+      await allocateNextNumber(
+        em,
+        body.is_sales_receipt ? "qb_sales_receipt" : "qb_invoice"
+      )
     );
+
+    const created = await invoiceService.createPosInvoices(
+      {
+        invoice_number,
+        order_id: body.order_id,
+        fulfillment_id: body.fulfillment_id ?? null,
+        customer_id: body.customer_id,
+        status: initialStatus as "issued" | "paid" | "partial",
+        subtotal: derivedSubtotal,
+        discount: safeDiscountCents,
+        shipping: body.shipping ?? 0,
+        tax: body.tax,
+        untaxed_total: derivedUntaxed,
+        total: derivedTotal,
+        amount_paid: body.amount_paid,
+        balance_due,
+        payment_method: resolvedPaymentMethod as any,
+        card_brand: resolvedCardBrand,
+        issued_at: new Date(),
+        paid_at: balance_due <= 0 ? new Date() : null,
+        notes: body.notes ?? null,
+        created_by: body.created_by ?? null,
+        shipping_address: body.shipping_address ?? null,
+        metadata: {
+          is_sales_receipt: !!body.is_sales_receipt,
+          qb_ref_number: qb_metadata_ref_number,
+        },
+      },
+      ctx
+    );
+
+    if (body.items?.length) {
+      await invoiceService.createPosInvoiceItems(
+        body.items.map((it) => {
+          const cost = it.variant_id ? costMap.get(it.variant_id) : undefined;
+          return {
+            invoice_id: (created as any).id,
+            variant_id: it.variant_id ?? null,
+            sku: it.sku ?? null,
+            description: it.description,
+            quantity: it.quantity,
+            unit_price: it.unit_price,
+            total: it.total,
+            // Frozen net (round-then-multiply), always populated for new
+            // invoices so the QB sync's NULL-guard only fires for legacy rows.
+            net_total_cents: resolveNetTotalCents(it),
+            attached_image: it.attached_image ?? null,
+            average_unit_cost: cost?.cost ?? null,
+            average_unit_cost_synced_at: cost?.synced_at ?? null,
+            discount_type: it.discount_type ?? null,
+            discount_value: it.discount_value ?? null,
+          };
+        }),
+        ctx
+      );
+    }
+
+    await finalizeInvoiceCreate(em, dedupKey, requestHash, (created as any).id);
+    return { kind: "created", invoice: created };
+  });
+
+  // Resolve dedup outcomes OUTSIDE the transaction callback (never return res
+  // from inside it).
+  if (core.kind === "existing") {
+    const existing = await invoiceService.retrievePosInvoice(core.invoiceId);
+    return res.status(200).json({ invoice: existing, idempotent: true });
   }
+  if (core.kind === "conflict") {
+    return res.status(409).json({
+      code: "INVOICE_DEDUP_CONFLICT",
+      error:
+        "An invoice with this Idempotency-Key already exists for a different request.",
+    });
+  }
+  if (core.kind === "in_progress") {
+    return res.status(409).json({
+      code: "INVOICE_CREATE_IN_PROGRESS",
+      error: "A matching invoice create is still in progress. Please retry.",
+    });
+  }
+
+  const invoice = core.invoice;
 
   // Step 2B: Release inventory reservations for invoiced items (best-effort)
   try {
