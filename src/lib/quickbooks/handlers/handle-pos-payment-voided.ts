@@ -2,18 +2,22 @@ import { SubscriberArgs } from "@medusajs/framework";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { FINANCE_MODULE } from "../../../modules/finance";
-import { bridgeFetch } from "../client/core";
+import { bridgeFetch, pollRawOperationResult } from "../client/core";
 import { writePipelineRow } from "../qb-pipeline";
 
 const LOG_PREFIX = "[QB-POS-PAYMENT-VOIDED]";
 const ENABLED = process.env.QB_ORDER_FLOW_ENABLED === "true";
 
 /**
- * Fires TxnVoid → ReceivePayment on the QB Bridge for a voided POS payment.
+ * Hard-deletes the ReceivePayment on the QB Bridge for a voided POS payment.
  * Called directly (setTimeout) from POST /admin/finance/payments/:id/void.
  *
- * QB Desktop behaviour: zeroes the amount to $0, prefixes memo with "VOID:",
- * reopens any applied invoices — full audit trail preserved.
+ * QB Desktop does NOT support TxnVoid for ReceivePayment (Error 3110 — the
+ * enumerated value is invalid for the qbXML version in use), so the bridge's
+ * /api/payments/:txnId/void route issues a TxnDel (hard delete). We POLL the
+ * operation result and only mark the payment qb_sync_status='voided' once QB
+ * confirms the delete; on failure we mark 'error' so the divergence is visible
+ * instead of silently claiming success.
  */
 export async function handlePosPaymentVoided({
   event,
@@ -102,19 +106,32 @@ export async function handlePosPaymentVoided({
     logger.warn(`${LOG_PREFIX} Could not set voiding status: ${mErr.message}`);
   }
 
-  // 3. Call QB Bridge: TxnVoid → ReceivePayment
+  // 3. Call QB Bridge: TxnDel → ReceivePayment (QB rejects TxnVoid with 3110)
   logger.info(
-    `${LOG_PREFIX} 🎯 Voiding ReceivePayment TxnID=${qbTxnId} in QuickBooks...`
+    `${LOG_PREFIX} 🎯 Deleting ReceivePayment TxnID=${qbTxnId} in QuickBooks...`
   );
   try {
     const result = await bridgeFetch("POST", `/api/payments/${qbTxnId}/void`);
 
-    if (!result?.success) {
-      throw new Error(result?.error ?? "Unknown bridge error");
+    if (!result?.success || !result?.operationId) {
+      throw new Error(result?.error ?? "Bridge did not queue the delete");
     }
 
     logger.info(
-      `${LOG_PREFIX} ✅ Void queued in QB Bridge. OperationID: ${result.operationId}`
+      `${LOG_PREFIX} ⏳ Delete queued (op ${result.operationId}) — polling QB for confirmation...`
+    );
+
+    // CRITICAL: poll the actual QB result. pollRawOperationResult resolves only
+    // when QB reports 'completed' and THROWS on failed/expired/timeout. Without
+    // this, a QB-side rejection (e.g. Error 3110) left the payment marked
+    // 'voided' in Medusa while it stayed alive in QB — a silent divergence.
+    await pollRawOperationResult(
+      result.operationId,
+      (m) => logger.info(`${LOG_PREFIX} ${m}`)
+    );
+
+    logger.info(
+      `${LOG_PREFIX} ✅ QB confirmed ReceivePayment ${qbTxnId} deleted.`
     );
 
     await financeService.updateCustomerPayments({
@@ -122,17 +139,21 @@ export async function handlePosPaymentVoided({
       metadata: {
         ...(payment.metadata || {}),
         qb_sync_status: "voided",
-        qb_void_operation_id: result.operationId ?? null,
+        qb_void_operation_id: result.operationId,
       },
     });
   } catch (err: any) {
     logger.error(
-      `${LOG_PREFIX} ❌ Failed to void payment in QB: ${err.message}`
+      `${LOG_PREFIX} ❌ Failed to delete payment in QB: ${err.message}`
     );
     try {
       await financeService.updateCustomerPayments({
         id: payment_id,
-        metadata: { ...(payment.metadata || {}), qb_sync_status: "error" },
+        metadata: {
+          ...(payment.metadata || {}),
+          qb_sync_status: "error",
+          qb_void_error: String(err?.message ?? "unknown").slice(0, 300),
+        },
       });
     } catch (_) {
       /* best effort */
