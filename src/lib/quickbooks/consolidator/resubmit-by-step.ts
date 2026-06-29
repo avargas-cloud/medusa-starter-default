@@ -31,6 +31,7 @@ import { handleDraftOrderUpdated } from "../handlers/handle-draft-order-updated"
 import { handleFulfillmentCreated } from "../handlers/handle-fulfillment-created";
 import { handleOrderPlaced } from "../handlers/handle-order-placed";
 import { handleOrderUpdated } from "../handlers/handle-order-updated";
+import { handlePaymentCustomerTransfer } from "../handlers/handle-payment-customer-transfer";
 import { handlePosPaymentApplied } from "../handlers/handle-pos-payment-applied";
 import { handleSalesReceiptCreated } from "../handlers/handle-sales-receipt-created";
 import { failPipelineRow } from "../qb-pipeline";
@@ -759,6 +760,22 @@ export async function resubmitByStep(
               `transferDocumentCustomer failed for ${tPayload.docType} ${tPayload.txnId}`
           );
         }
+        break;
+      }
+
+      case "transfer_payment": {
+        if (!row.reference_id) {
+          await failPipelineRow(
+            row.id,
+            "transfer_payment: missing reference_id (payment id)"
+          );
+          break;
+        }
+        await handlePaymentCustomerTransfer(
+          { id: row.id, reference_id: row.reference_id },
+          container,
+          logger
+        );
         break;
       }
 

@@ -48,6 +48,27 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         .status(400)
         .json({ error: "Payment has already been fully applied" });
 
+    // Block apply while a customer transfer is unresolved for this payment.
+    // The transfer is deleting+recreating the QB ReceivePayment (moving it to a
+    // new customer); applying now would bind it to an invoice mid-move and race
+    // the QB delete. Symmetric with the transfer guard, which requires zero
+    // active applications to start. Operator retries once the transfer settles.
+    const xferPool = getDbPool();
+    const { rows: pendingXfer } = await xferPool.query(
+      `SELECT id FROM qb_order_pipeline
+        WHERE reference_id = $1 AND step = 'transfer_payment'
+          AND status NOT IN ('confirmed', 'cancelled', 'skipped')
+        LIMIT 1`,
+      [id]
+    );
+    if (pendingXfer.length > 0) {
+      return res.status(409).json({
+        error: "PAYMENT_TRANSFER_IN_PROGRESS",
+        message:
+          "This payment is being transferred to another customer. Wait for the transfer to finish before applying it.",
+      });
+    }
+
     const activeApps: any[] = (payment.applications ?? []).filter(
       (a: any) => !a.voided_at
     );
