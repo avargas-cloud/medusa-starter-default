@@ -24,6 +24,7 @@ import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows
 import { getActorUserId, UnauthenticatedError } from "../../_lib/auth";
 import { zodErrorToBody } from "../../_lib/format";
 import { getPurchaseOrdersService } from "../../_lib/service-resolver";
+import { resolveNonReceivableReasons } from "../../_lib/receivability";
 import { receiveSchema } from "../../_lib/validators";
 
 interface PoHeader {
@@ -151,6 +152,17 @@ export async function POST(
     actualReceivedRows.map((r) => [r.id, r.actual_received])
   );
 
+  // Special-item guard: resolve which requested lines map to non-inventory /
+  // placeholder products (QB rejects those on an ItemReceipt with error 3153).
+  // Keyed by product_variant_id → reason (null when receivable).
+  const requestedVariantIds = body.lines
+    .map((rl) => byId.get(rl.po_line_id)?.product_variant_id)
+    .filter((v): v is string => Boolean(v));
+  const nonReceivableByVariant = await resolveNonReceivableReasons(
+    knex,
+    requestedVariantIds
+  );
+
   // Reject if every requested line is fully received per actual receipts
   const allFullyReceived = body.lines.every((rl) => {
     const pl = byId.get(rl.po_line_id);
@@ -198,6 +210,20 @@ export async function POST(
       return res.status(400).json({
         error: `po_line_id ${req_line.po_line_id} is cancelled`,
         code: "line_cancelled",
+      });
+    }
+    // Special-item guard (defense in depth — the UI also locks the input to 0).
+    // A non-inventory / "Special Item" placeholder cannot be received via a QB
+    // ItemReceipt (error 3153). Other lines on the PO may still be received.
+    const nonReceivableReasonForLine = nonReceivableByVariant.get(
+      po_line.product_variant_id
+    );
+    if (req_line.qty_received_now > 0 && nonReceivableReasonForLine) {
+      return res.status(409).json({
+        error: `Cannot receive "${po_line.sku_snapshot}": ${nonReceivableReasonForLine}`,
+        code: "non_receivable_special_item",
+        po_line_id: po_line.id,
+        sku: po_line.sku_snapshot,
       });
     }
     // Use MAX(stored, actual) so stale denormalized counters can never

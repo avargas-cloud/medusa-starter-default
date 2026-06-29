@@ -19,6 +19,7 @@ import { Modules } from "@medusajs/utils";
 import { getActorUserId, UnauthenticatedError } from "../_lib/auth";
 import { zodErrorToBody } from "../_lib/format";
 import { getPurchaseOrdersService } from "../_lib/service-resolver";
+import { resolveNonReceivableReasons } from "../_lib/receivability";
 import { computeTotals, normalizeLine } from "../_lib/totals";
 import { updateDraftSchema } from "../_lib/validators";
 import { orderPurchaseOrderModLines } from "../../../../lib/quickbooks/purchase-order-line-order";
@@ -369,6 +370,22 @@ export async function GET(
     }
   }
 
+  // Receivability: flag non-inventory / "Special Item" placeholder lines so the
+  // receive UI can lock their qty input to 0 (QB rejects them with error 3153).
+  const nonReceivableByVariant = new Map<string, string | null>();
+  if (variantIds.length > 0) {
+    try {
+      const knex = (req.scope as any).resolve("__pg_connection__");
+      const resolved = await resolveNonReceivableReasons(knex, variantIds);
+      for (const [vid, reason] of resolved) {
+        nonReceivableByVariant.set(vid, reason);
+      }
+    } catch {
+      // Non-fatal — receivability is an advisory UI hint; the receive route
+      // re-validates server-side regardless.
+    }
+  }
+
   const decoratedLines = lines.map((l) => {
     const vid = (l as { product_variant_id?: string | null })
       .product_variant_id;
@@ -377,6 +394,9 @@ export async function GET(
     const billedQty = billedQtyByPoLineId.get(lineId) ?? 0;
     const billingStatus =
       billedQty <= 0 ? "unbilled" : billedQty >= qtyReceived ? "billed" : "partially_billed";
+    const nonReceivableReasonForLine = vid
+      ? (nonReceivableByVariant.get(vid) ?? null)
+      : null;
     return {
       ...l,
       thumbnail: vid ? (thumbnailByVariantId.get(vid) ?? null) : null,
@@ -384,6 +404,8 @@ export async function GET(
       billed_qty: billedQty,
       unbilled_received_qty: Math.max(0, qtyReceived - billedQty),
       billing_status: billingStatus,
+      non_receivable: nonReceivableReasonForLine !== null,
+      non_receivable_reason: nonReceivableReasonForLine,
     };
   });
 

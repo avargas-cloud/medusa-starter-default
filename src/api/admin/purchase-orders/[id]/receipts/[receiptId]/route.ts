@@ -277,13 +277,21 @@ export async function PATCH(
   // delete-and-recreate.
   const qbModEnabled = process.env.QB_ITEM_RECEIPT_MOD_ENABLED === "true";
 
+  // "Synced to QB" is NOT the receipt header status — the poller leaves the
+  // header at 'applied' and records the QB TxnID in qb_item_receipt_list_id.
+  // Keying off receipt.status === 'synced' (which never happens in practice)
+  // silently skipped the Mod/block logic, so editing a QB-synced receipt
+  // mutated Medusa without ever touching QB → divergence → later ItemReceipt
+  // 3210 ("LinkToTxn invalid"). Detect QB-sync by the presence of the TxnID.
+  const qbSynced = receipt.qb_item_receipt_list_id !== null;
+
   if (receipt.status !== "applied" && receipt.status !== "synced") {
     return res.status(409).json({
       error: `Cannot edit a receipt in status '${receipt.status}'. Only 'applied' or 'synced' receipts can be edited.`,
       code: "not_editable",
     });
   }
-  if (receipt.status === "synced" && !qbModEnabled) {
+  if (qbSynced && !qbModEnabled) {
     return res.status(409).json({
       error:
         "Receipt is already synced to QuickBooks. Delete and recreate the receipt to make corrections.",
@@ -294,7 +302,7 @@ export async function PATCH(
   // Cross-channel guards: refuse a Mod if the pipeline is in any state
   // that would conflict with a fresh ItemReceiptModRq submission.
   let qbModEnqueueWanted = false;
-  if (receipt.status === "synced") {
+  if (qbSynced) {
     interface PipeRow {
       id: string;
       status: string | null;
