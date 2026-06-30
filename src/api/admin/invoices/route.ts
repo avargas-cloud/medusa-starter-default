@@ -18,6 +18,7 @@ import {
   skipPendingPaymentRows,
 } from "../../../lib/quickbooks/qb-pipeline";
 import { getVariantAvgCostBatch } from "../../../lib/cost/get-variant-avg-cost";
+import { maybeCompleteOrder } from "../../../lib/maybe-complete-order";
 import {
   allocateNextNumber,
   buildInvoiceRequestHash,
@@ -1386,105 +1387,20 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     );
   }
 
-  // Auto-complete order in Medusa native once fully fulfilled + fully paid.
-  // Non-fatal by design — the 201 is already in flight. The 1500ms delay lets
-  // Medusa's query-graph projection catch up before completeOrderWorkflow reads
-  // payment_status internally (it checks payment_collection.status = captured).
-  // ⚠️ Capture scope + pgConnection before setTimeout — req may be GC'd after response.
-  const scopeForClose = req.scope;
-  const pgConnForClose = pgConnection;
-  const orderIdForClose = body.order_id;
-
-  setTimeout(async () => {
-    try {
-      // Guard 0: quick bail — only attempt on fully-paid invoices
-      // balance_due is a local variable: body.total - body.amount_paid (both cents)
-      if (balance_due > 0) return;
-
-      // Guard 1: order must still be 'pending' (not already completed / cancelled)
-      const orderModForClose = scopeForClose.resolve(Modules.ORDER) as any;
-      const orderForClose = await orderModForClose.retrieveOrder(
-        orderIdForClose,
-        { select: ["id", "status"] }
-      );
-      if (orderForClose?.status !== "pending") return;
-
-      // Guard 2: all CURRENT-version order_item rows are fully fulfilled.
-      // ⚠️ Filter by oi.version = order.version — order edits / void+re-fulfill
-      // leave stale lower-version order_item rows (fulfilled_quantity=0) that are
-      // NOT part of the live order. Counting them blocked legitimately-complete
-      // multi-version orders from ever closing (e.g. orders #1354, #1870, #2034).
-      const fulfillCheck = await pgConnForClose.raw(
-        `SELECT COUNT(*) FILTER (WHERE oi.fulfilled_quantity < oi.quantity) AS unfulfilled
-         FROM order_item oi
-         JOIN "order" o ON o.id = oi.order_id
-         WHERE oi.order_id = ? AND oi.version = o.version`,
-        [orderIdForClose]
-      );
-      if (Number(fulfillCheck.rows[0]?.unfulfilled ?? 1) > 0) return;
-
-      // Guard 3: fully paid. pos_invoice.amount_paid is 0 for deposit/BAMS-paid
-      // orders (captured deposit never applied to the invoice row), so also
-      // consider the order's captured payment_collection. captured_amount is in
-      // DOLLARS; pos_invoice totals are in CENTS — convert before comparing.
-      const paidCheck = await pgConnForClose.raw(
-        `SELECT
-           COALESCE((SELECT SUM(amount_paid) FROM pos_invoice
-                      WHERE order_id = ? AND status != 'voided'), 0) AS paid_cents,
-           COALESCE((SELECT SUM(total) FROM pos_invoice
-                      WHERE order_id = ? AND status != 'voided'), 0) AS invoiced_cents,
-           COALESCE((SELECT SUM(pc.captured_amount - COALESCE(pc.refunded_amount, 0))
-                       FROM order_payment_collection opc
-                       JOIN payment_collection pc ON pc.id = opc.payment_collection_id
-                      WHERE opc.order_id = ?), 0) AS captured_dollars`,
-        [orderIdForClose, orderIdForClose, orderIdForClose]
-      );
-      const paidCents = Number(paidCheck.rows[0]?.paid_cents ?? 0);
-      const invoicedCents = Number(paidCheck.rows[0]?.invoiced_cents ?? 1);
-      const capturedCents = Math.round(
-        Number(paidCheck.rows[0]?.captured_dollars ?? 0) * 100
-      );
-      const effectivePaidCents = Math.max(paidCents, capturedCents);
-      // 1-cent tolerance for rounding; also skip if nothing has been invoiced
-      if (invoicedCents === 0 || effectivePaidCents < invoicedCents - 1) return;
-
-      // Guard 4: no draft/open credit memos (fail-open — skip if query fails)
-      try {
-        const cmCheck = await pgConnForClose.raw(
-          `SELECT COUNT(*) AS draft_cm FROM pos_credit_memo
-           WHERE order_id = ? AND status NOT IN ('completed', 'voided')`,
-          [orderIdForClose]
-        );
-        if (Number(cmCheck.rows[0]?.draft_cm ?? 0) > 0) return;
-      } catch {
-        return; // fail-open: can't verify credit memos, skip completion
-      }
-
-      // All guards passed → complete the order natively in Medusa
-      const { completeOrderWorkflow } = await import("@medusajs/core-flows");
-      // ⚠️ input shape is { orderIds: string[] } — plural array, NOT orderId
-      await completeOrderWorkflow(scopeForClose).run({
-        input: { orderIds: [orderIdForClose] },
-      });
-      console.log(`[invoice] ✅ order ${orderIdForClose} auto-completed in Medusa`);
-
-      // Emit custom event so purchasing-snapshot-on-event fires immediately
-      try {
-        const eventBusForClose = scopeForClose.resolve(Modules.EVENT_BUS);
-        await eventBusForClose.emit({
-          name: "pos.order.fulfilled",
-          data: { id: orderIdForClose },
-        });
-      } catch {
-        /* non-fatal */
-      }
-    } catch (closeErr: any) {
-      // Explicitly non-fatal — order stays pending, Fix C backfill will catch it
-      console.warn(
-        `[invoice] completeOrderWorkflow skipped: ${closeErr?.message?.slice(0, 120)}`
-      );
-    }
-  }, 1500);
+  // Best-effort native completion. If this invoice already makes the order fully
+  // fulfilled + paid, close it now (maybeCompleteOrder runs all guards + holds a
+  // session advisory lock + is idempotent). The auto-complete subscriber
+  // (pos.invoice.created / order.payment_captured / order.updated …) is the
+  // durable retry net for the common case where the terminal payment capture
+  // settles a beat after invoice creation. Awaited but non-fatal — never blocks
+  // the 201. Replaces the old fragile one-shot setTimeout (no retry → orphans).
+  try {
+    await maybeCompleteOrder(req.scope, body.order_id);
+  } catch (closeErr: any) {
+    console.warn(
+      `[invoice] auto-complete attempt failed (non-fatal): ${closeErr?.message?.slice(0, 120)}`
+    );
+  }
 
   return res.status(201).json({ invoice: full });
 }

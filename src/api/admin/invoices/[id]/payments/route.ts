@@ -9,6 +9,7 @@
 
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+import { maybeCompleteOrder } from "../../../../../lib/maybe-complete-order";
 import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../../modules/invoices";
@@ -235,6 +236,17 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         console.warn(
           `[invoices/:id/payments] Could not enqueue QB pipeline rows: ${rowErr.message}`
         );
+      }
+    }
+
+    // Best-effort native completion now that this payment settled against the
+    // invoice (idempotent + advisory-locked + non-fatal). The auto-complete
+    // subscriber is the retry net if the order isn't eligible yet.
+    if (invoice.order_id) {
+      try {
+        await maybeCompleteOrder(req.scope, invoice.order_id);
+      } catch {
+        /* non-fatal */
       }
     }
 

@@ -6,6 +6,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { getDbPool } from "../../../../utils/db-pool";
+import { maybeCompleteOrder } from "../../../../../lib/maybe-complete-order";
 import { handlePosPaymentApplied } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-applied";
 import { writePipelineRow } from "../../../../../lib/quickbooks/pipeline/row-mutations";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
@@ -282,6 +283,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       0,
       Number(payment.amount) - (alreadyApplied + effectiveAmount)
     );
+
+    // Best-effort native completion now that this payment settled against the
+    // invoice (idempotent + advisory-locked + non-fatal). The auto-complete
+    // subscriber is the retry net if the order isn't eligible yet.
+    if (invoice.order_id) {
+      try {
+        await maybeCompleteOrder(req.scope, invoice.order_id);
+      } catch {
+        /* non-fatal */
+      }
+    }
+
     return res.json({
       payment: updated,
       requested_amount: requestedAmount,

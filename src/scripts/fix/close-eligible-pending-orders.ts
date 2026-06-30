@@ -28,6 +28,8 @@
 
 import { Client } from "pg";
 
+import { maybeCompleteOrder } from "../../lib/maybe-complete-order";
+
 const DRY_RUN = process.env.DRY_RUN === "true";
 const DELAY_MS = 500; // throttle the workflow engine
 
@@ -95,40 +97,22 @@ export default async function closeEligiblePendingOrders({
       return;
     }
 
-    const { completeOrderWorkflow } = await import("@medusajs/core-flows");
+    // Delegate to the shared, idempotent, advisory-locked helper (same guards +
+    // completeOrderWorkflow it re-validates per order right before acting).
     let completed = 0;
     const skipped: { display_id: number; reason: string }[] = [];
 
     for (const order of candidates) {
-      try {
-        // re-check status right before acting (may have changed since the query)
-        const fresh = await db.query<{ status: string }>(
-          `SELECT status FROM "order" WHERE id = $1`,
-          [order.id]
-        );
-        if (fresh.rows[0]?.status !== "pending") {
-          skipped.push({
-            display_id: order.display_id,
-            reason: `already ${fresh.rows[0]?.status}`,
-          });
-          continue;
-        }
-
-        // ⚠️ input is { orderIds: string[] } — plural array
-        await completeOrderWorkflow(container).run({
-          input: { orderIds: [order.id] },
-        });
+      const result = await maybeCompleteOrder(container, order.id);
+      if (result.completed) {
         completed++;
         logger.info(
           `${prefix} ✅ [${completed}/${candidates.length}] order #${order.display_id} completed`
         );
-      } catch (err: any) {
-        skipped.push({
-          display_id: order.display_id,
-          reason: err?.message?.slice(0, 100) ?? "unknown error",
-        });
+      } else {
+        skipped.push({ display_id: order.display_id, reason: result.reason });
         logger.warn(
-          `${prefix} ⚠️  order #${order.display_id} skipped: ${err?.message?.slice(0, 100)}`
+          `${prefix} ⚠️  order #${order.display_id} skipped: ${result.reason}`
         );
       }
       await new Promise((r) => setTimeout(r, DELAY_MS));
