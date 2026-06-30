@@ -33,6 +33,8 @@ export interface OrderApplyOpts {
   applied_by: string | null;
   available_amount: number;
   total_applied: number;
+  /** Idempotency key for Link-credit double-click/retry (optional, additive). */
+  link_intent_key?: string | null;
 }
 
 const QUERY_KEY = "query";
@@ -49,6 +51,7 @@ export async function handleOrderApply(
     applied_by,
     available_amount,
     total_applied,
+    link_intent_key,
   } = opts;
 
   if (!order_id) {
@@ -116,6 +119,7 @@ export async function handleOrderApply(
     applied_at: new Date(),
     applied_by: applied_by || null,
     cost_snapshot: costSnapshot,
+    ...(link_intent_key ? { metadata: { link_intent_key } } : {}),
   });
 
   // 4. Do NOT change customer_payment.status for an order-only link.

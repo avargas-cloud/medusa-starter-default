@@ -25,7 +25,8 @@ import { handleOrderApply } from "./handle-order-apply";
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const paymentId = req.params.id!;
-  const { invoice_id, order_id, amount_applied, applied_by } = req.body as any;
+  const { invoice_id, order_id, amount_applied, applied_by, link_intent_key } =
+    req.body as any;
 
   if (!invoice_id && !order_id) {
     return res
@@ -68,6 +69,38 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       });
     }
 
+    // Idempotency guard (Link-credit double-click / network retry). When the
+    // caller supplies a link_intent_key, a replay returns the application that
+    // was already created for that intent instead of minting a second one.
+    // PURELY ADDITIVE — requests without the key behave exactly as before.
+    if (link_intent_key) {
+      const existing = (payment.applications ?? []).find(
+        (a: any) =>
+          !a.voided_at && a.metadata?.link_intent_key === link_intent_key
+      );
+      if (existing) {
+        const refetched = await financeService.retrieveCustomerPayment(
+          paymentId,
+          { relations: ["applications"] }
+        );
+        const invoiceBound = (refetched.applications ?? [])
+          .filter((a: any) => !a.voided_at && a.invoice_id != null)
+          .reduce((s: number, a: any) => s + Number(a.amount_applied), 0);
+        return res.json({
+          payment: refetched,
+          application: existing,
+          requested_amount: Number(amount_applied),
+          applied_amount: Number(existing.amount_applied),
+          overflow_amount: 0,
+          remaining_payment_balance: Math.max(
+            0,
+            Number(payment.amount) - invoiceBound
+          ),
+          idempotent_replay: true,
+        });
+      }
+    }
+
     // Two notions of "applied":
     //  • invoice-bound applications are REAL consumption (settled into an invoice)
     //  • order-only applications are convertible reservations, NOT consumption
@@ -104,6 +137,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           applied_by: applied_by ?? null,
           available_amount: reserveAvailable,
           total_applied: totalReserved,
+          link_intent_key: link_intent_key ?? null,
         },
         res
       );
@@ -179,6 +213,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           id: orderOnlyForOrder.id,
           invoice_id: invoice_id,
           invoice_number: String((invoice as any).invoice_number || ""),
+          ...(link_intent_key
+            ? {
+                metadata: {
+                  ...(orderOnlyForOrder.metadata || {}),
+                  link_intent_key,
+                },
+              }
+            : {}),
         });
       } else {
         // Partial: peel off an invoice-bound share, keep the remainder order-only.
@@ -191,6 +233,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           applied_at: new Date(),
           applied_by: applied_by || null,
           cost_snapshot: orderOnlyForOrder.cost_snapshot ?? null,
+          ...(link_intent_key ? { metadata: { link_intent_key } } : {}),
         });
         await financeService.updatePaymentApplications({
           id: orderOnlyForOrder.id,
@@ -223,6 +266,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         amount_applied: effectiveAmount,
         applied_at: new Date(),
         applied_by: applied_by || null,
+        ...(link_intent_key ? { metadata: { link_intent_key } } : {}),
       });
     }
 
