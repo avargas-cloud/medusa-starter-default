@@ -35,7 +35,8 @@
     "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,json,md}\"",
     "type-check": "tsc --noEmit",
-    "code-quality": "yarn type-check && yarn lint && yarn format:check",
+    "verify:inventory-raw-sync": "tsx src/scripts/verify/verify-inventory-raw-sync.ts",
+    "code-quality": "yarn type-check && yarn lint && yarn format:check && yarn verify:inventory-raw-sync",
     "pre-complete": "node scripts/pre-completion-check.mjs"
   },
   "dependencies": {
