@@ -99,7 +99,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       return {
         variant_id:    r.variant_id,
         sku:           r.sku,
-        description:   r.description,
+        description:   r.description ?? '',
         product_title: r.product_title,
         category:      r.category ?? 'Uncategorized',
         qty_sold:      Number(r.qty_sold),
