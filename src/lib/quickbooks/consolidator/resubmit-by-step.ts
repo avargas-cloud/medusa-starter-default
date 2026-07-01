@@ -471,7 +471,13 @@ export async function resubmitByStep(
           );
           break;
         }
-        const cmCreateResult = await createCreditMemoInQb(cmCreatePayload);
+        // Idempotency key keyed on the CM id — a re-dispatch of this same create
+        // (manual resync, lost response) dedupes at the bridge instead of minting
+        // a duplicate QB Credit Memo. Stable across re-dispatches of this row.
+        const cmCreateResult = await createCreditMemoInQb({
+          ...cmCreatePayload,
+          idempotencyKey: `credit-memo:${row.reference_id}`,
+        });
         if (cmCreateResult.success && cmCreateResult.data?.operationId) {
           await cmCreatePool.query(
             `UPDATE qb_order_pipeline

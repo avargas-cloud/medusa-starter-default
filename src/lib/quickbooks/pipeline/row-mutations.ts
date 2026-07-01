@@ -3,6 +3,32 @@ import type { WritePipelineRowInput } from "./types";
 import { decideRetry, type RetryDecision } from "../retry-config";
 
 /**
+ * QB "ADD" steps — each creates EXACTLY ONE QuickBooks document and is NOT
+ * idempotent on re-dispatch (a blind re-submit mints a duplicate QB doc,
+ * because the bridge has no idempotency ledger for writes). Mirrors the ADD
+ * list in consolidator/recovery-pass.ts (the inverse of IDEMPOTENT_REDISPATCH_STEPS).
+ *
+ * For these steps, re-enqueuing a row that is already in-flight ('processing'/
+ * 'submitted') or done ('confirmed') MUST be a no-op — otherwise a manual resync,
+ * a double-complete race, or a lost-response retry resets the live row back to
+ * 'pending' and the dispatcher fires a SECOND createXInQb → duplicate QB document.
+ * This is exactly what produced the duplicate Credit Memo (CM-1081 → QB #18939 +
+ * #18940): a manual "Sync to QuickBooks" reactivated the 'submitted' create row
+ * while its first bridge op was still in flight. Note the reactivation preserved
+ * retry_count=0, which is why every retry/dup guard missed it.
+ */
+const QB_CREATE_STEPS = new Set<string>([
+  "estimate",
+  "sales_order",
+  "sales_receipt",
+  "invoice",
+  "credit_memo",
+  "payment",
+  "apply_payment",
+  "inventory_adjustment",
+]);
+
+/**
  * Writes a row to qb_order_pipeline.
  * Returns the row's UUID.
  *
@@ -58,6 +84,29 @@ export async function writePipelineRow(
     (input.orderId || input.referenceId) &&
     input.step
   ) {
+    // Idempotency guard for ADD steps: if a create row for this document is
+    // already in-flight ('processing'/'submitted') or done ('confirmed'), do NOT
+    // reset it to 'pending' — that would re-dispatch and mint a DUPLICATE QB doc.
+    // Return the existing row id so callers (manual resync, retry, re-complete)
+    // treat it as "already enqueued". Genuinely failed/skipped creates fall
+    // through to the normal reactivation path below (legit retry).
+    if (QB_CREATE_STEPS.has(input.step)) {
+      const { rows: inFlight } = await pool.query(
+        `SELECT id
+           FROM qb_order_pipeline
+          WHERE step = $2
+            AND status IN ('processing', 'submitted', 'confirmed')
+            AND (
+              ($1::text IS NOT NULL AND order_id = $1::text AND ($3::text IS NULL OR reference_id = $3::text))
+              OR ($1::text IS NULL AND $3::text IS NOT NULL AND reference_id = $3::text)
+            )
+          ORDER BY COALESCE(updated_at, created_at) DESC
+          LIMIT 1`,
+        [input.orderId ?? null, input.step, input.referenceId ?? null]
+      );
+      if (inFlight.length > 0) return inFlight[0].id as string;
+    }
+
     const { rows: fromWaiting } = await pool.query(
       `UPDATE qb_order_pipeline
              SET status            = 'pending',

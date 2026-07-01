@@ -135,6 +135,12 @@ export interface QbCreateCreditMemoPayload {
   /** QB SalesTaxItem ListID — when present, bridge emits ItemSalesTaxRef.ListID instead of FullName. */
   qbTaxItemListid?: string;
   salesRepRef?: string;
+  /**
+   * Idempotency key forwarded to the bridge. A re-sent create with the same key
+   * returns the existing bridge op instead of minting a duplicate QB Credit Memo.
+   * Convention: `credit-memo:<pos_credit_memo.id>`.
+   */
+  idempotencyKey?: string;
 }
 
 export interface QbUpdateCreditMemoPayload {
