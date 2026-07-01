@@ -38,6 +38,69 @@ async function syncVeetchBills(knex: Knex): Promise<void> {
   // track its own line total — otherwise editing a draft bill's quantities
   // could not flow through to its finance row. Document dates always reflect
   // the bill's own invoice date.
+  //
+  // BEFORE touching bill amounts: propagate any bill-amount CHANGE to its draft
+  // "last payment". A bill can be paid in installments — earlier ones on
+  // CONFIRMED wires (immutable), the single remaining DRAFT clears the rest.
+  // When a vendor bill's line total changes, ONLY the draft absorbs the delta
+  // (Δ = new line total − current stored amount); shifting by the delta (never
+  // resetting to the full remaining) preserves an intentional PARTIAL draft.
+  // The wire amount moves by the same delta so wire_amount stays == Σ applied.
+  // Runs FIRST so `cfb.amount_cents` still holds the OLD amount; skipped for
+  // bills locked on a confirmed wire (their stored amount never changes) and
+  // when the shift would drive the application non-positive.
+  const billDeltaCte = `
+    WITH line_totals AS (
+      SELECT vb.id AS vendor_bill_id,
+             COALESCE((
+               SELECT SUM(vbl.unit_cost_cents::bigint * vbl.qty)::integer
+               FROM vendor_bill_line vbl
+               WHERE vbl.vendor_bill_id = vb.id AND vbl.deleted_at IS NULL
+             ), 0) AS new_amount
+      FROM vendor_bill vb
+      WHERE vb.vendor_id = ?
+        AND vb.bill_type IN ('regular','service','freight')
+        AND vb.deleted_at IS NULL
+    ),
+    bill_delta AS (
+      SELECT cfb.id AS bill_id, (lt.new_amount - cfb.amount_cents) AS delta
+      FROM china_finance_bill cfb
+      JOIN line_totals lt ON lt.vendor_bill_id = cfb.vendor_bill_id
+      WHERE cfb.type = 'vendor_bill'
+        AND lt.new_amount <> cfb.amount_cents
+        AND NOT EXISTS (
+          SELECT 1 FROM china_wire_transfer_application cwta
+          JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
+          WHERE cwta.bill_id = cfb.id AND cwt.status = 'confirmed'
+        )
+    ),
+    draft_targets AS (
+      SELECT a.id AS app_id, a.wire_transfer_id, bd.delta
+      FROM china_wire_transfer_application a
+      JOIN china_wire_transfer w ON w.id = a.wire_transfer_id
+      JOIN bill_delta bd ON bd.bill_id = a.bill_id
+      WHERE w.status = 'draft'
+        AND a.applied_cents + bd.delta > 0
+    )`;
+  await knex.raw(
+    `${billDeltaCte}
+     UPDATE china_wire_transfer w
+        SET wire_amount_cents = wire_amount_cents + agg.total_delta,
+            updated_at = now()
+        FROM (SELECT wire_transfer_id, SUM(delta) AS total_delta
+              FROM draft_targets GROUP BY wire_transfer_id) agg
+       WHERE w.id = agg.wire_transfer_id`,
+    [VEETECH_VENDOR_ID]
+  );
+  await knex.raw(
+    `${billDeltaCte}
+     UPDATE china_wire_transfer_application a
+        SET applied_cents = a.applied_cents + t.delta
+        FROM draft_targets t
+       WHERE a.id = t.app_id`,
+    [VEETECH_VENDOR_ID]
+  );
+
   await knex.raw(
     `WITH vendor_bill_totals AS (
        SELECT
