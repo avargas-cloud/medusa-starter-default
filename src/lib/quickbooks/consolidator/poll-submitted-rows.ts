@@ -15,6 +15,7 @@ import {
   cacheEditSequence,
   claimAndResetForResubmit,
   invalidateEditSequenceCache,
+  writePipelineRow,
 } from "../qb-pipeline";
 import { enqueueEstimateDeactivateIfNeeded } from "../pipeline/enqueue-estimate-deactivate";
 import {
@@ -230,6 +231,51 @@ export async function pollSubmittedRows(
           } catch (posInvErr: any) {
             logger.warn(
               `${LOG_PREFIX} ⚠️ Could not update pos_invoice metadata: ${posInvErr.message}`
+            );
+          }
+
+          // VOID-BEFORE-CREATE RACE GUARD (2026-07-01): if the invoice was voided
+          // in Medusa BEFORE its QB create confirmed, handle-invoice-voided found no
+          // qb_txn_id (order.metadata.qb_invoices was empty) and no-op'd — leaving
+          // the QB doc created afterwards and orphaned/open with no void. Now that the
+          // create confirmed and we know the TxnID, auto-enqueue the void so the
+          // consolidator voids it in QB. Idempotent: skips if a void row already exists.
+          try {
+            const { rows: invRows } = await pool.query(
+              `SELECT status, metadata->>'is_sales_receipt' AS is_sr
+                 FROM pos_invoice WHERE id = $1`,
+              [row.reference_id]
+            );
+            const invRow = invRows[0];
+            if (invRow?.status === "voided") {
+              const voidStep =
+                invRow.is_sr === "true" ? "void_sales_receipt" : "void_invoice";
+              const { rows: existingVoid } = await pool.query(
+                `SELECT id FROM qb_order_pipeline
+                   WHERE reference_id = $1
+                     AND step IN ('void_invoice', 'void_sales_receipt')
+                   LIMIT 1`,
+                [row.reference_id]
+              );
+              if (existingVoid.length === 0) {
+                await writePipelineRow({
+                  orderId: row.order_id ?? null,
+                  referenceId: row.reference_id,
+                  referenceType: "pos_invoice",
+                  step: voidStep,
+                  status: "pending",
+                  qbTxnId: txnId,
+                  qbRefNumber: refNumber ?? null,
+                  medusaRefNumber: refNumber ?? row.reference_id,
+                });
+                logger.info(
+                  `${LOG_PREFIX} ⚠️ pos_invoice ${row.reference_id} was voided before its QB create confirmed — auto-enqueued ${voidStep} for TxnID=${txnId}`
+                );
+              }
+            }
+          } catch (voidRaceErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Could not check/enqueue post-confirm void for pos_invoice ${row.reference_id}: ${voidRaceErr.message}`
             );
           }
 

@@ -249,9 +249,36 @@ export async function resubmitByStep(
         );
         const appRow = appRows[0];
         if (!appRow) {
-          logger.warn(
-            `${LOG_PREFIX} ⚠️ No payment_application found for apply_payment row ${row.id} (ref=${row.reference_id})`
+          // Distinguish "application was voided" (→ skip permanently) from
+          // "genuinely missing" (→ warn only, leave for a later tick). An
+          // apply_payment whose application got voided (e.g. the invoice was
+          // voided, unapplying the payment) will NEVER have anything to apply;
+          // without this it churns 'processing' forever. (Fixed 2026-07-01.)
+          const { rows: voidedApp } = await applyPool.query(
+            `SELECT id FROM payment_application
+             WHERE (id = $1 OR payment_id = $1)
+               AND (order_id = $2 OR $2 IS NULL)
+               AND voided_at IS NOT NULL
+             LIMIT 1`,
+            [row.reference_id, row.order_id ?? null]
           );
+          if (voidedApp.length > 0) {
+            await applyPool.query(
+              `UPDATE qb_order_pipeline
+                  SET status = 'skipped',
+                      error = 'apply_payment: payment_application voided (nothing to apply) — auto-skipped',
+                      updated_at = NOW()
+                WHERE id = $1`,
+              [row.id]
+            );
+            logger.info(
+              `${LOG_PREFIX} ⏭️ apply_payment row ${row.id} skipped — application voided (ref=${row.reference_id})`
+            );
+          } else {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ No payment_application found for apply_payment row ${row.id} (ref=${row.reference_id})`
+            );
+          }
           break;
         }
         await handlePosPaymentApplied({
