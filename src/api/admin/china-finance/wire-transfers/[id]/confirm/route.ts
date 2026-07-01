@@ -13,7 +13,12 @@ import type {
 import { randomUUID } from "crypto";
 import { z } from "zod";
 
-type Knex = { raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }> };
+type Knex = {
+  raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+  transaction?: () => Promise<
+    Knex & { commit: () => Promise<void>; rollback: () => Promise<void> }
+  >;
+};
 
 const confirmSchema = z.object({
   received_amount_cents: z.number().int().min(0),
@@ -115,41 +120,74 @@ export const PATCH = async (
   const { id } = req.params;
   const { received_amount_cents, confirmed_date, sent_date, bank_fee_included_cents } = parsed.data;
 
-  const { rows: existing } = await knex.raw(
-    `SELECT id, status, wire_amount_cents FROM china_wire_transfer WHERE id = ?`, [id]
-  ) as { rows: Array<{ id: string; status: string; wire_amount_cents: number }> };
+  const trx = knex.transaction ? await knex.transaction() : null;
+  const db = trx ?? knex;
 
-  const wire = existing[0];
-  if (!wire) return res.status(404).json({ message: "Wire transfer not found" });
-  if (wire.status === "confirmed") {
-    return res.status(400).json({ message: "Wire transfer already confirmed" });
+  try {
+    // Serialize with the delta engine / split / merge (all of which take a
+    // per-group advisory lock) by acquiring the SAME lock for every split group
+    // this wire touches, in a deterministic order, BEFORE locking any rows. This
+    // makes the confirm↔engine interaction group-serial (no reliance on FOR UPDATE
+    // bill ordering) and prevents the deadlock two lock orders could otherwise
+    // create.
+    const groups = (await db.raw(
+      `SELECT DISTINCT COALESCE(split_group_id, id) AS gid FROM china_finance_bill
+        WHERE id IN (SELECT bill_id FROM china_wire_transfer_application WHERE wire_transfer_id = ?)
+        ORDER BY 1`,
+      [id]
+    )) as { rows: Array<{ gid: string }> };
+    for (const g of groups.rows) {
+      await db.raw(`SELECT pg_advisory_xact_lock(hashtext('cf_group:' || ?))`, [g.gid]);
+    }
+
+    // Then lock the wire's bills, then the wire (same order as the engine).
+    await db.raw(
+      `SELECT id FROM china_finance_bill
+        WHERE id IN (SELECT bill_id FROM china_wire_transfer_application WHERE wire_transfer_id = ?)
+        ORDER BY id FOR UPDATE`,
+      [id]
+    );
+    const { rows: existing } = await db.raw(
+      `SELECT id, status, wire_amount_cents FROM china_wire_transfer WHERE id = ? FOR UPDATE`, [id]
+    ) as { rows: Array<{ id: string; status: string; wire_amount_cents: number }> };
+
+    const wire = existing[0];
+    if (!wire) { if (trx) await trx.rollback(); return res.status(404).json({ message: "Wire transfer not found" }); }
+    if (wire.status === "confirmed") {
+      if (trx) await trx.rollback();
+      return res.status(400).json({ message: "Wire transfer already confirmed" });
+    }
+
+    const bank_fee_cents = wire.wire_amount_cents - received_amount_cents;
+
+    // sent_date is optional — drafts are scheduled with an estimated date,
+    // and the actual send date may differ. When the caller passes it, we
+    // overwrite the estimate; otherwise the original draft date stays.
+    const setSentDate = sent_date !== undefined;
+    const { rows } = await db.raw(
+      `UPDATE china_wire_transfer
+         SET status = 'confirmed',
+             received_amount_cents = ?,
+             bank_fee_cents = ?,
+             confirmed_date = ?,
+             ${setSentDate ? "sent_date = ?," : ""}
+             updated_at = now()
+       WHERE id = ?
+       RETURNING *`,
+      setSentDate
+        ? [received_amount_cents, bank_fee_cents, confirmed_date, sent_date, id]
+        : [received_amount_cents, bank_fee_cents, confirmed_date, id]
+    ) as { rows: [Record<string, unknown>] };
+
+    if (bank_fee_included_cents !== undefined && id) {
+      const wireRow = rows[0] as { sent_date: string | null };
+      await reconcileWireBankFee(db, id, bank_fee_included_cents, wireRow.sent_date);
+    }
+
+    if (trx) await trx.commit();
+    return res.json({ wire_transfer: rows[0] });
+  } catch (err) {
+    if (trx) await trx.rollback();
+    throw err;
   }
-
-  const bank_fee_cents = wire.wire_amount_cents - received_amount_cents;
-
-  // sent_date is optional — drafts are scheduled with an estimated date,
-  // and the actual send date may differ. When the caller passes it, we
-  // overwrite the estimate; otherwise the original draft date stays.
-  const setSentDate = sent_date !== undefined;
-  const { rows } = await knex.raw(
-    `UPDATE china_wire_transfer
-       SET status = 'confirmed',
-           received_amount_cents = ?,
-           bank_fee_cents = ?,
-           confirmed_date = ?,
-           ${setSentDate ? "sent_date = ?," : ""}
-           updated_at = now()
-     WHERE id = ?
-     RETURNING *`,
-    setSentDate
-      ? [received_amount_cents, bank_fee_cents, confirmed_date, sent_date, id]
-      : [received_amount_cents, bank_fee_cents, confirmed_date, id]
-  ) as { rows: [Record<string, unknown>] };
-
-  if (bank_fee_included_cents !== undefined && id) {
-    const wireRow = rows[0] as { sent_date: string | null };
-    await reconcileWireBankFee(knex, id, bank_fee_included_cents, wireRow.sent_date);
-  }
-
-  return res.json({ wire_transfer: rows[0] });
 };

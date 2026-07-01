@@ -17,7 +17,12 @@ import type {
 import { randomUUID } from "crypto";
 import { z } from "zod";
 
-type Knex = { raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }> };
+type Knex = {
+  raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+  transaction?: () => Promise<
+    Knex & { commit: () => Promise<void>; rollback: () => Promise<void> }
+  >;
+};
 
 const updateWireSchema = z.object({
   sent_date: z.string().date().optional(),
@@ -158,28 +163,51 @@ export const PATCH = async (
 
   const { id } = req.params;
   const { sent_date, wire_amount_cents, notes, bank_fee_included_cents } = parsed.data;
+  const editsProtected =
+    wire_amount_cents !== undefined || bank_fee_included_cents !== undefined || sent_date !== undefined;
 
-  const setClauses: string[] = ["updated_at = now()"];
-  const bindings: unknown[] = [];
+  const trx = knex.transaction ? await knex.transaction() : null;
+  const db = trx ?? knex;
 
-  if (sent_date !== undefined) { setClauses.push("sent_date = ?"); bindings.push(sent_date); }
-  if (wire_amount_cents !== undefined) { setClauses.push("wire_amount_cents = ?"); bindings.push(wire_amount_cents); }
-  if (notes !== undefined) { setClauses.push("notes = ?"); bindings.push(notes); }
-  bindings.push(id);
+  try {
+    // Lock the wire row so the confirmed-check and the update are atomic against
+    // a concurrent confirm. A confirmed wire is a settled bank transaction: its
+    // money/date fields are immutable (only notes may change once confirmed).
+    const { rows: statusRows } = await db.raw(
+      `SELECT status FROM china_wire_transfer WHERE id = ? FOR UPDATE`, [id]
+    ) as { rows: Array<{ status: string }> };
+    if (statusRows.length === 0) {
+      if (trx) await trx.rollback();
+      return res.status(404).json({ message: "Wire transfer not found" });
+    }
+    if (statusRows[0]!.status === "confirmed" && editsProtected) {
+      if (trx) await trx.rollback();
+      return res.status(409).json({ message: "Cannot edit amount/fee/date of a confirmed wire transfer" });
+    }
 
-  const { rows } = await knex.raw(
-    `UPDATE china_wire_transfer SET ${setClauses.join(", ")} WHERE id = ? RETURNING *`,
-    bindings
-  ) as { rows: Array<Record<string, unknown>> };
+    const setClauses: string[] = ["updated_at = now()"];
+    const bindings: unknown[] = [];
+    if (sent_date !== undefined) { setClauses.push("sent_date = ?"); bindings.push(sent_date); }
+    if (wire_amount_cents !== undefined) { setClauses.push("wire_amount_cents = ?"); bindings.push(wire_amount_cents); }
+    if (notes !== undefined) { setClauses.push("notes = ?"); bindings.push(notes); }
+    bindings.push(id);
 
-  if (rows.length === 0) return res.status(404).json({ message: "Wire transfer not found" });
+    const { rows } = await db.raw(
+      `UPDATE china_wire_transfer SET ${setClauses.join(", ")} WHERE id = ? RETURNING *`,
+      bindings
+    ) as { rows: Array<Record<string, unknown>> };
 
-  if (bank_fee_included_cents !== undefined && id) {
-    const wireRow = rows[0] as { sent_date: string | null };
-    await reconcileWireBankFee(knex, id, bank_fee_included_cents, wireRow.sent_date);
+    if (bank_fee_included_cents !== undefined && id) {
+      const wireRow = rows[0] as { sent_date: string | null };
+      await reconcileWireBankFee(db, id, bank_fee_included_cents, wireRow.sent_date);
+    }
+
+    if (trx) await trx.commit();
+    return res.json({ wire_transfer: rows[0] });
+  } catch (err) {
+    if (trx) await trx.rollback();
+    throw err;
   }
-
-  return res.json({ wire_transfer: rows[0] });
 };
 
 export const DELETE = async (

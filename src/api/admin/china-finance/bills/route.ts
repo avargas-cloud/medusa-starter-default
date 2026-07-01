@@ -13,10 +13,16 @@ import type {
 } from "@medusajs/framework/http";
 import { randomUUID } from "crypto";
 import { z } from "zod";
+import { applyBillTotalChange } from "../../../../lib/china-finance/bill-delta-engine";
 
 const VEETECH_VENDOR_ID = "qbvnd_01KPGGSG2J1BEEWQE5ET30AHFC";
 
-type Knex = { raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }> };
+type Knex = {
+  raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+  transaction?: () => Promise<
+    Knex & { commit: () => Promise<void>; rollback: () => Promise<void> }
+  >;
+};
 
 const createBillSchema = z.object({
   document_type: z.enum(["commercial_invoice", "purchasing_services", "shipping_cost"]),
@@ -39,67 +45,55 @@ async function syncVeetchBills(knex: Knex): Promise<void> {
   // could not flow through to its finance row. Document dates always reflect
   // the bill's own invoice date.
   //
-  // BEFORE touching bill amounts: propagate any bill-amount CHANGE to its draft
-  // "last payment". A bill can be paid in installments — earlier ones on
-  // CONFIRMED wires (immutable), the single remaining DRAFT clears the rest.
-  // When a vendor bill's line total changes, ONLY the draft absorbs the delta
-  // (Δ = new line total − current stored amount); shifting by the delta (never
-  // resetting to the full remaining) preserves an intentional PARTIAL draft.
-  // The wire amount moves by the same delta so wire_amount stays == Σ applied.
-  // Runs FIRST so `cfb.amount_cents` still holds the OLD amount; skipped for
-  // bills locked on a confirmed wire (their stored amount never changes) and
-  // when the shift would drive the application non-positive.
-  const billDeltaCte = `
-    WITH line_totals AS (
-      SELECT vb.id AS vendor_bill_id,
-             COALESCE((
-               SELECT SUM(vbl.unit_cost_cents::bigint * vbl.qty)::integer
-               FROM vendor_bill_line vbl
-               WHERE vbl.vendor_bill_id = vb.id AND vbl.deleted_at IS NULL
-             ), 0) AS new_amount
-      FROM vendor_bill vb
-      WHERE vb.vendor_id = ?
-        AND vb.bill_type IN ('regular','service','freight')
-        AND vb.deleted_at IS NULL
-    ),
-    bill_delta AS (
-      SELECT cfb.id AS bill_id, (lt.new_amount - cfb.amount_cents) AS delta
-      FROM china_finance_bill cfb
-      JOIN line_totals lt ON lt.vendor_bill_id = cfb.vendor_bill_id
-      WHERE cfb.type = 'vendor_bill'
-        AND lt.new_amount <> cfb.amount_cents
-        AND NOT EXISTS (
-          SELECT 1 FROM china_wire_transfer_application cwta
-          JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
-          WHERE cwta.bill_id = cfb.id AND cwt.status = 'confirmed'
-        )
-    ),
-    draft_targets AS (
-      SELECT a.id AS app_id, a.wire_transfer_id, bd.delta
-      FROM china_wire_transfer_application a
-      JOIN china_wire_transfer w ON w.id = a.wire_transfer_id
-      JOIN bill_delta bd ON bd.bill_id = a.bill_id
-      WHERE w.status = 'draft'
-        AND a.applied_cents + bd.delta > 0
-    )`;
-  await knex.raw(
-    `${billDeltaCte}
-     UPDATE china_wire_transfer w
-        SET wire_amount_cents = wire_amount_cents + agg.total_delta,
-            updated_at = now()
-        FROM (SELECT wire_transfer_id, SUM(delta) AS total_delta
-              FROM draft_targets GROUP BY wire_transfer_id) agg
-       WHERE w.id = agg.wire_transfer_id`,
+  // Group-aware amount sync (F3): for each Veetech vendor bill whose line total
+  // no longer matches its split-group total, route the change through the shared
+  // delta engine. The engine owns ALL amount/wire mutation (split creation on a
+  // confirmed-locked group, draft absorb, decrease cascade, collapse), so a
+  // split root is never blindly reset to the full vendor total. `group_total` =
+  // Σ amount of the split group (or the bill's own amount when un-split). Only
+  // roots carry `vendor_bill_id`, so this selects one row per group.
+  const { rows: changedGroupsRaw } = (await knex.raw(
+    `WITH line_totals AS (
+       SELECT vb.id AS vendor_bill_id,
+              COALESCE((
+                SELECT SUM(vbl.unit_cost_cents::bigint * vbl.qty)::integer
+                FROM vendor_bill_line vbl
+                WHERE vbl.vendor_bill_id = vb.id AND vbl.deleted_at IS NULL
+              ), 0) AS new_amount
+       FROM vendor_bill vb
+       WHERE vb.vendor_id = ?
+         AND vb.bill_type IN ('regular','service','freight')
+         AND vb.deleted_at IS NULL
+     )
+     SELECT cfb.id AS root_id, lt.new_amount,
+            COALESCE((SELECT SUM(g.amount_cents)::integer FROM china_finance_bill g WHERE g.split_group_id = cfb.id),
+                     cfb.amount_cents) AS group_total
+     FROM china_finance_bill cfb
+     JOIN line_totals lt ON lt.vendor_bill_id = cfb.vendor_bill_id
+     WHERE cfb.type = 'vendor_bill' AND cfb.vendor_bill_id IS NOT NULL`,
     [VEETECH_VENDOR_ID]
-  );
-  await knex.raw(
-    `${billDeltaCte}
-     UPDATE china_wire_transfer_application a
-        SET applied_cents = a.applied_cents + t.delta
-        FROM draft_targets t
-       WHERE a.id = t.app_id`,
-    [VEETECH_VENDOR_ID]
-  );
+  )) as { rows: Array<{ root_id: string; new_amount: number | string; group_total: number | string }> };
+
+  for (const g of changedGroupsRaw) {
+    // Coerce: pg returns bigint SUM as a string, so compare numerically.
+    const newAmount = Number(g.new_amount);
+    const groupTotal = Number(g.group_total);
+    if (newAmount === groupTotal || !knex.transaction) continue;
+    const trx = await knex.transaction();
+    try {
+      await applyBillTotalChange(trx, {
+        billId: g.root_id,
+        targetTotalCents: newAmount,
+        source: "vendor_sync",
+      });
+      await trx.commit();
+    } catch (e) {
+      await trx.rollback();
+      // A group not yet migrated (partial draft app) or otherwise guarded is
+      // skipped, not corrupted; it syncs once the backfill/F3 split runs.
+      console.warn(`[china-finance sync] amount sync skipped for ${g.root_id}: ${e instanceof Error ? e.message : e}`);
+    }
+  }
 
   await knex.raw(
     `WITH vendor_bill_totals AS (
@@ -127,21 +121,34 @@ async function syncVeetchBills(knex: Knex): Promise<void> {
        invoice_number = vbt.reference_id,
        po_ref_number = vbt.po_ref_number,
        po_number = vbt.po_number,
-       amount_cents = CASE
-         WHEN EXISTS (
-           SELECT 1 FROM china_wire_transfer_application cwta
-           JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
-           WHERE cwta.bill_id = cfb.id
-             AND cwt.status = 'confirmed'
-         ) THEN cfb.amount_cents
-         ELSE vbt.amount_cents
-       END,
        document_date = vbt.document_date,
        due_date = vbt.due_date
      FROM vendor_bill_totals vbt
      WHERE cfb.vendor_bill_id = vbt.id
        AND cfb.type = 'vendor_bill'`,
     [VEETECH_VENDOR_ID]
+  );
+
+  // Amount is NOT synced here anymore — the delta engine (above) owns it. Only
+  // display metadata is refreshed. Propagate the root's metadata to its split
+  // children (children have vendor_bill_id NULL so the join above skips them).
+  await knex.raw(
+    `UPDATE china_finance_bill child
+        SET invoice_number = root.invoice_number,
+            po_ref_number = root.po_ref_number,
+            po_number = root.po_number,
+            document_date = root.document_date,
+            due_date = root.due_date,
+            updated_at = now()
+       FROM china_finance_bill root
+      WHERE child.split_group_id = root.id
+        AND child.id <> root.id
+        AND root.vendor_bill_id IS NOT NULL
+        AND (child.invoice_number IS DISTINCT FROM root.invoice_number
+          OR child.po_ref_number IS DISTINCT FROM root.po_ref_number
+          OR child.po_number IS DISTINCT FROM root.po_number
+          OR child.document_date IS DISTINCT FROM root.document_date
+          OR child.due_date IS DISTINCT FROM root.due_date)`
   );
 
   // Find confirmed/draft non-tariff Veetech VBs with no cfb record
@@ -244,8 +251,12 @@ export const GET = async (
       cfb.id, cfb.type, cfb.sort_order, cfb.document_type,
       cfb.invoice_number, cfb.po_number, cfb.po_ref_number,
       cfb.payee, cfb.description,
-      cwta.applied_cents AS amount_cents,
+      cfb.amount_cents AS amount_cents,
+      cwta.applied_cents AS applied_cents,
       cfb.amount_cents AS original_amount_cents,
+      cfb.split_group_id, cfb.partial_seq, cfb.split_version,
+      COALESCE((SELECT SUM(g.amount_cents)::integer FROM china_finance_bill g WHERE g.split_group_id = cfb.split_group_id), cfb.amount_cents) AS group_total_cents,
+      COALESCE((SELECT SUM(a.applied_cents)::integer FROM china_wire_transfer_application a JOIN china_finance_bill gb ON gb.id = a.bill_id WHERE gb.split_group_id = cfb.split_group_id), 0) AS group_paid_cents,
       GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) AS bill_balance_cents,
       cfb.document_date, cfb.due_date,
       cfb.vendor_bill_id,
@@ -276,7 +287,8 @@ export const GET = async (
         ELSE 5
       END,
       cwta.sort_order ASC,
-      cfb.sort_order ASC
+      cfb.sort_order ASC,
+      cfb.partial_seq ASC NULLS FIRST
   `) as { rows: Array<Record<string, unknown>> };
 
   // Group confirmed bills by wire_transfer_id
@@ -318,6 +330,9 @@ export const GET = async (
        cfb.invoice_number, cfb.po_number, cfb.po_ref_number,
        cfb.payee, cfb.description, cfb.amount_cents,
        cfb.amount_cents AS original_amount_cents,
+       cfb.split_group_id, cfb.partial_seq, cfb.split_version,
+       COALESCE((SELECT SUM(g.amount_cents)::integer FROM china_finance_bill g WHERE g.split_group_id = cfb.split_group_id), cfb.amount_cents) AS group_total_cents,
+       COALESCE((SELECT SUM(a.applied_cents)::integer FROM china_wire_transfer_application a JOIN china_finance_bill gb ON gb.id = a.bill_id WHERE gb.split_group_id = cfb.split_group_id), 0) AS group_paid_cents,
        GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) AS bill_balance_cents,
        cfb.document_date, cfb.due_date,
        cfb.vendor_bill_id,
@@ -339,7 +354,8 @@ export const GET = async (
          WHEN 'bank_fee' THEN 4
          ELSE 5
        END,
-       cfb.sort_order ASC`,
+       cfb.sort_order ASC,
+       cfb.partial_seq ASC NULLS FIRST`,
     [today]
   ) as { rows: Array<Record<string, unknown>> };
 

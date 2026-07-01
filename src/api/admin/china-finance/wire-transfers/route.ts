@@ -29,6 +29,10 @@ const createWireSchema = z.object({
   bank_fee_from_previous_cents: z.number().int().min(0).optional(),
   notes: z.string().max(1000).optional(),
   status: z.enum(["draft", "confirmed"]).optional(),
+  // "exact" (split-bill model): allocate ONLY to the selected bills, each at its
+  // own balance — never greedily pull in other pending bills to fill the wire.
+  // Defaults to "greedy" for backward compatibility with older callers.
+  allocation_mode: z.enum(["greedy", "exact"]).optional(),
 });
 
 type BillAllocationCandidate = {
@@ -82,8 +86,10 @@ export const POST = async (
     bank_fee_from_previous_cents,
     notes,
     status: wireStatusInput,
+    allocation_mode,
   } = parsed.data;
   const wireStatus = wireStatusInput ?? "confirmed";
+  const exactAllocation = allocation_mode === "exact";
   const isDraft = wireStatus === "draft";
 
   if (bill_ids.length === 0 && !include_opening_balance) {
@@ -143,6 +149,22 @@ export const POST = async (
     openingBalanceCents = Number(settingsRows[0]?.opening_balance_cents ?? 0);
     if (openingBalanceCents <= 0) {
       return res.status(400).json({ message: "No opening balance is configured" });
+    }
+  }
+
+  // Exact allocation must fund its selected bills EXACTLY — no leftover (wire >
+  // Σ bills → unassigned money) and no shortfall (wire < a bill's balance →
+  // applied < amount, the partial-draft state the delta engine rejects). To
+  // schedule a partial, split the bill instead of under-funding the wire.
+  if (exactAllocation) {
+    const selectedBalance = bills.reduce((s, b) => s + Number(b.bill_balance_cents), 0);
+    const required = selectedBalance + openingBalanceCents + (bank_fee_from_previous_cents ?? 0);
+    if (wire_amount_cents !== required) {
+      return res.status(400).json({
+        message: "Exact allocation requires wire_amount_cents to equal Σ(selected bill balances) + opening + bank fee",
+        expected: required,
+        got: wire_amount_cents,
+      });
     }
   }
 
@@ -227,25 +249,30 @@ export const POST = async (
 
     const selectedIds = new Set(bill_ids);
     const selectedBills = [...bills].sort((a, b) => a.sort_order - b.sort_order);
-    const { rows: extraBills } = await db.raw(
-      `WITH paid AS (
-         SELECT cwta.bill_id, SUM(cwta.applied_cents)::integer AS paid_cents
-         FROM china_wire_transfer_application cwta
-         JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
-         WHERE cwt.status = 'confirmed'
-         GROUP BY cwta.bill_id
-       )
-       SELECT
-         cfb.id,
-         cfb.sort_order,
-         cfb.amount_cents,
-         COALESCE(paid.paid_cents, 0) AS paid_cents,
-         GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) AS bill_balance_cents
-       FROM china_finance_bill cfb
-       LEFT JOIN paid ON paid.bill_id = cfb.id
-       WHERE GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) > 0
-       ORDER BY cfb.sort_order ASC`
-    ) as { rows: BillAllocationCandidate[] };
+    // "exact" mode allocates ONLY to the selected bills (split-bill model, where
+    // each partial is a discrete schedulable unit). Greedy mode additionally
+    // fills any leftover wire amount with other pending bills.
+    const extraBills = exactAllocation
+      ? ([] as BillAllocationCandidate[])
+      : ((await db.raw(
+          `WITH paid AS (
+             SELECT cwta.bill_id, SUM(cwta.applied_cents)::integer AS paid_cents
+             FROM china_wire_transfer_application cwta
+             JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
+             WHERE cwt.status = 'confirmed'
+             GROUP BY cwta.bill_id
+           )
+           SELECT
+             cfb.id,
+             cfb.sort_order,
+             cfb.amount_cents,
+             COALESCE(paid.paid_cents, 0) AS paid_cents,
+             GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) AS bill_balance_cents
+           FROM china_finance_bill cfb
+           LEFT JOIN paid ON paid.bill_id = cfb.id
+           WHERE GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) > 0
+           ORDER BY cfb.sort_order ASC`
+        )) as { rows: BillAllocationCandidate[] }).rows;
 
     const candidates = [
       ...selectedBills,
