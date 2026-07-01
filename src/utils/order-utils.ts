@@ -1,3 +1,4 @@
+import { Modules } from "@medusajs/utils";
 import { getDbPool } from "../api/utils/db-pool";
 
 /**
@@ -39,42 +40,28 @@ export async function recalculateOrderStatus(
       // Note: If delivered == qty we could set shipped, but 'fulfilled' is standard for POS.
     }
 
-    // Step 2: Calculate the true Payment Status based on what money hasn't been voided
-    // For POS, our source of truth for recognized recognized-revenue is non-void pos_invoices
-    const orderRes = await pool.query(
-      `SELECT total FROM "order" WHERE id = $1`,
-      [orderId]
-    );
-    const orderTotal = Number(orderRes.rows[0]?.total || 0);
-
+    // Step 2: Recognized payment from non-voided POS invoices. pos_invoice is the
+    // POS source of truth for money. This is only needed to decide whether to
+    // zero out the native payment collections below — NOT to derive a status.
+    //
+    // ⚠️ We deliberately do NOT read `order.total` here. In Medusa v2 the "order"
+    // table has no physical `total` column (it's a derived/summary value), so
+    // `SELECT total FROM "order"` throws `column "total" does not exist`, which
+    // aborted this whole recalc before it could reset the status — that's why a
+    // voided-invoice order stayed `completed` and dropped out of the Open tab.
     const invoiceRes = await pool.query(
-      `SELECT SUM(amount_paid) as total_paid 
-             FROM pos_invoice 
+      `SELECT SUM(amount_paid) as total_paid
+             FROM pos_invoice
              WHERE order_id = $1 AND status != 'voided'`,
       [orderId]
     );
     const totalPaid = Number(invoiceRes.rows[0]?.total_paid || 0);
 
-    let newPaymentStatus = "not_paid";
-    if (totalPaid > 0 && totalPaid < orderTotal) {
-      // Wait, Medusa's equivalent for partial is 'partially_captured' or 'partially_paid' depending on usage.
-      // But we can stick to native standard.
-      newPaymentStatus = "partially_captured";
-    } else if (totalPaid > 0 && totalPaid >= orderTotal) {
-      newPaymentStatus = "captured";
-    }
-
-    // Determine general status:
-    // Generally, an order is 'pending' until it's fully closed by the system, but we usually leave it pending
-    // unless it's fully paid and fulfilled (sometimes 'completed').
-    let newStatus = "pending";
-    if (
-      newPaymentStatus === "captured" &&
-      newFulfillmentStatus === "fulfilled"
-    ) {
-      newStatus = "completed"; // Or leave as pending depending on how the frontend tracks it. We'll default to pending to stay open.
-      newStatus = "pending";
-    }
+    // This helper only runs to REOPEN an order after a void / fulfillment change,
+    // so the target is always the open state 'pending'. Native completion is a
+    // separate flow (completeOrderWorkflow / maybeCompleteOrder, which re-checks
+    // its own guards) — we never re-close an order here.
+    const newStatus = "pending";
 
     // Step 3: Native Medusa reversal of generic payment collections if sum hits 0
     if (totalPaid === 0 && container) {
@@ -107,16 +94,29 @@ export async function recalculateOrderStatus(
 
     // Apply
     console.log(
-      `[ORDER ORACLE] Recalculating ${orderId} | Fulfillment: ${newFulfillmentStatus} | Payment: ${newPaymentStatus} | Delivered: ${delivered}`
+      `[ORDER ORACLE] Recalculating ${orderId} | Fulfillment: ${newFulfillmentStatus} | Paid(cents): ${totalPaid} | Delivered: ${delivered} | Status: ${newStatus}`
     );
-    await pool.query(
-      `UPDATE "order" SET 
-                fulfillment_status = $1, 
-                payment_status = $2, 
-                status = $3
-             WHERE id = $4`,
-      [newFulfillmentStatus, newPaymentStatus, newStatus, orderId]
-    );
+    // In Medusa v2 the "order" table only has a physical `status` column.
+    // `fulfillment_status` and `payment_status` are DERIVED at query time from
+    // the fulfillment / payment_collection rows — they are NOT columns here.
+    // The old UPDATE wrote all three, so it failed entirely ("column ... does
+    // not exist"), the catch below swallowed it, and `status` never got reset
+    // after an invoice void → the order stayed `completed` and dropped out of
+    // the Open tab.
+    //
+    // Reverting completion natively = updateOrders({ status }). Completion is a
+    // pure status flag (completeOrder_ only sets status='completed'); Medusa's
+    // own completeOrdersStep compensation reverts it the same way. Use the ORDER
+    // module when we have the container; fall back to raw SQL otherwise.
+    if (container) {
+      const orderModule = container.resolve(Modules.ORDER);
+      await orderModule.updateOrders([{ id: orderId, status: newStatus }]);
+    } else {
+      await pool.query(`UPDATE "order" SET status = $1 WHERE id = $2`, [
+        newStatus,
+        orderId,
+      ]);
+    }
   } catch (e: any) {
     console.error(
       `[ORDER ORACLE] Failed to recalculate order status for ${orderId}:`,
