@@ -62,9 +62,13 @@ export default async function cleanupReservations({ container }: ExecArgs) {
   console.log(`\n🔄 Restoring inventory levels...`);
   for (const r of reservations) {
     await pgConnection.raw(
-      `UPDATE inventory_level SET reserved_quantity = GREATEST(0, reserved_quantity - ?)
-             WHERE inventory_item_id = ? AND location_id = ? AND deleted_at IS NULL`,
-      [r.quantity, r.inventory_item_id, r.location_id]
+      `UPDATE inventory_level
+          SET reserved_quantity = GREATEST(0, reserved_quantity - ?),
+              raw_reserved_quantity = jsonb_build_object(
+                'value', GREATEST(0, reserved_quantity - ?)::text, 'precision', 20
+              )
+        WHERE inventory_item_id = ? AND location_id = ? AND deleted_at IS NULL`,
+      [r.quantity, r.quantity, r.inventory_item_id, r.location_id]
     );
   }
 

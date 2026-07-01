@@ -19,13 +19,48 @@ import {
 } from "./inventory-transfer-reservations";
 
 type KnexRaw = {
-  raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+  raw: (
+    sql: string,
+    bindings?: unknown[]
+  ) => Promise<{ rows: unknown[]; rowCount?: number }>;
 };
 
 interface VariantQty {
   inventory_item_id: string;
   product_variant_id: string;
   qty: number;
+}
+
+/**
+ * Atomic stock delta on the China warehouse level.
+ *
+ * CRITICAL: writes `raw_stocked_quantity` (the JSONB BigNumber) alongside the
+ * numeric `stocked_quantity`. Medusa's INVENTORY module — and therefore the
+ * MeiliSearch doc builder + reconciler — read from the raw_* column, so updating
+ * only the numeric column desyncs them (the operator sees phantom China stock
+ * that was already deducted). Mirrors `atomic-stock-move.ts`. Negative China is
+ * allowed (goods can leave before their replenishing Factory Order is received).
+ * Returns the number of rows affected (0 = China level missing).
+ */
+async function moveChinaStock(
+  knex: KnexRaw,
+  inventoryItemId: string,
+  delta: number,
+  now: string
+): Promise<number> {
+  const res = await knex.raw(
+    `UPDATE inventory_level
+        SET stocked_quantity = stocked_quantity + ?,
+            raw_stocked_quantity = jsonb_build_object(
+              'value', (stocked_quantity + ?)::text, 'precision', 20
+            ),
+            updated_at = ?
+      WHERE inventory_item_id = ?
+        AND location_id = ?
+        AND deleted_at IS NULL`,
+    [delta, delta, now, inventoryItemId, CHINA_LOC]
+  );
+  return res.rowCount ?? 0;
 }
 
 interface LinkedTransferRow {
@@ -70,9 +105,18 @@ export async function onPoReceiveApplied(
 
   const now = new Date().toISOString();
 
+  // Every line on a Transfer-to-USA PO (vendor = the China agent) is a China
+  // item, so China is decremented for every received line. `moveChinaStock`
+  // self-gates: it no-ops when the item has no China level (i.e. it is not a
+  // China-warehouse SKU), so a stray non-China line can never over-draw China.
+  // We intentionally do NOT gate on IT lines: a transfer PO can legitimately
+  // carry China items that were never listed on the IT (historical data-entry
+  // gap), and those goods DID leave China — gating them would leave phantom
+  // China stock (the exact desync this file exists to prevent).
   for (const line of lines) {
     // The transfer line was reserved when the IT was confirmed. Once units are
     // received, release that reserved qty before deducting physical China stock.
+    // (No-op for variants not carrying an IT reservation.)
     await releaseTransferLineChinaReservation(
       knex,
       transfer.id,
@@ -80,18 +124,10 @@ export async function onPoReceiveApplied(
       line.qty
     );
 
-    // Deduct from China warehouse inventory
-    await knex.raw(
-      `UPDATE inventory_level
-          SET stocked_quantity = stocked_quantity - ?,
-              updated_at       = ?
-        WHERE inventory_item_id = ?
-          AND location_id       = ?
-          AND deleted_at IS NULL`,
-      [line.qty, now, line.inventory_item_id, CHINA_LOC]
-    );
+    // Deduct physical China stock (numeric + raw_ BigNumber columns in lockstep).
+    await moveChinaStock(knex, line.inventory_item_id, -line.qty, now);
 
-    // Increment IT line qty_received (cap at qty to stay within constraint)
+    // Increment IT line qty_received (no-op if this variant is not on the IT).
     await knex.raw(
       `UPDATE inventory_transfer_line
           SET qty_received = LEAST(qty, qty_received + ?),
@@ -144,19 +180,14 @@ export async function onPoReceiveReversed(
 
   const now = new Date().toISOString();
 
+  // Mirror of onPoReceiveApplied: restore China for every reversed line (goods
+  // return to China / go back in transit). moveChinaStock self-gates on China
+  // level existence.
   for (const line of lines) {
-    // Restore China warehouse inventory
-    await knex.raw(
-      `UPDATE inventory_level
-          SET stocked_quantity = stocked_quantity + ?,
-              updated_at       = ?
-        WHERE inventory_item_id = ?
-          AND location_id       = ?
-          AND deleted_at IS NULL`,
-      [line.qty, now, line.inventory_item_id, CHINA_LOC]
-    );
+    // Restore China warehouse inventory (numeric + raw_ BigNumber columns).
+    await moveChinaStock(knex, line.inventory_item_id, line.qty, now);
 
-    // Decrement IT line qty_received (floor at 0)
+    // Decrement IT line qty_received (floor at 0; no-op if not on the IT).
     await knex.raw(
       `UPDATE inventory_transfer_line
           SET qty_received = GREATEST(0, qty_received - ?),
