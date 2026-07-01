@@ -19,6 +19,10 @@ import {
   getActorUserId,
   UnauthenticatedError,
 } from "../../purchase-orders/_lib/auth";
+import {
+  computeChinaAdjustment,
+  loadChinaLevels,
+} from "../_lib/china-adjustment-math";
 
 export async function GET(
   req: AuthenticatedMedusaRequest,
@@ -135,14 +139,14 @@ export async function PATCH(
       ...existingLines.map((l) => l.inventory_item_id),
     ])
   );
-  const levels = itemIds.length
-    ? await inventoryService.listInventoryLevels(
-        { inventory_item_id: itemIds, location_id: CHINA_LOCATION_ID },
-        { take: itemIds.length + 10 }
-      )
-    : [];
-  const stockByItem = new Map<string, number>(
-    levels.map((lvl) => [lvl.inventory_item_id, lvl.stocked_quantity ?? 0])
+  // Physical-basis snapshot (stocked + in_transit). `new_quantity` is a PHYSICAL
+  // count; in_transit is preserved on top of stocked. See
+  // `../_lib/china-adjustment-math.ts`.
+  const levels = await loadChinaLevels(
+    knex,
+    inventoryService,
+    CHINA_LOCATION_ID,
+    itemIds
   );
 
   const appliedLines: Array<{
@@ -152,24 +156,35 @@ export async function PATCH(
     new_qty: number;
     delta: number;
   }> = [];
+  const warnings: string[] = [];
 
   for (const line of lines) {
-    const currentQty = stockByItem.get(line.inventory_item_id) ?? 0;
-    const inventoryDelta = line.new_quantity - currentQty;
-    if (inventoryDelta !== 0) {
+    const level = levels.get(line.inventory_item_id) ?? {
+      stocked: 0,
+      in_transit: 0,
+    };
+    const m = computeChinaAdjustment(level, line.new_quantity);
+    if (m.delta !== 0) {
       await inventoryService.adjustInventory(
         line.inventory_item_id,
         CHINA_LOCATION_ID,
-        inventoryDelta
+        m.delta
       );
     }
-    const oldQty = existingByItem.get(line.inventory_item_id)?.old_qty ?? currentQty;
+    if (m.preexistingPhantom) {
+      warnings.push(
+        `${line.sku}: shipped reservations (${level.in_transit}) exceed stocked (${level.stocked}) — pre-existing phantom, adjustment applied as-is`
+      );
+    }
+    // Preserve the original physical old_qty across re-edits.
+    const oldQty =
+      existingByItem.get(line.inventory_item_id)?.old_qty ?? m.oldPhysical;
     appliedLines.push({
       inventory_item_id: line.inventory_item_id,
       sku: line.sku,
       old_qty: oldQty,
-      new_qty: line.new_quantity,
-      delta: line.new_quantity - oldQty,
+      new_qty: m.newPhysical,
+      delta: m.newPhysical - oldQty,
     });
   }
 
@@ -177,13 +192,18 @@ export async function PATCH(
     (line) => !requestedIds.has(line.inventory_item_id)
   );
   for (const line of removedLines) {
-    const currentQty = stockByItem.get(line.inventory_item_id) ?? 0;
-    const delta = line.old_qty - currentQty;
-    if (delta !== 0) {
+    const level = levels.get(line.inventory_item_id) ?? {
+      stocked: 0,
+      in_transit: 0,
+    };
+    // Restore physical present back to the original old_qty (target stocked =
+    // old_qty + current in_transit).
+    const m = computeChinaAdjustment(level, line.old_qty);
+    if (m.delta !== 0) {
       await inventoryService.adjustInventory(
         line.inventory_item_id,
         CHINA_LOCATION_ID,
-        delta
+        m.delta
       );
     }
   }
@@ -214,6 +234,7 @@ export async function PATCH(
       notes: notes ?? null,
       total_lines: appliedLines.length,
       meili,
+      warnings,
     },
     lines: appliedLines,
   });

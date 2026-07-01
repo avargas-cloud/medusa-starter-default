@@ -46,6 +46,10 @@ interface TransferRow {
   total_lines: number;
   total_units: number;
   subtotal_cents: number;
+  // Live-computed at list time from lines × factory cost (qb_purchase_cost);
+  // used to override the stale header subtotal_cents/total_units for display.
+  factory_subtotal_cents?: string | number | null;
+  live_units?: number | null;
   created_by_user_id: string;
   confirmed_at: string | null;
   confirmed_by_user_id: string | null;
@@ -118,16 +122,31 @@ export async function GET(
 
   bindings.push(limit, offset);
   const dataResult = await knex.raw(
-    `SELECT it.*, po.number AS linked_po_number
+    `SELECT it.*, po.number AS linked_po_number,
+            agg.factory_subtotal_cents,
+            agg.live_units
      FROM inventory_transfer it
      LEFT JOIN purchase_order po ON po.id = it.linked_purchase_order_id AND po.deleted_at IS NULL
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(SUM(itl.qty * ROUND(COALESCE(NULLIF(pv.metadata->>'qb_purchase_cost','')::numeric, 0) * 100)), 0)::bigint AS factory_subtotal_cents,
+              COALESCE(SUM(itl.qty), 0)::int AS live_units
+       FROM inventory_transfer_line itl
+       LEFT JOIN product_variant pv ON pv.id = itl.product_variant_id
+       WHERE itl.transfer_id = it.id AND itl.deleted_at IS NULL
+     ) agg ON true
      ${whereClause}
      ORDER BY it.created_at DESC
      LIMIT ? OFFSET ?`,
     bindings
   );
 
-  const transfers = dataResult.rows as TransferRow[];
+  // Override the stale header subtotal_cents/total_units with values computed
+  // live from the current lines at FACTORY cost (qb_purchase_cost).
+  const transfers = (dataResult.rows as TransferRow[]).map((r) => ({
+    ...r,
+    subtotal_cents: Number(r.factory_subtotal_cents ?? r.subtotal_cents),
+    total_units: Number(r.live_units ?? r.total_units),
+  }));
 
   return res.json({ transfers, count, limit, offset });
 }

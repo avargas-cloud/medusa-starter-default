@@ -15,6 +15,10 @@ import {
   UnauthenticatedError,
 } from "../purchase-orders/_lib/auth";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../workflows/sync-inventory-item-meilisearch";
+import {
+  computeChinaAdjustment,
+  loadChinaLevels,
+} from "./_lib/china-adjustment-math";
 
 export const CHINA_LOCATION_ID = "sloc_01KQ14C1CFX30EDD722BF87HDM";
 
@@ -151,15 +155,18 @@ export async function POST(
   const inventoryService = req.scope.resolve(
     Modules.INVENTORY
   ) as unknown as InventoryServiceLike;
+  const knex = resolveKnex(req);
 
-  // Snapshot all current stock levels in one query
+  // Snapshot current stocked + in_transit (physical-basis adjustment). The
+  // operator's `new_quantity` is a PHYSICAL count; in_transit is added back so
+  // stocked keeps carrying shipped-but-not-received transfer units. See
+  // `_lib/china-adjustment-math.ts`.
   const itemIds = lines.map((l) => l.inventory_item_id);
-  const levels = await inventoryService.listInventoryLevels(
-    { inventory_item_id: itemIds, location_id: CHINA_LOCATION_ID },
-    { take: itemIds.length + 10 }
-  );
-  const stockByItem = new Map<string, number>(
-    levels.map((lvl) => [lvl.inventory_item_id, lvl.stocked_quantity ?? 0])
+  const levels = await loadChinaLevels(
+    knex,
+    inventoryService,
+    CHINA_LOCATION_ID,
+    itemIds
   );
 
   // Apply adjustments
@@ -170,29 +177,37 @@ export async function POST(
     new_qty: number;
     delta: number;
   }> = [];
+  const warnings: string[] = [];
 
   for (const line of lines) {
-    const oldQty = stockByItem.get(line.inventory_item_id) ?? 0;
-    const delta = line.new_quantity - oldQty;
-    if (delta !== 0) {
+    const level = levels.get(line.inventory_item_id) ?? {
+      stocked: 0,
+      in_transit: 0,
+    };
+    const m = computeChinaAdjustment(level, line.new_quantity);
+    if (m.delta !== 0) {
       await inventoryService.adjustInventory(
         line.inventory_item_id,
         CHINA_LOCATION_ID,
-        delta
+        m.delta
+      );
+    }
+    if (m.preexistingPhantom) {
+      warnings.push(
+        `${line.sku}: shipped reservations (${level.in_transit}) exceed stocked (${level.stocked}) — pre-existing phantom, adjustment applied as-is`
       );
     }
     appliedLines.push({
       inventory_item_id: line.inventory_item_id,
       sku: line.sku,
-      old_qty: oldQty,
-      new_qty: line.new_quantity,
-      delta,
+      old_qty: m.oldPhysical,
+      new_qty: m.newPhysical,
+      delta: m.delta,
     });
   }
 
   // Persist the adjustment document + lines
   const id = `chadj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const knex = resolveKnex(req);
 
   await knex.raw(
     `INSERT INTO china_adjustment (id, notes, total_lines, created_by_user_id, created_at)
@@ -212,5 +227,7 @@ export async function POST(
 
   const meili = await syncChinaAdjustmentItemsToMeili(req, itemIds);
 
-  return res.status(201).json({ adjustment: { id, lines: appliedLines, meili } });
+  return res
+    .status(201)
+    .json({ adjustment: { id, lines: appliedLines, meili, warnings } });
 }
