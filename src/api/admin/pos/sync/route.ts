@@ -1391,6 +1391,37 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           });
         }
 
+        // Fix B (authoritative guard): a CREATE row already in-flight
+        // ('processing'/'submitted') or done ('confirmed') means the QB Credit
+        // Memo either exists or is being created right now — a second create
+        // mints a DUPLICATE QB document (exactly how CM-1081 got #18939+#18940
+        // when a resync fired during the pipeline's normal ~1min latency).
+        // writePipelineRow already no-ops the enqueue, but return an explicit
+        // 409 so the UI surfaces "already syncing" instead of a false success.
+        // Only the CREATE path (cmTxnId null) is guarded — MOD/VOID are
+        // idempotent and returned above.
+        const { rows: inFlightCreate } = await pgConnection.raw(
+          `SELECT status
+             FROM qb_order_pipeline
+            WHERE reference_id = ?
+              AND step = 'credit_memo'
+              AND status IN ('processing', 'submitted', 'confirmed')
+            ORDER BY COALESCE(updated_at, created_at) DESC
+            LIMIT 1`,
+          [id]
+        );
+        if (inFlightCreate.length > 0) {
+          const inFlightStatus = inFlightCreate[0].status as string;
+          return res.status(409).json({
+            error:
+              inFlightStatus === "confirmed"
+                ? "Credit Memo is already synced to QuickBooks."
+                : "Credit Memo is already being synced to QuickBooks — please wait.",
+            code: "CREDIT_MEMO_CREATE_IN_FLIGHT",
+            status: inFlightStatus,
+          });
+        }
+
         // 1.5.8: pipeline-only — enqueue 'pending' credit_memo with full payload.
         await enqueueCreditMemoRow({
           referenceId: id,
