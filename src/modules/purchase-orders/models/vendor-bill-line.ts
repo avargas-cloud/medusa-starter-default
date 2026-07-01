@@ -20,6 +20,12 @@ export const VendorBillLine = model.define("vendor_bill_line", {
   vendor_bill_id: model.text(),
   receipt_line_id: model.text().nullable(),
 
+  // Deterministic link back to the PurchaseOrderLine this bill line bills.
+  // Receipt-sourced lines mirror purchase_order_receipt_line.purchase_order_line_id;
+  // open-PO (fill-from-po) lines store the PO line directly. Nullable for legacy
+  // rows that predate this column (backfilled by migration where unambiguous).
+  purchase_order_line_id: model.text().nullable(),
+
   line_type: model.text().default("product"), // product | qb_account
   qb_account_list_id: model.text().nullable(),
   qb_account_full_name: model.text().nullable(),

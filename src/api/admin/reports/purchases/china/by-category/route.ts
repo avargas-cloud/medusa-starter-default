@@ -25,6 +25,20 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            AND vbl.line_type = 'product' AND vbl.deleted_at IS NULL
          WHERE vb.status = 'confirmed' AND vb.deleted_at IS NULL
          GROUP BY vbl.product_variant_id, vb.purchase_order_id
+       ),
+       vb_line_qty AS (
+         -- Confirmed billed quantity per PO line (Option A: a PO line can be
+         -- billed across multiple shipment bills). Keyed by purchase_order_line_id
+         -- so a partial first shipment does NOT zero out the whole line's pending.
+         SELECT
+           vbl.purchase_order_line_id,
+           SUM(vbl.qty) AS billed_qty
+         FROM vendor_bill vb
+         JOIN vendor_bill_line vbl ON vbl.vendor_bill_id = vb.id
+           AND vbl.line_type = 'product' AND vbl.deleted_at IS NULL
+         WHERE vb.status = 'confirmed' AND vb.deleted_at IS NULL
+           AND vbl.purchase_order_line_id IS NOT NULL
+         GROUP BY vbl.purchase_order_line_id
        )
        SELECT
          COALESCE(pt.category, 'Uncategorized')                                    AS category,
@@ -36,7 +50,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          COALESCE(SUM(vbc.freight_cents),    0)::bigint                          AS shipping_cents,
          COALESCE(SUM(vbc.tariff_cents),     0)::bigint                          AS tariff_cents,
          COALESCE(SUM(vbc.landed_cents),     0)::bigint                          AS landed_cents,
-         SUM(CASE WHEN vbc.has_bill IS NULL THEN pol.qty_ordered ELSE 0 END)::int AS qty_pending
+         SUM(GREATEST(pol.qty_ordered - COALESCE(vlq.billed_qty, 0), 0))::int     AS qty_pending
        FROM purchase_order po
        JOIN purchase_order_line pol ON pol.purchase_order_id = po.id AND pol.deleted_at IS NULL
        LEFT JOIN product_variant pv ON pv.id = pol.product_variant_id AND pv.deleted_at IS NULL
@@ -44,6 +58,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
        LEFT JOIN product_tier1 pt ON pt.product_id = p.id
        LEFT JOIN vb_costs vbc ON vbc.product_variant_id = pol.product_variant_id
          AND vbc.purchase_order_id = po.id
+       LEFT JOIN vb_line_qty vlq ON vlq.purchase_order_line_id = pol.id
        WHERE po.deleted_at IS NULL AND po.status NOT IN ('voided','cancelled')
          AND (p.metadata->>'is_sourced_via_agent')::boolean = true
          AND COALESCE(po.ordered_at, po.created_at) >= ? AND COALESCE(po.ordered_at, po.created_at) < ?

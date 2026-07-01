@@ -39,6 +39,8 @@ interface VendorBillRow {
 interface VendorBillLineRow {
   id: string;
   product_variant_id: string;
+  purchase_order_line_id: string | null;
+  line_type: string | null;
   qty: number;
   unit_cost_cents: number;
 }
@@ -103,40 +105,69 @@ export async function POST(
     });
   }
 
+  // Per-shipment confirm (Option A): allow confirming as soon as a shipment
+  // lands — the PO may still be partially_received. The TARGET receipt itself
+  // must be applied/synced (AVCO is receipt-line based).
   const poStatusResult = await knex.raw(
     `SELECT status FROM purchase_order WHERE id = ? AND deleted_at IS NULL`,
     [poId]
   );
   const poStatus = (poStatusResult.rows[0] as { status?: string } | undefined)?.status;
-  if (poStatus !== "received") {
+  if (poStatus !== "received" && poStatus !== "partially_received") {
     return res.status(422).json({
-      error: "Pending fully receiption",
-      code: "pending_fully_receiption",
+      error: "Purchase order must be received (or partially received) before confirming a vendor bill",
+      code: "po_not_receivable",
     });
   }
 
-  // 2. Fetch vendor bill (must exist and be draft)
-  const billResult = await knex.raw(
-    `SELECT *
-     FROM vendor_bill
-     WHERE deleted_at IS NULL
-       AND bill_type = 'regular'
-       AND (
-         purchase_order_receipt_id = ?
-         OR (
-           purchase_order_receipt_id IS NULL
-           AND purchase_order_id = ?
-         )
-       )
-     ORDER BY purchase_order_receipt_id IS NULL ASC, created_at ASC
-     LIMIT 1`,
-    [receiptId, poId]
+  const receiptStatusResult = await knex.raw(
+    `SELECT status FROM purchase_order_receipt WHERE id = ? AND deleted_at IS NULL`,
+    [receiptId]
   );
+  const receiptStatus = (receiptStatusResult.rows[0] as { status?: string } | undefined)?.status;
+  if (receiptStatus !== "applied" && receiptStatus !== "synced") {
+    return res.status(422).json({
+      error: "This receipt is not applied yet — cannot confirm its vendor bill",
+      code: "receipt_not_applied",
+    });
+  }
+
+  // 2. Resolve the target bill. Option A = one regular bill per receipt, so bind
+  //    EXPLICITLY: prefer the caller's vendor_bill_id, else the bill pinned to
+  //    THIS receipt. The legacy "earliest unpinned PO bill" fallback is removed —
+  //    with multiple regular bills per PO it could confirm the wrong one.
+  const explicitBillId =
+    typeof (req.body as { vendor_bill_id?: unknown })?.vendor_bill_id === "string"
+      ? (req.body as { vendor_bill_id: string }).vendor_bill_id
+      : null;
+
+  const billResult = explicitBillId
+    ? await knex.raw(
+        `SELECT *
+         FROM vendor_bill
+         WHERE id = ?
+           AND deleted_at IS NULL
+           AND bill_type = 'regular'
+           AND purchase_order_id = ?
+           AND (purchase_order_receipt_id = ? OR purchase_order_receipt_id IS NULL)
+         LIMIT 1`,
+        [explicitBillId, poId, receiptId]
+      )
+    : await knex.raw(
+        `SELECT *
+         FROM vendor_bill
+         WHERE deleted_at IS NULL
+           AND bill_type = 'regular'
+           AND purchase_order_receipt_id = ?
+         ORDER BY created_at ASC
+         LIMIT 1`,
+        [receiptId]
+      );
 
   const bill = (billResult.rows[0] ?? null) as VendorBillRow | null;
   if (!bill) {
     return res.status(404).json({
-      error: "Vendor bill not found — create it first",
+      error: "No vendor bill is pinned to this receipt — create or pin one first",
       code: "not_found",
     });
   }
@@ -147,6 +178,19 @@ export async function POST(
     });
   }
   if (!bill.purchase_order_receipt_id) {
+    // Pin the explicit bill to this receipt — preflight the UNIQUE(receipt) index.
+    const pinnedElsewhere = await knex.raw(
+      `SELECT id FROM vendor_bill
+       WHERE purchase_order_receipt_id = ? AND id <> ? AND deleted_at IS NULL
+       LIMIT 1`,
+      [receiptId, bill.id]
+    );
+    if (pinnedElsewhere.rows.length > 0) {
+      return res.status(409).json({
+        error: "Another vendor bill is already pinned to this receipt",
+        code: "receipt_already_pinned",
+      });
+    }
     await knex.raw(
       `UPDATE vendor_bill
        SET purchase_order_receipt_id = ?, updated_at = NOW()
@@ -166,6 +210,56 @@ export async function POST(
     return res.status(422).json({
       error: "Vendor bill has no lines",
       code: "no_lines",
+    });
+  }
+
+  // 3b. AVCO safety: the bill's product lines MUST mirror THIS receipt's
+  //     received lines by purchase_order_line_id AND quantity. Confirm uses the
+  //     bill-line qty as the AVCO numerator but receipt snapshots as the
+  //     denominator — a divergence (e.g. a PO-ordered-sourced bill confirmed
+  //     against a partial receipt) corrupts landed cost. Reconcile via
+  //     "Update from Receipt" before confirming.
+  const productLines = lines.filter(
+    (l) => (l.line_type ?? "product") === "product"
+  );
+  const { rows: receiptAggRows } = (await knex.raw(
+    `SELECT purchase_order_line_id,
+            COALESCE(SUM(qty_received_now), 0)::int AS qty
+       FROM purchase_order_receipt_line
+      WHERE purchase_order_receipt_id = ? AND deleted_at IS NULL
+      GROUP BY purchase_order_line_id`,
+    [receiptId]
+  )) as { rows: Array<{ purchase_order_line_id: string; qty: number }> };
+
+  const billByPol = new Map<string, number>();
+  let billHasUnlinked = false;
+  for (const l of productLines) {
+    if (!l.purchase_order_line_id) {
+      billHasUnlinked = true;
+      break;
+    }
+    billByPol.set(
+      l.purchase_order_line_id,
+      (billByPol.get(l.purchase_order_line_id) ?? 0) + l.qty
+    );
+  }
+  const rcptByPol = new Map<string, number>();
+  for (const r of receiptAggRows) {
+    rcptByPol.set(
+      r.purchase_order_line_id,
+      (rcptByPol.get(r.purchase_order_line_id) ?? 0) + r.qty
+    );
+  }
+  const qtyMismatch =
+    billHasUnlinked ||
+    billByPol.size !== rcptByPol.size ||
+    [...billByPol.entries()].some(([pol, q]) => rcptByPol.get(pol) !== q) ||
+    [...rcptByPol.entries()].some(([pol, q]) => billByPol.get(pol) !== q);
+  if (qtyMismatch) {
+    return res.status(422).json({
+      error:
+        "Vendor bill quantities don't match this receipt. Run 'Update from Receipt' so the bill mirrors the shipment exactly, then confirm.",
+      code: "bill_receipt_qty_mismatch",
     });
   }
 

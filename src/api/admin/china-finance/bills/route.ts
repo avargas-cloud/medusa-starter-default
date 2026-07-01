@@ -33,8 +33,11 @@ const createBillSchema = z.object({
 // ── Auto-register new Veetech vendor bills ───────────────────────────────────
 async function syncVeetchBills(knex: Knex): Promise<void> {
   // Keep Vendor Bill-linked finance rows aligned with the bill header.
-  // Amounts stay locked once a bill has been applied to a wire, but document
-  // dates should still reflect the bill's own invoice date.
+  // Amounts stay locked once a bill has been applied to a CONFIRMED wire (real
+  // money moved), but a bill that is only on scheduled/draft wires must still
+  // track its own line total — otherwise editing a draft bill's quantities
+  // could not flow through to its finance row. Document dates always reflect
+  // the bill's own invoice date.
   await knex.raw(
     `WITH vendor_bill_totals AS (
        SELECT
@@ -64,7 +67,9 @@ async function syncVeetchBills(knex: Knex): Promise<void> {
        amount_cents = CASE
          WHEN EXISTS (
            SELECT 1 FROM china_wire_transfer_application cwta
+           JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
            WHERE cwta.bill_id = cfb.id
+             AND cwt.status = 'confirmed'
          ) THEN cfb.amount_cents
          ELSE vbt.amount_cents
        END,
@@ -181,6 +186,7 @@ export const GET = async (
       GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) AS bill_balance_cents,
       cfb.document_date, cfb.due_date,
       cfb.vendor_bill_id,
+      vb.number AS vendor_bill_number,
       cwta.wire_transfer_id,
       vb.purchase_order_id AS po_id,
       cwt.status        AS wire_status,
@@ -252,6 +258,7 @@ export const GET = async (
        GREATEST(cfb.amount_cents - COALESCE(paid.paid_cents, 0), 0) AS bill_balance_cents,
        cfb.document_date, cfb.due_date,
        cfb.vendor_bill_id,
+       vb.number AS vendor_bill_number,
        vb.purchase_order_id AS po_id,
        (cfb.due_date IS NOT NULL AND cfb.due_date < ?) AS is_past_due
      FROM china_finance_bill cfb

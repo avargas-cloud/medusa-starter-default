@@ -108,25 +108,10 @@ export async function POST(
     });
   }
 
-  const linkedRegularBillResult = await knex.raw(
-    `SELECT id, number
-     FROM vendor_bill
-     WHERE purchase_order_id = ?
-       AND bill_type = 'regular'
-       AND id <> ?
-       AND deleted_at IS NULL
-     LIMIT 1`,
-    [parsed.data.purchase_order_id, id]
-  );
-  const linkedRegularBill = linkedRegularBillResult.rows[0] as
-    | { id: string; number: string | null }
-    | undefined;
-  if (linkedRegularBill) {
-    return res.status(409).json({
-      error: `Purchase order is already linked to regular bill ${linkedRegularBill.number ?? linkedRegularBill.id}`,
-      code: "already_linked_regular_bill",
-    });
-  }
+  // Option A: a PO can carry one regular bill PER RECEIPT (shipment), so we no
+  // longer block when another regular bill already exists for the PO. The
+  // per-receipt UNIQUE(purchase_order_receipt_id) index is the real guard; the
+  // anchor-receipt query below skips receipts already pinned to another bill.
 
   const existingLineResult = await knex.raw(
     `SELECT 1
@@ -142,13 +127,21 @@ export async function POST(
     });
   }
 
+  // Anchor to the first applied/synced receipt NOT already pinned to another
+  // bill (Option A + UNIQUE preflight). If every receipt is already pinned the
+  // bill stays unpinned (a PO-ordered planning bill).
   const receiptResult = await knex.raw(
-    `SELECT id
-     FROM purchase_order_receipt
-     WHERE purchase_order_id = ?
-       AND status IN ('applied','synced')
-       AND deleted_at IS NULL
-     ORDER BY received_at ASC
+    `SELECT por.id
+     FROM purchase_order_receipt por
+     WHERE por.purchase_order_id = ?
+       AND por.status IN ('applied','synced')
+       AND por.deleted_at IS NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM vendor_bill vb
+         WHERE vb.purchase_order_receipt_id = por.id
+           AND vb.deleted_at IS NULL
+       )
+     ORDER BY por.received_at ASC
      LIMIT 1`,
     [parsed.data.purchase_order_id]
   );
@@ -204,6 +197,7 @@ export async function POST(
        id,
        vendor_bill_id,
        receipt_line_id,
+       purchase_order_line_id,
        line_type,
        product_variant_id,
        sku,
@@ -219,12 +213,13 @@ export async function POST(
        created_at,
        updated_at
      )
-     VALUES (?, ?, ?, 'product', ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, NOW(), NOW())
+     VALUES (?, ?, ?, ?, 'product', ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, NOW(), NOW())
      RETURNING *`,
       [
         `vbl_${randomUUID().replace(/-/g, "")}`,
         id,
         null,
+        line.purchase_order_line_id,
         line.product_variant_id,
         line.sku_snapshot,
         typeof line.metadata?.mpn === "string" ? line.metadata.mpn : null,

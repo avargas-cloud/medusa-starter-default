@@ -287,6 +287,7 @@ export async function POST(
       };
       return {
         receipt_line_id: rl.id,
+        purchase_order_line_id: rl.purchase_order_line_id,
         product_variant_id: rl.product_variant_id,
         sku: rl.sku_snapshot,
         mpn: meta.mpn,
