@@ -53,7 +53,11 @@ export async function createEstimateInQb(
       ...payload,
       salesRepRef: payload.salesRep,
     };
-    const data = await bridgeFetch("POST", "/api/estimates", body);
+    const data = await bridgeFetch("POST", "/api/estimates", body, {
+      idempotencyKey: payload.refNumber
+        ? `estimate:${payload.refNumber}`
+        : undefined,
+    });
     const operationId = data?.operationId;
     if (!operationId)
       throw new Error("Bridge did not return an operationId for Estimate");

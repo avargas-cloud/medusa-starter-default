@@ -22,7 +22,8 @@ export const BRIDGE_FETCH_TIMEOUT_MS = 60_000;
 export async function bridgeFetch(
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
-  body?: object
+  body?: object,
+  opts?: { idempotencyKey?: string }
 ): Promise<any> {
   const url = `${BRIDGE_URL}${path}`;
   const ctrl = new AbortController();
@@ -36,6 +37,12 @@ export async function bridgeFetch(
         "x-api-key": API_KEY,
         "Content-Type": "application/json",
         "bypass-tunnel-reminder": "true",
+        // Idempotency key rides as a header (not in the QBXML body). The bridge
+        // uses it as the dedupeKey for CREATE ops → a re-sent create returns the
+        // existing op instead of minting a duplicate QB document.
+        ...(opts?.idempotencyKey
+          ? { "Idempotency-Key": opts.idempotencyKey }
+          : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
       signal: ctrl.signal,

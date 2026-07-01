@@ -54,6 +54,10 @@ export async function createSalesReceiptInQb(
         ...(item.qbItemType ? { qbItemType: item.qbItemType } : {}),
         ...(item.taxable === false ? { taxable: false } : {}),
       })),
+    }, {
+      idempotencyKey: payload.refNumber
+        ? `sales-receipt:${payload.refNumber}`
+        : undefined,
     });
 
     const operationId = data?.operationId;

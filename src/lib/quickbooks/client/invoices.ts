@@ -45,7 +45,11 @@ export async function createInvoiceInQb(
       ...payload,
       salesRepRef: payload.salesRep,
     };
-    const data = await bridgeFetch("POST", "/api/invoices", body);
+    const data = await bridgeFetch("POST", "/api/invoices", body, {
+      idempotencyKey: payload.refNumber
+        ? `invoice:${payload.refNumber}`
+        : undefined,
+    });
     const operationId = data?.operationId;
     if (!operationId)
       throw new Error("Bridge did not return an operationId for Invoice");

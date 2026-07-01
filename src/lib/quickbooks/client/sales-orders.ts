@@ -47,7 +47,11 @@ export async function createSalesOrderInQb(
       ...payload,
       salesRepRef: payload.salesRep,
     };
-    const data = await bridgeFetch("POST", "/api/sales-orders", body);
+    const data = await bridgeFetch("POST", "/api/sales-orders", body, {
+      idempotencyKey: payload.refNumber
+        ? `sales-order:${payload.refNumber}`
+        : undefined,
+    });
     const operationId = data?.operationId;
     if (!operationId)
       throw new Error("Bridge did not return an operationId for Sales Order");
