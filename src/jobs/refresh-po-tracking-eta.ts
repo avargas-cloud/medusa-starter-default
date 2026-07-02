@@ -1,11 +1,11 @@
 /**
- * refresh-po-tracking-eta — runs every 6 hours.
+ * refresh-po-tracking-eta — runs once a day at 07:00.
  *
  * Re-fetches carrier ETAs for in-transit Purchase Orders so Expected Delivery
- * stays current as packages move. Only touches POs that are open at the AP
- * level (submitted / partially_received / received) and that carry at least one
- * trackable, non-delivered tracking entry. Failures on one PO never block the
- * rest.
+ * stays current as packages move. Only touches POs still awaiting goods at the
+ * AP level (submitted / partially_received) that carry at least one trackable,
+ * non-delivered tracking entry. Failures on one PO never block the rest. The
+ * POS tracking modal also refreshes on demand for immediate updates.
  */
 
 import type { MedusaContainer } from "@medusajs/framework/types";
