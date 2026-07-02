@@ -254,7 +254,9 @@ function PipelinePoRow({
                 {expanded ? "▲ hide" : "▼ error"}
               </button>
             )}
-            {(row.status === "error" || row.status === "waiting") && (
+            {(row.status === "error" ||
+              row.status === "waiting" ||
+              row.status === "failed_permanent") && (
               <button
                 onClick={() => onRetry(row.id)}
                 disabled={retrying}

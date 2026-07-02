@@ -67,15 +67,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const row = rows[0];
     if (!row)
       return res.status(404).json({ error: "Pipeline entry not found" });
-    if (row.status !== "error") {
+    if (row.status !== "error" && row.status !== "failed_permanent") {
       return res.status(409).json({
         error: `Cannot retry entry with status '${row.status}'`,
       });
     }
+    // Manual retry = fresh budget: reset retries so a re-queued failed_permanent
+    // row isn't kicked straight back to failed_permanent on the next attempt.
     await knex.raw(
       `UPDATE qb_item_receipt_pipeline
           SET status          = 'waiting',
               qb_operation_id = NULL,
+              retries         = 0,
               last_error      = NULL,
               next_retry_at   = NULL,
               updated_at      = NOW()
