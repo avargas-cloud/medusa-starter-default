@@ -27,10 +27,15 @@ import {
   updateTrackingSchema,
 } from "../../_lib/validators";
 import type { TrackingEntry } from "../../../../../lib/carrier-tracking/types";
+import {
+  PO_STATUS_AUTOSHIP_BLOCKED_LIFECYCLE,
+  PO_STATUS_SHIPPED_WAITING,
+} from "../../_lib/po-shipping-status";
 
 interface PoHeaderLike {
   id: string;
   status: string;
+  po_status: string | null;
   tracking: TrackingEntry[] | null;
 }
 
@@ -117,6 +122,22 @@ export async function POST(
 
   const next = [...parseTracking(existing.tracking), entry];
   await persistTracking(service, id, next);
+
+  // Auto-advance the workflow status: a PO with a tracking number is in transit
+  // with a shipment to watch → "Shipped (Waiting on Arrival)". Idempotent +
+  // non-fatal, and skipped once the goods have arrived / the PO is dead.
+  if (
+    !PO_STATUS_AUTOSHIP_BLOCKED_LIFECYCLE.includes(existing.status) &&
+    existing.po_status !== PO_STATUS_SHIPPED_WAITING
+  ) {
+    try {
+      await service.updatePurchaseOrders([
+        { id, po_status: PO_STATUS_SHIPPED_WAITING },
+      ]);
+    } catch {
+      /* non-fatal — tracking already saved */
+    }
+  }
 
   return res.status(201).json({ tracking: next });
 }

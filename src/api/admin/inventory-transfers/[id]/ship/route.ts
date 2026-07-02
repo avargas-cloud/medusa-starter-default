@@ -12,6 +12,10 @@ import type {
 } from "@medusajs/framework/http";
 
 import { getActorUserId, UnauthenticatedError } from "../../../purchase-orders/_lib/auth";
+import {
+  PO_STATUS_AUTOSHIP_BLOCKED_LIFECYCLE,
+  resolveShippedPoStatus,
+} from "../../../purchase-orders/_lib/po-shipping-status";
 
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -26,6 +30,13 @@ function resolveKnex(req: AuthenticatedMedusaRequest): KnexInstance {
 interface TransferRow {
   id: string;
   status: string;
+  linked_purchase_order_id: string | null;
+}
+
+interface LinkedPoRow {
+  status: string;
+  po_status: string | null;
+  tracking: unknown;
 }
 
 export async function POST(
@@ -48,7 +59,7 @@ export async function POST(
   const knex = resolveKnex(req);
 
   const lookup = await knex.raw(
-    `SELECT id, status FROM inventory_transfer WHERE id = ? AND deleted_at IS NULL`,
+    `SELECT id, status, linked_purchase_order_id FROM inventory_transfer WHERE id = ? AND deleted_at IS NULL`,
     [id]
   );
   const transfer = (lookup.rows[0] ?? null) as TransferRow | null;
@@ -91,6 +102,33 @@ export async function POST(
     `UPDATE inventory_transfer SET ${updates.join(", ")} WHERE id = ?`,
     values
   );
+
+  // When the transfer ships, advance the linked PO's workflow status.
+  // Tracking-aware: with a tracking number the shipment is watchable →
+  // "Shipped (Waiting on Arrival)"; otherwise → "Shipped (Missing Tracking)".
+  // Idempotent + non-fatal, skipped once the PO has arrived / is dead.
+  if (transfer.linked_purchase_order_id) {
+    try {
+      const poLookup = await knex.raw(
+        `SELECT status, po_status, tracking FROM purchase_order WHERE id = ? AND deleted_at IS NULL`,
+        [transfer.linked_purchase_order_id]
+      );
+      const po = (poLookup.rows[0] ?? null) as LinkedPoRow | null;
+      if (po && !PO_STATUS_AUTOSHIP_BLOCKED_LIFECYCLE.includes(po.status)) {
+        const hasTracking =
+          Array.isArray(po.tracking) && po.tracking.length > 0;
+        const nextPoStatus = resolveShippedPoStatus(hasTracking);
+        if (po.po_status !== nextPoStatus) {
+          await knex.raw(
+            `UPDATE purchase_order SET po_status = ?, updated_at = ? WHERE id = ?`,
+            [nextPoStatus, now, transfer.linked_purchase_order_id]
+          );
+        }
+      }
+    } catch {
+      /* non-fatal — the transfer is already shipped */
+    }
+  }
 
   const updatedResult = await knex.raw(
     `SELECT * FROM inventory_transfer WHERE id = ?`,
