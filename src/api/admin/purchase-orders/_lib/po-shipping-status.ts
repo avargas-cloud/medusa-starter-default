@@ -38,3 +38,29 @@ export function resolveShippedPoStatus(hasTracking: boolean): string {
     ? PO_STATUS_SHIPPED_WAITING
     : PO_STATUS_SHIPPED_MISSING_TRACKING;
 }
+
+/** The two shipped-in-transit `po_status` values that track presence of a number. */
+export const PO_STATUS_SHIPPED_SET: readonly string[] = [
+  PO_STATUS_SHIPPED_WAITING,
+  PO_STATUS_SHIPPED_MISSING_TRACKING,
+];
+
+/**
+ * Keep `po_status` consistent when tracking is added/edited/removed on a PO that
+ * is ALREADY in a shipped state: with a number → "Waiting on Arrival", without →
+ * "Missing Tracking". Returns the corrected status, or null when nothing should
+ * change (PO not shipped, lifecycle blocked, or already correct). Never advances
+ * a non-shipped PO into a shipped state — that's the add-tracking trigger's job.
+ */
+export function reconcileShippedPoStatus(
+  currentPoStatus: string | null,
+  lifecycleStatus: string,
+  hasTracking: boolean
+): string | null {
+  if (PO_STATUS_AUTOSHIP_BLOCKED_LIFECYCLE.includes(lifecycleStatus)) return null;
+  if (!currentPoStatus || !PO_STATUS_SHIPPED_SET.includes(currentPoStatus)) {
+    return null;
+  }
+  const target = resolveShippedPoStatus(hasTracking);
+  return target === currentPoStatus ? null : target;
+}

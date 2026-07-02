@@ -30,6 +30,7 @@ import type { TrackingEntry } from "../../../../../lib/carrier-tracking/types";
 import {
   PO_STATUS_AUTOSHIP_BLOCKED_LIFECYCLE,
   PO_STATUS_SHIPPED_WAITING,
+  reconcileShippedPoStatus,
 } from "../../_lib/po-shipping-status";
 
 interface PoHeaderLike {
@@ -68,6 +69,29 @@ async function persistTracking(
   const update: Record<string, unknown> = { id, tracking };
   await service.updatePurchaseOrders([update]);
   return tracking;
+}
+
+/**
+ * Keep a shipped PO's `po_status` consistent after a tracking edit/removal:
+ * with a number → "Waiting on Arrival", without → "Missing Tracking". No-op when
+ * the PO isn't in a shipped state or its lifecycle is terminal. Non-fatal.
+ */
+async function reconcilePoStatusAfterTracking(
+  service: ReturnType<typeof getPurchaseOrdersService>,
+  po: PoHeaderLike,
+  hasTracking: boolean
+): Promise<void> {
+  const reconciled = reconcileShippedPoStatus(
+    po.po_status,
+    po.status,
+    hasTracking
+  );
+  if (!reconciled) return;
+  try {
+    await service.updatePurchaseOrders([{ id: po.id, po_status: reconciled }]);
+  } catch {
+    /* non-fatal — tracking change already saved */
+  }
 }
 
 export async function POST(
@@ -201,6 +225,7 @@ export async function PUT(
       : t
   );
   await persistTracking(service, id, next);
+  await reconcilePoStatusAfterTracking(service, existing, next.length > 0);
 
   return res.json({ tracking: next });
 }
@@ -244,6 +269,8 @@ export async function DELETE(
     (t) => t.id !== parsed.data.tracking_id
   );
   await persistTracking(service, id, next);
+  // Removing the last tracking number on a shipped PO → "Missing Tracking".
+  await reconcilePoStatusAfterTracking(service, existing, next.length > 0);
 
   return res.json({ tracking: next });
 }
