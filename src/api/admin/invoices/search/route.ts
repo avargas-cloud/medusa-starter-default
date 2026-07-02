@@ -2,6 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 
 import { INVOICE_MODULE } from "../../../../modules/invoices";
+import { sortDocItemsByInsertion } from "../_lib/item-order";
 
 /**
  * GET /admin/invoices/search?q=<term>
@@ -105,6 +106,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
     const enriched = (invoices || []).map((inv: any) => ({
       ...inv,
+      // The `items` hasMany has no default ORDER BY → restore insertion (ULID id)
+      // order so comment/header lines stay where the operator placed them.
+      items: sortDocItemsByInsertion(inv.items),
       customer: customerMap[inv.customer_id] ?? null,
     }));
 

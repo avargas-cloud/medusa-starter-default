@@ -9,6 +9,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { INVOICE_MODULE } from "../../../../modules/invoices";
 import { getAppliedInvoiceTotal, getNum } from "../payment-balance";
+import { sortDocItemsByInsertion } from "../_lib/item-order";
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const invoiceService = req.scope.resolve(INVOICE_MODULE);
@@ -28,7 +29,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     .listInvoicePayments({ invoice_id: id }, { order: { paid_at: "ASC" } })
     .catch(() => []);
 
-  const invoiceItems = ((invoice as any).items ?? []) as Array<{
+  // The `items` hasMany has no default ORDER BY → restore insertion (ULID id)
+  // order so comment/header lines stay where the operator placed them.
+  const invoiceItems = sortDocItemsByInsertion(
+    (invoice as any).items
+  ) as Array<{
     variant_id?: string | null;
     [key: string]: unknown;
   }>;

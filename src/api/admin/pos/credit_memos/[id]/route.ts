@@ -2,6 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { CREDIT_MEMO_MODULE } from "../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../modules/credit_memos/service";
+import { sortDocItemsByInsertion } from "../../../invoices/_lib/item-order";
 
 export async function GET(
   req: MedusaRequest,
@@ -136,7 +137,11 @@ export async function GET(
       }
     }
 
-    const memoItems = ((creditMemo as any).items ?? []) as Array<{
+    // The `items` hasMany has no default ORDER BY → restore insertion (ULID id)
+    // order so comment/header lines stay where the operator placed them.
+    const memoItems = sortDocItemsByInsertion(
+      (creditMemo as any).items
+    ) as Array<{
       variant_id?: string | null;
       thumbnail?: string | null;
       [key: string]: unknown;
