@@ -138,6 +138,7 @@ export async function handleOrderApply(
     amount: effectiveAmount,
     payment_method: payment.method,
     invoice_total: orderTotalCents,
+    customer_payment_id: payment.id,
   });
   if (medusaPaymentId) {
     await financeService

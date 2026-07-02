@@ -159,6 +159,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         amount: effectiveAmount,
         payment_method: payment.method,
         invoice_total: invoiceTotal,
+        customer_payment_id: payment.id,
       }).catch(() => {}); // non-fatal
     }
 

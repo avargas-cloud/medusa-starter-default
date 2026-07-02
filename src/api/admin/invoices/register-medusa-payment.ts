@@ -33,9 +33,11 @@ export async function registerMedusaPayment(
     currency_code?: string; // default 'usd'
     payment_method: string; // POS label: 'visa', 'cash', 'check', etc.
     invoice_total: number; // cents — used to size the collection if creating new
+    customer_payment_id?: string; // finance payment being captured (for guard log/audit)
   }
 ): Promise<string | null> {
-  const { order_id, amount, payment_method, invoice_total } = opts;
+  const { order_id, amount, payment_method, invoice_total, customer_payment_id } =
+    opts;
   const currency_code = opts.currency_code ?? "usd";
 
   // Guard: applying customer credit is not new money. Do not create a native
@@ -43,14 +45,15 @@ export async function registerMedusaPayment(
   if (MEDUSA_CAPTURE_EXCLUDED_METHODS.has(payment_method)) return null;
 
   // ⚠️  Medusa payment module stores amounts in DOLLARS (major units), not cents.
-  // Our finance ledger uses cents. Convert before every Medusa call.
-  const medusaAmount = amount / 100;
+  // Our finance ledger uses cents. Convert before every Medusa call. The actual
+  // captured amount is computed by the anti-double-capture guard below.
   const medusaInvoiceTotal = invoice_total / 100;
 
   try {
     const paymentModule = scope.resolve(MODULE_PAYMENT);
     const query = scope.resolve(KEY_QUERY);
     const remoteLink = scope.resolve(KEY_REMOTE_LINK);
+    const knex = scope.resolve("__pg_connection__");
     const logger = scope.resolve("logger");
 
     // ── Step 1: Find existing payment collection for this order ──────────
@@ -102,10 +105,64 @@ export async function registerMedusaPayment(
       }
     }
 
+    // ── Step 2.5: Rebind-safe cumulative-gap guard (anti double-capture) ──
+    // A native capture must never push the order's native effective captured
+    // above its DEDUPED expected native amount:
+    //   order_expected = Σ per-payment LEAST(Σ active apps, customer_payment.amount)
+    // The LEAST() cap is what makes this rebind-safe: during a deposit→invoice
+    // rebind the SAME customer_payment briefly has two active applications
+    // (order-only + invoice-bound), but it still contributes at most its own
+    // amount — so once it's captured, the gap is 0 and we skip the 2nd capture.
+    // This also hard-caps any single over-capture (the ~1.07 cases) going fwd.
+    const { rows: gapRows } = await knex.raw(
+      `
+      WITH exp AS (
+        SELECT COALESCE(SUM(LEAST(applied_cents, payment_cents)),0)::bigint AS order_expected
+        FROM (
+          SELECT pa.payment_id,
+                 SUM(pa.amount_applied)::bigint AS applied_cents,
+                 MAX(cp.amount)::bigint         AS payment_cents
+          FROM payment_application pa
+          JOIN customer_payment cp ON cp.id = pa.payment_id AND cp.deleted_at IS NULL
+          WHERE pa.order_id = ? AND pa.voided_at IS NULL AND pa.deleted_at IS NULL
+            AND cp.status <> 'voided'
+          GROUP BY pa.payment_id
+        ) x
+      ),
+      nat AS (
+        SELECT COALESCE(ROUND((SUM(pc.captured_amount) - SUM(COALESCE(pc.refunded_amount,0))) * 100),0)::bigint AS native_now
+        FROM order_payment_collection opc
+        JOIN payment_collection pc ON pc.id = opc.payment_collection_id
+        WHERE opc.order_id = ?
+      )
+      SELECT exp.order_expected, nat.native_now FROM exp, nat
+      `,
+      [order_id, order_id]
+    );
+    const orderExpectedCents = Number(gapRows?.[0]?.order_expected ?? 0);
+    const nativeNowCents = Number(gapRows?.[0]?.native_now ?? 0);
+    const captureCents = Math.min(amount, orderExpectedCents - nativeNowCents);
+
+    if (captureCents <= 1) {
+      logger.info(
+        `[registerMedusaPayment] SKIP native capture (already covered) for order ${order_id}` +
+          `${customer_payment_id ? ` cp=${customer_payment_id}` : ""} — ` +
+          `expected=${orderExpectedCents}¢ native=${nativeNowCents}¢ requested=${amount}¢`
+      );
+      return null;
+    }
+    if (captureCents < amount) {
+      logger.info(
+        `[registerMedusaPayment] CAP native capture for order ${order_id} ` +
+          `${amount}¢ → ${captureCents}¢ (expected=${orderExpectedCents}¢ native=${nativeNowCents}¢)`
+      );
+    }
+    const captureDollars = captureCents / 100; // Medusa expects dollars
+
     // ── Step 3: Create a payment session for this specific amount ─────────
     const session = await paymentModule.createPaymentSession(collectionId, {
       provider_id: SYSTEM_PROVIDER,
-      amount: medusaAmount, // Medusa expects dollars, not cents
+      amount: captureDollars,
       currency_code,
       data: { pos_payment_method: payment_method },
     });
@@ -116,11 +173,11 @@ export async function registerMedusaPayment(
     // ── Step 5: Capture ──────────────────────────────────────────────────
     await paymentModule.capturePayment({
       payment_id: payment.id,
-      amount: medusaAmount, // Medusa expects dollars, not cents
+      amount: captureDollars,
     });
 
     logger.info(
-      `[registerMedusaPayment] Captured $${(amount / 100).toFixed(2)} on payment ${payment.id} for order ${order_id}`
+      `[registerMedusaPayment] Captured $${captureDollars.toFixed(2)} on payment ${payment.id} for order ${order_id}`
     );
     return payment.id;
   } catch (err: any) {

@@ -850,12 +850,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         status: "applied",
       });
 
-      // Register in Medusa native Payment Module so payment_collection.status → 'completed'
+      // Register in Medusa native Payment Module so payment_collection.status → 'completed'.
+      // The helper's cumulative-gap guard skips if this deposit/terminal payment was
+      // already captured natively at apply-time (prevents the deposit double-capture).
       const medusaPaymentId = await registerMedusaPayment(req.scope, {
         order_id: body.order_id,
         amount: body.amount_paid,
         payment_method: resolvedPaymentMethod,
         invoice_total: body.total,
+        customer_payment_id: body.terminal_payment_id,
       });
       if (medusaPaymentId) {
         await financeService.updateCustomerPayments({
@@ -957,6 +960,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         amount: body.amount_paid,
         payment_method: resolvedPaymentMethod,
         invoice_total: body.total,
+        customer_payment_id: customerPayment.id,
       });
       if (medusaPaymentId) {
         await financeService.updateCustomerPayments({

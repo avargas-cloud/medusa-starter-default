@@ -184,6 +184,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       amount,
       payment_method,
       invoice_total: getNum(invoice.total),
+      customer_payment_id: customerPayment.id,
     });
     if (medusaPaymentId) {
       await financeService.updateCustomerPayments({
