@@ -25,7 +25,12 @@ function toIsoDate(raw: string | undefined): string | null {
 }
 
 interface DhlShipment {
-  status?: { statusCode?: string; status?: string; description?: string };
+  status?: {
+    statusCode?: string;
+    status?: string;
+    description?: string;
+    timestamp?: string;
+  };
   estimatedTimeOfDelivery?: string;
   estimatedDeliveryTimeFrame?: {
     estimatedThrough?: string;
@@ -58,8 +63,9 @@ export const dhlAdapter: CarrierAdapter = {
         shipment.status?.status ?? shipment.status?.description ?? null;
 
       if (statusCode === "delivered") {
+        // Surface the ACTUAL delivery date so Expected Delivery reflects reality.
         return {
-          estimated_delivery: null,
+          estimated_delivery: toIsoDate(shipment.status?.timestamp),
           status: "delivered",
           detail: statusText,
         };

@@ -3,9 +3,11 @@
  *
  * Covers the two robustness rules added on 2026-07-02:
  *  1. A transient carrier failure never wipes a previously known ETA.
- *  2. The carrier ETA always drives Expected Delivery when known — it
+ *  2. The carrier date always drives Expected Delivery when known — it
  *     overwrites any prior value (including a staff-entered date); a manual
- *     date is only a fallback while the carrier has no ETA.
+ *     date is only a fallback while the carrier has no date.
+ *  3. Once delivered, Expected Delivery reflects the ACTUAL delivery date, and
+ *     a settled delivered entry is not re-queried.
  */
 
 import type {
@@ -125,6 +127,37 @@ describe("refreshPoTrackingEta", () => {
       tracking: [entry({ carrier_eta: null, carrier_status: "pending" })],
     });
     expect(res.expected_at?.slice(0, 10)).toBe(manual);
+  });
+
+  it("uses the actual delivery date once delivered", async () => {
+    const manual = future(5);
+    const deliveredOn = future(-3); // 3 days ago
+    mockFetch.mockResolvedValue({
+      estimated_delivery: deliveredOn,
+      status: "delivered",
+      detail: "Delivered",
+    });
+    const svc = fakeService();
+    const res = await refreshPoTrackingEta(svc, {
+      id: "po_1",
+      expected_at: new Date(`${manual}T00:00:00.000Z`),
+      // Not yet settled (eta null) → re-fetched, comes back delivered.
+      tracking: [entry({ carrier_eta: null, carrier_status: "in_transit" })],
+    });
+    expect(res.expected_at?.slice(0, 10)).toBe(deliveredOn);
+  });
+
+  it("does not re-query a delivered entry that already has its date", async () => {
+    const deliveredOn = future(-2);
+    const svc = fakeService();
+    await refreshPoTrackingEta(svc, {
+      id: "po_1",
+      expected_at: new Date(`${deliveredOn}T00:00:00.000Z`),
+      tracking: [
+        entry({ carrier_eta: deliveredOn, carrier_status: "delivered" }),
+      ],
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("does NOT wipe a known ETA on a transient error", async () => {

@@ -14,13 +14,16 @@
 export type CarrierStatus =
   | "pending" // not fetched yet / no scan from carrier yet
   | "in_transit" // moving, ETA may be known
-  | "delivered" // carrier confirms delivered
+  | "delivered" // carrier confirms delivered (estimated_delivery = actual date)
   | "unavailable" // carrier has no API or no data (freight, USPS w/o creds, Other)
   | "error"; // lookup failed (transient — will retry)
 
 /** Normalized result of a single carrier tracking lookup. */
 export interface CarrierTrackingResult {
-  /** Estimated delivery as an ISO date (YYYY-MM-DD), or null if unknown. */
+  /**
+   * Carrier delivery date as an ISO date (YYYY-MM-DD): the ETA while in
+   * transit, or the ACTUAL delivery date once delivered. null if unknown.
+   */
   estimated_delivery: string | null;
   status: CarrierStatus;
   /** Human-readable note (carrier status text or error reason). */

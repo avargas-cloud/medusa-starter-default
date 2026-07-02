@@ -50,9 +50,12 @@ function needsRefresh(po: PoRow): boolean {
   const entries = Array.isArray(po.tracking) ? po.tracking : [];
   return entries.some(
     (e) =>
-      e.carrier_status !== "delivered" &&
       isTrackable(e) &&
-      withinCutoff(e.created_at)
+      withinCutoff(e.created_at) &&
+      // Re-query anything not yet delivered, plus a delivered entry whose actual
+      // delivery date hasn't been captured yet (one-time backfill, then it
+      // settles and drops out).
+      (e.carrier_status !== "delivered" || e.carrier_eta === null)
   );
 }
 

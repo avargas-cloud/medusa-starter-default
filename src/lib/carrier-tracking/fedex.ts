@@ -118,8 +118,9 @@ export const fedexAdapter: CarrierAdapter = {
         (d) => d.type === "ACTUAL_DELIVERY"
       );
       if (code === "DL" || actualDelivery) {
+        // Surface the ACTUAL delivery date so Expected Delivery reflects reality.
         return {
-          estimated_delivery: null,
+          estimated_delivery: toIsoDate(actualDelivery?.dateTime),
           status: "delivered",
           detail: statusText,
         };

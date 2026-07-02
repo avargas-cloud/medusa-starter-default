@@ -97,17 +97,20 @@ export const upsAdapter: CarrierAdapter = {
         statusType === "D" ||
         (statusDesc?.toLowerCase().includes("delivered") ?? false);
 
+      const byType = (type: string) =>
+        pkg.deliveryDate?.find((d) => d.type === type)?.date;
+
       if (delivered) {
+        // Surface the ACTUAL delivery date (type "DEL") so Expected Delivery
+        // reflects reality once the package has arrived.
         return {
-          estimated_delivery: null,
+          estimated_delivery: parseUpsDate(byType("DEL")),
           status: "delivered",
           detail: statusDesc,
         };
       }
 
       // Estimated delivery — prefer Rescheduled, then Scheduled, then Estimated.
-      const byType = (type: string) =>
-        pkg.deliveryDate?.find((d) => d.type === type)?.date;
       const raw = byType("RDD") ?? byType("SDD") ?? byType("EDD");
       const eta = parseUpsDate(raw);
 
