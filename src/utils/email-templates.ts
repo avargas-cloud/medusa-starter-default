@@ -161,28 +161,29 @@ export function buildActivationEmail(
 ): string {
   return emailLayout(
     `
-    ${emailIcon("🔗", "#f0fdf4")}
+    ${emailIcon("🔑", "#f0fdf4")}
     ${emailHeading(
-      `Welcome Back, ${firstName || "Valued Customer"}!`,
-      "We found an existing account associated with your email. Click below to activate your online access and set up your password."
+      `Set up your online access, ${firstName || "there"}`,
+      "You recently asked to create online access for this email at EcoPowerTech."
     )}
 
     <table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#fafafa;border-radius:10px;border:1px solid #e5e7eb;margin:24px 0;">
       <tr><td style="padding:20px 24px;">
         <div style="color:#6b7280;font-size:14px;line-height:1.7;">
-          As an existing customer, you'll have access to:<br>
-          ✓ Your complete order history<br>
-          ✓ Special pricing and terms<br>
-          ✓ Fast reordering of previous purchases
+          This email is already connected to a customer profile from an
+          in-store purchase, invoice, or other offline transaction with
+          EcoPowerTech. That profile helps us support your orders, receipts,
+          warranty history, and records, but you have <strong>not</strong>
+          created an online password or online access yet.
         </div>
       </td></tr>
     </table>
 
-    ${emailButton("Activate My Account", activationLink, "#059669")}
+    ${emailButton("Set up online access", activationLink, "#059669")}
 
-    ${emailFootnote("This link expires in 24 hours. If you didn't request this, please contact us.")}
+    ${emailFootnote("This link expires in 24 hours. If you didn't request this, you can ignore this email — no online password will be created.")}
   `,
-    { preheader: "Activate your EcoPowerTech account" }
+    { preheader: "Set up your EcoPowerTech online access" }
   );
 }
 

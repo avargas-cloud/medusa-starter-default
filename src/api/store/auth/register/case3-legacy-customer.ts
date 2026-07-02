@@ -49,7 +49,7 @@ export async function handleLegacyCustomerActivation(
 
     await sendMail({
       to: existingCustomer.email,
-      subject: "Activate Your Account – EcoPowerTech",
+      subject: "Finish setting up your EcoPowerTech online access",
       html: buildActivationEmail(
         existingCustomer.first_name || "",
         activationLink
