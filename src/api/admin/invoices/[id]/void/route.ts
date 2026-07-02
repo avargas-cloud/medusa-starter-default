@@ -431,61 +431,62 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         filters: { id: invoice.order_id },
       });
       if (order?.payment_collections?.length) {
-        let amountToRefund = Number(app.amount_applied); // dollars removed, kept natively in cents
+        // `app.amount_applied` is in CENTS (finance module); the native payment
+        // module works in DOLLARS. Convert once so the accounting below is
+        // unit-consistent (the old code mixed cents vs dollars and only worked
+        // by accident via Math.min).
+        let dollarsToRefund = Number(app.amount_applied) / 100;
         for (const pc of order.payment_collections) {
-          if (amountToRefund <= 0) break;
+          if (dollarsToRefund <= 0.001) break;
+          for (const payment of (pc?.payments ?? []) as any[]) {
+            if (dollarsToRefund <= 0.001) break;
 
-          if (pc) {
-            // Find a fully captured base payment
-            const payment = pc.payments?.find(
-              (p: any) => p.captured_at && !p.canceled_at
+            // Detect a captured payment via its CAPTURE rows (which this query
+            // DOES select), NOT `payment.captured_at`/`canceled_at` — those
+            // fields are not in the fields[] above, so they arrived `undefined`
+            // and the old `.find(p => p.captured_at && !p.canceled_at)` never
+            // matched → captured POS payments were never refunded and the native
+            // payment_collection kept a stale captured amount after a void.
+            // Refundable = captured − already-refunded.
+            const captured = ((payment.captures ?? []) as any[]).reduce(
+              (sum: number, c: any) => sum + Number(c.amount ?? 0),
+              0
             );
-            if (payment) {
-              const availableForRefund =
-                Number(payment.amount) -
-                Number(
-                  payment.refunds?.reduce(
-                    (sum: number, r: any) => sum + Number(r.amount),
-                    0
-                  ) || 0
-                );
-              const refundChunk = Math.min(amountToRefund, availableForRefund);
+            const refunded = ((payment.refunds ?? []) as any[]).reduce(
+              (sum: number, r: any) => sum + Number(r.amount ?? 0),
+              0
+            );
+            const availableForRefund = captured - refunded; // dollars
+            if (availableForRefund <= 0.001) continue;
 
-              if (availableForRefund > 0 && refundChunk > 0) {
-                console.log(
-                  `[VOID INVOICE] Proceeding with Native Refund of ${refundChunk} cents from Payment ${payment.id}`
-                );
-
-                await paymentModule
-                  .refundPayment({
-                    payment_id: payment.id,
-                    amount: refundChunk,
-                    created_by: "pos-void-hook",
-                    note: `Auto-refunded via Void of Invoice ${invoice.invoice_number || invoice.id}`,
-                  })
-                  .catch((e: any) =>
-                    console.error(
-                      "[VOID INVOICE] Refund failed for payment",
-                      payment.id,
-                      e.message
-                    )
-                  );
-
-                console.log(
-                  `[VOID INVOICE] Native Refund Successful for Payment ${payment.id}`
-                );
-                amountToRefund -= refundChunk;
-              } else {
-                console.warn(
-                  `[VOID INVOICE] Payment ${payment.id} does not have enough unrefunded balance (${availableForRefund} vs ${refundChunk}). Cannot auto-refund.`
-                );
-              }
-            } else {
-              console.warn(
-                `[VOID INVOICE] No fully captured payment found in PaymentCollection ${pc.id}. Cannot auto-refund.`
+            const refundChunk = Math.min(dollarsToRefund, availableForRefund);
+            console.log(
+              `[VOID INVOICE] Native refund of $${refundChunk.toFixed(2)} from Payment ${payment.id} (captured $${captured.toFixed(2)}, already refunded $${refunded.toFixed(2)})`
+            );
+            try {
+              await paymentModule.refundPayment({
+                payment_id: payment.id,
+                amount: refundChunk,
+                created_by: "pos-void-hook",
+                note: `Auto-refunded via Void of Invoice ${invoice.invoice_number || invoice.id}`,
+              });
+              dollarsToRefund -= refundChunk;
+              console.log(
+                `[VOID INVOICE] Native Refund Successful for Payment ${payment.id}`
+              );
+            } catch (refundErr: any) {
+              console.error(
+                "[VOID INVOICE] Refund failed for payment",
+                payment.id,
+                refundErr.message
               );
             }
           }
+        }
+        if (dollarsToRefund > 0.001) {
+          console.warn(
+            `[VOID INVOICE] Order ${invoice.order_id}: no refundable native capture for $${dollarsToRefund.toFixed(2)} of the voided application. The native payment_collection may retain a residual captured amount — the finance-module credit (customer_payment → available) is authoritative.`
+          );
         }
       }
     } catch (e: any) {

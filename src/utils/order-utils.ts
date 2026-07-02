@@ -63,34 +63,15 @@ export async function recalculateOrderStatus(
     // its own guards) — we never re-close an order here.
     const newStatus = "pending";
 
-    // Step 3: Native Medusa reversal of generic payment collections if sum hits 0
-    if (totalPaid === 0 && container) {
-      try {
-        // We resolve the native module to properly zero out rather than raw SQL (Hardcode avoidance)
-        const paymentModule = container.resolve("paymentModuleService");
-        const collections = await paymentModule.listPaymentCollections({
-          order_id: orderId,
-        });
-
-        for (const pc of collections) {
-          await pool.query(
-            `UPDATE payment_collection SET captured_amount = 0 WHERE id = $1`,
-            [pc.id]
-          );
-          await pool.query(
-            `UPDATE payment SET amount = 0, captured_at = NULL, canceled_at = NOW() WHERE payment_collection_id = $1`,
-            [pc.id]
-          );
-        }
-        console.log(
-          `[ORDER ORACLE] Natively processed zeroing for Medusa payment collections -> ${orderId}`
-        );
-      } catch (err: any) {
-        console.warn(
-          `[ORDER ORACLE] Native payment zeroing warning: ${err.message}`
-        );
-      }
-    }
+    // NOTE: We intentionally do NOT reverse native payment collections here.
+    // The invoice void route already does that correctly via the native payment
+    // module — it resolves Modules.PAYMENT and calls refundPayment() per captured
+    // payment (see api/admin/invoices/[id]/void/route.ts, ~line 420), which
+    // preserves the refund audit trail. A previous block here tried to zero
+    // payment/payment_collection rows with raw SQL, but it resolved a
+    // non-existent container key ("paymentModuleService") so it always threw and
+    // never ran. Removing it is behavior-neutral and avoids double-reversing
+    // (and corrupting) payments the void route already refunded.
 
     // Apply
     console.log(
