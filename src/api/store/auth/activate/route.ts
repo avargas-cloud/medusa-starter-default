@@ -7,6 +7,7 @@ import {
 import { z } from "zod";
 
 import { getSql } from "../../../../lib/db";
+import { decryptSecret } from "../../../../utils/temp-secret";
 
 const ActivateSchema = z.object({
   token: z.string().min(1, "Activation token is required"),
@@ -70,7 +71,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     const activationToken = rawMetadata.activation_token;
-    const temporaryPassword = rawMetadata.temporary_password;
+    // Encrypted at rest since 2026-07-02; decryptSecret passes legacy plaintext through.
+    const temporaryPassword = rawMetadata.temporary_password
+      ? decryptSecret(rawMetadata.temporary_password)
+      : rawMetadata.temporary_password;
     const activationExpires = rawMetadata.activation_expires;
 
     // Validate token

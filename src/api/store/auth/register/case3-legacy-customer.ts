@@ -3,6 +3,7 @@ import { Modules as _Modules } from "@medusajs/utils";
 
 import { buildActivationEmail } from "../../../../utils/email-templates";
 import { sendMail } from "../../../../utils/mailer";
+import { encryptSecret } from "../../../../utils/temp-secret";
 
 /**
  * CASE 3: Legacy Customer Activation
@@ -33,7 +34,8 @@ export async function handleLegacyCustomerActivation(
             UPDATE customer
             SET metadata = ${sql.json({
               legacy_customer: true,
-              temporary_password: password,
+              // Encrypted at rest — never store the typed password as plaintext.
+              temporary_password: encryptSecret(password),
               activation_token: activationToken,
               activation_expires: new Date(
                 Date.now() + 24 * 60 * 60 * 1000
