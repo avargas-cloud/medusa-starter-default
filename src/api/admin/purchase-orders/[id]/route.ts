@@ -16,6 +16,8 @@ import type {
 import type { IUserModuleService } from "@medusajs/framework/types";
 import { Modules } from "@medusajs/utils";
 
+import { generateEntityId } from "@medusajs/utils";
+
 import { getActorUserId, UnauthenticatedError } from "../_lib/auth";
 import { zodErrorToBody } from "../_lib/format";
 import { getPurchaseOrdersService } from "../_lib/service-resolver";
@@ -24,6 +26,7 @@ import { computeTotals, normalizeLine } from "../_lib/totals";
 import { updateDraftSchema } from "../_lib/validators";
 import { orderPurchaseOrderModLines } from "../../../../lib/quickbooks/purchase-order-line-order";
 import { rebuildTransferChinaReservations } from "../../../../lib/inventory-transfer-reservations";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../workflows/sync-inventory-item-meilisearch";
 
 interface QbVendorLike {
   id: string;
@@ -683,17 +686,32 @@ export async function PATCH(
       await service.createPurchaseOrderLines(toInsert);
     }
 
-    // Sync China reservations when lines are removed or qty is reduced.
-    // A linked inventory_transfer holds reservation_items in China; without
-    // this sync, deleting a PO line leaves orphan reservations indefinitely.
+    // Mirror line changes onto the linked inventory_transfer so China
+    // reservations stay in sync. The IT holds the China-side reservation_items;
+    // a PO line change that doesn't reach the IT leaves reservations wrong:
+    //   - deleting a PO line → orphan China reservation (over-reserved)
+    //   - adding a PO line   → NO China reservation for those units (phantom
+    //                          inventory: the PO "orders" units from China that
+    //                          were never reserved there). This is exactly what
+    //                          convert-to-transfer exists to prevent.
+    // Lines are matched to IT lines by product_variant_id (there is no per-line
+    // FK). After reconciling lines we recompute the IT header totals (they used
+    // to drift because only PO totals were refreshed) and rebuild reservations.
     const qtyChangedUpdates = toUpdate.filter((u) => {
       const old = oldLines.find((ol) => ol.id === u.id);
       return old && Number(old.qty_ordered) !== Number(u.data.qty_ordered);
     });
-    if (toDelete.length > 0 || qtyChangedUpdates.length > 0) {
+    if (
+      toDelete.length > 0 ||
+      qtyChangedUpdates.length > 0 ||
+      toInsert.length > 0
+    ) {
       try {
         const knex = (req.scope as any).resolve("__pg_connection__") as {
-          raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+          raw: (
+            sql: string,
+            bindings?: unknown[]
+          ) => Promise<{ rows: unknown[]; rowCount?: number }>;
         };
         const transferResult = await knex.raw(
           `SELECT id FROM inventory_transfer WHERE linked_purchase_order_id = ? AND deleted_at IS NULL LIMIT 1`,
@@ -726,7 +744,89 @@ export async function PATCH(
             );
           }
 
-          await rebuildTransferChinaReservations(knex, transferId, id);
+          // New PO lines → upsert a matching IT line by variant. Prefer an
+          // existing row for the variant (revive a soft-deleted one so a
+          // delete-then-readd round-trips cleanly); otherwise insert fresh.
+          for (const ins of toInsert) {
+            const variantId = ins.product_variant_id as string;
+            const qty = Number(ins.qty_ordered ?? 0);
+            const unitCost = Number(ins.unit_cost_cents ?? 0);
+            const existingItLine = await knex.raw(
+              `SELECT id FROM inventory_transfer_line
+                WHERE transfer_id = ? AND product_variant_id = ?
+                ORDER BY deleted_at IS NULL DESC, updated_at DESC
+                LIMIT 1`,
+              [transferId, variantId]
+            );
+            const itLineId = (
+              existingItLine.rows[0] as { id: string } | undefined
+            )?.id;
+            if (itLineId) {
+              await knex.raw(
+                `UPDATE inventory_transfer_line
+                    SET qty = ?, unit_cost_cents = ?, sku = ?, description = ?,
+                        deleted_at = NULL, updated_at = NOW()
+                  WHERE id = ?`,
+                [
+                  qty,
+                  unitCost,
+                  ins.sku_snapshot ?? "",
+                  ins.description_snapshot ?? "",
+                  itLineId,
+                ]
+              );
+            } else {
+              await knex.raw(
+                `INSERT INTO inventory_transfer_line (
+                    id, transfer_id, product_variant_id, sku, description,
+                    qty, unit_cost_cents, created_at, updated_at
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+                [
+                  generateEntityId("", "itl"),
+                  transferId,
+                  variantId,
+                  ins.sku_snapshot ?? "",
+                  ins.description_snapshot ?? "",
+                  qty,
+                  unitCost,
+                ]
+              );
+            }
+          }
+
+          // Recompute IT header totals from the live (non-deleted) lines so the
+          // transfer summary matches its lines after any add/remove/qty change.
+          await knex.raw(
+            `UPDATE inventory_transfer AS it
+                SET total_lines = agg.c,
+                    total_units = agg.u,
+                    subtotal_cents = agg.s,
+                    updated_at = NOW()
+               FROM (
+                 SELECT COUNT(*) AS c,
+                        COALESCE(SUM(qty), 0) AS u,
+                        COALESCE(SUM(qty * unit_cost_cents), 0) AS s
+                   FROM inventory_transfer_line
+                  WHERE transfer_id = ? AND deleted_at IS NULL
+               ) AS agg
+              WHERE it.id = ?`,
+            [transferId, transferId]
+          );
+
+          const touchedInventoryItemIds =
+            await rebuildTransferChinaReservations(knex, transferId, id);
+
+          // Instant MeiliSearch parity for the touched items. The PG triggers
+          // on inventory_level/reservation_item already guarantee eventual sync
+          // (~1min), but the sibling IT→PO handler syncs inline for immediacy;
+          // mirror that here so the inventory page reflects the change at once.
+          await Promise.allSettled(
+            touchedInventoryItemIds.map((inventoryItemId) =>
+              syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+                input: { inventoryItemId },
+              })
+            )
+          );
         }
       } catch (transferErr) {
         console.error("[po-patch] Failed to sync China transfer reservations:", transferErr);
