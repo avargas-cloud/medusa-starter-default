@@ -39,12 +39,35 @@ export const InventoryCountLine = model.define("inventory_count_line", {
   product_title: model.text(),
 
   // Counting
+  // qty_counted is the TOTAL physical count = qty_counted_available +
+  // qty_counted_reserved. It remains the single source of truth for the delta
+  // math (delta = qty_counted − qty_at_count_time, where qty_at_count_time =
+  // stocked_quantity which already includes reserved). The two components below
+  // capture WHERE the clerk found each unit so the reserved ("apartados") shelf
+  // is never silently skipped.
   qty_counted: model.number().nullable(),
+  // Floor / shelf count (maps to available = stocked − reserved).
+  qty_counted_available: model.number().nullable(),
+  // Reserved / holding-area ("apartados") count (maps to reserved_quantity).
+  // Required at submit whenever the system shows reserved > 0 for the item.
+  qty_counted_reserved: model.number().nullable(),
+  // Snapshot of the system reserved_quantity at submit — audit + drives the
+  // "reserved was required" validation.
+  reserved_at_count_time: model.number().nullable(),
   qty_at_count_time: model.number().nullable(),
   delta_original: model.number().nullable(),
   delta_applied: model.number().nullable(),
   qty_at_apply_time: model.number().nullable(),
   projected_stock: model.number().nullable(),
+
+  // Staleness detection (Phase 2): a counted line whose stock moves during the
+  // open draft (e.g. a sale ships mid-count) is flagged for re-count so it can't
+  // silently produce a wrong delta against a stale baseline.
+  counted_at: model.dateTime().nullable(),
+  stocked_at_count: model.number().nullable(),
+  needs_recount: model.boolean().default(false),
+  stock_moved_at: model.dateTime().nullable(),
+  stocked_after_movement: model.number().nullable(),
 
   // Per-line state
   status: model.text().default("pending"),

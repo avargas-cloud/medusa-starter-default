@@ -22,7 +22,10 @@ export const updateDraftLineSchema = z.object({
   inventory_item_id: z.string().min(1),
   sku: z.string().min(1),
   product_title: z.string().min(1),
-  qty_counted: z.number().int().min(0).nullable(),
+  // Split capture: on_hand (floor) + reserved (apartados). qty_counted (total)
+  // is derived server-side. on_hand null = uncounted.
+  qty_counted_available: z.number().int().min(0).nullable(),
+  qty_counted_reserved: z.number().int().min(0).nullable(),
   qb_account_list_id: z.string().min(1).nullish(),
 });
 

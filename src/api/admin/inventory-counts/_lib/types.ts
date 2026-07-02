@@ -47,6 +47,9 @@ export interface InventoryCountLineDto {
   sku: string;
   product_title: string;
   qty_counted: number | null;
+  qty_counted_available: number | null;
+  qty_counted_reserved: number | null;
+  reserved_at_count_time: number | null;
   qty_at_count_time: number | null;
   delta_original: number | null;
   delta_applied: number | null;
@@ -56,6 +59,11 @@ export interface InventoryCountLineDto {
   block_reason: InventoryCountLineBlockReason | null;
   override_note: string | null;
   resulted_negative: boolean;
+  counted_at: string | null;
+  stocked_at_count: number | null;
+  needs_recount: boolean;
+  stock_moved_at: string | null;
+  stocked_after_movement: number | null;
   qb_account_list_id: string | null;
   qb_line_index: number | null;
   qb_synced_at: string | null;
@@ -76,7 +84,10 @@ export interface UpdateDraftLineInput {
   inventory_item_id: string;
   sku: string;
   product_title: string;
-  qty_counted: number | null;
+  // Components; qty_counted (total) is derived server-side = on_hand + reserved.
+  // on_hand === null means the line is still uncounted (dropped at submit).
+  qty_counted_available: number | null;
+  qty_counted_reserved: number | null;
   qb_account_list_id?: string | null;
 }
 

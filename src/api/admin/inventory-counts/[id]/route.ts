@@ -10,6 +10,7 @@ import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
+import { Modules } from "@medusajs/utils";
 
 import { buildEnrichmentMaps, decorateCount } from "../_lib/enrich";
 import { zodErrorToBody } from "../_lib/format";
@@ -93,19 +94,91 @@ export async function PATCH(
     existing.map((l) => [l.product_variant_id, l])
   );
 
+  // Live stocked snapshot for staleness detection (Phase 2). When a line's count
+  // changes we freeze the stocked_quantity it was counted against; the DB trigger
+  // later flags needs_recount if that stock moves while the draft is still open.
+  const inventoryService = req.scope.resolve(
+    Modules.INVENTORY
+  ) as unknown as {
+    listInventoryLevels: (
+      filters: Record<string, unknown>,
+      options?: { take?: number }
+    ) => Promise<
+      Array<{
+        inventory_item_id: string;
+        stocked_quantity: number;
+        reserved_quantity: number;
+      }>
+    >;
+  };
+  const incomingItemIds = Array.from(
+    new Set(incoming.map((l) => l.inventory_item_id))
+  );
+  const levels = incomingItemIds.length
+    ? await inventoryService.listInventoryLevels(
+        {
+          inventory_item_id: incomingItemIds,
+          location_id: count.stock_location_id,
+        },
+        { take: 5000 }
+      )
+    : [];
+  const stockedByItem = new Map<string, number>();
+  const reservedByItem = new Map<string, number>();
+  for (const lvl of levels) {
+    stockedByItem.set(lvl.inventory_item_id, lvl.stocked_quantity ?? 0);
+    reservedByItem.set(lvl.inventory_item_id, lvl.reserved_quantity ?? 0);
+  }
+
   const toCreate: Array<Record<string, unknown>> = [];
   const toUpdate: Array<Record<string, unknown>> = [];
 
   for (const inLine of incoming) {
+    // Total is derived from the two components; an unset on_hand means the line
+    // is still uncounted (qty_counted stays null → dropped at submit).
+    const onHand = inLine.qty_counted_available;
+    const reserved = inLine.qty_counted_reserved;
+    const qtyCounted = onHand === null ? null : onHand + (reserved ?? 0);
     const found = existingByVariant.get(inLine.product_variant_id);
+
+    // Did the counted total change on this save? Re-snapshot the baseline and
+    // clear any prior stale flag; uncounting clears the snapshot entirely.
+    const countChanged = !found || found.qty_counted !== qtyCounted;
+    let staleness: Record<string, unknown> = {};
+    if (countChanged) {
+      if (qtyCounted === null) {
+        staleness = {
+          counted_at: null,
+          stocked_at_count: null,
+          reserved_at_count_time: null,
+          needs_recount: false,
+          stock_moved_at: null,
+          stocked_after_movement: null,
+        };
+      } else {
+        staleness = {
+          counted_at: new Date(),
+          stocked_at_count: stockedByItem.get(inLine.inventory_item_id) ?? null,
+          reserved_at_count_time:
+            reservedByItem.get(inLine.inventory_item_id) ?? null,
+          needs_recount: false,
+          stock_moved_at: null,
+          stocked_after_movement: null,
+        };
+      }
+    }
+
     if (found) {
       toUpdate.push({
         id: found.id,
         sku: inLine.sku,
         product_title: inLine.product_title,
         inventory_item_id: inLine.inventory_item_id,
-        qty_counted: inLine.qty_counted,
+        qty_counted: qtyCounted,
+        qty_counted_available: onHand,
+        qty_counted_reserved: reserved,
         qb_account_list_id: inLine.qb_account_list_id ?? null,
+        ...staleness,
       });
     } else {
       toCreate.push({
@@ -114,9 +187,12 @@ export async function PATCH(
         inventory_item_id: inLine.inventory_item_id,
         sku: inLine.sku,
         product_title: inLine.product_title,
-        qty_counted: inLine.qty_counted,
+        qty_counted: qtyCounted,
+        qty_counted_available: onHand,
+        qty_counted_reserved: reserved,
         qb_account_list_id: inLine.qb_account_list_id ?? null,
         status: "pending",
+        ...staleness,
       });
     }
   }
