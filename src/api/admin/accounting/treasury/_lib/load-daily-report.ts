@@ -71,10 +71,14 @@ type PgConnection = any;
 
 export async function loadDailyReport(
   pg: PgConnection,
-  date: string
+  from: string,
+  to: string = from
 ): Promise<TreasuryDailyReport> {
-  const dayStart = `${date} 00:00:00`;
-  const dayEnd = `${date} 23:59:59.999999`;
+  const isRange = from !== to;
+  // Range tag for warning sample_ids, and period-aware wording for details.
+  const rangeTag = isRange ? `${from}..${to}` : from;
+  const dayStart = `${from} 00:00:00`;
+  const dayEnd = `${to} 23:59:59.999999`;
 
   const sales = await loadSalesByApplication(pg, dayStart, dayEnd);
   const unattributedPayments = await loadUnattributedPayments(
@@ -232,7 +236,7 @@ export async function loadDailyReport(
       code: "NO_COGS_DATA_FOR_DAY",
       severity: "info",
       count: 1,
-      sample_ids: [date],
+      sample_ids: [rangeTag],
       detail: "No COGS recorded — full net cash routed to Operating.",
     });
   }
@@ -241,7 +245,7 @@ export async function loadDailyReport(
       code: "NET_CASH_BELOW_TAX",
       severity: "warning",
       count: 1,
-      sample_ids: [date],
+      sample_ids: [rangeTag],
       detail: "Sales tax exceeds net cash; Operating absorbed the shortfall.",
     });
   }
@@ -250,8 +254,10 @@ export async function loadDailyReport(
       code: "CROSS_DAY_REFUND_DETECTED",
       severity: "info",
       count: 1,
-      sample_ids: [date],
-      detail: "Refunds cleared today for prior-day sales — Operating absorbs the COGS pull-back.",
+      sample_ids: [rangeTag],
+      detail: `Refunds cleared ${
+        isRange ? "in this period" : "today"
+      } for prior-day sales — Operating absorbs the COGS pull-back.`,
     });
   }
   if (unattributedPayments.length > 0) {
@@ -266,12 +272,16 @@ export async function loadDailyReport(
       sample_ids: unattributedPayments
         .slice(0, 20)
         .map((p) => (p.display_id ? `PAY-${p.display_id}` : p.payment_id)),
-      detail: `$${(unattributedCents / 100).toFixed(2)} of today's cash is not linked to an order/invoice — counted as cash but not as a sale. Link these to attribute revenue & COGS.`,
+      detail: `$${(unattributedCents / 100).toFixed(2)} of ${
+        isRange ? "this period's" : "today's"
+      } cash is not linked to an order/invoice — counted as cash but not as a sale. Link these to attribute revenue & COGS.`,
     });
   }
 
   return {
-    distribution_date: date,
+    distribution_date: from,
+    range_start: from,
+    range_end: to,
     totals,
     splits,
     warnings,

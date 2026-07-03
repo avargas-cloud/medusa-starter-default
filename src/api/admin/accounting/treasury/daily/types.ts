@@ -62,7 +62,12 @@ export interface UnattributedPaymentView {
 }
 
 export interface TreasuryDailyReport {
+  /** Backward-compat single-day anchor; equals range_start. */
   distribution_date: string;
+  /** Inclusive range start (YYYY-MM-DD). Equals range_end for single-day reports. */
+  range_start: string;
+  /** Inclusive range end (YYYY-MM-DD). */
+  range_end: string;
   totals: {
     gross_revenue_pre_tax_cents: number;
     tax_collected_cents: number;
