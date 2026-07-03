@@ -71,10 +71,14 @@ export async function PATCH(
       .status(404)
       .json({ error: "Vendor bill not found", code: "not_found" });
   }
-  if (bill.status !== "draft" && bill.status !== "confirmed") {
+  // Draft-only: a confirmed bill is frozen history — its cbm_per_unit snapshot
+  // must never change. Update a product's CBM globally via the Freight Specs page
+  // (dimension-derived); it will apply to FUTURE bills without touching this one.
+  if (bill.status !== "draft") {
     return res.status(409).json({
-      error: "CBM can only be updated on draft or confirmed vendor bills",
-      code: "not_editable",
+      error:
+        "CBM can only be edited on draft vendor bills. Use the Freight Specs page to update a product's CBM (it applies to future bills without altering confirmed history).",
+      code: "confirmed_bill_cbm_locked",
     });
   }
 

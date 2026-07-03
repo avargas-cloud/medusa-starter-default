@@ -262,6 +262,38 @@ export async function GET(
 
   const lines = linesResult.rows as VendorBillLineRow[];
 
+  // On opening a DRAFT bill, refresh each line's cbm_per_unit from the current
+  // product CBM (source of truth = Freight Specs / product_variant.metadata.cbm),
+  // so the draft preview matches what "Confirm & Lock Costs" will lock (confirm
+  // reads fresh cbm). Display-only: the stored snapshot is untouched until confirm.
+  if (header.status === "draft") {
+    const variantIds = [
+      ...new Set(
+        lines
+          .map((l) => l.product_variant_id)
+          .filter((v): v is string => !!v)
+      ),
+    ];
+    if (variantIds.length > 0) {
+      const cbmResult = await knex.raw(
+        `SELECT id, (metadata->>'cbm') AS cbm
+           FROM product_variant
+          WHERE id IN (${variantIds.map(() => "?").join(",")})`,
+        variantIds
+      );
+      const cbmByVariant = new Map<string, number | null>();
+      for (const r of cbmResult.rows as Array<{ id: string; cbm: string | null }>) {
+        const n = r.cbm === null ? NaN : parseFloat(r.cbm);
+        cbmByVariant.set(r.id, Number.isFinite(n) ? n : null);
+      }
+      for (const l of lines) {
+        if (l.product_variant_id && cbmByVariant.has(l.product_variant_id)) {
+          l.cbm_per_unit = cbmByVariant.get(l.product_variant_id) ?? null;
+        }
+      }
+    }
+  }
+
   const total_landed_cents = lines.reduce(
     (s, l) => s + l.landed_unit_cost_cents * l.qty,
     0
