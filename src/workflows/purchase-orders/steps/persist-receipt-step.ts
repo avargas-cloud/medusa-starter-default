@@ -24,6 +24,10 @@ import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 
 import { PURCHASE_ORDERS_MODULE } from "../../../modules/purchase-orders";
 import type PurchaseOrdersModuleService from "../../../modules/purchase-orders/service";
+import {
+  poHasTracking,
+  reconcileReceivedPoStatus,
+} from "../../../lib/purchase-orders/po-received-status";
 
 import type { ReceiptAppliedDelta } from "./apply-receipt-stock-step";
 
@@ -174,6 +178,21 @@ export const persistReceiptStep = createStep(
     const newPoStatus: "partially_received" | "received" =
       totalReceivedAfter >= totalOrdered ? "received" : "partially_received";
 
+    // Derive the display `po_status` from receiving progress. A receipt always
+    // adds units (totalReceivedAfter > 0) so this resolves to "Fully Received"
+    // or "Partial Rcvd Pending Partial"; passing the current value avoids a
+    // no-op write. hasTracking only matters when nothing is received.
+    const poHeader = (await service.retrievePurchaseOrder(
+      input.po_id
+    )) as unknown as { po_status: string | null; tracking: unknown };
+    const nextDisplayPoStatus = reconcileReceivedPoStatus(
+      poHeader.po_status ?? null,
+      newPoStatus,
+      totalOrdered,
+      totalReceivedAfter,
+      poHasTracking(poHeader.tracking)
+    );
+
     // Use raw SQL (knex) instead of service.updateXxx — eliminates any
     // MikroORM identity-map / change-detection ambiguity. Same pattern as
     // qb-purchase-order-poller.ts:374 and qb-item-receipt-poller.ts:234.
@@ -204,9 +223,10 @@ export const persistReceiptStep = createStep(
 
     const headerR = await knex.raw(
       `UPDATE purchase_order
-          SET status = ?, total_units_received = ?, updated_at = NOW()
+          SET status = ?, total_units_received = ?,
+              po_status = COALESCE(?, po_status), updated_at = NOW()
         WHERE id = ? AND deleted_at IS NULL`,
-      [newPoStatus, totalReceivedAfter, input.po_id]
+      [newPoStatus, totalReceivedAfter, nextDisplayPoStatus, input.po_id]
     );
     if (headerR.rowCount !== 1) {
       throw new Error(

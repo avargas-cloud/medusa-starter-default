@@ -27,6 +27,10 @@ import { updateDraftSchema } from "../_lib/validators";
 import { orderPurchaseOrderModLines } from "../../../../lib/quickbooks/purchase-order-line-order";
 import { rebuildTransferChinaReservations } from "../../../../lib/inventory-transfer-reservations";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../workflows/sync-inventory-item-meilisearch";
+import {
+  poHasTracking,
+  reconcileReceivedPoStatus,
+} from "../../../../lib/purchase-orders/po-received-status";
 
 interface QbVendorLike {
   id: string;
@@ -146,6 +150,9 @@ async function resolveUserBrief(
 interface PoHeader {
   id: string;
   status: string;
+  po_status?: string | null;
+  tracking?: unknown;
+  total_units_received?: number;
   stock_location_id: string;
   vendor_id: string;
   cancelled_at?: Date | string | null;
@@ -492,10 +499,13 @@ export async function PATCH(
       .json({ error: "Purchase order not found", code: "not_found" });
   }
 
-  // Terminal states (received, closed, cancelled, voided) are fully frozen.
-  // Draft, submitted, and partially_received allow full edits (submitted/partial
-  // require a supervisor PIN on the frontend; backend trusts the caller).
-  const TERMINAL_STATUSES = ["received", "closed", "cancelled", "voided"];
+  // Terminal states (closed, cancelled, voided) are fully frozen.
+  // Draft, submitted, partially_received AND received allow edits (the per-item
+  // guard below still protects already-received lines). A `received` PO stays
+  // editable so a new line can be added — that reopens it to partially_received
+  // and drops the "Fully Received" po_status. QuickBooks accepts a line added to
+  // an already-received PurchaseOrder (it just clears its received state).
+  const TERMINAL_STATUSES = ["closed", "cancelled", "voided"];
   const {
     po_status: bodyPoStatus,
     shipping_method: bodyShippingMethod,
@@ -848,15 +858,34 @@ export async function PATCH(
     // Without this, a PO edited down to its received count stays stuck in
     // 'partially_received' / "open" forever. Mirrors persist-receipt-step.ts.
     const RECEIVE_LIFECYCLE = ["submitted", "partially_received", "received"];
+    const totalReceived = Number(
+      (existing as { total_units_received?: number }).total_units_received ?? 0
+    );
     if (RECEIVE_LIFECYCLE.includes(existing.status)) {
-      const totalReceived = Number(
-        (existing as { total_units_received?: number }).total_units_received ?? 0
-      );
       if (totalReceived > 0) {
         headerUpdate.status =
           totalReceived >= totals.total_units_ordered
             ? "received"
             : "partially_received";
+      }
+    }
+
+    // Re-derive the display `po_status` from receiving progress after the line
+    // change (e.g. adding a new line to a "Fully Received" PO drops it to
+    // "Partial Rcvd Pending Partial"). Skipped when the caller is explicitly
+    // setting po_status in this same request — a manual pick always wins.
+    if (bodyPoStatus === undefined) {
+      const effectiveLifecycle =
+        (headerUpdate.status as string | undefined) ?? existing.status;
+      const reconciledPoStatus = reconcileReceivedPoStatus(
+        existing.po_status ?? null,
+        effectiveLifecycle,
+        totals.total_units_ordered,
+        totalReceived,
+        poHasTracking(existing.tracking)
+      );
+      if (reconciledPoStatus !== null) {
+        headerUpdate.po_status = reconciledPoStatus;
       }
     }
   } else {
@@ -896,7 +925,14 @@ export async function PATCH(
   // queue a MOD operation so QuickBooks reflects the changes.
   // Use `existing` (pre-update full fetch) for QB fields — updatePurchaseOrders()
   // returns a partial object that does not hydrate qb_purchase_order_list_id.
-  const EDITABLE_SYNCED_STATUSES = ["submitted", "partially_received"];
+  // `received` is included so a line added to a fully-received (but QB-synced)
+  // PO still propagates to QuickBooks as a PurchaseOrderMod. QB accepts the new
+  // line on an already-received PO and simply reopens its received state.
+  const EDITABLE_SYNCED_STATUSES = [
+    "submitted",
+    "partially_received",
+    "received",
+  ];
   if (
     EDITABLE_SYNCED_STATUSES.includes(existing.status) &&
     existing.qb_purchase_order_list_id &&

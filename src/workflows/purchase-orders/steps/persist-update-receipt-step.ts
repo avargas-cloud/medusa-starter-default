@@ -21,6 +21,10 @@ import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 
 import { PURCHASE_ORDERS_MODULE } from "../../../modules/purchase-orders";
 import type PurchaseOrdersModuleService from "../../../modules/purchase-orders/service";
+import {
+  poHasTracking,
+  reconcileReceivedPoStatus,
+} from "../../../lib/purchase-orders/po-received-status";
 
 export interface PersistUpdateReceiptLine {
   receipt_line_id: string;
@@ -166,11 +170,25 @@ export const persistUpdateReceiptStep = createStep(
           ? "received"
           : "partially_received";
 
+    // Re-derive the display `po_status`. Editing a receipt down can drop the PO
+    // out of "Fully Received" → partial, or to zero → tracking-aware fallback.
+    const poHeader = (await service.retrievePurchaseOrder(
+      input.po_id
+    )) as unknown as { po_status: string | null; tracking: unknown };
+    const nextDisplayPoStatus = reconcileReceivedPoStatus(
+      poHeader.po_status ?? null,
+      newPoStatus,
+      totalOrdered,
+      totalReceivedAfter,
+      poHasTracking(poHeader.tracking)
+    );
+
     const headerR = await knex.raw(
       `UPDATE purchase_order
-          SET status = ?, total_units_received = ?, updated_at = NOW()
+          SET status = ?, total_units_received = ?,
+              po_status = COALESCE(?, po_status), updated_at = NOW()
         WHERE id = ? AND deleted_at IS NULL`,
-      [newPoStatus, totalReceivedAfter, input.po_id]
+      [newPoStatus, totalReceivedAfter, nextDisplayPoStatus, input.po_id]
     );
     if (headerR.rowCount !== 1) {
       throw new Error(

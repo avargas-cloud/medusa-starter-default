@@ -32,6 +32,7 @@ import {
   PO_STATUS_SHIPPED_WAITING,
   reconcileShippedPoStatus,
 } from "../../_lib/po-shipping-status";
+import { PO_STATUS_RECEIVED_DRIVEN_SET } from "../../../../../lib/purchase-orders/po-received-status";
 
 interface PoHeaderLike {
   id: string;
@@ -149,10 +150,13 @@ export async function POST(
 
   // Auto-advance the workflow status: a PO with a tracking number is in transit
   // with a shipment to watch → "Shipped (Waiting on Arrival)". Idempotent +
-  // non-fatal, and skipped once the goods have arrived / the PO is dead.
+  // non-fatal, and skipped once the goods have arrived / the PO is dead. Also
+  // skipped when the PO is already receipt-driven ("Fully Received" / "Partial
+  // Rcvd Pending Partial") — the arrival state outranks an inbound-shipment tag.
   if (
     !PO_STATUS_AUTOSHIP_BLOCKED_LIFECYCLE.includes(existing.status) &&
-    existing.po_status !== PO_STATUS_SHIPPED_WAITING
+    existing.po_status !== PO_STATUS_SHIPPED_WAITING &&
+    !PO_STATUS_RECEIVED_DRIVEN_SET.includes(existing.po_status ?? "")
   ) {
     try {
       await service.updatePurchaseOrders([

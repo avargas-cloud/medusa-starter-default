@@ -30,6 +30,10 @@ import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 
 import { PURCHASE_ORDERS_MODULE } from "../../../modules/purchase-orders";
 import type PurchaseOrdersModuleService from "../../../modules/purchase-orders/service";
+import {
+  poHasTracking,
+  reconcileReceivedPoStatus,
+} from "../../../lib/purchase-orders/po-received-status";
 
 import type { ReceiptReversedDelta } from "./contra-apply-receipt-stock-step";
 
@@ -159,11 +163,27 @@ export const persistDeleteReceiptStep = createStep(
         }
       }
 
+      // Re-derive the display `po_status`. Deleting/voiding a receipt reverses
+      // received units, so a "Fully Received" PO drops to "Partial Rcvd Pending
+      // Partial" or — if this was the last receipt — to a tracking-aware
+      // fallback ("Shipped (Waiting on Arrival)" / "To Arrange Delivery").
+      const poHeader = (await service.retrievePurchaseOrder(
+        input.po_id
+      )) as unknown as { po_status: string | null; tracking: unknown };
+      const nextDisplayPoStatus = reconcileReceivedPoStatus(
+        poHeader.po_status ?? null,
+        newPoStatus,
+        totalOrdered,
+        totalReceivedAfter,
+        poHasTracking(poHeader.tracking)
+      );
+
       const headerR = await knex.raw(
         `UPDATE purchase_order
-            SET status = ?, total_units_received = ?, updated_at = NOW()
+            SET status = ?, total_units_received = ?,
+                po_status = COALESCE(?, po_status), updated_at = NOW()
           WHERE id = ? AND deleted_at IS NULL`,
-        [newPoStatus, totalReceivedAfter, input.po_id]
+        [newPoStatus, totalReceivedAfter, nextDisplayPoStatus, input.po_id]
       );
       if (headerR.rowCount !== 1) {
         throw new Error(

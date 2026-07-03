@@ -25,6 +25,10 @@ const OPTIONS = [
   "Ready for Pickup",
   "Partial Rcvd Pending Partial",
   "Need Labor",
+  // Auto-stamped by the receipt pipeline when qty_received >= qty_ordered.
+  // Appended last so re-seeding an existing DB inserts it with a fresh,
+  // collision-free sort_order (never renumbers the options already present).
+  "Fully Received",
 ];
 
 export default async function seed({
