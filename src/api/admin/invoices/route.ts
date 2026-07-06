@@ -1121,17 +1121,32 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         // The Payment row confirms faster than the Invoice in practice, so by the time
         // the Invoice is confirmed the Payment TxnID is already available.
         for (const app of applicationsToEmit) {
-          const applyPayRef = app.payment_id;
-          // Use nextPayNum only for the newly-created payment; look up others
+          // CANONICAL apply_payment keying (dual-keying dup fix):
+          // Key this upfront waiting row by the payment_application (papp_), NOT
+          // the customer_payment (cpay_). The direct-exec handler below resolves
+          // the papp_ id via resolveCanonicalApplyPaymentRef, so keying the
+          // upfront row by cpay_ produced a SECOND apply_payment row that
+          // writePipelineRow's (order_id, reference_id, step) dedup couldn't
+          // collapse and the papp_ partial-unique index couldn't catch. Both
+          // rows then dispatched a ReceivePaymentMod against the same QB
+          // ReceivePayment → the loser failed with QB 3200 "stale edit sequence"
+          // (harmless-but-visible), or both confirmed via the idempotent merge
+          // (silent redundant dispatch). Keying by papp_ makes this waiting row
+          // dedup in-place with the handler's row → exactly ONE apply_payment.
+          const applyRefId = (app.application_id ?? app.payment_id) as string;
+          const applyRefType = app.application_id
+            ? ("payment_application" as const)
+            : ("customer_payment" as const);
+          // medusa_ref is the PAY-#### number → always resolve from the payment.
           let applyMedusaRef: string | null =
             paymentIdToEmit && app.payment_id === paymentIdToEmit && nextPayNum
               ? `PAY-${nextPayNum}`
               : null;
-          if (!applyMedusaRef && applyPayRef) {
+          if (!applyMedusaRef && app.payment_id) {
             try {
               const payRes = await pgConnection.raw(
                 `SELECT display_id FROM customer_payment WHERE id = ?`,
-                [applyPayRef]
+                [app.payment_id]
               );
               if (payRes.rows[0]?.display_id)
                 applyMedusaRef = `PAY-${payRes.rows[0].display_id}`;
@@ -1139,8 +1154,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           }
           await writePipelineRow({
             orderId: body.order_id,
-            referenceId: applyPayRef,
-            referenceType: "customer_payment",
+            referenceId: applyRefId,
+            referenceType: applyRefType,
             step: "apply_payment",
             status: "waiting",
             dependsOn: invoicePipelineRowId,
