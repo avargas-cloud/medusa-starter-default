@@ -19,6 +19,7 @@ import { Modules } from "@medusajs/utils";
 import { generateEntityId } from "@medusajs/utils";
 
 import { getActorUserId, UnauthenticatedError } from "../_lib/auth";
+import { deriveChinaTransferState, vendorIsChinaAgent } from "../_lib/china-transfer";
 import { zodErrorToBody } from "../_lib/format";
 import { getPurchaseOrdersService } from "../_lib/service-resolver";
 import { resolveNonReceivableReasons } from "../_lib/receivability";
@@ -453,11 +454,34 @@ export async function GET(
     }
   })();
 
+  // China-agent IT state: is this a PO to the buying agent, and does it still
+  // lack its required Inventory Transfer? Derived live from the vendor flag.
+  const china_transfer = await (async () => {
+    try {
+      const knex = (req.scope as any).resolve("__pg_connection__");
+      const poLike = po as unknown as {
+        status: string;
+        total_units_received?: number | null;
+        vendor_id: string;
+      };
+      const required = await vendorIsChinaAgent(knex, poLike.vendor_id);
+      return deriveChinaTransferState({
+        required,
+        hasLinkedTransfer: Boolean(linked_inventory_transfer),
+        status: poLike.status,
+        unitsReceived: Number(poLike.total_units_received ?? 0),
+      });
+    } catch {
+      return null;
+    }
+  })();
+
   return res.json({
     purchase_order: {
       ...po,
       linked_order_ids,
       linked_inventory_transfer,
+      china_transfer,
       lines: decoratedLines,
       receipts: decoratedReceipts,
       vendor,

@@ -14,6 +14,7 @@ import type {
 } from "@medusajs/framework/http";
 
 import { getActorUserId, UnauthenticatedError } from "./_lib/auth";
+import { enrichChinaTransferMap } from "./_lib/china-transfer";
 import { zodErrorToBody } from "./_lib/format";
 import { getPurchaseOrdersService } from "./_lib/service-resolver";
 import { computeTotals, normalizeLine } from "./_lib/totals";
@@ -60,8 +61,33 @@ export async function GET(
     order: { created_at: "DESC" },
   });
 
+  // Enrich the paginated slice with China-agent IT state so the list can flag
+  // POs to the buying agent that are missing their Inventory Transfer. One raw
+  // query keyed by these ids — does not affect pagination/counts.
+  const typedRows = rows as unknown as Array<{
+    id: string;
+    status: string;
+    total_units_received?: number | null;
+    vendor_id: string;
+  }>;
+  let purchase_orders: unknown[] = rows;
+  try {
+    const knex = (req.scope as unknown as {
+      resolve: (k: string) => {
+        raw: (sql: string, b?: unknown[]) => Promise<{ rows: unknown[] }>;
+      };
+    }).resolve("__pg_connection__");
+    const ctMap = await enrichChinaTransferMap(knex, typedRows);
+    purchase_orders = typedRows.map((r) => ({
+      ...r,
+      china_transfer: ctMap.get(r.id) ?? null,
+    }));
+  } catch {
+    // Non-fatal: fall back to raw rows without china_transfer decoration.
+  }
+
   return res.json({
-    purchase_orders: rows,
+    purchase_orders,
     count,
     limit: q.limit,
     offset: q.offset,

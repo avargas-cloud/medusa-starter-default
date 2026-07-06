@@ -28,6 +28,7 @@ type CreateVendorBody = {
   is_vendor_eligible_for_1099?: boolean | null;
   terms_ref_name?: string | null;
   vendor_type_ref_name?: string | null;
+  is_china_agent?: boolean;
 };
 
 export const POST = async (
@@ -83,9 +84,15 @@ export const POST = async (
       tax_identity: body.tax_identity ?? null,
       is_vendor_eligible_for_1099: body.is_vendor_eligible_for_1099 ?? null,
       terms_ref_name: body.terms_ref_name ?? null,
-      metadata: body.terms_ref_name
-        ? { payment_terms: body.terms_ref_name }
-        : null,
+      metadata: (() => {
+        const md: Record<string, unknown> = {};
+        if (body.terms_ref_name) md.payment_terms = body.terms_ref_name;
+        // Persist explicit boolean so the flag survives Medusa's JSONB deep-merge
+        // (a deleted/absent key would re-hydrate; see project deep-merge caveat).
+        if (typeof body.is_china_agent === "boolean")
+          md.is_china_agent = body.is_china_agent;
+        return Object.keys(md).length > 0 ? md : null;
+      })(),
       vendor_type_ref_name: body.vendor_type_ref_name ?? null,
       sync_status: "waiting",
       last_synced_at: new Date(),

@@ -22,6 +22,10 @@ import { receivePurchaseOrderWorkflow } from "../../../../../workflows/purchase-
 import { onPoReceiveApplied } from "../../../../../lib/inventory-transfer-link";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
 import { getActorUserId, UnauthenticatedError } from "../../_lib/auth";
+import {
+  hasActiveLinkedTransfer,
+  vendorIsChinaAgent,
+} from "../../_lib/china-transfer";
 import { zodErrorToBody } from "../../_lib/format";
 import { getPurchaseOrdersService } from "../../_lib/service-resolver";
 import { resolveNonReceivableReasons } from "../../_lib/receivability";
@@ -103,6 +107,28 @@ export async function POST(
         "Submitted PO is missing vendor snapshot / number — resubmit first.",
       code: "inconsistent_po",
     });
+  }
+
+  // Hard guard: a PO to the China purchasing agent MUST have an active linked
+  // Inventory Transfer before any stock is received. Receiving without it
+  // leaves China reservations uncreated → phantom inventory. Block here.
+  {
+    const guardKnex = (req.scope as unknown as {
+      resolve: (k: string) => {
+        raw: (sql: string, b?: unknown[]) => Promise<{ rows: unknown[] }>;
+      };
+    }).resolve("__pg_connection__");
+    const isAgent = await vendorIsChinaAgent(guardKnex, po.vendor_id);
+    if (isAgent) {
+      const hasIt = await hasActiveLinkedTransfer(guardKnex, po.id);
+      if (!hasIt) {
+        return res.status(409).json({
+          error:
+            "This PO is to a China purchasing agent and has no linked Inventory Transfer. Generate the Inventory Transfer before receiving.",
+          code: "china_transfer_missing",
+        });
+      }
+    }
   }
 
   // Load all PO lines referenced in the request
