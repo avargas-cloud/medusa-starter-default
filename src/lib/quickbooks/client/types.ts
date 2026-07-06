@@ -101,6 +101,10 @@ export interface QbConvertEstimatePayload {
 export interface QbReceivePaymentPayload {
   customerId: string;
   amount: number | string;
+  /** YYYY-MM-DD business date → QB <TxnDate>. When omitted, QB stamps the txn
+   * with the QB Desktop machine's system-clock date at process time. Always
+   * pass the real payment date so QB stays synced with the POS. */
+  date?: string;
   paymentMethod?: string;
   memo?: string;
   refNumber?: string;

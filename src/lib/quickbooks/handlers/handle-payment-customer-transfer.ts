@@ -23,6 +23,7 @@ interface TransferPayload {
     paymentMethod?: string;
     memo?: string;
     refNumber?: string;
+    date?: string; // original TxnDate — preserved so the moved payment keeps its date
   };
   delete_operation_id?: string;
   old_deleted?: boolean;
@@ -233,6 +234,7 @@ export async function handlePaymentCustomerTransfer(
             paymentMethod: retObj.PaymentMethodRef?.FullName,
             memo: retObj.Memo,
             refNumber: retObj.RefNumber,
+            date: retObj.TxnDate || undefined,
           };
           await savePayload(row.id, payload);
           // Record the ACTUAL txn being moved on the audit row (accurate even for
@@ -298,6 +300,7 @@ export async function handlePaymentCustomerTransfer(
         const createRes = await receivePaymentInQb({
           customerId: qbListId,
           amount: payload.recreate.amount_dollars,
+          date: payload.recreate.date,
           paymentMethod: payload.recreate.paymentMethod,
           memo: payload.recreate.memo,
           refNumber: payload.recreate.refNumber,

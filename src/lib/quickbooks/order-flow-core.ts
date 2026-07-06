@@ -885,6 +885,10 @@ export async function processPaymentCaptureInQb(capture: {
   qbCustomerId: string;
   refNumber?: string;
   memo?: string;
+  /** YYYY-MM-DD business date of the real payment (received_at/created_at in
+   * the POS). Sent as QB <TxnDate> so the payment lands on the day it was
+   * taken, immune to QB machine clock drift and pipeline latency. */
+  date?: string;
   onSubmitted?: (operationId: string) => Promise<void>;
 }): Promise<{
   enabled: boolean;
@@ -923,6 +927,7 @@ export async function processPaymentCaptureInQb(capture: {
   const result = await receivePaymentInQb({
     customerId: capture.qbCustomerId,
     amount: amountDollars,
+    date: capture.date,
     paymentMethod: capture.paymentMethod,
     memo: paymentMemo,
     autoApply: false,

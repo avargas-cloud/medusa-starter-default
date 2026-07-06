@@ -229,7 +229,9 @@ export async function handlePosPaymentCreated({
 
       const cmResult = await createCreditMemoInQb({
         customerId: qbCustomerId as string,
-        date: getBusinessDateString((payment as any).created_at ?? null),
+        date: getBusinessDateString(
+          ((payment as any).received_at ?? (payment as any).created_at) || null
+        ),
         memo: `Manual Refund / Deposit Return`,
         items: [
           {
@@ -359,6 +361,12 @@ export async function handlePosPaymentCreated({
       amount: (payment.amount as number) / 100,
       paymentMethod: resolvedQbMethod,
       qbCustomerId: qbCustomerId as string,
+      // QB <TxnDate> = the real moment the payment was taken/created in the POS
+      // (received_at, falling back to created_at). Keeps QB in lockstep with the
+      // POS regardless of QB machine clock or pipeline latency.
+      date: getBusinessDateString(
+        ((payment as any).received_at ?? (payment as any).created_at) || null
+      ),
       memo,
       onSubmitted: async (operationId) => {
         await writePipelineRow({
