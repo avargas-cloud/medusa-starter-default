@@ -101,7 +101,7 @@ async function main() {
         SET status     = 'skipped',
             error      = $2,
             updated_at = NOW()
-      WHERE id = ANY($1::text[])
+      WHERE id::text = ANY($1::text[])
         AND status <> 'skipped'`,
     [ids, SKIP_REASON]
   );
