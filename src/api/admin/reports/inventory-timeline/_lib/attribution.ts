@@ -3,21 +3,39 @@
  *
  * China stock is a single fungible pool per `inventory_item_id` — the schema has
  * NO record-level lineage tying an outbound transfer/shipment back to a specific
- * Factory Order receipt. To render "one row per received lot" with a per-row
- * SHIPPED and CURRENT quantity, we attribute the live on-hand pool across the
- * receipt lots using FIFO (oldest lot consumed first).
+ * Factory Order receipt lot. To render "one row per received lot" split across the
+ * lifecycle, we attribute the pool across the receipt lots using FIFO (oldest lot
+ * consumed first).
  *
- * Invariant: for every inventory_item_id, the sum of `current_qty` across the
- * rows it produces exactly equals the live `stocked_quantity` at China. When the
- * receipt history can't fully explain live stock (over-received imports or
- * negative stock from China adjustments), the residual is surfaced as an explicit
- * synthetic row instead of being silently smeared or clamped.
+ * Each unit that a Factory Order brought INTO China is, at any moment, in exactly
+ * one of three buckets — and they sum, per item, to the total FO-received qty:
  *
- * Manual lots: stock that came from an inventory adjustment has no FO receipt, so
- * it lands in the positive "unattributed" residual. The operator can layer manual
- * lots over that surplus (an FO + received date + qty, split as needed) purely for
- * aging control — the underlying stock stays unattributed; a manual lot just
- * carves a labelled, dated slice out of the surplus so it can age like a receipt.
+ *   EN MIAMI    (miami_qty)     — shipped out AND received in the USA warehouse.
+ *                                 China `stocked_quantity` only drops at RECEIVE,
+ *                                 so this == totalReceived − stocked_quantity.
+ *   EN TRÁNSITO (in_transit_qty)— on a shipped inventory_transfer not yet received.
+ *                                 Physically left China but still carried in
+ *                                 `stocked_quantity` (stock = physical + in_transit).
+ *   EN CHINA    (current_qty)   — still physically sitting in the agent's warehouse,
+ *                                 still aging. == stocked_quantity − in_transit.
+ *
+ * FIFO ordering: the "furthest along" units belong to the OLDEST inbound lots, so
+ * we consume oldest-first in the order  Miami → In-Transit → In-China. Equivalent
+ * cumulative-axis form: lay every lot end-to-end on [0, totalReceived); two cut
+ * points (miamiCut, transitCut) slice that axis into the three buckets, and each
+ * lot takes the overlap of its slice with each region. A single lot can straddle
+ * two buckets (e.g. 50 Miami / 30 in-transit / 20 in-China).
+ *
+ * Invariant: for every inventory_item_id, Σ current_qty across its lots (+ any
+ * residual rows) exactly equals the live physical China stock (stocked − inTransit).
+ * When receipt history can't explain physical stock (over-received adjustments →
+ * positive surplus, or negative/over-shipped stock → deficit), the residual is
+ * surfaced as an explicit synthetic row instead of being smeared or clamped.
+ *
+ * Manual lots: physical surplus that came from an inventory adjustment has no FO
+ * receipt, so it lands in the positive "unattributed" residual. The operator can
+ * layer manual lots over that surplus (an FO + received date + qty, split as
+ * needed) purely for aging control — the underlying stock stays unattributed.
  */
 
 export interface ReceiptInput {
@@ -37,6 +55,8 @@ export interface StockInput {
   sku: string
   description: string | null
   stocked: number
+  /** Units on shipped-but-not-yet-received transfers (left China, still in `stocked`). */
+  in_transit: number
 }
 
 export interface ManualLotInput {
@@ -60,7 +80,11 @@ export interface TimelineRow {
   description: string | null
   qty_received: number
   received_at: string | null
-  shipped_qty: number
+  /** Shipped out AND received in the USA warehouse. */
+  miami_qty: number
+  /** Shipped out, still in transit (not yet received in the USA). */
+  in_transit_qty: number
+  /** Still physically in the China warehouse (aging). */
   current_qty: number
   manual_lot_id?: string
 }
@@ -77,6 +101,11 @@ export interface TimelineResult {
   rows: TimelineRow[]
   residuals: ItemResidual[]
 }
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
+/** Length of the intersection of [a0,a1) and [b0,b1). */
+const overlap = (a0: number, a1: number, b0: number, b1: number) =>
+  Math.max(0, Math.min(a1, b1) - Math.max(a0, b0))
 
 export function buildTimeline(
   receiptsByItem: Map<string, ReceiptInput[]>,
@@ -105,7 +134,8 @@ export function buildTimeline(
         description: desc,
         qty_received: alloc,
         received_at: lot.received_at,
-        shipped_qty: 0,
+        miami_qty: 0,
+        in_transit_qty: 0,
         current_qty: alloc,
         manual_lot_id: lot.id,
       })
@@ -127,16 +157,30 @@ export function buildTimeline(
     })
 
     const totalReceived = receipts.reduce((s, r) => s + r.qty_received, 0)
-    const stock = stockByItem.get(itemId)?.stocked ?? 0
+    const stockRow = stockByItem.get(itemId)
+    const stock = stockRow?.stocked ?? 0
+    const inTransit = Math.max(0, stockRow?.in_transit ?? 0)
 
-    // How many units have left China (shipped + adjusted + shrinkage). When stock
-    // exceeds everything received, there's nothing to consume (clamp to 0); the
-    // surplus is attributed to manual lots / unattributed below.
-    let remaining = Math.max(0, totalReceived - stock)
+    // Physical units still in China (what actually ages). Can go negative when
+    // more has been shipped/adjusted out than the pool holds (surfaced as deficit).
+    const physicalChina = stock - inTransit
 
+    // Two cut points on the [0, totalReceived) cumulative lot axis. Miami first
+    // (units that completed the journey = totalReceived − stocked), then in-transit.
+    // Both clamped to the axis; anything the axis can't hold is a residual below.
+    const miamiCut = clamp(totalReceived - stock, 0, totalReceived)
+    const transitCut = clamp(miamiCut + inTransit, miamiCut, totalReceived)
+
+    let cursor = 0
+    let attributedChina = 0
     for (const r of receipts) {
-      const take = Math.min(r.qty_received, remaining)
-      remaining -= take
+      const start = cursor
+      const end = cursor + r.qty_received
+      cursor = end
+      const lotMiami = overlap(start, end, 0, miamiCut)
+      const lotTransit = overlap(start, end, miamiCut, transitCut)
+      const lotChina = r.qty_received - lotMiami - lotTransit
+      attributedChina += lotChina
       rows.push({
         key: r.line_id,
         kind: "receipt",
@@ -148,33 +192,36 @@ export function buildTimeline(
         description: r.description,
         qty_received: r.qty_received,
         received_at: r.received_at,
-        shipped_qty: take,
-        current_qty: r.qty_received - take,
+        miami_qty: lotMiami,
+        in_transit_qty: lotTransit,
+        current_qty: lotChina,
       })
     }
 
-    const sku = receipts[0]?.sku ?? stockByItem.get(itemId)?.sku ?? ""
-    const description = receipts[0]?.description ?? stockByItem.get(itemId)?.description ?? null
+    const sku = receipts[0]?.sku ?? stockRow?.sku ?? ""
+    const description = receipts[0]?.description ?? stockRow?.description ?? null
 
-    if (stock > totalReceived) {
-      emitSurplus(itemId, sku, description, stock - totalReceived)
-    } else if (stock < 0) {
-      // Negative China stock (allowed by design). All receipts read fully
-      // consumed above; surface the deficit as its own row, never spread it.
-      rows.push(makeResidual("deficit", itemId, sku, description, stock))
+    // Reconcile the En-China total to physical stock. Lots attributed
+    // `attributedChina`; the difference is honest surplus (adjustments) or deficit.
+    const residualChina = physicalChina - attributedChina
+    if (residualChina > 0) {
+      emitSurplus(itemId, sku, description, residualChina)
+    } else if (residualChina < 0) {
+      rows.push(makeResidual("deficit", itemId, sku, description, residualChina))
     } else if ((manualLotsByItem.get(itemId)?.length ?? 0) > 0) {
       // No surplus, but stale manual lots exist — expose for editing/clearing.
       emitSurplus(itemId, sku, description, 0)
     }
   }
 
-  // Items with live China stock but NO receipt history at all.
+  // Items with live China presence but NO receipt history at all.
   for (const [itemId, s] of stockByItem) {
     if (seenItems.has(itemId)) continue
-    if (s.stocked > 0) {
-      emitSurplus(itemId, s.sku, s.description, s.stocked)
-    } else if (s.stocked < 0) {
-      rows.push(makeResidual("deficit", itemId, s.sku, s.description, s.stocked))
+    const physicalChina = s.stocked - Math.max(0, s.in_transit)
+    if (physicalChina > 0) {
+      emitSurplus(itemId, s.sku, s.description, physicalChina)
+    } else if (physicalChina < 0) {
+      rows.push(makeResidual("deficit", itemId, s.sku, s.description, physicalChina))
     } else if ((manualLotsByItem.get(itemId)?.length ?? 0) > 0) {
       emitSurplus(itemId, s.sku, s.description, 0)
     }
@@ -201,7 +248,8 @@ function makeResidual(
     description,
     qty_received: kind === "unattributed" ? qty : 0,
     received_at: null,
-    shipped_qty: 0,
+    miami_qty: 0,
+    in_transit_qty: 0,
     current_qty: qty,
   }
 }

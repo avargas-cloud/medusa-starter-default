@@ -43,9 +43,47 @@ const DESC_JOIN = (itemCol: string) => `
     LIMIT 1
   ) v ON TRUE`
 
+// Units on shipped-but-not-yet-received transfers (origin China). These left the
+// warehouse physically but are still carried in `stocked_quantity` (stock only
+// drops at RECEIVE). Keyed to inventory_item_id via the variant→item link (1:1).
+// Doubles as the "active in transit" set for the closed-product filter below.
+const IN_TRANSIT_CTE = `
+  in_transit AS (
+    SELECT
+      pvii.inventory_item_id AS inventory_item_id,
+      SUM(GREATEST(0, itl.qty - COALESCE(itl.qty_received, 0)))::int AS in_transit_qty
+    FROM inventory_transfer_line itl
+    JOIN inventory_transfer it
+      ON it.id = itl.transfer_id AND it.deleted_at IS NULL
+    JOIN product_variant_inventory_item pvii
+      ON pvii.variant_id = itl.product_variant_id AND pvii.deleted_at IS NULL
+    WHERE itl.deleted_at IS NULL
+      AND it.status = 'shipped'
+      AND it.origin_country = 'CN'
+    GROUP BY pvii.inventory_item_id
+    HAVING SUM(GREATEST(0, itl.qty - COALESCE(itl.qty_received, 0))) > 0
+  )`
+
+// Only items still relevant to an AGING report: something physically in China
+// (stocked <> 0, incl. negative deficits) OR units currently in transit out of
+// China. Fully-received products (stocked = 0, nothing in transit) drop out
+// automatically — "closed" with zero bookkeeping, so history never has to be
+// recomputed. This bounds the receipt scan to active inventory (not all history).
+const ACTIVE_ITEMS_CTE = `
+  active_items AS (
+    SELECT inventory_item_id FROM inventory_level
+      WHERE location_id = '${CHINA_LOC}'
+        AND deleted_at IS NULL
+        AND stocked_quantity <> 0
+    UNION
+    SELECT inventory_item_id FROM in_transit
+  )`
+
 // Applied receipts only = the exact set of lots whose units are actually in the
 // China pool. `pending`/`error` haven't moved stock; `voided` reversed it.
 const RECEIPTS_SQL = `
+  WITH ${IN_TRANSIT_CTE},
+  ${ACTIVE_ITEMS_CTE}
   SELECT
     forl.id                    AS line_id,
     forl.inventory_item_id     AS inventory_item_id,
@@ -59,6 +97,7 @@ const RECEIPTS_SQL = `
   FROM factory_order_receipt_line forl
   JOIN factory_order_receipt fore ON fore.id = forl.factory_order_receipt_id
   JOIN factory_order fo           ON fo.id = forl.factory_order_id
+  JOIN active_items ai            ON ai.inventory_item_id = forl.inventory_item_id
   ${DESC_JOIN("forl.inventory_item_id")}
   WHERE forl.deleted_at IS NULL
     AND fore.deleted_at IS NULL
@@ -68,14 +107,18 @@ const RECEIPTS_SQL = `
 `
 
 const CHINA_STOCK_SQL = `
+  WITH ${IN_TRANSIT_CTE}
   SELECT
     il.inventory_item_id       AS inventory_item_id,
     il.stocked_quantity        AS stocked,
+    COALESCE(itr.in_transit_qty, 0) AS in_transit,
     v.sku                      AS sku,
     ${DESC_LATERAL("v.sku")}
   FROM inventory_level il
+  LEFT JOIN in_transit itr ON itr.inventory_item_id = il.inventory_item_id
   ${DESC_JOIN("il.inventory_item_id")}
   WHERE il.location_id = '${CHINA_LOC}'
+    AND (il.stocked_quantity <> 0 OR itr.in_transit_qty IS NOT NULL)
 `
 
 // Manual FO assignments layered over unattributed stock, stored on the item's
@@ -128,6 +171,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         sku: String(r.sku ?? ""),
         description: r.description != null ? String(r.description) : null,
         stocked: Number(r.stocked ?? 0),
+        in_transit: Number(r.in_transit ?? 0),
       })
     }
 

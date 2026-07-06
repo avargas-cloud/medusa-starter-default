@@ -8,9 +8,9 @@ import {
 } from "../../api/admin/reports/inventory-timeline/_lib/attribution"
 
 /**
- * Verifies the Inventory Timeline FIFO attribution against live prod data:
- *   - reconciliation invariant: Σ(current_qty) per inventory_item_id === live China stock
- *   - no negative shipped, no shipped > qty_received on any receipt row
+ * Verifies the Inventory Timeline FIFO 3-bucket attribution against live prod data:
+ *   - reconciliation: Σ(current_qty) per item === physical China stock (stocked − inTransit)
+ *   - per receipt row: miami + in_transit + current === qty_received, all >= 0
  *   - prints a summary (rows, residuals, over-60 lots)
  *
  * Run: env DATABASE_URL=... npx medusa exec ./src/scripts/verify/verify-inventory-timeline.ts
@@ -34,9 +34,21 @@ export default async function verify({ container }: ExecArgs) {
   `)
 
   const stockRes = await pg.raw(`
+    WITH in_transit AS (
+      SELECT pvii.inventory_item_id AS inventory_item_id,
+             SUM(GREATEST(0, itl.qty - COALESCE(itl.qty_received, 0)))::int AS in_transit_qty
+      FROM inventory_transfer_line itl
+      JOIN inventory_transfer it ON it.id = itl.transfer_id AND it.deleted_at IS NULL
+      JOIN product_variant_inventory_item pvii ON pvii.variant_id = itl.product_variant_id AND pvii.deleted_at IS NULL
+      WHERE itl.deleted_at IS NULL AND it.status = 'shipped' AND it.origin_country = 'CN'
+      GROUP BY pvii.inventory_item_id
+      HAVING SUM(GREATEST(0, itl.qty - COALESCE(itl.qty_received, 0))) > 0
+    )
     SELECT il.inventory_item_id AS inventory_item_id, il.stocked_quantity AS stocked,
+           COALESCE(itr.in_transit_qty, 0) AS in_transit,
            pv.sku AS sku, COALESCE(NULLIF(TRIM(pv.title), ''), pv.sku) AS description
     FROM inventory_level il
+    LEFT JOIN in_transit itr ON itr.inventory_item_id = il.inventory_item_id
     LEFT JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = il.inventory_item_id
     LEFT JOIN product_variant pv ON pv.id = pvii.variant_id AND pv.deleted_at IS NULL
     WHERE il.location_id = '${CHINA_LOC}'
@@ -69,6 +81,7 @@ export default async function verify({ container }: ExecArgs) {
       sku: String(r.sku ?? ""),
       description: r.description != null ? String(r.description) : null,
       stocked: Number(r.stocked ?? 0),
+      in_transit: Number(r.in_transit ?? 0),
     })
   }
 
@@ -96,7 +109,7 @@ export default async function verify({ container }: ExecArgs) {
 
   const { rows } = buildTimeline(receiptsByItem, stockByItem, manualLotsByItem)
 
-  // Invariant 1: Σ current per item === live stock (for every item that appears)
+  // Invariant 1: Σ current per item === physical China stock (stocked − inTransit)
   const currentByItem = new Map<string, number>()
   for (const row of rows) {
     currentByItem.set(row.inventory_item_id, (currentByItem.get(row.inventory_item_id) ?? 0) + row.current_qty)
@@ -104,21 +117,23 @@ export default async function verify({ container }: ExecArgs) {
   const allItems = new Set<string>([...receiptsByItem.keys(), ...stockByItem.keys()])
   let mismatches = 0
   for (const itemId of allItems) {
-    const stock = stockByItem.get(itemId)?.stocked ?? 0
+    const s = stockByItem.get(itemId)
+    const physicalChina = (s?.stocked ?? 0) - Math.max(0, s?.in_transit ?? 0)
     const attributed = currentByItem.get(itemId) ?? 0
-    if (attributed !== stock) {
+    if (attributed !== physicalChina) {
       mismatches++
-      console.error(`  ✗ RECONCILE FAIL ${itemId}: Σcurrent=${attributed} vs stock=${stock}`)
+      console.error(`  ✗ RECONCILE FAIL ${itemId}: Σcurrent=${attributed} vs physicalChina=${physicalChina} (stock=${s?.stocked ?? 0} inTransit=${s?.in_transit ?? 0})`)
     }
   }
 
-  // Invariant 2: per receipt row, 0 <= shipped <= qty_received, current >= 0
+  // Invariant 2: per receipt row, miami + in_transit + current === qty_received, all >= 0
   let badRows = 0
   for (const row of rows) {
     if (row.kind !== "receipt") continue
-    if (row.shipped_qty < 0 || row.shipped_qty > row.qty_received || row.current_qty < 0) {
+    const sum = row.miami_qty + row.in_transit_qty + row.current_qty
+    if (row.miami_qty < 0 || row.in_transit_qty < 0 || row.current_qty < 0 || sum !== row.qty_received) {
       badRows++
-      console.error(`  ✗ BAD ROW ${row.sku} ${row.fo_number}: recv=${row.qty_received} ship=${row.shipped_qty} cur=${row.current_qty}`)
+      console.error(`  ✗ BAD ROW ${row.sku} ${row.fo_number}: recv=${row.qty_received} miami=${row.miami_qty} transit=${row.in_transit_qty} china=${row.current_qty}`)
     }
   }
 
@@ -136,10 +151,17 @@ export default async function verify({ container }: ExecArgs) {
     .sort((a, b) => b.days - a.days)
     .slice(0, 5)
 
+  const totalChina = rows.reduce((s, r) => s + Math.max(0, r.current_qty), 0)
+  const totalTransit = rows.reduce((s, r) => s + r.in_transit_qty, 0)
+  const totalMiami = rows.reduce((s, r) => s + r.miami_qty, 0)
+
   console.log("\n=== Inventory Timeline verification ===")
   console.log(`receipt rows:        ${receiptRows.length}`)
   console.log(`unattributed rows:   ${unattributed.length}`)
   console.log(`deficit rows:        ${deficit.length}`)
+  console.log(`units En China:      ${totalChina}`)
+  console.log(`units En Tránsito:   ${totalTransit}`)
+  console.log(`units En Miami:      ${totalMiami}`)
   console.log(`reconcile mismatches:${mismatches}  (must be 0)`)
   console.log(`bad receipt rows:    ${badRows}  (must be 0)`)
   console.log(`lots over 60 days w/ current>0: ${over60.length}`)
