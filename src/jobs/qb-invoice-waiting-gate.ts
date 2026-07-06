@@ -28,6 +28,7 @@ import {
   writePipelineRow,
   skipSalesOrderPipelineRow,
   skipPendingPaymentRows,
+  resolveCanonicalApplyPaymentRef,
 } from "../lib/quickbooks/qb-pipeline";
 import { INVOICE_MODULE } from "../modules/invoices";
 
@@ -188,14 +189,27 @@ export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
                     applyMedusaRef = `PAY-${payRes.rows[0].display_id}`;
                 } catch {}
               }
+              // Canonical papp_ keying (dual-key dup fix): this gate historically
+              // keyed by payment_id (cpay_) while the handler keys the
+              // payment_application (papp_) → a second apply_payment row that
+              // dispatched a redundant ReceivePaymentMod (QB 3200). Resolve the
+              // papp_ here (the payload carries application_id + invoice_id). The
+              // central writePipelineRow guard is the backstop; payload is passed
+              // so it can re-derive if application_id is ever missing.
+              const applyRef = await resolveCanonicalApplyPaymentRef({
+                applicationId: app.application_id,
+                paymentId: app.payment_id,
+                invoiceId: inv.id,
+              });
               await writePipelineRow({
                 orderId: inv.order_id,
-                referenceId: applyPayRef,
-                referenceType: "customer_payment",
+                referenceId: applyRef.referenceId,
+                referenceType: applyRef.referenceType,
                 step: "apply_payment",
                 status: "waiting",
                 dependsOn: invoicePipelineRowId,
                 medusaRefNumber: applyMedusaRef,
+                payload: app,
               });
             }
           }
@@ -283,10 +297,18 @@ export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
           } = require("../lib/quickbooks/qb-pipeline");
           await Promise.all(
             payload.applications_to_emit.map(async (appPayload: any) => {
+              // Canonical papp_ keying (see waiting-row emission above): resolve
+              // the payment_application so the pending dispatch row dedups with the
+              // handler's papp_ row instead of spawning a cpay_ duplicate.
+              const applyRef = await resolveCanonicalApplyPaymentRef({
+                applicationId: appPayload.application_id,
+                paymentId: appPayload.payment_id,
+                invoiceId: appPayload.invoice_id ?? inv.id,
+              });
               await enqueueApply({
                 orderId: appPayload.order_id ?? inv.order_id,
-                referenceId: appPayload.payment_id,
-                referenceType: "payment",
+                referenceId: applyRef.referenceId,
+                referenceType: applyRef.referenceType,
                 step: "apply_payment",
                 status: "pending",
                 payload: appPayload,

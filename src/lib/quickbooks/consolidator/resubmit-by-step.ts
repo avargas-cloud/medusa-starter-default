@@ -281,6 +281,49 @@ export async function resubmitByStep(
           }
           break;
         }
+        // DEPLOY-WINDOW SAFETY NET (deploy-window-proof dual-key guard):
+        // If THIS row is keyed by customer_payment/payment (cpay_) — e.g. it was
+        // written by a stale pre-fix build during a Railway deploy cutover — and a
+        // canonical payment_application (papp_) sibling for the same
+        // (payment_id, invoice_id) is already in-flight or confirmed, dispatching
+        // this row would fire a SECOND ReceivePaymentMod against the same QB
+        // ReceivePayment → the loser fails QB 3200 "stale edit sequence". Skip it.
+        // Runs on the CURRENT build regardless of which build wrote the row, so it
+        // neutralizes the only harmful symptom of the deploy-window race.
+        if (row.reference_type !== "payment_application") {
+          const invoiceIdForSibling =
+            (payload?.invoice_id as string | undefined) ??
+            appRow.invoice_id ??
+            null;
+          if (invoiceIdForSibling) {
+            const { rows: papSibling } = await applyPool.query(
+              `SELECT p.id
+                 FROM qb_order_pipeline p
+                 JOIN payment_application pa ON pa.id = p.reference_id
+                WHERE p.step = 'apply_payment'
+                  AND p.reference_type = 'payment_application'
+                  AND p.status IN ('processing', 'submitted', 'confirmed')
+                  AND pa.payment_id = $1
+                  AND pa.invoice_id = $2
+                LIMIT 1`,
+              [appRow.payment_id, invoiceIdForSibling]
+            );
+            if (papSibling.length > 0) {
+              await applyPool.query(
+                `UPDATE qb_order_pipeline
+                    SET status = 'skipped',
+                        error = 'apply_payment: superseded by payment_application (papp_) sibling row — dual-key duplicate suppressed',
+                        updated_at = NOW()
+                  WHERE id = $1`,
+                [row.id]
+              );
+              logger.info(
+                `${LOG_PREFIX} ⏭️ apply_payment row ${row.id} skipped — papp_ sibling ${papSibling[0].id} already in-flight/confirmed (cpay_ dual-key suppressed, ref=${row.reference_id})`
+              );
+              break;
+            }
+          }
+        }
         await handlePosPaymentApplied({
           event: {
             name: "pos.payment.applied",

@@ -1,23 +1,26 @@
 /**
  * verify-apply-payment-dedup.ts
  *
- * Verifies the dual-keying dup fix for apply_payment pipeline rows.
+ * Verifies the dual-keying dup fix + the durable hardening for apply_payment
+ * pipeline rows (cpay_ vs papp_).
  *
- * Root cause (fixed in api/admin/invoices/route.ts): the upfront apply_payment
- * "waiting" row was keyed by customer_payment (cpay_) while the direct-exec
- * handler (handle-pos-payment-applied) keys the canonical payment_application
- * (papp_). writePipelineRow dedups on (order_id, step, reference_id) → cpay_ ≠
- * papp_ ⇒ TWO rows ⇒ two ReceivePaymentMod dispatches ⇒ one fails QB 3200
- * "stale edit sequence".
+ * Root cause: an apply_payment row keyed by customer_payment (cpay_) alongside the
+ * canonical payment_application (papp_) row. writePipelineRow dedups on
+ * (order_id, step, reference_id) → cpay_ ≠ papp_ ⇒ TWO rows ⇒ two ReceivePaymentMod
+ * dispatches ⇒ one fails QB 3200 "stale edit sequence".
  *
- * This script exercises the REAL writePipelineRow dedup SQL against the sandbox
- * DB, proving:
- *   NEW (fixed):  upfront papp_ waiting → handler papp_ pending  ⇒ 1 row
- *   OLD (bug):    upfront cpay_ waiting → handler papp_ pending  ⇒ 2 rows
- *   BACKSTOP:     partial-unique index rejects a 2nd active papp_ apply_payment
+ * Hardening under test (docs/APPLY_PAYMENT_DUAL_KEY_HARDENING_PLAN.md):
+ *   Fix 2 — writePipelineRow canonicalizes cpay_ → papp_ before any SQL:
+ *            #1 payload.application_id, #2 (payment_id, invoice_id),
+ *            #3 UNIQUE (payment_id, order_id). 0 or >1 leaves cpay_ (non-regressive).
+ *   Fix 3 — the dispatch pass skips a cpay_ apply_payment row when a papp_ sibling
+ *            (processing/submitted/confirmed) exists for the same
+ *            (payment_id, invoice_id). Tested here at the SQL level (the exact
+ *            sibling-detection query); the full cron path is covered by the
+ *            sandbox E2E.
  *
- * SANDBOX ONLY. Uses synthetic order ids (order_TEST_APPLY_DEDUP_*) and cleans
- * them up at the end. Refuses to run against a Railway/prod DATABASE_URL.
+ * SANDBOX ONLY. Uses synthetic ids (TEST_APPLY_DEDUP_*) and cleans them up at the
+ * end. Refuses to run against a Railway/prod DATABASE_URL.
  *
  * Run:
  *   DATABASE_URL=postgresql://postgres:sandbox@localhost:5499/medusa \
@@ -27,6 +30,8 @@ import { getDbPool } from "../../api/utils/db-pool";
 import { writePipelineRow } from "../../lib/quickbooks/pipeline/row-mutations";
 
 const TAG = "order_TEST_APPLY_DEDUP";
+const CP_TAG = "cpay_TEST_APPLY_DEDUP";
+const PA_TAG = "papp_TEST_APPLY_DEDUP";
 
 async function countApplyRows(
   orderId: string
@@ -48,10 +53,43 @@ async function countApplyRows(
   return { total, byType };
 }
 
+/** Seeds a synthetic customer_payment + payment_application (no FK to customer). */
+async function seedPaymentApp(input: {
+  cpay: string;
+  papp: string;
+  orderId: string;
+  invoiceId: string | null;
+}): Promise<void> {
+  const pool = getDbPool();
+  await pool.query(
+    `INSERT INTO customer_payment
+        (id, customer_id, source, type, amount, currency, method, status,
+         received_at, raw_amount, created_at, updated_at, medusa_payment_synced)
+     VALUES ($1,'cust_TEST','pos','payment',1,'usd','cash','applied',
+         NOW(), '{"value":"1","precision":20}'::jsonb, NOW(), NOW(), false)
+     ON CONFLICT (id) DO NOTHING`,
+    [input.cpay]
+  );
+  await pool.query(
+    `INSERT INTO payment_application
+        (id, payment_id, invoice_id, order_id, amount_applied, applied_at,
+         raw_amount_applied, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,1,NOW(),'{"value":"1","precision":20}'::jsonb,NOW(),NOW())
+     ON CONFLICT (id) DO NOTHING`,
+    [input.papp, input.cpay, input.invoiceId, input.orderId]
+  );
+}
+
 async function cleanup(): Promise<void> {
   const pool = getDbPool();
   await pool.query(`DELETE FROM qb_order_pipeline WHERE order_id LIKE $1`, [
     `${TAG}%`,
+  ]);
+  await pool.query(`DELETE FROM payment_application WHERE id LIKE $1`, [
+    `${PA_TAG}%`,
+  ]);
+  await pool.query(`DELETE FROM customer_payment WHERE id LIKE $1`, [
+    `${CP_TAG}%`,
   ]);
 }
 
@@ -63,31 +101,25 @@ async function main() {
       "REFUSING to run against a Railway/prod DATABASE_URL — sandbox only (expected localhost:5499)."
     );
   }
-  console.log(
-    `[verify-apply-dedup] db=${url.replace(/:[^:@]+@/, ":***@")}\n`
-  );
+  console.log(`[verify-apply-dedup] db=${url.replace(/:[^:@]+@/, ":***@")}\n`);
 
   const ts = Date.now();
   const results: { name: string; pass: boolean; detail: string }[] = [];
 
-  // Fresh start
   await cleanup();
 
-  // ── Scenario NEW (fixed behavior): both rows keyed by papp_ ────────────────
+  // ── 1. NEW baseline: both rows keyed papp_ ⇒ 1 row ─────────────────────────
   {
     const orderId = `${TAG}_NEW_${ts}`;
-    const papp = `papp_TEST_${ts}`;
-    // 1) upfront waiting row (as fixed invoices/route.ts now writes it)
+    const papp = `${PA_TAG}_NEW_${ts}`;
     await writePipelineRow({
       orderId,
       referenceId: papp,
       referenceType: "payment_application",
       step: "apply_payment",
       status: "waiting",
-      dependsOn: null,
       medusaRefNumber: "PAY-TEST",
     });
-    // 2) handler's row (handle-pos-payment-applied resolves papp_ → pending)
     await writePipelineRow({
       orderId,
       referenceId: papp,
@@ -97,30 +129,31 @@ async function main() {
       payload: { payment_id: "cpay_x", invoice_id: "inv_x", application_id: papp },
     });
     const { total, byType } = await countApplyRows(orderId);
-    const pass = total === 1 && byType["payment_application"] === 1;
     results.push({
-      name: "NEW (papp_ upfront + papp_ handler)",
-      pass,
-      detail: `expected 1 row (payment_application), got total=${total} ${JSON.stringify(byType)}`,
+      name: "NEW (papp_ upfront + papp_ handler) ⇒ 1 row",
+      pass: total === 1 && byType["payment_application"] === 1,
+      detail: `expected 1 payment_application, got total=${total} ${JSON.stringify(byType)}`,
     });
   }
 
-  // ── Scenario OLD (bug repro): cpay_ upfront + papp_ handler ─────────────────
+  // ── 2. GUARD via payload.application_id: cpay_ upfront gets canonicalized ───
+  //    Proves Fix 2 resolution #1 — the gate/handler pass application_id in
+  //    payload, so even a cpay_ referenceType collapses onto the papp_ row.
   {
-    const orderId = `${TAG}_OLD_${ts}`;
-    const cpay = `cpay_TEST_${ts}`;
-    const papp = `papp_TEST_OLD_${ts}`;
-    // 1) upfront waiting row keyed by customer_payment (pre-fix behavior)
+    const orderId = `${TAG}_GP_${ts}`;
+    const cpay = `${CP_TAG}_GP_${ts}`;
+    const papp = `${PA_TAG}_GP_${ts}`;
+    // upfront cpay_ row BUT carrying payload.application_id (what a fixed caller sends)
     await writePipelineRow({
       orderId,
       referenceId: cpay,
       referenceType: "customer_payment",
       step: "apply_payment",
       status: "waiting",
-      dependsOn: null,
       medusaRefNumber: "PAY-TEST",
+      payload: { payment_id: cpay, invoice_id: "inv_x", application_id: papp },
     });
-    // 2) handler's papp_ pending row (different reference_id → no dedup)
+    // handler papp_ row
     await writePipelineRow({
       orderId,
       referenceId: papp,
@@ -130,20 +163,97 @@ async function main() {
       payload: { payment_id: cpay, invoice_id: "inv_x", application_id: papp },
     });
     const { total, byType } = await countApplyRows(orderId);
-    // This is the BUG: two rows. The test PASSES if it reproduces (total===2),
-    // confirming the fix (papp_ keying) is what collapses them.
-    const pass = total === 2;
     results.push({
-      name: "OLD (cpay_ upfront + papp_ handler) — bug repro",
-      pass,
-      detail: `expected 2 rows (dual-key), got total=${total} ${JSON.stringify(byType)}`,
+      name: "GUARD payload.application_id (cpay_ → papp_) ⇒ 1 row",
+      pass: total === 1 && byType["payment_application"] === 1 && !byType["customer_payment"],
+      detail: `expected 1 payment_application, got total=${total} ${JSON.stringify(byType)}`,
     });
   }
 
-  // ── Backstop: partial unique index rejects 2nd active papp_ apply_payment ──
+  // ── 3. GUARD via DB lookup: cpay_ with NO payload, unique (payment_id,order) ─
+  //    Proves Fix 2 resolution #3 — a stale/legacy caller passing only cpay_ is
+  //    canonicalized by the writePipelineRow guard when exactly one application
+  //    exists for (payment_id, order_id).
+  {
+    const orderId = `${TAG}_GL_${ts}`;
+    const cpay = `${CP_TAG}_GL_${ts}`;
+    const papp = `${PA_TAG}_GL_${ts}`;
+    await seedPaymentApp({ cpay, papp, orderId, invoiceId: `inv_GL_${ts}` });
+    // cpay_ row, NO payload → guard must resolve papp_ via (payment_id, order_id)
+    await writePipelineRow({
+      orderId,
+      referenceId: cpay,
+      referenceType: "customer_payment",
+      step: "apply_payment",
+      status: "waiting",
+      medusaRefNumber: "PAY-TEST",
+    });
+    // handler papp_ row → should dedup in place
+    await writePipelineRow({
+      orderId,
+      referenceId: papp,
+      referenceType: "payment_application",
+      step: "apply_payment",
+      status: "pending",
+      payload: { payment_id: cpay, invoice_id: `inv_GL_${ts}`, application_id: papp },
+    });
+    const { total, byType } = await countApplyRows(orderId);
+    results.push({
+      name: "GUARD DB lookup (cpay_ no payload → papp_) ⇒ 1 row",
+      pass: total === 1 && byType["payment_application"] === 1 && !byType["customer_payment"],
+      detail: `expected 1 payment_application, got total=${total} ${JSON.stringify(byType)}`,
+    });
+  }
+
+  // ── 4. AMBIGUOUS non-regression: 2 applications same (payment_id, order) ────
+  //    Guard must NOT mis-key — leaves cpay_ (caller must pass application_id).
+  {
+    const orderId = `${TAG}_AMB_${ts}`;
+    const cpay = `${CP_TAG}_AMB_${ts}`;
+    const pappA = `${PA_TAG}_AMB_A_${ts}`;
+    const pappB = `${PA_TAG}_AMB_B_${ts}`;
+    await seedPaymentApp({ cpay, papp: pappA, orderId, invoiceId: `inv_AMB_A_${ts}` });
+    await seedPaymentApp({ cpay, papp: pappB, orderId, invoiceId: `inv_AMB_B_${ts}` });
+    await writePipelineRow({
+      orderId,
+      referenceId: cpay,
+      referenceType: "customer_payment",
+      step: "apply_payment",
+      status: "waiting",
+      medusaRefNumber: "PAY-TEST",
+    });
+    const { byType } = await countApplyRows(orderId);
+    results.push({
+      name: "AMBIGUOUS (2 apps) leaves cpay_ — no mis-key",
+      pass: byType["customer_payment"] === 1 && !byType["payment_application"],
+      detail: `expected 1 customer_payment (unresolved), got ${JSON.stringify(byType)}`,
+    });
+  }
+
+  // ── 5. LEGACY non-regression: no application at all → cpay_ preserved ───────
+  {
+    const orderId = `${TAG}_LEG_${ts}`;
+    const cpay = `${CP_TAG}_LEG_${ts}`;
+    await writePipelineRow({
+      orderId,
+      referenceId: cpay,
+      referenceType: "customer_payment",
+      step: "apply_payment",
+      status: "waiting",
+      medusaRefNumber: "PAY-TEST",
+    });
+    const { total, byType } = await countApplyRows(orderId);
+    results.push({
+      name: "LEGACY (no application) leaves cpay_ ⇒ 1 row",
+      pass: total === 1 && byType["customer_payment"] === 1,
+      detail: `expected 1 customer_payment, got total=${total} ${JSON.stringify(byType)}`,
+    });
+  }
+
+  // ── 6. BACKSTOP: partial unique index blocks a 2nd active papp_ ─────────────
   {
     const orderId = `${TAG}_IDX_${ts}`;
-    const papp = `papp_TEST_IDX_${ts}`;
+    const papp = `${PA_TAG}_IDX_${ts}`;
     await writePipelineRow({
       orderId,
       referenceId: papp,
@@ -151,9 +261,6 @@ async function main() {
       step: "apply_payment",
       status: "pending",
     });
-    // Force a raw INSERT of a SECOND active row with the same papp_ (simulating a
-    // concurrent enqueue that slips past the app-level dedup). The partial unique
-    // index uq_qb_pipeline_apply_payment_papp must reject it.
     const pool = getDbPool();
     let rejected = false;
     try {
@@ -165,18 +272,54 @@ async function main() {
              RETURNING id`,
         [`${orderId}_dup`, papp]
       );
-      // ON CONFLICT DO NOTHING → 0 rows returned means the index blocked it.
       rejected = rows.length === 0;
     } catch (e: any) {
-      // A raw unique_violation (23505) also counts as rejected.
       rejected = e?.code === "23505";
     }
     const { total } = await countApplyRows(orderId);
-    const pass = rejected && total === 1;
     results.push({
       name: "BACKSTOP (partial unique index blocks 2nd active papp_)",
-      pass,
-      detail: `rejected=${rejected}, active papp_ rows for order=${total} (expected 1)`,
+      pass: rejected && total === 1,
+      detail: `rejected=${rejected}, active papp_ rows=${total} (expected 1)`,
+    });
+  }
+
+  // ── 7. DISPATCH-NET (Fix 3) sibling-detection SQL ──────────────────────────
+  //    The exact query resubmit-by-step uses to detect a papp_ sibling before
+  //    dispatching a cpay_ row. Seed a confirmed papp_ apply row + its
+  //    application, then assert the sibling query matches by (payment_id,
+  //    invoice_id) — i.e. the cpay_ row WOULD be skipped.
+  {
+    const orderId = `${TAG}_NET_${ts}`;
+    const cpay = `${CP_TAG}_NET_${ts}`;
+    const papp = `${PA_TAG}_NET_${ts}`;
+    const invoiceId = `inv_NET_${ts}`;
+    await seedPaymentApp({ cpay, papp, orderId, invoiceId });
+    // confirmed papp_ apply_payment row (the sibling)
+    const pool = getDbPool();
+    await pool.query(
+      `INSERT INTO qb_order_pipeline
+              (order_id, reference_id, reference_type, step, status, retry_count)
+           VALUES ($1,$2,'payment_application','apply_payment','confirmed',0)
+           ON CONFLICT DO NOTHING`,
+      [orderId, papp]
+    );
+    const { rows: sibling } = await pool.query(
+      `SELECT p.id
+         FROM qb_order_pipeline p
+         JOIN payment_application pa ON pa.id = p.reference_id
+        WHERE p.step = 'apply_payment'
+          AND p.reference_type = 'payment_application'
+          AND p.status IN ('processing', 'submitted', 'confirmed')
+          AND pa.payment_id = $1
+          AND pa.invoice_id = $2
+        LIMIT 1`,
+      [cpay, invoiceId]
+    );
+    results.push({
+      name: "DISPATCH-NET sibling detected (cpay_ would be skipped)",
+      pass: sibling.length === 1,
+      detail: `expected 1 papp_ sibling for (payment_id, invoice_id), got ${sibling.length}`,
     });
   }
 

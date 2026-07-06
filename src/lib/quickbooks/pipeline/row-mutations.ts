@@ -29,6 +29,89 @@ const QB_CREATE_STEPS = new Set<string>([
 ]);
 
 /**
+ * CENTRAL apply_payment key guard. Rewrites the (reference_id, reference_type) of
+ * an apply_payment write to the canonical payment_application (papp_) key BEFORE
+ * any SQL runs, so every branch below (waiting upsert, pending transition, INSERT,
+ * the uq_qb_pipeline_apply_payment_papp partial-unique index) dedups in-place with
+ * the handler's papp_ row. This is the single choke-point that kills the cpay_/papp_
+ * dual-key duplicate for ALL callers — present, future, and any caller that forgot
+ * to resolve the papp_ itself (the qb-invoice-waiting-gate did, pre-fix).
+ *
+ * Only acts on apply_payment rows NOT already keyed by payment_application. The
+ * incoming reference_id for those is a customer_payment id (cpay_) — both the
+ * 'customer_payment' and the gate's odd 'payment' reference_type carry the cpay_.
+ *
+ * Resolution order (all non-voided applications):
+ *   1. payload.application_id → papp_ (unambiguous; the gate/handler pass this).
+ *   2. (payment_id=reference_id, invoice_id=payload.invoice_id) → papp_.
+ *   3. UNIQUE (payment_id=reference_id, order_id) → papp_ ONLY if exactly one match.
+ *      0 matches → leave cpay_ (genuine legacy payment with no application, e.g. an
+ *      edge deposit that never applied — non-regressive). >1 → leave cpay_ + warn
+ *      (ambiguous: one payment applied to several invoices in one order; the caller
+ *      MUST pass application_id — Fix 1 makes the gate do so).
+ */
+async function canonicalizeApplyPaymentInput(
+  input: WritePipelineRowInput
+): Promise<void> {
+  if (
+    input.step !== "apply_payment" ||
+    input.referenceType === "payment_application" ||
+    !input.referenceId
+  ) {
+    return;
+  }
+  const payload = (input.payload ?? {}) as {
+    application_id?: string | null;
+    invoice_id?: string | null;
+  };
+
+  // 1. application_id supplied → papp_ directly, no lookup.
+  if (payload.application_id) {
+    input.referenceId = payload.application_id;
+    input.referenceType = "payment_application";
+    return;
+  }
+
+  const pool = getDbPool();
+  const paymentId = input.referenceId;
+
+  // 2. (payment_id, invoice_id) → papp_.
+  if (payload.invoice_id) {
+    const { rows } = await pool.query(
+      `SELECT id FROM payment_application
+        WHERE payment_id = $1 AND invoice_id = $2 AND voided_at IS NULL
+        ORDER BY created_at DESC LIMIT 1`,
+      [paymentId, payload.invoice_id]
+    );
+    if (rows[0]?.id) {
+      input.referenceId = rows[0].id as string;
+      input.referenceType = "payment_application";
+      return;
+    }
+  }
+
+  // 3. UNIQUE (payment_id, order_id) → papp_. 0 leaves cpay_; >1 leaves cpay_ + warn.
+  if (input.orderId) {
+    const { rows } = await pool.query(
+      `SELECT id FROM payment_application
+        WHERE payment_id = $1 AND order_id = $2 AND voided_at IS NULL
+        LIMIT 2`,
+      [paymentId, input.orderId]
+    );
+    if (rows.length === 1) {
+      input.referenceId = rows[0].id as string;
+      input.referenceType = "payment_application";
+    } else if (rows.length > 1) {
+      console.warn(
+        `[writePipelineRow] apply_payment cpay_ ${paymentId} maps to multiple applications ` +
+          `for order ${input.orderId} — cannot canonicalize to papp_ unambiguously; ` +
+          `caller must pass application_id/invoice_id. Leaving customer_payment key.`
+      );
+    }
+  }
+}
+
+/**
  * Writes a row to qb_order_pipeline.
  * Returns the row's UUID.
  *
@@ -46,6 +129,11 @@ export async function writePipelineRow(
   input: WritePipelineRowInput
 ): Promise<string> {
   const pool = getDbPool();
+
+  // CENTRAL GUARD: canonicalize apply_payment cpay_ → papp_ before any SQL, so the
+  // dedup + partial-unique index collapse dual-key duplicates in-place. See the
+  // helper docstring for the resolution order and the non-regressive edge cases.
+  await canonicalizeApplyPaymentInput(input);
 
   // For "waiting": upsert — update existing waiting row or fall through to INSERT.
   // Prevents duplicate waiting rows when upfront pipeline rows are written on invoice creation.
