@@ -1,72 +1,79 @@
 /**
- * Shared physical-basis math for China inventory adjustments.
+ * Shared available-basis math for China inventory adjustments.
  *
  * Single source of truth used by the POST/PATCH endpoints AND the one-off import
  * scripts so the arithmetic can never drift between them.
  *
  * Model (see also `china-line-data.ts`):
- *   stocked          = physical_present_in_china + in_transit
- *   physical_present = available + committed        (committed is physically in China)
- *   available        = stocked − reserved           (reserved = committed + in_transit)
+ *   stocked   = available_on_shelf + committed + in_transit
+ *   reserved  = committed + in_transit
+ *   available = stocked − reserved                (the loose shelf being counted)
  *
- * The operator enters a PHYSICAL COUNT (what is actually in the warehouse). Only
- * `in_transit` (goods reserved by SHIPPED transfers — already gone but still
- * carried in China `stocked_quantity` until the USA side receives them) is added
- * back on top; `committed` is NOT added because those goods are still physically
- * in China and are already included in the operator's count.
+ * The operator enters ONLY the LOOSE SHELF COUNT (`available`). Both reserved
+ * buckets are set aside and NOT counted, so both are added back on top of the
+ * operator's number:
+ *   - `in_transit` (SHIPPED transfers) already physically left China but stays in
+ *     `stocked_quantity` until the USA side receives it.
+ *   - `committed`  (CONFIRMED-not-yet-shipped transfers) is physically still in
+ *     China but boxed/set aside away from the shelves, so the counter skips it.
+ * Both are preserved so that when a transfer later ships/receives, the stocked
+ * nets down to exactly the operator's shelf count.
  *
- * Because `in_transit` is constant on both sides of the equation, the delta
- * measured in PHYSICAL basis equals the delta in STOCKED basis:
+ * Because reserved (committed + in_transit) is constant on both sides during a
+ * count, the delta measured in AVAILABLE basis equals the delta in STOCKED basis:
  *   newStocked − currentStocked
- *     = (newPhysical + inTransit) − currentStocked
- *     = newPhysical − (currentStocked − inTransit)
- *     = newPhysical − oldPhysical
+ *     = (newAvailable + reserved) − currentStocked
+ *     = newAvailable − (currentStocked − reserved)
+ *     = newAvailable − oldAvailable
  * so one delta drives both the real `adjustInventory` call and the audit trail.
  */
 import { Modules } from "@medusajs/utils";
 import { loadChinaReservedByItem, type KnexRaw } from "./china-line-data";
 
 export interface ChinaLevel {
-  /** Current China `stocked_quantity` (includes in_transit). */
+  /** Current China `stocked_quantity` (includes committed + in_transit). */
   stocked: number;
+  /** Units reserved by CONFIRMED-not-shipped transfers (boxed, still in China). */
+  committed: number;
   /** Units reserved by SHIPPED transfers (already left China). */
   in_transit: number;
 }
 
 export interface ChinaAdjustmentMath {
-  /** Physical present the system believed it had (stocked − in_transit). */
-  oldPhysical: number;
-  /** Physical count the operator entered. */
-  newPhysical: number;
-  /** Delta to apply to stocked (== physical-basis delta). */
+  /** Loose shelf the system believed it had (stocked − committed − in_transit). */
+  oldAvailable: number;
+  /** Loose-shelf count the operator entered. */
+  newAvailable: number;
+  /** Delta to apply to stocked (== available-basis delta). */
   delta: number;
-  /** Resulting `stocked_quantity` after the adjustment (= newPhysical + in_transit). */
+  /** Resulting `stocked_quantity` after the adjustment (= newAvailable + reserved). */
   newStocked: number;
   /**
-   * True when SHIPPED reservations already exceed stocked (pre-existing phantom /
-   * stale reserved cache). The adjustment is still correct — flag, never clamp.
+   * True when reserved (committed + in_transit) already exceeds stocked
+   * (pre-existing phantom / stale reserved cache = negative available). The
+   * adjustment is still correct — flag, never clamp.
    */
   preexistingPhantom: boolean;
 }
 
 /**
- * Pure adjustment math for one item. `newPhysical` is the operator's physical
- * count. Never clamps: a negative oldPhysical is surfaced via `preexistingPhantom`.
+ * Pure adjustment math for one item. `newAvailable` is the operator's loose-shelf
+ * count. Never clamps: a negative oldAvailable is surfaced via `preexistingPhantom`.
  */
 export function computeChinaAdjustment(
   level: ChinaLevel,
-  newPhysical: number
+  newAvailable: number
 ): ChinaAdjustmentMath {
-  const inTransit = level.in_transit;
-  const oldPhysical = level.stocked - inTransit;
-  const delta = newPhysical - oldPhysical;
-  const newStocked = level.stocked + delta; // = newPhysical + inTransit
+  const reserved = level.committed + level.in_transit;
+  const oldAvailable = level.stocked - reserved;
+  const delta = newAvailable - oldAvailable;
+  const newStocked = level.stocked + delta; // = newAvailable + reserved
   return {
-    oldPhysical,
-    newPhysical,
+    oldAvailable,
+    newAvailable,
     delta,
     newStocked,
-    preexistingPhantom: inTransit > level.stocked,
+    preexistingPhantom: reserved > level.stocked,
   };
 }
 
@@ -78,9 +85,9 @@ export interface InventoryLevelReader {
 }
 
 /**
- * Loads current stocked + in_transit for a set of inventory items at the China
- * location. `in_transit` is the SHIPPED-transfer reservation sum (committed is
- * intentionally excluded from the adjustment basis).
+ * Loads current stocked + committed + in_transit for a set of inventory items at
+ * the China location. Both reserved buckets are added back on top of the
+ * operator's shelf count (see `computeChinaAdjustment`).
  */
 export async function loadChinaLevels(
   knex: KnexRaw,
@@ -105,6 +112,7 @@ export async function loadChinaLevels(
   for (const id of ids) {
     map.set(id, {
       stocked: stockByItem.get(id) ?? 0,
+      committed: reserved.get(id)?.committed ?? 0,
       in_transit: reserved.get(id)?.in_transit ?? 0,
     });
   }

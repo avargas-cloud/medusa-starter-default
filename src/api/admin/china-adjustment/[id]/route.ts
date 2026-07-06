@@ -32,7 +32,8 @@ export async function GET(
   const knex = resolveKnex(req);
 
   const { rows: docs } = await knex.raw(
-    `SELECT id, notes, total_lines, created_by_user_id, created_at
+    `SELECT id, notes, total_lines, created_by_user_id, created_at,
+            voided_at, voided_by_user_id, void_reason
      FROM china_adjustment WHERE id = ?`,
     [id]
   );
@@ -67,6 +68,8 @@ interface ExistingLine {
   inventory_item_id: string;
   sku: string;
   old_qty: number;
+  new_qty: number;
+  delta: number;
 }
 
 export async function PATCH(
@@ -110,15 +113,23 @@ export async function PATCH(
   }
 
   const knex = resolveKnex(req);
-  const docRes = await knex.raw(`SELECT id FROM china_adjustment WHERE id = ?`, [
-    id,
-  ]);
-  if ((docRes.rows as unknown[]).length === 0) {
+  const docRes = await knex.raw(
+    `SELECT id, voided_at FROM china_adjustment WHERE id = ?`,
+    [id]
+  );
+  const docRow = (docRes.rows as Array<{ voided_at: string | null }>)[0];
+  if (!docRow) {
     return res.status(404).json({ error: "Adjustment not found." });
+  }
+  if (docRow.voided_at) {
+    return res.status(409).json({
+      error: "This adjustment is voided and can no longer be edited.",
+      code: "ADJUSTMENT_VOIDED",
+    });
   }
 
   const existingRes = await knex.raw(
-    `SELECT inventory_item_id, sku, old_qty
+    `SELECT inventory_item_id, sku, old_qty, new_qty, delta
      FROM china_adjustment_line
      WHERE china_adjustment_id = ?`,
     [id]
@@ -161,30 +172,46 @@ export async function PATCH(
   for (const line of lines) {
     const level = levels.get(line.inventory_item_id) ?? {
       stocked: 0,
+      committed: 0,
       in_transit: 0,
     };
-    const m = computeChinaAdjustment(level, line.new_quantity);
-    if (m.delta !== 0) {
+    const existing = existingByItem.get(line.inventory_item_id);
+    const reserved = level.committed + level.in_transit;
+
+    // Delta-differential: an EXISTING line moves by the difference from its
+    // PREVIOUS entered count (not vs live stock), so the stored net `delta`
+    // always equals the actual movement this adjustment applied — that is what
+    // makes a later void (reverse `-delta`) exact even when sales/receives
+    // happened between edits. A NEW line behaves like a create (move from live).
+    let oldQty: number;
+    let appliedDelta: number;
+    if (existing) {
+      oldQty = existing.old_qty;
+      appliedDelta = line.new_quantity - existing.new_qty;
+    } else {
+      const m = computeChinaAdjustment(level, line.new_quantity);
+      oldQty = m.oldAvailable;
+      appliedDelta = m.delta;
+    }
+
+    if (appliedDelta !== 0) {
       await inventoryService.adjustInventory(
         line.inventory_item_id,
         CHINA_LOCATION_ID,
-        m.delta
+        appliedDelta
       );
     }
-    if (m.preexistingPhantom) {
+    if (reserved > level.stocked) {
       warnings.push(
-        `${line.sku}: shipped reservations (${level.in_transit}) exceed stocked (${level.stocked}) — pre-existing phantom, adjustment applied as-is`
+        `${line.sku}: reserved transfers (${reserved}) exceed stocked (${level.stocked}) — pre-existing phantom, adjustment applied as-is`
       );
     }
-    // Preserve the original physical old_qty across re-edits.
-    const oldQty =
-      existingByItem.get(line.inventory_item_id)?.old_qty ?? m.oldPhysical;
     appliedLines.push({
       inventory_item_id: line.inventory_item_id,
       sku: line.sku,
       old_qty: oldQty,
-      new_qty: m.newPhysical,
-      delta: m.newPhysical - oldQty,
+      new_qty: line.new_quantity,
+      delta: line.new_quantity - oldQty,
     });
   }
 
@@ -192,18 +219,13 @@ export async function PATCH(
     (line) => !requestedIds.has(line.inventory_item_id)
   );
   for (const line of removedLines) {
-    const level = levels.get(line.inventory_item_id) ?? {
-      stocked: 0,
-      in_transit: 0,
-    };
-    // Restore physical present back to the original old_qty (target stocked =
-    // old_qty + current in_transit).
-    const m = computeChinaAdjustment(level, line.old_qty);
-    if (m.delta !== 0) {
+    // Removing a line reverses its net contribution (movement-invariant: undo
+    // exactly what it applied), surviving any intermediate stock changes.
+    if (line.delta !== 0) {
       await inventoryService.adjustInventory(
         line.inventory_item_id,
         CHINA_LOCATION_ID,
-        m.delta
+        -line.delta
       );
     }
   }

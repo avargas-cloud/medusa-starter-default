@@ -41,7 +41,18 @@ async function getChineseStock(db: Client, inventoryItemId: string): Promise<num
      WHERE inventory_item_id = $1 AND location_id = $2`,
     [inventoryItemId, CHINA_LOCATION_ID]
   );
-  return (res.rows[0]?.stocked_quantity as number) ?? 0;
+  return Number(res.rows[0]?.stocked_quantity ?? 0);
+}
+
+/** China reserved (committed + in_transit). new_quantity is an AVAILABLE-basis
+ *  count, so the operator enters stocked − reserved and the backend re-adds it. */
+async function getChineseReserved(db: Client, inventoryItemId: string): Promise<number> {
+  const res = await db.query(
+    `SELECT COALESCE(reserved_quantity, 0) AS reserved FROM inventory_level
+     WHERE inventory_item_id = $1 AND location_id = $2`,
+    [inventoryItemId, CHINA_LOCATION_ID]
+  );
+  return Number(res.rows[0]?.reserved ?? 0);
 }
 
 async function getAdminToken(): Promise<string> {
@@ -101,22 +112,27 @@ async function main() {
   const db = new Client({ connectionString: process.env.DATABASE_URL });
   await db.connect();
 
-  // ── Step 1: snapshot original stock ────────────────────────────────────────
-  const originalQty = await getChineseStock(db, TEST_ITEM.inventory_item_id);
-  info(`Original China stock for ${TEST_ITEM.sku}: ${originalQty}`);
+  // ── Step 1: snapshot original stock + reserved (available basis) ───────────
+  const originalStocked = await getChineseStock(db, TEST_ITEM.inventory_item_id);
+  const reserved = await getChineseReserved(db, TEST_ITEM.inventory_item_id);
+  const originalAvailable = originalStocked - reserved;
+  info(`${TEST_ITEM.sku}: stocked=${originalStocked}, reserved=${reserved}, available=${originalAvailable}`);
 
   // ── Step 2: authenticate ────────────────────────────────────────────────────
   info("Authenticating as admin…");
   const token = await getAdminToken();
   pass("Token obtained");
 
-  // ── Step 3: set to originalQty + 7 (arbitrary change) ──────────────────────
-  const targetQty = originalQty + 7;
-  info(`Setting stock to ${targetQty} (+7 from original)…`);
+  // ── Step 3: enter available + 7 (operator counts the loose shelf) ──────────
+  // new_quantity is an AVAILABLE count; the backend re-adds reserved on top, so
+  // stocked must land at originalStocked + 7 (reserved preserved).
+  const targetAvailable = originalAvailable + 7;
+  const targetStocked = originalStocked + 7;
+  info(`Entering available count ${targetAvailable} (+7) → expected stocked ${targetStocked}…`);
 
   const createRes = await callAdjustment(
     token,
-    [{ ...TEST_ITEM, new_quantity: targetQty }],
+    [{ ...TEST_ITEM, new_quantity: targetAvailable }],
     "verify-china-adjustment test — do not delete"
   );
 
@@ -124,16 +140,16 @@ async function main() {
   if (!adjId) fail("Response missing adjustment.id");
   pass(`Adjustment created — id: ${adjId}`);
 
-  // ── Step 4: verify DB stock changed ────────────────────────────────────────
+  // ── Step 4: verify DB stock changed (reserved preserved) ───────────────────
   const afterQty = await getChineseStock(db, TEST_ITEM.inventory_item_id);
   info(`DB stocked_quantity after adjustment: ${afterQty}`);
 
-  if (afterQty !== targetQty) {
-    fail(`Expected ${targetQty}, got ${afterQty} — inventory_level was NOT updated!`);
+  if (afterQty !== targetStocked) {
+    fail(`Expected stocked ${targetStocked} (available ${targetAvailable} + reserved ${reserved}), got ${afterQty}!`);
   }
-  pass(`inventory_level.stocked_quantity = ${afterQty} ✓`);
+  pass(`inventory_level.stocked_quantity = ${afterQty} ✓ (reserved ${reserved} preserved)`);
 
-  // ── Step 5: verify audit row exists in china_adjustment_line ───────────────
+  // ── Step 5: verify audit row (available basis) ─────────────────────────────
   const lineRes = await db.query(
     `SELECT cl.old_qty, cl.new_qty, cl.delta
      FROM china_adjustment_line cl
@@ -143,9 +159,9 @@ async function main() {
   if (lineRes.rowCount === 0) fail("No china_adjustment_line row found for this adjustment.");
 
   const line = lineRes.rows[0] as { old_qty: number; new_qty: number; delta: number };
-  if (line.old_qty !== originalQty) fail(`Audit old_qty mismatch: expected ${originalQty}, got ${line.old_qty}`);
-  if (line.new_qty !== targetQty)   fail(`Audit new_qty mismatch: expected ${targetQty}, got ${line.new_qty}`);
-  if (line.delta   !== 7)           fail(`Audit delta mismatch: expected 7, got ${line.delta}`);
+  if (line.old_qty !== originalAvailable) fail(`Audit old_qty mismatch: expected available ${originalAvailable}, got ${line.old_qty}`);
+  if (line.new_qty !== targetAvailable)   fail(`Audit new_qty mismatch: expected ${targetAvailable}, got ${line.new_qty}`);
+  if (line.delta   !== 7)                 fail(`Audit delta mismatch: expected 7, got ${line.delta}`);
   pass(`Audit line correct — old=${line.old_qty} → new=${line.new_qty} (delta=${line.delta})`);
 
   // ── Step 6: GET /admin/china-adjustment/:id round-trip ─────────────────────
@@ -159,14 +175,14 @@ async function main() {
   pass(`GET /admin/china-adjustment/${adjId} returns document with ${getBody.lines.length} line(s)`);
 
   // ── Step 7: revert to original ─────────────────────────────────────────────
-  info(`Reverting ${TEST_ITEM.sku} back to ${originalQty}…`);
+  info(`Reverting ${TEST_ITEM.sku} back to available ${originalAvailable} (stocked ${originalStocked})…`);
   await callAdjustment(
     token,
-    [{ ...TEST_ITEM, new_quantity: originalQty }],
+    [{ ...TEST_ITEM, new_quantity: originalAvailable }],
     "verify-china-adjustment revert"
   );
   const revertedQty = await getChineseStock(db, TEST_ITEM.inventory_item_id);
-  if (revertedQty !== originalQty) fail(`Revert failed — expected ${originalQty}, got ${revertedQty}`);
+  if (revertedQty !== originalStocked) fail(`Revert failed — expected stocked ${originalStocked}, got ${revertedQty}`);
   pass(`Stock reverted to ${revertedQty} ✓`);
 
   // ── Done ───────────────────────────────────────────────────────────────────

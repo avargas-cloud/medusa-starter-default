@@ -93,6 +93,7 @@ export async function GET(
 
   const { rows } = await knex.raw(
     `SELECT ca.id, ca.notes, ca.total_lines, ca.created_by_user_id, ca.created_at,
+            ca.voided_at,
             COALESCE(SUM(ABS(cl.delta)), 0)::int AS total_units_changed
      FROM china_adjustment ca
      LEFT JOIN china_adjustment_line cl ON cl.china_adjustment_id = ca.id
@@ -157,10 +158,10 @@ export async function POST(
   ) as unknown as InventoryServiceLike;
   const knex = resolveKnex(req);
 
-  // Snapshot current stocked + in_transit (physical-basis adjustment). The
-  // operator's `new_quantity` is a PHYSICAL count; in_transit is added back so
-  // stocked keeps carrying shipped-but-not-received transfer units. See
-  // `_lib/china-adjustment-math.ts`.
+  // Snapshot current stocked + committed + in_transit (available-basis adjustment).
+  // The operator's `new_quantity` is the LOOSE SHELF count; committed + in_transit
+  // are both added back so stocked keeps carrying reserved transfer units until
+  // they ship/receive. See `_lib/china-adjustment-math.ts`.
   const itemIds = lines.map((l) => l.inventory_item_id);
   const levels = await loadChinaLevels(
     knex,
@@ -182,6 +183,7 @@ export async function POST(
   for (const line of lines) {
     const level = levels.get(line.inventory_item_id) ?? {
       stocked: 0,
+      committed: 0,
       in_transit: 0,
     };
     const m = computeChinaAdjustment(level, line.new_quantity);
@@ -194,14 +196,14 @@ export async function POST(
     }
     if (m.preexistingPhantom) {
       warnings.push(
-        `${line.sku}: shipped reservations (${level.in_transit}) exceed stocked (${level.stocked}) — pre-existing phantom, adjustment applied as-is`
+        `${line.sku}: reserved transfers (${level.committed + level.in_transit}) exceed stocked (${level.stocked}) — pre-existing phantom, adjustment applied as-is`
       );
     }
     appliedLines.push({
       inventory_item_id: line.inventory_item_id,
       sku: line.sku,
-      old_qty: m.oldPhysical,
-      new_qty: m.newPhysical,
+      old_qty: m.oldAvailable,
+      new_qty: m.newAvailable,
       delta: m.delta,
     });
   }

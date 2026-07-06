@@ -165,9 +165,15 @@ export default async function run({ container }: ExecArgs) {
   }> = [];
   const warnings: string[] = [];
 
+  // ⚠️ FROZEN (2026-07-01 one-off, already applied). The shared adjustment math
+  // has since moved from PHYSICAL basis (available + committed) to AVAILABLE basis
+  // (loose shelf only; committed is now added back like in_transit). This script's
+  // Excel `t.physical` values were physical-present counts — do NOT re-run it
+  // against the current math without re-deriving the input as an available count.
   for (const t of targets) {
     const level: ChinaLevel = levels.get(t.iid) ?? {
       stocked: 0,
+      committed: 0,
       in_transit: 0,
     };
     const m = computeChinaAdjustment(level, t.physical);
@@ -175,18 +181,18 @@ export default async function run({ container }: ExecArgs) {
       iid: t.iid,
       sku: t.sku,
       counted: t.counted,
-      oldPhysical: m.oldPhysical,
-      newPhysical: m.newPhysical,
+      oldPhysical: m.oldAvailable,
+      newPhysical: m.newAvailable,
       delta: m.delta,
       newStocked: m.newStocked,
       inTransit: level.in_transit,
-      reserved: level.in_transit, // committed excluded from basis; report in_transit
+      reserved: level.committed + level.in_transit,
       stockedNow: level.stocked,
       cost: t.cost,
     });
     if (m.preexistingPhantom) {
       warnings.push(
-        `${t.sku}: shipped reservations (${level.in_transit}) exceed stocked (${level.stocked}) — pre-existing phantom, applied as-is`
+        `${t.sku}: reserved transfers (${level.committed + level.in_transit}) exceed stocked (${level.stocked}) — pre-existing phantom, applied as-is`
       );
     }
   }
