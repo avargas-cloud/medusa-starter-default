@@ -38,36 +38,73 @@ const BASE_JOINS = `
   WHERE il.location_id = '${CHINA_SLOC}' AND il.stocked_quantity > 0
 `
 
-// POs whose linked inventory transfer is active (origin CN, status
-// confirmed|shipped) but which have NO matching china_finance_bill row.
-// The match logic mirrors the previous active_transfer EXISTS clause:
-// bill matches by po_number, po_ref_number, or via vendor_bill linkage.
+// Active China transfers (origin CN, status confirmed|shipped) with an
+// UNBILLED remainder — the "unbilled balance" gap the operator can't see in
+// the plain Balance.
+//
+// A China reservation is created at draft→confirmed and persists through
+// shipped until received in Miami, so the moment a transfer is confirmed its
+// pending units leave "+ Inv Value". `reserved_pending_value` values those
+// units on the SAME basis (`FACTORY_COST` = qb_purchase_cost) as the inventory
+// `value` above.
+//
+// We NET against what is already billed for the PO rather than excluding the
+// whole transfer once any bill exists. Today Veetech bills the full shipment at
+// once, so `billed_cents` covers (usually exceeds) the reserved value and the
+// remainder clamps to 0 — identical to the old NOT-EXISTS behaviour. But if a
+// PO is ever billed in parts, the unbilled remainder still surfaces correctly:
+//   unbilled = MAX(0, reserved_pending_value − billed_cents)
+// `billed_cents` = Σ china_finance_bill.amount_cents matched to the PO (same
+// predicate as before, kept as a single OR so each bill row — incl. split
+// "Partial #N" children — is counted exactly once, never doubled).
 const POS_WITHOUT_BILLS_SQL = `
-  SELECT DISTINCT
-    po.number                              AS po_number,
-    po.qb_purchase_order_txn_number        AS qb_po_number,
-    it.number                              AS transfer_number,
-    COALESCE(NULLIF(TRIM(po.vendor_name_snapshot), ''), 'Unknown') AS vendor_name
-  FROM inventory_transfer it
-  JOIN purchase_order po
-    ON po.id = it.linked_purchase_order_id
-   AND po.deleted_at IS NULL
-  WHERE it.deleted_at IS NULL
-    AND it.origin_country = 'CN'
-    AND it.status IN ('confirmed', 'shipped')
-    AND NOT EXISTS (
-      SELECT 1
-      FROM china_finance_bill cfb
-      WHERE cfb.po_number     = po.qb_purchase_order_txn_number
-         OR cfb.po_ref_number = po.number
-         OR cfb.vendor_bill_id IN (
-           SELECT vb.id
-           FROM vendor_bill vb
-           WHERE vb.purchase_order_id = po.id
-             AND vb.deleted_at IS NULL
-         )
-    )
-  ORDER BY po.number ASC
+  SELECT
+    t.po_number,
+    t.qb_po_number,
+    t.transfer_number,
+    t.transfer_status,
+    t.vendor_name,
+    ROUND(GREATEST(0, t.reserved_pending_cents - b.billed_cents)::numeric / 100, 2) AS unbilled_value
+  FROM (
+    SELECT
+      po.id                                  AS po_id,
+      po.number                              AS po_number,
+      po.qb_purchase_order_txn_number        AS qb_po_number,
+      it.number                              AS transfer_number,
+      it.status                              AS transfer_status,
+      COALESCE(NULLIF(TRIM(po.vendor_name_snapshot), ''), 'Unknown') AS vendor_name,
+      COALESCE(SUM(
+        GREATEST(0, itl.qty - COALESCE(itl.qty_received, 0)) * ${FACTORY_COST}
+      ), 0) * 100                            AS reserved_pending_cents
+    FROM inventory_transfer it
+    JOIN purchase_order po
+      ON po.id = it.linked_purchase_order_id
+     AND po.deleted_at IS NULL
+    LEFT JOIN inventory_transfer_line itl
+      ON itl.transfer_id = it.id
+     AND itl.deleted_at IS NULL
+    LEFT JOIN product_variant pv
+      ON pv.id = itl.product_variant_id
+     AND pv.deleted_at IS NULL
+    WHERE it.deleted_at IS NULL
+      AND it.origin_country = 'CN'
+      AND it.status IN ('confirmed', 'shipped')
+    GROUP BY po.id, po.number, po.qb_purchase_order_txn_number, it.number, it.status, po.vendor_name_snapshot
+  ) t
+  CROSS JOIN LATERAL (
+    SELECT COALESCE(SUM(cfb.amount_cents), 0) AS billed_cents
+    FROM china_finance_bill cfb
+    WHERE cfb.po_number     = t.qb_po_number
+       OR cfb.po_ref_number = t.po_number
+       OR cfb.vendor_bill_id IN (
+         SELECT vb.id
+         FROM vendor_bill vb
+         WHERE vb.purchase_order_id = t.po_id
+           AND vb.deleted_at IS NULL
+       )
+  ) b
+  WHERE t.reserved_pending_cents - b.billed_cents > 0
+  ORDER BY t.po_number ASC
 `
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
@@ -121,8 +158,15 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       po_number:       String(r.po_number ?? ''),
       qb_po_number:    r.qb_po_number != null ? String(r.qb_po_number) : null,
       transfer_number: r.transfer_number != null ? String(r.transfer_number) : null,
+      status:          String(r.transfer_status ?? ''),
       vendor_name:     String(r.vendor_name ?? 'Unknown'),
+      value:           Number(r.unbilled_value ?? 0),
     }))
+
+    // Total debt owed to the China agent for goods already reserved out of the
+    // inventory value (confirmed|shipped transfers) but not yet on a vendor bill.
+    const unbilledValue =
+      Math.round(posWithoutBills.reduce((s, r) => s + r.value, 0) * 100) / 100
 
     return res.json({
       by_factory:  allRows,
@@ -134,6 +178,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         landed_value: Math.round(totalLandedValue * 100) / 100,
       },
       pos_without_bills: posWithoutBills,
+      unbilled: { value: unbilledValue },
     })
   } catch (err) {
     console.error("[factory-orders/china-inventory]", err)
