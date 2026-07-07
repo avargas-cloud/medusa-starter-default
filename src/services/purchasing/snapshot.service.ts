@@ -44,6 +44,24 @@ function approxEq(a: number, b: number, eps = 0.001): boolean {
   return Math.abs(a - b) <= eps;
 }
 
+/**
+ * Factory (manufacturing) days multiplier for an ABC class. Configurable via
+ * purchasing_config (factory_mult_a/b/c). Defaults 1.0 / 0.7 / 0.5.
+ */
+function factoryMultFor(
+  cfg: Pick<
+    import("./purchasing-config.service").PurchasingConfig,
+    "factory_mult_a" | "factory_mult_b" | "factory_mult_c"
+  >,
+  abcClass: string
+): number {
+  return abcClass === "A"
+    ? cfg.factory_mult_a
+    : abcClass === "B"
+      ? cfg.factory_mult_b
+      : cfg.factory_mult_c;
+}
+
 export interface SnapshotRunOptions {
   /**
    * Bypass smart-skip logic and recompute every variant. Use after algorithm
@@ -482,8 +500,7 @@ export async function runPurchasingSnapshot(
         const onPoUsa = poUsaBySku.get(sku) ?? 0;
 
         const abcClass = pareto?.abc_class ?? "C";
-        const factoryMult =
-          abcClass === "A" ? 1.0 : abcClass === "B" ? 0.7 : 0.5;
+        const factoryMult = factoryMultFor(cfg, abcClass);
         const prodDays = prodDaysByVariant.get(r.variant_id) ?? 10;
         const effectiveDays = Math.round(prodDays * factoryMult);
 
@@ -764,8 +781,7 @@ export async function recalculateForVariants(
         }
 
         const abcClass = abcClassPartial.get(variantId) ?? "C";
-        const factoryMult =
-          abcClass === "A" ? 1.0 : abcClass === "B" ? 0.7 : 0.5;
+        const factoryMult = factoryMultFor(cfg, abcClass);
         const prodDays = prodDaysPartial.get(variantId) ?? 10;
         const effectiveDays = Math.round(prodDays * factoryMult);
 

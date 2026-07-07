@@ -29,7 +29,11 @@ export async function GET(
       key: string;
       value: string;
       description: string | null;
-    }>(`SELECT key, value, description FROM purchasing_config ORDER BY key`);
+    }>(
+      // Column is `label` (there is no `description` column) — alias it so the
+      // response shape stays stable.
+      `SELECT key, value, label AS description FROM purchasing_config ORDER BY key`
+    );
     return res.json({ config: rows.rows });
   } finally {
     await db.end();
@@ -51,8 +55,14 @@ export async function PUT(
   const db = await getDb();
   try {
     for (const { key, value } of updates) {
+      // Upsert (not bare UPDATE): a missing key row would otherwise make the
+      // save a silent no-op — e.g. a newly-added config key whose seed migration
+      // hasn't run yet on this instance. NOTE: purchasing_config has no
+      // updated_at column (only key/value/label), so don't reference it.
       await db.query(
-        `UPDATE purchasing_config SET value = $2, updated_at = now() WHERE key = $1`,
+        `INSERT INTO purchasing_config (key, value)
+         VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
         [key, String(value)]
       );
     }
@@ -60,7 +70,11 @@ export async function PUT(
       key: string;
       value: string;
       description: string | null;
-    }>(`SELECT key, value, description FROM purchasing_config ORDER BY key`);
+    }>(
+      // Column is `label` (there is no `description` column) — alias it so the
+      // response shape stays stable.
+      `SELECT key, value, label AS description FROM purchasing_config ORDER BY key`
+    );
     return res.json({ ok: true, config: rows.rows });
   } finally {
     await db.end();

@@ -16,6 +16,12 @@ export interface PurchasingConfig {
   buffer_air_days: number;
   transit_sea_days: number;
   buffer_sea_days: number;
+  // Factory (manufacturing) days multiplier per ABC class. effectiveDays =
+  // round(production_days * factory_mult_<class>). Configurable via the
+  // purchasing-analysis settings modal (PUT /admin/purchasing/config).
+  factory_mult_a: number;
+  factory_mult_b: number;
+  factory_mult_c: number;
 }
 
 const DEFAULTS: PurchasingConfig = {
@@ -34,6 +40,9 @@ const DEFAULTS: PurchasingConfig = {
   buffer_air_days: 15,
   transit_sea_days: 90,
   buffer_sea_days: 45,
+  factory_mult_a: 1.0,
+  factory_mult_b: 0.7,
+  factory_mult_c: 0.5,
 };
 
 export async function loadPurchasingConfig(
