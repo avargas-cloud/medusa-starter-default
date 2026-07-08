@@ -87,6 +87,13 @@ export interface TimelineRow {
   /** Still physically in the China warehouse (aging). */
   current_qty: number
   manual_lot_id?: string
+  /** Operator's Excel FO number(s) for this SKU — display-only cross-reference
+   *  (the `fo_number` column is the system FIFO-attributed FO). Attached by the
+   *  route from `inventory_item.metadata.china_fo_reference`; null when unset. */
+  fo_reference?: string | null
+  /** Factory purchase cost per unit (variant metadata.qb_purchase_cost), attached
+   *  by the route to value aging stock. null when unknown. */
+  unit_cost?: number | null
 }
 
 export interface ItemResidual {

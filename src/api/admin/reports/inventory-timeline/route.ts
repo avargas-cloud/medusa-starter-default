@@ -130,16 +130,38 @@ const MANUAL_LOTS_SQL = `
   WHERE deleted_at IS NULL AND metadata->'china_manual_lots' IS NOT NULL
 `
 
+// Operator's Excel FO number(s) per item — display-only cross-reference shown in
+// the "FO Ref" column next to the system FIFO-attributed FO.
+const FO_REFERENCE_SQL = `
+  SELECT id AS inventory_item_id, metadata->>'china_fo_reference' AS fo_reference
+  FROM inventory_item
+  WHERE deleted_at IS NULL AND NULLIF(metadata->>'china_fo_reference', '') IS NOT NULL
+`
+
+// Factory purchase cost per item (variant metadata.qb_purchase_cost — the China
+// valuation basis, same as China Finance). Used to value over-SLA aging stock.
+const COST_SQL = `
+  SELECT DISTINCT ON (pvii.inventory_item_id)
+         pvii.inventory_item_id,
+         NULLIF(pv.metadata->>'qb_purchase_cost', '')::numeric AS unit_cost
+  FROM product_variant_inventory_item pvii
+  JOIN product_variant pv ON pv.id = pvii.variant_id AND pv.deleted_at IS NULL
+  WHERE pvii.deleted_at IS NULL AND NULLIF(pv.metadata->>'qb_purchase_cost', '') IS NOT NULL
+  ORDER BY pvii.inventory_item_id, pv.created_at ASC
+`
+
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const pg = req.scope.resolve("__pg_connection__") as {
     raw: (sql: string) => Promise<{ rows: Record<string, unknown>[] }>
   }
 
   try {
-    const [receiptRes, stockRes, manualRes] = await Promise.all([
+    const [receiptRes, stockRes, manualRes, refRes, costRes] = await Promise.all([
       pg.raw(RECEIPTS_SQL),
       pg.raw(CHINA_STOCK_SQL),
       pg.raw(MANUAL_LOTS_SQL),
+      pg.raw(FO_REFERENCE_SQL),
+      pg.raw(COST_SQL),
     ])
 
     const receiptsByItem = new Map<string, ReceiptInput[]>()
@@ -194,10 +216,29 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       if (lots.length) manualLotsByItem.set(itemId, lots)
     }
 
+    const foRefByItem = new Map<string, string>()
+    for (const r of refRes.rows) {
+      const itemId = String(r.inventory_item_id ?? "")
+      const ref = r.fo_reference != null ? String(r.fo_reference).trim() : ""
+      if (itemId && ref) foRefByItem.set(itemId, ref)
+    }
+
+    const costByItem = new Map<string, number>()
+    for (const r of costRes.rows) {
+      const itemId = String(r.inventory_item_id ?? "")
+      const cost = r.unit_cost != null ? Number(r.unit_cost) : NaN
+      if (itemId && Number.isFinite(cost)) costByItem.set(itemId, cost)
+    }
+
     const { rows, residuals } = buildTimeline(receiptsByItem, stockByItem, manualLotsByItem)
+    const rowsWithRef = rows.map((row) => ({
+      ...row,
+      fo_reference: foRefByItem.get(row.inventory_item_id) ?? null,
+      unit_cost: costByItem.get(row.inventory_item_id) ?? null,
+    }))
 
     return res.json({
-      rows,
+      rows: rowsWithRef,
       residuals,
       generated_at: new Date().toISOString(),
     })
