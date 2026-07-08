@@ -97,7 +97,8 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
     // Transfers shipped OUT of China (−qty)
     pg.raw(
       `SELECT it.id AS transfer_id, it.number AS transfer_number, it.shipped_at,
-              it.received_at, SUM(itl.qty)::int AS qty
+              it.received_at, SUM(itl.qty)::int AS qty,
+              SUM(COALESCE(itl.qty_received, 0))::int AS qty_received
          FROM inventory_transfer_line itl
          JOIN inventory_transfer it ON it.id = itl.transfer_id
         WHERE itl.deleted_at IS NULL AND it.deleted_at IS NULL
@@ -148,6 +149,7 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
     shipped_at: r.shipped_at,
     received_at: r.received_at,
     qty: toInt(r.qty),
+    qty_received: toInt(r.qty_received),
   }));
   const adjustments = (adjRes.rows as Record<string, unknown>[]).map((r) => ({
     id: String(r.id),
@@ -161,19 +163,36 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
   const stateRow = (stateRes.rows[0] as Record<string, unknown>) ?? {};
   const stocked = toInt(stateRow.stocked_quantity);
   const reserved = toInt(stateRow.reserved_quantity);
+  // Units already SHIPPED out of China but not yet received in Miami — they've
+  // physically LEFT the warehouse though `stocked` still carries them until receive.
+  const in_transit = transfers_out.reduce(
+    (s, t) => s + Math.max(0, t.qty - t.qty_received),
+    0
+  );
+  // Physical-in-China = what's actually sitting in the warehouse (matches the
+  // Inventory Timeline "En China": excludes in-transit, INCLUDES committed).
+  const physical_china = stocked - in_transit;
 
-  // beginning_balance = current stocked walked back by net movement since periodStart.
+  // The running balance tracks PHYSICAL China (not On-Hand `stocked`, which keeps
+  // in-transit units until Miami receives). Transfers subtract at ship (units leave
+  // the warehouse); the ledger closes at physical_china. beginning walks that back.
   const netSince =
     fo_receipts.reduce((s, r) => s + r.qty, 0) -
     transfers_out.reduce((s, r) => s + r.qty, 0) +
     adjustments.reduce((s, r) => s + r.delta, 0);
-  const beginning_balance = stocked - netSince;
+  const beginning_balance = physical_china - netSince;
 
   return res.json({
     fo_receipts,
     transfers_out,
     adjustments,
-    current_state: { stocked, reserved, available: stocked - reserved },
+    current_state: {
+      stocked,
+      reserved,
+      in_transit,
+      physical_china,
+      available: stocked - reserved,
+    },
     beginning_balance,
     period,
     year: targetYear,
