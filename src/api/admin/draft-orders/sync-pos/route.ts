@@ -420,9 +420,14 @@ export async function POST(
               orderId: resolvedId,
               step: "estimate",
               status: "pending",
+              // intent:"mod" — estimate already exists (qbTxnId). Without it the
+              // QB_CREATE_STEPS guard no-ops a confirmed estimate row and the edit
+              // never reaches QB (same bug as the SO post-edit-sync path).
+              intent: "mod",
+              qbTxnId,
             });
             logger.info(
-              `[sync-pos] 📥 Enqueued estimate for ${resolvedId} (modified)`
+              `[sync-pos] 📥 Enqueued estimate MOD for ${resolvedId} (modified)`
             );
           } catch (qbErr: any) {
             logger.error(

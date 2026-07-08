@@ -63,4 +63,16 @@ export interface WritePipelineRowInput {
   qbResult?: object | null;
   payload?: object | null;
   error?: string | null;
+  /**
+   * Operation intent. Defaults to undefined = "add" (create a NEW QB document).
+   *
+   * Set to "mod" when this enqueue is meant to MODIFY an existing QB document
+   * (e.g. SalesOrderMod / EstimateMod after a post-confirm edit). MOD is
+   * idempotent on the bridge (it targets an existing TxnID + EditSequence), so a
+   * "mod" pending write is ALLOWED to reactivate a confirmed row — unlike an ADD,
+   * which stays a no-op to avoid minting a duplicate QB doc. A "mod" write REQUIRES
+   * qbTxnId (the doc to modify); enqueuing "mod" without it throws. See the
+   * QB_CREATE_STEPS guard in row-mutations.ts.
+   */
+  intent?: "mod";
 }

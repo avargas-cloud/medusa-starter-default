@@ -3,6 +3,37 @@ export const LOG_PREFIX = "[QB-ORDER]";
 /** Helper: safely extract floating point numbers from Medusa BigNumber objects */
 export const getFloat = (val: any) => Number(val?.numeric_ ?? val) || 0;
 
+/**
+ * Consume the stored net closest to `computedNet` from `bucket`, REMOVING it in place
+ * (mutates the array). Returns undefined if the bucket is empty/absent.
+ *
+ * Frozen invoice nets are keyed by `${variant|sku}|${grossCents}`; two lines of the
+ * SAME variant at the SAME list price but DIFFERENT per-line discount (e.g. one ESPDO
+ * at $60.75 and a second ESPDO at $60.75 −50% = $30.38) collapse to one key. A scalar
+ * lookup let the second overwrite the first, so BOTH lines read the discounted net and
+ * QB got both at $30.38 (order 2450, Inv 18973 → $30.37 short → apply_payment QB 3210).
+ * Storing a multiset and consuming the CLOSEST net to each line's own computed net keeps
+ * both lines distinct regardless of the (non-deterministic) snapshot row order.
+ */
+export function consumeClosestNet(
+  bucket: number[] | undefined,
+  computedNet: number
+): number | undefined {
+  if (!bucket || bucket.length === 0) return undefined;
+  let bestIdx = 0;
+  let bestDiff = Infinity;
+  for (let i = 0; i < bucket.length; i++) {
+    const candidate = bucket[i];
+    if (candidate === undefined) continue;
+    const diff = Math.abs(candidate - computedNet);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestIdx = i;
+    }
+  }
+  return bucket.splice(bestIdx, 1)[0];
+}
+
 // Sales Channel IDs from .env
 const POS_CHANNEL_ID = process.env.POS_SALES_CHANNEL_ID ?? "";
 

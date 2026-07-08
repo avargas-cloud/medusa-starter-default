@@ -812,9 +812,15 @@ export async function POST(
             orderId: id,
             step: isEstimateOnly ? "estimate" : "sales_order",
             status: "pending",
+            // intent:"mod" — the QB doc already exists (txnId). Without this the
+            // QB_CREATE_STEPS guard leaves the confirmed row untouched and the
+            // consolidator never runs the MOD, silently dropping the edit
+            // (order 2450 SKU swap). MOD is idempotent, so reactivating the row is safe.
+            intent: "mod",
+            qbTxnId: txnId,
           });
           logger.info(
-            `[post-edit-sync] 📥 Enqueued ${isEstimateOnly ? "estimate" : "sales_order"} for ${id}`
+            `[post-edit-sync] 📥 Enqueued ${isEstimateOnly ? "estimate" : "sales_order"} MOD for ${id} (txnId=${txnId})`
           );
         } catch (modErr: any) {
           logger.error(

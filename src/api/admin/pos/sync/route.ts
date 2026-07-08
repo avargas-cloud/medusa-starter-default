@@ -286,6 +286,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   orderId: id,
                   step: "estimate",
                   status: "pending",
+                  // intent:"mod" — force-sync of an EXISTING estimate. Without it the
+                  // QB_CREATE_STEPS guard no-ops a confirmed estimate row and the manual
+                  // "Sync to QuickBooks" silently does nothing (same bug as the SO path).
+                  intent: "mod",
                   qbTxnId: freshTxnId,
                   medusaRefNumber:
                     (freshOrder.metadata as any)?.document_number ?? null,
@@ -420,6 +424,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   orderId: id,
                   step: "sales_order",
                   status: "pending",
+                  // intent:"mod" — force-sync of an EXISTING SO. Without it the
+                  // QB_CREATE_STEPS guard no-ops a confirmed SO row and the manual
+                  // "Sync to QuickBooks" silently does nothing (same bug as post-edit-sync).
+                  intent: "mod",
                   qbTxnId: freshSoTxnId,
                   medusaRefNumber:
                     (freshOrder.metadata as any)?.document_number ?? null,

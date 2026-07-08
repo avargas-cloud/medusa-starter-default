@@ -26,7 +26,7 @@ import {
 } from "../qb-pipeline";
 
 import { handleOrderPlaced } from "./handle-order-placed";
-import { LOG_PREFIX, getQbConfig, getFloat } from "./utils";
+import { LOG_PREFIX, getQbConfig, getFloat, consumeClosestNet } from "./utils";
 import { resolveTaxListid } from "../resolve-tax-listid";
 
 function normalizePosInvoicePayloadItems(items: any[]): any[] {
@@ -392,11 +392,16 @@ export async function handleFulfillmentCreated(
     let lineDiscountTotalCents = 0;
 
     // Frozen net (round-then-multiply) per line, loaded from the invoice snapshot.
-    // Keyed by `${variant_id|sku}|${grossCents}` so same-variant lines at different
-    // prices stay distinct (grossCents === pos_invoice_item.total). Populated only for
-    // invoices issued after net_total_cents existed; legacy invoices yield an empty
-    // map → the recompute below stays authoritative and the doc is untouched.
-    const netByLine = new Map<string, number>();
+    // Keyed by `${variant_id|sku}|${grossCents}` (grossCents === pos_invoice_item.total).
+    // The value is a LIST of nets, not a single net: two lines of the SAME variant at
+    // the SAME list price but DIFFERENT per-line discount (e.g. one ESPDO at $60.75 and
+    // a second ESPDO at $60.75 −50% = $30.38) collapse to the same key. A scalar map let
+    // the second line OVERWRITE the first, so both lines then read the discounted net and
+    // QB received both at $30.38 (order 2450, Inv 18973 → $30.37 short, apply_payment 3210).
+    // A multiset that is CONSUMED per line (best-match below) keeps each net distinct.
+    // Populated only for invoices issued after net_total_cents existed; legacy invoices
+    // yield an empty map → the recompute below stays authoritative and the doc is untouched.
+    const netByLine = new Map<string, number[]>();
     const snapshotTaxableByVariantId = new Map<string, boolean>();
     if (data.invoice_id) {
       try {
@@ -410,7 +415,9 @@ export async function handleFulfillmentCreated(
         for (const r of netRows) {
           const grossCents = Math.round(Number(r.total || 0));
           const key = `${r.variant_id ?? r.sku ?? "custom"}|${grossCents}`;
-          netByLine.set(key, Number(r.net_total_cents));
+          const bucket = netByLine.get(key) ?? [];
+          bucket.push(Number(r.net_total_cents));
+          netByLine.set(key, bucket);
           if (r.variant_id != null && r.taxable != null) {
             snapshotTaxableByVariantId.set(
               String(r.variant_id),
@@ -535,7 +542,13 @@ export async function handleFulfillmentCreated(
         // missing freeze still yields the correct number. The baked discount is
         // gross − net either way, so the order-level subtraction below stays correct.
         const netKey = `${item.variant_id ?? item.variant?.sku ?? "custom"}|${grossTotalCents}`;
-        const storedNet = netByLine.get(netKey);
+        // Consume one net from the bucket for this line, closest to its own computed net,
+        // so a discounted and an undiscounted line of the same SKU/gross each get their
+        // own net instead of both reading whichever landed last (order 2450). See helper.
+        const storedNet = consumeClosestNet(
+          netByLine.get(netKey),
+          Math.max(0, grossTotalCents - lineDiscountCentsComputed)
+        );
         const hasStoredNet = storedNet != null && Number.isFinite(storedNet);
         const lineDiscountCents = hasStoredNet
           ? Math.max(0, grossTotalCents - Math.max(0, storedNet as number))

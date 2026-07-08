@@ -26,7 +26,7 @@ import {
 } from "../qb-pipeline";
 
 import { handleFulfillmentCreated } from "./handle-fulfillment-created";
-import { LOG_PREFIX, getQbConfig, getFloat } from "./utils";
+import { LOG_PREFIX, getQbConfig, getFloat, consumeClosestNet } from "./utils";
 import { resolveTaxListid } from "../resolve-tax-listid";
 import { invoiceLineDiscountCents } from "../force-sync-doc-payload";
 
@@ -321,7 +321,11 @@ export async function handleSalesReceiptCreated(
   //   (b) taxable reflects the value at invoice creation, not the current
   //       catalog state (G1 fix — column auto-set by DB trigger at INSERT).
   let lineDiscountTotalCents = 0;
-  const netByLine = new Map<string, number>();
+  // Multiset of frozen nets per `${variant|sku}|${grossCents}` key, CONSUMED per line
+  // below. Two lines of the same variant at the same list price but different per-line
+  // discount collapse to one key; a scalar map let the second overwrite the first so both
+  // read the discounted net (order 2450 dup-SKU bug). Parity with handle-fulfillment-created.
+  const netByLine = new Map<string, number[]>();
   const snapshotTaxableByVariantId = new Map<string, boolean>();
 
   if (data.invoice_id) {
@@ -336,7 +340,9 @@ export async function handleSalesReceiptCreated(
       for (const r of netRows) {
         const grossCents = Math.round(Number(r.total || 0));
         const key = `${r.variant_id ?? r.sku ?? "custom"}|${grossCents}`;
-        netByLine.set(key, Number(r.net_total_cents));
+        const bucket = netByLine.get(key) ?? [];
+        bucket.push(Number(r.net_total_cents));
+        netByLine.set(key, bucket);
         if (r.variant_id != null && r.taxable != null) {
           snapshotTaxableByVariantId.set(
             String(r.variant_id),
@@ -387,7 +393,12 @@ export async function handleSalesReceiptCreated(
       );
 
       const netKey = `${item.variant_id ?? item.variant?.sku ?? "custom"}|${grossTotalCents}`;
-      const storedNet = netByLine.get(netKey);
+      // Consume the closest stored net from the bucket (see helper): keeps
+      // same-variant/same-gross lines with different discounts distinct (order 2450).
+      const storedNet = consumeClosestNet(
+        netByLine.get(netKey),
+        Math.max(0, grossTotalCents - lineDiscountCentsComputed)
+      );
       const hasStoredNet = storedNet != null && Number.isFinite(storedNet);
       const lineDiscountCents = hasStoredNet
         ? Math.max(0, grossTotalCents - Math.max(0, storedNet as number))

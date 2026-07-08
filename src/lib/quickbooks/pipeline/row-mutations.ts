@@ -135,6 +135,16 @@ export async function writePipelineRow(
   // helper docstring for the resolution order and the non-regressive edge cases.
   await canonicalizeApplyPaymentInput(input);
 
+  // A "mod" intent means "modify an existing QB document" — it MUST know which doc
+  // (qbTxnId). Without it the consolidator would have nothing to MOD and could fall
+  // back to a CREATE, defeating the whole point. Fail loud instead of silently
+  // enqueuing a MOD that turns into a duplicate ADD.
+  if (input.intent === "mod" && !input.qbTxnId) {
+    throw new Error(
+      `writePipelineRow: intent:"mod" for step="${input.step}" requires qbTxnId (the QB doc to modify)`
+    );
+  }
+
   // For "waiting": upsert — update existing waiting row or fall through to INSERT.
   // Prevents duplicate waiting rows when upfront pipeline rows are written on invoice creation.
   // Supports orderId-only, referenceId-only, or both matches (null-safe).
@@ -178,7 +188,16 @@ export async function writePipelineRow(
     // Return the existing row id so callers (manual resync, retry, re-complete)
     // treat it as "already enqueued". Genuinely failed/skipped creates fall
     // through to the normal reactivation path below (legit retry).
-    if (QB_CREATE_STEPS.has(input.step)) {
+    //
+    // EXCEPTION — intent:"mod": a MOD is idempotent on the bridge (it targets an
+    // existing TxnID + EditSequence, never creates a new doc), so it is SAFE to
+    // reactivate a confirmed row into 'pending'. Skipping this exception is what
+    // silently dropped SalesOrderMod/EstimateMod edits made after the create
+    // confirmed (order 2450: SKU swap never reached the QB Sales Order). The
+    // consolidator routes a 'sales_order'/'estimate' pending row MOD-first
+    // (resubmit-by-step.ts), so a confirmed→pending reactivation dispatches a MOD,
+    // not a second ADD. intent:"mod" always carries qbTxnId (enforced above).
+    if (QB_CREATE_STEPS.has(input.step) && input.intent !== "mod") {
       const { rows: inFlight } = await pool.query(
         `SELECT id
            FROM qb_order_pipeline
@@ -234,6 +253,8 @@ export async function writePipelineRow(
                  bridge_op_id      = NULL,
                  qb_result         = NULL,
                  medusa_ref_number = COALESCE($3, medusa_ref_number),
+                 qb_txn_id         = COALESCE($6, qb_txn_id),
+                 qb_ref_number     = COALESCE($7, qb_ref_number),
                  payload           = COALESCE($5::jsonb, payload),
                  retry_count       = CASE WHEN status = 'failed' THEN retry_count + 1 ELSE retry_count END
              WHERE step = $2 AND status IN ('submitted', 'confirmed', 'failed', 'skipped')
@@ -248,6 +269,8 @@ export async function writePipelineRow(
         input.medusaRefNumber ?? null,
         input.referenceId ?? null,
         input.payload ? JSON.stringify(input.payload) : null,
+        input.qbTxnId ?? null,
+        input.qbRefNumber ?? null,
       ]
     );
     if (reactivated.length > 0) return reactivated[0].id as string;
