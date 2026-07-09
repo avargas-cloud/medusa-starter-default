@@ -182,6 +182,8 @@ export interface QbUpdateInvoicePayload {
 
 export interface QbUpdateSalesReceiptPayload {
   txnId: string;
+  /** New TxnDate (YYYY-MM-DD) — bridge SalesReceiptMod emits <TxnDate>. */
+  date?: string;
   salesRep?: string;
   salesTaxCode?: string;
   /** QB SalesTaxItem ListID — when present, bridge emits ItemSalesTaxRef.ListID instead of FullName. */

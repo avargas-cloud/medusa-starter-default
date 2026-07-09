@@ -130,6 +130,48 @@ export async function voidPaymentInQb(
 }
 
 /**
+ * Updates ONLY the TxnDate of a ReceivePayment (batch_day edit).
+ *
+ * Always queries QB fresh for the current EditSequence (cache is unreliable —
+ * QB bumps it on every Mod/reconcile), then issues a ReceivePaymentMod with
+ * just the new date. The bridge builder emits <TxnDate> when `date` is set
+ * (receivePayment.ts). Safe for applied payments: the Mod carries no
+ * AppliedToTxnMod, so existing applications are untouched.
+ */
+export async function updatePaymentTxnDateInQb(
+  paymentTxnId: string,
+  date: string,
+  log: (msg: string) => void = console.log
+): Promise<QbBridgeResult<QbAsyncResult>> {
+  if (DRY_RUN) {
+    console.log(
+      `[QB DRY RUN] Would update payment ${paymentTxnId} TxnDate → ${date}`
+    );
+    return {
+      success: true,
+      dryRun: true,
+      data: { operationId: "DRY_RUN", txnId: paymentTxnId },
+    };
+  }
+
+  try {
+    const state = await fetchPaymentCurrentState(paymentTxnId, log);
+    const modResp = await bridgeFetch("PUT", `/api/payments/${paymentTxnId}`, {
+      EditSequence: state.editSequence,
+      date,
+    });
+    const operationId = modResp?.operationId;
+    if (!operationId)
+      throw new Error(
+        "Bridge did not return an operationId for payment TxnDate mod"
+      );
+    return { success: true, data: { operationId, txnId: paymentTxnId } };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
  * Fetches the CURRENT live state of a ReceivePayment from QB:
  * - fresh EditSequence
  * - the full AppliedToTxnRet list (which invoices it currently pays, and how much)

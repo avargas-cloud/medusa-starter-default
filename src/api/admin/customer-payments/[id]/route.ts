@@ -5,6 +5,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 
+import { isValidBatchDay } from "../../../../lib/finance/batch-day";
 import { resolveQbPaymentMethodForPayment } from "../../../../lib/quickbooks/payment-method-sanitizer";
 import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../modules/finance";
@@ -175,12 +176,14 @@ const VALID_CARD_BRANDS = [
 
 export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
   const id = req.params.id!;
-  const { method, pos_payment_method, card_brand, reference } = req.body as {
-    method?: string;
-    pos_payment_method?: string;
-    card_brand?: string | null;
-    reference?: string;
-  };
+  const { method, pos_payment_method, card_brand, reference, batch_day } =
+    req.body as {
+      method?: string;
+      pos_payment_method?: string;
+      card_brand?: string | null;
+      reference?: string;
+      batch_day?: string;
+    };
   const financeService = req.scope.resolve(FINANCE_MODULE);
 
   try {
@@ -202,17 +205,56 @@ export async function PATCH(req: MedusaRequest, res: MedusaResponse) {
         .status(400)
         .json({ error: `Invalid card_brand: ${card_brand}` });
     }
+    if (batch_day !== undefined && !isValidBatchDay(batch_day)) {
+      return res
+        .status(400)
+        .json({ error: `Invalid batch_day: ${batch_day} (YYYY-MM-DD)` });
+    }
 
     const meta = (payment.metadata as Record<string, any>) ?? {};
     const fields: Record<string, any> = {};
     if (method) fields.method = method;
     if (reference !== undefined) fields.reference = reference;
     if (card_brand !== undefined) fields.card_brand = card_brand;
+    const batchDayChanged =
+      batch_day !== undefined && batch_day !== (payment as any).batch_day;
+    if (batchDayChanged) fields.batch_day = batch_day;
     if (pos_payment_method !== undefined) {
       fields.metadata = { ...meta, pos_payment_method };
     }
 
     await financeService.updateCustomerPayments({ id, ...fields });
+
+    // ── QB re-sync: batch_day edit moves the QB doc's TxnDate ────────────
+    // Enqueued as a durable consolidator step (NOT a direct bridge call):
+    // the dispatch reads the LIVE batch_day, so rapid repeated edits coalesce
+    // and QB converges on the latest value. SR-embedded payments move the
+    // whole Sales Receipt; standalone payments move the ReceivePayment.
+    if (batchDayChanged) {
+      const isSalesReceiptPayment =
+        meta.is_sales_receipt_payment === true ||
+        meta.qb_source === "sales_receipt";
+      const qbTxnId = meta.qb_txn_id as string | undefined;
+      const hasQbDoc =
+        (isSalesReceiptPayment && !!meta.order_id) ||
+        (!!qbTxnId && qbTxnId !== "SYNCED_VIA_RECEIPT");
+      if (hasQbDoc) {
+        const paymentLabel =
+          (payment as any).display_id != null
+            ? `PAY-${(payment as any).display_id}`
+            : ((payment as any).reference ?? null);
+        await writePipelineRow({
+          orderId: (meta.order_id as string | undefined) ?? null,
+          referenceId: id,
+          referenceType: "customer_payment",
+          step: "payment_txndate_change",
+          status: "pending",
+          medusaRefNumber: paymentLabel,
+        }).catch(() => {
+          /* non-fatal — consolidator visibility only */
+        });
+      }
+    }
 
     // ── Sync pos_invoice + invoice_payment payment_method ────────────────
     // When the payment method changes, propagate it to every linked PosInvoice

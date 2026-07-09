@@ -210,6 +210,7 @@ export async function updateSalesReceiptInQb(
       `/api/sales-receipts/${payload.txnId}`,
       {
         EditSequence: editSequence,
+        ...(payload.date ? { date: payload.date } : {}),
         ...(payload.salesRep ? { salesRepRef: payload.salesRep } : {}),
         ...(payload.salesTaxCode ? { salesTaxCode: payload.salesTaxCode } : {}),
         ...(payload.qbTaxItemListid

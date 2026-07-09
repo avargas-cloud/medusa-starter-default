@@ -6,6 +6,7 @@ import {
   cancelEstimateInQb,
   deactivateEstimateInQb,
 } from "../client/estimates";
+import { updatePaymentTxnDateInQb } from "../client/payments";
 import { transferDocumentCustomer } from "../client/transfer";
 import {
   updateCreditMemoInQb,
@@ -852,6 +853,141 @@ export async function resubmitByStep(
           container,
           logger
         );
+        break;
+      }
+
+      case "payment_txndate_change": {
+        // batch_day edit → move the QB doc's TxnDate. Reads the LIVE
+        // customer_payment.batch_day (never a stale payload) so repeated edits
+        // coalesce into the latest value and QB always converges — out-of-order
+        // dispatches are harmless.
+        if (!row.reference_id) {
+          await failPipelineRow(
+            row.id,
+            "payment_txndate_change: missing reference_id (payment id)"
+          );
+          break;
+        }
+        const txnDatePool = getDbPool();
+        const { rows: payRows } = await txnDatePool.query(
+          `SELECT batch_day, status, metadata
+             FROM customer_payment
+            WHERE id = $1 AND deleted_at IS NULL`,
+          [row.reference_id]
+        );
+        const pay = payRows[0] as
+          | {
+              batch_day: string | null;
+              status: string;
+              metadata: Record<string, unknown> | null;
+            }
+          | undefined;
+
+        const skipTxnDateRow = async (reason: string) => {
+          await txnDatePool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'skipped', error = $2, updated_at = NOW()
+              WHERE id = $1`,
+            [row.id, reason]
+          );
+          logger.info(
+            `${LOG_PREFIX} ⏭️ payment_txndate_change ${row.id} skipped: ${reason}`
+          );
+        };
+
+        if (!pay || !pay.batch_day) {
+          await skipTxnDateRow("payment missing or has no batch_day");
+          break;
+        }
+        if (pay.status === "voided") {
+          await skipTxnDateRow("payment is voided — no QB doc to move");
+          break;
+        }
+
+        const payMeta = pay.metadata ?? {};
+        const isSrEmbedded =
+          payMeta.is_sales_receipt_payment === true ||
+          payMeta.qb_source === "sales_receipt";
+
+        if (isSrEmbedded) {
+          // SR-embedded: the payment and the sale are ONE Sales Receipt —
+          // move the whole doc's TxnDate (user-confirmed; SR is standalone,
+          // no LinkToTxn risk).
+          const srOrderId =
+            (payMeta.order_id as string | undefined) ?? row.order_id ?? null;
+          if (!srOrderId) {
+            await skipTxnDateRow("SR-embedded payment has no order_id");
+            break;
+          }
+          const { rows: srRows } = await txnDatePool.query(
+            `SELECT qb_txn_id FROM qb_order_pipeline
+              WHERE order_id = $1 AND step = 'sales_receipt' AND status = 'confirmed'
+              ORDER BY created_at DESC LIMIT 1`,
+            [srOrderId]
+          );
+          const srTxnId = srRows[0]?.qb_txn_id as string | undefined;
+          if (!srTxnId) {
+            // SR create may still be in flight — fail (retryable) instead of skip.
+            await failPipelineRow(
+              row.id,
+              `payment_txndate_change: no confirmed sales_receipt row for order ${srOrderId}`
+            );
+            break;
+          }
+          const srMod = await updateSalesReceiptInQb({
+            txnId: srTxnId,
+            date: pay.batch_day,
+          });
+          if (srMod.success && srMod.data?.operationId) {
+            await txnDatePool.query(
+              `UPDATE qb_order_pipeline
+                  SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                      submitted_at = NOW(), updated_at = NOW()
+                WHERE id = $1`,
+              [row.id, srMod.data.operationId, srTxnId]
+            );
+            logger.info(
+              `${LOG_PREFIX} ✅ payment_txndate_change ${row.id} → SalesReceiptMod ${srTxnId} TxnDate=${pay.batch_day} op=${srMod.data.operationId}`
+            );
+          } else {
+            await failPipelineRow(
+              row.id,
+              srMod.error ?? "SalesReceiptMod for TxnDate failed"
+            );
+          }
+          break;
+        }
+
+        // Regular standalone ReceivePayment
+        const payTxnId = payMeta.qb_txn_id as string | undefined;
+        if (!payTxnId || payTxnId === "SYNCED_VIA_RECEIPT") {
+          await skipTxnDateRow(
+            "payment has no standalone QB ReceivePayment TxnID"
+          );
+          break;
+        }
+        const payMod = await updatePaymentTxnDateInQb(
+          payTxnId,
+          pay.batch_day,
+          (m: string) => logger.info(m)
+        );
+        if (payMod.success && payMod.data?.operationId) {
+          await txnDatePool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                    submitted_at = NOW(), updated_at = NOW()
+              WHERE id = $1`,
+            [row.id, payMod.data.operationId, payTxnId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ payment_txndate_change ${row.id} → ReceivePaymentMod ${payTxnId} TxnDate=${pay.batch_day} op=${payMod.data.operationId}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            payMod.error ?? "ReceivePaymentMod for TxnDate failed"
+          );
+        }
         break;
       }
 

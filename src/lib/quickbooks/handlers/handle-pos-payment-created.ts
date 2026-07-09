@@ -1,6 +1,7 @@
 import { SubscriberArgs } from "@medusajs/framework";
 import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
 
+import { computeBatchDay, getBatchCutoff } from "../../finance/batch-day";
 import { FINANCE_MODULE } from "../../../modules/finance";
 import { createCreditMemoInQb } from "../client";
 import {
@@ -361,12 +362,16 @@ export async function handlePosPaymentCreated({
       amount: (payment.amount as number) / 100,
       paymentMethod: resolvedQbMethod,
       qbCustomerId: qbCustomerId as string,
-      // QB <TxnDate> = the real moment the payment was taken/created in the POS
-      // (received_at, falling back to created_at). Keeps QB in lockstep with the
-      // POS regardless of QB machine clock or pipeline latency.
-      date: getBusinessDateString(
-        ((payment as any).received_at ?? (payment as any).created_at) || null
-      ),
+      // QB <TxnDate> = the payment's merchant batch day (after the 18:45 ET
+      // cutoff a payment belongs to the NEXT day's batch — matches the
+      // processor's deposits). batch_day is set centrally on create; the
+      // recompute fallback covers legacy/null rows (raw SQL, old scripts).
+      date:
+        ((payment as any).batch_day as string | null) ??
+        computeBatchDay(
+          ((payment as any).received_at ?? (payment as any).created_at) || null,
+          await getBatchCutoff()
+        ),
       memo,
       onSubmitted: async (operationId) => {
         await writePipelineRow({

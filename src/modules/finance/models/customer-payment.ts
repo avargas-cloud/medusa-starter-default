@@ -84,6 +84,11 @@ const CustomerPayment = model.define("customer_payment", {
 
   locked_order_id: model.text().nullable(), // web payments are locked to their order
   received_at: model.dateTime(),
+  // Merchant batch day (ET, 'YYYY-MM-DD'). Payments taken after the merchant's
+  // batch cutoff (store.metadata.payment_batch_cutoff, default 18:45 ET) belong
+  // to the NEXT day's batch. Set centrally in FinanceModuleService.create*;
+  // editable per-payment via PATCH /admin/customer-payments/:id.
+  batch_day: model.text().nullable(),
   notes: model.text().nullable(),
   created_by: model.text().nullable(), // admin user email / "system" for subscribers
   metadata: model.json().nullable(), // Extensibility (QuickBooks exact method, contexts, etc)

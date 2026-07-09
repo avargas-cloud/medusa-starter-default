@@ -21,6 +21,7 @@ export type PipelineStep =
   | "void_credit_memo"
   | "void_check"
   | "payment_method_change"
+  | "payment_txndate_change"
   | "transfer_customer"
   | "transfer_payment"
   | "so_close"

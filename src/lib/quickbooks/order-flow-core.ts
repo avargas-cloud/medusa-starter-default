@@ -32,6 +32,7 @@
  *   QB_DRY_RUN=false              — set to "true" to simulate without writing to QB
  */
 
+import { computeBatchDay, getBatchCutoff } from "../finance/batch-day";
 import { buildQbCustomerName } from "./build-customer-name";
 import { createSalesReceiptInQb } from "./client/sales-receipts";
 import { getFloat } from "./handlers/utils";
@@ -1052,7 +1053,10 @@ export async function processInvoiceInQb(invoice: {
 
   const invResult = await createInvoiceInQb({
     customerId: invoice.qbCustomerId,
-    date: getBusinessDateString(invoice.invoiceDate),
+    // TxnDate = merchant batch day: after the 18:45 ET cutoff the sale belongs
+    // to the NEXT day's batch (matches the processor's deposits). Deterministic
+    // from the invoice timestamp, so retries/resubmits land on the same day.
+    date: computeBatchDay(invoice.invoiceDate ?? null, await getBatchCutoff()),
     LinkToTxnID: invoice.qbSoTxnId,
     items: invoice.prebuiltItems,
     salesTaxCode: invoice.salesTaxCode,
@@ -1232,7 +1236,8 @@ export async function processSalesReceiptInQb(receipt: {
 
   const srResult = await createSalesReceiptInQb({
     customerId: receipt.qbCustomerId,
-    date: getBusinessDateString(receipt.receiptDate),
+    // TxnDate = merchant batch day (same cutoff rule as Invoice/ReceivePayment).
+    date: computeBatchDay(receipt.receiptDate ?? null, await getBatchCutoff()),
     items: receipt.prebuiltItems || [],
     salesTaxCode: receipt.salesTaxCode,
     qbTaxItemListid: receipt.qbTaxItemListid,
