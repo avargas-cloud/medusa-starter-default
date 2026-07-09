@@ -40,8 +40,8 @@ async function countActiveInvoices(pg: any, orderId: string): Promise<number> {
  *      Releases leftover reservations of un-invoiced lines; enqueues QB so_close.
  *      Reopenable → status back to pending.
  *   3. Invoiced but NOT fully paid/fulfilled → POS-flag close (metadata.pos_closed
- *      = true), reservations re-held with backorder; enqueues QB so_close.
- *      Reopenable via the flag.
+ *      = true), remaining reservations released; enqueues QB so_close.
+ *      Reopenable via the flag (reopen re-holds with backorder).
  *
  * Reopen (metadata.pos_closed already true): if the order is `completed` it is
  * reverted to `pending`; otherwise the flag is cleared. Reservations recreated
@@ -213,8 +213,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       });
     }
 
-    // 3. Invoiced but not completable → POS-flag close (reversible), reservations
-    //    re-held with backorder. Preserves the legacy behavior.
+    // 3. Invoiced but not completable → POS-flag close (reversible). Remaining
+    //    allocations are RELEASED so the stock is sellable while closed; reopen
+    //    recreates them with backorder.
     const newMeta = {
       ...meta,
       pos_closed: true,
@@ -223,18 +224,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     };
     await orderService.updateOrders([{ id: orderId, metadata: newMeta }]);
 
-    let negativeStockItems: NegativeStockItem[] = [];
-    if (locationId) {
-      negativeStockItems = await recreateReservationsWithBackorder({
-        scope: req.scope,
-        inventoryModule,
-        remoteQuery,
-        pg,
-        locationId,
-        orderId: orderId!,
-        items,
-      });
-    }
+    await releaseAllReservations(inventoryModule, items);
 
     const qb = await enqueueSoToggle({
       orderId: orderId!,
@@ -243,13 +233,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     });
 
     console.log(
-      `${LOG_PREFIX} 📦 Order ${orderId} POS-closed (not completable: ${completeResult.reason})`
+      `${LOG_PREFIX} 📦 Order ${orderId} POS-closed, reservations released (not completable: ${completeResult.reason})`
     );
     return res.status(200).json({
       success: true,
       action: "closed",
       complete_blocked_reason: completeResult.reason,
-      negative_stock_items: negativeStockItems,
+      negative_stock_items: [],
       qb_skipped: qb.qbSkipped,
       qb_error: qb.qbError ?? null,
     });

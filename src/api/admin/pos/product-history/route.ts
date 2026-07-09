@@ -139,6 +139,7 @@ export async function GET(
           ri.id           AS reservation_id,
           o.id            AS order_id,
           o.display_id,
+          o.metadata->>'document_number' AS document_number,
           o.created_at,
           ri.quantity,
           ri.created_at   AS reserved_at,
@@ -165,6 +166,7 @@ export async function GET(
         MIN(reservation_id) AS reservation_id,
         order_id,
         display_id,
+        document_number,
         created_at,
         SUM(quantity)::int AS quantity,
         MIN(reserved_at) AS reserved_at,
@@ -174,6 +176,7 @@ export async function GET(
       GROUP BY
         order_id,
         display_id,
+        document_number,
         created_at,
         customer_name,
         customer_email
