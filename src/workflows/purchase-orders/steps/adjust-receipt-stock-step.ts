@@ -50,7 +50,13 @@ interface InventoryServiceLike {
   listInventoryLevels: (
     filters: Record<string, unknown>,
     options?: { take?: number }
-  ) => Promise<Array<{ inventory_item_id: string; stocked_quantity: number }>>;
+  ) => Promise<
+    Array<{
+      inventory_item_id: string;
+      stocked_quantity: number;
+      reserved_quantity: number;
+    }>
+  >;
   adjustInventory: (
     inventory_item_id: string,
     location_id: string,
@@ -83,11 +89,23 @@ export const adjustReceiptStockStep = createStep(
         { take: 1 }
       );
       const preStock = levels[0]?.stocked_quantity ?? 0;
+      const preReserved = Number(levels[0]?.reserved_quantity ?? 0);
 
       // Guard: don't drive stock negative when reversing units.
       if (line.delta < 0 && preStock + line.delta < 0) {
         throw new Error(
           `Cannot reduce qty on receipt line ${line.receipt_line_id}: stock at location is ${preStock}, edit would result in ${preStock + line.delta}.`
+        );
+      }
+
+      // Guard: don't strand reservations (apartado). With reservations now
+      // surviving invoicing until dispatch/pickup, a receipt reduction that
+      // leaves stocked < reserved would depress availability negative for
+      // sold-but-undelivered goods. Same rule as the FO receipt steps
+      // (atomic-stock-move): unwind the reservation/transfer/sale first.
+      if (line.delta < 0 && preStock + line.delta < preReserved) {
+        throw new Error(
+          `Cannot reduce qty on receipt line ${line.receipt_line_id}: would leave stock at ${preStock + line.delta}, below the ${preReserved} reserved (apartado). Unwind the reservation/transfer/sale first.`
         );
       }
 

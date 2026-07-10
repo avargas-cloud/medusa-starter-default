@@ -1,4 +1,5 @@
 import { IInventoryService, IStockLocationService } from "@medusajs/types";
+import { USA_LOC } from "../locations";
 import { pollBridgeStatus } from "./bridge-fetch";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 
@@ -146,14 +147,15 @@ export async function syncInventoryCore(
       `⏰ Sync initiated: ${new Date().toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true, timeZoneName: "short" })}`
     );
 
-    // 1. Get Default Stock Location
+    // 1. Get the EXPLICIT Miami stock location — never "first row" (with
+    // Miami + China Warehouse both live, take:1 could sync QB stock into
+    // China depending on DB ordering). Fail closed.
     const locations = await stockLocationService.listStockLocations(
-      {},
+      { id: USA_LOC },
       { take: 1 }
     );
     if (locations.length === 0) {
-      const error =
-        "No Stock Location found! Create one in Medusa Settings first.";
+      const error = `Miami stock location ${USA_LOC} not found — refusing to guess.`;
       logger.error(`❌ ${error}`);
       return { success: false, stats, error };
     }

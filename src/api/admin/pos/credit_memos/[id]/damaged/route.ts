@@ -6,6 +6,7 @@ import { Modules } from "@medusajs/utils";
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
+import { USA_LOC } from "../../../../../../lib/locations";
 
 /**
  * PATCH /admin/pos/credit_memos/:id/damaged
@@ -60,8 +61,17 @@ export async function PATCH(
       return;
     }
 
-    const allLocations = await stockLocationService.listStockLocations({});
+    // EXPLICIT Miami — never "first row" (with Miami + China Warehouse both
+    // live, [0] could restock in China). Fail closed: no Miami → no restock.
+    const allLocations = await stockLocationService.listStockLocations({
+      id: USA_LOC,
+    });
     const locationId = allLocations[0]?.id;
+    if (!locationId) {
+      console.warn(
+        `[credit-memo] Miami location ${USA_LOC} not found — skipping restock`
+      );
+    }
     const touchedInventoryItemIds = new Set<string>();
 
     const pgConnection = req.scope.resolve("__pg_connection__") as any;

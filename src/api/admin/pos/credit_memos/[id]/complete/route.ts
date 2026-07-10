@@ -20,6 +20,7 @@ import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
+import { USA_LOC } from "../../../../../../lib/locations";
 
 export async function POST(
   req: MedusaRequest,
@@ -82,8 +83,17 @@ export async function POST(
 
     // Restock Inventory for every variant in the credit memo
     // Use the first active stock location (no assumption on name)
-    const allLocations = await stockLocationService.listStockLocations({});
+    // EXPLICIT Miami — never "first row" (with Miami + China Warehouse both
+    // live, [0] could restock in China). Fail closed: no Miami → no restock.
+    const allLocations = await stockLocationService.listStockLocations({
+      id: USA_LOC,
+    });
     const locationId = allLocations[0]?.id;
+    if (!locationId) {
+      console.warn(
+        `[credit-memo] Miami location ${USA_LOC} not found — skipping restock`
+      );
+    }
     const touchedInventoryItemIds = new Set<string>();
 
     if (locationId) {

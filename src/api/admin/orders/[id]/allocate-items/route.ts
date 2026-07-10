@@ -2,6 +2,9 @@ import { createReservationsWorkflow } from "@medusajs/core-flows";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
 
+import { USA_LOC } from "../../../../../lib/locations";
+import { listActiveReservationsRaw } from "../../../../../lib/reservations";
+
 /**
  * POST /admin/orders/:id/allocate-items
  *
@@ -12,7 +15,9 @@ import { Modules } from "@medusajs/utils";
  * Railway DB connection limits). All queries go through Medusa's shared ORM.
  *
  * Body:
- *   location_id?: string  — if omitted, uses first available stock location
+ *   location_id?: string  — explicit override; if omitted, uses the Miami POS
+ *   location (USA_LOC), fail-closed. Reservations succeed even at 0 stock
+ *   (allow_backorder=true) — apartado policy.
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const { id: orderId } = req.params;
@@ -35,20 +40,25 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const inventoryModule = req.scope.resolve(Modules.INVENTORY) as any;
     const remoteQuery = req.scope.resolve("remoteQuery") as any;
 
-    // 1. Get location_id from request body or first available stock location
+    // 1. Get location_id from request body, else the EXPLICIT Miami location.
+    // Never "first row" — with Miami + China Warehouse both live, take:1 could
+    // create the apartado in China depending on DB ordering. Fail closed.
     if (!location_id) {
       const stockLocationModule = req.scope.resolve(
         Modules.STOCK_LOCATION
       ) as any;
       const locs = await stockLocationModule.listStockLocations(
-        {},
+        { id: USA_LOC },
         { take: 1, select: ["id"] }
       );
       location_id = locs?.[0]?.id;
       if (!location_id) {
+        console.warn(
+          `[allocate-items] Miami location ${USA_LOC} not found — refusing to guess`
+        );
         return res
           .status(200)
-          .json({ allocated: [], message: "No stock location found" });
+          .json({ allocated: [], message: "Miami stock location not found" });
       }
     }
 
@@ -88,67 +98,115 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       }
 
       try {
-        let existingResId: string | undefined;
+        // Idempotent check by order_line_item.id — RAW SQL (the module's
+        // { line_item_id } filter is unreliable in Medusa v2; a false-negative
+        // here would mint a DUPLICATE reservation, and native fulfillment
+        // decrements stock once per reservation) + LOCATION-AWARE (a
+        // wrong-location reservation with the right qty must not pass as
+        // "already allocated").
+        const knex = req.scope.resolve("__pg_connection__") as any;
+        const actives = await listActiveReservationsRaw(knex, lineItemId);
 
-        // Idempotent: check by order_line_item.id
-        const existing = await inventoryModule.listReservationItems(
-          { line_item_id: lineItemId },
-          { take: 1 }
-        );
-        if (existing?.length) {
-          if (quantity === 0) {
-            await inventoryModule.deleteReservationItems([existing[0].id]);
+        if (quantity === 0) {
+          if (actives.length) {
+            await inventoryModule.deleteReservationItems(
+              actives.map((r) => r.id)
+            );
             results.push({
               line_item_id: lineItemId,
               status: "deleted_allocation",
-              reservation_id: existing[0].id,
+              reservation_id: actives[0]?.id,
             });
             console.log(
-              `[allocate-items] 🗑️ Deleted reservation ${existing[0].id} (pending qt=0)`
+              `[allocate-items] 🗑️ Deleted ${actives.length} reservation(s) (pending qty=0)`
             );
-            continue;
           }
-          if (Number(existing[0].quantity) === quantity) {
+          continue;
+        }
+
+        const misplaced = actives.some((r) => r.location_id !== location_id);
+        const single = actives.length === 1 ? actives[0] : undefined;
+        const needsConsolidation = actives.length > 1 || misplaced;
+
+        if (!needsConsolidation && single) {
+          if (single.quantity === quantity) {
             results.push({
               line_item_id: lineItemId,
               status: "already_allocated",
-              reservation_id: existing[0].id,
+              reservation_id: single.id,
             });
             continue;
-          } else {
-            existingResId = existing[0].id;
-            console.log(
-              `[allocate-items] 📝 Quantity changed for ${lineItemId}: ${existing[0].quantity} -> ${quantity}`
-            );
           }
-        } else if (quantity === 0) {
-          continue; // Nothing to reserve, nothing to delete
+          // Qty-only change on a healthy single reservation → update in place.
+          // Needs only the reservation id — NOT gated behind the inventory
+          // lookup (a lookup failure must not leave a stale qty).
+          try {
+            const {
+              updateReservationsWorkflow,
+            } = require("@medusajs/core-flows");
+            if (updateReservationsWorkflow) {
+              await updateReservationsWorkflow(req.scope).run({
+                input: { updates: [{ id: single.id, quantity }] },
+              });
+            } else {
+              // Module API takes an ARRAY of update objects.
+              await inventoryModule.updateReservationItems([
+                { id: single.id, quantity },
+              ]);
+            }
+          } catch (e) {
+            // Last-resort retry via the module API. If this ALSO fails, let it
+            // throw to the per-line catch → status "error" (never report a
+            // fake "updated_allocation" while the stale qty survives).
+            await inventoryModule.updateReservationItems([
+              { id: single.id, quantity },
+            ]);
+          }
+          results.push({
+            line_item_id: lineItemId,
+            status: "updated_allocation",
+            reservation_id: single.id,
+          });
+          console.log(
+            `[allocate-items] 🔄 Updated reservation ${single.id}: ${single.quantity} -> ${quantity}×`
+          );
+          continue;
         }
 
-        // Get inventory_item_id per variant via remoteQuery
-        // Using correct Medusa v2 syntax for filtering (not $where)
-        let inventoryItemId: string | undefined;
-        try {
-          const variantData = await remoteQuery({
-            variant: {
-              fields: ["id", "manage_inventory"],
-              __args: { filters: { id: variantId } },
-              inventory_items: { fields: ["inventory_item_id"] },
-            },
-          });
-          inventoryItemId =
-            variantData?.[0]?.inventory_items?.[0]?.inventory_item_id;
-        } catch (qErr: any) {
-          console.warn(
-            `[allocate-items] remoteQuery lookup failed for variant ${variantId}: ${qErr.message?.slice(0, 80)}`
-          );
+        // From here: create a fresh reservation — either the line has none, or
+        // it has duplicates/wrong-location ones to consolidate. CREATE FIRST,
+        // delete stale ones only AFTER the replacement exists (never strip the
+        // apartado and then fail to recreate it).
+
+        // inventory_item_id: prefer the one already on the raw reservation
+        // rows; fall back to remoteQuery per variant.
+        let inventoryItemId: string | undefined =
+          actives[0]?.inventory_item_id;
+        if (!inventoryItemId) {
+          try {
+            const variantData = await remoteQuery({
+              variant: {
+                fields: ["id", "manage_inventory"],
+                __args: { filters: { id: variantId } },
+                inventory_items: { fields: ["inventory_item_id"] },
+              },
+            });
+            inventoryItemId =
+              variantData?.[0]?.inventory_items?.[0]?.inventory_item_id;
+          } catch (qErr: any) {
+            console.warn(
+              `[allocate-items] remoteQuery lookup failed for variant ${variantId}: ${qErr.message?.slice(0, 80)}`
+            );
+          }
         }
 
         if (!inventoryItemId) {
           results.push({
             line_item_id: lineItemId,
             status: "skipped",
-            reason: "no inventory_item (unmanaged product)",
+            reason: needsConsolidation
+              ? "no inventory_item — stale reservations left in place"
+              : "no inventory_item (unmanaged product)",
           });
           continue;
         }
@@ -200,58 +258,48 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           );
         }
 
-        if (existingResId) {
-          try {
-            const {
-              updateReservationsWorkflow,
-            } = require("@medusajs/core-flows");
-            if (updateReservationsWorkflow) {
-              await updateReservationsWorkflow(req.scope).run({
-                input: { updates: [{ id: existingResId, quantity }] },
-              });
-            } else {
-              await inventoryModule.updateReservationItems(existingResId, {
+        // Create reservation — succeeds even at 0 stock (allow_backorder=true + level exists)
+        const { result } = await createReservationsWorkflow(req.scope).run({
+          input: {
+            reservations: [
+              {
+                inventory_item_id: inventoryItemId,
+                location_id,
                 quantity,
-              });
-            }
-          } catch (e) {
-            await inventoryModule
-              .updateReservationItems(existingResId, { quantity })
-              .catch(() => {});
+                line_item_id: lineItemId,
+                allow_backorder: true, // Bypass 0 stock validation
+              },
+            ],
+          },
+        });
+        const reservation = result?.[0];
+
+        // Replacement exists — NOW retire the stale duplicates/wrong-location
+        // rows. If this delete fails, the next allocate-items run consolidates
+        // again (temporary over-reserve beats losing the apartado).
+        if (needsConsolidation && actives.length) {
+          try {
+            await inventoryModule.deleteReservationItems(
+              actives.map((r) => r.id)
+            );
+            console.log(
+              `[allocate-items] ♻️ Consolidated ${actives.length} stale reservation(s) for ${lineItemId} → ${reservation?.id} @ ${location_id}`
+            );
+          } catch (delErr: any) {
+            console.warn(
+              `[allocate-items] stale reservation cleanup failed for ${lineItemId} (will re-consolidate next run): ${delErr?.message?.slice(0, 80)}`
+            );
           }
-          results.push({
-            line_item_id: lineItemId,
-            status: "updated_allocation",
-            reservation_id: existingResId,
-          });
-          console.log(
-            `[allocate-items] 🔄 Updated reservation ${existingResId} to ${quantity}×`
-          );
-        } else {
-          // Create reservation — succeeds even at 0 stock (allow_backorder=true + level exists)
-          const { result } = await createReservationsWorkflow(req.scope).run({
-            input: {
-              reservations: [
-                {
-                  inventory_item_id: inventoryItemId,
-                  location_id,
-                  quantity,
-                  line_item_id: lineItemId,
-                  allow_backorder: true, // Bypass 0 stock validation
-                },
-              ],
-            },
-          });
-          const reservation = result?.[0];
-          results.push({
-            line_item_id: lineItemId,
-            status: "allocated",
-            reservation_id: reservation?.id,
-          });
-          console.log(
-            `[allocate-items] ✅ Reserved ${quantity}× variant=${variantId} → ${reservation?.id}`
-          );
         }
+
+        results.push({
+          line_item_id: lineItemId,
+          status: needsConsolidation ? "reallocated" : "allocated",
+          reservation_id: reservation?.id,
+        });
+        console.log(
+          `[allocate-items] ✅ Reserved ${quantity}× variant=${variantId} → ${reservation?.id}`
+        );
       } catch (err: any) {
         console.warn(
           `[allocate-items] Failed for ${lineItemId}: ${err?.message?.slice(0, 120)}`

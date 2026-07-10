@@ -17,6 +17,7 @@ import { getVariantAvgCostBatch } from "../../../../../../lib/cost/get-variant-a
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../../workflows/sync-inventory-item-meilisearch";
+import { USA_LOC } from "../../../../../../lib/locations";
 
 const NON_INVENTORY_QB_TYPES = new Set([
   "Service",
@@ -238,8 +239,17 @@ export async function PATCH(
     // old_restockable = qty - damaged_qty per variant (what was added on complete)
     // new_restockable = new_qty - new_damaged_qty per variant
     // delta = new_restockable - old_restockable → apply to stocked_quantity
-    const allLocations = await stockLocationService.listStockLocations({});
+    // EXPLICIT Miami — never "first row" (with Miami + China Warehouse both
+    // live, [0] could restock in China). Fail closed: no Miami → no restock.
+    const allLocations = await stockLocationService.listStockLocations({
+      id: USA_LOC,
+    });
     const locationId = allLocations[0]?.id;
+    if (!locationId) {
+      console.warn(
+        `[credit-memo] Miami location ${USA_LOC} not found — skipping restock`
+      );
+    }
     const touchedInventoryItemIds = new Set<string>();
 
     if (locationId) {

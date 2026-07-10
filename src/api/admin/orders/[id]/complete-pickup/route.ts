@@ -4,6 +4,8 @@ import { Modules } from "@medusajs/utils";
 
 import { getDbPool } from "../../../../utils/db-pool";
 import { maybeCompleteOrder } from "../../../../../lib/maybe-complete-order";
+import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
+import { consumeReservationsForFulfillment } from "../_lib/consume-reservations-for-fulfillment";
 
 /**
  * Auto-complete the order natively in Medusa once it is fully fulfilled +
@@ -374,14 +376,55 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       [itemIds]
     );
 
-    const inventoryModule = req.scope.resolve(Modules.INVENTORY) as any;
     for (const reqItem of fulfillmentItems) {
       try {
-        const existing = await inventoryModule.listReservationItems(
-          { line_item_id: reqItem.id },
-          { take: 1 }
+        // RAW SQL — module { line_item_id } filter unreliable. CRITICAL: the
+        // native fulfillment workflow decrements stock once PER reservation of
+        // the line — legacy duplicates or wrong-location rows reaching it
+        // double-decrement. Ensure EXACTLY ONE right-location reservation.
+        const actives = await pool.query<{
+          id: string;
+          quantity: string;
+          location_id: string;
+        }>(
+          `SELECT id, quantity, location_id FROM reservation_item
+            WHERE line_item_id = $1 AND deleted_at IS NULL
+            ORDER BY created_at ASC`,
+          [reqItem.id]
         );
-        if (existing?.length) continue;
+        let consolidationQty: number | undefined;
+        if (
+          actives.rows.length === 1 &&
+          actives.rows[0]!.location_id === location_id
+        ) {
+          continue;
+        }
+        if (actives.rows.length > 0) {
+          // Duplicates or wrong location → delete ALL before the native
+          // workflow runs; if the recreate below fails, the fallback consume
+          // handles the no-reservation case gracefully.
+          const inventoryModuleForDedup = req.scope.resolve(
+            Modules.INVENTORY
+          ) as any;
+          await inventoryModuleForDedup.deleteReservationItems(
+            actives.rows.map((r) => r.id)
+          );
+          const oiRes = await pool.query<{ unfulfilled: string }>(
+            `SELECT (oi.quantity - COALESCE(oi.fulfilled_quantity, 0))::numeric AS unfulfilled
+               FROM order_item oi
+               JOIN "order" o ON o.id = oi.order_id AND oi.version = o.version
+              WHERE oi.item_id = $1 AND oi.deleted_at IS NULL
+              LIMIT 1`,
+            [reqItem.id]
+          );
+          consolidationQty = Math.max(
+            Number(reqItem.quantity),
+            Number(oiRes.rows[0]?.unfulfilled ?? 0)
+          );
+          console.log(
+            `[complete-pickup] ♻️ consolidated ${actives.rows.length} stale reservation(s) for ${reqItem.id} → recreating ${consolidationQty}× @ ${location_id}`
+          );
+        }
 
         const variantRes = await pool.query<{ variant_id: string | null }>(
           `SELECT variant_id FROM order_line_item WHERE id = $1 LIMIT 1`,
@@ -404,8 +447,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
               {
                 inventory_item_id: inventoryItemId,
                 location_id,
-                quantity: reqItem.quantity,
+                quantity: consolidationQty ?? reqItem.quantity,
                 line_item_id: reqItem.id,
+                allow_backorder: true,
               },
             ],
           },
@@ -591,6 +635,42 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       }
 
       fulfillmentId = fallbackFulfillment.id;
+
+      // The fallback bypasses the native workflow, so it must consume the
+      // reservations + decrement stock itself (parity with
+      // create-fulfillment-force Strategy 2; shared proportional helper).
+      // Without this, the apartado reservation survives the pickup and the
+      // stock never decrements.
+      try {
+        const inventoryModuleForConsume = req.scope.resolve(
+          Modules.INVENTORY
+        ) as any;
+        const affectedInventoryItems = await consumeReservationsForFulfillment(
+          {
+            pool,
+            inventoryModule: inventoryModuleForConsume,
+            locationId: location_id,
+            items: fulfillmentItems.map((reqItem) => ({
+              line_item_id: reqItem.id,
+              quantity: reqItem.quantity,
+            })),
+            logPrefix: "[complete-pickup:fallback]",
+          }
+        );
+        if (affectedInventoryItems.length > 0) {
+          await Promise.allSettled(
+            affectedInventoryItems.map((inventoryItemId) =>
+              syncInventoryItemToMeiliSearchWorkflow(req.scope).run({
+                input: { inventoryItemId },
+              })
+            )
+          );
+        }
+      } catch (consumeErr: any) {
+        console.warn(
+          `[complete-pickup] fallback inventory consume failed: ${consumeErr?.message?.slice(0, 120)}`
+        );
+      }
     }
 
     if (!fulfillmentId) {

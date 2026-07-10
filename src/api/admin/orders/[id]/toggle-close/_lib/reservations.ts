@@ -1,5 +1,7 @@
 import { createReservationsWorkflow } from "@medusajs/core-flows";
 import { Modules } from "@medusajs/utils";
+import { USA_LOC } from "../../../../../../lib/locations";
+import { listActiveReservationsRaw } from "../../../../../../lib/reservations";
 
 const LOG_PREFIX = "[toggle-close/reservations]";
 
@@ -9,35 +11,47 @@ export interface NegativeStockItem {
   available: number;
 }
 
-/** Resolve the first (only) stock location, or undefined if none exists. */
+/**
+ * Resolve the Miami POS stock location (explicit, never "first row" — with
+ * Miami + China Warehouse both live, take:1 could re-hold apartado in China
+ * depending on DB ordering). Fails closed (undefined) if USA_LOC is missing.
+ */
 export async function resolveStockLocation(
   stockLocationModule: any
 ): Promise<string | undefined> {
   try {
     const locs = await stockLocationModule.listStockLocations(
-      {},
+      { id: USA_LOC },
       { take: 1, select: ["id"] }
     );
-    return locs?.[0]?.id;
+    if (!locs?.[0]?.id) {
+      console.warn(
+        `${LOG_PREFIX} Miami location ${USA_LOC} not found — refusing to guess`
+      );
+      return undefined;
+    }
+    return locs[0].id;
   } catch {
     return undefined;
   }
 }
 
-/** Delete every reservation attached to the order's line items (idempotent). */
+/**
+ * Delete every reservation attached to the order's line items (idempotent).
+ * Reads via RAW SQL — the module's { line_item_id } filter is unreliable in
+ * Medusa v2 (may return [] when rows exist), which here would LEAK an active
+ * reservation past a close.
+ */
 export async function releaseAllReservations(
   inventoryModule: any,
+  knex: any,
   items: any[]
 ): Promise<void> {
   for (const item of items || []) {
     try {
-      const existing = await inventoryModule.listReservationItems({
-        line_item_id: item.id,
-      });
-      if (existing?.length) {
-        await inventoryModule.deleteReservationItems(
-          existing.map((r: any) => r.id)
-        );
+      const existing = await listActiveReservationsRaw(knex, item.id);
+      if (existing.length) {
+        await inventoryModule.deleteReservationItems(existing.map((r) => r.id));
         console.log(
           `${LOG_PREFIX} 🗑️ Released ${existing.length} reservation(s) for item ${item.id}`
         );
@@ -52,56 +66,33 @@ export async function releaseAllReservations(
 
 /**
  * Release then recreate reservations for the order with allow_backorder=true,
- * skipping the portion already fulfilled or invoiced. Used by the POS-flag close
- * (order held, not completed) and by reopen. Returns items that went negative.
+ * skipping only the portion already FULFILLED. Invoiced-but-unfulfilled units
+ * stay reserved ("apartado") — since 2026-07-10 invoicing no longer releases
+ * reservations; only the real fulfillment (pickup/dispatch) consumes them.
+ * Used by reopen. Returns items that went negative.
  */
 export async function recreateReservationsWithBackorder(opts: {
   scope: any;
   inventoryModule: any;
   remoteQuery: any;
-  pg: any;
+  knex: any;
   locationId: string;
   orderId: string;
   items: any[];
 }): Promise<NegativeStockItem[]> {
-  const { scope, inventoryModule, remoteQuery, pg, locationId, orderId, items } =
-    opts;
+  const { scope, inventoryModule, remoteQuery, knex, locationId, items } = opts;
 
   const negativeStockItems: NegativeStockItem[] = [];
 
   // Release existing reservations first.
-  await releaseAllReservations(inventoryModule, items);
-
-  // Pre-fetch invoiced quantities so we skip items already fully invoiced
-  // (guard against re-leaking reservations for invoiced work).
-  const invoicedQtyMap = new Map<string, number>();
-  try {
-    const { rows: invRows } = await pg.raw(
-      `SELECT pii.variant_id, COALESCE(SUM(pii.quantity), 0) AS invoiced_qty
-         FROM pos_invoice_item pii
-         JOIN pos_invoice pi ON pi.id = pii.invoice_id
-        WHERE pi.order_id = ? AND pi.status != 'voided'
-          AND pi.deleted_at IS NULL AND pii.deleted_at IS NULL
-        GROUP BY pii.variant_id`,
-      [orderId]
-    );
-    for (const row of invRows) {
-      invoicedQtyMap.set(row.variant_id, Number(row.invoiced_qty));
-    }
-  } catch (mapErr: any) {
-    console.warn(
-      `${LOG_PREFIX} Could not fetch invoiced quantities: ${mapErr.message}`
-    );
-  }
+  await releaseAllReservations(inventoryModule, knex, items);
 
   for (const item of items || []) {
     const variantId = item.variant_id;
     if (!variantId) continue;
 
     const fulfilledQty = Number(item.detail?.fulfilled_quantity || 0);
-    const invoicedQty = invoicedQtyMap.get(variantId) ?? 0;
-    const alreadyDone = Math.max(fulfilledQty, invoicedQty);
-    const quantity = Math.max(0, Number(item.quantity) - alreadyDone);
+    const quantity = Math.max(0, Number(item.quantity) - fulfilledQty);
     if (quantity === 0) continue;
 
     try {

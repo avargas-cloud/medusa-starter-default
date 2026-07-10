@@ -111,7 +111,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           scope: req.scope,
           inventoryModule,
           remoteQuery,
-          pg,
+          knex: pg,
           locationId,
           orderId: orderId!,
           items,
@@ -154,7 +154,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       }
 
       // Best-effort: release any lingering reservations + tag order_status.
-      await releaseAllReservations(inventoryModule, items);
+      await releaseAllReservations(inventoryModule, pg, items);
       try {
         await orderService.updateOrders([
           {
@@ -186,7 +186,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     if (completeResult.completed) {
       // Order is done → release ALL leftover reservations (un-invoiced lines).
-      await releaseAllReservations(inventoryModule, items);
+      await releaseAllReservations(inventoryModule, pg, items);
 
       // Mark closed so Reopen is available (status stays `completed`).
       const newMeta = {
@@ -224,7 +224,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     };
     await orderService.updateOrders([{ id: orderId, metadata: newMeta }]);
 
-    await releaseAllReservations(inventoryModule, items);
+    await releaseAllReservations(inventoryModule, pg, items);
 
     const qb = await enqueueSoToggle({
       orderId: orderId!,

@@ -1,6 +1,8 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
 
+import { USA_LOC } from "../../../../../lib/locations";
+
 /**
  * POST /admin/draft-orders/:id/add-item-force
  *
@@ -221,25 +223,29 @@ export async function POST(
 
     // ── Auto-create reservation so item shows "Allocated" in Medusa Admin ─
     // Items added directly via orderModule skip the normal fulfillment flow
-    // which would normally create reservations. We do it manually here.
+    // which would normally create reservations. We do it manually here via
+    // createReservationsWorkflow — the native POST /admin/reservations route
+    // REJECTS the `allow_backorder` field (400 "Unrecognized fields") so the
+    // old internal-HTTP call silently failed for months (allocate-items at
+    // order save was papering over it).
     try {
-      const base = `http://localhost:${process.env.PORT ?? 9000}`;
-      const authHeaders: Record<string, string> = {
-        Cookie: String(req.headers["cookie"] ?? ""),
-        Authorization: String(req.headers["authorization"] ?? ""),
-        "Content-Type": "application/json",
-      };
-
       const stockLocationModule = req.scope.resolve(
         Modules.STOCK_LOCATION
       ) as any;
       const remoteQuery = req.scope.resolve("remoteQuery") as any;
 
+      // EXPLICIT Miami — never "first row" (with Miami + China Warehouse both
+      // live, take:1 could create the apartado in China). Fail closed.
       const locs = await stockLocationModule.listStockLocations(
-        {},
+        { id: USA_LOC },
         { take: 1, select: ["id"] }
       );
       const primaryLocationId = locs?.[0]?.id;
+      if (!primaryLocationId) {
+        console.warn(
+          `[orders/add-item-force] Miami location ${USA_LOC} not found — skipping reservation`
+        );
+      }
 
       let inventoryItemId: string | null = null;
       try {
@@ -257,16 +263,21 @@ export async function POST(
       }
 
       if (primaryLocationId && inventoryItemId && createdItem?.id) {
-        await fetch(`${base}/admin/reservations`, {
-          method: "POST",
-          headers: authHeaders,
-          body: JSON.stringify({
-            line_item_id: createdItem.id,
-            inventory_item_id: inventoryItemId,
-            location_id: primaryLocationId,
-            quantity,
-            allow_backorder: true, // ← bypasses stock check; does NOT change stock qty
-          }),
+        const { createReservationsWorkflow } = await import(
+          "@medusajs/core-flows"
+        );
+        await createReservationsWorkflow(req.scope).run({
+          input: {
+            reservations: [
+              {
+                line_item_id: createdItem.id,
+                inventory_item_id: inventoryItemId,
+                location_id: primaryLocationId,
+                quantity,
+                allow_backorder: true, // bypasses stock check; does NOT change stock qty
+              },
+            ],
+          },
         });
         console.log(
           `[orders/add-item-force] ✅ Reservation created for lineItem ${createdItem.id}`

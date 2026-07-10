@@ -1,19 +1,29 @@
 /**
- * Release inventory reservations that were never cleared when POS invoices were
- * created.  This was a forward bug (no deleteReservationItems call in the
- * invoice creation route); the route was patched 2026-05-11.  This script
- * back-fills the cleanup for all orders that were already paid before the patch.
+ * ⛔ DEPRECATED 2026-07-10 — DO NOT RUN. Encodes the OLD policy ("a paid
+ * invoice should have no reservations"), REVERSED by the apartado policy:
+ * reservations now deliberately SURVIVE invoicing until the real fulfillment
+ * (pickup/dispatch) consumes them. Running APPLY=1 would strip the apartado
+ * from every invoiced-but-undispatched order.
  *
- * Dry-run (default):
- *   yarn medusa exec ./src/scripts/fix/fix-leaked-reservations.ts
+ * For genuinely stale reservations use instead:
+ *   - scripts/fix/release-closed-order-reservations.ts (closed orders)
+ *   - scripts/fix/release-completed-order-stale-reservations.ts (completed)
  *
- * Apply:
- *   APPLY=1 yarn medusa exec ./src/scripts/fix/fix-leaked-reservations.ts
+ * Detail: memoria project_invoice_reservation_policy.md.
  */
 import type { ExecArgs } from "@medusajs/framework/types";
 import { Modules } from "@medusajs/utils";
 
 export default async function fixLeakedReservations({ container }: ExecArgs) {
+  console.error(
+    "⛔ DEPRECATED (2026-07-10): reservations now survive invoicing by design " +
+      "(apartado policy). Running this would strip apartado from open orders. " +
+      "Use release-closed-order-reservations.ts / " +
+      "release-completed-order-stale-reservations.ts instead."
+  );
+  const DEPRECATED = true;
+  if (DEPRECATED) return;
+
   const apply = process.env.APPLY === "1";
   const logger = container.resolve("logger");
   const pg = container.resolve("__pg_connection__") as any;

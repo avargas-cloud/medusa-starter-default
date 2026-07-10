@@ -49,7 +49,13 @@ interface InventoryServiceLike {
   listInventoryLevels: (
     filters: Record<string, unknown>,
     options?: { take?: number }
-  ) => Promise<Array<{ inventory_item_id: string; stocked_quantity: number }>>;
+  ) => Promise<
+    Array<{
+      inventory_item_id: string;
+      stocked_quantity: number;
+      reserved_quantity: number;
+    }>
+  >;
   adjustInventory: (
     inventory_item_id: string,
     location_id: string,
@@ -82,11 +88,21 @@ export const contraApplyReceiptStockStep = createStep(
         { take: 1 }
       );
       const preStock = levels[0]?.stocked_quantity ?? 0;
+      const preReserved = Number(levels[0]?.reserved_quantity ?? 0);
       const reverseBy = -line.qty_applied;
 
       if (preStock + reverseBy < 0) {
         throw new Error(
           `Cannot void receipt line ${line.receipt_line_id}: reversing qty_applied=${line.qty_applied} on stock=${preStock} would result in negative stock. Units were likely sold or transferred already; manual reconciliation required.`
+        );
+      }
+
+      // Guard: don't strand reservations (apartado). Same rule as the FO
+      // receipt steps — a void that leaves stocked < reserved would depress
+      // availability negative for sold-but-undelivered goods.
+      if (preStock + reverseBy < preReserved) {
+        throw new Error(
+          `Cannot void receipt line ${line.receipt_line_id}: would leave stock at ${preStock + reverseBy}, below the ${preReserved} reserved (apartado). Unwind the reservation/transfer/sale first.`
         );
       }
 

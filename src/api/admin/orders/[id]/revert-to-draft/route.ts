@@ -1,4 +1,5 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { listActiveReservationsRaw } from "../../../../../lib/reservations";
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const { id } = req.params;
@@ -77,12 +78,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       // Free inventory reservations
       try {
         for (const item of order.items || []) {
-          const existingRes = await inventoryModule.listReservationItems({
-            line_item_id: item.id,
-          });
-          if (existingRes?.length > 0) {
+          // RAW SQL read — module { line_item_id } filter is unreliable; a
+          // miss here leaks a phantom reservation.
+          const knexConn = req.scope.resolve("__pg_connection__") as any;
+          const existingRes = await listActiveReservationsRaw(
+            knexConn,
+            item.id
+          );
+          if (existingRes.length > 0) {
             await inventoryModule.deleteReservationItems(
-              existingRes.map((r: any) => r.id)
+              existingRes.map((r) => r.id)
             );
           }
         }
@@ -154,12 +159,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // 3. Clear existing inventory reservations (from Strategy 1 native fulfillment allocations)
     try {
       for (const item of order.items || []) {
-        const existingRes = await inventoryModule.listReservationItems({
-          line_item_id: item.id,
-        });
-        if (existingRes?.length > 0) {
+        // RAW SQL read — module { line_item_id } filter is unreliable; a miss
+        // here leaks a phantom reservation.
+        const knexConn = req.scope.resolve("__pg_connection__") as any;
+        const existingRes = await listActiveReservationsRaw(knexConn, item.id);
+        if (existingRes.length > 0) {
           await inventoryModule.deleteReservationItems(
-            existingRes.map((r: any) => r.id)
+            existingRes.map((r) => r.id)
           );
         }
       }

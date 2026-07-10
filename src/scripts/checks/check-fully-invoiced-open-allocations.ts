@@ -1,12 +1,11 @@
 /**
- * Detect POS orders that look fully invoiced in the POS UI but still have
- * open Medusa reservation_item allocations.
- *
- * Run:
- *   yarn medusa exec ./src/scripts/checks/check-fully-invoiced-open-allocations.ts
- *
- * Optional:
- *   LIMIT=100 yarn medusa exec ./src/scripts/checks/check-fully-invoiced-open-allocations.ts
+ * ⛔ DEPRECATED 2026-07-10 — its signal is INVERTED under the apartado policy:
+ * an invoiced-but-undispatched order KEEPING its reservations is now the
+ * CORRECT state (they release only at real fulfillment: pickup/dispatch), so
+ * everything this check flags as "bad" is healthy. Kept for history; exits
+ * immediately. For genuinely stale reservations, audit closed/completed
+ * orders (release-closed-order-reservations.ts /
+ * release-completed-order-stale-reservations.ts).
  */
 import type { ExecArgs } from "@medusajs/framework/types";
 
@@ -29,6 +28,13 @@ interface CandidateRow {
 export default async function checkFullyInvoicedOpenAllocations({
   container,
 }: ExecArgs) {
+  console.error(
+    "⛔ DEPRECATED (2026-07-10): invoiced orders keeping reservations is now " +
+      "the CORRECT state (apartado policy) — this check's signal is inverted."
+  );
+  const DEPRECATED = true;
+  if (DEPRECATED) return;
+
   const pg = container.resolve("__pg_connection__") as any;
   const limit = Math.max(1, Number(process.env.LIMIT ?? 200));
 

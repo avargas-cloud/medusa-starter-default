@@ -1,6 +1,8 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
+import { USA_LOC } from "../../../../../../lib/locations";
+
 /**
  * GET /store/products/by-handle/:handle/with-prices-and-related
  *
@@ -172,6 +174,11 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
           .sum("il.stocked_quantity as total_stocked")
           .sum("il.reserved_quantity as total_reserved")
           .whereIn("pvi.variant_id", variantIds)
+          // Storefront availability = MIAMI ONLY. Summing every location
+          // inflated it with China Warehouse stock (not sellable online) —
+          // same policy as the dynamic stock endpoint and Meili totalStock.
+          .where("il.location_id", USA_LOC)
+          .whereNull("il.deleted_at")
           .groupBy("pvi.variant_id");
 
         for (const row of inventoryRows) {

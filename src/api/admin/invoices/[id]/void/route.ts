@@ -6,6 +6,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
 
+import { USA_LOC } from "../../../../../lib/locations";
 import { createSalesOrderInQb } from "../../../../../lib/quickbooks/client/sales-orders";
 import { handlePosPaymentCreated } from "../../../../../lib/quickbooks/handlers/handle-pos-payment-created";
 import { buildQbItems } from "../../../../../lib/quickbooks/order-flow-core";
@@ -200,12 +201,17 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const pool = getDbPool();
         const stockLocMod = req.scope.resolve(Modules.STOCK_LOCATION) as any;
 
+        // EXPLICIT Miami — never "first row" (with Miami + China Warehouse
+        // both live, take:1 could restore the apartado in China). Fail closed.
         const [invItemsRes, locs, orderItemsRes] = await Promise.all([
           pool.query(
             `SELECT * FROM pos_invoice_item WHERE invoice_id = $1 AND deleted_at IS NULL`,
             [id]
           ),
-          stockLocMod.listStockLocations({}, { take: 1, select: ["id"] }),
+          stockLocMod.listStockLocations(
+            { id: USA_LOC },
+            { take: 1, select: ["id"] }
+          ),
           pool.query<{ line_item_id: string; variant_id: string }>(
             `SELECT oli.id AS line_item_id, oli.variant_id
              FROM order_item oi
@@ -216,6 +222,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         ]);
 
         const locId: string | undefined = locs?.[0]?.id;
+        if (!locId) {
+          console.warn(
+            `[VOID INVOICE] Miami location ${USA_LOC} not found — skipping reservation restore`
+          );
+        }
         if (locId) {
           const { createReservationsWorkflow } = await import(
             "@medusajs/core-flows"

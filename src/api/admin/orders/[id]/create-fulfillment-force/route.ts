@@ -4,6 +4,7 @@ import { Modules } from "@medusajs/utils";
 
 import { getDbPool } from "../../../../utils/db-pool";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
+import { consumeReservationsForFulfillment } from "../_lib/consume-reservations-for-fulfillment";
 
 /**
  * POST /admin/orders/:id/create-fulfillment-force
@@ -129,24 +130,66 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           `[create-fulfillment-force] ✅ Pre-A: requires_shipping=false for ${itemIds.length} items`
         );
 
-        // Pre-step B: Ensure stock reservations exist for each item.
+        // Pre-step B: Ensure EXACTLY ONE right-location reservation per item.
         // POS orders call allocate-items at save time, but this is the safety net.
         // POS uses allow_backorder=true → createReservationItems always succeeds
         // regardless of stocked_quantity. No stock bump needed.
-        const inventoryModule = req.scope.resolve(Modules.INVENTORY) as any;
-
+        // CRITICAL: the native fulfillment workflow decrements stock once PER
+        // reservation of the line — legacy duplicates or wrong-location rows
+        // reaching it double-decrement. Consolidate them here first.
         for (const reqItem of items) {
           try {
-            // Idempotent: reqItem.id is order_line_item.id (from Medusa API)
-            const existing = await inventoryModule.listReservationItems(
-              { line_item_id: reqItem.id },
-              { take: 1 }
+            // reqItem.id is order_line_item.id. RAW SQL — the module's
+            // { line_item_id } filter is unreliable in Medusa v2.
+            const actives = await pool.query<{
+              id: string;
+              quantity: string;
+              location_id: string;
+            }>(
+              `SELECT id, quantity, location_id FROM reservation_item
+                WHERE line_item_id = $1 AND deleted_at IS NULL
+                ORDER BY created_at ASC`,
+              [reqItem.id]
             );
-            if (existing?.length) {
+            let consolidationQty: number | undefined;
+            if (
+              actives.rows.length === 1 &&
+              actives.rows[0]!.location_id === location_id
+            ) {
               console.log(
                 `[create-fulfillment-force] ✅ Pre-B: reservation exists for item ${reqItem.id}`
               );
               continue;
+            }
+            if (actives.rows.length > 0) {
+              // Duplicates or wrong location → delete ALL before the native
+              // workflow runs (double-decrement risk beats brief no-hold; if
+              // the recreate below fails, Strategy 2 / manual consume handles
+              // the no-reservation case gracefully).
+              const inventoryModuleForDedup = req.scope.resolve(
+                Modules.INVENTORY
+              ) as any;
+              await inventoryModuleForDedup.deleteReservationItems(
+                actives.rows.map((r) => r.id)
+              );
+              // Replacement target = current unfulfilled qty of the line
+              // (authoritative — preserves the apartado remainder on partial
+              // fulfillments), never less than the qty being fulfilled now.
+              const oiRes = await pool.query<{ unfulfilled: string }>(
+                `SELECT (oi.quantity - COALESCE(oi.fulfilled_quantity, 0))::numeric AS unfulfilled
+                   FROM order_item oi
+                   JOIN "order" o ON o.id = oi.order_id AND oi.version = o.version
+                  WHERE oi.item_id = $1 AND oi.deleted_at IS NULL
+                  LIMIT 1`,
+                [reqItem.id]
+              );
+              consolidationQty = Math.max(
+                Number(reqItem.quantity),
+                Number(oiRes.rows[0]?.unfulfilled ?? 0)
+              );
+              console.log(
+                `[create-fulfillment-force] ♻️ Pre-B: consolidated ${actives.rows.length} stale reservation(s) for ${reqItem.id} → recreating ${consolidationQty}× @ ${location_id}`
+              );
             }
 
             // reqItem.id = order_line_item.id → join via oi.item_id to get variant_id
@@ -185,8 +228,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                   {
                     inventory_item_id: inventoryItemId,
                     location_id,
-                    quantity: reqItem.quantity,
+                    quantity: consolidationQty ?? reqItem.quantity,
                     line_item_id: reqItem.id,
+                    allow_backorder: true,
                   },
                 ],
               },
@@ -488,60 +532,24 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       });
     }
 
-    // ── Inventory: release reservations + decrement stock (Strategy 2 only) ──
+    // ── Inventory: consume reservations + decrement stock (Strategy 2 only) ──
     // Strategy 1 handles this inside createOrderFulfillmentWorkflow
-    // (adjustInventoryLevelsStep + deleteReservationsStep). Strategy 2 bypasses
-    // the workflow so we do it manually to keep stock counts accurate.
+    // (adjustInventoryLevelsStep + reservation delete/decrement). Strategy 2
+    // bypasses the workflow, so use the shared proportional helper — a partial
+    // fulfillment consumes only its quantity and the remainder of the
+    // reservation SURVIVES (apartado policy 2026-07-10).
     if (pool) {
       const inventoryModule = req.scope.resolve(Modules.INVENTORY) as any;
-      const meiliSyncIds: string[] = [];
-
-      for (const reqItem of items) {
-        try {
-          const orderItem = orderData?.items?.find(
-            (i: any) => i.id === reqItem.id
-          );
-          const variantId = orderItem?.variant_id;
-          if (!variantId) continue;
-
-          const invRes = await pool.query<{ inventory_item_id: string }>(
-            `SELECT inventory_item_id FROM product_variant_inventory_item
-             WHERE variant_id = $1 AND deleted_at IS NULL LIMIT 1`,
-            [variantId]
-          );
-          const inventoryItemId = invRes.rows[0]?.inventory_item_id;
-          if (!inventoryItemId) continue;
-
-          // Release existing reservations for this line item.
-          // Raw SQL because inventoryModule.listReservationItems { line_item_id }
-          // filter is unreliable in Medusa v2 (may return empty when rows exist).
-          const resvRows = await pool.query<{ id: string }>(
-            `SELECT id FROM reservation_item WHERE line_item_id = $1 AND deleted_at IS NULL`,
-            [reqItem.id]
-          );
-          if (resvRows.rows.length > 0) {
-            await inventoryModule.deleteReservationItems(
-              resvRows.rows.map((r) => r.id)
-            );
-          }
-
-          // Decrement physical stock
-          await inventoryModule.adjustInventory(
-            inventoryItemId,
-            location_id,
-            -reqItem.quantity
-          );
-
-          meiliSyncIds.push(inventoryItemId);
-          console.log(
-            `[create-fulfillment-force] ✅ Inventory decremented ${reqItem.quantity} for item ${inventoryItemId}`
-          );
-        } catch (invErr: any) {
-          console.warn(
-            `[create-fulfillment-force] inventory decrement failed for item ${reqItem.id}: ${invErr?.message}`
-          );
-        }
-      }
+      const meiliSyncIds = await consumeReservationsForFulfillment({
+        pool,
+        inventoryModule,
+        locationId: location_id,
+        items: items.map((reqItem: any) => ({
+          line_item_id: reqItem.id,
+          quantity: reqItem.quantity,
+        })),
+        logPrefix: "[create-fulfillment-force]",
+      });
 
       // Belt-and-suspenders Meili sync (PG trigger is backstop, this is inline)
       if (meiliSyncIds.length > 0) {

@@ -9,6 +9,8 @@ import {
 import { getDbPool } from "../../../../utils/db-pool";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { buildOrderCostSnapshot } from "../../../../../lib/finance/build-order-cost-snapshot";
+import { USA_LOC } from "../../../../../lib/locations";
+import { listActiveReservationsRaw } from "../../../../../lib/reservations";
 
 /**
  * POST /admin/draft-orders/:id/convert-force
@@ -211,7 +213,16 @@ export async function POST(
       }),
     ]);
     const draft_order = orderData?.[0];
-    const primaryLocationId: string | undefined = locationData?.[0]?.id;
+    // EXPLICIT Miami — never "first row" (with Miami + China Warehouse both
+    // live, [0] could create the apartado in China). Fail closed.
+    const primaryLocationId: string | undefined = (
+      locationData as { id: string }[] | undefined
+    )?.find((loc) => loc.id === USA_LOC)?.id;
+    if (!primaryLocationId) {
+      console.warn(
+        `[convert-force] Miami location ${USA_LOC} not found — skipping reservation creation`
+      );
+    }
 
     if (draft_order) {
       const items: any[] = draft_order?.items ?? draft_order?.cart?.items ?? [];
@@ -220,7 +231,6 @@ export async function POST(
         // ── Step 3: Ensure allow_backorder reservations for all items ─
         // Creating reservations before conversion means convert-to-order
         // finds existing reservations and skips the stock check entirely.
-        const inventoryModule = req.scope.resolve(Modules.INVENTORY) as any;
         const { createReservationsWorkflow } = require("@medusajs/core-flows");
 
         for (const lineItem of items) {
@@ -229,13 +239,16 @@ export async function POST(
             lineItem.variant_id ?? lineItem.variant?.id;
           if (!variantId) continue;
 
-          // Skip if reservation already exists natively
+          // Skip if reservation already exists. Raw SQL — the module's
+          // { line_item_id } filter is unreliable in Medusa v2 and a
+          // false-negative here would mint a DUPLICATE reservation.
           try {
-            const existingRes = await inventoryModule.listReservationItems(
-              { line_item_id: lineItemId },
-              { take: 1 }
+            const knex = req.scope.resolve("__pg_connection__") as any;
+            const existingRes = await listActiveReservationsRaw(
+              knex,
+              lineItemId
             );
-            if (existingRes?.length > 0) continue;
+            if (existingRes.length > 0) continue;
           } catch (e) {
             /* ignore */
           }

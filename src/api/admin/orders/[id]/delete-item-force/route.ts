@@ -1,6 +1,8 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { Modules } from "@medusajs/utils";
 
+import { listActiveReservationsRaw } from "../../../../../lib/reservations";
+
 /**
  * DELETE /admin/draft-orders/:id/delete-item-force
  * POST   /admin/draft-orders/:id/delete-item-force  (POS compat alias)
@@ -28,15 +30,15 @@ async function handleDelete(
     const inventoryModule = req.scope.resolve(Modules.INVENTORY) as any;
 
     // Release any reservation tied to this line item before deleting it,
-    // so inventory_level.reserved_quantity stays accurate.
+    // so inventory_level.reserved_quantity stays accurate. RAW SQL read —
+    // the module's { line_item_id } filter is unreliable in Medusa v2; a miss
+    // here leaks a phantom reservation on a deleted line (permanently lowers
+    // available under the apartado policy).
     try {
-      const existing = await inventoryModule.listReservationItems({
-        line_item_id,
-      });
-      if (existing?.length) {
-        await inventoryModule.deleteReservationItems(
-          existing.map((r: any) => r.id)
-        );
+      const knex = req.scope.resolve("__pg_connection__") as any;
+      const existing = await listActiveReservationsRaw(knex, line_item_id);
+      if (existing.length) {
+        await inventoryModule.deleteReservationItems(existing.map((r) => r.id));
         console.log(
           `[delete-item-force] Released ${existing.length} reservation(s) for ${line_item_id}`
         );
