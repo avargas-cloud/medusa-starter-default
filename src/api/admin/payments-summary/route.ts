@@ -96,7 +96,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          -- ProcessRefundModal, backdatable). Legacy rows without a valid
          -- batch_day fall back to the ET date the QB Write Check confirmed.
          SELECT
-           CASE WHEN cp.batch_day ~ '^\d{4}-\d{2}-\d{2}$' THEN cp.batch_day
+           CASE WHEN cp.batch_day ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN cp.batch_day
                 ELSE to_char(COALESCE(lwc.confirmed_at, (cp.metadata->>'refunded_at')::timestamptz, cp.received_at) AT TIME ZONE 'America/New_York', 'YYYY-MM-DD')
            END AS d,
            -COALESCE((cp.metadata->>'refund_amount')::numeric, cp.amount) AS net_amount,
@@ -111,10 +111,10 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
              OR (cp.type <> 'refund' AND cp.status IN ('refunded', 'partial_refunded'))
            )
            AND cp.qb->>'check_txn_id' IS NOT NULL
-           AND (CASE WHEN cp.batch_day ~ '^\d{4}-\d{2}-\d{2}$' THEN cp.batch_day
+           AND (CASE WHEN cp.batch_day ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN cp.batch_day
                 ELSE to_char(COALESCE(lwc.confirmed_at, (cp.metadata->>'refunded_at')::timestamptz, cp.received_at) AT TIME ZONE 'America/New_York', 'YYYY-MM-DD')
            END) >= ?
-           AND (CASE WHEN cp.batch_day ~ '^\d{4}-\d{2}-\d{2}$' THEN cp.batch_day
+           AND (CASE WHEN cp.batch_day ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN cp.batch_day
                 ELSE to_char(COALESCE(lwc.confirmed_at, (cp.metadata->>'refunded_at')::timestamptz, cp.received_at) AT TIME ZONE 'America/New_York', 'YYYY-MM-DD')
            END) <= ?
        ) sub
