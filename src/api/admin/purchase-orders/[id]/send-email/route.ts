@@ -18,6 +18,7 @@ import {
 } from "../../../draft-orders/_shared/pdf";
 import { sendMail } from "../../../../../utils/mailer";
 import { getPurchaseOrdersService } from "../../_lib/service-resolver";
+import { isSpecialPlaceholder } from "../../_lib/receivability";
 
 const PURCHASING_CC_EMAIL = "purchase@ecopowertech.com";
 
@@ -181,6 +182,39 @@ export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse)
     return void res.status(404).json({ success: false, message: "Purchase order not found" });
   }
 
+  // Hard guard: a PO with generic "Special Item" placeholder lines must never
+  // reach the vendor — the SKU is meaningless and the MPN is empty, so the
+  // vendor can only guess the product from the description (wrong-item risk).
+  const guardKnex = req.scope.resolve("__pg_connection__") as {
+    raw: (sql: string, b?: unknown[]) => Promise<{ rows: unknown[] }>;
+  };
+  const guardLines = (
+    await guardKnex.raw(
+      `SELECT pol.sku_snapshot,
+              pv.sku   AS variant_sku,
+              pv.title AS variant_title
+         FROM purchase_order_line pol
+         LEFT JOIN product_variant pv ON pv.id = pol.product_variant_id
+        WHERE pol.purchase_order_id = ?
+          AND pol.deleted_at IS NULL`,
+      [id]
+    )
+  ).rows as Array<{
+    sku_snapshot: string | null;
+    variant_sku: string | null;
+    variant_title: string | null;
+  }>;
+  const specialCount = guardLines.filter((l) =>
+    isSpecialPlaceholder(l.sku_snapshot, l.variant_sku, l.variant_title)
+  ).length;
+  if (specialCount > 0) {
+    return void res.status(409).json({
+      success: false,
+      code: "special_item_send_blocked",
+      message: `Cannot send: this PO has ${specialCount} "Special Item" placeholder line${specialCount === 1 ? "" : "s"} with no real SKU/MPN. Replace ${specialCount === 1 ? "it" : "them"} with real products before sending to the vendor.`,
+    });
+  }
+
   let vendor: VendorEmailRecord | null = null;
   try {
     const catalog = req.scope.resolve("quickbooks_catalog") as {
@@ -320,6 +354,35 @@ ${sigHtml}
     const message = err instanceof Error ? err.message : String(err);
     console.error("[po-send-email] sendMail failed:", message);
     return void res.status(500).json({ success: false, message });
+  }
+
+  // Persist the send on the PO so the Activity timeline can surface it.
+  // Appended via raw SQL jsonb concat — the module's update* deep-merges
+  // JSONB and cannot reliably append to arrays. Best-effort: the email is
+  // already out, so a bookkeeping failure must not fail the request.
+  try {
+    const sendEntry = {
+      at: new Date().toISOString(),
+      to: toEmails,
+      cc: ccEmails,
+      by_user_id:
+        (req.auth_context as { actor_id?: string } | undefined)?.actor_id ??
+        null,
+      by_email: sender.replyTo ?? null,
+    };
+    await guardKnex.raw(
+      `UPDATE purchase_order
+          SET metadata = COALESCE(metadata, '{}'::jsonb) ||
+              jsonb_build_object(
+                'email_sends',
+                COALESCE(metadata->'email_sends', '[]'::jsonb) || ?::jsonb
+              ),
+              updated_at = NOW()
+        WHERE id = ?`,
+      [JSON.stringify(sendEntry), id]
+    );
+  } catch (err) {
+    console.error("[po-send-email] failed to record send activity:", err);
   }
 
   res.status(200).json({

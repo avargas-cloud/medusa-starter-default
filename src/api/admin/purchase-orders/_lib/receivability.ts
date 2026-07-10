@@ -43,6 +43,19 @@ const NON_RECEIVABLE_QB_TYPES = new Set([
 const SPECIAL_PLACEHOLDER_RE = /^special\b/i;
 
 /**
+ * True when any of the given sku/title values is a generic "Special …"
+ * placeholder. Narrower than nonReceivableReason (which also blocks QB
+ * service/non-inventory types): a placeholder line carries no real SKU/MPN,
+ * so a vendor receiving the PO cannot identify the product — used to
+ * hard-block sending the PO, where legit service items are still fine.
+ */
+export function isSpecialPlaceholder(
+  ...values: Array<string | null | undefined>
+): boolean {
+  return values.some((v) => SPECIAL_PLACEHOLDER_RE.test((v ?? "").trim()));
+}
+
+/**
  * Returns a human-readable reason the line cannot be received, or null if the
  * line is receivable.
  */
