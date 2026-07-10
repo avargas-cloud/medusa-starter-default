@@ -7,12 +7,13 @@
  */
 
 import { shippoAdapter } from "./shippo-adapter";
+import { upsDispatchAdapter } from "./ups-adapter";
 import type { DeliveryProvider, DispatchAdapter } from "./types";
 import { DispatchError } from "./types";
 
 const ADAPTERS: Partial<Record<DeliveryProvider, DispatchAdapter>> = {
   shippo: shippoAdapter,
-  // ups: upsDispatchAdapter,   // Fase 2 — add "Shipping" product to the UPS app
+  ups: upsDispatchAdapter, // Fase 2 — live only once the UPS app has the "Shipping" product
   // uber: uberAdapter,         // Fase 3 — Uber Direct creds
 };
 

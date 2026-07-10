@@ -10,7 +10,13 @@
  * See DELIVERY_FULFILLMENT_INTEGRATION_PLAN.md §5 Fase 0.
  */
 
-export type DeliveryProvider = "shippo" | "ups" | "uber";
+/**
+ * "fedex" is a placeholder — surfaced in the admin provider picker for a
+ * future adapter, but no DispatchAdapter is registered for it yet (unlike
+ * lib/carrier-tracking, where FedEx already exists for read-only PO ETA
+ * lookups — a different subsystem from buying customer shipping labels).
+ */
+export type DeliveryProvider = "shippo" | "ups" | "uber" | "fedex";
 
 /**
  * Explicit shipment state machine (plan §Fase 0). The PO-oriented
@@ -68,6 +74,11 @@ export interface LabelPackage {
   tracking_number: string;
   tracking_url: string | null;
   label_url: string | null;
+  /** Label image returned INLINE by the provider (UPS-direct: base64 GIF,
+   * no CDN URL). Consumed + STRIPPED by the re-host step — never persisted. */
+  label_base64?: string | null;
+  /** Mime of `label_base64` (e.g. "image/gif"). */
+  label_mime?: string | null;
 }
 
 /** Result of a successful label purchase / dispatch creation. */

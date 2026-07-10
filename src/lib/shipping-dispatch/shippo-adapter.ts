@@ -21,6 +21,7 @@ import type {
   RateOption,
 } from "./types";
 import { DispatchError } from "./types";
+import { sanitizePhone } from "./phone";
 
 const SHIPPO_API = "https://api.goshippo.com";
 
@@ -105,22 +106,6 @@ function originAddress(): ShippoAddressPayload {
     zip: process.env.UPS_ORIGIN_ZIP || "33016",
     country: process.env.UPS_ORIGIN_COUNTRY || "US",
   };
-}
-
-/**
- * UPS rejects the ENTIRE quote when a US phone has <10 digits (real POS data
- * has short/legacy phones). Phone is optional for rating — omit it when it
- * can't pass carrier validation instead of losing all rates.
- */
-function sanitizePhone(phone: string | undefined, country: string): string | undefined {
-  if (!phone) return undefined;
-  const digits = phone.replace(/\D/g, "");
-  if (country.toUpperCase() === "US") {
-    if (digits.length === 10) return digits;
-    if (digits.length === 11 && digits.startsWith("1")) return digits;
-    return undefined;
-  }
-  return digits.length >= 7 ? digits : undefined;
 }
 
 function toShippoAddress(a: DispatchAddress): ShippoAddressPayload {

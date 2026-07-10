@@ -21,7 +21,9 @@ const TRACK_URL = "https://onlinetools.ups.com/api/track/v1/details";
 let cachedToken: string | null = null;
 let tokenExpiry = 0;
 
-async function getToken(): Promise<string> {
+/** Shared UPS OAuth token (client_credentials). Exported so the
+ * shipping-dispatch UPS adapter reuses the SAME app + cache (plan §Fase 2). */
+export async function getUpsOauthToken(): Promise<string> {
   if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
 
   const id = process.env.UPS_CLIENT_ID;
@@ -72,7 +74,7 @@ export const upsAdapter: CarrierAdapter = {
     if (!this.isConfigured()) return unavailable("UPS API not configured");
 
     try {
-      const token = await getToken();
+      const token = await getUpsOauthToken();
       const res = await axios.get(
         `${TRACK_URL}/${encodeURIComponent(trackingNumber.trim())}`,
         {
