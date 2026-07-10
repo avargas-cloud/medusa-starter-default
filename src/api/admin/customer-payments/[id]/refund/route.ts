@@ -35,7 +35,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const activeApps = ((payment as any).applications ?? []).filter(
       (a: any) => !a.voided_at
     );
-    const alreadyApplied = activeApps.reduce(
+    // Invoice-bound applications are consumed money (immutable here).
+    // Order-only rows (invoice_id NULL) are reversible RESERVATIONS from
+    // "Link to Order" — refundable: the refund releases them (same hard-delete
+    // semantics as the unlink route; they never touch invoices or QB).
+    const invoiceApplied = activeApps
+      .filter((a: any) => !!a.invoice_id)
+      .reduce((s: number, a: any) => s + Number(a.amount_applied ?? 0), 0);
+    const orderOnlyApps = activeApps.filter((a: any) => !a.invoice_id);
+    const reserved = orderOnlyApps.reduce(
       (s: number, a: any) => s + Number(a.amount_applied ?? 0),
       0
     );
@@ -44,20 +52,64 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     );
     const available = Math.max(
       0,
-      Number(payment.amount) - alreadyApplied - alreadyRefunded
+      Number(payment.amount) - invoiceApplied - reserved - alreadyRefunded
     );
+    const refundable = available + reserved;
 
-    const refundAmount = amount ?? available;
+    const refundAmount = amount ?? refundable;
 
     if (refundAmount <= 0)
-      return res.status(400).json({ error: "No available balance to refund" });
-    if (refundAmount > available) {
+      return res.status(400).json({ error: "No refundable balance" });
+    if (refundAmount > refundable) {
       return res.status(400).json({
-        error: `Refund amount (${refundAmount}) exceeds available balance (${available})`,
+        error: `Refund amount (${refundAmount}) exceeds refundable balance (${refundable})`,
       });
     }
 
-    const isFullRefund = refundAmount >= available;
+    // Free balance is consumed first; anything beyond it comes out of the
+    // order-only reservations, which must be released (delete/decrement).
+    let needFromReserved = Math.max(0, refundAmount - available);
+    const releasedApps: Array<Record<string, unknown>> = [];
+    if (needFromReserved > 0) {
+      if ((payment as any).source === "web") {
+        return res.status(403).json({
+          error:
+            "Refund exceeds free balance and the remainder is reserved on a web payment — web payment links are immutable. Unlink is not allowed.",
+        });
+      }
+      const ordered = [...orderOnlyApps].sort(
+        (a: any, b: any) =>
+          new Date(a.applied_at ?? 0).getTime() -
+          new Date(b.applied_at ?? 0).getTime()
+      );
+      for (const app of ordered) {
+        if (needFromReserved <= 0) break;
+        const appAmt = Number(app.amount_applied ?? 0);
+        if (appAmt <= needFromReserved) {
+          await financeService.deletePaymentApplications([app.id]);
+          releasedApps.push({
+            id: app.id,
+            order_id: app.order_id ?? null,
+            released: appAmt,
+          });
+          needFromReserved -= appAmt;
+        } else {
+          await financeService.updatePaymentApplications({
+            id: app.id,
+            amount_applied: appAmt - needFromReserved,
+          });
+          releasedApps.push({
+            id: app.id,
+            order_id: app.order_id ?? null,
+            released: needFromReserved,
+            partial: true,
+          });
+          needFromReserved = 0;
+        }
+      }
+    }
+
+    const isFullRefund = refundAmount >= refundable;
     const newStatus = isFullRefund ? "refunded" : "partial_refunded";
 
     const existingMeta = (payment as any).metadata ?? {};
@@ -67,6 +119,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       refunded_at: new Date().toISOString(),
       refund_notes: notes ?? null,
       refunded_by: voided_by ?? null,
+      ...(releasedApps.length > 0
+        ? {
+            refund_released_applications: [
+              ...((existingMeta.refund_released_applications as
+                | unknown[]
+                | undefined) ?? []),
+              ...releasedApps,
+            ],
+          }
+        : {}),
     };
 
     const pgConnection = req.scope.resolve("__pg_connection__") as any;
