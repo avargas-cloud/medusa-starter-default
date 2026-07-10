@@ -18,6 +18,7 @@ import {
   skipPendingPaymentRows,
 } from "../../../lib/quickbooks/qb-pipeline";
 import { getVariantAvgCostBatch } from "../../../lib/cost/get-variant-avg-cost";
+import { getDbPool } from "../../utils/db-pool";
 import { sortDocItemsByInsertion } from "./_lib/item-order";
 import { maybeCompleteOrder } from "../../../lib/maybe-complete-order";
 import {
@@ -37,7 +38,7 @@ import { registerMedusaPayment } from "./register-medusa-payment";
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const invoiceService = req.scope.resolve(INVOICE_MODULE);
   const customerModule = req.scope.resolve(Modules.CUSTOMER);
-  const { order_id, customer_id, created_at, status, limit, offset, balance_due_gt } =
+  const { order_id, customer_id, created_at, status, limit, offset, balance_due_gt, delivery_active } =
     req.query as Record<string, any>;
 
   const filters: Record<string, unknown> = {};
@@ -46,6 +47,36 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   if (created_at) filters.created_at = created_at;
   if (status) filters.status = status;
   if (balance_due_gt !== undefined) filters.balance_due = { $gt: parseInt(balance_due_gt, 10) };
+
+  // [Deliveries] tab: invoices with a shipment in flight (order_delivery not
+  // yet delivered/canceled). Reads live rows — no Meili plumbing; delivered
+  // shipments drop off the tab the moment the 6h poll (or a webhook) lands.
+  let deliveryByInvoice: Record<string, unknown> | undefined;
+  if (delivery_active !== undefined) {
+    // Latest live delivery per invoice — DELIVERED rows stay in the map (the
+    // Fulfillment badge is tracking-status-driven) but only ACTIVE ones keep
+    // the invoice inside the tab.
+    const { rows } = await getDbPool().query(
+      `SELECT DISTINCT ON (invoice_id)
+              invoice_id, status, status_detail, tracking_number, tracking_url,
+              carrier, service, shipped_at, delivered_at, status_checked_at
+         FROM order_delivery
+        WHERE deleted_at IS NULL AND voided_at IS NULL
+          AND invoice_id IS NOT NULL
+          AND status <> 'canceled'
+        ORDER BY invoice_id, created_at DESC`
+    );
+    deliveryByInvoice = Object.fromEntries(
+      rows.map((r: { invoice_id: string }) => [r.invoice_id, r])
+    );
+    const activeIds = rows
+      .filter((r: { status: string }) => r.status !== "delivered")
+      .map((r: { invoice_id: string }) => r.invoice_id);
+    if (activeIds.length === 0) {
+      return res.json({ invoices: [], delivery_by_invoice: deliveryByInvoice });
+    }
+    filters.id = activeIds;
+  }
 
   const config: Record<string, any> = {
     relations: ["items", "tracking_links"],
@@ -85,7 +116,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     customer: customerMap[inv.customer_id] ?? null,
   }));
 
-  return res.json({ invoices: enriched });
+  return res.json(
+    deliveryByInvoice
+      ? { invoices: enriched, delivery_by_invoice: deliveryByInvoice }
+      : { invoices: enriched }
+  );
 }
 
 // ── POST /admin/invoices ──────────────────────────────────────────────────────

@@ -166,5 +166,13 @@ export default defineMiddlewares({
       method: ["POST"],
       middlewares: [idempotency("admin.qb-catalog.vendors")],
     },
+    // Label purchases must never double-run (a dup buys a second label). The
+    // route ALSO claims order_delivery.idempotency_key domain-side (resume
+    // without re-buying); this middleware adds the in-flight 409 + replay.
+    {
+      matcher: "/admin/orders/:id/create-shipment",
+      method: ["POST"],
+      middlewares: [idempotency("admin.orders.create-shipment")],
+    },
   ],
 });

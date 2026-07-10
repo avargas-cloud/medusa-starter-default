@@ -333,6 +333,9 @@ module.exports = defineConfig({
       resolve: "./src/modules/trip-objectives",
     },
     {
+      resolve: "./src/modules/order-delivery",
+    },
+    {
       resolve: "./src/modules/mailchimp",
     },
     {
