@@ -92,6 +92,7 @@ export async function GET(
     new Set(lines.map((l) => l.product_variant_id).filter((id): id is string => !!id))
   );
   const costByVariant = new Map<string, number | null>();
+  const salesDescByVariant = new Map<string, string | null>();
   if (variantIds.length > 0) {
     const pg = req.scope.resolve("__pg_connection__") as {
       raw: (
@@ -104,7 +105,8 @@ export async function GET(
               COALESCE(
                 (metadata->>'average_unit_cost')::numeric,
                 (metadata->>'qb_avg_cost')::numeric
-              ) AS unit_cost
+              ) AS unit_cost,
+              NULLIF(TRIM(metadata->>'sales_description'), '') AS sales_description
          FROM product_variant
         WHERE id = ANY(?)`,
       [variantIds]
@@ -119,6 +121,10 @@ export async function GET(
         String(row.id),
         n !== null && Number.isFinite(n) ? n : null
       );
+      salesDescByVariant.set(
+        String(row.id),
+        row.sales_description ? String(row.sales_description) : null
+      );
     }
   }
 
@@ -131,6 +137,8 @@ export async function GET(
       line_id: l.id,
       sku: l.sku,
       product_title: l.product_title,
+      product_sales_description:
+        salesDescByVariant.get(l.product_variant_id) ?? null,
       qty_at_count_time: l.qty_at_count_time ?? 0,
       qty_counted: l.qty_counted ?? 0,
       delta_original: delta,

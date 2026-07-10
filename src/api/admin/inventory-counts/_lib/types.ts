@@ -46,6 +46,8 @@ export interface InventoryCountLineDto {
   inventory_item_id: string;
   sku: string;
   product_title: string;
+  /** Live QB sales description (variant metadata) — display-only enrichment. */
+  product_sales_description?: string | null;
   qty_counted: number | null;
   qty_counted_available: number | null;
   qty_counted_reserved: number | null;
@@ -120,6 +122,8 @@ export interface PreviewApprovalLine {
   line_id: string;
   sku: string;
   product_title: string;
+  /** Live QB sales description (variant metadata) — display-only enrichment. */
+  product_sales_description?: string | null;
   qty_at_count_time: number;
   qty_counted: number;
   delta_original: number;

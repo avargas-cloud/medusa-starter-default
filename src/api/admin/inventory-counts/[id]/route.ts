@@ -12,7 +12,11 @@ import type {
 } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 
-import { buildEnrichmentMaps, decorateCount } from "../_lib/enrich";
+import {
+  buildEnrichmentMaps,
+  buildSalesDescriptionMap,
+  decorateCount,
+} from "../_lib/enrich";
 import { zodErrorToBody } from "../_lib/format";
 import { getInventoryCountService } from "../_lib/service-resolver";
 import type { UpdateDraftLineInput } from "../_lib/types";
@@ -37,10 +41,22 @@ export async function GET(
     { take: 5000, order: { sku: "ASC" } }
   );
 
-  const maps = await buildEnrichmentMaps(req, [count]);
+  const [maps, salesDescByVariant] = await Promise.all([
+    buildEnrichmentMaps(req, [count]),
+    buildSalesDescriptionMap(
+      req,
+      lines.map((l) => l.product_variant_id)
+    ),
+  ]);
   const enriched = decorateCount(count, maps);
 
-  return res.json({ inventory_count: enriched, lines });
+  const linesWithDesc = lines.map((l) => ({
+    ...l,
+    product_sales_description:
+      salesDescByVariant.get(l.product_variant_id) ?? null,
+  }));
+
+  return res.json({ inventory_count: enriched, lines: linesWithDesc });
 }
 
 export async function PATCH(

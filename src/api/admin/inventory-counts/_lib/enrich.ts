@@ -102,6 +102,44 @@ export async function buildEnrichmentMaps(
   return { locations: locationsMap, users: usersMap };
 }
 
+/**
+ * Batch-resolves the QB sales description per product variant (lives in
+ * product_variant.metadata.sales_description — same source the Meili
+ * inventory doc builder reads). Display-only enrichment for count lines;
+ * the stored product_title snapshot stays canonical.
+ */
+export async function buildSalesDescriptionMap(
+  req: AuthenticatedMedusaRequest,
+  variantIds: Array<string | null | undefined>
+): Promise<Map<string, string | null>> {
+  const map = new Map<string, string | null>();
+  const ids = Array.from(
+    new Set(variantIds.filter((id): id is string => Boolean(id)))
+  );
+  if (ids.length === 0) return map;
+
+  const pg = req.scope.resolve("__pg_connection__") as {
+    raw: (
+      sql: string,
+      bindings?: unknown[]
+    ) => Promise<{ rows: Array<Record<string, unknown>> }>;
+  };
+  const result = await pg.raw(
+    `SELECT id,
+            NULLIF(TRIM(metadata->>'sales_description'), '') AS sales_description
+       FROM product_variant
+      WHERE id = ANY(?)`,
+    [ids]
+  );
+  for (const row of result.rows) {
+    map.set(
+      String(row.id),
+      row.sales_description ? String(row.sales_description) : null
+    );
+  }
+  return map;
+}
+
 export function decorateCount<T extends RawCount>(
   count: T,
   maps: {
