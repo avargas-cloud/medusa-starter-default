@@ -117,6 +117,7 @@ export async function runRefundPaymentRecovery(logger: any): Promise<void> {
 
         const { rows: cpRows } = await pool.query(
           `SELECT cp.reference, cp.amount, cp.metadata,
+                            cp.batch_day,
                             cust.metadata->>'qb_list_id' AS customer_list_id
                      FROM customer_payment cp
                      JOIN customer cust ON cust.id = cp.customer_id
@@ -160,6 +161,13 @@ export async function runRefundPaymentRecovery(logger: any): Promise<void> {
           : Number(cp.amount);
         const amountDollars = Number(refundAmount / 100).toFixed(2);
 
+        // Explicit TxnDate (durable rule) — refund date from payload, batch_day
+        // fallback for legacy rows.
+        const rpTxnDate =
+          (rpPayload.txnDate as string | undefined) ??
+          (cp.batch_day as string | undefined) ??
+          undefined;
+
         const rpRes = await bridgeFetch("POST", "/api/sync/enqueue", {
           type: "receive-payment",
           action: "add",
@@ -170,6 +178,7 @@ export async function runRefundPaymentRecovery(logger: any): Promise<void> {
             amount: Number(amountDollars),
             totalAmount: 0,
             paymentAmount: 0,
+            ...(rpTxnDate ? { date: rpTxnDate } : {}),
           },
         });
         if (!rpRes?.operation_id) {

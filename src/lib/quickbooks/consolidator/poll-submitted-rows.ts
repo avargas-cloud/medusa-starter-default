@@ -577,6 +577,7 @@ export async function pollSubmittedRows(
                   const rpPayload = rpRow.payload ?? {};
                   const { rows: cpRows } = await pool.query(
                     `SELECT cp.reference, cp.amount, cp.metadata,
+                                                cp.batch_day,
                                                 cust.metadata->>'qb_list_id' AS customer_list_id
                                          FROM customer_payment cp
                                          JOIN customer cust ON cust.id = cp.customer_id
@@ -623,6 +624,14 @@ export async function pollSubmittedRows(
                     : Number(cp.amount);
                   const amountDollars = Number(refundAmount / 100).toFixed(2);
 
+                  // Explicit TxnDate (durable rule: EVERY ReceivePayment
+                  // callsite sends one) — refund date chosen at process time,
+                  // batch_day fallback for legacy rows without payload.txnDate.
+                  const rpTxnDate =
+                    (rpPayload.txnDate as string | undefined) ??
+                    (cp.batch_day as string | undefined) ??
+                    undefined;
+
                   const rpRes = await bridgeFetch("POST", "/api/sync/enqueue", {
                     type: "receive-payment",
                     action: "add",
@@ -633,6 +642,7 @@ export async function pollSubmittedRows(
                       amount: Number(amountDollars),
                       totalAmount: 0,
                       paymentAmount: 0,
+                      ...(rpTxnDate ? { date: rpTxnDate } : {}),
                     },
                   });
                   if (!rpRes?.operation_id) {
@@ -661,6 +671,38 @@ export async function pollSubmittedRows(
                 `${LOG_PREFIX} ⚠️ Error querying refund_payment rows: ${rpListErr.message}`
               );
             }
+          }
+        }
+
+        // refund_check_mod confirmed → NOW reflect the new bank on the
+        // confirmed write_check row's payload (deliberately deferred: updating
+        // it at enqueue time would make the UI claim a bank QB hasn't accepted).
+        if (row.step === "refund_check_mod" && row.reference_id) {
+          try {
+            const { rows: modSelfRows } = await pool.query(
+              `SELECT payload FROM qb_order_pipeline WHERE id = $1`,
+              [row.id]
+            );
+            const modBankId = modSelfRows[0]?.payload?.bankAccountId as
+              | string
+              | undefined;
+            if (modBankId) {
+              await pool.query(
+                `UPDATE qb_order_pipeline
+                    SET payload = COALESCE(payload, '{}'::jsonb) || $2::jsonb,
+                        updated_at = NOW()
+                  WHERE step = 'write_check' AND reference_id = $1
+                    AND status = 'confirmed'`,
+                [row.reference_id, JSON.stringify({ bankAccountId: modBankId })]
+              );
+              logger.info(
+                `${LOG_PREFIX} ✅ refund_check_mod confirmed → write_check payload bank=${modBankId} for ${row.reference_id}`
+              );
+            }
+          } catch (rcmErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Could not propagate refund_check_mod bank to write_check payload: ${rcmErr.message}`
+            );
           }
         }
 

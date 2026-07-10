@@ -26,6 +26,8 @@ const QB_CREATE_STEPS = new Set<string>([
   "payment",
   "apply_payment",
   "inventory_adjustment",
+  "write_check",
+  "refund_payment",
 ]);
 
 /**
@@ -156,7 +158,8 @@ export async function writePipelineRow(
     const { rows: existingWaiting } = await pool.query(
       `UPDATE qb_order_pipeline
              SET medusa_ref_number = COALESCE($3, medusa_ref_number),
-                 depends_on        = COALESCE($4, depends_on)
+                 depends_on        = COALESCE($4, depends_on),
+                 payload           = COALESCE($6::jsonb, payload)
              WHERE step = $2 AND status = 'waiting'
                AND (
                  ($1::text IS NOT NULL AND order_id = $1::text AND ($5::text IS NULL OR reference_id = $5::text))
@@ -169,6 +172,7 @@ export async function writePipelineRow(
         input.medusaRefNumber ?? null,
         input.dependsOn ?? null,
         input.referenceId ?? null,
+        input.payload ? JSON.stringify(input.payload) : null,
       ]
     );
     if (existingWaiting.length > 0) return existingWaiting[0].id as string;

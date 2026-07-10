@@ -9,6 +9,8 @@ export type PipelineStep =
   | "credit_memo"
   | "write_check"
   | "refund_payment"
+  | "refund_check_mod"
+  | "refund_payment_txndate_change"
   | "void_estimate"
   | "estimate_cancel"
   | "estimate_deactivate"

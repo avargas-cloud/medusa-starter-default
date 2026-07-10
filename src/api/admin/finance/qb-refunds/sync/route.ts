@@ -5,33 +5,50 @@ import {
   bridgeFetch,
   DRY_RUN,
 } from "../../../../../lib/quickbooks/client/core";
+import { getBusinessDateString } from "../../../../../lib/quickbooks/order-flow-core";
 import {
   writePipelineRow,
   getCachedEditSequence,
 } from "../../../../../lib/quickbooks/qb-pipeline";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 /**
  * POST /admin/finance/qb-refunds/sync
  * Fire-and-forget: enqueues a WriteCheck to the bridge and writes a submitted
  * pipeline row. The consolidator cron confirms/fails it and updates CustomerPayment.qb.
- * Body: { customer_payment_id, qb_bank_account_id }
+ * Body: { customer_payment_id, qb_bank_account_id, refund_date? }
+ *
+ * refund_date ('YYYY-MM-DD', backdatable) is the REFUND DATE: it becomes the
+ * payment's batch_day, metadata.refund_txn_date, and the TxnDate of BOTH QB
+ * documents (the Write Check and the $0 apply ReceivePayment). Defaults to
+ * today's ET business date. Changing it after the check is confirmed goes
+ * through POST /admin/finance/qb-refunds/mod (CheckMod), never a re-run here.
  *
  * Supports both:
  *   - New style: original payment with status='refunded'/'partial_refunded'
  *   - Legacy:    separate record with type='refund'
  */
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
-  const { customer_payment_id, qb_bank_account_id } = req.body as {
-    customer_payment_id: string;
-    qb_bank_account_id: string;
-  };
+  const { customer_payment_id, qb_bank_account_id, refund_date } =
+    req.body as {
+      customer_payment_id: string;
+      qb_bank_account_id: string;
+      refund_date?: string;
+    };
 
   if (!customer_payment_id || !qb_bank_account_id) {
     return res
       .status(400)
       .json({ error: "Missing customer_payment_id or qb_bank_account_id" });
   }
+  if (refund_date !== undefined && !DATE_ONLY_RE.test(refund_date)) {
+    return res
+      .status(400)
+      .json({ error: "refund_date must be YYYY-MM-DD", code: "BAD_DATE" });
+  }
+  const refundDate = refund_date ?? getBusinessDateString(new Date());
 
   const financeService = req.scope.resolve(FINANCE_MODULE);
   const customerModule = req.scope.resolve(Modules.CUSTOMER);
@@ -54,6 +71,35 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   }
   if (payment.qb?.status === "yes") {
     return res.status(400).json({ error: "Already synced to QuickBooks" });
+  }
+
+  // 1a. ANTI-DUPLICATE guard (CheckAdd is NOT idempotent): if the latest
+  //     write_check row is in flight or already confirmed, a re-run here would
+  //     mint a SECOND QB check (this route hits the bridge BEFORE
+  //     writePipelineRow, so the pipeline-level ADD guard alone can't stop it).
+  //     In-flight → wait; confirmed → use the mod route (change bank/date).
+  const pgConnection = req.scope.resolve("__pg_connection__") as any;
+  const { rows: wcRows } = await pgConnection.raw(
+    `SELECT status FROM qb_order_pipeline
+      WHERE step = 'write_check' AND reference_id = ?
+      ORDER BY COALESCE(updated_at, created_at) DESC
+      LIMIT 1`,
+    [customer_payment_id]
+  );
+  const latestWcStatus = wcRows?.[0]?.status as string | undefined;
+  if (latestWcStatus === "processing" || latestWcStatus === "submitted") {
+    return res.status(409).json({
+      error:
+        "A QB Write Check for this refund is already in flight. Wait for it to confirm or fail before retrying.",
+      code: "WRITE_CHECK_IN_FLIGHT",
+    });
+  }
+  if (latestWcStatus === "confirmed") {
+    return res.status(409).json({
+      error:
+        "The QB Write Check for this refund is already confirmed. Use the edit flow (qb-refunds/mod) to change bank or date.",
+      code: "WRITE_CHECK_ALREADY_CONFIRMED",
+    });
   }
 
   // 1b. Guard: for new-style refunds the payment IS the original — check its QB sync status.
@@ -138,7 +184,26 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       : payLabel;
   const medusaRef = `Refund ${payLabel}`;
 
+  // Persists the chosen refund date on the payment record: batch_day (drives
+  // /payments Batch Date basis + payments-summary) and metadata.refund_txn_date
+  // (drives the /accounting "Refund Date" column). received_at is deliberately
+  // NOT touched — it remains the CM-completion timestamp ("Credit Memo Date").
+  const persistRefundDate = async () => {
+    const newMeta = {
+      ...((payment.metadata as Record<string, unknown>) ?? {}),
+      refund_txn_date: refundDate,
+    };
+    // batch_day is a TEXT day-key column ('YYYY-MM-DD'), not DATE
+    await pgConnection.raw(
+      `UPDATE customer_payment
+          SET batch_day = ?, metadata = ?::jsonb
+        WHERE id = ?`,
+      [refundDate, JSON.stringify(newMeta), customer_payment_id]
+    );
+  };
+
   if (DRY_RUN) {
+    await persistRefundDate();
     await writePipelineRow({
       referenceId: customer_payment_id,
       referenceType: "customer_payment",
@@ -146,8 +211,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       status: "confirmed",
       qbTxnId: "DRY-RUN-CHECK-TXN",
       medusaRefNumber: refLabel,
+      payload: { bankAccountId: qb_bank_account_id, txnDate: refundDate },
     });
-    return res.json({ success: true, dry_run: true });
+    return res.json({ success: true, dry_run: true, refund_date: refundDate });
   }
 
   // 5. Enqueue CheckAdd to bridge
@@ -160,7 +226,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         AccountRef: { ListID: bank.list_id },
         PayeeEntityRef: { ListID: customerListId },
         RefNumber: refLabel,
-        TxnDate: new Date().toISOString().split("T")[0],
+        TxnDate: refundDate,
         Memo: `POS Refund - ${refLabel}`,
         ExpenseLineAdd: [
           {
@@ -184,7 +250,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       .json({ error: "Bridge did not return operation_id" });
   }
 
-  // 6. Write pipeline row as submitted
+  // 6. Write pipeline row as submitted + persist the refund date on the payment
   const writeCheckRowId = await writePipelineRow({
     referenceId: customer_payment_id,
     referenceType: "customer_payment",
@@ -192,8 +258,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     status: "submitted",
     bridgeOpId: enqueueRes.operation_id,
     medusaRefNumber: medusaRef,
-    payload: { bankAccountId: qb_bank_account_id },
+    payload: { bankAccountId: qb_bank_account_id, txnDate: refundDate },
   });
+  await persistRefundDate();
 
   // 6b. ALL refunds need a refund_payment (ReceivePaymentAdd) to close the open AR
   //     from the Write Check against the original QB credit:
@@ -219,8 +286,14 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
           customerListId,
           creditMemoRef: payment.reference,
           type: "credit_memo",
+          txnDate: refundDate,
         }
-      : { customerListId, originalPaymentTxnId, type: "direct_payment" },
+      : {
+          customerListId,
+          originalPaymentTxnId,
+          type: "direct_payment",
+          txnDate: refundDate,
+        },
   });
 
   // 7. Update original ReceivePayment memo in QB to append "(Refunded)"
@@ -260,5 +333,6 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     success: true,
     queued: true,
     operation_id: enqueueRes.operation_id,
+    refund_date: refundDate,
   });
 };

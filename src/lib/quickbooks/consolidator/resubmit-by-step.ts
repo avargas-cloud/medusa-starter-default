@@ -22,7 +22,7 @@ import {
   updateSalesReceiptInQb,
   voidSalesReceiptInQb,
 } from "../client/sales-receipts";
-import { voidCheckInQb } from "../client/checks";
+import { updateCheckInQb, voidCheckInQb } from "../client/checks";
 import {
   postInventoryAdjustmentToQb,
   voidInventoryAdjustmentInQb,
@@ -986,6 +986,259 @@ export async function resubmitByStep(
           await failPipelineRow(
             row.id,
             payMod.error ?? "ReceivePaymentMod for TxnDate failed"
+          );
+        }
+        break;
+      }
+
+      case "refund_check_mod": {
+        // Edit of a CONFIRMED refund Write Check: bank and/or refund date.
+        // Desired state is read LIVE at dispatch — the date from
+        // customer_payment (metadata.refund_txn_date › batch_day), the bank
+        // from this row's payload — so repeated edits coalesce into the latest
+        // value (same convergence model as payment_txndate_change). CheckMod
+        // is header-only (bridge emits no line elements → AR expense line
+        // preserved) and safe to re-dispatch.
+        if (!row.reference_id) {
+          await failPipelineRow(
+            row.id,
+            "refund_check_mod: missing reference_id (payment id)"
+          );
+          break;
+        }
+        const rcmPool = getDbPool();
+
+        const skipRcmRow = async (reason: string) => {
+          await rcmPool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'skipped', error = $2, updated_at = NOW()
+              WHERE id = $1`,
+            [row.id, reason]
+          );
+          logger.info(
+            `${LOG_PREFIX} ⏭️ refund_check_mod ${row.id} skipped: ${reason}`
+          );
+        };
+
+        const { rows: rcmCpRows } = await rcmPool.query(
+          `SELECT status, batch_day, metadata
+             FROM customer_payment
+            WHERE id = $1 AND deleted_at IS NULL`,
+          [row.reference_id]
+        );
+        const rcmCp = rcmCpRows[0] as
+          | {
+              status: string;
+              batch_day: string | null;
+              metadata: Record<string, unknown> | null;
+            }
+          | undefined;
+        if (!rcmCp) {
+          await skipRcmRow("customer_payment not found");
+          break;
+        }
+        if (rcmCp.status === "voided") {
+          await skipRcmRow("refund is voided — nothing to edit in QB");
+          break;
+        }
+
+        // Row payload + check TxnID (row.qb_txn_id set at enqueue; fall back
+        // to the confirmed write_check row).
+        const { rows: rcmSelfRows } = await rcmPool.query(
+          `SELECT payload, qb_txn_id FROM qb_order_pipeline WHERE id = $1`,
+          [row.id]
+        );
+        const rcmPayload = (rcmSelfRows[0]?.payload ?? {}) as {
+          bankAccountId?: string;
+        };
+        let checkTxnId = rcmSelfRows[0]?.qb_txn_id as string | null;
+        if (!checkTxnId) {
+          const { rows: wcTxnRows } = await rcmPool.query(
+            `SELECT qb_txn_id FROM qb_order_pipeline
+              WHERE step = 'write_check' AND reference_id = $1
+                AND status = 'confirmed' AND qb_txn_id IS NOT NULL
+              ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 1`,
+            [row.reference_id]
+          );
+          checkTxnId = wcTxnRows[0]?.qb_txn_id ?? null;
+        }
+        if (!checkTxnId) {
+          await failPipelineRow(
+            row.id,
+            "refund_check_mod: no confirmed write_check TxnID"
+          );
+          break;
+        }
+
+        const desiredDate =
+          ((rcmCp.metadata?.refund_txn_date as string | undefined) ??
+            rcmCp.batch_day) ||
+          undefined;
+
+        let bankListId: string | undefined;
+        if (rcmPayload.bankAccountId) {
+          const { rows: bankRows } = await rcmPool.query(
+            `SELECT list_id, type, name FROM qb_bank_account WHERE id = $1`,
+            [rcmPayload.bankAccountId]
+          );
+          const bankRow = bankRows[0];
+          if (!bankRow || bankRow.type !== "Bank" || !bankRow.list_id) {
+            await failPipelineRow(
+              row.id,
+              `refund_check_mod: bank account ${rcmPayload.bankAccountId} missing or not type Bank`
+            );
+            break;
+          }
+          bankListId = bankRow.list_id as string;
+        }
+
+        if (!desiredDate && !bankListId) {
+          await skipRcmRow("nothing to change (no date, no bank)");
+          break;
+        }
+
+        const checkMod = await updateCheckInQb(checkTxnId, {
+          date: desiredDate,
+          bankAccountListId: bankListId,
+        });
+        if (checkMod.success && checkMod.data?.operationId) {
+          await rcmPool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                    submitted_at = NOW(), updated_at = NOW()
+              WHERE id = $1`,
+            [row.id, checkMod.data.operationId, checkTxnId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ refund_check_mod ${row.id} → CheckMod ${checkTxnId} date=${desiredDate ?? "unchanged"} bank=${bankListId ?? "unchanged"} op=${checkMod.data.operationId}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            checkMod.error ?? "CheckMod failed"
+          );
+        }
+        break;
+      }
+
+      case "refund_payment_txndate_change": {
+        // Date-only mod of the $0 apply ReceivePayment of a refund. Reads the
+        // LIVE refund date and the LIVE refund_payment row: waiting → just
+        // rewrite its payload (the create will carry the date); in flight →
+        // fail-retryable until it confirms; confirmed → ReceivePaymentMod.
+        if (!row.reference_id) {
+          await failPipelineRow(
+            row.id,
+            "refund_payment_txndate_change: missing reference_id (payment id)"
+          );
+          break;
+        }
+        const rptPool = getDbPool();
+
+        const skipRptRow = async (reason: string) => {
+          await rptPool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'skipped', error = $2, updated_at = NOW()
+              WHERE id = $1`,
+            [row.id, reason]
+          );
+          logger.info(
+            `${LOG_PREFIX} ⏭️ refund_payment_txndate_change ${row.id} skipped: ${reason}`
+          );
+        };
+
+        const { rows: rptCpRows } = await rptPool.query(
+          `SELECT status, batch_day, metadata
+             FROM customer_payment
+            WHERE id = $1 AND deleted_at IS NULL`,
+          [row.reference_id]
+        );
+        const rptCp = rptCpRows[0] as
+          | {
+              status: string;
+              batch_day: string | null;
+              metadata: Record<string, unknown> | null;
+            }
+          | undefined;
+        if (!rptCp) {
+          await skipRptRow("customer_payment not found");
+          break;
+        }
+        if (rptCp.status === "voided") {
+          await skipRptRow("refund is voided — nothing to move");
+          break;
+        }
+        const rptDate =
+          ((rptCp.metadata?.refund_txn_date as string | undefined) ??
+            rptCp.batch_day) ||
+          null;
+        if (!rptDate) {
+          await skipRptRow("payment has no refund date / batch_day");
+          break;
+        }
+
+        const { rows: rptRpRows } = await rptPool.query(
+          `SELECT id, status, qb_txn_id FROM qb_order_pipeline
+            WHERE step = 'refund_payment' AND reference_id = $1
+            ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 1`,
+          [row.reference_id]
+        );
+        const rptRp = rptRpRows[0] as
+          | { id: string; status: string; qb_txn_id: string | null }
+          | undefined;
+        if (!rptRp) {
+          await skipRptRow("no refund_payment row for this refund");
+          break;
+        }
+        if (rptRp.status === "waiting") {
+          await rptPool.query(
+            `UPDATE qb_order_pipeline
+                SET payload = COALESCE(payload, '{}'::jsonb) || $2::jsonb,
+                    updated_at = NOW()
+              WHERE id = $1`,
+            [rptRp.id, JSON.stringify({ txnDate: rptDate })]
+          );
+          await skipRptRow(
+            "refund_payment still waiting — payload.txnDate updated, create will carry the date"
+          );
+          break;
+        }
+        if (rptRp.status === "confirmed" && !rptRp.qb_txn_id) {
+          // Legacy confirms didn't store the $0 ReceivePayment TxnID — nothing
+          // to target. Skip (NOT fail: retrying can never resolve it → churn).
+          await skipRptRow(
+            "refund_payment confirmed but has no qb_txn_id (legacy row) — cannot move its date"
+          );
+          break;
+        }
+        if (rptRp.status !== "confirmed" || !rptRp.qb_txn_id) {
+          await failPipelineRow(
+            row.id,
+            `refund_payment_txndate_change: apply ReceivePayment not confirmed yet (status=${rptRp.status})`
+          );
+          break;
+        }
+
+        const rptMod = await updatePaymentTxnDateInQb(
+          rptRp.qb_txn_id,
+          rptDate,
+          (m: string) => logger.info(m)
+        );
+        if (rptMod.success && rptMod.data?.operationId) {
+          await rptPool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                    submitted_at = NOW(), updated_at = NOW()
+              WHERE id = $1`,
+            [row.id, rptMod.data.operationId, rptRp.qb_txn_id]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ refund_payment_txndate_change ${row.id} → ReceivePaymentMod ${rptRp.qb_txn_id} TxnDate=${rptDate} op=${rptMod.data.operationId}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            rptMod.error ?? "ReceivePaymentMod for refund apply date failed"
           );
         }
         break;

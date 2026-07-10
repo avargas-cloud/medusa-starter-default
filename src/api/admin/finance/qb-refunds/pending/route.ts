@@ -53,6 +53,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       {
         write_check?: string;
         refund_payment?: string;
+        refund_check_mod?: string;
+        refund_payment_txndate_change?: string;
         bankAccountId?: string;
       }
     > = {};
@@ -61,7 +63,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       `SELECT DISTINCT ON (reference_id, step) reference_id, step, status, payload
        FROM qb_order_pipeline
        WHERE reference_id = ANY($1)
-         AND step IN ('write_check', 'refund_payment')
+         AND step IN ('write_check', 'refund_payment', 'refund_check_mod', 'refund_payment_txndate_change')
        ORDER BY reference_id, step, COALESCE(updated_at, created_at) DESC`,
       [refundIds]
     );
@@ -70,7 +72,13 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       if (!pipelineStatusMap[row.reference_id])
         pipelineStatusMap[row.reference_id] = {};
       const entry = pipelineStatusMap[row.reference_id]!;
-      entry[row.step as "write_check" | "refund_payment"] = row.status;
+      entry[
+        row.step as
+          | "write_check"
+          | "refund_payment"
+          | "refund_check_mod"
+          | "refund_payment_txndate_change"
+      ] = row.status;
       if (row.step === "write_check" && row.payload?.bankAccountId) {
         entry.bankAccountId = row.payload.bankAccountId;
       }
@@ -98,6 +106,10 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         write_check_status: pipeline.write_check ?? null,
         refund_payment_status: pipeline.refund_payment ?? null,
         qb_bank_account_id: pipeline.bankAccountId ?? null,
+        // Refund Date column: set once the refund is sent to QB, empty before.
+        refund_txn_date: r.metadata?.refund_txn_date ?? null,
+        check_mod_status: pipeline.refund_check_mod ?? null,
+        apply_date_mod_status: pipeline.refund_payment_txndate_change ?? null,
       };
     });
 

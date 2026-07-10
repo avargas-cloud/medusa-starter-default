@@ -1,4 +1,9 @@
-import { DRY_RUN, bridgeFetch, pollOperationResult } from "./core";
+import {
+  DRY_RUN,
+  bridgeFetch,
+  pollOperationResult,
+  pollRawOperationResult,
+} from "./core";
 import { QbCreateCheckPayload, QbBridgeResult, QbAsyncResult } from "./types";
 
 /**
@@ -74,6 +79,85 @@ export async function voidCheckInQb(
     const operationId = data?.operationId;
     if (!operationId)
       throw new Error("Bridge did not return an operationId for void-check");
+    return { success: true, data: { operationId, txnId: checkTxnId } };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Fetches the CURRENT live state of a Check from QB — fresh EditSequence.
+ * Always query fresh before a CheckMod: QB bumps the EditSequence on every
+ * edit/reconcile, so any cached value is unreliable (same policy as
+ * updatePaymentTxnDateInQb in payments.ts).
+ */
+export async function fetchCheckCurrentState(
+  checkTxnId: string,
+  log: (msg: string) => void = console.log
+): Promise<{ editSequence: string; txnDate: string | null }> {
+  const res = await bridgeFetch("GET", `/api/checks/${checkTxnId}`);
+  const operationId: string = res?.operationId || res?.operation?.id;
+  if (!operationId) {
+    throw new Error("Bridge did not return an operationId for check query");
+  }
+
+  const raw = await pollRawOperationResult(operationId, log);
+  const msgs = raw?.QBXML?.QBXMLMsgsRs ?? raw?.QBXMLMsgsRs ?? raw ?? {};
+  const retRaw =
+    msgs?.CheckQueryRs?.CheckRet ??
+    raw?.CheckQueryRs?.CheckRet ??
+    raw?.CheckRet ??
+    null;
+  const ret = Array.isArray(retRaw) ? retRaw[0] : retRaw;
+  if (!ret?.EditSequence) {
+    throw new Error(
+      `Check query for ${checkTxnId} returned no CheckRet/EditSequence`
+    );
+  }
+  return {
+    editSequence: String(ret.EditSequence),
+    txnDate: ret.TxnDate ? String(ret.TxnDate) : null,
+  };
+}
+
+/**
+ * Header-only CheckMod: moves the check's TxnDate and/or bank AccountRef.
+ * The bridge builder emits NO expense-line elements, so the AR-offset line
+ * (and its CustomerRef) is preserved. Queries QB fresh for the EditSequence
+ * first — a stale-3200 failure simply retries with a fresh query.
+ */
+export async function updateCheckInQb(
+  checkTxnId: string,
+  changes: { date?: string; bankAccountListId?: string },
+  log: (msg: string) => void = console.log
+): Promise<QbBridgeResult<QbAsyncResult>> {
+  if (!changes.date && !changes.bankAccountListId) {
+    return { success: false, error: "CheckMod requires date or bank account" };
+  }
+  if (DRY_RUN) {
+    console.log(
+      `[QB DRY RUN] Would modify check ${checkTxnId}: ` +
+        `date=${changes.date ?? "unchanged"} bank=${changes.bankAccountListId ?? "unchanged"}`
+    );
+    return {
+      success: true,
+      dryRun: true,
+      data: { operationId: "DRY_RUN", txnId: checkTxnId },
+    };
+  }
+
+  try {
+    const state = await fetchCheckCurrentState(checkTxnId, log);
+    const modResp = await bridgeFetch("PUT", `/api/checks/${checkTxnId}`, {
+      EditSequence: state.editSequence,
+      ...(changes.date ? { TxnDate: changes.date } : {}),
+      ...(changes.bankAccountListId
+        ? { AccountRef: { ListID: changes.bankAccountListId } }
+        : {}),
+    });
+    const operationId = modResp?.operationId;
+    if (!operationId)
+      throw new Error("Bridge did not return an operationId for check mod");
     return { success: true, data: { operationId, txnId: checkTxnId } };
   } catch (err: any) {
     return { success: false, error: err.message };
