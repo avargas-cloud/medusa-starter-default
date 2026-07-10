@@ -24,7 +24,9 @@ export interface PaymentSummaryDay {
  *   Both modes FILTER by the same day key (not received_at) so an evening
  *   payment on the last day of the range lands inside its bucket.
  * Cash OUT → refund records only after QB Write Check is confirmed
- *            (−refund_amount), bucketed on the ET date of the confirmation.
+ *            (−refund_amount), bucketed on batch_day (the refund date chosen
+ *            in ProcessRefundModal, backdatable) — falls back to the ET date
+ *            of the Write Check confirmation for legacy rows without batch_day.
  *
  * Requested refunds without a confirmed Write Check contribute 0 (money has not left).
  * Amounts in cents. count = number of incoming payments only.
@@ -90,11 +92,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
          UNION ALL
 
-         -- Refunds bucket on the day cash actually left the bank: the confirmed
-         -- Write Check timestamp (ET date). Legacy rows fall back only after
-         -- confirmation.
+         -- Refunds bucket on batch_day (the refund date chosen in
+         -- ProcessRefundModal, backdatable). Legacy rows without a valid
+         -- batch_day fall back to the ET date the QB Write Check confirmed.
          SELECT
-           to_char(COALESCE(lwc.confirmed_at, (cp.metadata->>'refunded_at')::timestamptz, cp.received_at) AT TIME ZONE 'America/New_York', 'YYYY-MM-DD') AS d,
+           CASE WHEN cp.batch_day ~ '^\d{4}-\d{2}-\d{2}$' THEN cp.batch_day
+                ELSE to_char(COALESCE(lwc.confirmed_at, (cp.metadata->>'refunded_at')::timestamptz, cp.received_at) AT TIME ZONE 'America/New_York', 'YYYY-MM-DD')
+           END AS d,
            -COALESCE((cp.metadata->>'refund_amount')::numeric, cp.amount) AS net_amount,
            0                            AS gross_payments,
            COALESCE((cp.metadata->>'refund_amount')::numeric, cp.amount) AS refunds,
@@ -107,8 +111,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
              OR (cp.type <> 'refund' AND cp.status IN ('refunded', 'partial_refunded'))
            )
            AND cp.qb->>'check_txn_id' IS NOT NULL
-           AND to_char(COALESCE(lwc.confirmed_at, (cp.metadata->>'refunded_at')::timestamptz, cp.received_at) AT TIME ZONE 'America/New_York', 'YYYY-MM-DD') >= ?
-           AND to_char(COALESCE(lwc.confirmed_at, (cp.metadata->>'refunded_at')::timestamptz, cp.received_at) AT TIME ZONE 'America/New_York', 'YYYY-MM-DD') <= ?
+           AND (CASE WHEN cp.batch_day ~ '^\d{4}-\d{2}-\d{2}$' THEN cp.batch_day
+                ELSE to_char(COALESCE(lwc.confirmed_at, (cp.metadata->>'refunded_at')::timestamptz, cp.received_at) AT TIME ZONE 'America/New_York', 'YYYY-MM-DD')
+           END) >= ?
+           AND (CASE WHEN cp.batch_day ~ '^\d{4}-\d{2}-\d{2}$' THEN cp.batch_day
+                ELSE to_char(COALESCE(lwc.confirmed_at, (cp.metadata->>'refunded_at')::timestamptz, cp.received_at) AT TIME ZONE 'America/New_York', 'YYYY-MM-DD')
+           END) <= ?
        ) sub
        GROUP BY d
        HAVING SUM(net_amount) <> 0 OR SUM(payment_count) > 0
