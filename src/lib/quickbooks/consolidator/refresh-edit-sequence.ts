@@ -26,19 +26,39 @@ type PipelineStep = string;
  *
  * Per-step ownership map. Extend when adding more *_mod steps:
  *   credit_memo_mod → pos_credit_memo.qb_edit_sequence
+ *   invoice_update / sales_order / estimate / sales_receipt_update → cache
+ *     only (their client functions in ../client/*.ts already do a live
+ *     re-fetch on failure or read the shared cache before every Mod — this
+ *     is a backstop for the rare double-stale race, not the primary heal).
+ *   transfer_customer → special-cased below: its EditSequence is frozen
+ *     once into THIS pipeline row's own `payload.editSequence` at dispatch
+ *     time (see handle-customer-transferred.ts) and every resubmit re-reads
+ *     that same column (resubmit-by-step.ts), so a generic persistTable/
+ *     persistColumn UPDATE can't reach it — it needs a jsonb_set on
+ *     qb_order_pipeline itself, keyed by pipelineRowId.
  */
 export async function refreshEditSequenceForRow(
   step: PipelineStep,
   txnId: string,
   referenceId: string | null,
   logger: { info: (m: string) => void; warn: (m: string) => void },
-  pipelineRowId?: string | null
+  pipelineRowId?: string | null,
+  referenceType?: string | null
 ): Promise<string | null> {
   const LOG_PREFIX = "[QB-AUTO-HEAL]";
 
   if (!txnId) {
     logger.warn(`${LOG_PREFIX} No txnId provided for step=${step} — abort`);
     return null;
+  }
+
+  if (step === "transfer_customer") {
+    return refreshTransferCustomerEditSequence(
+      txnId,
+      referenceType,
+      logger,
+      pipelineRowId ?? null
+    );
   }
 
   const fetchSpec = STEP_FETCH_SPEC[step];
@@ -143,10 +163,10 @@ interface FetchSpec {
   endpoint: string;
   /** Entity type used by the qb_edit_sequence_cache table. */
   cacheEntityType: string;
-  /** Owning table whose row carries the cached EditSequence for retries. */
-  persistTable: string;
-  /** Column on `persistTable` that stores the EditSequence. */
-  persistColumn: string;
+  /** Owning table whose row carries the cached EditSequence for retries. Omit when the step has no such column (cache-only backstop). */
+  persistTable?: string;
+  /** Column on `persistTable` that stores the EditSequence. Omit alongside persistTable. */
+  persistColumn?: string;
   /**
    * Walks the bridge GET response to the EditSequence string. The bridge
    * wraps QBXML payloads in several known envelopes; this is the same
@@ -155,15 +175,28 @@ interface FetchSpec {
   extractEditSequence: (rawResult: unknown) => string | null;
 }
 
-function extractFromCreditMemoQuery(rawResult: unknown): string | null {
+// Generic Query-response walker shared by every doc type below — the bridge
+// wraps the same QBXML envelope shape for all of them, only the *Rs/*Ret key
+// names differ.
+function extractRet(rawResult: unknown, rsKey: string, retKey: string): string | null {
   const r = rawResult as Record<string, any> | null;
-  const cmRet =
-    r?.QBXML?.QBXMLMsgsRs?.CreditMemoQueryRs?.CreditMemoRet ??
-    r?.QBXMLMsgsRs?.CreditMemoQueryRs?.CreditMemoRet ??
-    r?.CreditMemoRet;
-  const editSeq = cmRet?.EditSequence;
+  const msgs = r?.QBXML?.QBXMLMsgsRs ?? r?.QBXMLMsgsRs ?? {};
+  const ret = msgs?.[rsKey]?.[retKey] ?? r?.[retKey];
+  const resolved = Array.isArray(ret) ? ret[0] : ret;
+  const editSeq = resolved?.EditSequence;
   return typeof editSeq === "string" && editSeq.length > 0 ? editSeq : null;
 }
+
+const extractFromCreditMemoQuery = (r: unknown) =>
+  extractRet(r, "CreditMemoQueryRs", "CreditMemoRet");
+const extractFromInvoiceQuery = (r: unknown) =>
+  extractRet(r, "InvoiceQueryRs", "InvoiceRet");
+const extractFromSalesOrderQuery = (r: unknown) =>
+  extractRet(r, "SalesOrderQueryRs", "SalesOrderRet");
+const extractFromEstimateQuery = (r: unknown) =>
+  extractRet(r, "EstimateQueryRs", "EstimateRet");
+const extractFromSalesReceiptQuery = (r: unknown) =>
+  extractRet(r, "SalesReceiptQueryRs", "SalesReceiptRet");
 
 const STEP_FETCH_SPEC: Record<string, FetchSpec> = {
   credit_memo_mod: {
@@ -173,7 +206,150 @@ const STEP_FETCH_SPEC: Record<string, FetchSpec> = {
     persistColumn: "qb_edit_sequence",
     extractEditSequence: extractFromCreditMemoQuery,
   },
+  // The four specs below are cache-only backstops: their client functions
+  // (client/invoices.ts, client/sales-orders.ts, client/estimates.ts,
+  // client/sales-receipts.ts) already read qb_edit_sequence_cache first (or
+  // do a full live re-fetch on every attempt) before every Mod, so this
+  // covers only the rare double-stale race where BOTH the cache and their
+  // own inline retry-once lost the race against a concurrent QB edit.
+  invoice_update: {
+    endpoint: "/api/invoices",
+    cacheEntityType: "invoice",
+    extractEditSequence: extractFromInvoiceQuery,
+  },
+  sales_order: {
+    endpoint: "/api/sales-orders",
+    cacheEntityType: "sales_order",
+    extractEditSequence: extractFromSalesOrderQuery,
+  },
+  so_close: {
+    endpoint: "/api/sales-orders",
+    cacheEntityType: "sales_order",
+    extractEditSequence: extractFromSalesOrderQuery,
+  },
+  so_reopen: {
+    endpoint: "/api/sales-orders",
+    cacheEntityType: "sales_order",
+    extractEditSequence: extractFromSalesOrderQuery,
+  },
+  estimate: {
+    endpoint: "/api/estimates",
+    cacheEntityType: "estimate",
+    extractEditSequence: extractFromEstimateQuery,
+  },
+  sales_receipt_update: {
+    endpoint: "/api/sales-receipts",
+    cacheEntityType: "sales_receipt",
+    extractEditSequence: extractFromSalesReceiptQuery,
+  },
 };
+
+/**
+ * transfer_customer special-case: the fresh EditSequence must land in THIS
+ * pipeline row's own `payload.editSequence` (jsonb), not a persistTable/
+ * persistColumn on some other entity — resubmit-by-step.ts re-reads that
+ * exact column on every retry. docType/endpoint depend on referenceType
+ * ("sales_order" | "invoice"), set at dispatch time in
+ * handle-customer-transferred.ts.
+ */
+async function refreshTransferCustomerEditSequence(
+  txnId: string,
+  referenceType: string | null | undefined,
+  logger: { info: (m: string) => void; warn: (m: string) => void },
+  pipelineRowId: string | null
+): Promise<string | null> {
+  const LOG_PREFIX = "[QB-AUTO-HEAL]";
+  const isInvoice = referenceType === "invoice";
+  const endpoint = isInvoice ? "/api/invoices" : "/api/sales-orders";
+  const cacheEntityType = isInvoice ? "invoice" : "sales_order";
+  const extract = isInvoice ? extractFromInvoiceQuery : extractFromSalesOrderQuery;
+
+  if (!pipelineRowId) {
+    logger.warn(
+      `${LOG_PREFIX} transfer_customer: no pipelineRowId — cannot persist refreshed EditSequence`
+    );
+    return null;
+  }
+
+  let freshEditSeq: string | null = null;
+  try {
+    const queryResp = await bridgeFetch("GET", `${endpoint}/${txnId}`);
+    const queryOpId = queryResp?.operationId;
+    if (!queryOpId) {
+      logger.warn(`${LOG_PREFIX} transfer_customer: bridge GET ${endpoint}/${txnId} returned no operationId`);
+      return null;
+    }
+    const rawResult = await pollRawOperationResult(queryOpId, (m: string) => logger.info(`${LOG_PREFIX} ${m}`));
+    freshEditSeq = extract(rawResult);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`${LOG_PREFIX} transfer_customer: could not fetch fresh EditSequence for ${txnId}: ${msg}`);
+    return null;
+  }
+
+  if (!freshEditSeq) {
+    logger.warn(`${LOG_PREFIX} transfer_customer: QB returned no EditSequence for ${txnId}`);
+    return null;
+  }
+
+  const pool = getDbPool();
+  try {
+    await pool.query(
+      `UPDATE qb_order_pipeline
+          SET payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{editSequence}', to_jsonb($2::text)),
+              next_retry_at = NOW(),
+              updated_at = NOW()
+        WHERE id = $1 AND status = 'failed'`,
+      [pipelineRowId, freshEditSeq]
+    );
+    logger.info(`${LOG_PREFIX} ✅ transfer_customer: refreshed payload.editSequence on row ${pipelineRowId} → ${freshEditSeq}`);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`${LOG_PREFIX} transfer_customer: could not update row ${pipelineRowId}: ${msg}`);
+    return null;
+  }
+
+  try {
+    await cacheEditSequence(cacheEntityType, txnId, freshEditSeq);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`${LOG_PREFIX} transfer_customer: could not cache new EditSequence: ${msg}`);
+  }
+
+  return freshEditSeq;
+}
+
+// Steps whose entity_type in qb_edit_sequence_cache differs from the step
+// name itself (STEP_FETCH_SPEC already carries this for steps with a fetch
+// recipe; this extends it to steps that self-heal without one — payment.ts/
+// checks.ts fetch live every time and never read STEP_FETCH_SPEC, but the
+// cache still needs the correct key so *other* callers reading it via
+// getCachedEditSequence don't inherit a stale entry under the wrong type).
+const STEP_TO_CACHE_ENTITY_TYPE: Record<string, string> = {
+  payment_method_change: "payment",
+  payment_txndate_change: "payment",
+  refund_payment_txndate_change: "payment",
+  refund_check_mod: "check",
+};
+
+/**
+ * Resolves the qb_edit_sequence_cache entity_type for a given pipeline step
+ * — used to invalidate the CORRECT cache row on failure (before this, the
+ * caller passed row.step directly, which only matched the cache for steps
+ * whose step name equals their entity type, e.g. credit_memo_mod ≠
+ * "credit_memo" cache key — that invalidate was a silent no-op).
+ */
+export function stepToCacheEntityType(
+  step: string,
+  referenceType?: string | null
+): string {
+  if (step === "transfer_customer") {
+    return referenceType === "invoice" ? "invoice" : "sales_order";
+  }
+  const spec = STEP_FETCH_SPEC[step];
+  if (spec) return spec.cacheEntityType;
+  return STEP_TO_CACHE_ENTITY_TYPE[step] ?? step;
+}
 
 /**
  * Lightweight classifier for the failure path. The full classifyQbError

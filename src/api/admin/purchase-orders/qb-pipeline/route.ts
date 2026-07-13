@@ -4,15 +4,18 @@
  * Returns a unified feed of QuickBooks Purchase-side pipeline operations:
  *   - qb_purchase_order_pipeline rows  → PO add / mod / void
  *   - qb_item_receipt_pipeline rows    → ItemReceipt add  (always one row)
+ *                                        ItemReceipt mod (extra row emitted
+ *                                        when mod_status IS NOT NULL — editing
+ *                                        an already-synced receipt)
  *                                        ItemReceipt delete (extra row
  *                                        emitted when void_status IS NOT NULL;
  *                                        ItemReceipts only support hard delete
  *                                        in QB Desktop — there is no void).
  *
  * The frontend renders both kinds in the same table. To keep React keys
- * unique, void/delete rows for ItemReceipts use the composite id
- * `<pipeline_id>__void`. Retry / mark-fixed routes parse this suffix to
- * decide which table + columns to update.
+ * unique, mod rows for ItemReceipts use the composite id `<pipeline_id>__mod`
+ * and void/delete rows use `<pipeline_id>__void`. Retry / mark-fixed routes
+ * parse these suffixes to decide which table + columns to update.
  */
 
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
@@ -91,6 +94,35 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
         UNION ALL
 
+        -- ── ItemReceipt MOD pipeline (only when mod_status is set) ───────
+        SELECT
+          qbp.id || '__mod'                              AS id,
+          qbp.seq                                        AS seq,
+          ('R' || qbp.seq::text)                         AS seq_label,
+          qbp.purchase_order_id                          AS parent_id,
+          po.number                                      AS po_number,
+          NULL::text                                     AS draft_number,
+          por.number                                     AS receipt_number,
+          qbp.mod_status                                 AS status,
+          qbp.mod_operation_id                           AS qb_operation_id,
+          qbp.qb_list_id                                 AS qb_list_id,
+          NULL::text                                     AS qb_txn_number,
+          qbp.mod_last_error                             AS last_error,
+          COALESCE(qbp.mod_retries, 0)                   AS retries,
+          qbp.mod_next_retry_at                          AS next_retry_at,
+          qbp.mod_synced_at                               AS synced_at,
+          qbp.created_at                                 AS created_at,
+          qbp.updated_at                                 AS updated_at,
+          COALESCE(po.vendor_name_snapshot, po.vendor_id) AS vendor_name,
+          'mod_item_receipt'                             AS step
+        FROM qb_item_receipt_pipeline qbp
+        LEFT JOIN purchase_order_receipt por ON por.id = qbp.purchase_order_receipt_id
+        LEFT JOIN purchase_order po ON po.id = qbp.purchase_order_id
+        WHERE qbp.deleted_at IS NULL
+          AND qbp.mod_status IS NOT NULL
+
+        UNION ALL
+
         -- ── ItemReceipt VOID/DELETE pipeline (only when void_status is set)
         SELECT
           qbp.id || '__void'                             AS id,
@@ -163,6 +195,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       submitted: 0,
       processing: 0,
       synced: 0,
+      completed: 0, // ItemReceipt MOD lane's terminal success value (distinct from 'synced')
       error: 0,
       failed_permanent: 0,
     };

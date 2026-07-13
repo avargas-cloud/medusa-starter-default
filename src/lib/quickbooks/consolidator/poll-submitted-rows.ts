@@ -21,6 +21,7 @@ import { enqueueEstimateDeactivateIfNeeded } from "../pipeline/enqueue-estimate-
 import {
   isEditSequenceStaleError,
   refreshEditSequenceForRow,
+  stepToCacheEntityType,
 } from "./refresh-edit-sequence";
 import { buildEstimatePatch } from "../qb-metadata-types";
 import { resubmitByStep, type ResubmitRow } from "./resubmit-by-step";
@@ -1015,7 +1016,10 @@ export async function pollSubmittedRows(
           errMsg.includes("3175") || errMsg.includes("could not be locked");
         if (row.qb_txn_id && !isLockedError) {
           await invalidateEditSequenceCache(
-            row.step as string,
+            stepToCacheEntityType(
+              row.step as string,
+              (row.reference_type as string | null) ?? null
+            ),
             row.qb_txn_id as string
           ).catch(() => {});
         }
@@ -1035,7 +1039,8 @@ export async function pollSubmittedRows(
             row.qb_txn_id as string,
             (row.reference_id as string | null) ?? null,
             logger,
-            row.id as string
+            row.id as string,
+            (row.reference_type as string | null) ?? null
           ).catch((healErr: unknown) => {
             const msg =
               healErr instanceof Error ? healErr.message : String(healErr);

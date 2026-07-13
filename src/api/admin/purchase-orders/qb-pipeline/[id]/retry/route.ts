@@ -5,8 +5,16 @@
  *   - qbpopipe_<ulid>           → qb_purchase_order_pipeline (PO add/mod/void)
  *   - qbrcpipe_<ulid>           → qb_item_receipt_pipeline ADD lane
  *                                 (status, qb_operation_id, last_error...)
+ *   - qbrcpipe_<ulid>__mod      → qb_item_receipt_pipeline MOD lane
+ *                                 (mod_status, mod_operation_id, mod_*...)
  *   - qbrcpipe_<ulid>__void     → qb_item_receipt_pipeline VOID/DELETE lane
  *                                 (void_status, void_operation_id, void_*...)
+ *
+ * The MOD lane doesn't need a fresh-EditSequence dance before resubmitting:
+ * the bridge's POST /api/item-receipts/mod always re-queries the receipt's
+ * live EditSequence right before building the Mod QBXML (see bridge
+ * item-receipts.ts) — a stale/missing edit_sequence in mod_payload is
+ * harmless. A plain reset-and-resubmit is the correct, sufficient fix.
  */
 
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
@@ -23,7 +31,44 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const knex = (req.scope as any).resolve("__pg_connection__");
 
   const isVoidLane = rawId.endsWith("__void");
-  const id = isVoidLane ? rawId.slice(0, -"__void".length) : rawId;
+  const isModLane = !isVoidLane && rawId.endsWith("__mod");
+  const id = isVoidLane
+    ? rawId.slice(0, -"__void".length)
+    : isModLane
+      ? rawId.slice(0, -"__mod".length)
+      : rawId;
+
+  // ── ItemReceipt MOD lane ─────────────────────────────────────────────────
+  if (isModLane) {
+    const rows = await knex
+      .raw(
+        `SELECT id, mod_status FROM qb_item_receipt_pipeline
+          WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
+        [id]
+      )
+      .then((r: any) => r.rows);
+    const row = rows[0];
+    if (!row)
+      return res.status(404).json({ error: "Pipeline entry not found" });
+    if (row.mod_status !== "error" && row.mod_status !== "failed_permanent") {
+      return res.status(409).json({
+        error: `Cannot retry mod lane in status '${row.mod_status}'`,
+      });
+    }
+    // Manual retry = fresh budget, same as the ADD lane.
+    await knex.raw(
+      `UPDATE qb_item_receipt_pipeline
+          SET mod_status        = 'waiting',
+              mod_operation_id  = NULL,
+              mod_retries       = 0,
+              mod_last_error    = NULL,
+              mod_next_retry_at = NULL,
+              updated_at        = NOW()
+        WHERE id = ?`,
+      [id]
+    );
+    return res.json({ success: true, message: "Re-queued for processing" });
+  }
 
   // ── ItemReceipt VOID/DELETE lane ────────────────────────────────────────
   if (isVoidLane) {
