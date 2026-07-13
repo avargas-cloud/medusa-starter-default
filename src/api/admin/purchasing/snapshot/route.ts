@@ -28,6 +28,9 @@ const USA_LOC =
   "sloc_01KFS2AV3TAKR141KC2D6JCGTR";
 const CHINA_LOC =
   process.env.CHINA_WAREHOUSE_LOCATION_ID ?? "sloc_01KQ14C1CFX30EDD722BF87HDM";
+// POS go-live — the only window with order/customer-level sale granularity
+// (pre-go-live history is Excel-imported monthly totals, no order detail).
+const STORE_EPOCH = "2026-04-14";
 
 export async function GET(
   req: AuthenticatedMedusaRequest,
@@ -129,13 +132,18 @@ export async function GET(
          COALESCE((p.metadata->>'is_sourced_via_agent')::boolean, false) AS is_sourced_via_agent,
          COALESCE(open_po_usa.on_order, 0)::int AS qty_on_po,
          COALESCE(open_po_china.on_order, 0)::int AS qty_on_po_china,
+         COALESCE(open_po_china.lines, '[]'::json) AS po_china_lines,
          COALESCE(max_day.max_daily_sales, 0)::int AS max_daily_sales,
          COALESCE(max_day_alt.max_daily_sales_alt, 0)::int AS max_daily_sales_alt,
          COALESCE(alt_sku_list.alt_skus, ARRAY[]::text[]) AS alt_skus,
          COALESCE(res_usa.inv_usa_reserved, 0)::int AS inv_usa_reserved,
          COALESCE(alt_inv_usa.inv_usa_alt, 0)::int AS inv_usa_alt,
          COALESCE(alt_inv_usa.inv_usa_alt_reserved, 0)::int AS inv_usa_alt_reserved,
-         COALESCE(alt_po_usa.qty_on_po_alt, 0)::int AS qty_on_po_alt
+         COALESCE(alt_po_usa.qty_on_po_alt, 0)::int AS qty_on_po_alt,
+         COALESCE(project_signal.distinct_orders, 0)::int AS distinct_orders_live,
+         COALESCE(project_signal.distinct_customers, 0)::int AS distinct_customers_live,
+         COALESCE(project_signal.total_qty_live, 0)::int AS total_qty_live,
+         COALESCE(project_signal.top_order_qty, 0)::int AS top_order_qty_live
        FROM purchasing_snapshot snap
        JOIN product_variant pv ON pv.id = snap.variant_id AND pv.deleted_at IS NULL
        JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
@@ -161,10 +169,16 @@ export async function GET(
          GROUP BY pol.sku_snapshot
        ) open_po_usa ON open_po_usa.sku_snapshot = pv.sku
        LEFT JOIN (
-         SELECT sku_snapshot, SUM(on_order)::int AS on_order
+         -- Per-line qty + expected_at (ETA), not just the summed total — lets the
+         -- frontend weight each line by how soon it actually lands instead of
+         -- counting any open China-bound PO/FO as fully-available supply today.
+         SELECT sku_snapshot,
+                SUM(on_order)::int AS on_order,
+                json_agg(json_build_object('qty', on_order, 'expectedAt', expected_at) ORDER BY expected_at NULLS LAST) AS lines
          FROM (
            SELECT pol.sku_snapshot,
-                  GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled) AS on_order
+                  GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled) AS on_order,
+                  po.expected_at
            FROM purchase_order_line pol
            JOIN purchase_order po ON po.id = pol.purchase_order_id AND po.deleted_at IS NULL
            WHERE po.status IN ('submitted', 'partially_received')
@@ -173,7 +187,8 @@ export async function GET(
              AND BTRIM(po.stock_location_id, E' \\t\\n\\r') = $${chinaLocIdx}
            UNION ALL
            SELECT fol.sku_snapshot,
-                  GREATEST(0, fol.qty_ordered - fol.qty_received - fol.qty_cancelled) AS on_order
+                  GREATEST(0, fol.qty_ordered - fol.qty_received - fol.qty_cancelled) AS on_order,
+                  fo.expected_at
            FROM factory_order_line fol
            JOIN factory_order fo ON fo.id = fol.factory_order_id AND fo.deleted_at IS NULL
            WHERE fo.status IN ('submitted', 'partially_received')
@@ -181,8 +196,32 @@ export async function GET(
              AND fol.deleted_at IS NULL
              AND BTRIM(fo.stock_location_id, E' \\t\\n\\r') = $${chinaLocIdx}
          ) combined
+         WHERE on_order > 0
          GROUP BY sku_snapshot
        ) open_po_china ON open_po_china.sku_snapshot = pv.sku
+       LEFT JOIN (
+         -- Order/customer concentration since POS go-live (STORE_EPOCH) — the only
+         -- window with per-order granularity. Used to flag "looks like a one-off
+         -- project sale" (few orders, one dominates) vs. organic repeat demand.
+         SELECT variant_id,
+                COUNT(DISTINCT invoice_id)::int AS distinct_orders,
+                COUNT(DISTINCT customer_id)::int AS distinct_customers,
+                SUM(inv_qty)::int AS total_qty_live,
+                MAX(inv_qty)::int AS top_order_qty
+         FROM (
+           SELECT pii.variant_id, pii.invoice_id, pi.customer_id,
+                  SUM(pii.quantity - pii.refunded_quantity) AS inv_qty
+           FROM pos_invoice_item pii
+           JOIN pos_invoice pi ON pi.id = pii.invoice_id
+           WHERE pi.issued_at >= '${STORE_EPOCH}'
+             AND pi.status NOT IN ('voided')
+             AND pii.deleted_at IS NULL
+             AND pii.variant_id IS NOT NULL
+           GROUP BY pii.variant_id, pii.invoice_id, pi.customer_id
+         ) per_invoice
+         WHERE inv_qty > 0
+         GROUP BY variant_id
+       ) project_signal ON project_signal.variant_id = snap.variant_id
        LEFT JOIN (
          SELECT pii.variant_id,
                 MAX(day_qty)::int AS max_daily_sales
