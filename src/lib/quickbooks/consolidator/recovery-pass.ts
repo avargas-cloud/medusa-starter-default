@@ -27,6 +27,7 @@ const IDEMPOTENT_REDISPATCH_STEPS = [
   "so_close",
   "so_reopen",
   "transfer_customer",
+  "payment_method_change",
   "void_invoice",
   "void_sales_receipt",
   "void_sales_order",

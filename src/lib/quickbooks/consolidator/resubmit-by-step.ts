@@ -6,7 +6,11 @@ import {
   cancelEstimateInQb,
   deactivateEstimateInQb,
 } from "../client/estimates";
-import { updatePaymentTxnDateInQb } from "../client/payments";
+import {
+  updatePaymentTxnDateInQb,
+  updatePaymentMethodInQb,
+} from "../client/payments";
+import { resolveQbPaymentMethodForPayment } from "../payment-method-sanitizer";
 import { transferDocumentCustomer } from "../client/transfer";
 import {
   updateCreditMemoInQb,
@@ -986,6 +990,153 @@ export async function resubmitByStep(
           await failPipelineRow(
             row.id,
             payMod.error ?? "ReceivePaymentMod for TxnDate failed"
+          );
+        }
+        break;
+      }
+
+      case "payment_method_change": {
+        // Payment method edit → move the QB doc's PaymentMethodRef. Reads the
+        // LIVE customer_payment.method/card_brand (never a stale payload) so
+        // repeated edits coalesce into the latest value — same convergence
+        // model as payment_txndate_change/refund_check_mod.
+        if (!row.reference_id) {
+          await failPipelineRow(
+            row.id,
+            "payment_method_change: missing reference_id (payment id)"
+          );
+          break;
+        }
+        const pmcPool = getDbPool();
+
+        const skipPmcRow = async (reason: string) => {
+          await pmcPool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'skipped', error = $2, updated_at = NOW()
+              WHERE id = $1`,
+            [row.id, reason]
+          );
+          logger.info(
+            `${LOG_PREFIX} ⏭️ payment_method_change ${row.id} skipped: ${reason}`
+          );
+        };
+
+        const { rows: pmcRows } = await pmcPool.query(
+          `SELECT method, card_brand, status, metadata
+             FROM customer_payment
+            WHERE id = $1 AND deleted_at IS NULL`,
+          [row.reference_id]
+        );
+        const pmcPay = pmcRows[0] as
+          | {
+              method: string | null;
+              card_brand: string | null;
+              status: string;
+              metadata: Record<string, unknown> | null;
+            }
+          | undefined;
+
+        if (!pmcPay) {
+          await skipPmcRow("customer_payment not found");
+          break;
+        }
+        if (pmcPay.status === "voided") {
+          await skipPmcRow("payment is voided — no QB doc to move");
+          break;
+        }
+
+        const pmcMeta = pmcPay.metadata ?? {};
+        const qbMethodName =
+          resolveQbPaymentMethodForPayment(pmcPay.method, pmcPay.card_brand) ??
+          (pmcMeta.pos_payment_method as string | undefined) ??
+          pmcPay.method ??
+          undefined;
+        if (!qbMethodName) {
+          await skipPmcRow("could not resolve a QB payment method");
+          break;
+        }
+
+        const isSrEmbedded =
+          pmcMeta.is_sales_receipt_payment === true ||
+          pmcMeta.qb_source === "sales_receipt";
+
+        if (isSrEmbedded) {
+          const srOrderId =
+            (pmcMeta.order_id as string | undefined) ?? row.order_id ?? null;
+          if (!srOrderId) {
+            await skipPmcRow("SR-embedded payment has no order_id");
+            break;
+          }
+          const { rows: srRows } = await pmcPool.query(
+            `SELECT qb_txn_id FROM qb_order_pipeline
+              WHERE order_id = $1 AND step = 'sales_receipt' AND status = 'confirmed'
+              ORDER BY created_at DESC LIMIT 1`,
+            [srOrderId]
+          );
+          const srTxnId = srRows[0]?.qb_txn_id as string | undefined;
+          if (!srTxnId) {
+            // SR create may still be in flight — fail (retryable) instead of skip.
+            await failPipelineRow(
+              row.id,
+              `payment_method_change: no confirmed sales_receipt row for order ${srOrderId}`
+            );
+            break;
+          }
+          const srMod = await updateSalesReceiptInQb({
+            txnId: srTxnId,
+            paymentMethod: qbMethodName,
+          });
+          if (srMod.success && srMod.data?.operationId) {
+            await pmcPool.query(
+              `UPDATE qb_order_pipeline
+                  SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                      submitted_at = NOW(), updated_at = NOW()
+                WHERE id = $1`,
+              [row.id, srMod.data.operationId, srTxnId]
+            );
+            logger.info(
+              `${LOG_PREFIX} ✅ payment_method_change ${row.id} → SalesReceiptMod ${srTxnId} PaymentMethod=${qbMethodName} op=${srMod.data.operationId}`
+            );
+          } else {
+            await failPipelineRow(
+              row.id,
+              srMod.error ?? "SalesReceiptMod for PaymentMethod failed"
+            );
+          }
+          break;
+        }
+
+        // Regular standalone ReceivePayment
+        const payTxnId =
+          (pmcMeta.qb_txn_id as string | undefined) ??
+          row.qb_txn_id ??
+          undefined;
+        if (!payTxnId || payTxnId === "SYNCED_VIA_RECEIPT") {
+          await skipPmcRow(
+            "payment has no standalone QB ReceivePayment TxnID"
+          );
+          break;
+        }
+        const payMod = await updatePaymentMethodInQb(
+          payTxnId,
+          qbMethodName,
+          (m: string) => logger.info(m)
+        );
+        if (payMod.success && payMod.data?.operationId) {
+          await pmcPool.query(
+            `UPDATE qb_order_pipeline
+                SET status = 'submitted', bridge_op_id = $2, qb_txn_id = $3,
+                    submitted_at = NOW(), updated_at = NOW()
+              WHERE id = $1`,
+            [row.id, payMod.data.operationId, payTxnId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ payment_method_change ${row.id} → ReceivePaymentMod ${payTxnId} PaymentMethod=${qbMethodName} op=${payMod.data.operationId}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            payMod.error ?? "ReceivePaymentMod for PaymentMethod failed"
           );
         }
         break;

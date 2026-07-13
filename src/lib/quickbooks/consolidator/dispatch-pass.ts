@@ -23,7 +23,7 @@ export async function runPendingDispatchPass(
       WITH claim AS (
         SELECT id
           FROM qb_order_pipeline
-         WHERE step IN ('estimate_cancel', 'estimate_deactivate', 'credit_memo_mod', 'transfer_customer', 'transfer_payment', 'payment_txndate_change', 'refund_check_mod', 'refund_payment_txndate_change', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'invoice_update', 'sales_receipt_update', 'credit_memo', 'void_credit_memo', 'void_invoice', 'void_sales_order', 'void_sales_receipt', 'void_check', 'payment', 'apply_payment', 'inventory_adjustment', 'void_inventory_adjustment')
+         WHERE step IN ('estimate_cancel', 'estimate_deactivate', 'credit_memo_mod', 'transfer_customer', 'transfer_payment', 'payment_txndate_change', 'payment_method_change', 'refund_check_mod', 'refund_payment_txndate_change', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'invoice_update', 'sales_receipt_update', 'credit_memo', 'void_credit_memo', 'void_invoice', 'void_sales_order', 'void_sales_receipt', 'void_check', 'payment', 'apply_payment', 'inventory_adjustment', 'void_inventory_adjustment')
            AND (
              status = 'pending'
              OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= NOW())

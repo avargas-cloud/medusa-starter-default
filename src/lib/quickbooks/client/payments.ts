@@ -172,6 +172,48 @@ export async function updatePaymentTxnDateInQb(
 }
 
 /**
+ * Updates ONLY the PaymentMethodRef of a ReceivePayment (payment method edit).
+ *
+ * Always queries QB fresh for the current EditSequence (same self-healing
+ * pattern as updatePaymentTxnDateInQb — cache is unreliable, QB bumps it on
+ * every Mod/reconcile), then issues a ReceivePaymentMod with just the new
+ * PaymentMethodRef. No AppliedToTxnMod is sent, so existing applications are
+ * untouched.
+ */
+export async function updatePaymentMethodInQb(
+  paymentTxnId: string,
+  qbMethodName: string,
+  log: (msg: string) => void = console.log
+): Promise<QbBridgeResult<QbAsyncResult>> {
+  if (DRY_RUN) {
+    console.log(
+      `[QB DRY RUN] Would update payment ${paymentTxnId} PaymentMethod → ${qbMethodName}`
+    );
+    return {
+      success: true,
+      dryRun: true,
+      data: { operationId: "DRY_RUN", txnId: paymentTxnId },
+    };
+  }
+
+  try {
+    const state = await fetchPaymentCurrentState(paymentTxnId, log);
+    const modResp = await bridgeFetch("PUT", `/api/payments/${paymentTxnId}`, {
+      EditSequence: state.editSequence,
+      paymentMethod: qbMethodName,
+    });
+    const operationId = modResp?.operationId;
+    if (!operationId)
+      throw new Error(
+        "Bridge did not return an operationId for payment method mod"
+      );
+    return { success: true, data: { operationId, txnId: paymentTxnId } };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
  * Fetches the CURRENT live state of a ReceivePayment from QB:
  * - fresh EditSequence
  * - the full AppliedToTxnRet list (which invoices it currently pays, and how much)
