@@ -13,6 +13,7 @@ import type {
 } from "@medusajs/framework/http";
 
 import { withDb } from "../../_lib/db";
+import { PROJECT_SIGNAL_CTE, UNMET_L4W_CTE } from "../../_lib/demand-signals";
 import { getExcelPeak } from "../../_lib/peak-sales";
 
 const USA_LOC =
@@ -85,6 +86,7 @@ export async function GET(
       qty_on_po: number;
       qty_on_po_alt: number;
       qty_on_po_china: number;
+      po_china_lines: { qty: number; expectedAt: string | null }[];
       qty_on_po_china_alt: number;
       inv_china_alt: number;
       inv_usa_alt: number;
@@ -100,6 +102,12 @@ export async function GET(
       sales_q4: string | null;
       cv: string | null;
       unmet_net_30d: string | null;
+      // Project-sale guard + L4W-aligned unmet demand — same definitions the parent
+      // row uses (see _lib/demand-signals), so an alternative and its primary cannot
+      // disagree about the same SKU sitting one row apart in the grid.
+      distinct_customers_live: number;
+      total_qty_live: number;
+      unmet_net_l4w: number;
       first_sale_date: string | null;
       last_calculated_at: string | null;
     }>(
@@ -138,7 +146,11 @@ export async function GET(
         COALESCE((p.metadata->>'is_sourced_via_agent')::boolean, false) AS is_sourced_via_agent,
         COALESCE(open_po_usa.on_order, 0)::int AS qty_on_po,
         COALESCE(open_po_china.on_order, 0)::int AS qty_on_po_china,
-        COALESCE(max_day.max_daily_sales, 0)::int AS max_daily_sales
+        COALESCE(open_po_china.lines, '[]'::jsonb) AS po_china_lines,
+        COALESCE(max_day.max_daily_sales, 0)::int AS max_daily_sales,
+        COALESCE(project_signal.distinct_customers, 0)::int AS distinct_customers_live,
+        COALESCE(project_signal.total_qty_live, 0)::int AS total_qty_live,
+        COALESCE(unmet_l4w.unmet_net_l4w, 0)::int AS unmet_net_l4w
       FROM product_alternative pa
       JOIN product_variant pv ON pv.id = pa.alt_variant_id AND pv.deleted_at IS NULL
       JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
@@ -159,10 +171,21 @@ export async function GET(
         GROUP BY pol.sku_snapshot
       ) open_po_usa ON open_po_usa.sku_snapshot = pv.sku
       LEFT JOIN (
-        SELECT sku_snapshot, SUM(on_order)::int AS on_order
+        -- Per-line qty + ETA, not just the summed total — same shape the snapshot
+        -- returns, so an alternative row applies the SAME out-of-window exclusion and
+        -- pre-arrival-gap alert as its primary. Without the lines, Factory falls back
+        -- to counting every open order as available today, and the two rows sitting
+        -- one above the other would disagree about the same supply.
+        SELECT sku_snapshot,
+               SUM(on_order)::int AS on_order,
+               -- jsonb, NOT json: this query GROUPs BY these lines (it SUMs inventory levels),
+               -- and Postgres has no equality operator for the json type — grouping on it
+               -- errors at runtime (type-check cannot catch it; only hitting the endpoint does).
+               jsonb_agg(jsonb_build_object('qty', on_order, 'expectedAt', expected_at) ORDER BY expected_at NULLS LAST) AS lines
         FROM (
           SELECT pol.sku_snapshot,
-                 GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled) AS on_order
+                 GREATEST(0, pol.qty_ordered - pol.qty_received - pol.qty_cancelled) AS on_order,
+                 po.expected_at
           FROM purchase_order_line pol
           JOIN purchase_order po ON po.id = pol.purchase_order_id AND po.deleted_at IS NULL
           WHERE po.status IN ('submitted', 'partially_received')
@@ -171,7 +194,8 @@ export async function GET(
             AND BTRIM(po.stock_location_id, E' \\t\\n\\r') = $3
           UNION ALL
           SELECT fol.sku_snapshot,
-                 GREATEST(0, fol.qty_ordered - fol.qty_received - fol.qty_cancelled) AS on_order
+                 GREATEST(0, fol.qty_ordered - fol.qty_received - fol.qty_cancelled) AS on_order,
+                 fo.expected_at
           FROM factory_order_line fol
           JOIN factory_order fo ON fo.id = fol.factory_order_id AND fo.deleted_at IS NULL
           WHERE fo.status IN ('submitted', 'partially_received')
@@ -179,6 +203,7 @@ export async function GET(
             AND fol.deleted_at IS NULL
             AND BTRIM(fo.stock_location_id, E' \\t\\n\\r') = $3
         ) combined
+        WHERE on_order > 0
         GROUP BY sku_snapshot
       ) open_po_china ON open_po_china.sku_snapshot = pv.sku
       LEFT JOIN (
@@ -196,6 +221,8 @@ export async function GET(
         ) daily
         GROUP BY daily.variant_id
       ) max_day ON max_day.variant_id = pv.id
+      LEFT JOIN (${PROJECT_SIGNAL_CTE}) project_signal ON project_signal.variant_id = pv.id
+      LEFT JOIN (${UNMET_L4W_CTE}) unmet_l4w ON unmet_l4w.variant_id = pv.id
       WHERE pa.primary_variant_id = $1
         AND pa.is_active = true AND pa.deleted_at IS NULL
         AND pv.deleted_at IS NULL
@@ -205,7 +232,9 @@ export async function GET(
                snap.tier0_30d, snap.sales_q1, snap.sales_q2, snap.sales_q3, snap.sales_q4,
                snap.cv, snap.unmet_net_30d, snap.first_sale_date, snap.last_calculated_at,
                snap.inv_china_alt, snap.qty_on_po_china_alt,
-               open_po_usa.on_order, open_po_china.on_order, max_day.max_daily_sales
+               open_po_usa.on_order, open_po_china.on_order, open_po_china.lines, max_day.max_daily_sales,
+               project_signal.distinct_customers, project_signal.total_qty_live,
+               unmet_l4w.unmet_net_l4w
       ORDER BY pa.priority ASC, pv.sku
     `,
       [variantId, USA_LOC, CHINA_LOC]

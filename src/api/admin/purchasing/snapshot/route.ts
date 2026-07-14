@@ -18,6 +18,7 @@ import type {
 } from "@medusajs/framework/http";
 
 import { withDb } from "../_lib/db";
+import { PROJECT_SIGNAL_CTE, UNMET_L4W_CTE } from "../_lib/demand-signals";
 import { checkMissingSalesData } from "../../../../services/purchasing/missing-month-check";
 import { runPurchasingSnapshot } from "../../../../services/purchasing/snapshot.service";
 import { computeTier0Meta } from "../../../../services/purchasing/tier0-window";
@@ -28,9 +29,8 @@ const USA_LOC =
   "sloc_01KFS2AV3TAKR141KC2D6JCGTR";
 const CHINA_LOC =
   process.env.CHINA_WAREHOUSE_LOCATION_ID ?? "sloc_01KQ14C1CFX30EDD722BF87HDM";
-// POS go-live — the only window with order/customer-level sale granularity
-// (pre-go-live history is Excel-imported monthly totals, no order detail).
-const STORE_EPOCH = "2026-04-14";
+// POS go-live, project-sale signal and L4W unmet demand all live in _lib/demand-signals
+// so this route and the alternatives feed cannot drift apart. See that file.
 
 export async function GET(
   req: AuthenticatedMedusaRequest,
@@ -143,7 +143,8 @@ export async function GET(
          COALESCE(project_signal.distinct_orders, 0)::int AS distinct_orders_live,
          COALESCE(project_signal.distinct_customers, 0)::int AS distinct_customers_live,
          COALESCE(project_signal.total_qty_live, 0)::int AS total_qty_live,
-         COALESCE(project_signal.top_order_qty, 0)::int AS top_order_qty_live
+         COALESCE(project_signal.top_order_qty, 0)::int AS top_order_qty_live,
+         COALESCE(unmet_l4w.unmet_net_l4w, 0)::int AS unmet_net_l4w
        FROM purchasing_snapshot snap
        JOIN product_variant pv ON pv.id = snap.variant_id AND pv.deleted_at IS NULL
        JOIN product p ON p.id = pv.product_id AND p.deleted_at IS NULL
@@ -199,29 +200,8 @@ export async function GET(
          WHERE on_order > 0
          GROUP BY sku_snapshot
        ) open_po_china ON open_po_china.sku_snapshot = pv.sku
-       LEFT JOIN (
-         -- Order/customer concentration since POS go-live (STORE_EPOCH) — the only
-         -- window with per-order granularity. Used to flag "looks like a one-off
-         -- project sale" (few orders, one dominates) vs. organic repeat demand.
-         SELECT variant_id,
-                COUNT(DISTINCT invoice_id)::int AS distinct_orders,
-                COUNT(DISTINCT customer_id)::int AS distinct_customers,
-                SUM(inv_qty)::int AS total_qty_live,
-                MAX(inv_qty)::int AS top_order_qty
-         FROM (
-           SELECT pii.variant_id, pii.invoice_id, pi.customer_id,
-                  SUM(pii.quantity - pii.refunded_quantity) AS inv_qty
-           FROM pos_invoice_item pii
-           JOIN pos_invoice pi ON pi.id = pii.invoice_id
-           WHERE pi.issued_at >= '${STORE_EPOCH}'
-             AND pi.status NOT IN ('voided')
-             AND pii.deleted_at IS NULL
-             AND pii.variant_id IS NOT NULL
-           GROUP BY pii.variant_id, pii.invoice_id, pi.customer_id
-         ) per_invoice
-         WHERE inv_qty > 0
-         GROUP BY variant_id
-       ) project_signal ON project_signal.variant_id = snap.variant_id
+       LEFT JOIN (${PROJECT_SIGNAL_CTE}) project_signal ON project_signal.variant_id = snap.variant_id
+       LEFT JOIN (${UNMET_L4W_CTE}) unmet_l4w ON unmet_l4w.variant_id = snap.variant_id
        LEFT JOIN (
          SELECT pii.variant_id,
                 MAX(day_qty)::int AS max_daily_sales
