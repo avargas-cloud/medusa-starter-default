@@ -215,11 +215,13 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const search = req.query.search
     ? String(req.query.search).toLowerCase()
     : undefined;
+  const listId = req.query.list_id ? String(req.query.list_id) : undefined;
   const activeOnly = req.query.active !== "false";
   const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 100;
 
   const filters: any = {};
   if (activeOnly) filters.is_active = true;
+  if (listId) filters.qb_list_id = listId;
 
   const { data } = await query.graph({
     entity: "qb_vendor",
