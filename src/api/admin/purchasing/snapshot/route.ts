@@ -8,6 +8,8 @@
  *   abc=A,B,C   — filter by ABC class
  *   xyz=X,Y,Z   — filter by XYZ class
  *   q=...       — filter by SKU or product title (case-insensitive)
+ *   sku=...     — exact SKU filter (repeatable as sku[])
+ *   variant_id= — exact variant filter (repeatable as variant_id[])
  *   limit=N     — default 200
  *   offset=N    — default 0
  */
@@ -60,6 +62,16 @@ export async function GET(
       ? [skuParam.trim()]
       : [];
 
+  // variant_id / variant_id[] — exact variant filter. Lets a caller that already
+  // knows its variants (e.g. the factory-order "By Manufacturer" modal) pull just
+  // those snapshot rows instead of the whole 2.5k-row table.
+  const variantParam = req.query["variant_id"] as string | string[] | undefined;
+  const variantFilter: string[] = Array.isArray(variantParam)
+    ? variantParam.filter(Boolean)
+    : variantParam?.trim()
+      ? [variantParam.trim()]
+      : [];
+
   return withDb(async (db) => {
     const conditions: string[] = ["snap.variant_id IS NOT NULL"];
     const params: unknown[] = [];
@@ -81,6 +93,10 @@ export async function GET(
     if (skuFilter.length > 0) {
       params.push(skuFilter);
       conditions.push(`pv.sku = ANY($${params.length}::text[])`);
+    }
+    if (variantFilter.length > 0) {
+      params.push(variantFilter);
+      conditions.push(`snap.variant_id = ANY($${params.length}::text[])`);
     }
 
     const where = conditions.join(" AND ");
