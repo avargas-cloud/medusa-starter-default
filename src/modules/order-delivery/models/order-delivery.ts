@@ -20,6 +20,8 @@ export const OrderDelivery = model.define("order_delivery", {
   invoice_id: model.text().nullable(),
 
   // Dispatch provider that sold/arranged the shipment: shippo | ups | uber.
+  // 'manual' = tracking number typed by hand (TrackingModal), no label bought
+  // and no dispatch adapter — provider_object_id stays null for these rows.
   provider: model.text(),
   // Provider-side object id (Shippo transaction id / Uber delivery id).
   // Needed for void/refund. NEVER exposed to the storefront.
