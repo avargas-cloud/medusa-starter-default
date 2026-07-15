@@ -522,6 +522,14 @@ interface LegendResult {
   // request 2026-07-14: these answer two different questions and must stay
   // visually distinct, not collapse into one "ROI" figure.
   gmroi: number | null
+  // Final − Initial Miami inventory $ for the period (or the hidden "this
+  // month" range in "current" mode, same as the other legend inputs) —
+  // positive = inventory value grew, negative = it shrank. User request
+  // 2026-07-15: "vemos si en cuestión de dinero estamos aumentando el valor
+  // del inventario o lo estamos reduciendo". Already-computed Initial/Final
+  // (needed for Average Inventory above) — just surfaced as a delta too.
+  inventory_change: number
+  inventory_change_pct: number | null
 }
 
 // Bottom-left legend — Average Ticket / Unique Customers / Inventory
@@ -556,6 +564,8 @@ function buildLegend(args: {
     inventory_rotation: averageMiamiInventory > 0 ? receivedTotal / averageMiamiInventory : null,
     roi: receivedTotal > 0 ? grossProfit / receivedTotal : null,
     gmroi: averageMiamiInventory > 0 ? grossProfit / averageMiamiInventory : null,
+    inventory_change: miamiFinal - miamiInitial,
+    inventory_change_pct: miamiInitial > 0 ? (miamiFinal - miamiInitial) / miamiInitial : null,
   }
 }
 
