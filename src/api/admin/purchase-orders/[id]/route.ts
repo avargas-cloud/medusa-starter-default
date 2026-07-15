@@ -358,15 +358,21 @@ export async function GET(
   );
   const thumbnailByVariantId = new Map<string, string | null>();
   const mpnByVariantId = new Map<string, string | null>();
+  const productIdByVariantId = new Map<string, string | null>();
   if (variantIds.length > 0) {
     try {
       // Raw SQL — Medusa v2's listProductVariants doesn't reliably hydrate metadata
       const knex = (req.scope as any).resolve("__pg_connection__");
-      const rows: Array<{ id: string; thumbnail: string | null; mpn: string | null }> =
-        await knex.raw(
+      const rows: Array<{
+        id: string;
+        thumbnail: string | null;
+        mpn: string | null;
+        product_id: string | null;
+      }> = await knex.raw(
           `SELECT pv.id,
                   COALESCE(pv.thumbnail, p.thumbnail) AS thumbnail,
-                  pv.metadata->>'mpn' AS mpn
+                  pv.metadata->>'mpn' AS mpn,
+                  p.id AS product_id
              FROM product_variant pv
              LEFT JOIN product p ON p.id = pv.product_id
             WHERE pv.id = ANY(?)`,
@@ -375,6 +381,7 @@ export async function GET(
       for (const row of rows) {
         thumbnailByVariantId.set(row.id, row.thumbnail ?? null);
         mpnByVariantId.set(row.id, row.mpn ?? null);
+        productIdByVariantId.set(row.id, row.product_id ?? null);
       }
     } catch {
       // Non-fatal — thumbnail and MPN are display-only
@@ -412,6 +419,7 @@ export async function GET(
       ...l,
       thumbnail: vid ? (thumbnailByVariantId.get(vid) ?? null) : null,
       mpn: vid ? (mpnByVariantId.get(vid) ?? null) : null,
+      product_id: vid ? (productIdByVariantId.get(vid) ?? null) : null,
       billed_qty: billedQty,
       unbilled_received_qty: Math.max(0, qtyReceived - billedQty),
       billing_status: billingStatus,
