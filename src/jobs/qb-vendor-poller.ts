@@ -4,6 +4,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../modules/quickbooks-catalog";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 const MAX_ROWS_PER_TICK = 30;
 // Use shared retry policy so vendor sync matches the rest of the QB pipeline
 // (formerly used [2,4,8] which gave up ~5× faster — see B2 fix 2026-04-29).
@@ -101,6 +102,8 @@ const markError = async (
 };
 
 export default async function qbVendorPoller(container: MedusaContainer) {
+  if (isScheduledJobsDisabled(container)) return;
+
   const logger = container.resolve("logger");
   const query = container.resolve(ContainerRegistrationKeys.QUERY);
   const catalog = container.resolve(QUICKBOOKS_CATALOG_MODULE) as any;

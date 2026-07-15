@@ -2,6 +2,7 @@ import type { MedusaContainer } from "@medusajs/framework/types";
 
 import reconcileAndCloseDrifted from "../scripts/fix/reconcile-and-close-drifted-orders";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 /**
  * Scheduled self-heal for orders stuck `pending` because a void+re-fulfill / edit
  * drifted the current-version fulfilled_quantity below quantity even though the
@@ -16,6 +17,8 @@ import reconcileAndCloseDrifted from "../scripts/fix/reconcile-and-close-drifted
 export default async function reconcileDriftedOrdersCron(
   container: MedusaContainer
 ): Promise<void> {
+  if (isScheduledJobsDisabled(container)) return;
+
   if (process.env.RECONCILE_DRIFT_CRON_ENABLED === "false") return;
   const logger = container.resolve("logger") as any;
   try {

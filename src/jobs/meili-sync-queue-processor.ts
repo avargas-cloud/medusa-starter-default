@@ -21,6 +21,7 @@ import { customerReconciler } from "../lib/meilisearch/reconcilers/customer-reco
 import { productReconciler } from "../lib/meilisearch/reconcilers/product-reconciler";
 import { inventoryReconciler } from "../lib/meilisearch/reconcilers/inventory-reconciler";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 export const config = {
   name: "meili-sync-queue-processor",
   schedule: "*/1 * * * *", // Every 1 minute — Medusa cron's minimum.
@@ -54,6 +55,8 @@ interface QueueRow {
 export default async function meiliSyncQueueProcessor(
   container: MedusaContainer
 ): Promise<void> {
+  if (isScheduledJobsDisabled(container)) return;
+
   const logger = container.resolve("logger") as {
     info: (m: string) => void;
     warn: (m: string) => void;

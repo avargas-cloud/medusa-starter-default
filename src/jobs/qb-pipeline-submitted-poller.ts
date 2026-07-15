@@ -2,6 +2,7 @@ import type { MedusaContainer } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { getDbPool } from "../api/utils/db-pool";
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 import {
   pollSubmittedRows,
   type SubmittedRow,
@@ -31,6 +32,8 @@ const LOG_PREFIX = "[QB-SUBMITTED-POLLER]";
 export default async function qbPipelineSubmittedPoller(
   container: MedusaContainer
 ): Promise<void> {
+  if (isScheduledJobsDisabled(container)) return;
+
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
 
   if (process.env.QB_ORDER_FLOW_ENABLED !== "true") return;

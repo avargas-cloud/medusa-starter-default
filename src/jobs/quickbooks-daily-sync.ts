@@ -7,6 +7,7 @@ import { syncAverageCostCore } from "../lib/quickbooks/sync-average-cost-core";
 import { syncCustomersCore } from "../lib/quickbooks/sync-customers-core";
 import { syncPricesCore } from "../lib/quickbooks/sync-prices-core";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 /**
  * QuickBooks Daily Sync — runs every 30 minutes; executes at the configured hour.
  *
@@ -19,6 +20,8 @@ import { syncPricesCore } from "../lib/quickbooks/sync-prices-core";
  * Schedule: every 30 min — hour check done internally.
  */
 export default async function qbDailySyncHandler(container: MedusaContainer) {
+  if (isScheduledJobsDisabled(container)) return;
+
   const TAG = "[QB-AUTO-SYNC]";
   const client = new Client({ connectionString: process.env.DATABASE_URL });
 

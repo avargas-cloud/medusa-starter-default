@@ -10,6 +10,7 @@ import { QUICKBOOKS_CATALOG_MODULE } from "../modules/quickbooks-catalog";
 import { syncProductToMeiliSearchWorkflow } from "../workflows/sync-product-meilisearch";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../workflows/sync-inventory-item-meilisearch";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 // Read at call time so tests can override QB_BRIDGE_URL after module load.
 const bridgeUrl = (): string =>
   process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
@@ -249,6 +250,8 @@ const resubmitToBridge = async (
 };
 
 export default async function qbItemPipelinePoller(container: MedusaContainer) {
+  if (isScheduledJobsDisabled(container)) return;
+
   const logger = container.resolve("logger");
   const query = container.resolve(ContainerRegistrationKeys.QUERY);
   const catalog = container.resolve(QUICKBOOKS_CATALOG_MODULE) as any;

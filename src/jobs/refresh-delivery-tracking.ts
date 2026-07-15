@@ -24,6 +24,7 @@ import {
 import type { DeliveryStatus } from "../lib/shipping-dispatch/types";
 import { getDbPool } from "../api/utils/db-pool";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 export const config = {
   name: "refresh-delivery-tracking",
   schedule: "0 */6 * * *",
@@ -62,6 +63,8 @@ export function aggregateBoxStatuses(
 export default async function refreshDeliveryTracking(
   container: MedusaContainer
 ) {
+  if (isScheduledJobsDisabled(container)) return;
+
   const logger = container.resolve("logger");
   const pool = getDbPool();
   const lock = await pool.connect();

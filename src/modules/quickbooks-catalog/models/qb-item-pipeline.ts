@@ -42,4 +42,8 @@ export const QbItemPipeline = model.define("qb_item_pipeline", {
   next_retry_at: model.dateTime().nullable(),
   failed_at: model.dateTime().nullable(),
   resolved_at: model.dateTime().nullable(),
+  // Stamped by qb-pipeline-error-digest.ts when it reports this row in the
+  // STUCK bucket — lets that bucket dedupe (don't repeat the same still-broken
+  // row every day; only re-surface on a new development or a weekly safety net).
+  digest_notified_at: model.dateTime().nullable(),
 });

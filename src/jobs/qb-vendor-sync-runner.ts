@@ -4,6 +4,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../modules/quickbooks-catalog";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
 const API_KEY = process.env.QB_API_KEY || "";
 const HEADERS = {
@@ -97,6 +98,8 @@ const buildVendorPayload = (
 };
 
 export default async function qbVendorSyncRunner(container: MedusaContainer) {
+  if (isScheduledJobsDisabled(container)) return;
+
   const logger = container.resolve("logger");
   const query = container.resolve(ContainerRegistrationKeys.QUERY);
   const catalog = container.resolve(QUICKBOOKS_CATALOG_MODULE) as any;

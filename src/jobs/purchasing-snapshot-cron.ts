@@ -8,6 +8,7 @@ import type { MedusaContainer } from "@medusajs/framework/types";
 
 import { runPurchasingSnapshot } from "../services/purchasing/snapshot.service";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 export const config = {
   name: "purchasing-snapshot-daily",
   schedule: "0 0 * * *",
@@ -16,6 +17,8 @@ export const config = {
 export default async function purchasingSnapshotCron(
   _container: MedusaContainer
 ) {
+  if (isScheduledJobsDisabled(_container)) return;
+
   const logger = console;
   logger.info("[purchasing-cron] Starting daily snapshot...");
 

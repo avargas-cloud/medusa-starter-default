@@ -2,6 +2,7 @@ import { MedusaContainer } from "@medusajs/framework/types";
 
 import { bridgeFetch } from "../lib/quickbooks/client/core";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 /**
  * Nightly auto-purge of the QB Web Connector bridge queue history.
  *
@@ -32,6 +33,8 @@ const num = (value: unknown): number => {
 export default async function qbBridgeAutoPurge(
   container: MedusaContainer
 ): Promise<void> {
+  if (isScheduledJobsDisabled(container)) return;
+
   const logger = container.resolve("logger");
 
   let stats: BridgeStats;

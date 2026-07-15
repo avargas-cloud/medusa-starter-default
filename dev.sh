@@ -22,8 +22,17 @@ export PORT=9090
 unset DATABASE_URL REDIS_URL NODE_ENV
 unset QB_BRIDGE_URL QB_API_KEY QB_ORDER_FLOW_ENABLED QB_DRY_RUN QB_INTEGRATION
 
+# CRITICAL: this backend connects to the SAME prod DB + SAME prod QB bridge as
+# Railway (see above). Medusa has no per-environment job gate, so without this
+# flag every scheduled job in src/jobs/ (QB dispatcher/poller/consolidator,
+# digest emails, etc.) fires here too — a leaked/zombie `medusa develop`
+# process then races Railway's real workers against live QuickBooks. Each job
+# checks this via isScheduledJobsDisabled() (src/jobs/_lib/scheduled-jobs-guard.ts).
+export DISABLE_SCHEDULED_JOBS=true
+
 echo "🚀 Starting Railway dev backend on :$PORT"
 echo "📡 Connecting to Railway Postgres + Railway Redis (per .env)"
+echo "⏸️  Scheduled jobs DISABLED locally (DISABLE_SCHEDULED_JOBS=true) — only Railway runs cron."
 
 # Clean up any old Medusa processes (safe - only kills medusa-related)
 echo "🧹 Cleaning up old Medusa processes on :$PORT..."

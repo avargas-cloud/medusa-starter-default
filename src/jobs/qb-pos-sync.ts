@@ -15,6 +15,7 @@ import {
 import { promoteStaleWaitingSalesOrders } from "../lib/quickbooks/pipeline/promote-stale-sales-orders";
 import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger";
 import { FINANCE_MODULE } from "../modules/finance";
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 // 1.5.4: handleDraftOrderCreated import removed — POS wake-up now flips
 // pipeline row status 'waiting'→'pending' instead of calling the handler.
 
@@ -22,6 +23,8 @@ const LOG_PREFIX = "[QB-POS-SYNC]";
 const POS_CHANNEL_ID = process.env.POS_SALES_CHANNEL_ID ?? "";
 
 export default async function qbPosSyncHandler(container: MedusaContainer) {
+  if (isScheduledJobsDisabled(container)) return;
+
   if (!POS_CHANNEL_ID) {
     console.warn(`${LOG_PREFIX} POS_SALES_CHANNEL_ID not set. Skipping job.`);
     return;

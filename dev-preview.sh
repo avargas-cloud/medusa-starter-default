@@ -44,6 +44,11 @@ set -a
 source .env.preview
 set +a
 
+# Preview's DB + QB bridge are isolated, but Redis/MeiliSearch/email/MinIO are
+# NOT (see backend/CLAUDE.md "Qué NO está aislado en preview"). Scheduled jobs
+# would still pollute those shared systems from here, so disable them too.
+export DISABLE_SCHEDULED_JOBS=true
+
 # Hard guard: refuse to start if DATABASE_URL is still pointing at Railway —
 # that would mean .env.preview did not actually override it, and starting in
 # this state is the exact bug that motivated this script.

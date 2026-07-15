@@ -32,6 +32,7 @@ import {
 } from "../lib/quickbooks/qb-pipeline";
 import { INVOICE_MODULE } from "../modules/invoices";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 const MAX_ROWS_PER_TICK = 20;
 
 type DispatchPayload = {
@@ -45,6 +46,8 @@ type DispatchPayload = {
 };
 
 export default async function qbInvoiceWaitingGate(container: MedusaContainer) {
+  if (isScheduledJobsDisabled(container)) return;
+
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
   const invoiceService = container.resolve(INVOICE_MODULE) as any;
   // 1.5.7: orderModule + customerModule no longer needed — handler call

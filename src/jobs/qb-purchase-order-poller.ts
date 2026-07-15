@@ -28,6 +28,7 @@ import {
   STANDARD_STALE_CONFIG,
 } from "../lib/quickbooks/stale-row-cleanup";
 import { classifyQbError } from "../lib/quickbooks/error-classifier";
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 import {
   orderPurchaseOrderModLines,
   type PurchaseOrderModLineLike,
@@ -347,6 +348,8 @@ const lookupPoByRefNumber = async (
 export default async function qbPurchaseOrderPoller(
   container: MedusaContainer
 ) {
+  if (isScheduledJobsDisabled(container)) return;
+
   const logger = container.resolve("logger") as any;
   const knex = (container as any).resolve("__pg_connection__");
 

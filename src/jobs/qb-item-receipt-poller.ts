@@ -29,6 +29,7 @@
 
 import { MedusaContainer } from "@medusajs/framework/types";
 import { pollBridgeStatus } from "../lib/quickbooks/bridge-fetch";
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 import {
   markStaleRowsAsFailed,
   STANDARD_STALE_CONFIG,
@@ -255,6 +256,8 @@ const extractEditSequence = (data: BridgeStatus): string | null => {
 };
 
 export default async function qbItemReceiptPoller(container: MedusaContainer) {
+  if (isScheduledJobsDisabled(container)) return;
+
   const logger = container.resolve("logger") as any;
   const knex = (container as any).resolve("__pg_connection__");
 

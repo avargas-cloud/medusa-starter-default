@@ -2,6 +2,7 @@ import { MedusaContainer } from "@medusajs/framework/types";
 
 import { sendMail } from "../utils/mailer";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 const DIGEST_RECIPIENT =
   process.env.QB_PIPELINE_DIGEST_TO || "a.vargas@ecopowertech.com";
 const ADMIN_BASE_URL =
@@ -142,6 +143,8 @@ const renderSection = (section: PipelineSection): string => {
 export default async function qbPipelineErrorDigest(
   container: MedusaContainer
 ) {
+  if (isScheduledJobsDisabled(container)) return;
+
   const logger = container.resolve("logger");
   const knex = (container as any).resolve("__pg_connection__");
 
@@ -150,6 +153,11 @@ export default async function qbPipelineErrorDigest(
   ).toISOString();
 
   // ── 1. Sales pipeline (qb_order_pipeline) — raw SQL with display_id join
+  // status='failed' alone isn't a reliable "needs a human" signal here — the
+  // dispatcher auto-retries any failed row with next_retry_at set (backoff
+  // ladder up to MAX_RETRIES, see row-mutations.ts), often resolving within
+  // minutes. Excluding those avoids reporting transient failures our own
+  // retry loop already fixed by the time this digest is read.
   const salesRes = await knex.raw(
     `SELECT
        p.id,
@@ -167,6 +175,7 @@ export default async function qbPipelineErrorDigest(
      FROM qb_order_pipeline p
      LEFT JOIN "order" o ON o.id = p.order_id
      WHERE p.status = 'failed'
+       AND p.next_retry_at IS NULL
        AND p.updated_at >= ?
      ORDER BY p.updated_at DESC
      LIMIT 500`,
@@ -208,9 +217,22 @@ export default async function qbPipelineErrorDigest(
      FROM qb_item_pipeline
      WHERE deleted_at IS NULL
        AND (
-         (status IN ('error', 'failed_permanent') AND updated_at >= ?)
+         -- 'error' rows with a scheduled next_retry_at will self-heal on their
+         -- own (same auto-retry ladder as the other 3 pipelines) — only
+         -- failed_permanent (exhausted) or an 'error' with nothing scheduled
+         -- counts as a real, non-self-resolving error.
+         ((status = 'failed_permanent' OR (status = 'error' AND next_retry_at IS NULL))
+          AND updated_at >= ?)
          OR (status NOT IN ('synced', 'failed_permanent')
-             AND created_at < now() - interval '2 hours')
+             AND created_at < now() - interval '2 hours'
+             -- Dedup: don't repeat the exact same still-broken incident every
+             -- day. Re-surface only if it's new (never notified), something
+             -- happened since we last told the user (a retry attempt bumped
+             -- updated_at), or a week of total silence has passed (safety net
+             -- so a truly-frozen row doesn't fall off the radar forever).
+             AND (digest_notified_at IS NULL
+                  OR updated_at > digest_notified_at
+                  OR digest_notified_at < now() - interval '7 days'))
        )
      ORDER BY updated_at DESC
      LIMIT 500`,
@@ -246,6 +268,7 @@ export default async function qbPipelineErrorDigest(
      FROM qb_inventory_adjustment_pipeline p
      LEFT JOIN inventory_count ic ON ic.id = p.inventory_count_id
      WHERE p.status = 'error'
+       AND p.next_retry_at IS NULL
        AND p.updated_at >= ?
        AND p.deleted_at IS NULL
      ORDER BY p.updated_at DESC
@@ -278,7 +301,7 @@ export default async function qbPipelineErrorDigest(
        po.reference_number AS po_reference_number
      FROM qb_purchase_order_pipeline p
      LEFT JOIN purchase_order po ON po.id = p.purchase_order_id
-     WHERE p.status = 'error'
+     WHERE (p.status = 'failed_permanent' OR (p.status = 'error' AND p.next_retry_at IS NULL))
        AND p.updated_at >= ?
        AND p.deleted_at IS NULL
      ORDER BY p.updated_at DESC
@@ -300,7 +323,8 @@ export default async function qbPipelineErrorDigest(
   const sections: PipelineSection[] = [
     {
       title: "Sales Pipeline",
-      description: "Failed QB sync of orders, invoices, payments, refunds.",
+      description:
+        "Failed QB sync of orders, invoices, payments, refunds — excludes rows still on an automatic retry schedule.",
       admin_path: "/qb-pipeline",
       rows: salesErrors.map((r) => ({
         id: r.id,
@@ -322,7 +346,7 @@ export default async function qbPipelineErrorDigest(
     {
       title: "Item Pipeline",
       description:
-        "Failed + STUCK QB sync of product items (create + edit). Exhausted rows are failed_permanent; non-terminal rows older than 2h (incl. resubmit loops, shown as submit×N) are surfaced even if recently updated.",
+        "Failed + STUCK QB sync of product items (create + edit) — excludes rows still on an automatic retry schedule. Exhausted rows are failed_permanent; non-terminal rows older than 2h (incl. resubmit loops, shown as submit×N) are surfaced even if recently updated, and MAY repeat across daily digests until they reach synced/failed_permanent.",
       admin_path: "/qb-pipeline",
       rows: itemErrors.map((r) => ({
         id: r.id,
@@ -348,7 +372,8 @@ export default async function qbPipelineErrorDigest(
     },
     {
       title: "Inventory Adjustment Pipeline",
-      description: "Failed QB inventory adjustments from POS counts.",
+      description:
+        "Failed QB inventory adjustments from POS counts — excludes rows still on an automatic retry schedule.",
       admin_path: "/qb-pipeline",
       rows: invErrors.map((r) => ({
         id: r.id,
@@ -363,7 +388,8 @@ export default async function qbPipelineErrorDigest(
     },
     {
       title: "Purchase Pipeline",
-      description: "Failed QB sync of purchase orders + item receipts.",
+      description:
+        "Failed QB sync of purchase orders + item receipts — excludes rows still on an automatic retry schedule.",
       admin_path: "/qb-pipeline",
       rows: poErrors.map((r) => ({
         id: r.id,
@@ -406,7 +432,9 @@ export default async function qbPipelineErrorDigest(
           Daily digest for ${today} — ${totalErrors} error${totalErrors === 1 ? "" : "s"} from the ${windowLabel} across 4 pipelines.
           <br/>
           <span style="color: #888; font-size: 12px;">
-            Older still-broken rows already appeared in earlier digests and are not repeated here.
+            Rows still on an automatic retry schedule are excluded — only genuinely stuck errors are shown.
+            Older still-broken rows are not repeated here EXCEPT in the Item Pipeline's STUCK bucket
+            (resubmit loops), which re-surfaces daily until it reaches synced/failed_permanent.
             Window: ${windowSinceIso} → now.
           </span>
         </p>
@@ -431,6 +459,17 @@ export default async function qbPipelineErrorDigest(
       logger.info(
         `[qb-pipeline-error-digest] sent: ${totalErrors} errors → ${DIGEST_RECIPIENT}`
       );
+      // Stamp every reported item-pipeline row so the STUCK bucket's dedup
+      // window (above) can tell "already told them" from "new development".
+      // Only do this on a confirmed send — if sendMail fails, leave rows
+      // un-stamped so they're retried in tomorrow's digest.
+      const stuckIds = itemErrors.map((r) => r.id);
+      if (stuckIds.length > 0) {
+        await knex.raw(
+          `UPDATE qb_item_pipeline SET digest_notified_at = now() WHERE id = ANY(?)`,
+          [stuckIds]
+        );
+      }
     } else {
       logger.warn(
         `[qb-pipeline-error-digest] mail not sent — RESEND_API_KEY missing`

@@ -17,6 +17,7 @@ import type { MedusaContainer } from "@medusajs/framework/types";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../workflows/sync-inventory-item-meilisearch";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 interface KnexRaw {
   raw: (
     sql: string,
@@ -33,6 +34,8 @@ const PAIRS = [
 export default async function inventoryRawDriftGuard(
   container: MedusaContainer
 ) {
+  if (isScheduledJobsDisabled(container)) return;
+
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
   const knex = container.resolve(
     ContainerRegistrationKeys.PG_CONNECTION

@@ -5,6 +5,7 @@ import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard";
 import { QbSyncLogger } from "../lib/quickbooks/qb-sync-logger";
 import { syncInventoryCore } from "../lib/quickbooks/sync-inventory-core";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 /**
  * QuickBooks Inventory Auto-Sync — cron fires every 10 minutes.
  *
@@ -21,6 +22,8 @@ import { syncInventoryCore } from "../lib/quickbooks/sync-inventory-core";
 export default async function qbInventorySyncHandler(
   container: MedusaContainer
 ) {
+  if (isScheduledJobsDisabled(container)) return;
+
   const TAG = "[QB-INVENTORY-AUTO]";
   const client = new Client({ connectionString: process.env.DATABASE_URL });
 

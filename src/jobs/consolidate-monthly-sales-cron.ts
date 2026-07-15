@@ -13,6 +13,7 @@
 
 import type { MedusaContainer } from "@medusajs/framework/types";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 import {
   consolidateMonthFromMedusa,
   previousCalendarMonth,
@@ -26,6 +27,8 @@ export const config = {
 export default async function consolidateMonthlySalesCron(
   _container: MedusaContainer
 ) {
+  if (isScheduledJobsDisabled(_container)) return;
+
   const logger = console;
   const todayET = new Date().toLocaleDateString("en-CA", {
     timeZone: "America/New_York",

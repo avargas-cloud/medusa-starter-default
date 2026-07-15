@@ -15,6 +15,7 @@ import { Client } from "pg";
 
 import { checkMissingSalesData } from "../services/purchasing/missing-month-check";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 export const config = {
   name: "missing-april-2026-reminder",
   schedule: "0 9 * * *",
@@ -23,6 +24,8 @@ export const config = {
 export default async function missingApril2026Reminder(
   _container: MedusaContainer
 ) {
+  if (isScheduledJobsDisabled(_container)) return;
+
   const db = new Client({ connectionString: process.env.DATABASE_URL });
   await db.connect();
   try {

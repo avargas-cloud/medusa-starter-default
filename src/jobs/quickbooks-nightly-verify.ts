@@ -20,6 +20,7 @@ import { Client } from "pg";
 
 import { isQbIntegrationEnabled } from "../lib/quickbooks/qb-integration-guard";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 const TAG = "[QB-NIGHTLY-VERIFY]";
 const BRIDGE_URL = process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
 const API_KEY = process.env.QB_API_KEY || "mQb-7k9Pzx4RwN2vL8jT3bY6hF5nC1aD";
@@ -241,6 +242,8 @@ function buildEmailHtml(
 export default async function qbNightlyVerifyHandler(
   _container: MedusaContainer
 ) {
+  if (isScheduledJobsDisabled(_container)) return;
+
   // ── Hour check: only run at VERIFY_HOUR in store timezone ──────────────────
   const now = new Date();
   const currentHour = parseInt(

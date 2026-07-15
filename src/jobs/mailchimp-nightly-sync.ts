@@ -16,6 +16,7 @@
 import type { MedusaContainer } from "@medusajs/framework/types";
 import postgres from "postgres";
 import { generateEntityId } from "@medusajs/utils";
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 import {
   customerToMailchimpPayload,
   MAILCHIMP_MODULE,
@@ -86,6 +87,8 @@ function rowToCustomer(row: CustomerRow): CustomerForMailchimp {
 export default async function mailchimpNightlySync(
   container: MedusaContainer
 ): Promise<void> {
+  if (isScheduledJobsDisabled(container)) return;
+
   const logger = container.resolve("logger") as {
     info: (m: string) => void;
     warn: (m: string) => void;

@@ -16,6 +16,7 @@ import { isTrackable } from "../lib/carrier-tracking";
 import { refreshPoTrackingEta } from "../lib/carrier-tracking/refresh-po";
 import type { TrackingEntry } from "../lib/carrier-tracking/types";
 
+import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 export const config = {
   name: "refresh-po-tracking-eta",
   // Once a day at 07:00. ETAs for inbound POs don't move minute-to-minute, so
@@ -62,6 +63,8 @@ function needsRefresh(po: PoRow): boolean {
 export default async function refreshPoTrackingEtaJob(
   container: MedusaContainer
 ) {
+  if (isScheduledJobsDisabled(container)) return;
+
   const logger = console;
   const service = container.resolve(
     PURCHASE_ORDERS_MODULE
