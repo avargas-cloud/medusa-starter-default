@@ -401,7 +401,26 @@ export async function resubmitByStep(
         // as "open"; we close it here so it drops out of QB's Open Estimates
         // list. Line amounts are PRESERVED (deactivate, not cancel/zero-out) so
         // the historical estimate stays intact. txnId rides on the pipeline row.
-        const estDeactTxnId = row.qb_txn_id ?? null;
+        let estDeactTxnId = row.qb_txn_id ?? null;
+        // Rows chained via handleOrderCanceled (order voided while its Estimate
+        // was still in-flight) are written without qb_txn_id — only depends_on.
+        // If runWakeDependentsPass wakes this row before poll-submitted-rows'
+        // targeted activation stamps qb_txn_id, resolve it here as a fallback.
+        if (!estDeactTxnId && row.order_id) {
+          const estPool = getDbPool();
+          const { rows: estRows } = await estPool.query(
+            `SELECT qb_txn_id
+               FROM qb_order_pipeline
+              WHERE order_id = $1
+                AND step = 'estimate'
+                AND status = 'confirmed'
+                AND qb_txn_id IS NOT NULL
+              ORDER BY confirmed_at DESC
+              LIMIT 1`,
+            [row.order_id]
+          );
+          estDeactTxnId = estRows[0]?.qb_txn_id ?? null;
+        }
         if (!estDeactTxnId) {
           await failPipelineRow(
             row.id,

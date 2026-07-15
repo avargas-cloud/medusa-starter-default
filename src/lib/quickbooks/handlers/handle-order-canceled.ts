@@ -84,12 +84,19 @@ export async function handleOrderCanceled(
           );
           skippedCount++;
         } else {
-          // pending/submitted — document is on its way to QB, chain a void after confirmation
+          // pending/submitted — document is on its way to QB, chain a void after confirmation.
+          // An "estimate" row is a draft order's Estimate — it may never become a Sales
+          // Order (e.g. voided before conversion). Closing it via closeSalesOrderInQb
+          // (SalesOrderQueryRq/Mod) fails permanently because that TxnID is an Estimate,
+          // not a Sales Order in QB — route it through the existing estimate_deactivate
+          // step instead (deactivateEstimateInQb), same as the SO-conversion path uses.
           const voidStep =
             inFlightRow.step === "invoice" ||
             inFlightRow.step === "sales_receipt"
               ? ("void_invoice" as const)
-              : ("void_sales_order" as const);
+              : inFlightRow.step === "estimate"
+                ? ("estimate_deactivate" as const)
+                : ("void_sales_order" as const);
           await writePipelineRow({
             orderId,
             step: voidStep,

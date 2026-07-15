@@ -9,6 +9,7 @@ import {
   closeSalesOrderInQb,
   reopenSalesOrderInQb,
 } from "../client/sales-orders";
+import { deactivateEstimateInQb } from "../client/estimates";
 import {
   confirmPipelineRow,
   failOrRetryPipelineRow,
@@ -864,7 +865,7 @@ export async function pollSubmittedRows(
             const { rows: waitingVoids } = await pool.query(
               `SELECT id, step FROM qb_order_pipeline
                              WHERE depends_on = $1 AND status = 'waiting'
-                               AND step IN ('void_sales_order', 'void_invoice')`,
+                               AND step IN ('void_sales_order', 'void_invoice', 'estimate_deactivate')`,
               [row.id]
             );
             for (const voidRow of waitingVoids) {
@@ -872,7 +873,13 @@ export async function pollSubmittedRows(
                 const vResult =
                   voidRow.step === "void_invoice"
                     ? await voidInvoiceInQb(txnId, (m) => logger.info(m))
-                    : await closeSalesOrderInQb(txnId, (m) => logger.info(m));
+                    : voidRow.step === "estimate_deactivate"
+                      ? await deactivateEstimateInQb(
+                          txnId,
+                          undefined,
+                          (m) => logger.info(m)
+                        )
+                      : await closeSalesOrderInQb(txnId, (m) => logger.info(m));
                 if (vResult.success && vResult.data?.operationId) {
                   await pool.query(
                     `UPDATE qb_order_pipeline
@@ -1125,7 +1132,7 @@ export async function pollSubmittedRows(
                                  failed_at    = NULL,
                                  updated_at   = NOW()
                              WHERE depends_on = $1 AND status = 'waiting'
-                               AND step IN ('void_sales_order', 'void_invoice')`,
+                               AND step IN ('void_sales_order', 'void_invoice', 'estimate_deactivate')`,
               [row.id, `Skipped — parent ${row.step} never reached QB`]
             );
             if (skipCount && skipCount > 0) {
