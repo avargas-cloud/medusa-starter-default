@@ -60,7 +60,10 @@ export async function POST(
   const service = getPurchaseOrdersService(req);
   const knex = (req.scope as unknown as {
     resolve: (k: string) => {
-      raw: (sql: string, b?: unknown[]) => Promise<{ rows: unknown[] }>;
+      raw: (
+        sql: string,
+        b?: unknown[]
+      ) => Promise<{ rows: unknown[]; rowCount?: number }>;
     };
   }).resolve("__pg_connection__");
 
@@ -114,21 +117,44 @@ export async function POST(
     },
   ]);
 
-  // If synced to QB, create a NEW pipeline row to close it (IsManuallyClosed=true)
+  // If synced to QB, queue a close (IsManuallyClosed=true). `qb_purchase_order_pipeline`
+  // has a unique index on purchase_order_id (one row per PO) — a synced PO already owns
+  // a row, so this MUST reset that row rather than insert a second one (mirrors the
+  // UPDATE-first/INSERT-fallback pattern used by the PATCH mod path in [id]/route.ts).
   if (po.qb_purchase_order_list_id) {
-    await service.createQbPurchaseOrderPipelines([{
-      purchase_order_id: id,
-      status: "waiting",
-      payload: {
-        is_void: true,
-        txn_id: po.qb_purchase_order_list_id,
-        edit_sequence: po.qb_edit_sequence ?? null,
-        po_id: id,
-        po_number: po.number,
-        vendor_qb_list_id: po.vendor_qb_list_id_snapshot,
-        vendor_name: po.vendor_name_snapshot,
-      },
-    }]);
+    const voidPayload = {
+      is_void: true,
+      txn_id: po.qb_purchase_order_list_id,
+      edit_sequence: po.qb_edit_sequence ?? null,
+      po_id: id,
+      po_number: po.number,
+      vendor_qb_list_id: po.vendor_qb_list_id_snapshot,
+      vendor_name: po.vendor_name_snapshot,
+    };
+    try {
+      const result = await knex.raw(
+        `UPDATE qb_purchase_order_pipeline
+            SET status          = 'waiting',
+                qb_operation_id = NULL,
+                payload         = ?,
+                retries         = 0,
+                last_error      = NULL,
+                next_retry_at   = NULL,
+                synced_at       = NULL,
+                updated_at      = NOW()
+          WHERE purchase_order_id = ?
+            AND deleted_at IS NULL`,
+        [JSON.stringify(voidPayload), id]
+      );
+      if ((result.rowCount ?? 0) === 0) {
+        await service.createQbPurchaseOrderPipelines([
+          { purchase_order_id: id, status: "waiting", payload: voidPayload },
+        ]);
+      }
+    } catch (qbErr) {
+      // Non-fatal: the local void already succeeded; QB close will need a manual retry.
+      console.error("[po-void] Failed to enqueue QB close:", qbErr);
+    }
   }
 
   // Transfer-to-USA accounting: void the linked IT (goods return to China)
