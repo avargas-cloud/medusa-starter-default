@@ -84,9 +84,48 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     : undefined;
   const searchParam = Array.isArray(query.q) ? query.q[0] : query.q;
   const trimmedSearch = (searchParam ?? "").trim();
+  const unlinkedParam = Array.isArray(query.unlinked)
+    ? query.unlinked[0]
+    : query.unlinked;
+  const wantUnlinked = unlinkedParam === "1" || unlinkedParam === "true";
 
   const filters: Record<string, unknown> = {};
   if (customerIdParam) filters.customer_id = customerIdParam;
+
+  // ── Optional unlinked filter: payments/credits with money not assigned to
+  // anything (free balance = amount − Σ active applications > 0). Resolved in
+  // SQL because the module filter can't express an aggregate comparison —
+  // this powers the POS payments page "Unlinked" tab and must cover the FULL
+  // history, not just the most recent page. Excludes web captures (permanent
+  // auto-applied ledger rows), refunds, and refunded/voided payments (a
+  // refund reduces free balance without an application, so the formula would
+  // overcount them).
+  if (wantUnlinked) {
+    try {
+      const knex = req.scope.resolve("__pg_connection__") as any;
+      const { rows: unlinkedRows } = await knex.raw(
+        `SELECT cp.id
+           FROM customer_payment cp
+           LEFT JOIN payment_application pa
+             ON pa.payment_id = cp.id
+            AND pa.voided_at IS NULL AND pa.deleted_at IS NULL
+          WHERE cp.deleted_at IS NULL
+            AND cp.type IN ('payment', 'credit_memo')
+            AND cp.status NOT IN ('voided', 'refunded', 'partial_refunded')
+            AND cp.source <> 'web'
+          GROUP BY cp.id
+         HAVING cp.amount - COALESCE(SUM(pa.amount_applied), 0) > 0
+          ORDER BY MAX(cp.received_at) DESC NULLS LAST
+          LIMIT 500`
+      );
+      if (unlinkedRows.length === 0) {
+        return res.json({ payments: [], count: 0 });
+      }
+      filters.id = unlinkedRows.map((r: { id: string }) => r.id);
+    } catch (unlErr: any) {
+      return res.status(500).json({ error: unlErr.message });
+    }
+  }
 
   // ── Optional search (q): match by customer name/email/company/phone or payment reference ──
   if (trimmedSearch) {
