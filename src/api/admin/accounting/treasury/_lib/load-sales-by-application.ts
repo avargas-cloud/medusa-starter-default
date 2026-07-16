@@ -54,14 +54,14 @@ export interface SalesAggregateRow {
 
 type PgConnection = { raw: (sql: string, params: unknown[]) => Promise<{ rows: any[] }> };
 
-const COST_FALLBACK_EXPR = `COALESCE(
+export const COST_FALLBACK_EXPR = `COALESCE(
   pii.average_unit_cost,
   NULLIF(pv.metadata->>'avg_landed_cost_cents', '')::numeric / 100.0,
   NULLIF(pv.metadata->>'qb_avg_cost', '')::numeric,
   NULLIF(pv.metadata->>'qb_purchase_cost', '')::numeric
 )`;
 
-const ORDER_COST_FALLBACK_EXPR = `COALESCE(
+export const ORDER_COST_FALLBACK_EXPR = `COALESCE(
   NULLIF(pv.metadata->>'avg_landed_cost_cents', '')::numeric / 100.0,
   NULLIF(pv.metadata->>'qb_avg_cost', '')::numeric,
   NULLIF(pv.metadata->>'qb_purchase_cost', '')::numeric

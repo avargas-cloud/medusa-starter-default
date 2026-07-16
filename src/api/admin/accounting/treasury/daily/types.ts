@@ -91,6 +91,33 @@ export interface CreditMemoCogsGapView {
   cogs_local_cents: number;
 }
 
+/**
+ * A single CASH sale line that shipped/was-paid this day but has no usable
+ * cost (unit cost is NULL or literally $0), so it contributed $0 to the COGS
+ * pool and its whole revenue landed in Operating. Advisory only — could be a
+ * legit free sample or a missing-cost data error; the accountant verifies.
+ * See load-zero-cost-lines.ts.
+ */
+export interface ZeroCostLineView {
+  source_kind: "invoice" | "order";
+  /** pos_invoice.id or order.id — for building a detail-page link. */
+  source_id: string | null;
+  /** Invoice number (e.g. "20930") or order display id (e.g. "2450"). */
+  source_ref: string | null;
+  payment_display_id: number | null;
+  sku: string | null;
+  description: string | null;
+  quantity: number;
+  /** Line's sale value attributed to the day's cash, in cents — the money
+   * that went to Operating with no matching COGS. */
+  revenue_cents: number;
+  /** Where the COGS WOULD have been routed had a cost existed. */
+  origin: "china" | "local" | "untagged";
+  /** true = cost is literally 0 (possible legit sample); false = cost missing
+   * entirely (more likely a data error to fix). */
+  cost_is_explicit_zero: boolean;
+}
+
 export interface TreasuryDailyReport {
   /** Backward-compat single-day anchor; equals range_start. */
   distribution_date: string;
@@ -112,6 +139,8 @@ export interface TreasuryDailyReport {
   unattributed_payments: UnattributedPaymentView[];
   /** Credit-memo redemptions whose China/Local COGS never got routed to a bucket — see CreditMemoCogsGapView. Empty/absent on snapshots frozen before this field existed. */
   credit_memo_cogs_gaps?: CreditMemoCogsGapView[];
+  /** Cash sale lines with no usable cost ($0/missing) whose revenue fell into Operating — see ZeroCostLineView. Empty/absent on snapshots frozen before this field existed. */
+  zero_cost_cogs_lines?: ZeroCostLineView[];
   reconciliation: {
     sum_of_splits_cents: number;
     net_cash_received_cents: number;

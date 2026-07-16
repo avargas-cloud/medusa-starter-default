@@ -8,6 +8,7 @@ import {
   STALE_COST_THRESHOLD_DAYS as APP_STALE_COST_THRESHOLD_DAYS,
 } from "./load-sales-by-application";
 import { loadUnattributedPayments } from "./load-unattributed-payments";
+import { loadZeroCostLines } from "./load-zero-cost-lines";
 import type {
   TreasuryBucketView,
   TreasuryDailyReport,
@@ -137,6 +138,7 @@ async function computeLiveRangeReport(
   const sales = await loadSalesByApplication(pg, dayStart, dayEnd);
   const unattributedPayments = await loadUnattributedPayments(pg, dayStart, dayEnd);
   const creditMemoCogsRows = await loadCreditMemoCogsGaps(pg, dayStart, dayEnd);
+  const zeroCostLines = await loadZeroCostLines(pg, dayStart, dayEnd);
 
   // Cash total, decomposed per payment into an APPLIED portion (always
   // counted on the payment's real received_at day — this stays in lockstep
@@ -414,6 +416,7 @@ async function computeLiveRangeReport(
     warnings,
     unattributed_payments: unattributedPayments,
     credit_memo_cogs_gaps: creditMemoCogsGaps,
+    zero_cost_cogs_lines: zeroCostLines,
     reconciliation: result.reconciliation,
     generated_at: new Date().toISOString(),
   };
@@ -451,6 +454,7 @@ function mergeContributions(
   >();
   const unattributed: TreasuryDailyReport["unattributed_payments"] = [];
   const creditMemoCogsGaps: NonNullable<TreasuryDailyReport["credit_memo_cogs_gaps"]> = [];
+  const zeroCostLines: NonNullable<TreasuryDailyReport["zero_cost_cogs_lines"]> = [];
   let sumOfSplits = 0;
   let netCash = 0;
 
@@ -478,6 +482,7 @@ function mergeContributions(
     }
     unattributed.push(...c.unattributed_payments);
     creditMemoCogsGaps.push(...(c.credit_memo_cogs_gaps ?? []));
+    zeroCostLines.push(...(c.zero_cost_cogs_lines ?? []));
     sumOfSplits += c.reconciliation.sum_of_splits_cents;
     netCash += c.reconciliation.net_cash_received_cents;
   }
@@ -527,6 +532,7 @@ function mergeContributions(
     warnings,
     unattributed_payments: unattributed,
     credit_memo_cogs_gaps: creditMemoCogsGaps,
+    zero_cost_cogs_lines: zeroCostLines,
     reconciliation: {
       sum_of_splits_cents: sumOfSplits,
       net_cash_received_cents: netCash,
