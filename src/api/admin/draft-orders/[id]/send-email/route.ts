@@ -1135,7 +1135,15 @@ export async function POST(
       : {};
     const curStatus = curMeta.order_status ?? curMeta.estimate_status;
     const newStatus = curStatus === "Created" ? "Sent" : (curStatus ?? "Sent");
-    await fetch(`${base}/admin/draft-orders/${id}`, {
+    // Route the metadata write by document type: the draft-orders endpoint
+    // rejects real (converted) orders with "is not a draft order", which left
+    // estimate_sent_at/estimate_sent_to permanently NULL for invoice sends —
+    // there was no send history at all for invoices.
+    const metaTarget =
+      docType === "Estimate"
+        ? `${base}/admin/draft-orders/${id}`
+        : `${base}/admin/orders/${id}`;
+    await fetch(metaTarget, {
       method: "POST",
       headers: metaHeaders,
       body: JSON.stringify({
