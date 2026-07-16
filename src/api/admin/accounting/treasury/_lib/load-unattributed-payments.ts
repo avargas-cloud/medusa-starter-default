@@ -6,11 +6,18 @@
  * PaymentApplications don't cover its full amount. These payments DO count in
  * the day's net cash (so they land in Operating with $0 revenue/COGS) but the
  * sale behind them is invisible until someone links them. The Treasury page
- * lists them so staff can act.
+ * lists them so staff can act, and blocks that day's "Confirm Transfers"
+ * until each one is either linked or explicitly deferred.
  *
- * Anchored on customer_payment.received_at (same day boundary as the rest of
- * Treasury). Credit-memo redemptions are excluded (not new cash). Refunds are
- * excluded (type <> 'payment').
+ * Anchored on the payment's EFFECTIVE treasury date: `received_at::date`,
+ * unless the payment has an entry in `treasury_payment_defer` (the "Exception
+ * — defer to next day" action), in which case its most recent
+ * `effective_treasury_date` wins. This ONLY moves the UNAPPLIED remainder for
+ * Treasury purposes — it never touches `customer_payment.received_at` itself
+ * (that still feeds the unrelated QB batch_day/TxnDate mechanism).
+ *
+ * Credit-memo redemptions are excluded (not new cash). Refunds are excluded
+ * (type <> 'payment').
  */
 
 export interface UnattributedPayment {
@@ -24,7 +31,12 @@ export interface UnattributedPayment {
   source: string | null;
   status: string | null;
   has_locked_order: boolean;
-  received_at: string;
+  /** The payment's real capture timestamp — never altered by deferral. */
+  original_received_at: string;
+  /** Day this payment's unapplied cash currently counts toward for Treasury. */
+  effective_treasury_date: string;
+  /** How many times "Exception — defer to next day" has been used on this payment. */
+  defer_count: number;
 }
 
 interface PgConnection {
@@ -42,7 +54,9 @@ interface RawRow {
   source: string | null;
   status: string | null;
   has_locked_order: boolean | null;
-  received_at: string | Date | null;
+  original_received_at: string | Date | null;
+  effective_treasury_date: string | Date | null;
+  defer_count: string | number | null;
 }
 
 function toInt(v: string | number | null | undefined): number {
@@ -63,6 +77,17 @@ export async function loadUnattributedPayments(
       FROM payment_application
       WHERE voided_at IS NULL AND deleted_at IS NULL
       GROUP BY payment_id
+    ),
+    latest_defer AS (
+      SELECT DISTINCT ON (payment_id)
+        payment_id, effective_treasury_date
+      FROM treasury_payment_defer
+      ORDER BY payment_id, created_at DESC
+    ),
+    defer_counts AS (
+      SELECT payment_id, COUNT(*)::int AS defer_count
+      FROM treasury_payment_defer
+      GROUP BY payment_id
     )
     SELECT
       cp.id                                          AS payment_id,
@@ -75,15 +100,19 @@ export async function loadUnattributedPayments(
       cp.source                                      AS source,
       cp.status                                      AS status,
       (cp.locked_order_id IS NOT NULL)              AS has_locked_order,
-      cp.received_at                                 AS received_at
+      cp.received_at                                 AS original_received_at,
+      COALESCE(ld.effective_treasury_date, cp.received_at::date) AS effective_treasury_date,
+      COALESCE(dc.defer_count, 0)                    AS defer_count
     FROM customer_payment cp
     LEFT JOIN applied a ON a.payment_id = cp.id
+    LEFT JOIN latest_defer ld ON ld.payment_id = cp.id
+    LEFT JOIN defer_counts dc ON dc.payment_id = cp.id
     WHERE cp.deleted_at IS NULL
       AND cp.type = 'payment'
       AND cp.status <> 'voided'
       AND COALESCE(cp.method, '') <> 'credit_memo'
-      AND cp.received_at >= ?
-      AND cp.received_at <= ?
+      AND COALESCE(ld.effective_treasury_date, cp.received_at::date) >= ?::date
+      AND COALESCE(ld.effective_treasury_date, cp.received_at::date) <= ?::date
       AND (cp.amount - COALESCE(a.applied, 0)) > 0
     ORDER BY (cp.amount - COALESCE(a.applied, 0)) DESC
     `,
@@ -105,9 +134,14 @@ export async function loadUnattributedPayments(
     source: r.source ?? null,
     status: r.status ?? null,
     has_locked_order: r.has_locked_order === true,
-    received_at:
-      r.received_at instanceof Date
-        ? r.received_at.toISOString()
-        : String(r.received_at ?? ""),
+    original_received_at:
+      r.original_received_at instanceof Date
+        ? r.original_received_at.toISOString()
+        : String(r.original_received_at ?? ""),
+    effective_treasury_date:
+      r.effective_treasury_date instanceof Date
+        ? r.effective_treasury_date.toISOString().slice(0, 10)
+        : String(r.effective_treasury_date ?? ""),
+    defer_count: toInt(r.defer_count),
   }));
 }

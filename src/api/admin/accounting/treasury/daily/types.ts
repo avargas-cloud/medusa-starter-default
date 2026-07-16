@@ -15,7 +15,8 @@ export type TreasuryWarningCode =
   | "NET_CASH_BELOW_TAX"
   | "CROSS_DAY_REFUND_DETECTED"
   | "FOREIGN_CURRENCY_DETECTED"
-  | "UNATTRIBUTED_PAYMENTS";
+  | "UNATTRIBUTED_PAYMENTS"
+  | "CREDIT_MEMO_COGS_UNROUTED";
 
 export interface TreasuryWarning {
   code: TreasuryWarningCode;
@@ -58,7 +59,36 @@ export interface UnattributedPaymentView {
   source: string | null;
   status: string | null;
   has_locked_order: boolean;
-  received_at: string;
+  /** The payment's real capture timestamp — never altered by deferral. */
+  original_received_at: string;
+  /** Day this payment's unapplied cash currently counts toward for Treasury. */
+  effective_treasury_date: string;
+  /** How many times "Exception — defer to next day" has been used on this payment. */
+  defer_count: number;
+}
+
+/**
+ * A credit-memo redemption whose COGS contribution wasn't actually reflected
+ * in that day's china_cogs/local_cogs split — because the day had zero
+ * real-cash revenue to weight it against (compute-splits.ts's pool formula
+ * requires gross_revenue_pre_tax_cents > 0 to run at all). The credit itself
+ * moved zero new cash (correctly excluded from net_cash always), but the
+ * China/Local vendor obligation behind the redeemed goods is real and — on
+ * a day like this — never got a chance to shift the bucket split. It isn't
+ * carried forward to any other day; this is the only place it's visible.
+ */
+export interface CreditMemoCogsGapView {
+  payment_id: string;
+  /** e.g. "CM-1090" */
+  reference: string | null;
+  customer_id: string | null;
+  /** The invoice/order the credit was redeemed against. */
+  invoice_id: string | null;
+  order_id: string | null;
+  /** Day the redemption itself happened (payment_application.applied_at), not the original return date. */
+  redeemed_on: string;
+  cogs_china_cents: number;
+  cogs_local_cents: number;
 }
 
 export interface TreasuryDailyReport {
@@ -80,10 +110,24 @@ export interface TreasuryDailyReport {
   splits: TreasurySplitWithBucket[];
   warnings: TreasuryWarning[];
   unattributed_payments: UnattributedPaymentView[];
+  /** Credit-memo redemptions whose China/Local COGS never got routed to a bucket — see CreditMemoCogsGapView. Empty/absent on snapshots frozen before this field existed. */
+  credit_memo_cogs_gaps?: CreditMemoCogsGapView[];
   reconciliation: {
     sum_of_splits_cents: number;
     net_cash_received_cents: number;
     delta_cents: number;
   };
   generated_at: string;
+  /** True when this exact single day (range_start === range_end) is frozen/locked. */
+  is_locked?: boolean;
+  /** Set when is_locked — timestamp the "Confirm Transfers" action ran. */
+  confirmed_at?: string;
+  /** Set when is_locked — the user_id that clicked "Confirm Transfers". */
+  confirmed_by_user_id?: string | null;
+  /** Set when is_locked — the treasury_distribution_log row id. */
+  log_id?: string;
+  /** Multi-day (range) reports only: how many of the days in [range_start, range_end] are locked. */
+  locked_days_count?: number;
+  /** Multi-day (range) reports only: total calendar days in [range_start, range_end]. */
+  total_days_count?: number;
 }

@@ -16,9 +16,23 @@
  *   • invoice_id IS NULL   → "order" + order_line_item via order_item link
  *                             (Medusa order deposits not yet invoiced)
  *
- * Credit-memo method payments (existing credit being re-applied) are excluded
- * — they represent moving credit around, not new cash. Web payments ARE
- * included because they correspond to real money captured on D.
+ * Credit-memo method payments (existing credit being re-applied) never
+ * represent new cash, so they're excluded from `gross_revenue_pre_tax_cents`
+ * / `tax_collected_cents` — including them there would double-count money
+ * already recognized (and its tax passthrough already routed) on the
+ * original sale's day. Web payments ARE included in revenue/tax because
+ * they correspond to real money captured on D.
+ *
+ * They are NOT excluded from cogs_china_cents/cogs_local_cents, though: those
+ * two numbers only ever feed a RATIO (china / (china+local)) that decides how
+ * a day's real cash pool gets split — see compute-splits.ts. A customer memo
+ * redeemed against, say, an all-China-sourced invoice is a real shipment with
+ * a real China-vendor obligation; excluding it entirely (the pre-2026-07-16
+ * behavior) meant that obligation NEVER shifted the split ratio, so days with
+ * cross-category returns→redemptions silently mis-routed cash between the
+ * china_cogs/local_cogs buckets (verified against 51 days of real data: $3.3k
+ * in redemptions, 28% of redemption invoices mixing China+local lines). The
+ * cash pool itself is untouched either way — this only changes how it's cut.
  */
 
 export const STALE_COST_THRESHOLD_DAYS = 30;
@@ -53,6 +67,124 @@ const ORDER_COST_FALLBACK_EXPR = `COALESCE(
   NULLIF(pv.metadata->>'qb_purchase_cost', '')::numeric
 )`;
 
+export interface CreditMemoCogsGapRow {
+  payment_id: string;
+  reference: string | null;
+  customer_id: string | null;
+  invoice_id: string | null;
+  order_id: string | null;
+  redeemed_on: string;
+  cogs_china_cents: string | number;
+  cogs_local_cents: string | number;
+}
+
+/**
+ * Every credit-memo redemption that resolved in [dayStart, dayEnd] (dated by
+ * payment_application.applied_at — the actual redemption day, not the
+ * original return's cp.received_at), with its China/Local COGS contribution.
+ * Whether that contribution actually got routed to a bucket depends on the
+ * SAME day's gross_revenue_pre_tax_cents (see compute-splits.ts's pool
+ * guard) — the caller (load-daily-report.ts) decides that and tags each row;
+ * this function only computes the raw per-payment COGS split.
+ */
+export async function loadCreditMemoCogsGaps(
+  pg: PgConnection,
+  dayStart: string,
+  dayEnd: string
+): Promise<CreditMemoCogsGapRow[]> {
+  const result = await pg.raw(
+    `
+    WITH apps_day AS (
+      SELECT pa.id AS app_id, pa.payment_id, pa.invoice_id, pa.order_id,
+             pa.amount_applied, pa.cost_snapshot, pa.applied_at
+      FROM payment_application pa
+      JOIN customer_payment cp ON cp.id = pa.payment_id
+      WHERE pa.voided_at IS NULL AND pa.deleted_at IS NULL AND cp.deleted_at IS NULL
+        AND cp.type = 'credit_memo' AND cp.method = 'credit_memo' AND cp.status <> 'voided'
+        AND pa.applied_at >= ? AND pa.applied_at <= ?
+    ),
+    invoice_lines AS (
+      SELECT ad.app_id, ad.amount_applied AS app_amount, pi.id AS source_id,
+             pi.total AS source_total, pii.quantity,
+             ${COST_FALLBACK_EXPR} AS effective_unit_cost,
+             (p.metadata->>'is_sourced_via_agent') AS origin_flag
+      FROM apps_day ad
+      JOIN pos_invoice pi ON pi.id = ad.invoice_id
+      JOIN pos_invoice_item pii ON pii.invoice_id = pi.id
+      LEFT JOIN product_variant pv ON pv.id = pii.variant_id
+      LEFT JOIN product p ON p.id = pv.product_id
+      WHERE ad.invoice_id IS NOT NULL
+        AND COALESCE(pi.status, '') NOT IN ('draft','voided','cancelled')
+    ),
+    order_lines AS (
+      SELECT ad.app_id, ad.amount_applied AS app_amount, o.id AS source_id,
+             order_totals.source_total_cents AS source_total, oi.quantity,
+             COALESCE(cs.snap_unit_cost_cents / 100.0, ${ORDER_COST_FALLBACK_EXPR}) AS effective_unit_cost,
+             CASE
+               WHEN cs.snap_is_china IS NOT NULL THEN (CASE WHEN cs.snap_is_china THEN 'true' ELSE 'false' END)
+               ELSE (p.metadata->>'is_sourced_via_agent')
+             END AS origin_flag
+      FROM apps_day ad
+      JOIN "order" o ON o.id = ad.order_id
+      JOIN order_item oi ON oi.order_id = o.id
+      JOIN order_line_item oli ON oli.id = oi.item_id AND oli.deleted_at IS NULL
+      JOIN LATERAL (
+        SELECT COALESCE(SUM(ROUND(oli2.unit_price * oi2.quantity * 100)), 0)::numeric AS source_total_cents
+        FROM order_item oi2
+        JOIN order_line_item oli2 ON oli2.id = oi2.item_id AND oli2.deleted_at IS NULL
+        WHERE oi2.order_id = o.id
+      ) order_totals ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT (snap->>'unit_cost_cents')::numeric AS snap_unit_cost_cents,
+               (snap->>'is_china')::boolean AS snap_is_china
+        FROM jsonb_array_elements(COALESCE(ad.cost_snapshot->'lines', '[]'::jsonb)) snap
+        WHERE snap->>'line_id' = oli.id
+        LIMIT 1
+      ) cs ON TRUE
+      LEFT JOIN product_variant pv ON pv.id = oli.variant_id
+      LEFT JOIN product p ON p.id = pv.product_id
+      WHERE ad.invoice_id IS NULL AND ad.order_id IS NOT NULL
+        AND COALESCE(o.status::text, '') NOT IN ('draft','canceled','cancelled')
+    ),
+    weighted AS (
+      SELECT app_id, source_total, quantity, effective_unit_cost, origin_flag,
+             CASE WHEN source_total > 0 THEN app_amount::numeric / source_total ELSE 0 END AS prop
+      FROM invoice_lines
+      UNION ALL
+      SELECT app_id, source_total, quantity, effective_unit_cost, origin_flag,
+             CASE WHEN source_total > 0 THEN app_amount::numeric / source_total ELSE 0 END AS prop
+      FROM order_lines
+    ),
+    per_app AS (
+      SELECT
+        w.app_id,
+        COALESCE(SUM(CASE WHEN origin_flag = 'true' AND effective_unit_cost IS NOT NULL
+          THEN ROUND(quantity * effective_unit_cost * 100 * prop) ELSE 0 END), 0)::bigint AS cogs_china_cents,
+        COALESCE(SUM(CASE WHEN origin_flag IS DISTINCT FROM 'true' AND effective_unit_cost IS NOT NULL
+          THEN ROUND(quantity * effective_unit_cost * 100 * prop) ELSE 0 END), 0)::bigint AS cogs_local_cents
+      FROM weighted w
+      GROUP BY w.app_id
+    )
+    SELECT
+      cp.id AS payment_id,
+      cp.reference,
+      cp.customer_id,
+      ad.invoice_id,
+      ad.order_id,
+      ad.applied_at::date::text AS redeemed_on,
+      pa2.cogs_china_cents,
+      pa2.cogs_local_cents
+    FROM apps_day ad
+    JOIN customer_payment cp ON cp.id = ad.payment_id
+    JOIN per_app pa2 ON pa2.app_id = ad.app_id
+    WHERE pa2.cogs_china_cents > 0 OR pa2.cogs_local_cents > 0
+    ORDER BY ad.applied_at
+    `,
+    [dayStart, dayEnd]
+  );
+  return (result.rows ?? []) as CreditMemoCogsGapRow[];
+}
+
 export async function loadSalesByApplication(
   pg: PgConnection,
   dayStart: string,
@@ -61,25 +193,42 @@ export async function loadSalesByApplication(
   const result = await pg.raw(
     `
     WITH apps_day AS (
-      -- All non-voided PaymentApplications whose payment's cash entered today.
+      -- All non-voided PaymentApplications resolved today — both real-cash
+      -- payments AND credit-memo redemptions (see is_cash_funded below; the
+      -- cash-vs-categorization split happens downstream, not here).
+      --
+      -- The day-window itself is keyed differently per kind: a real payment's
+      -- cash entered on cp.received_at, so that's the attribution date (this
+      -- is what "attribution follows the cash" means). A credit-memo's
+      -- cp.received_at is frozen at the ORIGINAL RETURN's date — the goods
+      -- behind a redemption ship on whatever day the redemption itself
+      -- happens (pa.applied_at), which is frequently a different day (real
+      -- data: one credit sat unredeemed for 8 months). Using received_at for
+      -- both would misdate the categorization to the return day instead of
+      -- the actual shipment day.
       SELECT
         pa.id            AS app_id,
         pa.payment_id,
         pa.invoice_id,
         pa.order_id,
         pa.amount_applied,
-        pa.cost_snapshot
+        pa.cost_snapshot,
+        COALESCE(cp.method, '') <> 'credit_memo' AS is_cash_funded
       FROM payment_application pa
       JOIN customer_payment cp ON cp.id = pa.payment_id
       WHERE pa.voided_at IS NULL
         AND pa.deleted_at IS NULL
         AND cp.deleted_at IS NULL
-        AND cp.received_at >= ?
-        AND cp.received_at <= ?
-        AND cp.type = 'payment'
+        -- customer_payment rows for a credit memo carry type='credit_memo'
+        -- (NOT 'payment') — this must stay in sync with the method check
+        -- below, both set together at creation (credit_memos complete route).
+        AND cp.type IN ('payment', 'credit_memo')
         AND cp.status <> 'voided'
-        -- Exclude credit-memo redemptions: not new cash, just re-allocation.
-        AND COALESCE(cp.method, '') <> 'credit_memo'
+        AND (
+          (COALESCE(cp.method, '') <> 'credit_memo' AND cp.received_at >= ? AND cp.received_at <= ?)
+          OR
+          (cp.method = 'credit_memo' AND pa.applied_at >= ? AND pa.applied_at <= ?)
+        )
     ),
 
     invoice_lines AS (
@@ -104,7 +253,8 @@ export async function loadSalesByApplication(
           AND NULLIF(pv.metadata->>'qb_purchase_cost', '') IS NOT NULL
         )                                                          AS used_unit_cost_fallback,
         (p.metadata->>'is_sourced_via_agent')                      AS origin_flag,
-        p.id                                                       AS product_id
+        p.id                                                       AS product_id,
+        ad.is_cash_funded                                          AS is_cash_funded
       FROM apps_day ad
       JOIN pos_invoice pi      ON pi.id = ad.invoice_id
       JOIN pos_invoice_item pii ON pii.invoice_id = pi.id
@@ -143,7 +293,8 @@ export async function loadSalesByApplication(
             THEN (CASE WHEN cs.snap_is_china THEN 'true' ELSE 'false' END)
           ELSE (p.metadata->>'is_sourced_via_agent')
         END                                                        AS origin_flag,
-        p.id                                                       AS product_id
+        p.id                                                       AS product_id,
+        ad.is_cash_funded                                          AS is_cash_funded
       FROM apps_day ad
       JOIN "order" o            ON o.id = ad.order_id
       JOIN order_item oi        ON oi.order_id = o.id
@@ -189,7 +340,11 @@ export async function loadSalesByApplication(
       FROM all_lines al
     ),
 
-    -- Revenue/tax aggregate at APPLICATION level (deduped — each app contributes once).
+    -- Revenue/tax aggregate at APPLICATION level (deduped — each app contributes
+    -- once). Credit-memo-funded apps are excluded here (real-cash-only) — see
+    -- the module docstring; weighted/cogs below intentionally do NOT filter
+    -- on is_cash_funded, since COGS categorization should follow what
+    -- actually shipped, not just what was newly paid for.
     app_revenue AS (
       SELECT DISTINCT app_id, source_subtotal, source_tax, source_total, app_amount,
         CASE
@@ -197,6 +352,7 @@ export async function loadSalesByApplication(
           ELSE 0
         END AS prop
       FROM all_lines
+      WHERE is_cash_funded
     ),
     revenue_totals AS (
       SELECT
@@ -276,7 +432,7 @@ export async function loadSalesByApplication(
     CROSS JOIN missing_origin mo
     CROSS JOIN unit_cost_fallback uf
     `,
-    [dayStart, dayEnd, dayStart]
+    [dayStart, dayEnd, dayStart, dayEnd, dayStart]
   );
 
   return (result.rows[0] ?? {
