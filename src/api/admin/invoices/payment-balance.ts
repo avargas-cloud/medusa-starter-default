@@ -15,6 +15,34 @@ export function getNum(val: unknown): number {
   return Number(val) || 0;
 }
 
+/**
+ * Strict variant of getNum for money GUARDS (not display/status math).
+ * getNum coerces garbage to 0 (`Number(val) || 0`), which makes a corrupted
+ * amount look like "$0 available" — silently hiding the corruption. Guards
+ * that gate money movement must instead FAIL CLOSED: return null when the
+ * value cannot be read as a finite number, and let the caller reject.
+ */
+export function getFiniteMoney(val: unknown): number | null {
+  if (val === null || val === undefined) return null;
+  if (typeof val === "number") return Number.isFinite(val) ? val : null;
+  if (typeof val === "string") {
+    if (val.trim() === "") return null;
+    const n = Number(val);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (typeof val === "object") {
+    const obj = val as Record<string, unknown>;
+    if (typeof obj.toNumber === "function") {
+      const n = (obj.toNumber as () => number)();
+      return Number.isFinite(n) ? n : null;
+    }
+    if (obj.numeric !== undefined) return getFiniteMoney(obj.numeric);
+    if (obj.value !== undefined) return getFiniteMoney(obj.value);
+    return null;
+  }
+  return null;
+}
+
 export async function getAppliedInvoiceTotal(
   scope: { resolve: (key: string) => any },
   invoiceId: string

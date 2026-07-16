@@ -1,6 +1,7 @@
 import { cancelOrderWorkflow } from "@medusajs/core-flows";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 
+import { reconcileOrderReservations } from "../../../../../lib/finance/reconcile-order-reservations";
 import { maybeCompleteOrder } from "../../../../../lib/maybe-complete-order";
 import {
   getInventoryModules,
@@ -155,6 +156,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
       // Best-effort: release any lingering reservations + tag order_status.
       await releaseAllReservations(inventoryModule, pg, items);
+      // A canceled order must not hold PAYMENT reservations either — release
+      // order-only credit links back to the customer's available pool.
+      try {
+        await reconcileOrderReservations(req.scope, orderId!, {
+          logger: { info: console.log, warn: console.warn },
+        });
+      } catch {
+        /* non-fatal hygiene */
+      }
       try {
         await orderService.updateOrders([
           {
@@ -187,6 +197,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     if (completeResult.completed) {
       // Order is done → release ALL leftover reservations (un-invoiced lines).
       await releaseAllReservations(inventoryModule, pg, items);
+      // Leftover PAYMENT reservations (order-only links beyond what the
+      // invoices consumed) return to the customer's available pool too.
+      try {
+        await reconcileOrderReservations(req.scope, orderId!, {
+          logger: { info: console.log, warn: console.warn },
+        });
+      } catch {
+        /* non-fatal hygiene */
+      }
 
       // Mark closed so Reopen is available (status stays `completed`).
       const newMeta = {

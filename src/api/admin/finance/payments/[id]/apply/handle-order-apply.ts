@@ -16,6 +16,8 @@ import type { MedusaResponse } from "@medusajs/framework/http";
 
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
 import { buildOrderCostSnapshot } from "../../../../../../lib/finance/build-order-cost-snapshot";
+import { computeOrderReservationState } from "../../../../../../lib/finance/reconcile-order-reservations";
+import { upsertOrderOnlyApplication } from "../../../../../../lib/finance/upsert-order-only-application";
 import { registerMedusaPayment } from "../../../../invoices/register-medusa-payment";
 import { getNum } from "../../../../invoices/payment-balance";
 
@@ -86,13 +88,31 @@ export async function handleOrderApply(
     });
   }
 
-  // 2. Auto-clamp against payment available balance. We intentionally do NOT
-  //    clamp against order outstanding balance — staff may apply more than the
-  //    order's listed total if upselling or partial-prepay scenarios apply.
-  //    Surplus over the order will simply remain in available_amount when this
-  //    is the only allocation.
+  // 2. Auto-clamp against BOTH the payment's available balance AND the
+  //    order's outstanding balance ("el POS order define el monto linkeado").
+  //    POLICY CHANGE 2026-07-16: over-linking beyond the order total is no
+  //    longer allowed — prepay-larger-than-order now stays in the payment's
+  //    AVAILABLE pool (still consumable), and the POS offers to link it via
+  //    the Cover-with-Credit prompt if the order grows. When the order total
+  //    is unresolvable (total_unknown) the order-cap fails OPEN.
   const requestedAmount = Number(amount_applied);
-  const effectiveAmount = Math.min(requestedAmount, available_amount);
+  let orderCap = Number.POSITIVE_INFINITY;
+  try {
+    const state = await computeOrderReservationState(scope, order_id);
+    if (state && !state.total_unknown) {
+      orderCap = state.gap_cents; // allowed − already-linked
+    }
+  } catch {
+    /* fail-open: order cap is hygiene; available_amount still caps below */
+  }
+  if (orderCap <= 0 && Number.isFinite(orderCap)) {
+    return res.status(400).json({
+      error:
+        "The order's balance is already fully covered by linked credit — nothing left to link.",
+      code: "ORDER_BALANCE_FULLY_LINKED",
+    });
+  }
+  const effectiveAmount = Math.min(requestedAmount, available_amount, orderCap);
   const overflowAmount = requestedAmount - effectiveAmount;
 
   // 3. Create PaymentApplication with invoice_id=NULL (order-only link).
@@ -110,17 +130,40 @@ export async function handleOrderApply(
     costSnapshot = null;
   }
 
-  const application = await financeService.createPaymentApplications({
+  // UPSERT (not blind create): at most ONE active order-only row per
+  // (payment, order) — enforced by UQ_payment_application_order_only_active.
+  // A second legitimate link to the same order INCREMENTS the existing
+  // reservation; a replayed link_intent_key is a no-op.
+  const upsert = await upsertOrderOnlyApplication({
+    financeService,
+    knex: scope.resolve("__pg_connection__"),
     payment_id: payment.id,
-    invoice_id: null,
-    invoice_number: null,
     order_id,
-    amount_applied: effectiveAmount,
-    applied_at: new Date(),
+    amount_cents: effectiveAmount,
     applied_by: applied_by || null,
     cost_snapshot: costSnapshot,
-    ...(link_intent_key ? { metadata: { link_intent_key } } : {}),
+    link_intent_key: link_intent_key ?? null,
   });
+  const application = upsert.application;
+
+  if (upsert.mode === "replayed") {
+    // Same intent already recorded — belt-and-suspenders behind the route's
+    // replay check. Skip Medusa payment registration (the original call did it).
+    const replayedPayment = await financeService.retrieveCustomerPayment(
+      payment.id,
+      { relations: ["applications"] }
+    );
+    return res.json({
+      payment: replayedPayment,
+      application,
+      requested_amount: requestedAmount,
+      applied_amount: getNum(application.amount_applied),
+      overflow_amount: 0,
+      remaining_payment_balance: available_amount,
+      linked_to: "order",
+      idempotent_replay: true,
+    });
+  }
 
   // 4. Do NOT change customer_payment.status for an order-only link.
   //    Business rule: "applied" / "partially_applied" reflect consumption by

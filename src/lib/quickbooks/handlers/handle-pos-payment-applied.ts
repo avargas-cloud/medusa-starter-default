@@ -333,9 +333,73 @@ export async function handlePosPaymentApplied({
     );
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Routing: credit_memo payments carry a CreditMemo TxnID, not a ReceivePayment
+  // TxnID. Applying them requires ReceivePaymentAdd+SetCredit (a new record),
+  // not ReceivePaymentMod of an existing one. All other payments use merge-apply.
+  // ─────────────────────────────────────────────────────────────────────────
+  const isCreditMemoPayment = (payment as any).type === "credit_memo";
+
+  // ── Aggregate amount for merge-apply (split-safe) ────────────────────────
+  // CONVERT-ON-APPLY can split one logical apply into TWO payment_application
+  // rows (convert + surplus) for the same (payment, invoice), each with its
+  // own papp_ pipeline row. mergeApplyPaymentInQb REPLACES the per-invoice
+  // amount inside the ReceivePayment (read-merge-replace) — dispatching a
+  // single row's partial amount would clobber the previously-applied share
+  // (e.g. $500 convert then $300 surplus would leave QB at $300, not $800).
+  // Always send the SUM of ALL active applications for this (payment, invoice):
+  // every row's dispatch then writes the same correct total, so ordering and
+  // redundant dispatches become harmless. The credit_memo path is EXCLUDED —
+  // it ADDs a new ReceivePayment per dispatch (not idempotent), so sending the
+  // aggregate there would double-apply; per-row amounts remain correct for it.
+  let amountForQbCents = Number(amount_applied);
+  if (!isCreditMemoPayment) {
+    try {
+      const aggPool = getDbPool();
+      const { rows: aggRows } = await aggPool.query(
+        `SELECT COALESCE(SUM(amount_applied), 0) AS total
+           FROM payment_application
+          WHERE payment_id = $1
+            AND invoice_id = $2
+            AND voided_at IS NULL`,
+        [payment_id, invoice_id]
+      );
+      const aggregate = Number(aggRows[0]?.total ?? 0);
+      if (Number.isFinite(aggregate) && aggregate > 0) {
+        if (Math.round(aggregate) !== Math.round(amountForQbCents)) {
+          logger.info(
+            `${LOG_PREFIX} Split-aware aggregate: event carried ${amountForQbCents}¢ but active applications for payment ${payment_id} → invoice ${invoice_id} total ${aggregate}¢ — applying the aggregate.`
+          );
+        }
+        amountForQbCents = aggregate;
+      } else {
+        // No active application left (all voided since this row was written) —
+        // applying the event amount would re-apply voided money. Skip.
+        logger.info(
+          `${LOG_PREFIX} ⏭️ No active applications remain for payment ${payment_id} → invoice ${invoice_id} (aggregate=${aggregate}) — skipping apply.`
+        );
+        await writePipelineRow({
+          orderId: order_id,
+          referenceId: applyReferenceId,
+          referenceType: applyReferenceType,
+          step: "apply_payment",
+          status: "skipped",
+          medusaRefNumber: medusaPayRef,
+          error:
+            "apply_payment: no active payment_application remains for this payment+invoice (aggregate <= 0) — auto-skipped",
+        }).catch(() => {});
+        return;
+      }
+    } catch (aggErr: any) {
+      logger.warn(
+        `${LOG_PREFIX} Aggregate lookup failed (${aggErr.message}) — falling back to event amount ${amountForQbCents}¢`
+      );
+    }
+  }
+
   // 5. Fire the Bridge Request to Apply Payment to Invoice!
   logger.info(
-    `${LOG_PREFIX} 🎯 Applying Payment (TxnID: ${paymentTxnId}, Amount: $${(amount_applied / 100).toFixed(2)}) -> Invoice (TxnID: ${invoiceTxnId}) in QB...`
+    `${LOG_PREFIX} 🎯 Applying Payment (TxnID: ${paymentTxnId}, Amount: $${(amountForQbCents / 100).toFixed(2)}) -> Invoice (TxnID: ${invoiceTxnId}) in QB...`
   );
 
   // Fetch the customer based on the order to get QB List ID if needed
@@ -375,13 +439,6 @@ export async function handlePosPaymentApplied({
       : `Payment for Invoice ${invoiceNumber}`
     : undefined;
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Routing: credit_memo payments carry a CreditMemo TxnID, not a ReceivePayment
-  // TxnID. Applying them requires ReceivePaymentAdd+SetCredit (a new record),
-  // not ReceivePaymentMod of an existing one. All other payments use merge-apply.
-  // ─────────────────────────────────────────────────────────────────────────
-  const isCreditMemoPayment = (payment as any).type === "credit_memo";
-
   // Write `submitted` with bridgeOpId as soon as the op is enqueued to the bridge,
   // before polling for completion. This prevents orphaned `pending` rows if the
   // process crashes or restarts during the poll.
@@ -413,7 +470,9 @@ export async function handlePosPaymentApplied({
       : await mergeApplyPaymentInQb({
           customerId: customerQbId,
           invoiceId: invoiceTxnId!,
-          amount: amount_applied / 100,
+          // Split-safe aggregate (see block above) — the merge REPLACES the
+          // per-invoice amount in QB, so it must always carry the full total.
+          amount: amountForQbCents / 100,
           creditTxnId: paymentTxnId!,
           memo: updatedMemo,
           log: (m: string) => logger.info(m),

@@ -32,6 +32,8 @@ import {
 import { FINANCE_MODULE } from "../../../modules/finance";
 import { INVOICE_MODULE } from "../../../modules/invoices";
 
+import { reconcileOrderReservations } from "../../../lib/finance/reconcile-order-reservations";
+import { getFiniteMoney, getNum } from "./payment-balance";
 import { registerMedusaPayment } from "./register-medusa-payment";
 // ── GET /admin/invoices?order_id=:id ─────────────────────────────────────────
 
@@ -216,12 +218,44 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       .json({ error: "order_id, customer_id, and items are required" });
   }
 
+  // Codex audit finding #5: amount_paid feeds balance_due (derivedTotal -
+  // amount_paid), initialStatus, and every downstream payment/application
+  // write with no floor — a negative value would inflate balance_due and
+  // silently skip Step 3's payment recording (`if (body.amount_paid > 0)`).
+  // Round 2: NaN/Infinity satisfy `typeof === "number"` and are not `< 0`,
+  // so they slipped through — require a finite number.
+  if (
+    typeof body.amount_paid !== "number" ||
+    !Number.isFinite(body.amount_paid) ||
+    body.amount_paid < 0
+  ) {
+    return res
+      .status(400)
+      .json({ error: "amount_paid must be a non-negative finite number" });
+  }
+
+  // Round 2: a terminal payment ALWAYS charged a positive amount (the terminal
+  // route rejects amountCents <= 0), so amount_paid=0 alongside a
+  // terminal_payment_id is a stale client value (React state race on the POS
+  // auto-submit). Letting it through would claim the `terminal:<id>` dedup key
+  // on a $0 invoice — Step 3 records no application, and the correct retry
+  // then bounces off claimInvoiceCreate ("existing") forever. Reject BEFORE
+  // any dedup/number work.
+  if (body.terminal_payment_id && !(body.amount_paid > 0)) {
+    return res.status(400).json({
+      error:
+        "amount_paid must be > 0 when terminal_payment_id is provided (a terminal payment always captured a positive amount)",
+      code: "TERMINAL_PAYMENT_ZERO_AMOUNT",
+    });
+  }
+
   // ── Idempotency: a terminal_payment_id can only be applied to ONE invoice ──
   // The terminal route already created a CustomerPayment when the card was
   // charged. If the client retries this POST (browser double-click, network
   // retry, recovery button), we must NOT create a second invoice — it would
   // consume two sequence numbers and leave an orphan Sales Receipt in QB.
   // Runs BEFORE nextval() so we don't burn invoice/SR sequence numbers on retries.
+  let idempotencyPrecheckFailed = false;
   if (body.terminal_payment_id) {
     try {
       const existingApplications = await financeService.listPaymentApplications(
@@ -229,8 +263,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           payment_id: body.terminal_payment_id,
         }
       );
-      if (existingApplications.length > 0) {
-        const existingInvoiceId = (existingApplications[0] as any).invoice_id;
+      // Only an INVOICE-BOUND application means "this terminal payment already
+      // has its invoice" — an order-only application (invoice_id=NULL) is just
+      // the checkout-time auto-link reservation (see store-pos bams/terminal
+      // route) and must NOT short-circuit invoice creation, or every terminal
+      // checkout would incorrectly bounce back a nonexistent prior invoice.
+      const invoiceBoundApplication = existingApplications.find(
+        (a: any) => !a.voided_at && a.invoice_id != null
+      );
+      if (invoiceBoundApplication) {
+        const existingInvoiceId = (invoiceBoundApplication as any).invoice_id;
         const existingInvoice =
           await invoiceService.retrievePosInvoice(existingInvoiceId);
         console.warn(
@@ -243,11 +285,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         });
       }
     } catch (idemErr: any) {
-      // Non-fatal — fall through to normal creation path. Worst case: duplicate
-      // invoice if the listPaymentApplications call was transiently broken, but
-      // that's no worse than the pre-idempotency behavior.
+      // Round 2: do NOT fall through blindly — under a transient read failure
+      // we cannot know whether this terminal payment already has its invoice.
+      // Flag it; the mandatory retrieveCustomerPayment below (which loads the
+      // same applications relation) re-runs the short-circuit. Only if BOTH
+      // reads fail does the request get rejected (503) — never create an
+      // invoice under uncertainty.
+      idempotencyPrecheckFailed = true;
       console.warn(
-        `[invoice] Idempotency check failed for terminal_payment ${body.terminal_payment_id}: ${idemErr.message}`
+        `[invoice] Idempotency check failed for terminal_payment ${body.terminal_payment_id}: ${idemErr.message} — will re-verify via mandatory payment retrieve`
       );
     }
   }
@@ -444,29 +490,121 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   // reuse termPay for tagging without a second DB round-trip.
   let termPay: any = null;
   if (body.terminal_payment_id) {
+    // Round 2 (MANDATORY, fail-fast): this retrieve used to be best-effort —
+    // a transient read failure left termPay=null, which (a) skipped the
+    // over-claim guard below (fail-open), (b) bypassed Step 3's
+    // CONVERT-ON-APPLY lookup so the order-only reservation survived NEXT TO a
+    // fresh invoice-bound application (the exact Treasury double-count this
+    // whole fix exists to prevent), and (c) forced the status calc's
+    // `?? body.amount_paid` fallback to mark the payment fully "applied".
+    // A terminal invoice must never be created without a verified payment.
     try {
       termPay = await financeService.retrieveCustomerPayment(
-        body.terminal_payment_id
+        body.terminal_payment_id,
+        { relations: ["applications"] }
       );
-      const termPosMethod = termPay?.metadata?.pos_payment_method as
-        | string
-        | undefined;
-      const termCardBrand =
-        (termPay?.metadata?.card_brand as string | undefined) ?? null;
-      if (termPosMethod && termPosMethod !== normalizedPaymentMethod) {
-        console.log(
-          `[invoice] Overriding payment_method '${normalizedPaymentMethod}' → '${termPosMethod}' from terminal_payment metadata (source of truth)`
-        );
-        resolvedPaymentMethod = termPosMethod;
-        resolvedCardBrand = termCardBrand;
-      } else if (termCardBrand && !resolvedCardBrand) {
-        // Method already matches but terminal payment has a brand we don't — adopt it.
-        resolvedCardBrand = termCardBrand;
-      }
     } catch (tpErr: any) {
-      console.warn(
-        `[invoice] Could not read terminal_payment metadata for ${body.terminal_payment_id}: ${tpErr.message}`
+      const isNotFound =
+        tpErr?.type === "not_found" || /not found/i.test(tpErr?.message ?? "");
+      console.error(
+        `[invoice] Mandatory terminal payment read failed for ${body.terminal_payment_id} (${isNotFound ? "not found" : "read error"}): ${tpErr.message}`
       );
+      return res.status(isNotFound ? 404 : 503).json({
+        error: isNotFound
+          ? `terminal_payment_id ${body.terminal_payment_id} not found`
+          : `Could not verify terminal payment ${body.terminal_payment_id} — please retry`,
+        code: isNotFound
+          ? "TERMINAL_PAYMENT_NOT_FOUND"
+          : "TERMINAL_PAYMENT_READ_FAILED",
+      });
+    }
+    if (!termPay) {
+      return res.status(404).json({
+        error: `terminal_payment_id ${body.terminal_payment_id} not found`,
+        code: "TERMINAL_PAYMENT_NOT_FOUND",
+      });
+    }
+
+    // If the cheap idempotency precheck above failed transiently, re-run the
+    // same invoice-bound short-circuit on the applications we just loaded —
+    // never create a second invoice under uncertainty.
+    if (idempotencyPrecheckFailed) {
+      const invoiceBoundApp = (termPay.applications ?? []).find(
+        (a: any) => !a.voided_at && a.invoice_id != null
+      );
+      if (invoiceBoundApp) {
+        const existingInvoice = await invoiceService.retrievePosInvoice(
+          invoiceBoundApp.invoice_id
+        );
+        console.warn(
+          `[invoice] Idempotent short-circuit (recovered via mandatory retrieve): terminal_payment ${body.terminal_payment_id} already applied to invoice ${invoiceBoundApp.invoice_id}. Returning existing.`
+        );
+        return res.status(200).json({
+          invoice: existingInvoice,
+          idempotent: true,
+        });
+      }
+    }
+
+    const termPosMethod = termPay?.metadata?.pos_payment_method as
+      | string
+      | undefined;
+    const termCardBrand =
+      (termPay?.metadata?.card_brand as string | undefined) ?? null;
+    if (termPosMethod && termPosMethod !== normalizedPaymentMethod) {
+      console.log(
+        `[invoice] Overriding payment_method '${normalizedPaymentMethod}' → '${termPosMethod}' from terminal_payment metadata (source of truth)`
+      );
+      resolvedPaymentMethod = termPosMethod;
+      resolvedCardBrand = termCardBrand;
+    } else if (termCardBrand && !resolvedCardBrand) {
+      // Method already matches but terminal payment has a brand we don't — adopt it.
+      resolvedCardBrand = termCardBrand;
+    }
+  }
+
+  // How much of termPay is still un-invoice-bound (order-only reservations are
+  // convertible, so only prior INVOICE-BOUND applications count as spent —
+  // mirrors finance/payments/[id]/apply/route.ts's invoiceBoundApplied). Hoisted
+  // here (computed once from the termPay.applications already loaded above) so
+  // both the guard below and the Step 3 CONVERT-ON-APPLY status calc reuse the
+  // same number instead of drifting.
+  const termPayInvoiceBoundApplied = (termPay?.applications ?? [])
+    .filter((a: any) => !a.voided_at && a.invoice_id != null)
+    .reduce((sum: number, a: any) => sum + getNum(a.amount_applied), 0);
+
+  // Codex audit finding #4: unlike finance/payments/[id]/apply/route.ts, this
+  // branch never clamped body.amount_paid against what termPay actually has
+  // left to give — a caller/recovery-path bug sending too large an
+  // amount_paid would let the CONVERT-ON-APPLY block (Step 3) mint a
+  // payment_application worth more than the CustomerPayment itself, breaking
+  // SUM(payment_application.amount_applied) <= customer_payment.amount. Fail
+  // closed here, before allocating a number / opening the tx, rather than
+  // silently truncating the invoice's own amount_paid.
+  if (termPay && body.terminal_payment_id) {
+    // Round 2: money fields are model.bigNumber() and can surface as
+    // number/string/BigNumber-shaped objects. Number({...}) is NaN, and
+    // `body.amount_paid > NaN` is FALSE — the guard would silently fail open.
+    // getFiniteMoney fails CLOSED: unreadable amount → reject, never let an
+    // unverifiable payment mint applications.
+    const termPayAmount = getFiniteMoney(termPay.amount);
+    if (termPayAmount === null) {
+      console.error(
+        `[invoice] terminal payment ${body.terminal_payment_id} has unreadable amount: ${JSON.stringify(termPay.amount)}`
+      );
+      return res.status(500).json({
+        error: `Terminal payment ${body.terminal_payment_id} amount could not be read — refusing to create invoice.`,
+        code: "TERMINAL_PAYMENT_AMOUNT_UNREADABLE",
+      });
+    }
+    const termPayAvailable = termPayAmount - termPayInvoiceBoundApplied;
+    if (
+      !Number.isFinite(termPayAvailable) ||
+      body.amount_paid > termPayAvailable
+    ) {
+      return res.status(400).json({
+        error: `amount_paid (${body.amount_paid}) exceeds what terminal_payment_id ${body.terminal_payment_id} has available to apply (${termPayAvailable}).`,
+      });
     }
   }
 
@@ -840,30 +978,122 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         }
       }
 
-      const application = await financeService.createPaymentApplications({
-        payment_id: body.terminal_payment_id,
-        invoice_id: (invoice as any).id,
-        invoice_number: String(invoice_number || body.order_display_id || ""),
-        order_id: body.order_id,
-        amount_applied: body.amount_paid,
-        applied_at: new Date(),
-        applied_by: body.created_by || null,
-      });
+      // CONVERT-ON-APPLY: if this terminal payment was already auto-linked to
+      // the order as an order-only reservation at checkout time (see store-pos
+      // bams/terminal route's registerPayment), CONVERT that reservation to
+      // invoice-bound instead of creating a second application — a second
+      // INSERT would double-count the same cash in Treasury/AR. Mirrors
+      // finance/payments/[id]/apply/route.ts's CONVERT-ON-APPLY block.
+      const orderOnlyForOrder = (termPay?.applications ?? []).find(
+        (a: any) =>
+          !a.voided_at &&
+          (a.invoice_id === null || a.invoice_id === undefined) &&
+          a.order_id === body.order_id
+      );
 
-      applicationsToEmit.push({
-        payment_id: body.terminal_payment_id,
-        invoice_id: (invoice as any).id,
-        order_id: body.order_id,
-        amount_applied: body.amount_paid,
-        application_id: application.id,
-      });
+      let application: any;
+      // Accumulate every invoice-bound application created/converted in this
+      // step (normally exactly one, but the split/surplus sub-branches below
+      // can produce two with DIFFERENT amounts) so the QB enqueue and the
+      // payment status below reflect the real per-row amounts instead of
+      // assuming a single application worth the full body.amount_paid.
+      const boundApplications: Array<{ id: string; amount: number }> = [];
+      if (orderOnlyForOrder) {
+        const existingAmount = getNum(orderOnlyForOrder.amount_applied);
+        const convertAmount = Math.min(body.amount_paid, existingAmount);
 
-      // Always mark the terminal payment as fully applied once we link it,
-      // regardless of SR or regular-invoice mode. Previously this only ran in
-      // the non-SR branch, leaving SR-linked payments stuck on status='available'.
+        if (convertAmount >= existingAmount) {
+          // Convert the whole order-only reservation to invoice-bound.
+          application = await financeService.updatePaymentApplications({
+            id: orderOnlyForOrder.id,
+            invoice_id: (invoice as any).id,
+            invoice_number: String(
+              invoice_number || body.order_display_id || ""
+            ),
+          });
+          boundApplications.push({ id: application.id, amount: existingAmount });
+        } else {
+          // Partial: peel off an invoice-bound share, keep the remainder order-only.
+          application = await financeService.createPaymentApplications({
+            payment_id: body.terminal_payment_id,
+            invoice_id: (invoice as any).id,
+            invoice_number: String(
+              invoice_number || body.order_display_id || ""
+            ),
+            order_id: body.order_id,
+            amount_applied: convertAmount,
+            applied_at: new Date(),
+            applied_by: body.created_by || null,
+            cost_snapshot: orderOnlyForOrder.cost_snapshot ?? null,
+          });
+          boundApplications.push({ id: application.id, amount: convertAmount });
+          await financeService.updatePaymentApplications({
+            id: orderOnlyForOrder.id,
+            amount_applied: existingAmount - convertAmount,
+          });
+        }
+
+        // If more was paid than the reservation covered, the surplus becomes a
+        // fresh invoice-bound application (extra credit beyond the reservation).
+        const surplus = body.amount_paid - convertAmount;
+        if (surplus > 0) {
+          const surplusApplication = await financeService.createPaymentApplications({
+            payment_id: body.terminal_payment_id,
+            invoice_id: (invoice as any).id,
+            invoice_number: String(
+              invoice_number || body.order_display_id || ""
+            ),
+            order_id: body.order_id,
+            amount_applied: surplus,
+            applied_at: new Date(),
+            applied_by: body.created_by || null,
+          });
+          boundApplications.push({ id: surplusApplication.id, amount: surplus });
+        }
+      } else {
+        application = await financeService.createPaymentApplications({
+          payment_id: body.terminal_payment_id,
+          invoice_id: (invoice as any).id,
+          invoice_number: String(invoice_number || body.order_display_id || ""),
+          order_id: body.order_id,
+          amount_applied: body.amount_paid,
+          applied_at: new Date(),
+          applied_by: body.created_by || null,
+        });
+        boundApplications.push({ id: application.id, amount: body.amount_paid });
+      }
+
+      for (const bound of boundApplications) {
+        applicationsToEmit.push({
+          payment_id: body.terminal_payment_id,
+          invoice_id: (invoice as any).id,
+          order_id: body.order_id,
+          amount_applied: bound.amount,
+          application_id: bound.id,
+        });
+      }
+
+      // Mark the terminal payment applied|partially_applied based on how much
+      // of it is now bound to an invoice — mirrors the isFullyApplied check in
+      // finance/payments/[id]/apply/route.ts. Previously this always set
+      // "applied" unconditionally, which was only safe because the pre-fix
+      // code always converted the ENTIRE payment in one INSERT; the
+      // CONVERT-ON-APPLY path above can now leave a partial order-only
+      // remainder (the `convertAmount < existingAmount` branch), so a payment
+      // with money still order-reserved must not show as fully "applied" —
+      // that would hide the remainder from available-credit lookups.
+      const newlyBoundTotal = boundApplications.reduce(
+        (sum, b) => sum + b.amount,
+        0
+      );
+      // termPay is guaranteed non-null in this branch (mandatory retrieve
+      // above) — the old `?? body.amount_paid` fallback forced isFullyApplied
+      // to true whenever the read had failed, hiding any order-only remainder.
+      const isFullyApplied =
+        termPayInvoiceBoundApplied + newlyBoundTotal >= getNum(termPay.amount);
       await financeService.updateCustomerPayments({
         id: body.terminal_payment_id,
-        status: "applied",
+        status: isFullyApplied ? "applied" : "partially_applied",
       });
 
       // Register in Medusa native Payment Module so payment_collection.status → 'completed'.
@@ -1434,6 +1664,24 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   } catch (closeErr: any) {
     console.warn(
       `[invoice] auto-complete attempt failed (non-fatal): ${closeErr?.message?.slice(0, 120)}`
+    );
+  }
+
+  // Reservation hygiene: invoicing raises invoice-bound consumption, which
+  // lowers what the order still needs reserved — release any order-only
+  // remainder that exceeds it (e.g. a $1000 reservation on an order reduced
+  // to $600: the CONVERT above bound $600; the $400 leftover returns to the
+  // payment's available pool here). Non-fatal.
+  try {
+    await reconcileOrderReservations(req.scope, body.order_id, {
+      logger: {
+        info: (m) => console.log(m),
+        warn: (m) => console.warn(m),
+      },
+    });
+  } catch (reconErr: any) {
+    console.warn(
+      `[invoice] reservation reconcile failed (non-fatal): ${reconErr?.message?.slice(0, 120)}`
     );
   }
 

@@ -4,6 +4,7 @@ import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows
 
 import { parseSalesRepInitials } from "../../../../../lib/quickbooks/parse-sales-rep";
 import { withQbSerialized } from "../../../../../lib/quickbooks/qb-serializer";
+import { reconcileOrderReservations } from "../../../../../lib/finance/reconcile-order-reservations";
 import { getDbPool } from "../../../../utils/db-pool";
 
 /**
@@ -1020,21 +1021,44 @@ export async function POST(
     );
   }
 
-  res.status(200).json({ success: true, ...results });
-
-  // ── Persist POS-computed total in metadata for list-view consistency ────────
+  // ── Persist POS-computed total BEFORE the reconcile below — pos_total is
+  // the source of truth for the reservation clamp ("el POS order define el
+  // monto linkeado") and for list-view consistency.
   if (pos_total != null && pos_total > 0) {
-    setImmediate(async () => {
-      try {
-        const pool = getDbPool();
-        await pool.query(
-          `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || jsonb_build_object('pos_total', $1::numeric) WHERE id = $2`,
-          [pos_total, id]
-        );
-        logger.info(`[post-edit-sync] ✅ Persisted pos_total=$${pos_total} in metadata`);
-      } catch (e: any) {
-        logger.warn(`[post-edit-sync] Failed to persist pos_total: ${e.message}`);
-      }
-    });
+    try {
+      const pool = getDbPool();
+      await pool.query(
+        `UPDATE "order" SET metadata = COALESCE(metadata, '{}') || jsonb_build_object('pos_total', $1::numeric) WHERE id = $2`,
+        [pos_total, id]
+      );
+      logger.info(`[post-edit-sync] ✅ Persisted pos_total=$${pos_total} in metadata`);
+    } catch (e: any) {
+      logger.warn(`[post-edit-sync] Failed to persist pos_total: ${e.message}`);
+    }
   }
+
+  // ── Reservation clamp + credit gap ──────────────────────────────────────
+  // Order total went DOWN → auto-release the excess order-only reservation
+  // back to the payment's available pool. Order total went UP → report the
+  // gap so the POS can OFFER covering it with available credit (the
+  // Cover-with-Credit modal — never auto-links). Non-fatal.
+  try {
+    const reconcile = await reconcileOrderReservations(req.scope, id, {
+      logger,
+    });
+    if (reconcile) {
+      results.reservation_reconcile = {
+        released_cents: reconcile.released_cents,
+        gap_cents: reconcile.state.total_unknown ? 0 : reconcile.state.gap_cents,
+        allowed_cents: reconcile.state.allowed_cents,
+        linked_cents: reconcile.state.order_only_cents,
+      };
+    }
+  } catch (e: any) {
+    logger.warn(
+      `[post-edit-sync] reservation reconcile non-fatal err: ${e.message}`
+    );
+  }
+
+  res.status(200).json({ success: true, ...results });
 }

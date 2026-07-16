@@ -9,6 +9,8 @@ import {
   getAppliedInvoiceTotal,
   getNum,
 } from "../../../../invoices/payment-balance";
+import { matchesLinkIntent } from "../../../../../../lib/finance/upsert-order-only-application";
+import { reconcileOrderReservations } from "../../../../../../lib/finance/reconcile-order-reservations";
 import { registerMedusaPayment } from "../../../../invoices/register-medusa-payment";
 import { handleOrderApply } from "./handle-order-apply";
 
@@ -74,9 +76,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // was already created for that intent instead of minting a second one.
     // PURELY ADDITIVE — requests without the key behave exactly as before.
     if (link_intent_key) {
+      // matchesLinkIntent also checks the `link_intent_keys` object map that
+      // the order-only UPSERT records when a second link merges into an
+      // existing reservation — a replay of THAT intent must be caught too.
       const existing = (payment.applications ?? []).find(
-        (a: any) =>
-          !a.voided_at && a.metadata?.link_intent_key === link_intent_key
+        (a: any) => !a.voided_at && matchesLinkIntent(a.metadata, link_intent_key)
       );
       if (existing) {
         const refetched = await financeService.retrieveCustomerPayment(
@@ -85,16 +89,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         );
         const invoiceBound = (refetched.applications ?? [])
           .filter((a: any) => !a.voided_at && a.invoice_id != null)
-          .reduce((s: number, a: any) => s + Number(a.amount_applied), 0);
+          .reduce((s: number, a: any) => s + getNum(a.amount_applied), 0);
         return res.json({
           payment: refetched,
           application: existing,
           requested_amount: Number(amount_applied),
-          applied_amount: Number(existing.amount_applied),
+          applied_amount: getNum(existing.amount_applied),
           overflow_amount: 0,
           remaining_payment_balance: Math.max(
             0,
-            Number(payment.amount) - invoiceBound
+            getNum(payment.amount) - invoiceBound
           ),
           idempotent_replay: true,
         });
@@ -111,18 +115,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // fully-reserved deposit shows 0 available and the apply is rejected.
     const invoiceBoundApplied = payment.applications
       .filter((app: any) => !app.voided_at && app.invoice_id != null)
-      .reduce((sum: number, app: any) => sum + Number(app.amount_applied), 0);
+      .reduce((sum: number, app: any) => sum + getNum(app.amount_applied), 0);
 
     const totalReserved = payment.applications
       .filter((app: any) => !app.voided_at)
-      .reduce((sum: number, app: any) => sum + Number(app.amount_applied), 0);
+      .reduce((sum: number, app: any) => sum + getNum(app.amount_applied), 0);
 
     // Order-only branch: delegate to helper and short-circuit. Returns the
     // same response shape as the invoice branch. Reserving MORE deposit can't
     // exceed what's already reserved, so this branch guards against the full
     // total (order-only + invoice-bound).
     if (order_id && !invoice_id) {
-      const reserveAvailable = Number(payment.amount) - totalReserved;
+      const reserveAvailable = getNum(payment.amount) - totalReserved;
       if (reserveAvailable <= 0) {
         return res.status(400).json({
           error: "This payment has no available balance to reserve.",
@@ -145,7 +149,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     // Settling onto an invoice: order-only reservations are convertible, so only
     // invoice-bound consumption reduces what's available to apply.
-    const availableAmount = Number(payment.amount) - invoiceBoundApplied;
+    const availableAmount = getNum(payment.amount) - invoiceBoundApplied;
 
     if (availableAmount <= 0) {
       return res.status(400).json({
@@ -203,8 +207,17 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     );
 
     let application: any;
+    // Every invoice-bound application created/converted in this request
+    // (normally one, but the full-convert + surplus case below produces TWO
+    // with DIFFERENT amounts). The QB enqueue must emit one papp_ pipeline row
+    // PER application with its real amount — a single row carrying the total
+    // under the first application's id desyncs the consolidator's resubmit
+    // (which re-reads amount_applied from the row's application) and leaves
+    // the surplus application invisible to papp_ keying. Mirrors the
+    // boundApplications pattern in admin/invoices/route.ts.
+    const boundApplications: Array<{ id: string; amount: number }> = [];
     if (orderOnlyForOrder) {
-      const existingAmount = Number(orderOnlyForOrder.amount_applied);
+      const existingAmount = getNum(orderOnlyForOrder.amount_applied);
       const convertAmount = Math.min(effectiveAmount, existingAmount);
 
       if (convertAmount >= existingAmount) {
@@ -222,6 +235,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
               }
             : {}),
         });
+        boundApplications.push({ id: application.id, amount: existingAmount });
       } else {
         // Partial: peel off an invoice-bound share, keep the remainder order-only.
         application = await financeService.createPaymentApplications({
@@ -235,6 +249,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           cost_snapshot: orderOnlyForOrder.cost_snapshot ?? null,
           ...(link_intent_key ? { metadata: { link_intent_key } } : {}),
         });
+        boundApplications.push({ id: application.id, amount: convertAmount });
         await financeService.updatePaymentApplications({
           id: orderOnlyForOrder.id,
           amount_applied: existingAmount - convertAmount,
@@ -246,15 +261,17 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       // same payment beyond the order-only reservation).
       const surplus = effectiveAmount - convertAmount;
       if (surplus > 0) {
-        await financeService.createPaymentApplications({
-          payment_id: paymentId,
-          invoice_id: invoice_id,
-          invoice_number: String((invoice as any).invoice_number || ""),
-          order_id: invoice.order_id,
-          amount_applied: surplus,
-          applied_at: new Date(),
-          applied_by: applied_by || null,
-        });
+        const surplusApplication =
+          await financeService.createPaymentApplications({
+            payment_id: paymentId,
+            invoice_id: invoice_id,
+            invoice_number: String((invoice as any).invoice_number || ""),
+            order_id: invoice.order_id,
+            amount_applied: surplus,
+            applied_at: new Date(),
+            applied_by: applied_by || null,
+          });
+        boundApplications.push({ id: surplusApplication.id, amount: surplus });
       }
     } else {
       // No existing reservation — create the invoice-bound application directly.
@@ -268,6 +285,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         applied_by: applied_by || null,
         ...(link_intent_key ? { metadata: { link_intent_key } } : {}),
       });
+      boundApplications.push({ id: application.id, amount: effectiveAmount });
     }
 
     // 4. Update the CustomerPayment status
@@ -276,7 +294,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // consumption only — never to the order-only row it may have just converted,
     // which would double-count and wrongly flip status to "applied".
     const isFullyApplied =
-      invoiceBoundApplied + effectiveAmount >= Number(payment.amount);
+      invoiceBoundApplied + effectiveAmount >= getNum(payment.amount);
     const newPaymentStatus = isFullyApplied ? "applied" : "partially_applied";
 
     await financeService.updateCustomerPayments({
@@ -343,6 +361,19 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       }
     }
 
+    // Reservation hygiene: settling onto the invoice raised invoice-bound
+    // consumption — release any order-only remainder that now exceeds what
+    // the order still needs reserved. Non-fatal.
+    if (invoice.order_id) {
+      try {
+        await reconcileOrderReservations(req.scope, invoice.order_id, {
+          logger: req.scope.resolve("logger"),
+        });
+      } catch {
+        /* non-fatal */
+      }
+    }
+
     // Refetch updated payment for response
     const updatedPayment = await financeService.retrieveCustomerPayment(
       paymentId,
@@ -376,50 +407,60 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         invoicePipelineRowId = invRows[0]?.id ?? null;
       } catch {}
 
-      // Upfront waiting row — gives instant UI visibility before handler runs
-      try {
-        await writePipelineRow({
-          orderId: invoice.order_id,
-          referenceId: application.id,
-          referenceType: "payment_application",
-          step: "apply_payment",
-          status: "waiting",
-          dependsOn: invoicePipelineRowId,
-          medusaRefNumber: applyMedusaRef,
-        });
-      } catch (rowErr: any) {
-        req.scope
-          .resolve("logger")
-          .warn(
-            `[apply] Could not write upfront pipeline row: ${rowErr.message}`
-          );
-      }
+      // One waiting + pending row PER bound application (split-safe): the
+      // waiting write gives instant UI visibility with the invoice dependency;
+      // the pending write flips the same row (writePipelineRow dedups by
+      // order_id+step+reference_id) into dispatchable state. Do NOT collapse
+      // this into a single `pending` write with dependsOn — the pending
+      // dispatch pass claims by status alone and ignores depends_on; the
+      // handler itself requeues to waiting-with-dependency when TxnIDs are
+      // missing, which is what actually gates dispatch order.
+      for (const bound of boundApplications) {
+        // Upfront waiting row — gives instant UI visibility before handler runs
+        try {
+          await writePipelineRow({
+            orderId: invoice.order_id,
+            referenceId: bound.id,
+            referenceType: "payment_application",
+            step: "apply_payment",
+            status: "waiting",
+            dependsOn: invoicePipelineRowId,
+            medusaRefNumber: applyMedusaRef,
+          });
+        } catch (rowErr: any) {
+          req.scope
+            .resolve("logger")
+            .warn(
+              `[apply] Could not write upfront pipeline row: ${rowErr.message}`
+            );
+        }
 
-      // 1.5.9: pipeline-only — enqueue 'apply_payment' for consolidator pickup.
-      try {
-        const {
-          writePipelineRow: enqueueApplyFin,
-        } = require("../../../../../../lib/quickbooks/qb-pipeline");
-        await enqueueApplyFin({
-          orderId: invoice.order_id ?? null,
-          referenceId: application.id,
-          referenceType: "payment_application",
-          step: "apply_payment",
-          status: "pending",
-          payload: {
-            payment_id: paymentId,
-            invoice_id,
-            order_id: invoice.order_id,
-            amount_applied: effectiveAmount,
-            application_id: application.id,
-          },
-        });
-      } catch (execErr: any) {
-        req.scope
-          .resolve("logger")
-          .error(
-            `[apply] Enqueue apply_payment failed: ${execErr.message}`
-          );
+        // 1.5.9: pipeline-only — enqueue 'apply_payment' for consolidator pickup.
+        try {
+          const {
+            writePipelineRow: enqueueApplyFin,
+          } = require("../../../../../../lib/quickbooks/qb-pipeline");
+          await enqueueApplyFin({
+            orderId: invoice.order_id ?? null,
+            referenceId: bound.id,
+            referenceType: "payment_application",
+            step: "apply_payment",
+            status: "pending",
+            payload: {
+              payment_id: paymentId,
+              invoice_id,
+              order_id: invoice.order_id,
+              amount_applied: bound.amount,
+              application_id: bound.id,
+            },
+          });
+        } catch (execErr: any) {
+          req.scope
+            .resolve("logger")
+            .error(
+              `[apply] Enqueue apply_payment failed: ${execErr.message}`
+            );
+        }
       }
     }
 

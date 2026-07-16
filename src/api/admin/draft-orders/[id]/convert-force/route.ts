@@ -9,6 +9,7 @@ import {
 import { getDbPool } from "../../../../utils/db-pool";
 import { FINANCE_MODULE } from "../../../../../modules/finance";
 import { buildOrderCostSnapshot } from "../../../../../lib/finance/build-order-cost-snapshot";
+import { upsertOrderOnlyApplication } from "../../../../../lib/finance/upsert-order-only-application";
 import { USA_LOC } from "../../../../../lib/locations";
 import { listActiveReservationsRaw } from "../../../../../lib/reservations";
 
@@ -420,18 +421,22 @@ export async function POST(
             .reduce((s: number, a: any) => s + Number(a.amount_applied), 0);
           const remaining = Number(dep.amount) - applied;
           if (remaining > 0) {
-            await financeService.createPaymentApplications({
+            // UPSERT (constraint-safe): if an active order-only row already
+            // exists for (dep, order) — e.g. a manual link landed between a
+            // half-failed conversion attempt and this retry — merge into it
+            // instead of inserting a duplicate that the partial unique index
+            // UQ_payment_application_order_only_active would reject.
+            const upserted = await upsertOrderOnlyApplication({
+              financeService,
+              knex: req.scope.resolve("__pg_connection__"),
               payment_id: dep.id,
-              invoice_id: null,
-              invoice_number: null,
               order_id: id,
-              amount_applied: remaining,
-              applied_at: new Date(),
+              amount_cents: remaining,
               applied_by: "system:convert-link",
               cost_snapshot: costSnapshot,
             });
             console.log(
-              `[convert-force] ✅ Linked deposit ${dep.id} (${remaining}c) to converted order ${id}`
+              `[convert-force] ✅ Linked deposit ${dep.id} (${remaining}c, ${upserted.mode}) to converted order ${id}`
             );
           }
         }
