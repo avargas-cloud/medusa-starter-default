@@ -99,7 +99,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   // history, not just the most recent page. Excludes web captures (permanent
   // auto-applied ledger rows), refunds, and refunded/voided payments (a
   // refund reduces free balance without an application, so the formula would
-  // overcount them).
+  // overcount them). The `> 0.5` threshold (half a cent, not `> 0`) is
+  // deliberate: amount_applied can carry floating-point residue from a
+  // proportional split (e.g. a fully-applied 14095c payment whose application
+  // stored 14094.999999999998) — a bare `> 0` leaks those already-consumed
+  // payments into the tab even though free balance rounds to $0.00. Money is
+  // integer cents, so a real free balance is always ≥ 1c.
   if (wantUnlinked) {
     try {
       const knex = req.scope.resolve("__pg_connection__") as any;
@@ -114,7 +119,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
             AND cp.status NOT IN ('voided', 'refunded', 'partial_refunded')
             AND cp.source <> 'web'
           GROUP BY cp.id
-         HAVING cp.amount - COALESCE(SUM(pa.amount_applied), 0) > 0
+         HAVING cp.amount - COALESCE(SUM(pa.amount_applied), 0) > 0.5
           ORDER BY MAX(cp.received_at) DESC NULLS LAST
           LIMIT 500`
       );
