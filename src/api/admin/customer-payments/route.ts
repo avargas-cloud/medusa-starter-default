@@ -117,6 +117,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     if (matchedCustomerIds.length) {
       paymentOr.push({ customer_id: matchedCustomerIds });
     }
+    // Exact match on the human-facing "Payment #" (display_id is numeric —
+    // ILIKE isn't valid on an integer column in Postgres).
+    if (/^\d+$/.test(trimmedSearch)) {
+      paymentOr.push({ display_id: parseInt(trimmedSearch, 10) });
+    }
     filters.$or = paymentOr;
   }
 
