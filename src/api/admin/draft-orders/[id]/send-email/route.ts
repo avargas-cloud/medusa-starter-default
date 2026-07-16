@@ -1152,11 +1152,13 @@ export async function POST(
           estimate_sent_at: new Date().toISOString(),
           estimate_sent_to: customerEmail,
           estimate_sent_by: senderName,
-          ...(paymentLinkUrl
-            ? {
-                payment_link_count: Number(curMeta.payment_link_count || 1) + 1,
-              }
-            : {}),
+          // payment_link_count is owned by the POS SendEmailModal, which
+          // persists it at BAMS-generation time (success AND duplicate
+          // rejection). Incrementing it here again double-counted every
+          // link send. Deliberately NOT spread ...curMeta stale value —
+          // curMeta was read before the modal's persist landed, so ...curMeta
+          // could regress it; strip the key so this PATCH never touches it.
+          payment_link_count: undefined,
           order_status: newStatus,
         },
       }),
