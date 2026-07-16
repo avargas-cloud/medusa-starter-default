@@ -5,15 +5,25 @@ import { getDbPool } from "../../../../../utils/db-pool";
 /**
  * GET /admin/finance/customers/:id/open-orders
  *
- * Returns Medusa orders eligible to receive a direct payment application
- * (no PosInvoice yet). Used by payments/new to render the "Medusa Orders"
- * selectable box alongside outstanding invoices.
+ * Returns Medusa orders that still have a linkable balance for a direct
+ * order-only payment application. Used by payments/new to render the
+ * "Medusa Orders" selectable box AND by the payment "Link to Order" modal.
  *
  * Eligibility:
  *   • Order belongs to the customer
  *   • status NOT IN ('draft','canceled','cancelled')
- *   • Order has NO non-voided PosInvoice (would otherwise be in invoice list)
- *   • Outstanding > 0 (total minus active PaymentApplications)
+ *   • Outstanding > 0
+ *
+ * Outstanding = total − Σ(all active PaymentApplications) — which is exactly
+ * the reservation engine's `gap` (allowed − orderOnlyLinked, where allowed =
+ * total − invoiceBound). Total is sourced from `metadata.pos_total` first (the
+ * SAME source `reconcile-order-reservations` uses) so the picker's outstanding
+ * matches the gap the server will actually enforce on apply — a partially
+ * invoiced order therefore stays linkable for its remaining balance (a fully
+ * invoiced+paid order falls out via outstanding=0). We intentionally do NOT
+ * exclude orders that already have a PosInvoice: a partial invoice leaves real
+ * un-invoiced balance that a deposit can still be reserved against, and CONVERT-
+ * ON-APPLY + the gap clamp prevent any double-consumption.
  *
  * Why raw SQL: Medusa v2 query.graph does not consistently populate the
  * synthetic `total` field on the order entity — it depends on which loaders
@@ -38,6 +48,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       status: string;
       currency_code: string;
       created_at: Date | string;
+      pos_total_raw: string | null;
       total_cents: string | number | null;
       applied_cents: string | number | null;
       has_active_invoice: boolean;
@@ -52,7 +63,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         o.status::text AS status,
         o.currency_code,
         o.created_at,
-        -- Real order total comes from order_summary.totals.original_order_total
+        -- Preferred total source: metadata.pos_total (DOLLARS) — the SAME source
+        -- reconcile-order-reservations uses. Kept as raw text and parsed in JS
+        -- (mirrors the engine's Number()+isFinite guard) so a malformed value
+        -- can never crash the query via a bad ::numeric cast.
+        NULLIF(o.metadata->>'pos_total','') AS pos_total_raw,
+        -- Fallback order total comes from order_summary.totals.original_order_total
         -- (matches the value rendered on the orders list — includes tax, shipping,
         -- discounts). Falls back to the line-item sum if no summary row exists
         -- (extremely old orders that predate the summary migration).
@@ -100,9 +116,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     );
 
     const open_orders = rows
-      .filter((r) => !r.has_active_invoice)
       .map((r) => {
-        const total = Number(r.total_cents) || 0;
+        // Prefer metadata.pos_total (dollars) to match the reservation engine;
+        // fall back to the order_summary/line-item total (already in cents).
+        const posTotalDollars = Number(r.pos_total_raw);
+        const total =
+          Number.isFinite(posTotalDollars) && posTotalDollars > 0
+            ? Math.round(posTotalDollars * 100)
+            : Number(r.total_cents) || 0;
         const applied = Number(r.applied_cents) || 0;
         const outstanding = Math.max(0, total - applied);
         return {
@@ -113,6 +134,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
           total_cents: total,
           applied_cents: applied,
           outstanding_cents: outstanding,
+          // Surfaced so the UI can label a partially-invoiced order as a top-up.
+          has_active_invoice: r.has_active_invoice,
           currency_code: r.currency_code ?? "usd",
           created_at:
             r.created_at instanceof Date
@@ -120,6 +143,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
               : String(r.created_at),
         };
       })
+      // Keep any order that still has linkable balance — a partial invoice
+      // leaves real remainder; a fully invoiced+paid order lands at 0 and drops.
       .filter((o) => o.outstanding_cents > 0);
 
     return res.json({ open_orders });
