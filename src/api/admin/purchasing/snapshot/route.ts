@@ -167,7 +167,14 @@ export async function GET(
        LEFT JOIN (
          SELECT pvii.variant_id,
                 COALESCE(SUM(CASE WHEN il.location_id = $${usaLocIdx} THEN il.stocked_quantity ELSE 0 END), 0)::int AS inv_usa,
-                COALESCE(SUM(CASE WHEN il.location_id = $${chinaLocIdx} THEN GREATEST(0, il.stocked_quantity - il.reserved_quantity) ELSE 0 END), 0)::int AS inv_china
+                -- China NET position (stocked − reserved), NOT floored at 0. When a
+                -- transfer/China-agent PO reserves more than is physically in China,
+                -- the deficit will be backfilled by an incoming factory order — so the
+                -- position must go negative. Flooring at 0 hid that deficit and let the
+                -- factory-supply math count those FO units twice (once implicitly
+                -- claimed by the transfer, once as fresh supply), under-ordering by the
+                -- deficit. e.g. stocked 40, reserved 120 ⇒ -80 nets against a 200-unit FO.
+                COALESCE(SUM(CASE WHEN il.location_id = $${chinaLocIdx} THEN (il.stocked_quantity - il.reserved_quantity) ELSE 0 END), 0)::int AS inv_china
          FROM product_variant_inventory_item pvii
          JOIN inventory_item ii ON ii.id = pvii.inventory_item_id AND ii.deleted_at IS NULL
          JOIN inventory_level il ON il.inventory_item_id = ii.id

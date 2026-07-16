@@ -101,7 +101,9 @@ export async function GET(
         COALESCE(pv.metadata->>'sales_description', '') AS sales_description,
         ac.alt_count::int,
         COALESCE(SUM(CASE WHEN inv.location_id = $1 THEN inv.qty ELSE 0 END), 0)::int AS inv_usa,
-        COALESCE(SUM(CASE WHEN inv.location_id = $2 THEN GREATEST(0, inv.qty - inv.reserved) ELSE 0 END), 0)::int AS inv_china,
+        -- China NET position (not floored) — parity with the main snapshot feed so
+        -- the same SKU can't show two different China numbers. See snapshot/route.ts.
+        COALESCE(SUM(CASE WHEN inv.location_id = $2 THEN (inv.qty - inv.reserved) ELSE 0 END), 0)::int AS inv_china,
         COALESCE(ai.alt_inv_usa, 0)::int AS alt_inv_usa,
         COALESCE(ai.alt_inv_usa_reserved, 0)::int AS alt_inv_usa_reserved,
         COALESCE(apo.alt_qty_on_po, 0)::int AS alt_qty_on_po,
