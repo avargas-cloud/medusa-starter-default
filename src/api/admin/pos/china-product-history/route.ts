@@ -76,11 +76,11 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
   const trUp = upper("it.shipped_at");
   const adjUp = upper("ca.created_at");
 
-  const [foRes, trRes, adjRes, stateRes] = await Promise.all([
+  const [foRes, trRes, adjRes, stateRes, openRes] = await Promise.all([
     // FO receipts INTO China (+qty)
     pg.raw(
       `SELECT fore.id AS receipt_id, fore.number AS receipt_number, fore.received_at,
-              fo.number AS fo_number, SUM(forl.qty_received_now)::int AS qty
+              fo.id AS fo_id, fo.number AS fo_number, SUM(forl.qty_received_now)::int AS qty
          FROM factory_order_receipt_line forl
          JOIN factory_order_receipt fore ON fore.id = forl.factory_order_receipt_id
          JOIN factory_order fo ON fo.id = forl.factory_order_id
@@ -90,23 +90,27 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
           AND forl.product_variant_id = ?
           AND COALESCE(forl.qty_received_now, 0) <> 0
           ${foUp.clause}
-        GROUP BY fore.id, fore.number, fore.received_at, fo.number
+        GROUP BY fore.id, fore.number, fore.received_at, fo.id, fo.number
         ORDER BY fore.received_at ASC`,
       [CHINA_LOCATION_ID, variant_id, ...foUp.bind]
     ),
-    // Transfers shipped OUT of China (−qty)
+    // Transfers shipped OUT of China (−qty) — carry the linked PO so the ledger
+    // can offer BOTH an IT link and a PO link on each transfer row.
     pg.raw(
       `SELECT it.id AS transfer_id, it.number AS transfer_number, it.shipped_at,
-              it.received_at, SUM(itl.qty)::int AS qty,
+              it.received_at, it.linked_purchase_order_id AS po_id, po.number AS po_number,
+              SUM(itl.qty)::int AS qty,
               SUM(COALESCE(itl.qty_received, 0))::int AS qty_received
          FROM inventory_transfer_line itl
          JOIN inventory_transfer it ON it.id = itl.transfer_id
+         LEFT JOIN purchase_order po ON po.id = it.linked_purchase_order_id AND po.deleted_at IS NULL
         WHERE itl.deleted_at IS NULL AND it.deleted_at IS NULL
           AND it.origin_country = 'CN' AND it.voided_at IS NULL
           AND it.shipped_at IS NOT NULL
           AND itl.product_variant_id = ?
           ${trUp.clause}
-        GROUP BY it.id, it.number, it.shipped_at, it.received_at
+        GROUP BY it.id, it.number, it.shipped_at, it.received_at,
+                 it.linked_purchase_order_id, po.number
         ORDER BY it.shipped_at ASC`,
       [variant_id, ...trUp.bind]
     ),
@@ -134,10 +138,31 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
           [inventoryItemId, CHINA_LOCATION_ID]
         )
       : Promise.resolve({ rows: [] as unknown[] }),
+    // OPEN transfers (LIVE, not period-scoped): units still tied up in China —
+    // committed (confirmed, not shipped) OR in-transit (shipped, not received).
+    // Each carries its IT and linked PO so both can be opened independently.
+    pg.raw(
+      `SELECT it.id AS transfer_id, it.number AS transfer_number, it.status,
+              it.shipped_at, it.linked_purchase_order_id AS po_id, po.number AS po_number,
+              SUM(itl.qty - COALESCE(itl.qty_received, 0))::int AS qty_open
+         FROM inventory_transfer_line itl
+         JOIN inventory_transfer it ON it.id = itl.transfer_id
+         LEFT JOIN purchase_order po ON po.id = it.linked_purchase_order_id AND po.deleted_at IS NULL
+        WHERE itl.deleted_at IS NULL AND it.deleted_at IS NULL
+          AND it.origin_country = 'CN' AND it.voided_at IS NULL
+          AND it.received_at IS NULL
+          AND itl.product_variant_id = ?
+        GROUP BY it.id, it.number, it.status, it.shipped_at,
+                 it.linked_purchase_order_id, po.number
+       HAVING SUM(itl.qty - COALESCE(itl.qty_received, 0)) > 0
+        ORDER BY it.shipped_at ASC NULLS LAST, it.number ASC`,
+      [variant_id]
+    ),
   ]);
 
   const fo_receipts = (foRes.rows as Record<string, unknown>[]).map((r) => ({
     id: String(r.receipt_id),
+    fo_id: r.fo_id != null ? String(r.fo_id) : null,
     fo_number: r.fo_number != null ? String(r.fo_number) : null,
     receipt_number: r.receipt_number != null ? String(r.receipt_number) : null,
     received_at: r.received_at,
@@ -146,10 +171,23 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
   const transfers_out = (trRes.rows as Record<string, unknown>[]).map((r) => ({
     id: String(r.transfer_id),
     transfer_number: r.transfer_number != null ? String(r.transfer_number) : null,
+    po_id: r.po_id != null ? String(r.po_id) : null,
+    po_number: r.po_number != null ? String(r.po_number) : null,
     shipped_at: r.shipped_at,
     received_at: r.received_at,
     qty: toInt(r.qty),
     qty_received: toInt(r.qty_received),
+  }));
+  const open_transfers = (openRes.rows as Record<string, unknown>[]).map((r) => ({
+    id: String(r.transfer_id),
+    transfer_number: r.transfer_number != null ? String(r.transfer_number) : null,
+    po_id: r.po_id != null ? String(r.po_id) : null,
+    po_number: r.po_number != null ? String(r.po_number) : null,
+    status: r.status != null ? String(r.status) : null,
+    // A shipped-but-unreceived transfer is in-transit; otherwise it's committed
+    // (confirmed, still physically sitting in the China warehouse).
+    state: r.shipped_at ? ("in_transit" as const) : ("committed" as const),
+    qty: toInt(r.qty_open),
   }));
   const adjustments = (adjRes.rows as Record<string, unknown>[]).map((r) => ({
     id: String(r.id),
@@ -185,6 +223,7 @@ export async function GET(req: AuthenticatedMedusaRequest, res: MedusaResponse) 
   return res.json({
     fo_receipts,
     transfers_out,
+    open_transfers,
     adjustments,
     current_state: {
       stocked,
