@@ -2,13 +2,14 @@
  * POST /admin/draft-orders/:id/pdf-link
  *
  * Generates a PDF for the given draft order and uploads it to MinIO
- * under the `pdf-shares/` prefix (which should have a 7-day lifecycle
- * rule configured in MinIO to auto-delete old files).
+ * under the `pdf-shares/` prefix (which has a 30-day lifecycle rule
+ * configured in MinIO to auto-delete old files — installed 2026-07-16).
  *
- * Returns a public URL valid for 7 days.
+ * Returns a public URL valid for 30 days. B2B sharing chains (recipient
+ * forwards to whoever actually pays, often on net-30 terms) outlive 7 days.
  *
- * Setup (one-time, MinIO):
- *   mc ilm rule add --expiry-days 7 --prefix "pdf-shares/" myminio/medusa-media
+ * Setup (one-time, MinIO — must match SHARE_TTL_SECONDS below):
+ *   mc ilm rule add --expiry-days 30 --prefix "pdf-shares/" myminio/medusa-media
  */
 
 import { randomBytes } from "crypto";
@@ -23,7 +24,7 @@ import {
   generatePdfFromUrl,
 } from "../../_shared/pdf";
 
-const SHARE_TTL_SECONDS = 7 * 24 * 60 * 60;
+const SHARE_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 function generateShareSlug(): string {
   return randomBytes(6).toString("base64url");
@@ -124,7 +125,7 @@ export async function POST(
     );
     console.log(`[pdf-link] PDF generated (${pdfBuffer.length} bytes)`);
 
-    // Upload to MinIO — pdf-shares/ prefix has a 7-day lifecycle rule
+    // Upload to MinIO — pdf-shares/ prefix has a 30-day lifecycle rule
     const bucket = process.env.MINIO_BUCKET ?? "medusa-media";
     const endpoint = process.env.MINIO_ENDPOINT!;
     const fileKey = `pdf-shares/${documentType.toLowerCase()}-${displayId ?? id}-${Date.now()}.pdf`;

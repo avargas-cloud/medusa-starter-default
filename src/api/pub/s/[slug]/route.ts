@@ -6,7 +6,7 @@ import { getRedis } from "../../../../lib/redis-client";
  * GET /pub/s/:slug
  *
  * Public short-URL redirect. Looks up the slug in Redis and 302-redirects
- * to the real MinIO pdf-shares URL. Slugs expire after 7 days (same as
+ * to the real MinIO pdf-shares URL. Slugs expire after 30 days (same as
  * the MinIO lifecycle on pdf-shares/).
  *
  * Used by the POS WhatsApp send flow to replace long MinIO URLs with a
