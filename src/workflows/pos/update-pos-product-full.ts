@@ -15,6 +15,7 @@ import { createProductVariantsStep } from "./steps/create-product-variants-step"
 import { deleteProductVariantsStep } from "./steps/delete-product-variants-step";
 import { ensureMiamiLevelsStep } from "./steps/ensure-miami-levels-step";
 import { ensureOptionValuesStep } from "./steps/ensure-option-values-step";
+import { resolveQbVendorListIdStep } from "./steps/resolve-qb-vendor-list-id-step";
 import { syncInventoryItemSkuStep } from "./steps/sync-inventory-item-sku-step";
 
 /**
@@ -96,8 +97,36 @@ const pruneUndefined = <T extends Record<string, unknown>>(
 export const updatePosProductFullWorkflow = createWorkflow(
   "update-pos-product-full",
   function (input: UpdatePosProductFullInput) {
+    // Resolve internal qb_vendor.id → real QB Desktop ListID (never persist the
+    // raw qbvnd_ id in qb_vendor_list_id) — same as create-pos-product-v2.
+    const vendorResolveInput = transform({ input }, (data) => ({
+      vendor_qb_ids: [data.input.vendor_qb_id ?? null],
+    }));
+    const resolvedVendors = resolveQbVendorListIdStep(vendorResolveInput);
+
+    // Shared canonical QB metadata (vendor / income / COGS) — product-level facts
+    // that must land on the product AND every variant. Only the keys provided.
+    const canonicalMeta = transform({ input, resolvedVendors }, (data) => {
+      const i = data.input;
+      // Only internal ids (qbvnd_…) get resolved to a ListID; an already-resolved
+      // ListID passes through as-is (never wipe the vendor on an unrelated edit).
+      const resolvedListId =
+        i.vendor_qb_id != null
+          ? i.vendor_qb_id.startsWith("qbvnd_")
+            ? (data.resolvedVendors.listIdByVendorId[i.vendor_qb_id] ?? null)
+            : i.vendor_qb_id
+          : undefined;
+      return pruneUndefined({
+        qb_income_account_full_name: i.income_account_full_name,
+        qb_cogs_account_full_name: i.cogs_account_full_name,
+        qb_vendor_full_name: i.vendor_full_name,
+        qb_vendor_list_id:
+          i.vendor_qb_id !== undefined ? resolvedListId : undefined,
+      });
+    });
+
     // ── 1. Product-level patch (never includes variants array) ────────────
-    const productsInput = transform({ input }, (data) => {
+    const productsInput = transform({ input, canonicalMeta }, (data) => {
       const i = data.input;
       const productPatch: Record<string, unknown> = { id: i.id };
       if (i.title !== undefined) productPatch.title = i.title;
@@ -108,14 +137,8 @@ export const updatePosProductFullWorkflow = createWorkflow(
         productPatch.thumbnail = i.image_urls[0] ?? null;
         productPatch.images = i.image_urls.map((url) => ({ url }));
       }
-      const productMetaPatch = pruneUndefined({
-        qb_income_account_full_name: i.income_account_full_name,
-        qb_cogs_account_full_name: i.cogs_account_full_name,
-        qb_vendor_full_name: i.vendor_full_name,
-        qb_vendor_list_id: i.vendor_qb_id,
-      });
-      if (Object.keys(productMetaPatch).length > 0) {
-        productPatch.metadata = productMetaPatch;
+      if (Object.keys(data.canonicalMeta).length > 0) {
+        productPatch.metadata = data.canonicalMeta;
       }
       return [productPatch];
     });
@@ -125,7 +148,10 @@ export const updatePosProductFullWorkflow = createWorkflow(
     });
 
     // ── 2. Update existing variants (those with an id) ────────────────────
-    const variantUpdates = transform({ input }, (data) => {
+    // Every existing variant also gets the shared canonical fields (vendor /
+    // income / COGS) so a product-mode edit never leaves a sibling stale.
+    const variantUpdates = transform({ input, canonicalMeta }, (data) => {
+      const canonical = data.canonicalMeta;
       return data.input.variants
         .filter((v) => !!v.id)
         .map((v) => {
@@ -143,6 +169,7 @@ export const updatePosProductFullWorkflow = createWorkflow(
             qb_purchase_cost: v.cost,
             mpn: v.mpn,
             sales_description: v.sales_description,
+            ...canonical,
           });
           if (Object.keys(metaPatch).length > 0) {
             patch.metadata = metaPatch;
@@ -175,7 +202,7 @@ export const updatePosProductFullWorkflow = createWorkflow(
     ensureOptionValuesStep(newVariantOptionsInput);
 
     // ── 3b. Create brand-new variants (no id) ─────────────────────────────
-    const newVariantsInput = transform({ input }, (data) => ({
+    const newVariantsInput = transform({ input, canonicalMeta }, (data) => ({
       product_id: data.input.id,
       variants: data.input.variants
         .filter((v) => !v.id)
@@ -195,6 +222,7 @@ export const updatePosProductFullWorkflow = createWorkflow(
             qb_purchase_cost: v.cost,
             mpn: v.mpn,
             sales_description: v.sales_description,
+            ...data.canonicalMeta,
           }),
         })),
     }));

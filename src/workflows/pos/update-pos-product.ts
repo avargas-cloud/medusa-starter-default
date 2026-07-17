@@ -14,6 +14,8 @@ import { buildPrefVendorRef } from "../../lib/quickbooks/pref-vendor-ref";
 
 import { applyShippingAttributesStep } from "./steps/apply-shipping-attributes-step";
 import { linkQbVendorStep } from "./steps/link-qb-vendor-step";
+import { listProductVariantIdsStep } from "./steps/list-product-variant-ids-step";
+import { resolveQbVendorListIdStep } from "./steps/resolve-qb-vendor-list-id-step";
 import { syncInventoryItemSkuStep } from "./steps/sync-inventory-item-sku-step";
 
 /**
@@ -186,12 +188,54 @@ export const buildQbStepInput = (i: UpdatePosProductInput) => {
 export const updatePosProductWorkflow = createWorkflow(
   "update-pos-product",
   function (input: UpdatePosProductInput) {
+    // Resolve the internal qb_vendor.id → real QB Desktop ListID so the value we
+    // persist matches create-pos-product-v2 and mass-metadata-sync (the raw
+    // qbvnd_ id must NEVER land in qb_vendor_list_id — it isn't the canonical
+    // ListID other readers expect, and QB rejects it as a PrefVendorRef).
+    const vendorResolveInput = transform({ input }, (data) => ({
+      vendor_qb_ids: [data.input.vendor_qb_id ?? null],
+    }));
+    const resolvedVendors = resolveQbVendorListIdStep(vendorResolveInput);
+
+    // Vendor / income / COGS are PRODUCT-level facts shared by every variant, so
+    // an edit fans them out to ALL variants (not just the edited one) — otherwise
+    // a sibling keeps a stale value that the re-add hydration path would read back.
+    const variantListInput = transform({ input }, (data) => ({
+      product_id: data.input.id,
+    }));
+    const allVariants = listProductVariantIdsStep(variantListInput);
+
+    // Shared canonical QB metadata — only the keys actually provided in the edit.
+    // qb_vendor_list_id carries the RESOLVED ListID (null when the vendor has no QB
+    // ListID yet), never the internal id.
+    const canonicalMeta = transform({ input, resolvedVendors }, (data) => {
+      const i = data.input;
+      // vendor_qb_id may be an internal qb_vendor.id (user picked a vendor →
+      // resolve to its ListID) OR an already-resolved QB ListID (the route
+      // hydrates qb_vendor_list_id from existing metadata when the edit didn't
+      // change the vendor). Only internal ids (qbvnd_…) need resolving; a ListID
+      // passes through as-is so an unrelated edit never wipes the vendor.
+      const resolvedListId =
+        i.vendor_qb_id != null
+          ? i.vendor_qb_id.startsWith("qbvnd_")
+            ? (data.resolvedVendors.listIdByVendorId[i.vendor_qb_id] ?? null)
+            : i.vendor_qb_id
+          : undefined;
+      return pruneUndefined({
+        qb_income_account_full_name: i.income_account_full_name,
+        qb_cogs_account_full_name: i.cogs_account_full_name,
+        qb_vendor_full_name: i.vendor_full_name,
+        qb_vendor_list_id:
+          i.vendor_qb_id !== undefined ? resolvedListId : undefined,
+      });
+    });
+
     // Build product-level and variant-level patches independently. They go to
     // SEPARATE workflows: passing a `variants` array to updateProductsWorkflow
     // is interpreted as the authoritative variant SET (siblings get hard-
     // deleted). updateProductVariantsWorkflow is scoped to the listed variants
     // and never touches siblings — that's the safe path for per-variant edits.
-    const productsInput = transform({ input }, (data) => {
+    const productsInput = transform({ input, canonicalMeta }, (data) => {
       const i = data.input;
 
       const productPatch: Record<string, unknown> = { id: i.id };
@@ -207,46 +251,56 @@ export const updatePosProductWorkflow = createWorkflow(
         productPatch.images = i.image_urls.map((url) => ({ url }));
       }
       // Product-level canonical QB metadata (only touched if provided).
-      const productMetaPatch = pruneUndefined({
-        qb_income_account_full_name: i.income_account_full_name,
-        qb_cogs_account_full_name: i.cogs_account_full_name,
-        qb_vendor_full_name: i.vendor_full_name,
-        qb_vendor_list_id: i.vendor_qb_id,
-      });
-      if (Object.keys(productMetaPatch).length > 0) {
-        productPatch.metadata = productMetaPatch;
+      if (Object.keys(data.canonicalMeta).length > 0) {
+        productPatch.metadata = data.canonicalMeta;
       }
       return [productPatch];
     });
 
-    const variantsInput = transform({ input }, (data) => {
-      const i = data.input;
+    const variantsInput = transform(
+      { input, canonicalMeta, allVariants },
+      (data) => {
+        const i = data.input;
+        const canonical = data.canonicalMeta;
+        const hasCanonical = Object.keys(canonical).length > 0;
 
-      const variantPatch: Record<string, unknown> = { id: i.variant_id };
-      if (i.sku !== undefined) variantPatch.sku = i.sku;
-      if (i.barcode !== undefined) variantPatch.barcode = i.barcode;
-      if (i.weight !== undefined) variantPatch.weight = i.weight;
-      if (i.material !== undefined) variantPatch.material = i.material;
-      if (i.hs_code !== undefined) variantPatch.hs_code = i.hs_code;
-      if (i.country_of_origin !== undefined)
-        variantPatch.origin_country = i.country_of_origin;
-      if (i.mid_code !== undefined) variantPatch.mid_code = i.mid_code;
+        // Edited variant: its own per-variant fields (cost/mpn/sku/sales_desc are
+        // variant-specific) PLUS the shared canonical fields.
+        const editedVariantMeta = pruneUndefined({
+          qb_purchase_cost: i.cost,
+          qb_vendor_name: i.vendor,
+          mpn: i.mpn,
+          sales_description: i.salesDescription,
+          ...canonical,
+        });
+        const editedPatch: Record<string, unknown> = { id: i.variant_id };
+        if (i.sku !== undefined) editedPatch.sku = i.sku;
+        if (i.barcode !== undefined) editedPatch.barcode = i.barcode;
+        if (i.weight !== undefined) editedPatch.weight = i.weight;
+        if (i.material !== undefined) editedPatch.material = i.material;
+        if (i.hs_code !== undefined) editedPatch.hs_code = i.hs_code;
+        if (i.country_of_origin !== undefined)
+          editedPatch.origin_country = i.country_of_origin;
+        if (i.mid_code !== undefined) editedPatch.mid_code = i.mid_code;
+        if (Object.keys(editedVariantMeta).length > 0) {
+          editedPatch.metadata = editedVariantMeta;
+        }
 
-      // Variant-level metadata — pos_user path writes qb_vendor_name (legacy),
-      // admin path is expected to update the canonical product.metadata instead
-      // and leave variant.metadata untouched unless overriding explicitly.
-      const variantMetaPatch = pruneUndefined({
-        qb_purchase_cost: i.cost,
-        qb_vendor_name: i.vendor,
-        mpn: i.mpn,
-        sales_description: i.salesDescription,
-      });
-      if (Object.keys(variantMetaPatch).length > 0) {
-        variantPatch.metadata = variantMetaPatch;
+        const patches: Array<Record<string, unknown>> = [editedPatch];
+
+        // Sibling variants: ONLY the shared canonical fields. metadata deep-merges,
+        // so each sibling keeps its own cost/mpn/sales_description. Skipped entirely
+        // when the edit didn't touch any canonical (vendor/income/COGS) field.
+        if (hasCanonical) {
+          for (const vid of data.allVariants.variant_ids) {
+            if (vid === i.variant_id) continue;
+            patches.push({ id: vid, metadata: canonical });
+          }
+        }
+
+        return patches;
       }
-
-      return [variantPatch];
-    });
+    );
 
     updateProductsWorkflow.runAsStep({
       input: { products: productsInput as any },
