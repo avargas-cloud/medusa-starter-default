@@ -109,7 +109,7 @@ describe("getVariantAvgCostBatch", () => {
     const result = await getVariantAvgCostBatch(container, ["var_existing", "var_missing"]);
 
     expect(result.get("var_existing")!.cost).toBe(3);
-    expect(result.get("var_missing")).toEqual({ cost: null, synced_at: null });
+    expect(result.get("var_missing")).toEqual({ cost: null, synced_at: null, source: "none" });
   });
 
   it("filters out empty / falsy variant ids before querying", async () => {

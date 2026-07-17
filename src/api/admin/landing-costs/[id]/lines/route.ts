@@ -99,9 +99,12 @@ export async function POST(
       cbmPerUnit = isNaN(n) ? null : n;
     }
     if (body.unit_cost_cents == null) {
-      const avg = meta.qb_avg_cost;
-      if (typeof avg === "number" && avg > 0) {
-        unitCostCents = Math.round(avg * 100);
+      // Landing costs allocate freight/duty ON TOP of the raw factory cost, so
+      // the base defaults to purchase_cost (pre-landing), NOT the average/landed
+      // cost — the landed already includes freight and would double-count.
+      const base = meta.purchase_cost ?? meta.qb_purchase_cost;
+      if (typeof base === "number" && base > 0) {
+        unitCostCents = Math.round(base * 100);
       }
     }
   }

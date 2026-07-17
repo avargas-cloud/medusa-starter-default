@@ -244,12 +244,7 @@ export async function loadCreditMemoMovements(
     order_lines AS (
       SELECT ad.app_id, ad.amount_applied AS app_amount,
              order_totals.source_total_cents AS source_total, oi.quantity,
-             COALESCE(
-               NULLIF(pv.metadata->>'avg_landed_cost_cents', '')::numeric / 100.0,
-               NULLIF(pv.metadata->>'qb_avg_cost', '')::numeric,
-               NULLIF(pv.metadata->>'qb_purchase_cost', '')::numeric,
-               cs.snap_unit_cost_cents / 100.0
-             ) AS effective_unit_cost,
+             ${liveCost("cs.snap_unit_cost_cents / 100.0")} AS effective_unit_cost,
              CASE
                WHEN (p.metadata->>'is_sourced_via_agent') IS NOT NULL
                  THEN (p.metadata->>'is_sourced_via_agent')
