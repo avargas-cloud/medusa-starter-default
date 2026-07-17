@@ -38,7 +38,9 @@ type VariantUpdate = {
   id: string;
   productId: string;
   sku: string;
-  metadata: Record<string, unknown>;
+  // Only the cost keys to MERGE into metadata (never a full-blob replace —
+  // that would stomp concurrent metadata edits).
+  patch: Record<string, unknown>;
 };
 
 export interface SyncAverageCostResult {
@@ -196,13 +198,13 @@ async function applyAverageCostUpdates(
     for (let i = 0; i < updates.length; i += METADATA_BATCH) {
       const chunk = updates.slice(i, i + METADATA_BATCH);
       const ids = chunk.map((row) => row.id);
-      const metas = chunk.map((row) => JSON.stringify(row.metadata));
+      const metas = chunk.map((row) => JSON.stringify(row.patch));
       const result = await client.query(
         `
           UPDATE product_variant AS pv
-             SET metadata = u.metadata::jsonb,
+             SET metadata = COALESCE(pv.metadata, '{}'::jsonb) || u.patch::jsonb,
                  updated_at = NOW()
-            FROM UNNEST($1::text[], $2::text[]) AS u(id, metadata)
+            FROM UNNEST($1::text[], $2::text[]) AS u(id, patch)
            WHERE pv.id = u.id
         `,
         [ids, metas]
@@ -401,15 +403,26 @@ export async function syncAverageCostCore(
       // downstream snapshots a "we confirmed this cost as of T" signal even
       // when the value itself didn't change. New invoices/credit-memos copy
       // both fields into their average_unit_cost{,_synced_at} columns.
+      const nowIso = new Date().toISOString();
+      const patch: Record<string, unknown> = {
+        qb_avg_cost: qb.avgCost,
+        qb_avg_cost_synced_at: nowIso,
+      };
+      // Canonical convergence field (Phase 1): only maintain average_cost here
+      // for the non-China (USA) sync — USA's average_cost mirrors the
+      // QuickBooks average. China's average_cost is owned by vendor-bill
+      // confirm (source 'landed'); a scope='all' run must NOT stamp 'sync'
+      // over it.
+      if (scope === "non_china") {
+        patch.average_cost = qb.avgCost;
+        patch.average_cost_updated_at = nowIso;
+        patch.average_cost_source = "sync";
+      }
       updates.push({
         id: variant.id,
         productId: variant.product?.id ?? "",
         sku,
-        metadata: {
-          ...(variant.metadata ?? {}),
-          qb_avg_cost: qb.avgCost,
-          qb_avg_cost_synced_at: new Date().toISOString(),
-        },
+        patch,
       });
       if (isUnchanged) stats.skippedNoChange++;
       if (variant.product?.id) touchedProductIds.add(variant.product.id);

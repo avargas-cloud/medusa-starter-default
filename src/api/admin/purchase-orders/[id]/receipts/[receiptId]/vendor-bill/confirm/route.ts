@@ -478,10 +478,14 @@ export async function POST(
       await knex.raw(
         `UPDATE product_variant
          SET metadata = COALESCE(metadata, '{}'::jsonb)
-           || jsonb_build_object('avg_landed_cost_cents', ?::float),
+           || jsonb_build_object('avg_landed_cost_cents', ?::float,
+                                 'avg_landed_cost_updated_at', now()::text,
+                                 'average_cost', (?::float) / 100.0,
+                                 'average_cost_updated_at', now()::text,
+                                 'average_cost_source', 'landed'),
              updated_at = NOW()
          WHERE id = ?`,
-        [newAvg, variantId]
+        [newAvg, newAvg, variantId]
       );
 
       // Write cost log row — used for cancel reversal and audit trail

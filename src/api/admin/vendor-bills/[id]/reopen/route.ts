@@ -195,10 +195,14 @@ export async function POST(
       await db.raw(
         `UPDATE product_variant
             SET metadata = COALESCE(metadata, '{}'::jsonb)
-              || jsonb_build_object('avg_landed_cost_cents', ?::float),
+              || jsonb_build_object('avg_landed_cost_cents', ?::float,
+                                    'avg_landed_cost_updated_at', now()::text,
+                                    'average_cost', (?::float) / 100.0,
+                                    'average_cost_updated_at', now()::text,
+                                    'average_cost_source', 'landed'),
                 updated_at = NOW()
           WHERE id = ?`,
-        [restoredAvg, log.product_variant_id]
+        [restoredAvg, restoredAvg, log.product_variant_id]
       );
 
       await db.raw(
