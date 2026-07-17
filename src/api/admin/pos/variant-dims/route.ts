@@ -25,6 +25,7 @@ interface VariantDimRow {
   sku: string | null;
   variant_title: string | null;
   product_title: string | null;
+  sales_description: string | null;
   length: number | null;
   width: number | null;
   height: number | null;
@@ -51,6 +52,7 @@ interface RawDimRow {
   sku: string | null;
   variant_title: string | null;
   product_title: string | null;
+  sales_description: string | null;
   length: string | number | null;
   width: string | number | null;
   height: string | number | null;
@@ -86,10 +88,10 @@ export async function GET(
   const term = q?.trim().toLowerCase();
   if (term) {
     where.push(
-      "(LOWER(v.sku) LIKE ? OR LOWER(p.title) LIKE ? OR LOWER(v.title) LIKE ?)"
+      "(LOWER(v.sku) LIKE ? OR LOWER(p.title) LIKE ? OR LOWER(v.title) LIKE ? OR LOWER(v.metadata->>'sales_description') LIKE ?)"
     );
     const like = `%${term}%`;
-    bindings.push(like, like, like);
+    bindings.push(like, like, like, like);
   }
   if (onlyMissing) {
     where.push("(v.metadata->>'cbm') IS NULL");
@@ -116,6 +118,7 @@ export async function GET(
         v.sku,
         v.title AS variant_title,
         p.title AS product_title,
+        v.metadata->>'sales_description' AS sales_description,
         v.metadata->>'shipping_length' AS length,
         v.metadata->>'shipping_width'  AS width,
         v.metadata->>'shipping_height' AS height,
@@ -134,6 +137,7 @@ export async function GET(
     sku: r.sku,
     variant_title: r.variant_title,
     product_title: r.product_title,
+    sales_description: r.sales_description,
     length: toNum(r.length),
     width: toNum(r.width),
     height: toNum(r.height),
