@@ -31,7 +31,9 @@ export default async function backfillAverageCost({
   const computed = `
     WITH src AS (
       SELECT pv.id,
-        ((p.metadata->>'is_sourced_via_agent') = 'true') AS is_china,
+        -- COALESCE to false: a product without the key yields (NULL='true')=NULL,
+        -- and NOT-of-NULL is NULL, so the non-China CASE branches would never match.
+        COALESCE((p.metadata->>'is_sourced_via_agent') = 'true', false) AS is_china,
         NULLIF(pv.metadata->>'avg_landed_cost_cents','')::numeric      AS landed_cents,
         NULLIF(pv.metadata->>'qb_avg_cost','')::numeric                AS qb_avg,
         NULLIF(pv.metadata->>'qb_purchase_cost','')::numeric           AS purchase,
