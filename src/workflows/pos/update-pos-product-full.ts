@@ -193,7 +193,6 @@ export const updatePosProductFullWorkflow = createWorkflow(
             if (v.mid_code !== undefined) patch.mid_code = v.mid_code;
             const metaPatch = pruneUndefined({
               purchase_cost: v.cost,
-              qb_purchase_cost: v.cost,
               mpn: v.mpn,
               sales_description: v.sales_description,
               ...canonical,
@@ -252,7 +251,6 @@ export const updatePosProductFullWorkflow = createWorkflow(
           options: v.options,
           metadata: pruneUndefined({
             purchase_cost: v.cost,
-            qb_purchase_cost: v.cost,
             mpn: v.mpn,
             sales_description: v.sales_description,
             ...data.canonicalMeta,

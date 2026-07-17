@@ -162,7 +162,7 @@ export const VARIANT_METADATA_KEYS = [
   "mpn",
   "sales_description",
   "qb_purchase_desc",
-  "qb_purchase_cost",
+  "purchase_cost",
   "qb_avg_cost",
   "qb_override_income_account",
   "qb_override_cogs_account",

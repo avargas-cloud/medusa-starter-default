@@ -60,7 +60,6 @@ export const createPosProductWorkflow = createWorkflow(
                 },
                 metadata: {
                   purchase_cost: input.cost,
-                  qb_purchase_cost: input.cost,
                   qb_vendor_name: input.vendor,
                   mpn: input.mpn,
                   sales_description: input.salesDescription,

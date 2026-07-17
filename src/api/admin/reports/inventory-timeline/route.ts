@@ -143,10 +143,10 @@ const FO_REFERENCE_SQL = `
 const COST_SQL = `
   SELECT DISTINCT ON (pvii.inventory_item_id)
          pvii.inventory_item_id,
-         COALESCE(NULLIF(pv.metadata->>'purchase_cost', '')::numeric, NULLIF(pv.metadata->>'qb_purchase_cost', '')::numeric) AS unit_cost
+         NULLIF(pv.metadata->>'purchase_cost', '')::numeric AS unit_cost
   FROM product_variant_inventory_item pvii
   JOIN product_variant pv ON pv.id = pvii.variant_id AND pv.deleted_at IS NULL
-  WHERE pvii.deleted_at IS NULL AND COALESCE(NULLIF(pv.metadata->>'purchase_cost', ''), NULLIF(pv.metadata->>'qb_purchase_cost', '')) IS NOT NULL
+  WHERE pvii.deleted_at IS NULL AND NULLIF(pv.metadata->>'purchase_cost', '') IS NOT NULL
   ORDER BY pvii.inventory_item_id, pv.created_at ASC
 `
 

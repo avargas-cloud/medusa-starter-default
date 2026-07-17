@@ -269,7 +269,7 @@ export function classifyMetadataDiff(input: ClassifyInput): ClassifyResult {
 
   // Numeric variant fields.
   const directNumberFields: Array<[VariantMetaKey, number | null | undefined]> = [
-    ["qb_purchase_cost", qb.purchaseCost],
+    ["purchase_cost", qb.purchaseCost],
     ["qb_avg_cost", qb.avgCost],
   ];
   for (const [key, qbValue] of directNumberFields) {

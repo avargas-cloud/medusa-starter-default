@@ -128,7 +128,7 @@ export async function GET(
      FROM inventory_transfer it
      LEFT JOIN purchase_order po ON po.id = it.linked_purchase_order_id AND po.deleted_at IS NULL
      LEFT JOIN LATERAL (
-       SELECT COALESCE(SUM(itl.qty * ROUND(COALESCE(NULLIF(pv.metadata->>'purchase_cost','')::numeric, NULLIF(pv.metadata->>'qb_purchase_cost','')::numeric, 0) * 100)), 0)::bigint AS factory_subtotal_cents,
+       SELECT COALESCE(SUM(itl.qty * ROUND(COALESCE(NULLIF(pv.metadata->>'purchase_cost','')::numeric, 0) * 100)), 0)::bigint AS factory_subtotal_cents,
               COALESCE(SUM(itl.qty), 0)::int AS live_units
        FROM inventory_transfer_line itl
        LEFT JOIN product_variant pv ON pv.id = itl.product_variant_id

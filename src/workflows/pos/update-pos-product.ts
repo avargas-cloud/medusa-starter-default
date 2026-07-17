@@ -294,7 +294,6 @@ export const updatePosProductWorkflow = createWorkflow(
         // variant-specific) PLUS the shared canonical fields.
         const editedVariantMeta = pruneUndefined({
           purchase_cost: i.cost,
-          qb_purchase_cost: i.cost,
           qb_vendor_name: i.vendor,
           mpn: i.mpn,
           sales_description: i.salesDescription,
