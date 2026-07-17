@@ -172,6 +172,7 @@ export const createPosProductV2Workflow = createWorkflow(
             ...sharedMeta,
             sales_description:
               v.sales_description ?? i.sales_description ?? i.title,
+            purchase_cost: v.cost,
             qb_purchase_cost: v.cost,
             qb_retail_price: v.retail_price,
             qb_wholesale_price: v.wholesale_price ?? null,

@@ -187,7 +187,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         inputPayload.retail_price ?? asNumber(meta.qb_retail_price);
       inputPayload.salesDescription =
         inputPayload.salesDescription ?? asString(meta.sales_description);
-      inputPayload.cost = inputPayload.cost ?? asNumber(meta.qb_purchase_cost);
+      inputPayload.cost = inputPayload.cost ?? asNumber(meta.purchase_cost ?? meta.qb_purchase_cost);
       inputPayload.mpn = inputPayload.mpn ?? asString(meta.mpn);
       inputPayload.income_account_full_name =
         inputPayload.income_account_full_name ??

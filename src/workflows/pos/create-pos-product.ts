@@ -59,6 +59,7 @@ export const createPosProductWorkflow = createWorkflow(
                   Item: "Default Unit",
                 },
                 metadata: {
+                  purchase_cost: input.cost,
                   qb_purchase_cost: input.cost,
                   qb_vendor_name: input.vendor,
                   mpn: input.mpn,

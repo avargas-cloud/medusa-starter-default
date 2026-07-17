@@ -23,7 +23,7 @@
 export function avgCostDollars(pv = "pv"): string {
   return `COALESCE(
     NULLIF(NULLIF(${pv}.metadata->>'average_cost', '')::numeric, 0),
-    NULLIF(${pv}.metadata->>'qb_purchase_cost', '')::numeric
+    ${purchaseCostDollars(pv)}
   )`;
 }
 
@@ -32,5 +32,10 @@ export function avgCostCents(pv = "pv"): string {
 }
 
 export function purchaseCostDollars(pv = "pv"): string {
-  return `NULLIF(${pv}.metadata->>'qb_purchase_cost', '')::numeric`;
+  // Phase 3 rename: prefer purchase_cost, fall back to legacy qb_purchase_cost
+  // (transition window — both keys coexist until the legacy key is dropped).
+  return `COALESCE(
+    NULLIF(${pv}.metadata->>'purchase_cost', '')::numeric,
+    NULLIF(${pv}.metadata->>'qb_purchase_cost', '')::numeric
+  )`;
 }

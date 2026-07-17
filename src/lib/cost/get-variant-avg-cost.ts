@@ -44,6 +44,7 @@ type CostRow = {
   qb_avg_cost_synced_at: string | null;
   avg_landed_cost_cents: string | null;
   avg_landed_cost_updated_at: string | null;
+  purchase_cost: string | null;
   qb_purchase_cost: string | null;
 };
 
@@ -80,6 +81,7 @@ export async function getVariantAvgCostBatch(
             pv.metadata->>'qb_avg_cost_synced_at'       AS qb_avg_cost_synced_at,
             pv.metadata->>'avg_landed_cost_cents'       AS avg_landed_cost_cents,
             pv.metadata->>'avg_landed_cost_updated_at'  AS avg_landed_cost_updated_at,
+            pv.metadata->>'purchase_cost'               AS purchase_cost,
             pv.metadata->>'qb_purchase_cost'            AS qb_purchase_cost
        FROM product_variant pv
        LEFT JOIN product p ON p.id = pv.product_id
@@ -101,7 +103,8 @@ export async function getVariantAvgCostBatch(
 }
 
 function resolveVariantCost(row: CostRow): VariantAvgCost {
-  const purchaseCost = parseNumber(row.qb_purchase_cost);
+  const purchaseCost =
+    parseNumber(row.purchase_cost) ?? parseNumber(row.qb_purchase_cost);
 
   // Canonical field first. Treat <= 0 as non-authoritative (a vendor-bill
   // cancel/reopen can reset the running average to 0 when stock is fully

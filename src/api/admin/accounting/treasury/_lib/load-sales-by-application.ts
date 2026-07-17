@@ -255,7 +255,7 @@ export async function loadSalesByApplication(
           pii.average_unit_cost IS NULL
           AND NULLIF(pv.metadata->>'avg_landed_cost_cents', '') IS NULL
           AND NULLIF(pv.metadata->>'qb_avg_cost', '') IS NULL
-          AND NULLIF(pv.metadata->>'qb_purchase_cost', '') IS NOT NULL
+          AND COALESCE(NULLIF(pv.metadata->>'purchase_cost', ''), NULLIF(pv.metadata->>'qb_purchase_cost', '')) IS NOT NULL
         )                                                          AS used_unit_cost_fallback,
         (p.metadata->>'is_sourced_via_agent')                      AS origin_flag,
         p.id                                                       AS product_id,
