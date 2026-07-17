@@ -26,7 +26,7 @@ import { MigrationInterface, QueryRunner } from "typeorm";
  * into treasury_distribution_log.snapshot_json (frozen forever); these rows stay
  * as the audit trail.
  */
-export class CreateTreasuryCmMovementResolution1780100000000
+export class CreateTreasuryCmMovementResolution1780200000000
   implements MigrationInterface
 {
   public async up(queryRunner: QueryRunner): Promise<void> {
