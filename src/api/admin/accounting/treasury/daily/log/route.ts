@@ -107,6 +107,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       });
     }
 
+    // Every credit-memo cross-category COGS movement must be resolved (confirm
+    // the rebalance, or ignore/mark-unattributable) before locking — otherwise
+    // the frozen snapshot would bake in an un-decided money movement. A stale
+    // resolution (numbers changed since the accountant decided) also blocks.
+    const unresolvedMovements = (report.credit_memo_movements ?? []).filter(
+      (m) => m.resolution === null || m.resolution_stale
+    );
+    if (unresolvedMovements.length > 0) {
+      if (trx) await trx.rollback();
+      return res.status(409).json({
+        success: false,
+        error: `CM_MOVEMENTS_UNRESOLVED: ${unresolvedMovements.length} credit-memo cross-category COGS movement(s) need a decision (confirm / ignore / mark unattributable) before locking.`,
+        data: { credit_memo_movements: unresolvedMovements },
+      });
+    }
+
     const id = `tdl_${ulid()}`;
     const executedAt = new Date().toISOString();
     await db.raw(

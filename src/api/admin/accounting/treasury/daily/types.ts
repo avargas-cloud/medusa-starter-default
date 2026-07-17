@@ -2,8 +2,10 @@ import type {
   BucketSplit,
   TreasuryBucketCode,
 } from "../_lib/compute-splits";
+import type { CreditMemoMovementView } from "../_lib/load-cm-movements";
 
 export type { TreasuryBucketCode, BucketSplit };
+export type { CreditMemoMovementView };
 
 export type TreasuryWarningCode =
   | "LINES_MISSING_AVG_COST"
@@ -16,7 +18,8 @@ export type TreasuryWarningCode =
   | "CROSS_DAY_REFUND_DETECTED"
   | "FOREIGN_CURRENCY_DETECTED"
   | "UNATTRIBUTED_PAYMENTS"
-  | "CREDIT_MEMO_COGS_UNROUTED";
+  | "CREDIT_MEMO_COGS_UNROUTED"
+  | "CM_MOVEMENTS_UNRESOLVED";
 
 export interface TreasuryWarning {
   code: TreasuryWarningCode;
@@ -139,6 +142,8 @@ export interface TreasuryDailyReport {
   unattributed_payments: UnattributedPaymentView[];
   /** Credit-memo redemptions whose China/Local COGS never got routed to a bucket — see CreditMemoCogsGapView. Empty/absent on snapshots frozen before this field existed. */
   credit_memo_cogs_gaps?: CreditMemoCogsGapView[];
+  /** Credit-memo cross-category COGS movements needing accountant resolution before lock — see CreditMemoMovementView. Empty/absent on snapshots frozen before this field existed. */
+  credit_memo_movements?: CreditMemoMovementView[];
   /** Cash sale lines with no usable cost ($0/missing) whose revenue fell into Operating — see ZeroCostLineView. Empty/absent on snapshots frozen before this field existed. */
   zero_cost_cogs_lines?: ZeroCostLineView[];
   reconciliation: {

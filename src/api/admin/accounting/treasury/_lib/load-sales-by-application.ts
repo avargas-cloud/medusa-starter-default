@@ -23,16 +23,19 @@
  * original sale's day. Web payments ARE included in revenue/tax because
  * they correspond to real money captured on D.
  *
- * They are NOT excluded from cogs_china_cents/cogs_local_cents, though: those
- * two numbers only ever feed a RATIO (china / (china+local)) that decides how
- * a day's real cash pool gets split — see compute-splits.ts. A customer memo
- * redeemed against, say, an all-China-sourced invoice is a real shipment with
- * a real China-vendor obligation; excluding it entirely (the pre-2026-07-16
- * behavior) meant that obligation NEVER shifted the split ratio, so days with
- * cross-category returns→redemptions silently mis-routed cash between the
- * china_cogs/local_cogs buckets (verified against 51 days of real data: $3.3k
- * in redemptions, 28% of redemption invoices mixing China+local lines). The
- * cash pool itself is untouched either way — this only changes how it's cut.
+ * They are ALSO excluded from cogs_china_cents/cogs_local_cents (as of
+ * 2026-07-17). Those two numbers feed a RATIO (china / (china+local)) that
+ * decides how a day's real CASH pool gets split — see compute-splits.ts.
+ * Since the ratio's denominator (gross_revenue_pre_tax) is already cash-only,
+ * counting non-cash credit-memo COGS in the numerator both (a) inflated the
+ * ratio inconsistently and (b) DOUBLE-FUNDED the redeemed obligation once the
+ * explicit inter-bucket movement feature exists: the redemption nudged the
+ * day's split toward local AND an explicit china→local wire moved the parked
+ * money. So credit-memo redemption COGS now lives ONLY in the movement section
+ * (see load-cm-movements.ts + TREASURY_CREDIT_MEMO_MOVEMENT_PLAN.md), where the
+ * accountant approves the real bank rebalance. This supersedes the 2026-07-16
+ * fix, which correctly identified the cross-category problem but solved it in
+ * the wrong layer (the cash ratio) instead of an explicit movement.
  */
 
 export const STALE_COST_THRESHOLD_DAYS = 30;
@@ -342,9 +345,11 @@ export async function loadSalesByApplication(
 
     -- Revenue/tax aggregate at APPLICATION level (deduped — each app contributes
     -- once). Credit-memo-funded apps are excluded here (real-cash-only) — see
-    -- the module docstring; weighted/cogs below intentionally do NOT filter
-    -- on is_cash_funded, since COGS categorization should follow what
-    -- actually shipped, not just what was newly paid for.
+    -- the module docstring. As of 2026-07-17 the cogs CTE below ALSO filters
+    -- on is_cash_funded: the ratio splits cash-funded revenue, so its COGS
+    -- numerator must be cash-funded too. Credit-memo redemption COGS is handled
+    -- as an explicit accountant-approved movement (load-cm-movements.ts), not
+    -- by silently nudging this day's cash ratio.
     app_revenue AS (
       SELECT DISTINCT app_id, source_subtotal, source_tax, source_total, app_amount,
         CASE
@@ -361,7 +366,10 @@ export async function loadSalesByApplication(
       FROM app_revenue
     ),
 
-    -- COGS aggregate at LINE level (every line's cost contributes once, scaled).
+    -- COGS aggregate at LINE level (every CASH-funded line's cost contributes
+    -- once, scaled). Non-cash credit-memo redemption lines are excluded — their
+    -- China/Local obligation is surfaced as an explicit inter-bucket movement
+    -- (load-cm-movements.ts), never folded into the day's cash split ratio.
     cogs AS (
       SELECT
         COALESCE(SUM(
@@ -375,6 +383,7 @@ export async function loadSalesByApplication(
             ELSE 0 END
         ), 0)::bigint AS cogs_local_cents
       FROM weighted
+      WHERE is_cash_funded
     ),
 
     missing_cost AS (

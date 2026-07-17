@@ -9,6 +9,7 @@ import {
 } from "./load-sales-by-application";
 import { loadUnattributedPayments } from "./load-unattributed-payments";
 import { loadZeroCostLines } from "./load-zero-cost-lines";
+import { loadCreditMemoMovements } from "./load-cm-movements";
 import type {
   TreasuryBucketView,
   TreasuryDailyReport,
@@ -139,6 +140,7 @@ async function computeLiveRangeReport(
   const unattributedPayments = await loadUnattributedPayments(pg, dayStart, dayEnd);
   const creditMemoCogsRows = await loadCreditMemoCogsGaps(pg, dayStart, dayEnd);
   const zeroCostLines = await loadZeroCostLines(pg, dayStart, dayEnd);
+  const creditMemoMovements = await loadCreditMemoMovements(pg, dayStart, dayEnd);
 
   // Cash total, decomposed per payment into an APPLIED portion (always
   // counted on the payment's real received_at day — this stays in lockstep
@@ -407,6 +409,23 @@ async function computeLiveRangeReport(
     });
   }
 
+  const unresolvedMovements = creditMemoMovements.filter(
+    (m) => m.resolution === null || m.resolution_stale
+  );
+  if (unresolvedMovements.length > 0) {
+    warnings.push({
+      code: "CM_MOVEMENTS_UNRESOLVED",
+      severity: "warning",
+      count: unresolvedMovements.length,
+      sample_ids: unresolvedMovements
+        .slice(0, 20)
+        .map((m) => m.reference ?? m.payment_application_id),
+      detail: `${unresolvedMovements.length} credit-memo cross-category COGS movement(s) need an accountant decision (confirm the china↔local rebalance, or ignore/mark unattributable) before ${
+        from === to ? "this day" : "this period"
+      } can be locked.`,
+    });
+  }
+
   return {
     distribution_date: from,
     range_start: from,
@@ -416,6 +435,7 @@ async function computeLiveRangeReport(
     warnings,
     unattributed_payments: unattributedPayments,
     credit_memo_cogs_gaps: creditMemoCogsGaps,
+    credit_memo_movements: creditMemoMovements,
     zero_cost_cogs_lines: zeroCostLines,
     reconciliation: result.reconciliation,
     generated_at: new Date().toISOString(),
@@ -454,6 +474,7 @@ function mergeContributions(
   >();
   const unattributed: TreasuryDailyReport["unattributed_payments"] = [];
   const creditMemoCogsGaps: NonNullable<TreasuryDailyReport["credit_memo_cogs_gaps"]> = [];
+  const creditMemoMovements: NonNullable<TreasuryDailyReport["credit_memo_movements"]> = [];
   const zeroCostLines: NonNullable<TreasuryDailyReport["zero_cost_cogs_lines"]> = [];
   let sumOfSplits = 0;
   let netCash = 0;
@@ -482,6 +503,7 @@ function mergeContributions(
     }
     unattributed.push(...c.unattributed_payments);
     creditMemoCogsGaps.push(...(c.credit_memo_cogs_gaps ?? []));
+    creditMemoMovements.push(...(c.credit_memo_movements ?? []));
     zeroCostLines.push(...(c.zero_cost_cogs_lines ?? []));
     sumOfSplits += c.reconciliation.sum_of_splits_cents;
     netCash += c.reconciliation.net_cash_received_cents;
@@ -532,6 +554,7 @@ function mergeContributions(
     warnings,
     unattributed_payments: unattributed,
     credit_memo_cogs_gaps: creditMemoCogsGaps,
+    credit_memo_movements: creditMemoMovements,
     zero_cost_cogs_lines: zeroCostLines,
     reconciliation: {
       sum_of_splits_cents: sumOfSplits,
