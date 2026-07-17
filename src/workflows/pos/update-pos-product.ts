@@ -72,6 +72,12 @@ export type UpdatePosProductInput = {
   is_sourced_via_agent?: boolean;
   /** true when set through the PIN-gated toggle — bulk-set-sourcing-agent skips these. */
   is_sourced_via_agent_manual?: boolean;
+  /**
+   * Discontinued lifecycle flag. VARIANT-level (product_variant.metadata.discontinued).
+   * Purely a display/merchandising signal: the Inventory & Inventory China lists hide
+   * discontinued items by default. NOT sent to QuickBooks (no QB field mirrors it).
+   */
+  discontinued?: boolean;
   category_ids?: string[];
   image_urls?: string[];
   shipping_attributes?: {
@@ -276,6 +282,14 @@ export const updatePosProductWorkflow = createWorkflow(
         const canonical = data.canonicalMeta;
         const hasCanonical = Object.keys(canonical).length > 0;
 
+        // upsertProductVariants REPLACES the metadata JSONB (unlike the product
+        // upsert, which merges) — so every partial write must be layered on top
+        // of the variant's CURRENT metadata or it wipes the other keys
+        // (quickbooks_id, cost, vendor, sales_description, …). Hydrate here.
+        const metaById = new Map(
+          data.allVariants.variants.map((v) => [v.id, v.metadata ?? {}])
+        );
+
         // Edited variant: its own per-variant fields (cost/mpn/sku/sales_desc are
         // variant-specific) PLUS the shared canonical fields.
         const editedVariantMeta = pruneUndefined({
@@ -283,6 +297,10 @@ export const updatePosProductWorkflow = createWorkflow(
           qb_vendor_name: i.vendor,
           mpn: i.mpn,
           sales_description: i.salesDescription,
+          // Variant-level lifecycle flag (never fanned out to siblings; each
+          // variant can be discontinued independently). false is a legitimate
+          // "reactivate" write, so it must survive pruneUndefined (it does).
+          discontinued: i.discontinued,
           ...canonical,
         });
         const editedPatch: Record<string, unknown> = { id: i.variant_id };
@@ -295,18 +313,27 @@ export const updatePosProductWorkflow = createWorkflow(
           editedPatch.origin_country = i.country_of_origin;
         if (i.mid_code !== undefined) editedPatch.mid_code = i.mid_code;
         if (Object.keys(editedVariantMeta).length > 0) {
-          editedPatch.metadata = editedVariantMeta;
+          // Layer the changed keys on top of the CURRENT metadata (the upsert
+          // replaces, so we must send the full merged object).
+          editedPatch.metadata = {
+            ...(metaById.get(i.variant_id as string) ?? {}),
+            ...editedVariantMeta,
+          };
         }
 
         const patches: Array<Record<string, unknown>> = [editedPatch];
 
-        // Sibling variants: ONLY the shared canonical fields. metadata deep-merges,
-        // so each sibling keeps its own cost/mpn/sales_description. Skipped entirely
-        // when the edit didn't touch any canonical (vendor/income/COGS) field.
+        // Sibling variants: the shared canonical fields layered on top of each
+        // sibling's existing metadata (again, the upsert replaces — sending only
+        // `canonical` would wipe the sibling's own cost/mpn/sales_description).
+        // Skipped entirely when the edit didn't touch a canonical field.
         if (hasCanonical) {
           for (const vid of data.allVariants.variant_ids) {
             if (vid === i.variant_id) continue;
-            patches.push({ id: vid, metadata: canonical });
+            patches.push({
+              id: vid,
+              metadata: { ...(metaById.get(vid) ?? {}), ...canonical },
+            });
           }
         }
 

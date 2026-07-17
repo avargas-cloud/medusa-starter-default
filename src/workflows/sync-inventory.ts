@@ -193,6 +193,7 @@ export const syncInventoryToMeiliStep = createStep(
           "onOrderUsa",
           "onOrderChina",
           "is_sourced_via_agent",
+          "discontinued",
         ],
         sortableAttributes: [
           "title",

@@ -15,6 +15,7 @@ import { createProductVariantsStep } from "./steps/create-product-variants-step"
 import { deleteProductVariantsStep } from "./steps/delete-product-variants-step";
 import { ensureMiamiLevelsStep } from "./steps/ensure-miami-levels-step";
 import { ensureOptionValuesStep } from "./steps/ensure-option-values-step";
+import { listProductVariantIdsStep } from "./steps/list-product-variant-ids-step";
 import { resolveQbVendorListIdStep } from "./steps/resolve-qb-vendor-list-id-step";
 import { syncInventoryItemSkuStep } from "./steps/sync-inventory-item-sku-step";
 
@@ -129,6 +130,15 @@ export const updatePosProductFullWorkflow = createWorkflow(
       });
     });
 
+    // Existing variant metadata (id → metadata). upsertProductVariants REPLACES
+    // the metadata JSONB, so every partial write must be layered on top of the
+    // current value or it wipes the variant's other keys (quickbooks_id, cost,
+    // vendor, sales_description, …).
+    const variantListInput = transform({ input }, (data) => ({
+      product_id: data.input.id,
+    }));
+    const allVariants = listProductVariantIdsStep(variantListInput);
+
     // ── 1. Product-level patch (never includes variants array) ────────────
     const productsInput = transform({ input, canonicalMeta }, (data) => {
       const i = data.input;
@@ -161,33 +171,43 @@ export const updatePosProductFullWorkflow = createWorkflow(
     // ── 2. Update existing variants (those with an id) ────────────────────
     // Every existing variant also gets the shared canonical fields (vendor /
     // income / COGS) so a product-mode edit never leaves a sibling stale.
-    const variantUpdates = transform({ input, canonicalMeta }, (data) => {
-      const canonical = data.canonicalMeta;
-      return data.input.variants
-        .filter((v) => !!v.id)
-        .map((v) => {
-          const patch: Record<string, unknown> = { id: v.id! };
-          if (v.title !== undefined) patch.title = v.title;
-          if (v.sku !== undefined) patch.sku = v.sku;
-          if (v.barcode !== undefined) patch.barcode = v.barcode;
-          if (v.weight !== undefined) patch.weight = v.weight;
-          if (v.material !== undefined) patch.material = v.material;
-          if (v.hs_code !== undefined) patch.hs_code = v.hs_code;
-          if (v.country_of_origin !== undefined)
-            patch.origin_country = v.country_of_origin;
-          if (v.mid_code !== undefined) patch.mid_code = v.mid_code;
-          const metaPatch = pruneUndefined({
-            qb_purchase_cost: v.cost,
-            mpn: v.mpn,
-            sales_description: v.sales_description,
-            ...canonical,
+    const variantUpdates = transform(
+      { input, canonicalMeta, allVariants },
+      (data) => {
+        const canonical = data.canonicalMeta;
+        const metaById = new Map(
+          data.allVariants.variants.map((v) => [v.id, v.metadata ?? {}])
+        );
+        return data.input.variants
+          .filter((v) => !!v.id)
+          .map((v) => {
+            const patch: Record<string, unknown> = { id: v.id! };
+            if (v.title !== undefined) patch.title = v.title;
+            if (v.sku !== undefined) patch.sku = v.sku;
+            if (v.barcode !== undefined) patch.barcode = v.barcode;
+            if (v.weight !== undefined) patch.weight = v.weight;
+            if (v.material !== undefined) patch.material = v.material;
+            if (v.hs_code !== undefined) patch.hs_code = v.hs_code;
+            if (v.country_of_origin !== undefined)
+              patch.origin_country = v.country_of_origin;
+            if (v.mid_code !== undefined) patch.mid_code = v.mid_code;
+            const metaPatch = pruneUndefined({
+              qb_purchase_cost: v.cost,
+              mpn: v.mpn,
+              sales_description: v.sales_description,
+              ...canonical,
+            });
+            if (Object.keys(metaPatch).length > 0) {
+              // Layer changes on top of CURRENT metadata (upsert replaces).
+              patch.metadata = {
+                ...(metaById.get(v.id!) ?? {}),
+                ...metaPatch,
+              };
+            }
+            return patch;
           });
-          if (Object.keys(metaPatch).length > 0) {
-            patch.metadata = metaPatch;
-          }
-          return patch;
-        });
-    });
+      }
+    );
 
     // updateProductVariantsWorkflow rejects empty arrays — wrap in transform
     // that returns a sentinel when empty so the workflow can be invoked

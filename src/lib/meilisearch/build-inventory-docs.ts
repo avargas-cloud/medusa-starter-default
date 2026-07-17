@@ -37,6 +37,9 @@ export interface MeiliInventoryDoc {
   // (product.metadata.is_sourced_via_agent). Filterable so the Inventory page
   // can facet USA vs China and filter to inspect mis-assignments.
   is_sourced_via_agent: boolean;
+  // true when the VARIANT is marked discontinued (variant.metadata.discontinued).
+  // Filterable so the Inventory & Inventory China lists can hide these by default.
+  discontinued: boolean;
   chinaStock: number;
   // Open inbound balance (qty_ordered − received − cancelled) on documents in
   // status submitted/partially_received. USA = Purchase Orders, China = Factory
@@ -113,6 +116,11 @@ export function buildInventoryDocsForVariants(
       pmeta.is_sourced_via_agent === true ||
       pmeta.is_sourced_via_agent === "true";
 
+    // Discontinued is VARIANT-level. Normalize the JSONB value (boolean true or
+    // string "true"); anything else — including an absent field — reads as false.
+    const isDiscontinued =
+      vmeta.discontinued === true || vmeta.discontinued === "true";
+
     // Prefer the canonical vendor link; fall back to the legacy metadata field.
     const vendorName =
       vendorNameByVariantId.get(variant.id) ||
@@ -153,6 +161,7 @@ export function buildInventoryDocsForVariants(
         vendorName,
         mpn: (vmeta.mpn as string) || null,
         is_sourced_via_agent: isSourcedViaAgent,
+        discontinued: isDiscontinued,
         chinaStock: 0,
         onOrderUsa: 0,
         onOrderChina: 0,
@@ -198,6 +207,7 @@ export function buildInventoryDocsForVariants(
         vendorName,
         mpn: (vmeta.mpn as string) || null,
         is_sourced_via_agent: isSourcedViaAgent,
+        discontinued: isDiscontinued,
         chinaStock: chinaStockMap.get(inventory.id) ?? 0,
         onOrderUsa: onOrderUsaMap.get(inventory.id) ?? 0,
         onOrderChina: onOrderChinaMap.get(inventory.id) ?? 0,
