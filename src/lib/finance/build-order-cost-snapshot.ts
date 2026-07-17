@@ -16,6 +16,8 @@
  * same as today's live behavior).
  */
 
+import { avgCostCents } from "../cost/cost-sql";
+
 // NOTE: these are `type` aliases (not `interface`) on purpose. Medusa's
 // model.json() create-input expects `Record<string, unknown>`, and only object
 // *type literals* get an implicit string index signature — interfaces do not —
@@ -69,11 +71,7 @@ export async function buildOrderCostSnapshot(
       oli.variant_id                                              AS variant_id,
       COALESCE(NULLIF(oli.variant_sku, ''), NULLIF(pv.sku, ''), oli.id) AS sku,
       oi.quantity                                                AS quantity,
-      ROUND(COALESCE(
-        NULLIF(pv.metadata->>'avg_landed_cost_cents', '')::numeric,
-        NULLIF(pv.metadata->>'qb_avg_cost', '')::numeric * 100,
-        NULLIF(pv.metadata->>'qb_purchase_cost', '')::numeric * 100
-      ))::bigint                                                  AS unit_cost_cents,
+      ${avgCostCents("pv")}::bigint                               AS unit_cost_cents,
       ((p.metadata->>'is_sourced_via_agent') = 'true')           AS is_china
     FROM order_item oi
     JOIN order_line_item oli ON oli.id = oi.item_id AND oli.deleted_at IS NULL

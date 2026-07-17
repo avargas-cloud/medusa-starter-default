@@ -36,6 +36,7 @@
 
 import { createHash } from "crypto";
 import type { TreasuryBucketCode } from "./compute-splits";
+import { avgCostDollars } from "../../../../../lib/cost/cost-sql";
 
 type PgConnection = {
   raw: (sql: string, params: unknown[]) => Promise<{ rows: any[] }>;
@@ -103,9 +104,7 @@ const num = (v: string | number | null | undefined): number => {
 
 // LIVE-preferred cost (dollars), frozen item cost as last-resort fallback.
 const liveCost = (frozenCol: string): string => `COALESCE(
-  NULLIF(pv.metadata->>'avg_landed_cost_cents', '')::numeric / 100.0,
-  NULLIF(pv.metadata->>'qb_avg_cost', '')::numeric,
-  NULLIF(pv.metadata->>'qb_purchase_cost', '')::numeric,
+  ${avgCostDollars("pv")},
   ${frozenCol}
 )`;
 

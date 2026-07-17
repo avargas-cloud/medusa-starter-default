@@ -38,6 +38,8 @@
  * the wrong layer (the cash ratio) instead of an explicit movement.
  */
 
+import { avgCostDollars } from "../../../../../lib/cost/cost-sql";
+
 export const STALE_COST_THRESHOLD_DAYS = 30;
 
 export interface SalesAggregateRow {
@@ -57,18 +59,14 @@ export interface SalesAggregateRow {
 
 type PgConnection = { raw: (sql: string, params: unknown[]) => Promise<{ rows: any[] }> };
 
+// Canonical cost: frozen per-line snapshot first, then the origin-correct
+// live average_cost (→ purchase fallback). See lib/cost/cost-sql.ts.
 export const COST_FALLBACK_EXPR = `COALESCE(
   pii.average_unit_cost,
-  NULLIF(pv.metadata->>'avg_landed_cost_cents', '')::numeric / 100.0,
-  NULLIF(pv.metadata->>'qb_avg_cost', '')::numeric,
-  NULLIF(pv.metadata->>'qb_purchase_cost', '')::numeric
+  ${avgCostDollars("pv")}
 )`;
 
-export const ORDER_COST_FALLBACK_EXPR = `COALESCE(
-  NULLIF(pv.metadata->>'avg_landed_cost_cents', '')::numeric / 100.0,
-  NULLIF(pv.metadata->>'qb_avg_cost', '')::numeric,
-  NULLIF(pv.metadata->>'qb_purchase_cost', '')::numeric
-)`;
+export const ORDER_COST_FALLBACK_EXPR = avgCostDollars("pv");
 
 export interface CreditMemoCogsGapRow {
   payment_id: string;
