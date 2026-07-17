@@ -56,6 +56,23 @@ export interface SyncAverageCostResult {
   error?: string;
 }
 
+export type AvgCostSyncScope = "all" | "non_china";
+
+/**
+ * Coarse progress signal for the durable qb_avg_cost_sync_run row that the POS
+ * "Cost Sync" card polls. `fetching` covers the slow QB bridge pull (processed
+ * stays 0, card shows "Waiting for QuickBooks…"); `processing` animates the
+ * per-chunk matching/writing.
+ */
+export type AvgCostSyncProgress = {
+  phase: "fetching" | "processing";
+  total: number;
+  processed: number;
+  updated: number;
+  unchanged: number;
+  skipped: number;
+};
+
 function asArray<T>(value: T | T[] | null | undefined): T[] {
   if (value === null || value === undefined) return [];
   return Array.isArray(value) ? value : [value];
@@ -198,11 +215,42 @@ async function applyAverageCostUpdates(
   }
 }
 
+/**
+ * Resolve the set of NON-China variant IDs via raw Postgres. A product is China
+ * when product.metadata.is_sourced_via_agent is truthy; everything else
+ * (including NULL/absent metadata) is non-China.
+ */
+async function fetchNonChinaVariantIds(
+  container: any
+): Promise<Set<string>> {
+  const pg = container.resolve("__pg_connection__") as {
+    raw: (
+      sql: string,
+      bindings?: unknown[]
+    ) => Promise<{ rows: Array<{ id: string }> }>;
+  };
+  const { rows } = await pg.raw(
+    `SELECT pv.id
+       FROM product_variant pv
+       JOIN product p ON p.id = pv.product_id
+      WHERE pv.deleted_at IS NULL
+        AND p.deleted_at IS NULL
+        AND (p.metadata->>'is_sourced_via_agent') IS DISTINCT FROM 'true'`
+  );
+  return new Set(rows.map((r) => String(r.id)));
+}
+
 export async function syncAverageCostCore(
   container: any,
-  options: { dryRun?: boolean; onLog?: (line: string) => void } = {}
+  options: {
+    dryRun?: boolean;
+    onLog?: (line: string) => void;
+    scope?: AvgCostSyncScope;
+    onProgress?: (p: AvgCostSyncProgress) => void | Promise<void>;
+  } = {}
 ): Promise<SyncAverageCostResult> {
   const dryRun = options.dryRun || process.env.QB_DRY_RUN === "true";
+  const scope: AvgCostSyncScope = options.scope ?? "all";
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
   const query = container.resolve(ContainerRegistrationKeys.QUERY);
 
@@ -258,17 +306,42 @@ export async function syncAverageCostCore(
       fields: ["id", "sku", "metadata", "product.id"],
     });
 
-    const linkedVariants = (variants as VariantRow[]).filter(
+    let linkedVariants = (variants as VariantRow[]).filter(
       (variant) =>
         typeof variant.metadata?.quickbooks_id === "string" &&
         variant.metadata.quickbooks_id.length > 0
     );
+
+    // Scope filter. For 'non_china' we resolve the eligible variant IDs via raw
+    // Postgres (Medusa v2 query.graph does NOT reliably hydrate product.metadata
+    // JSONB — same footgun that forces raw SQL elsewhere in this codebase), then
+    // intersect. `->>` normalizes both the JSON string "true" and boolean true;
+    // IS DISTINCT FROM keeps NULL/absent metadata as non-China.
+    if (scope === "non_china") {
+      const nonChinaIds = await fetchNonChinaVariantIds(container);
+      linkedVariants = linkedVariants.filter((v) => nonChinaIds.has(v.id));
+      log(
+        `🌎 Scope=non_china → ${linkedVariants.length} non-China QB-linked variants.`
+      );
+    }
+
     stats.totalLinkedVariants = linkedVariants.length;
     log(`📊 Found ${linkedVariants.length} variants linked to QuickBooks.`);
 
     if (linkedVariants.length === 0) {
       return { success: false, dryRun, stats, error: "No linked products found" };
     }
+
+    // Enter the slow bridge-pull phase. total is already known so the POS card
+    // can render "0 / N · Waiting for QuickBooks…".
+    await options.onProgress?.({
+      phase: "fetching",
+      total: linkedVariants.length,
+      processed: 0,
+      updated: 0,
+      unchanged: 0,
+      skipped: 0,
+    });
 
     const { items } = await fetchQbAverageCostItems(log);
     const qbByListId = new Map(
@@ -278,7 +351,23 @@ export async function syncAverageCostCore(
     const updates: VariantUpdate[] = [];
     const touchedProductIds = new Set<string>();
 
+    let processed = 0;
+    const PROGRESS_EVERY = 200;
+    const emitProgress = async () => {
+      await options.onProgress?.({
+        phase: "processing",
+        total: linkedVariants.length,
+        processed,
+        updated: updates.length - stats.skippedNoChange,
+        unchanged: stats.skippedNoChange,
+        skipped: stats.skippedNoAverageCost + stats.missingInQb,
+      });
+    };
+
     for (const variant of linkedVariants) {
+      processed++;
+      if (processed % PROGRESS_EVERY === 0) await emitProgress();
+
       const qbId = variant.metadata?.quickbooks_id as string;
       const qb = qbByListId.get(qbId);
 
@@ -325,6 +414,8 @@ export async function syncAverageCostCore(
       if (isUnchanged) stats.skippedNoChange++;
       if (variant.product?.id) touchedProductIds.add(variant.product.id);
     }
+
+    await emitProgress();
 
     // updatedAverageCost reflects rows whose qb_avg_cost actually changed.
     // updates.length includes timestamp-only refreshes (cost unchanged) too;

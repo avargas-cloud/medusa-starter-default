@@ -1,6 +1,7 @@
 import { MedusaService } from "@medusajs/utils";
 
 import { QbAccount } from "./models/qb-account";
+import { QbAvgCostSyncRun } from "./models/qb-avg-cost-sync-run";
 import { QbItemPipeline } from "./models/qb-item-pipeline";
 import { QbVendor } from "./models/qb-vendor";
 import { QbVendorPipeline } from "./models/qb-vendor-pipeline";
@@ -12,6 +13,7 @@ class QuickbooksCatalogModuleService extends MedusaService({
   QbItemPipeline,
   QbVendorPipeline,
   QbVendorSyncRun,
+  QbAvgCostSyncRun,
 }) {}
 
 export default QuickbooksCatalogModuleService;

@@ -33,6 +33,10 @@ export interface MeiliInventoryDoc {
   avg_landed_cost: number | null; // avg_landed_cost_cents — our AVCO, used for profit calcs
   vendorName: string | null;
   mpn: string | null;
+  // true when the product is sourced via the China agent
+  // (product.metadata.is_sourced_via_agent). Filterable so the Inventory page
+  // can facet USA vs China and filter to inspect mis-assignments.
+  is_sourced_via_agent: boolean;
   chinaStock: number;
   // Open inbound balance (qty_ordered − received − cancelled) on documents in
   // status submitted/partially_received. USA = Purchase Orders, China = Factory
@@ -102,6 +106,12 @@ export function buildInventoryDocsForVariants(
     }));
 
     const vmeta = (variant?.metadata || {}) as AnyRec;
+    const pmeta = (product?.metadata || {}) as AnyRec;
+    // China origin flag lives at PRODUCT level. Normalize the JSONB value which
+    // can be boolean true or the string "true".
+    const isSourcedViaAgent =
+      pmeta.is_sourced_via_agent === true ||
+      pmeta.is_sourced_via_agent === "true";
 
     // Prefer the canonical vendor link; fall back to the legacy metadata field.
     const vendorName =
@@ -142,6 +152,7 @@ export function buildInventoryDocsForVariants(
         avg_landed_cost: (vmeta.avg_landed_cost_cents as number) || null,
         vendorName,
         mpn: (vmeta.mpn as string) || null,
+        is_sourced_via_agent: isSourcedViaAgent,
         chinaStock: 0,
         onOrderUsa: 0,
         onOrderChina: 0,
@@ -186,6 +197,7 @@ export function buildInventoryDocsForVariants(
         avg_landed_cost: (vmeta.avg_landed_cost_cents as number) || null,
         vendorName,
         mpn: (vmeta.mpn as string) || null,
+        is_sourced_via_agent: isSourcedViaAgent,
         chinaStock: chinaStockMap.get(inventory.id) ?? 0,
         onOrderUsa: onOrderUsaMap.get(inventory.id) ?? 0,
         onOrderChina: onOrderChinaMap.get(inventory.id) ?? 0,
