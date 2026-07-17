@@ -206,6 +206,15 @@ export const createPosProductV2Workflow = createWorkflow(
           title: i.title,
           handle,
           description: i.sales_description,
+          // Vendor + income/COGS accounts are PRODUCT-level facts (every variant
+          // of a product shares the same vendor and accounts). Persist them on
+          // product.metadata — the canonical level that the inventory edit modal
+          // (EditItemModalAdmin), the FO "By Manufacturer" picker, and
+          // mass-metadata-sync all read from. They're also written to each
+          // variant below for the QB re-add hydration path; product-level is the
+          // one the UI displays, so it must be set here too (was variant-only,
+          // which made freshly created items show blank vendor/accounts).
+          metadata: sharedMeta,
           status: "draft" as const,
           sales_channels: [],
           categories:

@@ -16,6 +16,13 @@ const validate = (body: any): string | null => {
     return "income_account_full_name is required";
   if (body.item_type === "Inventory" && !body.cogs_account_full_name)
     return "cogs_account_full_name is required for Inventory items";
+  // Preferred Vendor is mandatory for Inventory items — mirrors the Add Item
+  // modal's frontend requirement so non-modal creates (scripts, direct API,
+  // Load Template re-adds) can't slip an Inventory item through with no vendor.
+  // vendor_qb_id (not vendor_full_name) is required: it's the internal qb_vendor
+  // id that resolves to the QB Desktop ListID; a bare name won't link/sync.
+  if (body.item_type === "Inventory" && !body.vendor_qb_id)
+    return "vendor_qb_id (Preferred Vendor) is required for Inventory items";
   if (!Array.isArray(body.variants) || body.variants.length === 0)
     return "variants must contain at least 1 variant";
   for (const v of body.variants) {
