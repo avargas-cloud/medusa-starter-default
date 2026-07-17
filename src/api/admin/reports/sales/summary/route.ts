@@ -1,4 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+
+import { avgCostDollars } from "../../../../../lib/cost/cost-sql"
 import { parseDateRange, priorPeriod } from "../../_lib/date-range"
 import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
 import {
@@ -52,8 +54,7 @@ async function fetchInventoryAdjCogs(pg: any, from: string, to: string): Promise
   const result = await pg.raw(
     `SELECT COALESCE(SUM(
        icl.delta_applied::numeric *
-       COALESCE((pv.metadata->>'average_unit_cost')::numeric,
-                (pv.metadata->>'qb_avg_cost')::numeric, 0)
+       COALESCE(${avgCostDollars("pv")}, 0)
      ), 0) AS adj_cogs
      FROM inventory_count ic
      JOIN inventory_count_line icl ON icl.inventory_count_id = ic.id

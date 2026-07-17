@@ -1,4 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+
+import { avgCostDollars } from "../../../../../lib/cost/cost-sql"
 import { parseDateRange } from "../../_lib/date-range"
 import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
 import { parseRegion, regionClause } from "../../_lib/region-filter"
@@ -75,8 +77,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            0::bigint                                                        AS revenue,
            COALESCE(SUM(
              icl.delta_applied::numeric *
-             COALESCE((pv.metadata->>'average_unit_cost')::numeric,
-                      (pv.metadata->>'qb_avg_cost')::numeric, 0)
+             COALESCE(${avgCostDollars("pv")}, 0)
            ), 0)::numeric                                                   AS cogs,
            COUNT(DISTINCT ic.id)::int                                       AS invoice_count
          FROM inventory_count ic

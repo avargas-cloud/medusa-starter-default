@@ -14,6 +14,8 @@ import type {
 } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 
+import { avgCostDollars } from "../../../../../lib/cost/cost-sql";
+
 import {
   ManagerRoleRequiredError,
   UnauthenticatedError,
@@ -102,10 +104,7 @@ export async function GET(
     };
     const result = await pg.raw(
       `SELECT id,
-              COALESCE(
-                (metadata->>'average_unit_cost')::numeric,
-                (metadata->>'qb_avg_cost')::numeric
-              ) AS unit_cost,
+              ${avgCostDollars("product_variant")} AS unit_cost,
               NULLIF(TRIM(metadata->>'sales_description'), '') AS sales_description
          FROM product_variant
         WHERE id = ANY(?)`,
