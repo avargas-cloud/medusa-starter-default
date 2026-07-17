@@ -403,10 +403,27 @@ export async function POST(
     // skips deposits already fully linked. No QB enqueue (order-only).
     try {
       const financeService = req.scope.resolve(FINANCE_MODULE);
-      const deposits = await financeService.listCustomerPayments(
-        { locked_order_id: id, type: "payment" },
-        { relations: ["applications"] }
+      // Find deferred deposits by locked_order_id OR metadata.order_id. The BAMS
+      // webhook stamps both (order_id in metadata always; locked_order_id only
+      // if finance/payments persisted it) — matching either is belt-and-
+      // suspenders so a null locked_order_id (historical gap) never strands a
+      // deposit. This was why PAY-3152 was never linked at conversion.
+      const depConn = req.scope.resolve("__pg_connection__") as {
+        raw: (sql: string, b?: unknown[]) => Promise<{ rows: { id: string }[] }>;
+      };
+      const idRes = await depConn.raw(
+        `SELECT id FROM customer_payment
+         WHERE type = 'payment' AND deleted_at IS NULL AND status <> 'voided'
+           AND (locked_order_id = ? OR metadata->>'order_id' = ?)`,
+        [id, id]
       );
+      const depIds = (idRes.rows ?? []).map((r) => r.id);
+      const deposits = depIds.length
+        ? await financeService.listCustomerPayments(
+            { id: depIds } as any,
+            { relations: ["applications"] }
+          )
+        : [];
       const active = (deposits ?? []).filter(
         (d: any) => d.status !== "voided"
       );

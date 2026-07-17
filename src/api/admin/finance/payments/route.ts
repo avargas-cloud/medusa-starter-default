@@ -94,6 +94,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     type,
     metadata,
     skip_qb_sync,
+    locked_order_id,
   } = req.body as any;
 
   if (!customer_id) {
@@ -191,6 +192,15 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     const qbFlowEnabled = process.env.QB_ORDER_FLOW_ENABLED === "true";
 
+    // Persist the order this payment was captured against. The BAMS webhook and
+    // the deposit modals send this so an estimate-time deposit can be linked at
+    // convert-force time (see convert-force Step 4b, which finds deferred
+    // deposits by locked_order_id). Falls back to metadata.order_id. Without
+    // this, estimate deposits stayed unlinked until the order was invoiced
+    // (root cause of PAY-3152 hanging in Treasury's unattributed panel).
+    const resolvedLockedOrderId =
+      locked_order_id || (metadata as any)?.order_id || null;
+
     const payment = await financeService.createCustomerPayments({
       customer_id,
       display_id: nextPayNum,
@@ -199,6 +209,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       card_brand: mappedCardBrand,
       reference: reference || null,
       notes: notes || null,
+      locked_order_id: resolvedLockedOrderId,
       received_at: received_at ? new Date(received_at) : new Date(),
       created_by: created_by || null,
       source: source || "pos",
