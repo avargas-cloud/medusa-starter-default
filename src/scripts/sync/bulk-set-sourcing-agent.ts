@@ -73,11 +73,22 @@ async function main() {
     const alreadySet = allMatched.filter(
       (r) => (r.metadata ?? {})['is_sourced_via_agent'] === true
     )
+    // Never override a human decision: a product whose Product Source was set
+    // through the PIN-gated toggle carries is_sourced_via_agent_manual=true and
+    // is left untouched (even if its SKU prefix says China and it's now USA).
+    const manualSkipped = allMatched.filter(
+      (r) =>
+        (r.metadata ?? {})['is_sourced_via_agent'] !== true &&
+        (r.metadata ?? {})['is_sourced_via_agent_manual'] === true
+    )
     const toUpdate = allMatched.filter(
-      (r) => (r.metadata ?? {})['is_sourced_via_agent'] !== true
+      (r) =>
+        (r.metadata ?? {})['is_sourced_via_agent'] !== true &&
+        (r.metadata ?? {})['is_sourced_via_agent_manual'] !== true
     )
 
     console.log(`Already set (is_sourced_via_agent = true): ${alreadySet.length}`)
+    console.log(`Skipped (manual override — is_sourced_via_agent_manual): ${manualSkipped.length}`)
     console.log(`${APPLY ? 'Will update' : 'Would update'}: ${toUpdate.length}\n`)
 
     if (toUpdate.length === 0) {

@@ -72,6 +72,10 @@ export type UpdatePosProductFullInput = {
   cogs_account_full_name?: string;
   vendor_full_name?: string;
   vendor_qb_id?: string;
+  /** Product Source: true = CHINA (sourced via agent), false = USA. Product-level (is_sourced_via_agent). */
+  is_sourced_via_agent?: boolean;
+  /** true when set through the PIN-gated toggle — bulk-set-sourcing-agent skips these. */
+  is_sourced_via_agent_manual?: boolean;
 
   // Shipping dims — shared across every variant's inventory_item.
   shipping_attributes?: {
@@ -137,8 +141,15 @@ export const updatePosProductFullWorkflow = createWorkflow(
         productPatch.thumbnail = i.image_urls[0] ?? null;
         productPatch.images = i.image_urls.map((url) => ({ url }));
       }
-      if (Object.keys(data.canonicalMeta).length > 0) {
-        productPatch.metadata = data.canonicalMeta;
+      // is_sourced_via_agent (Product Source) is PRODUCT-only — rides the product
+      // patch, not the variant fan-out. Only written when the edit sent it.
+      const productMeta = pruneUndefined({
+        ...data.canonicalMeta,
+        is_sourced_via_agent: i.is_sourced_via_agent,
+        is_sourced_via_agent_manual: i.is_sourced_via_agent_manual,
+      });
+      if (Object.keys(productMeta).length > 0) {
+        productPatch.metadata = productMeta;
       }
       return [productPatch];
     });

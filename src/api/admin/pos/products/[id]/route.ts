@@ -73,6 +73,10 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
           | undefined,
         vendor_full_name: body.vendor_full_name as string | undefined,
         vendor_qb_id: body.vendor_qb_id as string | undefined,
+        is_sourced_via_agent: body.is_sourced_via_agent as boolean | undefined,
+        is_sourced_via_agent_manual: body.is_sourced_via_agent_manual as
+          | boolean
+          | undefined,
         shipping_attributes: body.shipping_attributes as
           | UpdatePosProductFullInput["shipping_attributes"]
           | undefined,

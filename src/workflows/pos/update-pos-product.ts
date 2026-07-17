@@ -68,6 +68,10 @@ export type UpdatePosProductInput = {
   cogs_account_full_name?: string;
   vendor_full_name?: string;
   vendor_qb_id?: string;
+  /** Product Source: true = CHINA (sourced via agent), false = USA. Product-level (is_sourced_via_agent). */
+  is_sourced_via_agent?: boolean;
+  /** true when set through the PIN-gated toggle — bulk-set-sourcing-agent skips these. */
+  is_sourced_via_agent_manual?: boolean;
   category_ids?: string[];
   image_urls?: string[];
   shipping_attributes?: {
@@ -251,8 +255,16 @@ export const updatePosProductWorkflow = createWorkflow(
         productPatch.images = i.image_urls.map((url) => ({ url }));
       }
       // Product-level canonical QB metadata (only touched if provided).
-      if (Object.keys(data.canonicalMeta).length > 0) {
-        productPatch.metadata = data.canonicalMeta;
+      // is_sourced_via_agent (Product Source) is PRODUCT-only — it rides the
+      // product patch, NOT the variant fan-out (canonicalMeta), because every
+      // China reader reads p.metadata. Only written when the edit sent it.
+      const productMeta = pruneUndefined({
+        ...data.canonicalMeta,
+        is_sourced_via_agent: i.is_sourced_via_agent,
+        is_sourced_via_agent_manual: i.is_sourced_via_agent_manual,
+      });
+      if (Object.keys(productMeta).length > 0) {
+        productPatch.metadata = productMeta;
       }
       return [productPatch];
     });

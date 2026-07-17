@@ -66,6 +66,10 @@ export type CreatePosProductV2Input = {
   vendor_qb_id?: string;
   /** Default true. False marks the product non-taxable across all order line items (services / labor). */
   taxable?: boolean;
+  /** Product Source: true = CHINA (sourced via agent), false = USA. Product-level metadata (is_sourced_via_agent). */
+  is_sourced_via_agent?: boolean;
+  /** true when a user set the source through the PIN-gated toggle — bulk-set-sourcing-agent skips these. */
+  is_sourced_via_agent_manual?: boolean;
   variants: CreatePosProductV2VariantInput[];
   currency_code?: string;
   /** MinIO URLs from POST /admin/uploads. First entry becomes the thumbnail. */
@@ -214,7 +218,14 @@ export const createPosProductV2Workflow = createWorkflow(
           // variant below for the QB re-add hydration path; product-level is the
           // one the UI displays, so it must be set here too (was variant-only,
           // which made freshly created items show blank vendor/accounts).
-          metadata: sharedMeta,
+          // is_sourced_via_agent (Product Source USA/CHINA) is PRODUCT-only —
+          // every China reader (freight-specs, purchasing, china-adjustment)
+          // reads p.metadata, so it does NOT go onto the variants.
+          metadata: {
+            ...sharedMeta,
+            is_sourced_via_agent: i.is_sourced_via_agent ?? false,
+            is_sourced_via_agent_manual: i.is_sourced_via_agent_manual ?? false,
+          },
           status: "draft" as const,
           sales_channels: [],
           categories:
