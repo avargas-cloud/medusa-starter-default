@@ -246,6 +246,10 @@ export async function loadSalesByApplication(
         pii.quantity                                               AS quantity,
         pii.average_unit_cost,
         pii.average_unit_cost_synced_at,
+        -- LIVE cost freshness (origin-agnostic): set at QB sync for USA and at
+        -- vendor-bill confirm for China. Drives the "stale cost" warning.
+        COALESCE(NULLIF(pv.metadata->>'average_cost_updated_at', ''),
+                 NULLIF(pv.metadata->>'qb_avg_cost_synced_at', ''))::timestamptz AS avg_cost_freshness,
         ${COST_FALLBACK_EXPR}                                      AS effective_unit_cost,
         (
           pii.average_unit_cost IS NULL
@@ -281,6 +285,8 @@ export async function loadSalesByApplication(
         oi.quantity                                                AS quantity,
         NULL::numeric                                              AS average_unit_cost,
         NULL::timestamptz                                          AS average_unit_cost_synced_at,
+        COALESCE(NULLIF(pv.metadata->>'average_cost_updated_at', ''),
+                 NULLIF(pv.metadata->>'qb_avg_cost_synced_at', ''))::timestamptz AS avg_cost_freshness,
         -- Prefer the per-line cost frozen on the application at attribution
         -- time (cost_snapshot, in cents → dollars); fall back to LIVE metadata
         -- only for legacy rows without a snapshot. This is what stops a closed
@@ -403,9 +409,9 @@ export async function loadSalesByApplication(
         COALESCE(ARRAY_AGG(sample_id) FILTER (WHERE TRUE), ARRAY[]::text[]) AS ids
       FROM (
         SELECT sample_id FROM weighted
-        WHERE average_unit_cost IS NOT NULL
-          AND (average_unit_cost_synced_at IS NULL
-               OR average_unit_cost_synced_at < (?::timestamptz - INTERVAL '${STALE_COST_THRESHOLD_DAYS} days'))
+        WHERE effective_unit_cost IS NOT NULL
+          AND (avg_cost_freshness IS NULL
+               OR avg_cost_freshness < (?::timestamptz - INTERVAL '${STALE_COST_THRESHOLD_DAYS} days'))
         LIMIT 20
       ) x
     ),

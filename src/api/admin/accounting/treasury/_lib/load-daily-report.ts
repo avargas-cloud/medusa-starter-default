@@ -325,7 +325,7 @@ async function computeLiveRangeReport(
       severity: "info",
       count: toInt(sales.stale_cost_count),
       sample_ids: sales.sample_stale_cost ?? [],
-      detail: `average_unit_cost not synced from QB in the last ${STALE_COST_THRESHOLD_DAYS} days.`,
+      detail: `Average cost not refreshed in the last ${STALE_COST_THRESHOLD_DAYS} days (USA: QuickBooks sync · China: vendor-bill landed cost).`,
     });
   }
   if (toInt(sales.missing_origin_tag_count) > 0) {

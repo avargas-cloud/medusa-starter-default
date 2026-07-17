@@ -30,7 +30,7 @@ export default async function backfillLandedCostUpdatedAt({
              GROUP BY product_variant_id) l ON l.product_variant_id = pv.id
      WHERE pv.deleted_at IS NULL
        AND (pv.metadata->>'avg_landed_cost_cents') IS NOT NULL
-       AND (pv.metadata->>'avg_landed_cost_updated_at') IS NULL`);
+       AND (pv.metadata->>'average_cost_updated_at') IS NULL`);
   const eligible = elig[0]?.n ?? 0;
   console.log(`Eligible variants (landed cost, no timestamp, has active log): ${eligible}`);
 
@@ -48,14 +48,15 @@ export default async function backfillLandedCostUpdatedAt({
     )
     UPDATE product_variant pv
        SET metadata = COALESCE(pv.metadata, '{}'::jsonb)
-                      || jsonb_build_object('avg_landed_cost_updated_at', l.ts::text),
+                      || jsonb_build_object('avg_landed_cost_updated_at', l.ts::text,
+                                            'average_cost_updated_at', l.ts::text),
            updated_at = NOW()
       FROM latest l
      WHERE pv.id = l.product_variant_id
        AND pv.deleted_at IS NULL
        AND (pv.metadata->>'avg_landed_cost_cents') IS NOT NULL
-       AND (pv.metadata->>'avg_landed_cost_updated_at') IS NULL`);
+       AND (pv.metadata->>'average_cost_updated_at') IS NULL`);
 
-  console.log(`✅ Applied avg_landed_cost_updated_at to ${res.rowCount ?? 0} variants.`);
+  console.log(`✅ Applied landed-cost freshness timestamps to ${res.rowCount ?? 0} variants.`);
   return { eligible, applied: res.rowCount ?? 0, dryRun: false };
 }
