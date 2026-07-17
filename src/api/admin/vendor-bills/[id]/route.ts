@@ -81,6 +81,7 @@ interface VendorBillLineRow {
   id: string;
   vendor_bill_id: string;
   receipt_line_id: string;
+  purchase_order_line_id: string | null;
   line_type: string;
   qb_account_list_id: string | null;
   qb_account_full_name: string | null;
@@ -299,7 +300,74 @@ export async function GET(
     0
   );
 
-  return res.json({ vendor_bill: { ...header, total_landed_cents, lines } });
+  // po_drift — does a DRAFT regular bill's product lines still match its PO's
+  // ordered lines? True when "Update From… → Use PO" would add/update/remove a
+  // line (a line was added to the PO after the bill, a qty/cost changed, or a
+  // PO line was removed). The UI uses this ONLY as an advisory nudge (amber
+  // "Update From…" button) — it never affects save/dirty state.
+  //
+  // Scoped to a draft regular bill linked to a PO and NOT associated with a
+  // receipt: when a bill mirrors a receipt (e.g. a PARTIAL shipment), the PO's
+  // ordered qty is intentionally larger than the received qty, so comparing
+  // against the PO would be a false alarm. There the receipt is the source of
+  // truth, so we suppress the PO-drift signal entirely.
+  let po_drift = false;
+  if (
+    header.status === "draft" &&
+    header.bill_type === "regular" &&
+    header.purchase_order_id &&
+    !header.purchase_order_receipt_id
+  ) {
+    const poSrc = await knex.raw(
+      `SELECT pol.id AS pol_id,
+              GREATEST(pol.qty_ordered - COALESCE(pol.qty_cancelled, 0), 0)::int AS qty,
+              COALESCE(pol.unit_cost_cents, 0)::int AS unit_cost_cents
+         FROM purchase_order_line pol
+        WHERE pol.purchase_order_id = ?
+          AND pol.deleted_at IS NULL
+          AND COALESCE(pol.status, 'open') <> 'cancelled'
+          AND GREATEST(pol.qty_ordered - COALESCE(pol.qty_cancelled, 0), 0) > 0`,
+      [header.purchase_order_id]
+    );
+    const poRows = poSrc.rows as Array<{
+      pol_id: string;
+      qty: number;
+      unit_cost_cents: number;
+    }>;
+    const poByPol = new Map(poRows.map((r) => [r.pol_id, r]));
+    const billProduct = lines.filter(
+      (l) => (l.line_type ?? "product") === "product"
+    );
+    const billByPol = new Map<string, VendorBillLineRow>();
+    for (const l of billProduct) {
+      if (l.purchase_order_line_id) billByPol.set(l.purchase_order_line_id, l);
+    }
+    // A PO line the bill doesn't have (or a qty/cost that changed) → drift.
+    for (const r of poRows) {
+      const bl = billByPol.get(r.pol_id);
+      if (
+        !bl ||
+        Number(bl.qty) !== r.qty ||
+        Number(bl.unit_cost_cents) !== r.unit_cost_cents
+      ) {
+        po_drift = true;
+        break;
+      }
+    }
+    // A bill product line no longer backed by a live PO line → drift (removed).
+    if (!po_drift) {
+      for (const l of billProduct) {
+        if (!l.purchase_order_line_id || !poByPol.has(l.purchase_order_line_id)) {
+          po_drift = true;
+          break;
+        }
+      }
+    }
+  }
+
+  return res.json({
+    vendor_bill: { ...header, total_landed_cents, lines, po_drift },
+  });
 }
 
 export async function PATCH(
