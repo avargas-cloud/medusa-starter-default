@@ -1,4 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+
+import { avgCostDollars, purchaseCostDollars } from "../../../../../../lib/cost/cost-sql"
 import { TIER1_CTE } from "../../../_lib/category-tier1"
 
 const CHINA_SLOC = 'sloc_01KQ14C1CFX30EDD722BF87HDM'
@@ -12,16 +14,9 @@ const CHINA_SLOC = 'sloc_01KQ14C1CFX30EDD722BF87HDM'
 // at the location (transfers, draft orders, etc.) so we use it directly and
 // drop the bill filter. Bills are surfaced separately as POs-without-bills.
 
-const FACTORY_COST = `COALESCE(
-  (pv.metadata->>'qb_purchase_cost')::numeric,
-  (pv.metadata->>'qb_avg_cost')::numeric,
-  0
-)`
+const FACTORY_COST = `COALESCE(${purchaseCostDollars("pv")}, 0)`
 
-const LANDED_COST = `COALESCE(
-  (pv.metadata->>'qb_avg_cost')::numeric,
-  0
-)`
+const LANDED_COST = `COALESCE(${avgCostDollars("pv")}, 0)`
 
 const CHINA_AVAILABLE_QTY = `GREATEST(
   0,

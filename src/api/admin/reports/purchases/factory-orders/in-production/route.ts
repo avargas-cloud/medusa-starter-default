@@ -1,4 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+
+import { avgCostDollars } from "../../../../../../lib/cost/cost-sql"
 import { TIER1_CTE } from "../../../_lib/category-tier1"
 
 const PENDING = `GREATEST(fol.qty_ordered - fol.qty_received - COALESCE(fol.qty_cancelled,0), 0)`
@@ -29,7 +31,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            SUM(fol.qty_received)::int                                           AS qty_received,
            SUM(${PENDING})::int                                                 AS qty_pending,
            ROUND(SUM(${PENDING} * fol.unit_cost_cents / 100.0)::numeric, 2)    AS value,
-           ROUND(SUM(${PENDING} * COALESCE((pv.metadata->>'qb_avg_cost')::numeric, 0))::numeric, 2) AS landed_value
+           ROUND(SUM(${PENDING} * COALESCE(${avgCostDollars("pv")}, 0))::numeric, 2) AS landed_value
          ${BASE_FROM}
          GROUP BY 1
          ORDER BY value DESC`
@@ -44,7 +46,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
            SUM(fol.qty_received)::int                                           AS qty_received,
            SUM(${PENDING})::int                                                 AS qty_pending,
            ROUND(SUM(${PENDING} * fol.unit_cost_cents / 100.0)::numeric, 2)    AS value,
-           ROUND(SUM(${PENDING} * COALESCE((pv.metadata->>'qb_avg_cost')::numeric, 0))::numeric, 2) AS landed_value
+           ROUND(SUM(${PENDING} * COALESCE(${avgCostDollars("pv")}, 0))::numeric, 2) AS landed_value
          ${BASE_FROM}
          GROUP BY 1
          ORDER BY value DESC`

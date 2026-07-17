@@ -1,4 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+
+import { avgCostDollars, purchaseCostDollars } from "../../../../../../../lib/cost/cost-sql"
 import { TIER1_CTE } from "../../../../_lib/category-tier1"
 
 const CHINA_SLOC = 'sloc_01KQ14C1CFX30EDD722BF87HDM'
@@ -48,24 +50,10 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          COALESCE(NULLIF(TRIM(p.metadata->>'qb_vendor_full_name'),''), 'Unknown') AS factory,
          COALESCE(t1.category, 'Uncategorized')                                  AS category,
          ${CHINA_AVAILABLE_QTY}::int                                              AS qty,
-         COALESCE(
-           (pv.metadata->>'qb_purchase_cost')::numeric,
-           (pv.metadata->>'qb_avg_cost')::numeric,
-           0
-         )                                                                        AS unit_cost,
-         ROUND(${CHINA_AVAILABLE_QTY} * COALESCE(
-           (pv.metadata->>'qb_purchase_cost')::numeric,
-           (pv.metadata->>'qb_avg_cost')::numeric,
-           0
-         )::numeric, 2)                                                          AS total_value,
-         COALESCE(
-           (pv.metadata->>'qb_avg_cost')::numeric,
-           0
-         )                                                                        AS landed_unit_cost,
-         ROUND(${CHINA_AVAILABLE_QTY} * COALESCE(
-           (pv.metadata->>'qb_avg_cost')::numeric,
-           0
-         )::numeric, 2)                                                          AS landed_value
+         COALESCE(${purchaseCostDollars("pv")}, 0)                                                                        AS unit_cost,
+         ROUND(${CHINA_AVAILABLE_QTY} * COALESCE(${purchaseCostDollars("pv")}, 0)::numeric, 2)                                                          AS total_value,
+         COALESCE(${avgCostDollars("pv")}, 0)                                                                        AS landed_unit_cost,
+         ROUND(${CHINA_AVAILABLE_QTY} * COALESCE(${avgCostDollars("pv")}, 0)::numeric, 2)                                                          AS landed_value
        FROM inventory_level il
        JOIN inventory_item ii ON ii.id = il.inventory_item_id
        JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = ii.id

@@ -1,4 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+
+import { avgCostDollars, purchaseCostDollars } from "../../../../../lib/cost/cost-sql"
 import { parseDateRange } from "../../_lib/date-range"
 import { VENDOR_IS_CHINA_AGENT_SQL } from "../../../purchase-orders/_lib/china-transfer"
 import {
@@ -19,13 +21,9 @@ const CHINA_SLOC = 'sloc_01KQ14C1CFX30EDD722BF87HDM'
 // Snapshot inventory value — same formulas as reports/purchases/factory-orders/china-inventory.
 // China values at factory cost (pre-landed); Miami values at landed cost (already includes
 // freight/tariff/service by the time it's on this side).
-const FACTORY_COST = `COALESCE(
-  (pv.metadata->>'qb_purchase_cost')::numeric,
-  (pv.metadata->>'qb_avg_cost')::numeric,
-  0
-)`
+const FACTORY_COST = `COALESCE(${purchaseCostDollars("pv")}, 0)`
 
-const LANDED_COST = `COALESCE((pv.metadata->>'qb_avg_cost')::numeric, 0)`
+const LANDED_COST = `COALESCE(${avgCostDollars("pv")}, 0)`
 
 const AVAILABLE_QTY = `GREATEST(0, il.stocked_quantity - COALESCE(il.reserved_quantity, 0))`
 
