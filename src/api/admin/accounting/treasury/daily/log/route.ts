@@ -78,6 +78,47 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       });
     }
 
+    // Chronological gate: a day can't be confirmed while an EARLIER day that
+    // had cash is still pending — treasury days must be confirmed in order, so
+    // no day's wires get executed out of sequence. Floor at the earliest
+    // confirmed day (the Confirm & Lock grandfather start); days before the
+    // feature existed are out of scope. A day "has cash" if a non-voided
+    // customer payment landed on it (received_at::date). If the log is empty
+    // (no era established yet) the floor is NULL and this gate is skipped.
+    const earlierPending = (await db.raw(
+      `WITH floor AS (
+         SELECT MIN(distribution_date) AS d
+           FROM treasury_distribution_log WHERE executed_at IS NOT NULL
+       )
+       SELECT d.day::text AS day
+         FROM (
+           SELECT DISTINCT cp.received_at::date AS day
+             FROM customer_payment cp
+            WHERE cp.type = 'payment' AND cp.deleted_at IS NULL
+              AND cp.status <> 'voided'
+              AND COALESCE(cp.method, '') <> 'credit_memo'
+              AND cp.received_at::date < ?::date
+         ) d, floor
+        WHERE floor.d IS NOT NULL
+          AND d.day >= floor.d
+          AND NOT EXISTS (
+            SELECT 1 FROM treasury_distribution_log t
+             WHERE t.distribution_date = d.day AND t.executed_at IS NOT NULL
+          )
+        ORDER BY d.day ASC
+        LIMIT 1`,
+      [body.date]
+    )) as { rows: { day: string }[] };
+    const blockingDay = earlierPending.rows[0]?.day;
+    if (blockingDay) {
+      if (trx) await trx.rollback();
+      return res.status(409).json({
+        success: false,
+        error: `EARLIER_DAY_PENDING: Confirm ${blockingDay} first — an earlier day with cash is still pending. Treasury days must be confirmed in chronological order.`,
+        data: { earliest_pending_day: blockingDay },
+      });
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const report = await loadDailyReport(db as any, body.date, body.date);
 
