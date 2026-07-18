@@ -15,7 +15,7 @@ import type { MedusaContainer } from "@medusajs/framework/types";
  *         is a stale/unmaintained legacy number — NEVER use it for China.
  *
  * Fallback (both origins) when the primary is missing → the product's purchase
- * cost (`qb_purchase_cost`, the raw acquisition cost, excludes freight/tariff);
+ * cost (`purchase_cost`, the raw acquisition cost, excludes freight/tariff);
  * `none` only when even that is absent. This keeps "every product has a cost".
  *
  * NOTE on naming: the underlying metadata keys are historically prefixed `qb_`.
@@ -25,7 +25,7 @@ import type { MedusaContainer } from "@medusajs/framework/types";
 export type VariantCostSource =
   | "average_cost" // USA: qb_avg_cost (QuickBooks average)
   | "landed_cost" // China: avg_landed_cost_cents (vendor-bill AVCO)
-  | "purchase_cost" // fallback: qb_purchase_cost (raw acquisition)
+  | "purchase_cost" // fallback: purchase_cost (raw acquisition)
   | "none"; // no cost found
 
 export type VariantAvgCost = {

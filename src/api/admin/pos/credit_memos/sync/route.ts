@@ -127,8 +127,8 @@ export async function POST(
       }
     }
 
-    // Snapshot avg unit cost from variant.metadata.qb_avg_cost so credit-memo
-    // margin reports stay accurate even after later QB cost re-syncs.
+    // Snapshot avg unit cost from the canonical variant.metadata.average_cost so
+    // credit-memo margin reports stay accurate even after later cost changes.
     // Custom lines without a variantId legitimately get NULL.
     const costVariantIds = (items ?? [])
       .map((i: any) => i.variantId)

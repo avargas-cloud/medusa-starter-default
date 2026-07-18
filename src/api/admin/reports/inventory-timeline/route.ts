@@ -138,7 +138,7 @@ const FO_REFERENCE_SQL = `
   WHERE deleted_at IS NULL AND NULLIF(metadata->>'china_fo_reference', '') IS NOT NULL
 `
 
-// Factory purchase cost per item (variant metadata.qb_purchase_cost — the China
+// Factory purchase cost per item (variant metadata.purchase_cost — the China
 // valuation basis, same as China Finance). Used to value over-SLA aging stock.
 const COST_SQL = `
   SELECT DISTINCT ON (pvii.inventory_item_id)

@@ -40,7 +40,7 @@ const BASE_JOINS = `
 // A China reservation is created at draft→confirmed and persists through
 // shipped until received in Miami, so the moment a transfer is confirmed its
 // pending units leave "+ Inv Value". `reserved_pending_value` values those
-// units on the SAME basis (`FACTORY_COST` = qb_purchase_cost) as the inventory
+// units on the SAME basis (`FACTORY_COST` = purchase_cost) as the inventory
 // `value` above.
 //
 // We NET against what is already billed for the PO rather than excluding the

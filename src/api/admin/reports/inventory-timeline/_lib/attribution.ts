@@ -91,7 +91,7 @@ export interface TimelineRow {
    *  (the `fo_number` column is the system FIFO-attributed FO). Attached by the
    *  route from `inventory_item.metadata.china_fo_reference`; null when unset. */
   fo_reference?: string | null
-  /** Factory purchase cost per unit (variant metadata.qb_purchase_cost), attached
+  /** Factory purchase cost per unit (variant metadata.purchase_cost), attached
    *  by the route to value aging stock. null when unknown. */
   unit_cost?: number | null
 }

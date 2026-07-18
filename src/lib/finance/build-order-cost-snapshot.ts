@@ -11,7 +11,7 @@
  *
  * Units: `unit_cost_cents` is the effective unit cost in CENTS.
  *   - metadata.avg_landed_cost_cents is already cents.
- *   - metadata.qb_avg_cost / qb_purchase_cost are dollars → ×100.
+ *   - metadata.average_cost / purchase_cost are dollars → ×100 (via avgCostCents).
  * NULL `unit_cost_cents` means no cost data was available (line excluded from COGS,
  * same as today's live behavior).
  */

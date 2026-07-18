@@ -46,7 +46,7 @@ interface TransferRow {
   total_lines: number;
   total_units: number;
   subtotal_cents: number;
-  // Live-computed at list time from lines × factory cost (qb_purchase_cost);
+  // Live-computed at list time from lines × factory cost (purchase_cost);
   // used to override the stale header subtotal_cents/total_units for display.
   factory_subtotal_cents?: string | number | null;
   live_units?: number | null;
@@ -141,7 +141,7 @@ export async function GET(
   );
 
   // Override the stale header subtotal_cents/total_units with values computed
-  // live from the current lines at FACTORY cost (qb_purchase_cost).
+  // live from the current lines at FACTORY cost (purchase_cost).
   const transfers = (dataResult.rows as TransferRow[]).map((r) => ({
     ...r,
     subtotal_cents: Number(r.factory_subtotal_cents ?? r.subtotal_cents),

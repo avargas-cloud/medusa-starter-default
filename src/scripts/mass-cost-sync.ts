@@ -45,7 +45,7 @@ export default async function run({
 
     const m = variant.metadata || {};
     if (
-      m.qb_purchase_cost === cost &&
+      m.purchase_cost === cost &&
       m.qb_vendor_id === vendorId &&
       m.qb_vendor_name === vendorName &&
       m.mpn === mpn
@@ -54,7 +54,7 @@ export default async function run({
       continue;
     }
 
-    m.qb_purchase_cost = cost;
+    m.purchase_cost = cost;
     m.qb_vendor_id = vendorId;
     m.qb_vendor_name = vendorName;
     m.mpn = mpn;

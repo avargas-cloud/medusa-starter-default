@@ -12,10 +12,9 @@
  *
  *   • purchaseCostDollars → the raw factory/acquisition cost (no freight).
  *     Used by PO autofill, factory/transfer valuation, pre-landed inventory
- *     value. Still keyed on the legacy `qb_purchase_cost` (Phase 3 renames it
- *     to `purchase_cost`).
+ *     value. Keyed on `purchase_cost`.
  *
- * Units: `average_cost` and `qb_purchase_cost` are DOLLARS. Use the *Cents
+ * Units: `average_cost` and `purchase_cost` are DOLLARS. Use the *Cents
  * helpers where the caller works in cents.
  *
  * @param pv  SQL alias of the `product_variant` row (default "pv").

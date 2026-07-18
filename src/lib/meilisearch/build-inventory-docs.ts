@@ -28,8 +28,8 @@ export interface MeiliInventoryDoc {
   salesDescription: string | null;
   purchaseDescription: string | null;
   quickbooks_id: string | null;
-  purchaseCost: number | null;   // qb_purchase_cost — fixed purchase price on the QB item
-  cost: number | null;          // qb_avg_cost — QB running average cost
+  purchaseCost: number | null;   // purchase_cost — raw factory/acquisition cost (no freight)
+  cost: number | null;          // average_cost — canonical cost (landed for China, QB avg for USA)
   avg_landed_cost: number | null; // avg_landed_cost_cents — our AVCO, used for profit calcs
   vendorName: string | null;
   mpn: string | null;

@@ -27,7 +27,7 @@ import { syncInventoryItemSkuStep } from "./steps/sync-inventory-item-sku-step";
  *     qb_vendor_full_name
  *     qb_vendor_list_id
  *   variant.metadata
- *     qb_purchase_cost
+ *     purchase_cost
  *     mpn
  *     sales_description (duplicated here for legacy POS pickers)
  *     qb_override_*  (optional per-variant overrides)

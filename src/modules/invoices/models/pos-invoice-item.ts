@@ -19,12 +19,12 @@ const PosInvoiceItem = model.define("pos_invoice_item", {
   unit_price: model.bigNumber(),
   total: model.bigNumber(),
   attached_image: model.text().nullable(),
-  // Snapshot of variant.metadata.qb_avg_cost at the moment the invoice was
-  // issued. Frozen forever — QB sync never back-propagates here. NULL for
-  // custom lines without a variant_id and for variants whose qb_avg_cost
-  // had not been synced yet.
+  // Snapshot of the canonical variant.metadata.average_cost (via the cost
+  // resolver) at the moment the invoice was issued. Frozen forever — later
+  // cost changes never back-propagate here. NULL for custom lines without a
+  // variant_id and for variants that had no cost yet.
   average_unit_cost: model.bigNumber().nullable(),
-  // Snapshot of variant.metadata.qb_avg_cost_synced_at at issue time.
+  // Snapshot of the cost's freshness timestamp (average_cost_updated_at) at issue time.
   // Lets reports show cost freshness ("based on a sync from N days ago").
   average_unit_cost_synced_at: model.dateTime().nullable(),
   // Snapshotted at invoice creation by DB trigger (trg_pos_invoice_item_taxable_default)
