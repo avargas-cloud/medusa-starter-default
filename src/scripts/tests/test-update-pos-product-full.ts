@@ -135,7 +135,7 @@ export default async function ({ container }: ExecArgs) {
   assertOk(t1Red?.weight === 11, "Red weight=11");
   assertOk((t1Red?.metadata as any)?.mpn === "MPN-RED", "Red metadata.mpn");
   assertOk(t1Green?.mid_code === "MID-GREEN", "Green mid_code");
-  assertOk((t1Green?.metadata as any)?.qb_purchase_cost === 5, "Green cost");
+  assertOk((t1Green?.metadata as any)?.purchase_cost === 5, "Green cost");
   assertOk(!!byColor("Blue"), "Blue untouched and present");
 
   // ─── TEST 2: add a new variant ─────────────────────────────────────────

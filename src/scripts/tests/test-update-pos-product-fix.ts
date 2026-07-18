@@ -133,7 +133,7 @@ export default async function ({ container }: ExecArgs) {
   record(assert(t2?.mid_code === "TEST-MPN-2", "mid_code updated"));
   const t2meta = (t2?.metadata ?? {}) as Record<string, unknown>;
   record(assert(t2meta.sales_description === "T2 sales desc", "metadata.sales_description updated"));
-  record(assert(t2meta.qb_purchase_cost === 99.99, "metadata.qb_purchase_cost updated"));
+  record(assert(t2meta.purchase_cost === 99.99, "metadata.purchase_cost updated"));
 
   // ─── TEST 3: edit product-level fields only ────────────────────────────
   console.log("\n▶ TEST 3: edit product-level (title) — no variant_id changes");
