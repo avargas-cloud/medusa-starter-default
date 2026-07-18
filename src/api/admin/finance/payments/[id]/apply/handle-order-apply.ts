@@ -175,7 +175,9 @@ export async function handleOrderApply(
 
   // 5. Register in Medusa native Payment Module so the order shows the deposit.
   //    Non-fatal — Finance Ledger remains the source of truth.
-  const orderTotalCents = getNum(order.total);
+  // order.total is DOLLARS (Medusa BigNumber) → ×100; registerMedusaPayment
+  // expects invoice_total in CENTS.
+  const orderTotalCents = getNum(order.total) * 100;
   const medusaPaymentId = await registerMedusaPayment(scope, {
     order_id,
     amount: effectiveAmount,

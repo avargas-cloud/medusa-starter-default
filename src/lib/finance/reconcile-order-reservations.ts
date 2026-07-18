@@ -14,7 +14,9 @@
  *              modal).
  *
  * Order total source of truth: `order.metadata.pos_total` (DOLLARS, persisted
- * by post-edit-sync) — falls back to Medusa order.total (cents) when absent.
+ * by post-edit-sync) — falls back to Medusa order.total (also DOLLARS — a
+ * BigNumber in major currency units, NOT cents) when absent. Both paths must
+ * ×100 to reach cents.
  *
  * NEVER touches (they are permanent ledger rows, not reservations):
  *   - web-capture applications (customer_payment.source = 'web' — web sales
@@ -93,7 +95,8 @@ async function loadState(
         fields: ["id", "total"],
         filters: { id: orderId },
       });
-      orderTotalCents = Math.round(getNum(order?.total));
+      // order.total is DOLLARS (Medusa BigNumber, major units) → ×100 for cents.
+      orderTotalCents = Math.round(getNum(order?.total) * 100);
     } catch {
       orderTotalCents = 0;
     }
