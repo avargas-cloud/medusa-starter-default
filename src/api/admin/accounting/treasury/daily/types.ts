@@ -68,6 +68,12 @@ export interface UnattributedPaymentView {
   effective_treasury_date: string;
   /** How many times "Exception — defer to next day" has been used on this payment. */
   defer_count: number;
+  /** True when the referenced order is still a draft (approved estimate not yet converted). */
+  estimate_pending: boolean;
+  /** The estimate's document number (e.g. "E-2687") when estimate_pending. */
+  estimate_doc_no: string | null;
+  /** The draft order id to deep-link into the estimate for conversion. */
+  estimate_order_id: string | null;
 }
 
 /**

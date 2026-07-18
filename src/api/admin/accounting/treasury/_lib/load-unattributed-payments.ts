@@ -37,6 +37,18 @@ export interface UnattributedPayment {
   effective_treasury_date: string;
   /** How many times "Exception — defer to next day" has been used on this payment. */
   defer_count: number;
+  /**
+   * True when this deposit points (via metadata.order_id) at an order that is
+   * still a DRAFT (an approved estimate not yet converted to a real order).
+   * Payments can only be linked to orders/invoices, so these are un-linkable
+   * until the estimate is converted — the panel surfaces that as guidance
+   * instead of looking like an ordinary missing link.
+   */
+  estimate_pending: boolean;
+  /** The estimate's document number (e.g. "E-2687") when estimate_pending. */
+  estimate_doc_no: string | null;
+  /** The draft order id to deep-link into the estimate for conversion. */
+  estimate_order_id: string | null;
 }
 
 interface PgConnection {
@@ -57,6 +69,9 @@ interface RawRow {
   original_received_at: string | Date | null;
   effective_treasury_date: string | Date | null;
   defer_count: string | number | null;
+  estimate_pending: boolean | null;
+  estimate_doc_no: string | null;
+  estimate_order_id: string | null;
 }
 
 function toInt(v: string | number | null | undefined): number {
@@ -102,11 +117,19 @@ export async function loadUnattributedPayments(
       (cp.locked_order_id IS NOT NULL)              AS has_locked_order,
       cp.received_at                                 AS original_received_at,
       COALESCE(ld.effective_treasury_date, cp.received_at::date) AS effective_treasury_date,
-      COALESCE(dc.defer_count, 0)                    AS defer_count
+      COALESCE(dc.defer_count, 0)                    AS defer_count,
+      -- Estimate-deposit guidance: the referenced order is still a draft (an
+      -- approved estimate not yet converted → payment can't be linked yet).
+      COALESCE(mo.is_draft_order = true OR mo.status = 'draft', false) AS estimate_pending,
+      CASE WHEN COALESCE(mo.is_draft_order = true OR mo.status = 'draft', false)
+           THEN cp.metadata->>'order_document_number' ELSE NULL END AS estimate_doc_no,
+      CASE WHEN COALESCE(mo.is_draft_order = true OR mo.status = 'draft', false)
+           THEN cp.metadata->>'order_id' ELSE NULL END AS estimate_order_id
     FROM customer_payment cp
     LEFT JOIN applied a ON a.payment_id = cp.id
     LEFT JOIN latest_defer ld ON ld.payment_id = cp.id
     LEFT JOIN defer_counts dc ON dc.payment_id = cp.id
+    LEFT JOIN "order" mo ON mo.id = cp.metadata->>'order_id' AND mo.deleted_at IS NULL
     WHERE cp.deleted_at IS NULL
       AND cp.type = 'payment'
       AND cp.status <> 'voided'
@@ -143,5 +166,8 @@ export async function loadUnattributedPayments(
         ? r.effective_treasury_date.toISOString().slice(0, 10)
         : String(r.effective_treasury_date ?? ""),
     defer_count: toInt(r.defer_count),
+    estimate_pending: r.estimate_pending === true,
+    estimate_doc_no: r.estimate_doc_no ?? null,
+    estimate_order_id: r.estimate_order_id ?? null,
   }));
 }
