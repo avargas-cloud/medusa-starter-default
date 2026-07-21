@@ -103,8 +103,10 @@ export const PurchaseOrder = model.define("purchase_order", {
   qb_edit_sequence: model.text().nullable(), // required for PurchaseOrderMod
   qb_synced_at: model.dateTime().nullable(),
 
-  // Free-form metadata bag — currently used for receiving worksheet snapshots
-  // (metadata.receiving_drafts[]). Stored as JSONB.
+  // Free-form metadata bag (JSONB) — email_sends[], etc. Historical note:
+  // receiving_drafts[] snapshots live here on older POs; the save mechanism
+  // was retired 2026-07-21 (the receiving worksheet is print-only reference —
+  // the receipt is the real record). Existing entries are harmless and unread.
   metadata: model.json().nullable(),
 
   // Inbound shipment tracking — JSON array of tracking entries attached to the
