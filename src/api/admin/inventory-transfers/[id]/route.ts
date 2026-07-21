@@ -77,8 +77,14 @@ export async function GET(
   const { id } = req.params as { id: string };
   const knex = resolveKnex(req);
 
+  // linked_po_number joined in, matching the list route — the detail's bare
+  // SELECT * silently dropped it and the POS "PO-XXXX" badge rendered "PO-?".
   const transferResult = await knex.raw(
-    `SELECT * FROM inventory_transfer WHERE id = ? AND deleted_at IS NULL`,
+    `SELECT it.*, po.number AS linked_po_number
+       FROM inventory_transfer it
+       LEFT JOIN purchase_order po
+         ON po.id = it.linked_purchase_order_id AND po.deleted_at IS NULL
+      WHERE it.id = ? AND it.deleted_at IS NULL`,
     [id]
   );
   const transfer = (transferResult.rows[0] ?? null) as TransferRow | null;
