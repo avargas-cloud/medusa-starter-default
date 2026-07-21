@@ -25,6 +25,10 @@ const updateSettingsSchema = z.object({
   cl_include_production: z.boolean().optional(),
   exposure_limit_cents: z.number().int().min(0).optional(),
   exposure_include_production: z.boolean().optional(),
+  // Drift check: the agent's commission rate (basis points, 1500 = 15%) and the
+  // tolerance (cents) that absorbs the agent's own rounding before flagging.
+  agent_commission_rate_bps: z.number().int().min(0).max(100_000).optional(),
+  commission_tolerance_cents: z.number().int().min(0).max(100_000).optional(),
 }).refine((d) => Object.keys(d).length > 0, { message: "No fields provided" });
 
 export const GET = async (
@@ -55,7 +59,8 @@ export const PATCH = async (
 
   const { payment_day_of_week, estimate_strategy, opening_balance_cents, opening_balance_date,
           credit_limit_cents, cl_include_balance, cl_include_inventory, cl_include_production,
-          exposure_limit_cents, exposure_include_production } = parsed.data;
+          exposure_limit_cents, exposure_include_production,
+          agent_commission_rate_bps, commission_tolerance_cents } = parsed.data;
 
   const setClauses: string[] = ["updated_at = now()"];
   const bindings: unknown[] = [];
@@ -99,6 +104,14 @@ export const PATCH = async (
   if (exposure_include_production !== undefined) {
     setClauses.push("exposure_include_production = ?");
     bindings.push(exposure_include_production);
+  }
+  if (agent_commission_rate_bps !== undefined) {
+    setClauses.push("agent_commission_rate_bps = ?");
+    bindings.push(agent_commission_rate_bps);
+  }
+  if (commission_tolerance_cents !== undefined) {
+    setClauses.push("commission_tolerance_cents = ?");
+    bindings.push(commission_tolerance_cents);
   }
   bindings.push("singleton");
 

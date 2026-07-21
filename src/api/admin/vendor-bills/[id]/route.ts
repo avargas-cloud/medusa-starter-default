@@ -22,6 +22,17 @@ import { randomUUID } from "crypto";
 import { getActorUserId, UnauthenticatedError } from "../../purchase-orders/_lib/auth";
 import { zodErrorToBody } from "../../purchase-orders/_lib/format";
 import { recomputeBillFinanceLinks } from "../../../../lib/finance/recompute-bill-finance";
+import { verifySupervisorPin } from "../../../../lib/pos/verify-supervisor-pin";
+import {
+  buildAdjustmentNote,
+  diffBillLines,
+  type AdjLineState,
+} from "../../../../lib/china-finance/bill-adjustment";
+import {
+  describeDrift,
+  loadBillDrift,
+  type BillDrift,
+} from "../../../../lib/china-finance/bill-drift";
 
 // ── Knex type ────────────────────────────────────────────────────────────────
 
@@ -119,6 +130,12 @@ const vendorBillPatchSchema = z.object({
   tariff_vendor_bill_id: z.string().max(200).nullish(),
   notes: z.string().max(2000).nullish(),
   clear_lines_for_type_change: z.boolean().optional(),
+  // Editing a bill already paid by a CONFIRMED wire is refused by default (the
+  // money is gone). A valid supervisor PIN authorises it: the bill's liability
+  // drops, the wire application stays immutable, and the delta engine turns the
+  // difference into an overpay credit — audited in china_finance_bill_adjustment.
+  supervisor_pin: z.string().max(64).optional(),
+  adjustment_reason: z.string().max(500).optional(),
   // Staged line edits, persisted together with the header in a SINGLE request
   // (no per-keystroke auto-save). Draft regular bills only.
   line_quantities: z
@@ -300,73 +317,37 @@ export async function GET(
     0
   );
 
-  // po_drift — does a DRAFT regular bill's product lines still match its PO's
-  // ordered lines? True when "Update From… → Use PO" would add/update/remove a
-  // line (a line was added to the PO after the bill, a qty/cost changed, or a
-  // PO line was removed). The UI uses this ONLY as an advisory nudge (amber
-  // "Update From…" button) — it never affects save/dirty state.
+  // Drift — does this bill still agree with the document it mirrors? Computed by
+  // the SHARED engine (lib/china-finance/bill-drift.ts) so this page and the
+  // China Finance ledger always give the same verdict. Four rules live there:
+  // PO lines, receipt lines (union of the PO's applied receipts — the old check
+  // went blind the moment a bill was pinned), agent-commission reconciliation,
+  // and freight-vs-declared. Advisory only: never affects save/dirty state.
   //
-  // Scoped to a draft regular bill linked to a PO and NOT associated with a
-  // receipt: when a bill mirrors a receipt (e.g. a PARTIAL shipment), the PO's
-  // ordered qty is intentionally larger than the received qty, so comparing
-  // against the PO would be a false alarm. There the receipt is the source of
-  // truth, so we suppress the PO-drift signal entirely.
+  // `po_drift` survives as the legacy boolean the amber "Update From…" button
+  // reads; it is now true for RECEIPT drift too (the button is also the fix
+  // there), but still only on editable (draft regular) bills.
   let po_drift = false;
-  if (
-    header.status === "draft" &&
-    header.bill_type === "regular" &&
-    header.purchase_order_id &&
-    !header.purchase_order_receipt_id
-  ) {
-    const poSrc = await knex.raw(
-      `SELECT pol.id AS pol_id,
-              GREATEST(pol.qty_ordered - COALESCE(pol.qty_cancelled, 0), 0)::int AS qty,
-              COALESCE(pol.unit_cost_cents, 0)::int AS unit_cost_cents
-         FROM purchase_order_line pol
-        WHERE pol.purchase_order_id = ?
-          AND pol.deleted_at IS NULL
-          AND COALESCE(pol.status, 'open') <> 'cancelled'
-          AND GREATEST(pol.qty_ordered - COALESCE(pol.qty_cancelled, 0), 0) > 0`,
-      [header.purchase_order_id]
+  let drift: (BillDrift & { message: string }) | null = null;
+  try {
+    const driftMap = await loadBillDrift(knex, { vendorBillIds: [id] });
+    const d = driftMap.get(id);
+    if (d) {
+      drift = { ...d, message: describeDrift(d) };
+      po_drift =
+        header.status === "draft" &&
+        header.bill_type === "regular" &&
+        (d.kind === "po_lines" || d.kind === "receipt_lines");
+    }
+  } catch (e) {
+    // Advisory signal only — a drift failure must never break the bill page.
+    console.warn(
+      `[vendor-bills] drift check failed for ${id}: ${e instanceof Error ? e.message : e}`
     );
-    const poRows = poSrc.rows as Array<{
-      pol_id: string;
-      qty: number;
-      unit_cost_cents: number;
-    }>;
-    const poByPol = new Map(poRows.map((r) => [r.pol_id, r]));
-    const billProduct = lines.filter(
-      (l) => (l.line_type ?? "product") === "product"
-    );
-    const billByPol = new Map<string, VendorBillLineRow>();
-    for (const l of billProduct) {
-      if (l.purchase_order_line_id) billByPol.set(l.purchase_order_line_id, l);
-    }
-    // A PO line the bill doesn't have (or a qty/cost that changed) → drift.
-    for (const r of poRows) {
-      const bl = billByPol.get(r.pol_id);
-      if (
-        !bl ||
-        Number(bl.qty) !== r.qty ||
-        Number(bl.unit_cost_cents) !== r.unit_cost_cents
-      ) {
-        po_drift = true;
-        break;
-      }
-    }
-    // A bill product line no longer backed by a live PO line → drift (removed).
-    if (!po_drift) {
-      for (const l of billProduct) {
-        if (!l.purchase_order_line_id || !poByPol.has(l.purchase_order_line_id)) {
-          po_drift = true;
-          break;
-        }
-      }
-    }
   }
 
   return res.json({
-    vendor_bill: { ...header, total_landed_cents, lines, po_drift },
+    vendor_bill: { ...header, total_landed_cents, lines, po_drift, drift },
   });
 }
 
@@ -374,8 +355,9 @@ export async function PATCH(
   req: AuthenticatedMedusaRequest,
   res: MedusaResponse
 ) {
+  let actorUserId: string | null = null;
   try {
-    getActorUserId(req);
+    actorUserId = getActorUserId(req) ?? null;
   } catch (err) {
     if (err instanceof UnauthenticatedError) {
       return res
@@ -394,11 +376,11 @@ export async function PATCH(
   const knex = resolveKnex(req);
 
   const lookup = await knex.raw(
-    `SELECT id, status, bill_type, purchase_order_id, purchase_order_receipt_id FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
+    `SELECT id, number, status, bill_type, purchase_order_id, purchase_order_receipt_id FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
     [id]
   );
   const bill = (lookup.rows[0] ?? null) as
-    | { id: string; status: string; bill_type: string; purchase_order_id: string | null; purchase_order_receipt_id: string | null }
+    | { id: string; number: string | null; status: string; bill_type: string; purchase_order_id: string | null; purchase_order_receipt_id: string | null }
     | null;
   if (!bill) {
     return res
@@ -554,6 +536,8 @@ export async function PATCH(
   const removedIds = hasFullLines ? [] : patch.removed_line_ids ?? [];
   const pinProvided = "purchase_order_receipt_id" in patch;
   const hasLineEdits = hasFullLines || qtyEdits.length > 0 || removedIds.length > 0;
+  // Set by the confirmed-wire gate below; drives the audited-adjustment write.
+  let onConfirmedWire = false;
 
   // Shared PO-line map (caps + new-line snapshots) for the bill's PO.
   const poLineById = new Map<
@@ -575,8 +559,23 @@ export async function PATCH(
         WHERE cfb.vendor_bill_id = ? AND cwt.status = 'confirmed' LIMIT 1`,
       [id]
     );
-    if (confirmedWire.rows.length > 0) {
-      return res.status(409).json({ error: "This bill is paid by a confirmed wire and can't be edited", code: "on_confirmed_wire" });
+    // Paid by a confirmed wire → the money already moved, so this is no longer a
+    // free edit: it lowers the bill's liability while the wire application stays
+    // immutable, and the delta engine turns the gap into an overpay CREDIT the
+    // agent owes back. Allowed, but only behind a supervisor PIN and always
+    // audited (see the adjustment record written after the line writes below).
+    onConfirmedWire = confirmedWire.rows.length > 0;
+    if (onConfirmedWire) {
+      const pinOk = await verifySupervisorPin(knex, patch.supervisor_pin);
+      if (!pinOk) {
+        return res.status(409).json({
+          error: patch.supervisor_pin
+            ? "Invalid supervisor PIN"
+            : "This bill is already paid by a confirmed wire. A supervisor PIN is required to adjust it — the difference becomes a credit against the agent.",
+          code: "on_confirmed_wire_pin_required",
+          requires_supervisor_pin: true,
+        });
+      }
     }
 
     const polRows = await knex.raw(
@@ -621,15 +620,24 @@ export async function PATCH(
     }
   }
 
-  // Existing product lines on the bill (id → row).
-  let existingProductLines: Array<{ id: string; purchase_order_line_id: string | null }> = [];
+  // Existing product lines on the bill (id → row). sku/qty/unit_cost are carried
+  // so an audited adjustment can state exactly what moved ("RM5: 50 → 25").
+  type ExistingLine = {
+    id: string;
+    purchase_order_line_id: string | null;
+    sku: string | null;
+    qty: number;
+    unit_cost_cents: number;
+  };
+  let existingProductLines: ExistingLine[] = [];
   if (hasLineEdits) {
     const plResult = await knex.raw(
-      `SELECT id, purchase_order_line_id FROM vendor_bill_line
+      `SELECT id, purchase_order_line_id, sku, qty::int AS qty, unit_cost_cents::int AS unit_cost_cents
+         FROM vendor_bill_line
         WHERE vendor_bill_id = ? AND deleted_at IS NULL AND COALESCE(line_type,'product') = 'product'`,
       [id]
     );
-    existingProductLines = plResult.rows as Array<{ id: string; purchase_order_line_id: string | null }>;
+    existingProductLines = plResult.rows as ExistingLine[];
   }
   const existingById = new Map(existingProductLines.map((l) => [l.id, l]));
 
@@ -761,6 +769,75 @@ export async function PATCH(
       if (!recompute.ok) {
         if (trx) await trx.rollback();
         return res.status(409).json({ error: recompute.message, code: recompute.code, conflicts: recompute.conflicts });
+      }
+    }
+
+    // Audited adjustment of an already-PAID bill. The credit stays DERIVED
+    // (applied_cents − amount_cents, produced by the delta engine on the next
+    // China Finance sync); this row is the provenance that explains it.
+    if (onConfirmedWire && hasLineEdits) {
+      const beforeState: AdjLineState[] = existingProductLines.map((l) => ({
+        id: l.id,
+        sku: l.sku,
+        qty: Number(l.qty),
+        unit_cost_cents: Number(l.unit_cost_cents),
+      }));
+      const removedSet = new Set(removedIds);
+      const qtyById = new Map(qtyEdits.map((e) => [e.id, e.qty]));
+      const afterState: AdjLineState[] = hasFullLines
+        ? fullLines!.map((l) => ({
+            id: l.id ?? null,
+            sku: l.sku ?? poLineById.get(l.purchase_order_line_id)?.sku ?? null,
+            qty: l.qty,
+            unit_cost_cents: l.unit_cost_cents,
+          }))
+        : beforeState
+            .filter((l) => !removedSet.has(l.id as string))
+            .map((l) => ({ ...l, qty: qtyById.get(l.id as string) ?? l.qty }));
+
+      const changes = diffBillLines(beforeState, afterState);
+      const previousTotalCents = beforeState.reduce(
+        (n, l) => n + l.qty * l.unit_cost_cents,
+        0
+      );
+      const newTotalCents = afterState.reduce(
+        (n, l) => n + l.qty * l.unit_cost_cents,
+        0
+      );
+
+      if (changes.length > 0 && previousTotalCents !== newTotalCents) {
+        const cfbRows = await db.raw(
+          `SELECT id FROM china_finance_bill WHERE vendor_bill_id = ? LIMIT 1`,
+          [id]
+        );
+        const cfbId =
+          (cfbRows.rows[0] as { id?: string } | undefined)?.id ?? null;
+        const note = buildAdjustmentNote({
+          changes,
+          previousTotalCents,
+          newTotalCents,
+          billNumber: bill.number,
+          sourceLabel: bill.purchase_order_receipt_id ? "the receipt" : "the purchase order",
+          reason: patch.adjustment_reason ?? null,
+        });
+        await db.raw(
+          `INSERT INTO china_finance_bill_adjustment
+             (id, vendor_bill_id, china_finance_bill_id, previous_total_cents,
+              new_total_cents, delta_cents, line_changes, note, reason, created_by_user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?)`,
+          [
+            `cfba_${randomUUID().replace(/-/g, "")}`,
+            id,
+            cfbId,
+            previousTotalCents,
+            newTotalCents,
+            newTotalCents - previousTotalCents,
+            JSON.stringify(changes),
+            note,
+            patch.adjustment_reason ?? null,
+            actorUserId,
+          ]
+        );
       }
     }
 

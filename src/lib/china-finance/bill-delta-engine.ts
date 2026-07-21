@@ -233,6 +233,34 @@ export async function applyBillTotalChange(
   const previousTotalCents = members.reduce((n, m) => n + m.amount_cents, 0);
   const delta = targetTotalCents - previousTotalCents;
 
+  // Consumed-credit guard: an INCREASE shrinks the group's overpay credit
+  // (generated = Σ confirmed applied − total). If wires already CONSUMED more
+  // credit than would remain, refuse — the consumption lines are settled cash
+  // planning and must never be silently stranded. Resolve by removing the
+  // credit lines from their (draft) wires first. Table may predate migration →
+  // treat as zero consumed.
+  if (delta > 0) {
+    const memberIds = members.map((m) => m.id);
+    const confirmedApplied = members.reduce(
+      (n, m) => n + (m.wire_status === "confirmed" ? (m.applied_cents ?? 0) : 0),
+      0
+    );
+    const consumed = await rows<{ used: string | number }>(
+      db,
+      `SELECT COALESCE(SUM(amount_cents), 0) AS used
+         FROM china_finance_wire_credit WHERE source_bill_id = ANY(?)`,
+      [memberIds]
+    )
+      .then((r) => Number(r[0]?.used ?? 0))
+      .catch(() => 0);
+    const newGenerated = Math.max(0, confirmedApplied - targetTotalCents);
+    if (consumed > newGenerated) {
+      throw new Error(
+        `applyBillTotalChange: increase would strand ${consumed - newGenerated}¢ of already-consumed overpay credit on group ${groupId} — remove the credit lines from their wires first`
+      );
+    }
+  }
+
   const result: BillDeltaResult = {
     rootBillId: groupId,
     previousTotalCents,

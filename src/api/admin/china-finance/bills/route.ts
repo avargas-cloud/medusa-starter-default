@@ -14,6 +14,7 @@ import type {
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { applyBillTotalChange } from "../../../../lib/china-finance/bill-delta-engine";
+import { describeDrift, loadBillDrift } from "../../../../lib/china-finance/bill-drift";
 
 const VEETECH_VENDOR_ID = "qbvnd_01KPGGSG2J1BEEWQE5ET30AHFC";
 
@@ -378,7 +379,143 @@ export const GET = async (
   const s = summary[0];
   const balance_cents = s.total_received_cents - s.total_expenses_cents;
 
-  return res.json({ confirmed, pending, balance_cents, summary: s });
+  // ── Overpay credits ────────────────────────────────────────────────────────
+  // usable_credits = the POOL (per source bill: generated − consumed > 0),
+  // wire_credits   = the consumption lines, grouped per wire for display.
+  // Derived live, never materialised. Missing table (pre-migration) → empty.
+  let usable_credits: Array<Record<string, unknown>> = [];
+  let creditsByWire = new Map<string, Array<Record<string, unknown>>>();
+  try {
+    const { rows: pool } = await knex.raw(`
+      WITH confirmed_paid AS (
+        SELECT a.bill_id, SUM(a.applied_cents)::bigint AS applied
+          FROM china_wire_transfer_application a
+          JOIN china_wire_transfer w ON w.id = a.wire_transfer_id
+         WHERE w.status = 'confirmed'
+         GROUP BY a.bill_id
+      ), consumed AS (
+        SELECT c.source_bill_id, SUM(c.amount_cents)::bigint AS used
+          FROM china_finance_wire_credit c
+         GROUP BY c.source_bill_id
+      )
+      SELECT b.id AS source_bill_id,
+             b.invoice_number,
+             b.document_type,
+             vb.number AS vendor_bill_number,
+             cp.applied::int AS confirmed_applied_cents,
+             b.amount_cents,
+             GREATEST(cp.applied - b.amount_cents, 0)::int AS generated_cents,
+             COALESCE(co.used, 0)::int AS consumed_cents,
+             (GREATEST(cp.applied - b.amount_cents, 0) - COALESCE(co.used, 0))::int AS available_cents,
+             (SELECT w.sent_date::text
+                FROM china_wire_transfer_application a2
+                JOIN china_wire_transfer w ON w.id = a2.wire_transfer_id
+               WHERE a2.bill_id = b.id AND w.status = 'confirmed'
+               ORDER BY w.sent_date DESC NULLS LAST LIMIT 1) AS origin_sent_date
+        FROM china_finance_bill b
+        JOIN confirmed_paid cp ON cp.bill_id = b.id
+        LEFT JOIN consumed co ON co.source_bill_id = b.id
+        LEFT JOIN vendor_bill vb ON vb.id = b.vendor_bill_id
+       WHERE cp.applied > b.amount_cents
+       ORDER BY origin_sent_date DESC NULLS LAST
+    `) as { rows: Array<Record<string, unknown>> };
+    usable_credits = pool.filter((p) => Number(p.available_cents) > 0);
+
+    const { rows: lines } = await knex.raw(`
+      SELECT c.id, c.wire_transfer_id, c.source_bill_id, c.amount_cents, c.note,
+             c.source_wire_sent_date_at_apply::text AS origin_sent_date,
+             c.source_applied_cents_at_apply,
+             c.source_bill_amount_cents_at_apply,
+             -- LIVE generated credit of the source bill — lets the UI flag a
+             -- line as PARTIAL when it consumed only part of the credit (incl.
+             -- when a later correction generated more after this line applied).
+             GREATEST(COALESCE((SELECT SUM(a.applied_cents)::bigint
+                                  FROM china_wire_transfer_application a
+                                  JOIN china_wire_transfer w ON w.id = a.wire_transfer_id
+                                 WHERE a.bill_id = b.id AND w.status = 'confirmed'), 0)
+                      - b.amount_cents, 0)::int AS source_generated_cents,
+             b.invoice_number, vb.number AS vendor_bill_number
+        FROM china_finance_wire_credit c
+        JOIN china_finance_bill b ON b.id = c.source_bill_id
+        LEFT JOIN vendor_bill vb ON vb.id = b.vendor_bill_id
+       ORDER BY c.created_at ASC
+    `) as { rows: Array<Record<string, unknown>> };
+    creditsByWire = new Map();
+    for (const l of lines) {
+      const wid = l.wire_transfer_id as string;
+      const arr = creditsByWire.get(wid);
+      if (arr) arr.push(l);
+      else creditsByWire.set(wid, [l]);
+    }
+  } catch {
+    // Table not migrated yet — the page simply shows no credit pool.
+  }
+  for (const g of confirmed) {
+    const wid = (g.wire as { id: string }).id;
+    (g as Record<string, unknown>).credits = creditsByWire.get(wid) ?? [];
+  }
+
+  // Drift enrichment — same engine the vendor-bill page uses, scoped to the
+  // vendor bills already on this page (never a whole-table scan). A bill whose
+  // lines/commission no longer match its source gets an advisory `drift` object;
+  // the UI renders it as a warning icon + message. Advisory only, and a failure
+  // here must never take down the ledger.
+  try {
+    const pageVbIds = Array.from(
+      new Set(
+        [...confirmed.flatMap((g) => g.bills), ...pending]
+          .map((r) => r.vendor_bill_id as string | null)
+          .filter((x): x is string => !!x)
+      )
+    );
+    if (pageVbIds.length > 0) {
+      const driftMap = await loadBillDrift(knex, { vendorBillIds: pageVbIds });
+      const attach = (row: Record<string, unknown>) => {
+        const vbId = row.vendor_bill_id as string | null;
+        const d = vbId ? driftMap.get(vbId) : undefined;
+        if (d) {
+          row.drift = {
+            kind: d.kind,
+            delta_cents: d.delta_cents,
+            expected_cents: d.expected_cents,
+            bill_total_cents: d.bill_total_cents,
+            source_label: d.source_label,
+            on_confirmed_wire: d.on_confirmed_wire,
+            message: describeDrift(d),
+          };
+        }
+      };
+      for (const g of confirmed) g.bills.forEach(attach);
+      for (const p of pending) attach(p);
+
+      // Overpay-credit provenance: a PIN-audited adjustment of a paid bill left
+      // `applied_cents > amount_cents`. Attach the latest adjustment note so the
+      // UI can EXPLAIN the credit (the note is the sentence the buyer forwards
+      // to the purchasing agent), not just show a bare green number.
+      const { rows: adjRows } = await knex.raw(
+        `SELECT DISTINCT ON (vendor_bill_id) vendor_bill_id, note, delta_cents
+           FROM china_finance_bill_adjustment
+          WHERE vendor_bill_id = ANY(?)
+          ORDER BY vendor_bill_id, created_at DESC`,
+        [pageVbIds]
+      ).catch(() => ({ rows: [] })) as { rows: Array<{ vendor_bill_id: string; note: string | null; delta_cents: number }> };
+      if (adjRows.length > 0) {
+        const noteByVb = new Map(adjRows.map((a) => [a.vendor_bill_id, a.note]));
+        const attachNote = (row: Record<string, unknown>) => {
+          const vbId = row.vendor_bill_id as string | null;
+          if (vbId && noteByVb.has(vbId)) row.adjustment_note = noteByVb.get(vbId) ?? null;
+        };
+        for (const g of confirmed) g.bills.forEach(attachNote);
+        for (const p of pending) attachNote(p);
+      }
+    }
+  } catch (e) {
+    console.warn(
+      `[china-finance] drift enrichment failed: ${e instanceof Error ? e.message : e}`
+    );
+  }
+
+  return res.json({ confirmed, pending, balance_cents, summary: s, usable_credits });
 };
 
 // ── POST /admin/china-finance/bills ──────────────────────────────────────────
