@@ -298,3 +298,73 @@ export async function computeReceiptDrift(
   }
   return [...byReceipt.values()];
 }
+
+export interface ReconcileResult {
+  enqueued: boolean;
+  driftedSkus: string[];
+  reason?: string;
+}
+
+/**
+ * RECONCILE-ON-CONFIRM. Called by the item-receipt poller right after an ADD
+ * confirms in QB (list_id + edit_sequence just written). If a receipt line was
+ * edited while the ADD was still in-flight, the frozen ADD payload shipped the
+ * pre-edit qty and QB now diverges from the live receipt. This detects that
+ * QUANTITY drift and auto-enqueues a corrective Mod (rehydrated from live state)
+ * behind the atomic mod-enqueue gate — closing the RM5 / PO-1081 class of silent
+ * divergence going forward, without a periodic writer that could loop.
+ *
+ * QTY-only trigger: unit-cost drift alone does NOT auto-Mod (changing cost on a
+ * QB receipt has accounting side effects once a bill/AVCO consumed it). Any Mod
+ * enqueued here still rehydrates the live cost, but only qty drift triggers it.
+ *
+ * Idempotent: the atomic gate refuses if a Mod is already waiting/submitted (a
+ * concurrent user edit wins). Safe to call unconditionally at confirm time.
+ */
+export async function reconcileReceiptModIfDrifted(
+  knex: KnexRaw,
+  receiptId: string
+): Promise<ReconcileResult> {
+  const driftRows = await knex.raw(
+    `WITH eff AS (
+       SELECT p.id AS pipeline_id,
+              CASE WHEN p.mod_status = 'completed' THEN p.mod_payload ELSE p.payload END AS qb_payload
+       FROM qb_item_receipt_pipeline p
+       WHERE p.purchase_order_receipt_id = ?
+         AND p.status = 'synced'
+         AND p.void_status IS NULL
+         AND p.deleted_at IS NULL
+         AND COALESCE(p.mod_status, '') NOT IN ('waiting', 'submitted', 'error')
+     ),
+     qbl AS (
+       SELECT (l->>'receipt_line_id') AS receipt_line_id,
+              (l->>'sku') AS sku,
+              (l->>'qty_received_now')::numeric AS qb_qty
+       FROM eff, jsonb_array_elements(eff.qb_payload->'lines') l
+     )
+     SELECT qbl.sku, qbl.qb_qty, rl.qty_received_now::numeric AS live_qty
+     FROM qbl
+     JOIN purchase_order_receipt_line rl
+       ON rl.id = qbl.receipt_line_id AND rl.deleted_at IS NULL
+     WHERE rl.qty_received_now::numeric <> qbl.qb_qty`,
+    [receiptId]
+  );
+  const drifted = (driftRows.rows ?? []) as { sku: string }[];
+  if (drifted.length === 0) return { enqueued: false, driftedSkus: [] };
+
+  const driftedSkus = drifted.map((d) => String(d.sku));
+
+  const built = await buildItemReceiptModPayload(knex, receiptId);
+  if (!built.ok) return { enqueued: false, driftedSkus, reason: built.reason };
+
+  const enqueued = await enqueueItemReceiptModAtomic(
+    knex,
+    built.pipeline_id,
+    built.payload
+  );
+  return {
+    enqueued,
+    driftedSkus,
+    reason: enqueued ? undefined : "atomic gate rejected (mod already in flight)",
+  };
+}

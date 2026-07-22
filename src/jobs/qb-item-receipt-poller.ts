@@ -34,6 +34,10 @@ import {
   markStaleRowsAsFailed,
   STANDARD_STALE_CONFIG,
 } from "../lib/quickbooks/stale-row-cleanup";
+import {
+  reconcileReceiptModIfDrifted,
+  type KnexRaw,
+} from "../lib/purchase-orders/item-receipt-mod-payload";
 
 const bridgeUrl = (): string =>
   process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
@@ -448,6 +452,29 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
       logger.info(
         `${TAG} receipt ${row.purchase_order_receipt_id} synced → QB TxnID=${txnId}${refNumber ? ` Ref=${refNumber}` : ""}${editSequence ? ` EditSeq=${editSequence}` : ""}`
       );
+
+      // Reconcile-on-confirm: if a line was edited while this ADD was in-flight,
+      // the frozen ADD payload just shipped a stale qty to QB. Auto-enqueue a
+      // corrective Mod from live state (atomic-gated, qty-drift only). Non-fatal.
+      try {
+        const rec = await reconcileReceiptModIfDrifted(
+          knex as unknown as KnexRaw,
+          row.purchase_order_receipt_id
+        );
+        if (rec.enqueued) {
+          logger.info(
+            `${TAG} receipt ${row.purchase_order_receipt_id} drifted during ADD latency (${rec.driftedSkus.join(", ")}) — auto-enqueued corrective Mod`
+          );
+        } else if (rec.driftedSkus.length > 0) {
+          logger.warn(
+            `${TAG} receipt ${row.purchase_order_receipt_id} drifted (${rec.driftedSkus.join(", ")}) but Mod not enqueued: ${rec.reason}`
+          );
+        }
+      } catch (recErr: any) {
+        logger.warn(
+          `${TAG} reconcile-on-confirm failed for receipt ${row.purchase_order_receipt_id}: ${recErr.message}`
+        );
+      }
     } catch (err: any) {
       logger.warn(`${TAG} poll failed for row ${row.id}: ${err.message}`);
     }
