@@ -111,3 +111,5 @@ main().catch((e) => {
   console.error("verify-uber-adapter crashed:", e);
   process.exit(1);
 });
+
+// deploy retrigger 2026-07-22: Railway orchestrator infra error x2 (Diagnose: "not your code")
