@@ -207,6 +207,87 @@ const refreshNullPoLineIds = async (
   return refreshedPayload;
 };
 
+// LAYER-1 fix: refresh the frozen ADD payload's qty/cost from the LIVE receipt
+// lines right before dispatch. If a line was edited (or dropped to 0) while this
+// ADD sat in the queue, the ADD ships the corrected qty instead of the pre-edit
+// snapshot — closing the edit-while-in-flight window at the source. (Reconcile-
+// on-confirm is the backstop for edits that land AFTER dispatch.) DB-only: reads
+// Medusa, never queries QB. Persists only when something actually changed.
+const refreshAddPayloadFromLive = async (
+  knex: any,
+  logger: any,
+  tag: string,
+  payload: Record<string, unknown>,
+  rowId: string
+): Promise<Record<string, unknown>> => {
+  const lines = payload.lines as Array<Record<string, unknown>> | undefined;
+  if (!lines?.length) return payload;
+  const receiptLineIds = lines
+    .map((l) => l.receipt_line_id as string | undefined)
+    .filter((v): v is string => !!v);
+  if (!receiptLineIds.length) return payload;
+
+  const liveRows: Array<{ id: string; qty: number; unit_cost_cents: number }> =
+    await knex
+      .raw(
+        `SELECT rl.id,
+                rl.qty_received_now AS qty,
+                COALESCE(rl.unit_cost_cents_override, pol.unit_cost_cents) AS unit_cost_cents
+           FROM purchase_order_receipt_line rl
+           JOIN purchase_order_line pol ON pol.id = rl.purchase_order_line_id
+          WHERE rl.id = ANY(?::text[]) AND rl.deleted_at IS NULL`,
+        [receiptLineIds]
+      )
+      .then((r: any) => r.rows);
+  const liveById = new Map(liveRows.map((r) => [r.id, r]));
+
+  let changed = false;
+  const refreshedLines: Array<Record<string, unknown>> = [];
+  for (const l of lines) {
+    const rid = l.receipt_line_id as string | undefined;
+    const live = rid ? liveById.get(rid) : undefined;
+    if (!live || Number(live.qty) <= 0) {
+      // line deleted or edited to 0 → omit from the ADD (QB shouldn't receive it)
+      changed = true;
+      continue;
+    }
+    const newQty = Number(live.qty);
+    const newCost = Number(live.unit_cost_cents);
+    if (
+      Number(l.qty_received_now) !== newQty ||
+      Number(l.unit_cost_cents) !== newCost
+    ) {
+      changed = true;
+    }
+    refreshedLines.push({
+      ...l,
+      qty_received_now: newQty,
+      unit_cost_cents: newCost,
+    });
+  }
+
+  if (!changed) return payload;
+
+  // Never send an empty ADD — if every line vanished, leave the frozen payload
+  // as-is and let confirm/void handling deal with it.
+  if (refreshedLines.length === 0) {
+    logger.warn(
+      `${tag} row ${rowId}: every line is now 0/deleted — leaving ADD payload untouched (not sending an empty receipt)`
+    );
+    return payload;
+  }
+
+  const refreshedPayload = { ...payload, lines: refreshedLines };
+  await knex.raw(
+    `UPDATE qb_item_receipt_pipeline SET payload = ?::jsonb, updated_at = NOW() WHERE id = ?`,
+    [JSON.stringify(refreshedPayload), rowId]
+  );
+  logger.info(
+    `${tag} row ${rowId}: refreshed ADD payload qty/cost from live before submit (${refreshedLines.length} line(s))`
+  );
+  return refreshedPayload;
+};
+
 // QB Desktop error code 3175 = stale EditSequence. Detected so chunk 4 can
 // trigger an automatic refresh; for now we just tag the row's last_error so
 // the admin UI can show a specific badge instead of a generic "QB error".
@@ -309,8 +390,11 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
 
   for (const row of unsubmitted) {
     try {
-      const freshPayload = await refreshNullPoLineIds(
+      let freshPayload = await refreshNullPoLineIds(
         knex, logger, TAG, row.payload as Record<string, unknown>, row.id, "payload"
+      );
+      freshPayload = await refreshAddPayloadFromLive(
+        knex, logger, TAG, freshPayload, row.id
       );
       const operationId = await submitAddToBridge(freshPayload);
       await knex.raw(
@@ -518,8 +602,11 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     }
 
     try {
-      const freshPayload = await refreshNullPoLineIds(
+      let freshPayload = await refreshNullPoLineIds(
         knex, logger, TAG, row.payload as Record<string, unknown>, row.id, "payload"
+      );
+      freshPayload = await refreshAddPayloadFromLive(
+        knex, logger, TAG, freshPayload, row.id
       );
       const operationId = await submitAddToBridge(freshPayload);
       await knex.raw(
