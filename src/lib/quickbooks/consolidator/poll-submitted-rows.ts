@@ -26,6 +26,7 @@ import {
 } from "./refresh-edit-sequence";
 import { buildEstimatePatch } from "../qb-metadata-types";
 import { resubmitByStep, type ResubmitRow } from "./resubmit-by-step";
+import { activateRefundPaymentRow } from "./refund-payment-activation";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -563,7 +564,10 @@ export async function pollSubmittedRows(
             );
           }
 
-          // Activate waiting refund_payment rows (ALL refund types)
+          // Activate waiting refund_payment rows (ALL refund types).
+          // Shared logic in activateRefundPaymentRow — if the bridge call
+          // throws here, the row stays 'waiting' and runRefundPaymentRecovery
+          // re-claims it on the next consolidator tick.
           if (txnId) {
             try {
               const { rows: rpRows } = await pool.query(
@@ -576,92 +580,7 @@ export async function pollSubmittedRows(
               );
               for (const rpRow of rpRows) {
                 try {
-                  const rpPayload = rpRow.payload ?? {};
-                  const { rows: cpRows } = await pool.query(
-                    `SELECT cp.reference, cp.amount, cp.metadata,
-                                                cp.batch_day,
-                                                cust.metadata->>'qb_list_id' AS customer_list_id
-                                         FROM customer_payment cp
-                                         JOIN customer cust ON cust.id = cp.customer_id
-                                         WHERE cp.id = $1`,
-                    [rpRow.reference_id]
-                  );
-                  const cp = cpRows[0];
-                  if (!cp?.customer_list_id) {
-                    logger.warn(
-                      `${LOG_PREFIX} ⚠️ No customer QB ListID for refund_payment ${rpRow.id}`
-                    );
-                    continue;
-                  }
-
-                  let creditTxnId: string | null = null;
-
-                  if (rpPayload.type === "credit_memo") {
-                    const { rows: cmRows } = await pool.query(
-                      `SELECT qb_txn_id FROM pos_credit_memo WHERE credit_memo_number = $1`,
-                      [cp.reference]
-                    );
-                    creditTxnId = cmRows[0]?.qb_txn_id ?? null;
-                    if (!creditTxnId) {
-                      logger.warn(
-                        `${LOG_PREFIX} ⚠️ No QB TxnID for credit memo ${cp.reference} — refund_payment skipped`
-                      );
-                      continue;
-                    }
-                  } else {
-                    creditTxnId =
-                      rpPayload.originalPaymentTxnId ??
-                      cp.metadata?.qb_txn_id ??
-                      null;
-                    if (!creditTxnId) {
-                      logger.warn(
-                        `${LOG_PREFIX} ⚠️ No original ReceivePayment TxnID for refund_payment ${rpRow.id} — skipping`
-                      );
-                      continue;
-                    }
-                  }
-
-                  const refundAmount = cp.metadata?.refund_amount
-                    ? Number(cp.metadata.refund_amount)
-                    : Number(cp.amount);
-                  const amountDollars = Number(refundAmount / 100).toFixed(2);
-
-                  // Explicit TxnDate (durable rule: EVERY ReceivePayment
-                  // callsite sends one) — refund date chosen at process time,
-                  // batch_day fallback for legacy rows without payload.txnDate.
-                  const rpTxnDate =
-                    (rpPayload.txnDate as string | undefined) ??
-                    (cp.batch_day as string | undefined) ??
-                    undefined;
-
-                  const rpRes = await bridgeFetch("POST", "/api/sync/enqueue", {
-                    type: "receive-payment",
-                    action: "add",
-                    data: {
-                      customerId: cp.customer_list_id,
-                      invoiceId: txnId,
-                      creditTxnId: creditTxnId,
-                      amount: Number(amountDollars),
-                      totalAmount: 0,
-                      paymentAmount: 0,
-                      ...(rpTxnDate ? { date: rpTxnDate } : {}),
-                    },
-                  });
-                  if (!rpRes?.operation_id) {
-                    logger.warn(
-                      `${LOG_PREFIX} ⚠️ Bridge did not return operation_id for refund_payment ${rpRow.id}`
-                    );
-                    continue;
-                  }
-                  await pool.query(
-                    `UPDATE qb_order_pipeline
-                                         SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW()
-                                         WHERE id = $1`,
-                    [rpRow.id, rpRes.operation_id]
-                  );
-                  logger.info(
-                    `${LOG_PREFIX} ✅ refund_payment ${rpRow.id} activated (${rpPayload.type ?? "direct"}) → bridge op ${rpRes.operation_id}`
-                  );
+                  await activateRefundPaymentRow(pool, logger, rpRow, txnId);
                 } catch (rpErr: any) {
                   logger.warn(
                     `${LOG_PREFIX} ⚠️ Failed to activate refund_payment ${rpRow.id}: ${rpErr.message}`

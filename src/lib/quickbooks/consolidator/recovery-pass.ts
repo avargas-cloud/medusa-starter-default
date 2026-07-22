@@ -1,9 +1,9 @@
 import { getDbPool } from "../../../api/utils/db-pool";
-import { bridgeFetch } from "../client/core";
 import {
   closeSalesOrderInQb,
   reopenSalesOrderInQb,
 } from "../client/sales-orders";
+import { activateRefundPaymentRow } from "./refund-payment-activation";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -87,118 +87,75 @@ export async function runOrphanedProcessingRecovery(
 }
 
 /**
- * Recovery pass: orphaned waiting refund_payment rows whose depends_on
- * write_check is already confirmed (e.g. server restarted mid-confirmation).
- * Re-enqueues the receive-payment bridge call and marks the row submitted.
+ * Recovery pass for refund_payment rows whose depends_on write_check is
+ * already confirmed. Claims two shapes:
+ *  - 'waiting' rows orphaned mid-confirmation (server restarted before the
+ *    write_check-confirm path could activate them), and
+ *  - 'failed' rows with a due next_retry_at — refund_payment is NOT in the
+ *    pending-dispatch step list, so timeout-pass casualties (bridge outage)
+ *    had no retry path and stayed failed forever (Refund PAY-3179, 2026-07-22).
+ * Activation itself lives in activateRefundPaymentRow (shared with
+ * poll-submitted-rows); the bridge call is idempotency-keyed, so a retry after
+ * a lost response cannot mint a duplicate $0 ReceivePayment.
  */
 export async function runRefundPaymentRecovery(logger: any): Promise<void> {
   const pool = getDbPool();
   try {
     const { rows: orphanRows } = await pool.query(`
-            SELECT rp.id, rp.reference_id, rp.payload, wc.qb_txn_id AS check_txn_id
+            SELECT rp.id, rp.reference_id, rp.payload, rp.status, rp.retry_count,
+                   wc.qb_txn_id AS check_txn_id
             FROM qb_order_pipeline rp
             JOIN qb_order_pipeline wc ON wc.id = rp.depends_on
             WHERE rp.step   = 'refund_payment'
-              AND rp.status = 'waiting'
               AND wc.step   = 'write_check'
               AND wc.status = 'confirmed'
               AND wc.qb_txn_id IS NOT NULL
+              AND (
+                rp.status = 'waiting'
+                OR (rp.status = 'failed'
+                    AND rp.next_retry_at IS NOT NULL
+                    AND rp.next_retry_at <= NOW()
+                    AND COALESCE(rp.retry_count, 0) < 8)
+              )
         `);
 
     if (orphanRows.length > 0) {
       logger.info(
-        `${LOG_PREFIX} 🔄 Recovery: found ${orphanRows.length} orphaned refund_payment row(s) to activate`
+        `${LOG_PREFIX} 🔄 Recovery: found ${orphanRows.length} refund_payment row(s) to activate`
       );
     }
 
     for (const rpRow of orphanRows) {
       try {
-        const checkTxnId: string = rpRow.check_txn_id;
-        const rpPayload = rpRow.payload ?? {};
-
-        const { rows: cpRows } = await pool.query(
-          `SELECT cp.reference, cp.amount, cp.metadata,
-                            cp.batch_day,
-                            cust.metadata->>'qb_list_id' AS customer_list_id
-                     FROM customer_payment cp
-                     JOIN customer cust ON cust.id = cp.customer_id
-                     WHERE cp.id = $1`,
-          [rpRow.reference_id]
-        );
-        const cp = cpRows[0];
-        if (!cp?.customer_list_id) {
-          logger.warn(
-            `${LOG_PREFIX} ⚠️ Recovery: no customer QB ListID for refund_payment ${rpRow.id}`
-          );
-          continue;
-        }
-
-        let creditTxnId: string | null = null;
-        if (rpPayload.type === "credit_memo") {
-          const { rows: cmRows } = await pool.query(
-            `SELECT qb_txn_id FROM pos_credit_memo WHERE credit_memo_number = $1`,
-            [cp.reference]
-          );
-          creditTxnId = cmRows[0]?.qb_txn_id ?? null;
-          if (!creditTxnId) {
-            logger.warn(
-              `${LOG_PREFIX} ⚠️ Recovery: no QB TxnID for credit memo ${cp.reference} — skipping ${rpRow.id}`
-            );
-            continue;
-          }
-        } else {
-          creditTxnId =
-            rpPayload.originalPaymentTxnId ?? cp.metadata?.qb_txn_id ?? null;
-          if (!creditTxnId) {
-            logger.warn(
-              `${LOG_PREFIX} ⚠️ Recovery: no original payment TxnID for refund_payment ${rpRow.id} — skipping`
-            );
-            continue;
-          }
-        }
-
-        const refundAmount = cp.metadata?.refund_amount
-          ? Number(cp.metadata.refund_amount)
-          : Number(cp.amount);
-        const amountDollars = Number(refundAmount / 100).toFixed(2);
-
-        // Explicit TxnDate (durable rule) — refund date from payload, batch_day
-        // fallback for legacy rows.
-        const rpTxnDate =
-          (rpPayload.txnDate as string | undefined) ??
-          (cp.batch_day as string | undefined) ??
-          undefined;
-
-        const rpRes = await bridgeFetch("POST", "/api/sync/enqueue", {
-          type: "receive-payment",
-          action: "add",
-          data: {
-            customerId: cp.customer_list_id,
-            invoiceId: checkTxnId,
-            creditTxnId: creditTxnId,
-            amount: Number(amountDollars),
-            totalAmount: 0,
-            paymentAmount: 0,
-            ...(rpTxnDate ? { date: rpTxnDate } : {}),
-          },
-        });
-        if (!rpRes?.operation_id) {
-          logger.warn(
-            `${LOG_PREFIX} ⚠️ Recovery: bridge did not return operation_id for ${rpRow.id}`
-          );
-          continue;
-        }
-        await pool.query(
-          `UPDATE qb_order_pipeline
-                     SET status = 'submitted', bridge_op_id = $2, submitted_at = NOW()
-                     WHERE id = $1`,
-          [rpRow.id, rpRes.operation_id]
-        );
-        logger.info(
-          `${LOG_PREFIX} ✅ Recovery: refund_payment ${rpRow.id} activated (${rpPayload.type ?? "direct"}) → bridge op ${rpRes.operation_id}`
+        await activateRefundPaymentRow(
+          pool,
+          logger,
+          rpRow,
+          rpRow.check_txn_id as string,
+          "Recovery: "
         );
       } catch (recErr: unknown) {
         const msg = recErr instanceof Error ? recErr.message : String(recErr);
+        if (rpRow.status === "failed") {
+          // Bridge unreachable on a retry attempt — reschedule with a growing
+          // backoff instead of stranding the row (attempt cap enforced by the
+          // claim query above). 'waiting' rows keep their status: the next
+          // consolidator tick re-claims them for free.
+          const attempt = Number(rpRow.retry_count ?? 0) + 1;
+          try {
+            await pool.query(
+              `UPDATE qb_order_pipeline
+                  SET retry_count   = $2,
+                      error         = $3,
+                      next_retry_at = NOW() + (LEAST($2 * 2, 30) || ' minutes')::interval,
+                      updated_at    = NOW()
+                WHERE id = $1 AND status = 'failed'`,
+              [rpRow.id, attempt, msg]
+            );
+          } catch {
+            // non-fatal — the row keeps its previous next_retry_at
+          }
+        }
         logger.warn(
           `${LOG_PREFIX} ⚠️ Recovery: failed to activate ${rpRow.id}: ${msg}`
         );
