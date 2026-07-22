@@ -182,5 +182,12 @@ export default defineMiddlewares({
       method: ["POST"],
       middlewares: [idempotency("admin.orders.create-shipment")],
     },
+    // Local Delivery handoff (own driver) — fulfills + ships + marks
+    // delivered in one shot; a double-click must replay, never re-run.
+    {
+      matcher: "/admin/orders/:id/driver-delivery",
+      method: ["POST"],
+      middlewares: [idempotency("admin.orders.driver-delivery")],
+    },
   ],
 });

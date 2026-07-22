@@ -90,8 +90,9 @@ interface InvoiceServiceShape {
 
 /** Run the hardened create-fulfillment-force handler in-process, capturing
  * its response instead of writing to the wire. Reuses 600+ lines of POS
- * fulfillment hardening without an HTTP self-call. */
-async function createFulfillmentInProcess(
+ * fulfillment hardening without an HTTP self-call. Also used by the
+ * driver-delivery command (Local Delivery — no label to buy). */
+export async function createFulfillmentInProcess(
   req: MedusaRequest,
   body: Record<string, unknown>
 ): Promise<{ status: number; fulfillmentId: string | null; payload: unknown }> {
