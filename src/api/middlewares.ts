@@ -126,6 +126,14 @@ export default defineMiddlewares({
       matcher: "/pub/*",
       middlewares: [pubCorsMiddleware],
     },
+    // Uber Direct webhook: HMAC (X-Uber-Signature) verifies the RAW bytes —
+    // re-stringified JSON does not round-trip byte-identically in Node.
+    {
+      matcher: "/pub/webhooks/uber",
+      method: "POST",
+      bodyParser: { preserveRawBody: true },
+      middlewares: [],
+    },
     {
       matcher: "/store/product-categories/:id",
       method: "GET",

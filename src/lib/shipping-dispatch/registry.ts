@@ -7,6 +7,7 @@
  */
 
 import { shippoAdapter } from "./shippo-adapter";
+import { uberDispatchAdapter } from "./uber-adapter";
 import { upsDispatchAdapter } from "./ups-adapter";
 import type { DeliveryProvider, DispatchAdapter } from "./types";
 import { DispatchError } from "./types";
@@ -14,7 +15,7 @@ import { DispatchError } from "./types";
 const ADAPTERS: Partial<Record<DeliveryProvider, DispatchAdapter>> = {
   shippo: shippoAdapter,
   ups: upsDispatchAdapter, // Fase 2 — live only once the UPS app has the "Shipping" product
-  // uber: uberAdapter,         // Fase 3 — Uber Direct creds
+  uber: uberDispatchAdapter, // Fase 3 — per-order same-day courier (never the global default)
 };
 
 export function getDispatchAdapter(provider: string): DispatchAdapter {

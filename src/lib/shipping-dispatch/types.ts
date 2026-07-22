@@ -65,6 +65,10 @@ export interface CreateLabelContext {
   parcels: DispatchParcel[];
   /** Provider-specific service token (e.g. "ups_ground"). Omit = cheapest UPS. */
   service?: string;
+  /** The create-shipment Idempotency-Key, forwarded to providers with their
+   * own server-side dedupe (Uber) so a crash mid-purchase can never dispatch
+   * twice on retry. Parcel-label providers ignore it. */
+  idempotency_key?: string;
 }
 
 /** One physical package's label within a (possibly multi-box) shipment. */

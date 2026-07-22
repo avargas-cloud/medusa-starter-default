@@ -269,6 +269,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         address_to,
         parcels: body.parcels,
         service: body.service,
+        idempotency_key: idempotencyKey,
       });
       // Own the PDFs: pull them off the provider CDN into our storage before
       // anything else can fail — the invoice must never depend on Shippo.

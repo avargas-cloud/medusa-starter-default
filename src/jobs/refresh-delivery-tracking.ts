@@ -17,6 +17,7 @@
 import type { MedusaContainer } from "@medusajs/framework/types";
 
 import { fetchCarrierEta } from "../lib/carrier-tracking";
+import { getDispatchAdapter } from "../lib/shipping-dispatch/registry";
 import {
   applyStatusUpdate,
   deliveryStatusFromCarrier,
@@ -36,6 +37,8 @@ const LOCK_KEY = "refresh-delivery-tracking";
 
 interface DeliveryRow {
   id: string;
+  provider: string | null;
+  provider_object_id: string | null;
   carrier: string | null;
   tracking_number: string;
   status: DeliveryStatus;
@@ -79,7 +82,7 @@ export default async function refreshDeliveryTracking(
     }
 
     const { rows } = await pool.query<DeliveryRow>(
-      `SELECT id, carrier, tracking_number, status,
+      `SELECT id, provider, provider_object_id, carrier, tracking_number, status,
               metadata->'packages' AS packages
          FROM order_delivery
         WHERE deleted_at IS NULL
@@ -116,14 +119,38 @@ export default async function refreshDeliveryTracking(
         if (trackingNumbers.length === 0) trackingNumbers.push(row.tracking_number);
 
         const details: string[] = [];
-        const mappedPerBox: (DeliveryStatus | null)[] = [];
-        for (const tn of trackingNumbers) {
-          const probe = await fetchCarrierEta(row.carrier ?? "Auto", tn);
-          mappedPerBox.push(deliveryStatusFromCarrier(probe.status));
+        let aggregate: DeliveryStatus | null = null;
+        let providerDeliveredAt: string | null = null;
+
+        // Providers with their own status probe (Uber: courier dispatch, no
+        // parcel tracking number) are polled via adapter.getStatus — ONE trip
+        // per delivery, box aggregation doesn't apply. Parcel carriers fall
+        // through to the tracking-number lookup below.
+        const statusAdapter = (() => {
+          if (!row.provider || !row.provider_object_id) return null;
+          try {
+            const a = getDispatchAdapter(row.provider);
+            return a.getStatus ? a : null;
+          } catch {
+            return null; // unregistered/unconfigured → carrier fallback
+          }
+        })();
+
+        if (statusAdapter?.getStatus && row.provider_object_id) {
+          const probe = await statusAdapter.getStatus(row.provider_object_id);
+          aggregate = probe.status;
+          providerDeliveredAt = probe.delivered_at;
           if (probe.detail) details.push(probe.detail);
+        } else {
+          const mappedPerBox: (DeliveryStatus | null)[] = [];
+          for (const tn of trackingNumbers) {
+            const probe = await fetchCarrierEta(row.carrier ?? "Auto", tn);
+            mappedPerBox.push(deliveryStatusFromCarrier(probe.status));
+            if (probe.detail) details.push(probe.detail);
+          }
+          aggregate = aggregateBoxStatuses(mappedPerBox);
         }
 
-        const aggregate = aggregateBoxStatuses(mappedPerBox);
         const next = aggregate ? applyStatusUpdate(row.status, aggregate) : null;
         if (next && next !== row.status) {
           await pool.query(
@@ -131,12 +158,12 @@ export default async function refreshDeliveryTracking(
                 SET status = $2,
                     status_detail = $3,
                     delivered_at = CASE WHEN $2 = 'delivered'
-                                        THEN COALESCE(delivered_at, now())
+                                        THEN COALESCE(delivered_at, $4::timestamptz, now())
                                         ELSE delivered_at END,
                     status_checked_at = now(),
                     updated_at = now()
               WHERE id = $1`,
-            [row.id, next, details.slice(0, 3).join(" | ") || null]
+            [row.id, next, details.slice(0, 3).join(" | ") || null, providerDeliveredAt]
           );
           updated += 1;
         } else {
