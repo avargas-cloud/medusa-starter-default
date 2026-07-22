@@ -17,6 +17,7 @@ import type {
 
 import { getActorUserId, UnauthenticatedError } from "../../../../../_lib/auth";
 import { getPurchaseOrdersService } from "../../../../../_lib/service-resolver";
+import { computeLandedLines } from "../../../../../../../../lib/purchase-orders/landed-allocation";
 
 // ── Typed shapes ─────────────────────────────────────────────────────────────
 
@@ -282,18 +283,8 @@ export async function POST(
     })
   );
 
-  // 5. Compute aggregates for cost distribution
-  let totalCbm = 0;
-  let totalSubtotalCents = 0;
-  let totalQty = 0;
-
-  for (const line of lines) {
-    const cbm = cbmByVariantId.get(line.product_variant_id) ?? null;
-    if (cbm !== null) totalCbm += cbm * line.qty;
-    totalSubtotalCents += line.unit_cost_cents * line.qty;
-    totalQty += line.qty;
-  }
-
+  // 5. Resolve the commission (service-bill) pool. Freight/tariff totals live on
+  //    the bill header. Per-line weights are computed inside computeLandedLines.
   let serviceBillTotalCents = 0;
   if (bill.service_vendor_bill_id) {
     const serviceBillResult = await knex.raw(
@@ -323,32 +314,36 @@ export async function POST(
     landed_unit_cost_cents: number;
   };
 
-  const lineUpdates: LineUpdate[] = lines.map((line) => {
-    const cbm = cbmByVariantId.get(line.product_variant_id) ?? null;
-
-    const commissionPerUnit =
-      totalQty > 0 ? Math.round(serviceBillTotalCents / totalQty) : 0;
-
-    let freightPerUnit = 0;
-    if (bill.freight_included && totalCbm > 0 && cbm !== null) {
-      freightPerUnit = Math.round((cbm / totalCbm) * bill.freight_amount_cents);
+  // Largest-remainder allocation (shared with the store-pos draft preview via
+  // computeLandedLines) so Σ(perUnit × qty) lands on the exact pool total — no
+  // rounding drift, no manual "plug" line on the QuickBooks bill. Pools are
+  // gated exactly as before: commission only when a service bill is linked
+  // (serviceBillTotalCents=0 otherwise), freight/tariff only when included.
+  const cbmPerLine = lines.map(
+    (line) => cbmByVariantId.get(line.product_variant_id) ?? null
+  );
+  const landed = computeLandedLines(
+    lines.map((line, i) => ({
+      qty: line.qty,
+      unit_cost_cents: line.unit_cost_cents,
+      cbm_per_unit: cbmPerLine[i] ?? null,
+    })),
+    {
+      commissionCents: serviceBillTotalCents,
+      freightCents: bill.freight_included ? bill.freight_amount_cents : 0,
+      tariffCents: bill.tariff_included ? bill.tariff_amount_cents : 0,
     }
+  );
 
-    let tariffPerUnit = 0;
-    if (bill.tariff_included && totalSubtotalCents > 0) {
-      tariffPerUnit = Math.round(
-        (line.unit_cost_cents / totalSubtotalCents) * bill.tariff_amount_cents
-      );
-    }
-
+  const lineUpdates: LineUpdate[] = lines.map((line, i) => {
+    const r = landed.lines[i]!;
     return {
       id: line.id,
-      cbm_per_unit: cbm,
-      commission_per_unit_cents: commissionPerUnit,
-      freight_per_unit_cents: freightPerUnit,
-      tariff_per_unit_cents: tariffPerUnit,
-      landed_unit_cost_cents:
-        line.unit_cost_cents + commissionPerUnit + freightPerUnit + tariffPerUnit,
+      cbm_per_unit: cbmPerLine[i] ?? null,
+      commission_per_unit_cents: r.commission_per_unit_cents,
+      freight_per_unit_cents: r.freight_per_unit_cents,
+      tariff_per_unit_cents: r.tariff_per_unit_cents,
+      landed_unit_cost_cents: r.landed_unit_cost_cents,
     };
   });
 
