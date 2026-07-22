@@ -3,6 +3,11 @@ import { Client } from "pg";
 
 // 1.5.9: handlePosPaymentCreated import removed — finance/payments enqueues now.
 import { writePipelineRow } from "../../../../lib/quickbooks/qb-pipeline";
+import {
+  computeBatchDay,
+  getBatchCutoff,
+} from "../../../../lib/finance/batch-day";
+import { isTreasuryDayLocked } from "../../../../lib/finance/treasury-lock";
 import { FINANCE_MODULE } from "../../../../modules/finance";
 
 /**
@@ -153,6 +158,30 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     ].includes(m)
   ) {
     mappedMethod = "ach";
+  }
+
+  // Backdated payments (explicit received_at whose batch day is behind the
+  // natural one) must not land on a treasury day that is already confirmed
+  // & locked — that cash would be invisible in the confirmed totals forever.
+  // Real-time callers (received_at ≈ now, e.g. BAMS webhook/terminal) are
+  // exempt: their target batch day is never behind the natural one.
+  if (received_at) {
+    try {
+      const cutoff = await getBatchCutoff();
+      const targetDay = computeBatchDay(new Date(received_at), cutoff);
+      const naturalDay = computeBatchDay(new Date(), cutoff);
+      if (targetDay < naturalDay && (await isTreasuryDayLocked(targetDay))) {
+        return res.status(409).json({
+          code: "TREASURY_DAY_LOCKED",
+          error: `Treasury for ${targetDay} is already confirmed & locked. Pick a different payment date or ask accounting to unlock that day.`,
+        });
+      }
+    } catch (guardErr: any) {
+      // Non-fatal: recording the payment outranks the rare locked-day edge.
+      console.warn(
+        `[finance/payments] treasury-lock guard failed (allowing create): ${guardErr.message}`
+      );
+    }
   }
 
   try {
