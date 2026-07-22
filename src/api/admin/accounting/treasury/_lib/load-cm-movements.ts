@@ -48,7 +48,25 @@ export type CmBackingStatus =
   | "unbacked"
   | "unknown";
 
-export type CmMovementResolution = "confirmed" | "ignored" | "unattributable";
+/**
+ * 'kept' / 'moved' are the current bucket-assignment resolutions (2026-07-21);
+ * 'confirmed' / 'ignored' / 'unattributable' are legacy values kept only so
+ * rows/snapshots stored before the redesign still display.
+ */
+export type CmMovementResolution =
+  | "confirmed"
+  | "ignored"
+  | "unattributable"
+  | "kept"
+  | "moved";
+
+/**
+ * Where the credit's parked cash currently sits, derived from the backing's
+ * sourcing category. 'mixed' (both categories) and 'unknown' (no costed
+ * backing) never get a "keep" shortcut — the accountant must pick a bucket
+ * explicitly, with a reason.
+ */
+export type CmCurrentBucket = "china_cogs" | "local_cogs" | "mixed" | "unknown";
 
 export interface CreditMemoMovementView {
   payment_application_id: string;
@@ -68,12 +86,18 @@ export interface CreditMemoMovementView {
   backing_status: CmBackingStatus;
   /** sha256 of the derived inputs — flips if items/costs/tags change → stale UI. */
   derivation_hash: string;
+  /** Where this credit's cash currently sits (from the backing's category). */
+  current_bucket: CmCurrentBucket;
   /** Joined from treasury_cm_movement_resolution (null = unresolved). */
   resolution: CmMovementResolution | null;
   /** true when a stored resolution's hash no longer matches the live derivation. */
   resolution_stale: boolean;
   /** Required reason captured for ignored/unattributable resolutions. */
   resolution_reason: string | null;
+  /** Bucket chosen on a 'kept'/'moved' resolution (kept → the current bucket). */
+  resolution_target_bucket: TreasuryBucketCode | null;
+  /** Face-value cents recorded on a 'kept'/'moved' resolution. */
+  resolution_amount_cents: number | null;
 }
 
 interface RawRow {
@@ -94,6 +118,8 @@ interface RawRow {
   stored_resolution: CmMovementResolution | null;
   stored_hash: string | null;
   stored_reason: string | null;
+  stored_target_bucket: string | null;
+  stored_amount_cents: string | number | null;
 }
 
 const num = (v: string | number | null | undefined): number => {
@@ -133,10 +159,29 @@ export interface CmMovementDerived {
   surplus_shortfall_cents: number;
   backing_status: CmBackingStatus;
   derivation_hash: string;
+  /** Where the credit's cash currently sits — pure backing category, else mixed/unknown. */
+  current_bucket: CmCurrentBucket;
   /** True only when the row needs an accountant decision (a real suggested
    * movement, or an ambiguous backing that could hide one). Same-category
    * cash-backed and pure-goodwill (unbacked) redemptions return false. */
   needs_attention: boolean;
+}
+
+/**
+ * Pure backing category = that bucket; both categories present = 'mixed';
+ * nothing costed = 'unknown'. Never guess a dominant side for mixed backing —
+ * hiding a 60/40 split behind "current = China" would be audit ambiguity.
+ */
+export function deriveCurrentBucket(
+  backingChinaCents: number,
+  backingLocalCents: number
+): CmCurrentBucket {
+  const china = backingChinaCents > 0;
+  const local = backingLocalCents > 0;
+  if (china && local) return "mixed";
+  if (china) return "china_cogs";
+  if (local) return "local_cogs";
+  return "unknown";
 }
 
 /**
@@ -207,6 +252,7 @@ export function deriveCmMovement(input: CmMovementInputs): CmMovementDerived {
     surplus_shortfall_cents: backing.total_cents - consumption.total_cents,
     backing_status: status,
     derivation_hash,
+    current_bucket: deriveCurrentBucket(backing.china_cents, backing.local_cents),
     needs_attention,
   };
 }
@@ -327,7 +373,9 @@ export async function loadCreditMemoMovements(
       cb.backing_lines_costed,
       r.resolution AS stored_resolution,
       r.derivation_hash AS stored_hash,
-      r.reason AS stored_reason
+      r.reason AS stored_reason,
+      r.target_bucket AS stored_target_bucket,
+      r.amount_cents AS stored_amount_cents
     FROM apps_day ad
     LEFT JOIN consumption cons ON cons.app_id = ad.app_id
     LEFT JOIN cm_backing cb ON cb.app_id = ad.app_id
@@ -368,10 +416,17 @@ export async function loadCreditMemoMovements(
       surplus_shortfall_cents: d.surplus_shortfall_cents,
       backing_status: d.backing_status,
       derivation_hash: d.derivation_hash,
+      current_bucket: d.current_bucket,
       resolution: r.stored_resolution ?? null,
       resolution_stale:
         r.stored_resolution !== null && r.stored_hash !== d.derivation_hash,
       resolution_reason: r.stored_reason ?? null,
+      resolution_target_bucket:
+        (r.stored_target_bucket as TreasuryBucketCode | null) ?? null,
+      resolution_amount_cents:
+        r.stored_amount_cents === null || r.stored_amount_cents === undefined
+          ? null
+          : num(r.stored_amount_cents),
     });
   }
 

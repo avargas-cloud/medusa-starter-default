@@ -298,6 +298,55 @@ async function computeLiveRangeReport(
     return { ...s, bucket };
   });
 
+  // 2026-07-21 v2: registered bucket assignments MOVE the money in the
+  // displayed split — and therefore in the wire amounts, which aggregate from
+  // these splits. Always sum-zero between two buckets, so the reconciliation
+  // invariant (sum of splits == net cash) is untouched.
+  //  - CM 'moved' rows (pure backing, non-stale): face value from the backing
+  //    bucket to the selected one. Mixed/unknown backing has no single source
+  //    bucket — its assignment stays audit-only.
+  //  - Payment-credit assignments ≠ operating (non-stale): the remainder out
+  //    of Operating (its factual sink per compute-splits) into the selection.
+  // If either side's bucket isn't in this range's splits, the move is skipped
+  // whole (never half-applied).
+  const splitByCode = new Map(splits.map((s) => [s.code, s]));
+  const applyMove = (
+    fromCode: TreasuryBucketCode,
+    toCode: TreasuryBucketCode,
+    cents: number
+  ) => {
+    const fromSplit = splitByCode.get(fromCode);
+    const toSplit = splitByCode.get(toCode);
+    if (!fromSplit || !toSplit || cents <= 0 || fromCode === toCode) return;
+    fromSplit.amount_cents -= cents;
+    toSplit.amount_cents += cents;
+  };
+  for (const m of creditMemoMovements) {
+    if (
+      m.resolution === "moved" &&
+      !m.resolution_stale &&
+      m.resolution_target_bucket &&
+      m.resolution_amount_cents &&
+      (m.current_bucket === "china_cogs" || m.current_bucket === "local_cogs")
+    ) {
+      applyMove(
+        m.current_bucket,
+        m.resolution_target_bucket,
+        m.resolution_amount_cents
+      );
+    }
+  }
+  for (const p of unattributedPayments) {
+    if (
+      p.credit_bucket &&
+      !p.credit_stale &&
+      p.credit_bucket !== "operating" &&
+      p.credit_amount_cents
+    ) {
+      applyMove("operating", p.credit_bucket, p.credit_amount_cents);
+    }
+  }
+
   const warnings: TreasuryWarning[] = [];
   if (toInt(sales.unit_cost_fallback_count) > 0) {
     warnings.push({
@@ -376,21 +425,23 @@ async function computeLiveRangeReport(
       } for prior-day sales — Operating absorbs the COGS pull-back.`,
     });
   }
-  if (unattributedPayments.length > 0) {
-    const unattributedCents = unattributedPayments.reduce(
+  // Rows resolved "as credit" (valid, non-stale) don't warn/block anymore.
+  const blockingUnattributed = unattributedPayments.filter((p) => p.blocking);
+  if (blockingUnattributed.length > 0) {
+    const unattributedCents = blockingUnattributed.reduce(
       (sum, p) => sum + p.unapplied_cents,
       0
     );
     warnings.push({
       code: "UNATTRIBUTED_PAYMENTS",
       severity: "warning",
-      count: unattributedPayments.length,
-      sample_ids: unattributedPayments
+      count: blockingUnattributed.length,
+      sample_ids: blockingUnattributed
         .slice(0, 20)
         .map((p) => (p.display_id ? `PAY-${p.display_id}` : p.payment_id)),
       detail: `$${(unattributedCents / 100).toFixed(2)} of ${
         from === to ? "today's" : "this period's"
-      } cash is not linked to an order/invoice — counted as cash but not as a sale. Link these to attribute revenue & COGS, or defer them to the next day.`,
+      } cash is not linked to an order/invoice — counted as cash but not as a sale. Link these to attribute revenue & COGS, treat them as credit, or defer them to the next day.`,
     });
   }
   if (creditMemoCogsGaps.length > 0) {
@@ -409,8 +460,12 @@ async function computeLiveRangeReport(
     });
   }
 
+  // Only ambiguous-backing rows (mixed/unknown — no current bucket) require
+  // an explicit pick; pure-backing rows default to staying where they are.
   const unresolvedMovements = creditMemoMovements.filter(
-    (m) => m.resolution === null || m.resolution_stale
+    (m) =>
+      (m.resolution === null || m.resolution_stale) &&
+      (m.current_bucket === "mixed" || m.current_bucket === "unknown")
   );
   if (unresolvedMovements.length > 0) {
     warnings.push({
@@ -420,7 +475,7 @@ async function computeLiveRangeReport(
       sample_ids: unresolvedMovements
         .slice(0, 20)
         .map((m) => m.reference ?? m.payment_application_id),
-      detail: `${unresolvedMovements.length} credit-memo cross-category COGS movement(s) need an accountant decision (confirm the china↔local rebalance, or ignore/mark unattributable) before ${
+      detail: `${unresolvedMovements.length} credit-memo movement(s) with ambiguous backing need an explicit bucket pick before ${
         from === to ? "this day" : "this period"
       } can be locked.`,
     });

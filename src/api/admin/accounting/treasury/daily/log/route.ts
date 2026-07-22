@@ -131,35 +131,44 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       });
     }
 
-    if (report.unattributed_payments.length > 0) {
+    // Rows resolved "as credit" (valid, non-stale) no longer block — the
+    // accountant has explicitly classified that cash as customer credit in a
+    // bucket. Everything else (including stale credit resolutions) blocks.
+    const blockingUnattributed = report.unattributed_payments.filter(
+      (p) => p.blocking
+    );
+    if (blockingUnattributed.length > 0) {
       if (trx) await trx.rollback();
-      const totalUnapplied = report.unattributed_payments.reduce(
+      const totalUnapplied = blockingUnattributed.reduce(
         (sum, p) => sum + p.unapplied_cents,
         0
       );
       return res.status(409).json({
         success: false,
-        error: `UNATTRIBUTED_PAYMENTS_BLOCK: ${report.unattributed_payments.length} payment(s) totaling $${(
+        error: `UNATTRIBUTED_PAYMENTS_BLOCK: ${blockingUnattributed.length} payment(s) totaling $${(
           totalUnapplied / 100
         ).toFixed(
           2
-        )} are not linked to an order/invoice yet. Link them, or use "Exception — defer to next day" on each, before confirming.`,
-        data: { unattributed_payments: report.unattributed_payments },
+        )} are not linked to an order/invoice yet. Link them, treat them as credit, or use "Exception — defer to next day" on each, before confirming.`,
+        data: { unattributed_payments: blockingUnattributed },
       });
     }
 
-    // Every credit-memo cross-category COGS movement must be resolved (confirm
-    // the rebalance, or ignore/mark-unattributable) before locking — otherwise
-    // the frozen snapshot would bake in an un-decided money movement. A stale
-    // resolution (numbers changed since the accountant decided) also blocks.
+    // 2026-07-21 v2: a pure-backing credit needs no explicit decision — its
+    // money simply stays in its current bucket unless the accountant clicked
+    // it elsewhere (the selector is re-clickable until this lock; the lock is
+    // the final save). Only AMBIGUOUS backing (mixed/unknown — no current
+    // bucket exists) still requires an explicit pick before freezing.
     const unresolvedMovements = (report.credit_memo_movements ?? []).filter(
-      (m) => m.resolution === null || m.resolution_stale
+      (m) =>
+        (m.resolution === null || m.resolution_stale) &&
+        (m.current_bucket === "mixed" || m.current_bucket === "unknown")
     );
     if (unresolvedMovements.length > 0) {
       if (trx) await trx.rollback();
       return res.status(409).json({
         success: false,
-        error: `CM_MOVEMENTS_UNRESOLVED: ${unresolvedMovements.length} credit-memo cross-category COGS movement(s) need a decision (confirm / ignore / mark unattributable) before locking.`,
+        error: `CM_MOVEMENTS_UNRESOLVED: ${unresolvedMovements.length} credit-memo movement(s) with ambiguous backing need an explicit bucket pick before locking.`,
         data: { credit_memo_movements: unresolvedMovements },
       });
     }

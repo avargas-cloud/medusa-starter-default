@@ -74,6 +74,14 @@ export interface UnattributedPaymentView {
   estimate_doc_no: string | null;
   /** The draft order id to deep-link into the estimate for conversion. */
   estimate_order_id: string | null;
+  /** Bucket from a "treat as credit" resolution (null = none). */
+  credit_bucket: TreasuryBucketCode | null;
+  /** Remainder snapshot stored when the credit resolution was made. */
+  credit_amount_cents: number | null;
+  /** True when the live remainder no longer matches the resolved snapshot. */
+  credit_stale: boolean;
+  /** True when this row still blocks the day's Confirm Transfers. */
+  blocking: boolean;
 }
 
 /**

@@ -5,28 +5,33 @@ import { loadCreditMemoMovements } from "../../../_lib/load-cm-movements";
 
 type Knex = { raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: any[] }> };
 
-const bodySchema = z
-  .object({
-    payment_application_id: z.string().min(1),
-    resolution: z.enum(["confirmed", "ignored", "unattributable"]),
-    derivation_hash: z.string().min(1),
-    reason: z.string().max(2000).optional(),
-  })
-  .refine(
-    (b) => b.resolution === "confirmed" || (b.reason && b.reason.trim().length > 0),
-    { message: "reason is required for ignored / unattributable", path: ["reason"] }
-  );
+const BUCKETS = ["china_cogs", "local_cogs", "operating", "reserve"] as const;
+
+const bodySchema = z.object({
+  payment_application_id: z.string().min(1),
+  action: z.enum(["keep", "move"]),
+  target_bucket: z.enum(BUCKETS).optional(),
+  derivation_hash: z.string().min(1),
+  reason: z.string().max(2000).optional(),
+});
 
 /**
  * POST /admin/accounting/treasury/daily/cm-movement/resolve
  *
- * Records an accountant's decision on ONE credit-memo cross-category COGS
- * movement (see load-cm-movements.ts). Body:
- *   { payment_application_id, resolution, derivation_hash, reason? }
+ * Records the accountant's bucket assignment for ONE credit-memo redemption
+ * (see load-cm-movements.ts). Body:
+ *   { payment_application_id, action: 'keep'|'move', target_bucket?, derivation_hash, reason? }
  *
- * - 'confirmed'      → apply the china↔local bank rebalance (audited).
- * - 'ignored'        → acknowledged, no movement (reason required).
- * - 'unattributable' → backing can't be determined (reason required).
+ * - 'keep' → the credit's cash stays in its current bucket (stored as
+ *   resolution 'kept'; only valid when the backing is a pure category).
+ * - 'move' → manual inter-bank transfer of the credit's FACE VALUE from the
+ *   current bucket to `target_bucket` (stored as 'moved'). The accountant
+ *   executes the transfer at the bank — this is advisory + audit, it never
+ *   feeds the split math. Backing/consumption/suggested COGS math is kept in
+ *   movement_json as audit context.
+ * - Mixed/unknown backing has no "keep" shortcut: action must be 'move' and a
+ *   reason is required (the accountant is deciding where an ambiguous credit
+ *   sits — that judgment call needs a note).
  *
  * Guards (money-safety):
  *  1. Recomputes the movement LIVE and rejects 409 STALE_DERIVATION if the
@@ -35,8 +40,6 @@ const bodySchema = z
  *  2. Rejects 409 if that redemption's day is already Confirmed & Locked (its
  *     movements are frozen in the snapshot; resolving after lock is a no-op
  *     that would desync the audit trail).
- *  3. 'confirmed' is only valid when the live derivation actually suggests a
- *     movement (cash_backed cross-category) — you can't "confirm" a non-movement.
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const parsed = bodySchema.safeParse(req.body);
@@ -83,7 +86,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       });
     }
 
-    // Guard 1 + 3: recompute live and validate.
+    // Guard 1: recompute live and validate.
     const movements = await loadCreditMemoMovements(
       knex,
       `${day} 00:00:00`,
@@ -106,15 +109,52 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         data: { current: live },
       });
     }
-    if (body.resolution === "confirmed" && live.suggested_movement === null) {
-      return res.status(409).json({
-        success: false,
-        error:
-          "Nothing to confirm — this row has no suggested movement (mark it ignored or unattributable instead).",
-      });
+
+    const currentIsPure =
+      live.current_bucket === "china_cogs" || live.current_bucket === "local_cogs";
+
+    if (body.action === "keep") {
+      if (!currentIsPure) {
+        return res.status(409).json({
+          success: false,
+          error:
+            "This credit's backing is mixed/unknown — there is no single current bucket to keep. Pick a bucket explicitly (with a reason).",
+        });
+      }
+    } else {
+      if (!body.target_bucket) {
+        return res.status(400).json({
+          success: false,
+          error: "target_bucket is required for action 'move'",
+        });
+      }
+      if (currentIsPure && body.target_bucket === live.current_bucket) {
+        return res.status(400).json({
+          success: false,
+          error: "target_bucket equals the current bucket — use action 'keep' instead",
+        });
+      }
+      if (!currentIsPure && !(body.reason && body.reason.trim().length > 0)) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "reason is required when assigning a bucket to a mixed/unknown-backing credit",
+        });
+      }
     }
 
+    const resolution = body.action === "keep" ? "kept" : "moved";
+    const targetBucket =
+      body.action === "keep"
+        ? (live.current_bucket as (typeof BUCKETS)[number])
+        : body.target_bucket!;
+    const amountCents = live.amount_applied_cents;
+
     const movementJson = JSON.stringify({
+      current_bucket: live.current_bucket,
+      target_bucket: targetBucket,
+      face_value_cents: amountCents,
+      // COGS-engine audit context (NOT the moved amount):
       suggested_movement: live.suggested_movement,
       backing: live.backing,
       consumption: live.consumption,
@@ -126,29 +166,41 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     await knex.raw(
       `INSERT INTO treasury_cm_movement_resolution
          (id, payment_application_id, resolution, derivation_hash, movement_json,
-          reason, resolved_by_user_id, resolved_at)
-       VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, now())
+          reason, current_bucket, target_bucket, amount_cents,
+          resolved_by_user_id, resolved_at)
+       VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, now())
        ON CONFLICT (payment_application_id) DO UPDATE SET
          resolution = EXCLUDED.resolution,
          derivation_hash = EXCLUDED.derivation_hash,
          movement_json = EXCLUDED.movement_json,
          reason = EXCLUDED.reason,
+         current_bucket = EXCLUDED.current_bucket,
+         target_bucket = EXCLUDED.target_bucket,
+         amount_cents = EXCLUDED.amount_cents,
          resolved_by_user_id = EXCLUDED.resolved_by_user_id,
          resolved_at = now()`,
       [
         id,
         body.payment_application_id,
-        body.resolution,
+        resolution,
         body.derivation_hash,
         movementJson,
-        body.reason ?? null,
+        body.reason?.trim() || null,
+        live.current_bucket,
+        targetBucket,
+        amountCents,
         actorId,
       ]
     );
 
     return res.json({
       success: true,
-      data: { payment_application_id: body.payment_application_id, resolution: body.resolution },
+      data: {
+        payment_application_id: body.payment_application_id,
+        resolution,
+        target_bucket: targetBucket,
+        amount_cents: amountCents,
+      },
     });
   } catch (err) {
     const message =
