@@ -59,6 +59,11 @@ class SmartStorageService extends AbstractFileProviderService {
     ) {
       return "categories";
     }
+    // Shipping labels get their own folder so the bucket lifecycle rule
+    // (shipping-labels-30d-expiry) can expire them without touching content/.
+    if (lowerName.startsWith("context_shipping_labels_")) {
+      return "shipping-labels";
+    }
 
     // Default folder for everything else
     return "content";
@@ -70,6 +75,7 @@ class SmartStorageService extends AbstractFileProviderService {
     return filename
       .replace(/^context_products_/i, "")
       .replace(/^context_categories_/i, "")
+      .replace(/^context_shipping_labels_/i, "")
       .replace(/^prod_/i, "")
       .replace(/^cat_/i, "");
   }

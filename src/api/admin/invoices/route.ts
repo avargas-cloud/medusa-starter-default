@@ -50,14 +50,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   if (status) filters.status = status;
   if (balance_due_gt !== undefined) filters.balance_due = { $gt: parseInt(balance_due_gt, 10) };
 
-  // [Deliveries] tab: invoices with a shipment in flight (order_delivery not
-  // yet delivered/canceled). Reads live rows — no Meili plumbing; delivered
-  // shipments drop off the tab the moment the 6h poll (or a webhook) lands.
+  // [Deliveries] tab: every invoice with a shipment on record (order_delivery
+  // not canceled/voided) — DELIVERED rows stay in the tab as the registry of
+  // everything sent; the per-row badge distinguishes In Transit vs Delivered.
+  // Reads live rows — no Meili plumbing.
   let deliveryByInvoice: Record<string, unknown> | undefined;
   if (delivery_active !== undefined) {
-    // Latest live delivery per invoice — DELIVERED rows stay in the map (the
-    // Fulfillment badge is tracking-status-driven) but only ACTIVE ones keep
-    // the invoice inside the tab.
+    // Latest live delivery per invoice.
     const { rows } = await getDbPool().query(
       `SELECT DISTINCT ON (invoice_id)
               invoice_id, status, status_detail, tracking_number, tracking_url,
@@ -71,13 +70,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     deliveryByInvoice = Object.fromEntries(
       rows.map((r: { invoice_id: string }) => [r.invoice_id, r])
     );
-    const activeIds = rows
-      .filter((r: { status: string }) => r.status !== "delivered")
-      .map((r: { invoice_id: string }) => r.invoice_id);
-    if (activeIds.length === 0) {
+    const deliveryIds = rows.map(
+      (r: { invoice_id: string }) => r.invoice_id
+    );
+    if (deliveryIds.length === 0) {
       return res.json({ invoices: [], delivery_by_invoice: deliveryByInvoice });
     }
-    filters.id = activeIds;
+    filters.id = deliveryIds;
   }
 
   const config: Record<string, any> = {

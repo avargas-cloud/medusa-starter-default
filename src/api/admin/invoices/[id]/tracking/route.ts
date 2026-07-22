@@ -58,16 +58,25 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   // these rows. status: 'in_transit' — a tracking number was just typed in
   // because the package already left, so "In Transit" is accurate (and is
   // the badge InvoiceTableRow renders for any non-terminal status anyway).
+  // EXCEPT untrackable carriers ('Other', and 'USPS' — no lookup adapter in
+  // lib/carrier-tracking, fetchCarrierEta returns 'unavailable'): nothing can
+  // ever advance the row, so it would sit 'in_transit' forever — it is born
+  // 'delivered' instead (business rule: untrackable manual shipments count as
+  // delivered on entry).
   try {
     const pool = getDbPool();
     const actorId =
       (req as { auth_context?: { actor_id?: string } }).auth_context
         ?.actor_id ?? null;
+    const carrierKey = (body.carrier ?? "").trim().toLowerCase();
+    const isUntrackable = carrierKey === "other" || carrierKey === "usps";
     await pool.query(
       `INSERT INTO order_delivery
          (id, order_id, fulfillment_id, invoice_id, provider, carrier,
-          tracking_number, tracking_url, status, shipped_at, created_by_user_id)
-       VALUES ($1, $2, $3, $4, 'manual', $5, $6, $7, 'in_transit', now(), $8)`,
+          tracking_number, tracking_url, status, shipped_at, delivered_at,
+          created_by_user_id)
+       VALUES ($1, $2, $3, $4, 'manual', $5, $6, $7, $8, now(),
+               CASE WHEN $8 = 'delivered' THEN now() END, $9)`,
       [
         generateEntityId("", "odel"),
         invoice.order_id,
@@ -76,6 +85,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         body.carrier ?? null,
         body.tracking_number,
         body.tracking_url ?? null,
+        isUntrackable ? "delivered" : "in_transit",
         actorId,
       ]
     );
