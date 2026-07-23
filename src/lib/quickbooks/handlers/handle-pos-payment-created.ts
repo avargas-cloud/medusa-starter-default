@@ -392,6 +392,12 @@ export async function handlePosPaymentCreated({
           await getBatchCutoff()
         ),
       memo,
+      // One ReceivePayment per customer_payment row, so cpay id is a sound
+      // dedupe key: if the bridge succeeds but we lose the response, the retry
+      // returns the existing op instead of minting a duplicate ReceivePayment.
+      // Safe precisely because it is 1:1 with the document — see
+      // receivePaymentInQb for why an order-scoped key would not be.
+      idempotencyKey: `payment:${paymentId}`,
       onSubmitted: async (operationId) => {
         await writePipelineRow({
           orderId: (orderId as string) || null,

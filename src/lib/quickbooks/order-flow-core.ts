@@ -890,6 +890,15 @@ export async function processPaymentCaptureInQb(capture: {
    * the POS). Sent as QB <TxnDate> so the payment lands on the day it was
    * taken, immune to QB machine clock drift and pipeline latency. */
   date?: string;
+  /**
+   * Dedupe key for this ADD, forwarded to the bridge as `Idempotency-Key`.
+   * OPT-IN: only pass one that is 1:1 with the QB document you intend to
+   * create (e.g. `payment:<cpay_id>`). A key shared by two legitimately
+   * distinct payments makes the bridge swallow the second one — missing money
+   * in QB, which is worse than the duplicate it prevents. See
+   * receivePaymentInQb for the full rationale.
+   */
+  idempotencyKey?: string;
   onSubmitted?: (operationId: string) => Promise<void>;
 }): Promise<{
   enabled: boolean;
@@ -925,14 +934,19 @@ export async function processPaymentCaptureInQb(capture: {
     metadata: { amount: amountDollars, paymentMethod: capture.paymentMethod },
   });
 
-  const result = await receivePaymentInQb({
-    customerId: capture.qbCustomerId,
-    amount: amountDollars,
-    date: capture.date,
-    paymentMethod: capture.paymentMethod,
-    memo: paymentMemo,
-    autoApply: false,
-  });
+  const result = await receivePaymentInQb(
+    {
+      customerId: capture.qbCustomerId,
+      amount: amountDollars,
+      date: capture.date,
+      paymentMethod: capture.paymentMethod,
+      memo: paymentMemo,
+      autoApply: false,
+    },
+    capture.idempotencyKey
+      ? { idempotencyKey: capture.idempotencyKey }
+      : undefined
+  );
 
   if (!result.success) {
     console.error(`[QB] ❌ Failed to record payment: ${result.error}`);

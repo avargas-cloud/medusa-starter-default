@@ -24,9 +24,28 @@ export interface MergeApplyResult {
 /**
  * Records a payment receipt in QuickBooks (async).
  * With autoApply: false, creates an unapplied credit that can be applied to the Invoice later.
+ *
+ * `opts.idempotencyKey` is OPT-IN per caller, and deliberately so. This is an
+ * ADD: without a key, a retry after a lost bridge response mints a duplicate
+ * ReceivePayment. But a key that is not unique-per-intended-document is WORSE
+ * than no key — the bridge would dedupe two legitimately distinct payments into
+ * one, and the second would silently never reach QB (missing money, not a
+ * visible duplicate). So only pass a key you can prove is 1:1 with the QB
+ * document you intend to create:
+ *   - `payment:<cpay_id>`   ✅ one ReceivePayment per customer_payment row
+ *   - anything keyed on order id  ❌ an order can be paid more than once
+ *   - the transfer path (TxnDel + recreate) ❌ recreates are meant to repeat
+ *
+ * Bridge semantics (queue/operation-queue.ts): for write actions a matching
+ * 'completed' or 'processing' op is RETURNED instead of re-queued, so a retry
+ * after a lost response cannot duplicate. A 'failed' op is NOT matched, so a
+ * genuine retry still proceeds. The bridge purges completed/failed ops after
+ * 6h, so protection is bounded to that window — fine against our 20-minute
+ * timeout, and the same bound every other keyed ADD already lives with.
  */
 export async function receivePaymentInQb(
-  payload: QbReceivePaymentPayload
+  payload: QbReceivePaymentPayload,
+  opts?: { idempotencyKey?: string }
 ): Promise<QbBridgeResult<QbAsyncResult>> {
   if (DRY_RUN) {
     console.log(
@@ -48,7 +67,12 @@ export async function receivePaymentInQb(
       autoApply: false, // default: keep as open credit for e-commerce flow
       ...payload,
     };
-    const data = await bridgeFetch("POST", "/api/payments", body);
+    const data = await bridgeFetch(
+      "POST",
+      "/api/payments",
+      body,
+      opts?.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : undefined
+    );
     const operationId = data?.operationId;
     if (!operationId)
       throw new Error("Bridge did not return an operationId for Payment");
