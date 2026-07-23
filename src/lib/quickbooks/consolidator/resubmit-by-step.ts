@@ -9,6 +9,7 @@ import {
 import {
   updatePaymentTxnDateInQb,
   updatePaymentMethodInQb,
+  voidPaymentInQb,
 } from "../client/payments";
 import { resolveQbPaymentMethodForPayment } from "../payment-method-sanitizer";
 import { transferDocumentCustomer } from "../client/transfer";
@@ -758,6 +759,41 @@ export async function resubmitByStep(
           await failPipelineRow(
             row.id,
             checkResult.error ?? "voidCheckInQb failed"
+          );
+        }
+        break;
+      }
+
+      // Revert-refund cleanup: TxnDel the $0 apply ReceivePayment (QB has no
+      // TxnVoid for ReceivePayment). Its confirm handler (poll-submitted-rows)
+      // runs the Medusa revert and wakes the dependent void_check row.
+      case "refund_apply_del": {
+        if (!row.qb_txn_id) {
+          await failPipelineRow(
+            row.id,
+            "refund_apply_del: missing qb_txn_id — cannot delete $0 apply"
+          );
+          break;
+        }
+        const delResult = await voidPaymentInQb(row.qb_txn_id);
+        if (delResult.success && delResult.data?.operationId) {
+          const delPool = getDbPool();
+          await delPool.query(
+            `UPDATE qb_order_pipeline
+                  SET status = 'submitted',
+                      bridge_op_id = $2,
+                      submitted_at = NOW(),
+                      updated_at = NOW()
+                WHERE id = $1`,
+            [row.id, delResult.data.operationId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ refund_apply_del ${row.id} submitted op=${delResult.data.operationId}`
+          );
+        } else {
+          await failPipelineRow(
+            row.id,
+            delResult.error ?? "voidPaymentInQb failed"
           );
         }
         break;

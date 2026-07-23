@@ -56,11 +56,12 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         refund_check_mod?: string;
         refund_payment_txndate_change?: string;
         bankAccountId?: string;
+        refundPaymentTxnId?: string;
       }
     > = {};
 
     const { rows: pipelineRows } = await pgClient.query(
-      `SELECT DISTINCT ON (reference_id, step) reference_id, step, status, payload
+      `SELECT DISTINCT ON (reference_id, step) reference_id, step, status, payload, qb_txn_id
        FROM qb_order_pipeline
        WHERE reference_id = ANY($1)
          AND step IN ('write_check', 'refund_payment', 'refund_check_mod', 'refund_payment_txndate_change')
@@ -81,6 +82,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       ] = row.status;
       if (row.step === "write_check" && row.payload?.bankAccountId) {
         entry.bankAccountId = row.payload.bankAccountId;
+      }
+      if (row.step === "refund_payment" && row.qb_txn_id) {
+        entry.refundPaymentTxnId = row.qb_txn_id;
       }
     }
 
@@ -110,6 +114,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         refund_txn_date: r.metadata?.refund_txn_date ?? null,
         check_mod_status: pipeline.refund_check_mod ?? null,
         apply_date_mod_status: pipeline.refund_payment_txndate_change ?? null,
+        refund_payment_txn_id: pipeline.refundPaymentTxnId ?? null,
+        revert_state: r.metadata?.revert_state ?? null,
       };
     });
 

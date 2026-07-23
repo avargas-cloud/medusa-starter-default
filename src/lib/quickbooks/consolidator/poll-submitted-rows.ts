@@ -2,6 +2,7 @@ import type { MedusaContainer } from "@medusajs/framework/types";
 import { Modules } from "@medusajs/utils";
 
 import { getDbPool } from "../../../api/utils/db-pool";
+import { performMedusaRefundRevert } from "../../finance/revert-refund";
 import { bridgeFetch } from "../client/core";
 import { voidCreditMemoInQb } from "../client/credit-memos";
 import { voidInvoiceInQb } from "../client/invoices";
@@ -362,6 +363,46 @@ export async function pollSubmittedRows(
                 `${LOG_PREFIX} ⚠️ Could not stamp order qb_sync_status='voided' on ${row.order_id}: ${ordErr.message}`
               );
             }
+          }
+        }
+
+        // Revert-refund: the $0 apply ReceivePayment was deleted in QB — the
+        // credit is free again. NOW run the Medusa revert (restores the
+        // customer's credit) and wake the dependent void_check row. The
+        // revert is claim-guarded, so a manual confirm-qb-cleanup that raced
+        // ahead makes this a harmless no-op.
+        if (row.step === "refund_apply_del" && row.reference_id) {
+          try {
+            const out = await performMedusaRefundRevert(row.reference_id, {
+              actorId: null,
+              reason: null, // staged at revert time (metadata.revert_reason)
+              source: "qb_cleanup_confirmed",
+            });
+            if (out.ok) {
+              logger.info(
+                `${LOG_PREFIX} ✅ refund_apply_del confirmed → customer_payment ${row.reference_id} reverted to '${out.newStatus}' ($${((out.restoredCents ?? 0) / 100).toFixed(2)} restored as credit)`
+              );
+            } else if (out.code !== "ALREADY_REVERTED") {
+              logger.warn(
+                `${LOG_PREFIX} ⚠️ refund_apply_del confirmed but Medusa revert returned ${out.code} for ${row.reference_id}`
+              );
+            }
+          } catch (revErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ refund_apply_del confirmed but Medusa revert failed for ${row.reference_id}: ${revErr.message}`
+            );
+          }
+          try {
+            await pool.query(
+              `UPDATE qb_order_pipeline
+                  SET status = 'pending', updated_at = NOW()
+                WHERE depends_on = $1 AND step = 'void_check' AND status = 'waiting'`,
+              [row.id]
+            );
+          } catch (wakeErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Could not wake dependent void_check for refund_apply_del ${row.id}: ${wakeErr.message}`
+            );
           }
         }
 

@@ -11,6 +11,7 @@ export type PipelineStep =
   | "refund_payment"
   | "refund_check_mod"
   | "refund_payment_txndate_change"
+  | "refund_apply_del"
   | "void_estimate"
   | "estimate_cancel"
   | "estimate_deactivate"

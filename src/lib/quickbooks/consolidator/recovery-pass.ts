@@ -33,6 +33,7 @@ const IDEMPOTENT_REDISPATCH_STEPS = [
   "void_sales_order",
   "void_credit_memo",
   "void_check",
+  "refund_apply_del",
   "void_inventory_adjustment",
 ];
 
