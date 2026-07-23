@@ -744,6 +744,21 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
                     `${LOG_PREFIX} Pulled ${availableLines.length} existing QB line(s) from ${isSR ? "SalesReceipt" : "Invoice"} ${freshTxnId}`
                   );
 
+                  // A synced document ALWAYS has lines. Zero means the snapshot
+                  // is not telling us the truth (for a long time it never could:
+                  // Invoice/SalesReceiptQueryRq were built without
+                  // <IncludeLineItems>, so QB returned the header only). Falling
+                  // through would leave every item at TxnLineID=-1, and a Mod
+                  // built that way REPLACES the document's lines wholesale —
+                  // new TxnLineIDs, broken SO links, lost line identity.
+                  // Throwing hands this to the abort path below, which parks a
+                  // failed pipeline row instead of corrupting the QB document.
+                  if (availableLines.length === 0 && qbItems.length > 0) {
+                    throw new Error(
+                      `QB returned 0 lines for ${isSR ? "SalesReceipt" : "Invoice"} ${freshTxnId} — refusing to rebuild ${qbItems.length} line(s) as new (would replace the document's lines). Check that the bridge's query builder sends <IncludeLineItems>.`
+                    );
+                  }
+
                   for (const it of qbItems) {
                     const targetId = (it as any).productId;
                     const targetName = (it as any).productName;

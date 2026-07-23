@@ -53,6 +53,24 @@ const STEP_LINE_ORDER_SPEC: Record<string, LineOrderSpec> = {
     retKey: "CreditMemoRet",
     lineKeys: ["CreditMemoLineRet", "CreditMemoLineGroupRet"],
   },
+  invoice_update: {
+    endpoint: "/api/invoices",
+    rsKey: "InvoiceQueryRs",
+    retKey: "InvoiceRet",
+    lineKeys: ["InvoiceLineRet", "InvoiceLineGroupRet"],
+  },
+  sales_receipt_update: {
+    endpoint: "/api/sales-receipts",
+    rsKey: "SalesReceiptQueryRs",
+    retKey: "SalesReceiptRet",
+    lineKeys: ["SalesReceiptLineRet", "SalesReceiptLineGroupRet"],
+  },
+  // estimate / sales_order are deliberately absent: they cannot reach a
+  // non-ascending line order any more (their builders park new lines last), and
+  // neither posts to the GL, so a wedged one is a visible annoyance rather than
+  // a reporting error. Add them the day one actually hits 3290 — remembering
+  // that a spec entry WITHOUT the matching qbLineOrder forwarding in
+  // updateEstimateInQb / updateSalesOrderInQb heals into a silent no-op.
 };
 
 /**
@@ -132,6 +150,34 @@ export async function healLineOrderForRow(
   }
 
   const pool = getDbPool();
+
+  // Divergence check. QB just told us every line the document has, so any
+  // TxnLineID our payload still references that is NOT in that list was deleted
+  // on the QB side — by a human in QB Desktop, or by an earlier Mod that
+  // dropped it. This is an authority conflict, not an ordering problem, and
+  // re-ordering will not fix it: QB rejects the Mod either way (which is the
+  // safe outcome — we never silently re-create a line the accountant removed).
+  // Surface it explicitly so the error names the cause instead of leaving a
+  // second, more cryptic failure behind.
+  try {
+    const { rows } = await pool.query(
+      `SELECT payload -> 'items' AS items FROM qb_order_pipeline WHERE id = $1`,
+      [pipelineRowId]
+    );
+    const items = (rows[0]?.items ?? []) as Array<{ TxnLineID?: unknown }>;
+    const live = new Set(orderedLineIds);
+    const orphans = items
+      .map((i) => (i?.TxnLineID == null ? "" : String(i.TxnLineID)))
+      .filter((id) => id && id !== "-1" && id !== "0" && !live.has(id));
+    if (orphans.length > 0) {
+      logger.warn(
+        `${LOG_PREFIX} ⚠️ ${step} ${txnId}: payload references ${orphans.length} line(s) that no longer exist in QB (${orphans.join(", ")}) — these were deleted on the QB side. The Mod will keep failing until the document is re-edited; do NOT assume re-ordering fixes it.`
+      );
+    }
+  } catch {
+    // Diagnostic only — never let it block the heal.
+  }
+
   try {
     // retry_count is reset alongside: the cause is deterministic and now fixed,
     // so the row deserves a fresh budget rather than dying on the retries it

@@ -462,6 +462,28 @@ export async function pollSubmittedRows(
           }
         }
 
+        // Drop any healed line order once a MOD lands. `qbLineOrder` is a
+        // snapshot of how QB held the lines BEFORE this MOD; the MOD itself may
+        // have appended, removed or re-created lines (subtotal/discount are
+        // re-created every time), so keeping it would steer the NEXT MOD with a
+        // stale map. Clearing is safe: the builder falls back to ascending
+        // TxnLineID, and if that is wrong the 3290 heal re-reads the fresh
+        // order from QB.
+        if (String(row.step).endsWith("_mod")) {
+          try {
+            await pool.query(
+              `UPDATE qb_order_pipeline
+                  SET payload = payload - 'qbLineOrder'
+                WHERE id = $1 AND payload ? 'qbLineOrder'`,
+              [row.id]
+            );
+          } catch (lineOrderErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Could not clear qbLineOrder on row ${row.id}: ${lineOrderErr.message}`
+            );
+          }
+        }
+
         if (
           txnId &&
           (row.step === "credit_memo" || row.step === "credit_memo_mod") &&

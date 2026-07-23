@@ -516,8 +516,20 @@ export async function PATCH(
     const existingItems = await creditMemoService.listPosCreditMemoItems({
       credit_memo_id: id,
     });
+    // Sort before queueing. The rows come back from a hasMany read with no
+    // ORDER BY, so Postgres is free to return them in any order — and the
+    // per-SKU queue below assigns line IDENTITY, not just display order. With a
+    // duplicate SKU (17 credit memos and 66 invoices have one today) an
+    // unordered read hands line A's TxnLineID to line B, so QB ends up with the
+    // quantities/prices swapped between two lines of the same item. The totals
+    // still reconcile, which is exactly what makes it invisible.
+    // ids are ULIDs → ascending id == insertion order == the order the previous
+    // edit wrote them, so occurrence N maps to occurrence N.
+    const orderedExistingItems = [...(existingItems as any[])].sort((a, b) =>
+      String(a.id).localeCompare(String(b.id))
+    );
     const txnLineIdQueueBySku = new Map<string, string[]>();
-    for (const it of existingItems as any[]) {
+    for (const it of orderedExistingItems) {
       const sku = (it.sku ?? "") as string;
       const tlid = (it.qb_txn_line_id ?? null) as string | null;
       if (sku && tlid) {

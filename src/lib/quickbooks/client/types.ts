@@ -185,6 +185,11 @@ export interface QbUpdateInvoicePayload {
   taxExempt?: boolean;
   memo?: string;
   items?: QbOrderItem[];
+  /**
+   * Authoritative TxnLineID order as the document actually holds it in QB.
+   * Only set by the 3290 line-order self-heal (heal-line-order.ts).
+   */
+  qbLineOrder?: string[];
 }
 
 export interface QbUpdateSalesReceiptPayload {
@@ -199,6 +204,11 @@ export interface QbUpdateSalesReceiptPayload {
   memo?: string;
   paymentMethod?: string; // QB FullName (e.g., 'Visa', 'MasterCard', 'Cash')
   items?: QbOrderItem[];
+  /**
+   * Authoritative TxnLineID order as the document actually holds it in QB.
+   * Only set by the 3290 line-order self-heal (heal-line-order.ts).
+   */
+  qbLineOrder?: string[];
 }
 
 export interface QbCreateEstimatePayload {
