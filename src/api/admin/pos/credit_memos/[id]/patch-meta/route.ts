@@ -173,6 +173,13 @@ export async function PATCH(
           status: "pending",
           medusaRefNumber: cmNumber ?? null,
           qbTxnId,
+          // MERGE, don't replace: this route only knows about sales rep + tax,
+          // but the credit_memo_mod row is reused for the CM's whole life and
+          // may already be carrying an edit's `items` that hasn't dispatched
+          // yet. Replacing dropped those line changes silently — they stayed in
+          // Medusa and never reached QB. Normally that window is one dispatch
+          // tick; while the row is `failed` it is unbounded.
+          mergePayload: true,
           payload: {
             ...(salesRepRef !== undefined ? { salesRepRef } : {}),
             ...(isFlorida && qbConfig

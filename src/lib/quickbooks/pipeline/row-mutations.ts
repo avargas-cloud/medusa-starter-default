@@ -147,6 +147,16 @@ export async function writePipelineRow(
     );
   }
 
+  // How an incoming payload combines with the row's existing one. Default is
+  // REPLACE (the caller owns the whole payload). `mergePayload` switches to a
+  // shallow jsonb merge so a narrow enqueue (e.g. patch-meta's tax/rep-only
+  // credit_memo_mod) can never drop keys a broader enqueue staged — see the
+  // WritePipelineRowInput docstring for the concrete data-loss window.
+  const payloadAssignment = (placeholder: string): string =>
+    input.mergePayload
+      ? `COALESCE(payload, '{}'::jsonb) || COALESCE(${placeholder}::jsonb, '{}'::jsonb)`
+      : `COALESCE(${placeholder}::jsonb, payload)`;
+
   // For "waiting": upsert — update existing waiting row or fall through to INSERT.
   // Prevents duplicate waiting rows when upfront pipeline rows are written on invoice creation.
   // Supports orderId-only, referenceId-only, or both matches (null-safe).
@@ -159,7 +169,7 @@ export async function writePipelineRow(
       `UPDATE qb_order_pipeline
              SET medusa_ref_number = COALESCE($3, medusa_ref_number),
                  depends_on        = COALESCE($4, depends_on),
-                 payload           = COALESCE($6::jsonb, payload)
+                 payload           = ${payloadAssignment('$6')}
              WHERE step = $2 AND status = 'waiting'
                AND (
                  ($1::text IS NOT NULL AND order_id = $1::text AND ($5::text IS NULL OR reference_id = $5::text))
@@ -224,7 +234,7 @@ export async function writePipelineRow(
                  updated_at        = NOW(),
                  medusa_ref_number = COALESCE($3, medusa_ref_number),
                  qb_ref_number     = COALESCE($4, qb_ref_number),
-                 payload           = COALESCE($6::jsonb, payload)
+                 payload           = ${payloadAssignment('$6')}
              WHERE step = $2 AND status IN ('waiting', 'pending')
                AND (
                  ($1::text IS NOT NULL AND order_id = $1::text AND ($5::text IS NULL OR reference_id = $5::text))
@@ -259,7 +269,7 @@ export async function writePipelineRow(
                  medusa_ref_number = COALESCE($3, medusa_ref_number),
                  qb_txn_id         = COALESCE($6, qb_txn_id),
                  qb_ref_number     = COALESCE($7, qb_ref_number),
-                 payload           = COALESCE($5::jsonb, payload),
+                 payload           = ${payloadAssignment('$5')},
                  retry_count       = CASE WHEN status = 'failed' THEN retry_count + 1 ELSE retry_count END
              WHERE step = $2 AND status IN ('submitted', 'confirmed', 'failed', 'skipped')
                AND (

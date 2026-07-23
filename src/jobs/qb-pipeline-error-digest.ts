@@ -176,7 +176,20 @@ export default async function qbPipelineErrorDigest(
      LEFT JOIN "order" o ON o.id = p.order_id
      WHERE p.status = 'failed'
        AND p.next_retry_at IS NULL
-       AND p.updated_at >= ?
+       AND (
+         -- (a) broke or retried inside the window — the daily "what happened
+         -- today" bucket.
+         p.updated_at >= ?
+         -- (b) DORMANT: exhausted its retry ladder and nothing touches it any
+         -- more, so updated_at froze and (a) stopped matching the day after.
+         -- Without this a dead row is reported exactly once and then goes
+         -- silent forever while still being broken (CM-1087: 14 days). Same
+         -- dedup as the item pipeline — re-surface when it's new, when
+         -- something moved since we last said so, or after a week of silence.
+         OR (p.digest_notified_at IS NULL
+             OR p.updated_at > p.digest_notified_at
+             OR p.digest_notified_at < now() - interval '7 days')
+       )
      ORDER BY p.updated_at DESC
      LIMIT 500`,
     [windowSinceIso]
@@ -468,6 +481,16 @@ export default async function qbPipelineErrorDigest(
         await knex.raw(
           `UPDATE qb_item_pipeline SET digest_notified_at = now() WHERE id = ANY(?)`,
           [stuckIds]
+        );
+      }
+      // Same for the sales pipeline's dormant-failure bucket — without the
+      // stamp its dedup can't distinguish "already told them" from "new", and
+      // every dead row would be re-reported every single day.
+      const salesIds = salesErrors.map((r) => r.id);
+      if (salesIds.length > 0) {
+        await knex.raw(
+          `UPDATE qb_order_pipeline SET digest_notified_at = now() WHERE id = ANY(?)`,
+          [salesIds]
         );
       }
     } else {

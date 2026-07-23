@@ -66,6 +66,24 @@ export interface WritePipelineRowInput {
   medusaRefNumber?: string | null;
   qbResult?: object | null;
   payload?: object | null;
+  /**
+   * Shallow-MERGE `payload` into whatever the row already carries instead of
+   * REPLACING it (the default).
+   *
+   * Use this for narrow, partial enqueues — a caller that only knows about a
+   * couple of header fields (sales rep, tax mode) must not clobber a broader
+   * payload another caller staged. The concrete hazard: patch-meta enqueues a
+   * `credit_memo_mod` carrying only salesRepRef/tax, and the credit_memo_mod
+   * row is REUSED for a CM's whole life. Replacing meant a tax tweak landing on
+   * a not-yet-dispatched edit silently dropped that edit's `items`, so the line
+   * changes existed in Medusa and never reached QB. The window is one dispatch
+   * tick normally — but it is unbounded while the row sits `failed` (CM-1087
+   * sat failed for 14 days).
+   *
+   * Merge is shallow: incoming keys win, absent keys are preserved. Re-sending
+   * an already-applied `items` array is harmless — a Mod is idempotent.
+   */
+  mergePayload?: boolean;
   error?: string | null;
   /**
    * Operation intent. Defaults to undefined = "add" (create a NEW QB document).
