@@ -153,6 +153,15 @@ export async function runOrphanedWaitingPass(logger: any): Promise<void> {
           AND depends_on  IS NULL
           AND step        = 'payment'
           AND created_at  < NOW() - INTERVAL '3 minutes'
+          -- $0 payments have nothing to record in QB. Promoting one costs a
+          -- pointless dispatch round-trip, and if the handler's $0 guard ever
+          -- stops settling the row it loops forever (PAY-3230, 2026-07-23).
+          -- Cheaper and safer to never wake it in the first place.
+          AND NOT EXISTS (
+                SELECT 1 FROM customer_payment cp
+                 WHERE cp.id = qb_order_pipeline.reference_id
+                   AND cp.amount = 0
+              )
         RETURNING id, reference_id`
     );
     if (promoted.length > 0) {

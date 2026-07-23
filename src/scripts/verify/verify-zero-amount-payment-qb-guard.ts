@@ -30,7 +30,16 @@ import * as path from "path";
 
 dotenv.config({ path: path.join(__dirname, "../../../.env") });
 
-const NON_TERMINAL = ["pending", "processing", "submitted", "waiting"];
+/**
+ * States the consolidator actually acts on. A 'waiting' row is NOT here on
+ * purpose: POST /admin/finance/payments writes one unconditionally so every
+ * cpay keeps a pipeline anchor, and the consolidator only picks up 'pending'
+ * — so a $0 payment holding a 'waiting' row is benign and expected.
+ */
+const LOOP_CAPABLE = ["pending", "processing", "submitted"];
+
+/** The signature of the ApplyCreditModal anchor anti-pattern. */
+const ANCHOR_CONTEXT = "FROM STANDALONE CREDIT MODAL";
 
 async function main() {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
@@ -61,11 +70,13 @@ async function main() {
           AND p.step = 'payment'
           AND p.status = ANY($1::text[])
         ORDER BY p.created_at`,
-      [NON_TERMINAL]
+      [LOOP_CAPABLE]
     );
 
     if (liveRows.length === 0) {
-      console.log("✅ Check 1: no $0 payment holds a live QB `payment` row.");
+      console.log(
+        "✅ Check 1: no $0 payment holds a consolidator-visible QB `payment` row."
+      );
     } else {
       failures++;
       console.log(
@@ -107,35 +118,49 @@ async function main() {
       }
     }
 
-    // ── Check 3: surviving $0 anchor payments (informational + gate) ─────────
+    // ── Check 3: surviving ApplyCreditModal anchor payments ──────────────────
+    // Gates on the anti-pattern's signature, not on "$0 payment" in general:
+    // a $0 cpay can legitimately exist from other flows, and now that it is
+    // never enqueued to QB it is harmless. A cpay carrying the modal's
+    // capture_context means the store-pos fix has regressed AGAIN.
     const { rows: anchors } = await client.query<{
       payment_id: string;
       display_id: number;
-      capture_context: string;
       created_at: string;
     }>(
-      `SELECT id AS payment_id, display_id,
-              metadata->>'capture_context' AS capture_context,
-              created_at
+      `SELECT id AS payment_id, display_id, created_at
          FROM customer_payment
         WHERE amount = 0
           AND deleted_at IS NULL
-        ORDER BY created_at`
+          AND metadata->>'capture_context' = $1
+        ORDER BY created_at`,
+      [ANCHOR_CONTEXT]
     );
 
     if (anchors.length === 0) {
-      console.log("✅ Check 3: zero $0 anchor payments alive.");
+      console.log(
+        "✅ Check 3: zero ApplyCreditModal $0 anchor payments alive."
+      );
     } else {
       failures++;
       console.log(
-        `❌ Check 3: ${anchors.length} $0 payment(s) still alive (anchor anti-pattern):`
+        `❌ Check 3: ${anchors.length} ApplyCreditModal $0 anchor(s) alive — the store-pos fix has regressed:`
       );
       for (const a of anchors) {
         console.log(
-          `   PAY-${a.display_id} (${a.payment_id}) ctx=${a.capture_context ?? "(none)"} created=${a.created_at}`
+          `   PAY-${a.display_id} (${a.payment_id}) created=${a.created_at}`
         );
       }
     }
+
+    // Informational: benign $0 payments (never enqueued, no spinner).
+    const { rows: benign } = await client.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM customer_payment
+        WHERE amount = 0 AND deleted_at IS NULL`
+    );
+    console.log(
+      `ℹ️  $0 payments alive (benign since the guard — not enqueued to QB): ${benign[0].n}`
+    );
 
     console.log(
       failures === 0

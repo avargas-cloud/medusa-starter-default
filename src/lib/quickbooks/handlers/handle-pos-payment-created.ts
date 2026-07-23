@@ -133,6 +133,25 @@ export async function handlePosPaymentCreated({
       logger.info(
         `${LOG_PREFIX} ⏭️ Skipping: payment ${paymentId} has amount=0 (credit-only transaction anchor — no QB entry needed)`
       );
+      // Returning without settling the row is NOT enough: runOrphanedWaitingPass
+      // promotes any depends_on-less 'waiting' payment row to 'pending' after 3
+      // minutes, dispatch claims it as 'processing', this guard returns, and the
+      // row loops processing → timeout → failed → retry forever. Settle it the
+      // same way the SR-embedded branch above does.
+      try {
+        const n = await skipPaymentRowByReference(
+          paymentId,
+          "Payment amount is $0 — nothing to record in QB"
+        );
+        if (n > 0)
+          logger.info(
+            `${LOG_PREFIX} ⏭️ Skipped ${n} pipeline row(s) for $0 payment ${paymentId}`
+          );
+      } catch (e: any) {
+        logger.warn(
+          `${LOG_PREFIX} Could not skip pipeline row for $0 payment ${paymentId}: ${e.message}`
+        );
+      }
       return;
     }
 
