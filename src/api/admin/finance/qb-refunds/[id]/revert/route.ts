@@ -226,45 +226,50 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     });
   }
 
+  // Automatic cleanup: delete the $0 apply FIRST (frees the credit in QB),
+  // then TxnVoid the check. The Medusa revert happens when refund_apply_del
+  // confirms — or when void_check confirms, for the no-doc case below —
+  // never before QB frees the credit.
+  //
+  // When the $0 apply TxnID is unknown (the historic norm — QB's AddRs Ret
+  // for a zero-amount credit apply carries no TxnID), the refund_apply_del
+  // row resolves it at dispatch time from the CHECK's LinkedTxns:
+  //  - linked ReceivePayment found → that's the doc, TxnDel it;
+  //  - none linked → no $0 doc exists → row skips itself, void_check alone
+  //    frees the credit;
+  //  - bridge without IncludeLinkedTxns → row retry-fails with a clear
+  //    message; manual escape hatch = POST .../confirm-qb-cleanup.
   const applyTxnId = rp?.qb_txn_id || null;
-  if (applyTxnId) {
-    // Automatic cleanup: TxnDel the $0 apply FIRST (frees the credit in QB),
-    // then TxnVoid the check. The Medusa revert happens when refund_apply_del
-    // confirms (consolidator poll pass) — never before QB frees the credit.
-    await stampRevertState("pending_qb_cleanup");
-    const delRowId = await writePipelineRow({
-      referenceId: id,
-      referenceType: "customer_payment",
-      step: "refund_apply_del",
-      status: "pending",
-      qbTxnId: applyTxnId,
-      medusaRefNumber: `Revert ${label}`,
-    });
-    await writePipelineRow({
-      referenceId: id,
-      referenceType: "customer_payment",
-      step: "void_check",
-      status: "waiting",
-      dependsOn: delRowId,
-      qbTxnId: checkTxnId,
-      medusaRefNumber: `Revert ${label}`,
-    });
-    return res.status(202).json({
-      success: true,
-      mode: "qb_cleanup_queued",
-      check_txn_id: checkTxnId,
-    });
-  }
-
-  // TxnID of the $0 apply unknown (historic capture gap) — never void the
-  // check blindly: the accountant cleans both docs in QB Desktop, then
-  // confirms via POST .../confirm-qb-cleanup.
-  await stampRevertState("pending_manual_qb_cleanup");
+  await stampRevertState("pending_qb_cleanup");
+  const delRowId = await writePipelineRow({
+    referenceId: id,
+    referenceType: "customer_payment",
+    step: "refund_apply_del",
+    status: "pending",
+    qbTxnId: applyTxnId,
+    medusaRefNumber: `Revert ${label}`,
+    ...(applyTxnId
+      ? {}
+      : {
+          payload: {
+            resolveVia: "check_linked_txn",
+            checkTxnId,
+          },
+        }),
+  });
+  await writePipelineRow({
+    referenceId: id,
+    referenceType: "customer_payment",
+    step: "void_check",
+    status: "waiting",
+    dependsOn: delRowId,
+    qbTxnId: checkTxnId,
+    medusaRefNumber: `Revert ${label}`,
+  });
   return res.status(202).json({
     success: true,
-    mode: "manual_qb_cleanup_required",
+    mode: "qb_cleanup_queued",
     check_txn_id: checkTxnId,
-    instructions:
-      "In QB Desktop: (1) delete the $0 ReceivePayment that applies this refund's credit to the check, (2) void the Write Check. Then click 'Confirm QB cleanup done'.",
+    apply_txn_resolution: applyTxnId ? "known" : "resolve_from_check",
   });
 };

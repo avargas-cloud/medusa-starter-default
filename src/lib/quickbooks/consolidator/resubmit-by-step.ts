@@ -27,7 +27,11 @@ import {
   updateSalesReceiptInQb,
   voidSalesReceiptInQb,
 } from "../client/sales-receipts";
-import { updateCheckInQb, voidCheckInQb } from "../client/checks";
+import {
+  updateCheckInQb,
+  voidCheckInQb,
+  fetchCheckLinkedTxns,
+} from "../client/checks";
 import {
   postInventoryAdjustmentToQb,
   voidInventoryAdjustmentInQb,
@@ -40,7 +44,7 @@ import { handleOrderUpdated } from "../handlers/handle-order-updated";
 import { handlePaymentCustomerTransfer } from "../handlers/handle-payment-customer-transfer";
 import { handlePosPaymentApplied } from "../handlers/handle-pos-payment-applied";
 import { handleSalesReceiptCreated } from "../handlers/handle-sales-receipt-created";
-import { failPipelineRow } from "../qb-pipeline";
+import { failOrRetryPipelineRow, failPipelineRow } from "../qb-pipeline";
 import { handleDraftOrderCreated } from "../../../subscribers/qb-draft-order-subscriber";
 import {
   processCustomerPipelineRow,
@@ -56,7 +60,20 @@ export type ResubmitRow = {
   reference_type: string | null;
   step: string;
   qb_txn_id?: string | null;
+  retry_count?: number | null;
+  payload?: Record<string, unknown> | null;
 };
+
+/**
+ * Retry-aware failure for the VOID/DEL step family (void_check,
+ * refund_apply_del, void_invoice, …): transient errors (dead tunnel, fetch
+ * failed, 3170 lock) land as status='failed' WITH next_retry_at so the
+ * dispatch pass re-claims them with backoff, instead of the legacy dead-end
+ * failed-with-NULL-next_retry_at that only a human could revive.
+ */
+async function failVoidFamilyRow(row: ResubmitRow, error: string) {
+  await failOrRetryPipelineRow(row.id, error, Number(row.retry_count ?? 0));
+}
 
 /**
  * Re-submits a pipeline row that was coalesced while in-flight, or a pending row
@@ -630,8 +647,8 @@ export async function resubmitByStep(
             `${LOG_PREFIX} ✅ void_credit_memo ${row.id} submitted op=${vcResult.data.operationId}`
           );
         } else {
-          await failPipelineRow(
-            row.id,
+          await failVoidFamilyRow(
+            row,
             vcResult.error ?? "voidCreditMemoInQb failed"
           );
         }
@@ -670,8 +687,8 @@ export async function resubmitByStep(
             `${LOG_PREFIX} ✅ ${row.step} ${row.id} submitted op=${voidResult.data.operationId}`
           );
         } else {
-          await failPipelineRow(
-            row.id,
+          await failVoidFamilyRow(
+            row,
             voidResult.error ??
               `${row.step === "void_sales_receipt" ? "voidSalesReceiptInQb" : "voidInvoiceInQb"} failed`
           );
@@ -724,8 +741,8 @@ export async function resubmitByStep(
             `${LOG_PREFIX} ✅ void_sales_order ${row.id} submitted op=${closeResult.data.operationId} txn=${soTxnId}`
           );
         } else {
-          await failPipelineRow(
-            row.id,
+          await failVoidFamilyRow(
+            row,
             closeResult.error ?? "closeSalesOrderInQb failed"
           );
         }
@@ -756,8 +773,8 @@ export async function resubmitByStep(
             `${LOG_PREFIX} ✅ void_check ${row.id} submitted op=${checkResult.data.operationId}`
           );
         } else {
-          await failPipelineRow(
-            row.id,
+          await failVoidFamilyRow(
+            row,
             checkResult.error ?? "voidCheckInQb failed"
           );
         }
@@ -767,15 +784,92 @@ export async function resubmitByStep(
       // Revert-refund cleanup: TxnDel the $0 apply ReceivePayment (QB has no
       // TxnVoid for ReceivePayment). Its confirm handler (poll-submitted-rows)
       // runs the Medusa revert and wakes the dependent void_check row.
+      //
+      // When qb_txn_id is unknown (the historic norm — QBXML quirk: a
+      // zero-amount ReceivePaymentAdd applied entirely from credits may create
+      // NO txn, its AddRs Ret has no TxnID), the row carries
+      // payload.resolveVia='check_linked_txn': we query the CHECK with
+      // IncludeLinkedTxns and (a) find a linked ReceivePayment → that's the
+      // doc, delete it; (b) linked list present but no ReceivePayment → no $0
+      // doc exists, skip this row and wake void_check (voiding the check alone
+      // frees the credit); (c) no LinkedTxn key → bridge predates
+      // IncludeLinkedTxns → retry-fail with a clear message.
       case "refund_apply_del": {
-        if (!row.qb_txn_id) {
+        let applyTxnId = row.qb_txn_id ?? null;
+        const rpPayload = (row.payload ?? {}) as Record<string, unknown>;
+        if (!applyTxnId && rpPayload.resolveVia === "check_linked_txn") {
+          const checkTxnIdForResolve = String(rpPayload.checkTxnId ?? "");
+          if (!checkTxnIdForResolve) {
+            await failPipelineRow(
+              row.id,
+              "refund_apply_del: resolveVia=check_linked_txn but payload.checkTxnId missing"
+            );
+            break;
+          }
+          let linked: Awaited<ReturnType<typeof fetchCheckLinkedTxns>>;
+          try {
+            linked = await fetchCheckLinkedTxns(
+              checkTxnIdForResolve,
+              (m: string) => logger.info(m)
+            );
+          } catch (resolveErr: any) {
+            // Bridge/network failure while resolving — transient: retry with
+            // backoff instead of the dead-end generic catch.
+            await failVoidFamilyRow(
+              row,
+              `refund_apply_del resolve failed: ${resolveErr.message ?? resolveErr}`
+            );
+            break;
+          }
+          if (linked === null) {
+            await failVoidFamilyRow(
+              row,
+              "refund_apply_del: bridge returned no LinkedTxn (IncludeLinkedTxns not deployed on bridge yet) — update the bridge or clean up manually via confirm-qb-cleanup"
+            );
+            break;
+          }
+          const linkedRp = linked.find((l) => l.txnType === "ReceivePayment");
+          if (!linkedRp) {
+            // No $0 ReceivePayment doc exists in QB — the credit application
+            // lives directly on the check. Voiding the check frees the credit.
+            const skipPool = getDbPool();
+            await skipPool.query(
+              `UPDATE qb_order_pipeline
+                  SET status = 'skipped',
+                      error = 'no $0 apply ReceivePayment doc exists in QB (zero-amount credit apply) — check void alone frees the credit',
+                      updated_at = NOW()
+                WHERE id = $1`,
+              [row.id]
+            );
+            await skipPool.query(
+              `UPDATE qb_order_pipeline
+                  SET status = 'pending', updated_at = NOW()
+                WHERE depends_on = $1 AND step = 'void_check' AND status = 'waiting'`,
+              [row.id]
+            );
+            logger.info(
+              `${LOG_PREFIX} ✅ refund_apply_del ${row.id}: no $0 apply doc in QB — skipped, void_check woken`
+            );
+            break;
+          }
+          applyTxnId = linkedRp.txnId;
+          const persistPool = getDbPool();
+          await persistPool.query(
+            `UPDATE qb_order_pipeline SET qb_txn_id = $2, updated_at = NOW() WHERE id = $1`,
+            [row.id, applyTxnId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ refund_apply_del ${row.id}: resolved $0 apply TxnID=${applyTxnId} via check LinkedTxns`
+          );
+        }
+        if (!applyTxnId) {
           await failPipelineRow(
             row.id,
             "refund_apply_del: missing qb_txn_id — cannot delete $0 apply"
           );
           break;
         }
-        const delResult = await voidPaymentInQb(row.qb_txn_id);
+        const delResult = await voidPaymentInQb(applyTxnId);
         if (delResult.success && delResult.data?.operationId) {
           const delPool = getDbPool();
           await delPool.query(
@@ -791,8 +885,8 @@ export async function resubmitByStep(
             `${LOG_PREFIX} ✅ refund_apply_del ${row.id} submitted op=${delResult.data.operationId}`
           );
         } else {
-          await failPipelineRow(
-            row.id,
+          await failVoidFamilyRow(
+            row,
             delResult.error ?? "voidPaymentInQb failed"
           );
         }
@@ -1507,7 +1601,7 @@ export async function resubmitByStep(
             `${LOG_PREFIX} ✅ void_inventory_adjustment ${row.id} submitted op=${viaResult.operationId}`
           );
         } else {
-          await failPipelineRow(row.id, viaResult.error);
+          await failVoidFamilyRow(row, viaResult.error);
           logger.warn(
             `${LOG_PREFIX} ❌ void_inventory_adjustment ${row.id} failed: ${viaResult.error}`
           );

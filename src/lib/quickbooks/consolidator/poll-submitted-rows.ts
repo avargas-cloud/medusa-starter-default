@@ -408,6 +408,38 @@ export async function pollSubmittedRows(
 
         // Section 1.5.14: void_check confirmed → mark customer_payment qb.status='voided'.
         if (row.step === "void_check" && row.reference_id) {
+          // Revert-refund completion (no-$0-doc chain): when the refund's
+          // credit application lives directly on the check (zero-amount
+          // apply created no ReceivePayment doc), the check void IS the
+          // moment QB frees the credit → finish the pending Medusa revert.
+          // Claim-guarded: if refund_apply_del already reverted, this no-ops.
+          try {
+            const { rows: cpStateRows } = await pool.query(
+              `SELECT metadata->>'revert_state' AS revert_state
+                 FROM customer_payment WHERE id = $1`,
+              [row.reference_id]
+            );
+            if (cpStateRows[0]?.revert_state === "pending_qb_cleanup") {
+              const out = await performMedusaRefundRevert(row.reference_id, {
+                actorId: null,
+                reason: null,
+                source: "qb_cleanup_confirmed",
+              });
+              if (out.ok) {
+                logger.info(
+                  `${LOG_PREFIX} ✅ void_check confirmed → customer_payment ${row.reference_id} reverted to '${out.newStatus}' ($${((out.restoredCents ?? 0) / 100).toFixed(2)} restored as credit)`
+                );
+              } else if (out.code !== "ALREADY_REVERTED") {
+                logger.warn(
+                  `${LOG_PREFIX} ⚠️ void_check confirmed but Medusa revert returned ${out.code} for ${row.reference_id}`
+                );
+              }
+            }
+          } catch (revErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ void_check revert-completion failed for ${row.reference_id}: ${revErr.message}`
+            );
+          }
           try {
             await pool.query(
               `UPDATE customer_payment

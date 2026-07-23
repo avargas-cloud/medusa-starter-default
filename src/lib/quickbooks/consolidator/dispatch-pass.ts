@@ -38,7 +38,7 @@ export async function runPendingDispatchPass(
              error = NULL
         FROM claim
        WHERE p.id = claim.id
-       RETURNING p.id, p.order_id, p.reference_id, p.reference_type, p.step, p.qb_txn_id
+       RETURNING p.id, p.order_id, p.reference_id, p.reference_type, p.step, p.qb_txn_id, p.retry_count, p.payload
     `);
     if (pendingMutations.length > 0) {
       logger.info(

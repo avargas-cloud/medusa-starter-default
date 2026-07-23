@@ -173,3 +173,64 @@ export async function pollCheckResult(
 ): Promise<QbAsyncResult> {
   return pollOperationResult(operationId, log);
 }
+
+/** One LinkedTxn aggregate from a CheckRet (IncludeLinkedTxns query). */
+export interface CheckLinkedTxn {
+  txnId: string;
+  txnType: string;
+}
+
+/**
+ * Pure parser: extracts the LinkedTxn list from a CheckRet.
+ * Returns null when the CheckRet carries NO LinkedTxn key at all — that means
+ * the bridge predates IncludeLinkedTxns (capability missing), which callers
+ * MUST distinguish from "linked list present but empty/no ReceivePayment".
+ */
+export function extractCheckLinkedTxns(
+  checkRet: unknown
+): CheckLinkedTxn[] | null {
+  const ret = (
+    Array.isArray(checkRet) ? checkRet[0] : checkRet
+  ) as Record<string, unknown> | null;
+  if (!ret || !("LinkedTxn" in ret)) return null;
+  const rawList = ret.LinkedTxn;
+  const arr: unknown[] = Array.isArray(rawList) ? rawList : [rawList];
+  const out: CheckLinkedTxn[] = [];
+  for (const item of arr) {
+    const l = item as Record<string, unknown> | null;
+    if (l?.TxnID) {
+      out.push({ txnId: String(l.TxnID), txnType: String(l.TxnType ?? "") });
+    }
+  }
+  return out;
+}
+
+/**
+ * Queries the check in QB and returns its LinkedTxn list (or null when the
+ * bridge doesn't return LinkedTxn — old bridge without IncludeLinkedTxns).
+ * Used by the revert-refund flow to resolve the $0 apply ReceivePayment:
+ * QBXML quirk — a zero-amount ReceivePaymentAdd applied entirely from credits
+ * may create NO ReceivePayment txn (its AddRs Ret has no TxnID), in which case
+ * voiding the check alone frees the credit.
+ */
+export async function fetchCheckLinkedTxns(
+  checkTxnId: string,
+  log: (msg: string) => void = console.log
+): Promise<CheckLinkedTxn[] | null> {
+  const res = await bridgeFetch("GET", `/api/checks/${checkTxnId}`);
+  const operationId: string = res?.operationId || res?.operation?.id;
+  if (!operationId) {
+    throw new Error("Bridge did not return an operationId for check query");
+  }
+  const raw = await pollRawOperationResult(operationId, log);
+  const msgs = raw?.QBXML?.QBXMLMsgsRs ?? raw?.QBXMLMsgsRs ?? raw ?? {};
+  const retRaw =
+    msgs?.CheckQueryRs?.CheckRet ??
+    raw?.CheckQueryRs?.CheckRet ??
+    raw?.CheckRet ??
+    null;
+  if (!retRaw) {
+    throw new Error(`Check query for ${checkTxnId} returned no CheckRet`);
+  }
+  return extractCheckLinkedTxns(retRaw);
+}
