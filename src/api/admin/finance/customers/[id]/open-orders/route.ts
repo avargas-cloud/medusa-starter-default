@@ -147,7 +147,101 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       // leaves real remainder; a fully invoiced+paid order lands at 0 and drops.
       .filter((o) => o.outstanding_cents > 0);
 
-    return res.json({ open_orders });
+    // ── Open ESTIMATES (draft orders) — deferred-deposit targets ──────────
+    // Drafts can't receive a PaymentApplication (handle-order-apply rejects
+    // them by design), so a deposit against an estimate is captured as a bare
+    // payment carrying locked_order_id + metadata.order_id; convert-force
+    // Step 4b creates the real order-only application at conversion. This
+    // list exists so payments/new can stamp that pointer at capture time.
+    // "Applied" here = Σ payments already pointed at the draft (same matcher
+    // Step 4b uses), since no application rows can exist yet.
+    interface EstimateRow {
+      id: string;
+      display_id: number | null;
+      document_number: string | null;
+      currency_code: string;
+      created_at: Date | string;
+      pos_total_raw: string | null;
+      total_cents: string | number | null;
+      pointed_cents: string | number | null;
+    }
+    const { rows: estRows } = await pool.query<EstimateRow>(
+      `
+      SELECT
+        o.id,
+        o.display_id,
+        NULLIF(o.metadata->>'document_number','')::text AS document_number,
+        o.currency_code,
+        o.created_at,
+        NULLIF(o.metadata->>'pos_total','') AS pos_total_raw,
+        COALESCE(
+          (
+            SELECT ROUND(((os.totals->>'original_order_total')::numeric) * 100)::bigint
+            FROM order_summary os
+            WHERE os.order_id = o.id AND os.deleted_at IS NULL
+              AND (os.totals->>'original_order_total') IS NOT NULL
+            ORDER BY os.version DESC
+            LIMIT 1
+          ),
+          (
+            SELECT SUM(ROUND(oli.unit_price * oi.quantity * 100))::bigint
+            FROM order_item oi
+            JOIN order_line_item oli ON oli.id = oi.item_id AND oli.deleted_at IS NULL
+            WHERE oi.order_id = o.id
+          ),
+          0
+        ) AS total_cents,
+        COALESCE(
+          (
+            SELECT SUM(cp.amount)::bigint
+            FROM customer_payment cp
+            WHERE cp.type = 'payment'
+              AND cp.deleted_at IS NULL
+              AND cp.status <> 'voided'
+              AND (cp.locked_order_id = o.id OR cp.metadata->>'order_id' = o.id)
+          ),
+          0
+        ) AS pointed_cents
+      FROM "order" o
+      WHERE o.customer_id = $1
+        AND o.deleted_at IS NULL
+        AND COALESCE(o.is_draft_order, false) = true
+        AND o.status::text = 'draft'
+        AND COALESCE(o.metadata->>'order_status','') NOT IN ('Voided','Declined')
+      ORDER BY o.created_at DESC
+      LIMIT 50
+      `,
+      [customerId]
+    );
+
+    const open_estimates = estRows
+      .map((r) => {
+        const posTotalDollars = Number(r.pos_total_raw);
+        const total =
+          Number.isFinite(posTotalDollars) && posTotalDollars > 0
+            ? Math.round(posTotalDollars * 100)
+            : Number(r.total_cents) || 0;
+        const pointed = Number(r.pointed_cents) || 0;
+        return {
+          id: r.id,
+          display_id: r.display_id ?? null,
+          document_number: r.document_number ?? null,
+          status: "draft",
+          total_cents: total,
+          applied_cents: pointed,
+          outstanding_cents: Math.max(0, total - pointed),
+          has_active_invoice: false,
+          is_estimate: true,
+          currency_code: r.currency_code ?? "usd",
+          created_at:
+            r.created_at instanceof Date
+              ? r.created_at.toISOString()
+              : String(r.created_at),
+        };
+      })
+      .filter((o) => o.outstanding_cents > 0);
+
+    return res.json({ open_orders, open_estimates });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
