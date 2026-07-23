@@ -125,11 +125,35 @@ export const DraftOrdersTable = ({
           : "—";
         const email = order.customer?.email ?? order.email ?? "—";
         const estObj = order.metadata?.qb_estimate;
-        const synced = !!(
-          (estObj && typeof estObj === "object"
-            ? (estObj as any).txn_id
-            : null) ?? order.metadata?.qb_estimate_txn_id
-        );
+        const syncStatus = order.metadata?.qb_sync_status as
+          | string
+          | undefined;
+        const synced =
+          !!(
+            (estObj && typeof estObj === "object"
+              ? (estObj as any).txn_id
+              : null) ?? order.metadata?.qb_estimate_txn_id
+          ) || syncStatus === "synced";
+        // Mirror the POS QBSyncedBadge semantics (EstimateRow.tsx): voided
+        // estimates are done (nothing pending), converted ones skip the QB
+        // Estimate on purpose, and only genuinely young rows are "Pending".
+        const isQbVoided = syncStatus === "voided";
+        const isQbConverted =
+          order.metadata?.order_status === "Accepted" ||
+          !!order.metadata?.order_id;
+        const isQbYoung =
+          Date.now() - new Date(order.created_at).getTime() <
+          24 * 60 * 60 * 1000;
+        const qbBadge: { color: "green" | "orange" | "grey" | "red"; label: string } =
+          isQbVoided
+            ? { color: "grey", label: "Voided" }
+            : synced
+              ? { color: "green", label: "✓ Yes" }
+              : isQbYoung
+                ? { color: "orange", label: "Pending" }
+                : isQbConverted
+                  ? { color: "grey", label: "Skipped" }
+                  : { color: "red", label: "Missing" };
         const qbRef =
           (estObj && typeof estObj === "object"
             ? (estObj as any).ref_number
@@ -190,8 +214,8 @@ export const DraftOrdersTable = ({
               </Badge>
             </div>
             <div className="flex justify-center">
-              <Badge color={synced ? "green" : "orange"} size="small">
-                {synced ? "✓ Yes" : "Pending"}
+              <Badge color={qbBadge.color} size="small">
+                {qbBadge.label}
               </Badge>
             </div>
             <Text size="small" className="text-right">
