@@ -65,10 +65,13 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     fields: [
       "id",
       "status",
+      "mode",
       "total_count",
       "processed_count",
       "created_count",
       "updated_count",
+      "terms_written_count",
+      "terms_skipped_count",
       "error_count",
       "started_at",
       "completed_at",

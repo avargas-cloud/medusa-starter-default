@@ -201,10 +201,29 @@ export const PATCH = async (
     return res.status(400).json({ error: "full_name cannot be blank" });
   }
 
+  // Setting the vendor's default payment term BY HAND marks it as a manual
+  // override: the QuickBooks payment-terms resync then refreshes the term name
+  // but leaves the day count alone, so a negotiated term isn't silently undone
+  // (see qb-vendor-sync-runner). Send `default_payment_terms_days_manual: false`
+  // explicitly to hand the vendor back to QuickBooks.
+  const stampManualTerms =
+    incomingMetadata !== undefined &&
+    "default_payment_terms_days" in incomingMetadata &&
+    !("default_payment_terms_days_manual" in incomingMetadata);
+
   const merged =
     incomingMetadata === undefined
       ? undefined
-      : { ...(vendor.metadata ?? {}), ...incomingMetadata };
+      : {
+          ...(vendor.metadata ?? {}),
+          ...incomingMetadata,
+          ...(stampManualTerms
+            ? {
+                default_payment_terms_days_manual: true,
+                default_payment_terms_source: "manual",
+              }
+            : {}),
+        };
 
   await catalog.updateQbVendors({
     id,

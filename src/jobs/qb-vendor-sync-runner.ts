@@ -1,5 +1,11 @@
 import { MedusaContainer } from "@medusajs/framework/types";
 import { pollBridgeStatus } from "../lib/quickbooks/bridge-fetch";
+import {
+  enqueueQbTermsQuery,
+  normalizeTermsKey,
+  parseQbTermsMap,
+  type QbTermsMap,
+} from "../lib/quickbooks/qb-terms";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../modules/quickbooks-catalog";
@@ -17,18 +23,67 @@ const CHUNK_SIZE = 300; // vendors per tick while in 'processing'
 const MAX_CHUNKS_PER_TICK = 3; // up to 3 chunks per minute to reach ~1k vendors in 2 ticks
 const FETCH_TIMEOUT_MINUTES = 5; // fail a 'fetching' run after this
 
+type SyncMode = "full" | "payment_terms";
+
 type RunRow = {
   id: string;
   status: string;
+  mode: SyncMode | null;
   bridge_operation_id: string | null;
+  terms_operation_id: string | null;
   vendor_snapshot: unknown;
+  terms_snapshot: unknown;
   total_count: number;
   processed_count: number;
   created_count: number;
   updated_count: number;
+  terms_written_count: number;
+  terms_skipped_count: number;
   error_count: number;
   started_at: Date | string | null;
 };
+
+const RUN_FIELDS = [
+  "id",
+  "status",
+  "mode",
+  "bridge_operation_id",
+  "terms_operation_id",
+  "vendor_snapshot",
+  "terms_snapshot",
+  "total_count",
+  "processed_count",
+  "created_count",
+  "updated_count",
+  "terms_written_count",
+  "terms_skipped_count",
+  "error_count",
+  "started_at",
+] as const;
+
+const modeOf = (run: RunRow): SyncMode =>
+  run.mode === "payment_terms" ? "payment_terms" : "full";
+
+/**
+ * Metadata patch carrying the vendor's QB payment term.
+ *
+ * `default_payment_terms_days` is the number a vendor bill's Due Date is
+ * computed from (bill date + days). It comes from the QB Terms list, never from
+ * parsing the term name. A term QB can't express as a day count (date-driven,
+ * e.g. "120" = due the 20th) writes `days: null` + the day-of-month, so the
+ * caller falls back to the system default instead of inventing a number.
+ */
+const buildTermsMetadata = (
+  termsName: string,
+  entry: { days: number | null; day_of_month_due: number | null } | undefined,
+  now: Date
+): Record<string, unknown> => ({
+  payment_terms: termsName,
+  default_payment_terms_days: entry?.days ?? null,
+  default_payment_terms_day_of_month: entry?.day_of_month_due ?? null,
+  default_payment_terms_source: "quickbooks",
+  default_payment_terms_synced_at: now.toISOString(),
+});
 
 /**
  * QB VendorRet shape we care about. The actual payload has many more fields
@@ -113,18 +168,7 @@ export default async function qbVendorSyncRunner(container: MedusaContainer) {
       ["queued", "fetching", "processing"].map(async (s) => {
         const { data } = await query.graph({
           entity: "qb_vendor_sync_run",
-          fields: [
-            "id",
-            "status",
-            "bridge_operation_id",
-            "vendor_snapshot",
-            "total_count",
-            "processed_count",
-            "created_count",
-            "updated_count",
-            "error_count",
-            "started_at",
-          ],
+          fields: [...RUN_FIELDS],
           filters: { status: s } as any,
           pagination: { skip: 0, take: 1 },
         });
@@ -178,15 +222,67 @@ async function handleQueued(
   if (!data.operationId) {
     throw new Error("Bridge did not return operationId");
   }
+
+  // The QB Terms list runs as a SECOND, parallel bridge query: a VendorRet only
+  // carries the term NAME, so the due-days come from the Terms catalog. In
+  // payment_terms mode it is the whole point of the run and a failure is fatal;
+  // in full mode the vendor refresh still stands on its own, so we degrade to
+  // "no terms this run" rather than fail the sync.
+  let termsOperationId: string | null = null;
+  try {
+    termsOperationId = await enqueueQbTermsQuery();
+  } catch (err: any) {
+    if (modeOf(run) === "payment_terms") throw err;
+    logger.warn(
+      `[qb-vendor-sync-runner] run ${run.id} could not queue the Terms query ` +
+        `(${err.message}) — continuing without payment terms`
+    );
+  }
+
   await catalog.updateQbVendorSyncRuns({
     id: run.id,
     status: "fetching",
     bridge_operation_id: data.operationId,
+    terms_operation_id: termsOperationId,
     started_at: new Date(),
   });
   logger.info(
-    `[qb-vendor-sync-runner] run ${run.id} → fetching op=${data.operationId}`
+    `[qb-vendor-sync-runner] run ${run.id} (${modeOf(run)}) → fetching ` +
+      `op=${data.operationId} termsOp=${termsOperationId ?? "none"}`
   );
+}
+
+/**
+ * Poll the parallel Terms query. Returns the parsed map when it lands,
+ * `"waiting"` while the bridge is still working, `null` when there is nothing
+ * to wait for (no op queued, or it failed in a mode that tolerates that).
+ */
+async function pollTermsMap(
+  run: RunRow,
+  logger: any
+): Promise<QbTermsMap | "waiting" | null> {
+  if (!run.terms_operation_id) return null;
+
+  const fatal = modeOf(run) === "payment_terms";
+  const polled = await pollBridgeStatus(run.terms_operation_id);
+
+  if (polled.status === "expired") {
+    const msg = `Terms query op ${run.terms_operation_id} expired (HTTP 404)`;
+    if (fatal) throw new Error(msg);
+    logger.warn(`[qb-vendor-sync-runner] run ${run.id} ${msg} — skipping terms`);
+    return null;
+  }
+
+  const op = (polled.data as Record<string, any>)?.operation;
+  if (op?.status === "failed") {
+    const msg = `Terms query failed: ${op?.error ?? "unknown error"}`;
+    if (fatal) throw new Error(msg);
+    logger.warn(`[qb-vendor-sync-runner] run ${run.id} ${msg} — skipping terms`);
+    return null;
+  }
+  if (op?.status !== "completed") return "waiting";
+
+  return parseQbTermsMap(polled.data);
 }
 
 async function handleFetching(
@@ -229,6 +325,17 @@ async function handleFetching(
     return;
   }
 
+  // Both bridge queries must land before we start writing: a chunk processed
+  // without the terms map would stamp `days: null` on vendors that do have a
+  // term in QB. The FETCH_TIMEOUT_MINUTES guard above bounds the wait.
+  const termsMap = await pollTermsMap(run, logger);
+  if (termsMap === "waiting") {
+    logger.info(
+      `[qb-vendor-sync-runner] run ${run.id} vendors ready, waiting on Terms query`
+    );
+    return;
+  }
+
   const raw =
     data.operation?.result?.QBXML?.QBXMLMsgsRs?.VendorQueryRs?.VendorRet ?? [];
   const vendors: VendorRet[] = Array.isArray(raw) ? raw : [raw];
@@ -237,11 +344,13 @@ async function handleFetching(
     id: run.id,
     status: vendors.length === 0 ? "completed" : "processing",
     vendor_snapshot: vendors,
+    terms_snapshot: termsMap ?? null,
     total_count: vendors.length,
     completed_at: vendors.length === 0 ? new Date() : null,
   });
   logger.info(
-    `[qb-vendor-sync-runner] run ${run.id} → processing (${vendors.length} vendors)`
+    `[qb-vendor-sync-runner] run ${run.id} → processing (${vendors.length} vendors, ` +
+      `${Object.keys(termsMap ?? {}).length} QB terms)`
   );
 }
 
@@ -260,11 +369,16 @@ async function handleProcessing(
     return;
   }
 
+  const mode = modeOf(run);
+  const termsMap = (run.terms_snapshot as QbTermsMap | null) ?? {};
+
   // Accumulate progress locally and flush to DB between chunks so the UI
   // sees fine-grained updates instead of a big jump at the end of the tick.
   let processed = run.processed_count;
   let created = run.created_count;
   let updated = run.updated_count;
+  let termsWritten = run.terms_written_count;
+  let termsSkipped = run.terms_skipped_count;
   let errored = run.error_count;
 
   for (let i = 0; i < MAX_CHUNKS_PER_TICK; i++) {
@@ -276,13 +390,23 @@ async function handleProcessing(
     const chunkListIds = chunk
       .map((v) => v.ListID)
       .filter((id): id is string => !!id);
+    // `metadata` is selected too: the terms patch is a read-modify-write merge
+    // (Medusa deep-merges JSONB on update, but the manual-override check needs
+    // the previous value anyway).
     const existing = chunkListIds.length
       ? ((await catalog.listQbVendors(
           { qb_list_id: chunkListIds },
-          { select: ["id", "qb_list_id"], take: chunkListIds.length }
-        )) as { id: string; qb_list_id: string }[])
+          {
+            select: ["id", "qb_list_id", "metadata"],
+            take: chunkListIds.length,
+          }
+        )) as {
+          id: string;
+          qb_list_id: string;
+          metadata: Record<string, unknown> | null;
+        }[])
       : [];
-    const byListId = new Map(existing.map((v) => [v.qb_list_id, v.id]));
+    const byListId = new Map(existing.map((v) => [v.qb_list_id, v]));
 
     const now = new Date();
     let chunkCreated = 0;
@@ -296,16 +420,76 @@ async function handleProcessing(
       }
       try {
         const payload = buildVendorPayload(v, now);
-        const prevId = byListId.get(String(v.ListID));
-        if (prevId) {
-          await catalog.updateQbVendors({ id: prevId, ...payload });
+        const termsName = payload.terms_ref_name as string | null;
+        const termsEntry = termsName
+          ? termsMap[normalizeTermsKey(termsName)]
+          : undefined;
+        const prev = byListId.get(String(v.ListID));
+
+        if (prev) {
+          const prevMeta = (prev.metadata ?? {}) as Record<string, unknown>;
+          // A term set by hand in the POS wins over QuickBooks — the accountant
+          // negotiated it there and a resync must not silently undo it. The QB
+          // term NAME still refreshes; only the day count is left alone.
+          const isManual = prevMeta.default_payment_terms_days_manual === true;
+          const writeTerms = !!termsName && !isManual;
+
+          if (writeTerms) termsWritten++;
+          else termsSkipped++;
+
+          const fields =
+            mode === "payment_terms"
+              ? {
+                  terms_ref_name: payload.terms_ref_name,
+                  last_synced_at: payload.last_synced_at,
+                }
+              : payload;
+
+          await catalog.updateQbVendors({
+            id: prev.id,
+            ...fields,
+            ...(writeTerms
+              ? {
+                  metadata: {
+                    ...prevMeta,
+                    ...buildTermsMetadata(termsName!, termsEntry, now),
+                  },
+                }
+              : {}),
+          });
           chunkUpdated++;
         } else {
-          await catalog.createQbVendors({
-            ...payload,
-            metadata: { payment_terms: payload.terms_ref_name ?? null },
-          });
-          chunkCreated++;
+          if (termsName) termsWritten++;
+          else termsSkipped++;
+
+          const metadata = termsName
+            ? buildTermsMetadata(termsName, termsEntry, now)
+            : { payment_terms: null };
+
+          try {
+            await catalog.createQbVendors({ ...payload, metadata });
+            chunkCreated++;
+          } catch (err: any) {
+            // Two runner ticks can overlap when a chunk pass outlives the
+            // one-minute cron interval: the second tick re-reads a stale
+            // processed_count and replays the chunk, so a vendor this pass
+            // believes is new already exists. Fall back to an update instead of
+            // burning an error — the row still ends up with its QB terms.
+            if (!/already exists/i.test(err?.message ?? "")) throw err;
+
+            const [dup] = (await catalog.listQbVendors(
+              { qb_list_id: [String(v.ListID)] },
+              { select: ["id", "metadata"], take: 1 }
+            )) as { id: string; metadata: Record<string, unknown> | null }[];
+            if (!dup) throw err;
+
+            await catalog.updateQbVendors({
+              id: dup.id,
+              ...payload,
+              metadata: { ...(dup.metadata ?? {}), ...metadata },
+            });
+            chunkUpdated++;
+          }
         }
       } catch (err: any) {
         chunkErrored++;
@@ -326,10 +510,13 @@ async function handleProcessing(
       processed_count: processed,
       created_count: created,
       updated_count: updated,
+      terms_written_count: termsWritten,
+      terms_skipped_count: termsSkipped,
       error_count: errored,
       status: isDone ? "completed" : "processing",
       completed_at: isDone ? new Date() : null,
       vendor_snapshot: isDone ? null : run.vendor_snapshot,
+      terms_snapshot: isDone ? null : run.terms_snapshot,
     });
 
     logger.info(
@@ -339,8 +526,9 @@ async function handleProcessing(
 
     if (isDone) {
       logger.info(
-        `[qb-vendor-sync-runner] run ${run.id} → completed ` +
-          `(created=${created} updated=${updated} error=${errored})`
+        `[qb-vendor-sync-runner] run ${run.id} (${mode}) → completed ` +
+          `(created=${created} updated=${updated} terms=${termsWritten} ` +
+          `termsSkipped=${termsSkipped} error=${errored})`
       );
       break;
     }
