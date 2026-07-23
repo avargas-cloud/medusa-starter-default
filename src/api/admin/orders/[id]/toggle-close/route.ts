@@ -1,5 +1,10 @@
-import { cancelOrderWorkflow } from "@medusajs/core-flows";
+import {
+  archiveOrderWorkflow,
+  cancelOrderWorkflow,
+  completeOrderWorkflow,
+} from "@medusajs/core-flows";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+import { Modules } from "@medusajs/utils";
 
 import { reconcileOrderReservations } from "../../../../../lib/finance/reconcile-order-reservations";
 import { maybeCompleteOrder } from "../../../../../lib/maybe-complete-order";
@@ -13,6 +18,23 @@ import {
 import { enqueueSoToggle } from "./_lib/qb-so-toggle";
 
 const LOG_PREFIX = "[toggle-close]";
+
+/**
+ * The pos_closed writes here go through orderService.updateOrders (module
+ * level), which emits NO event — so the Meili `orders` doc (source of the
+ * POS Open/Closed tabs) never re-indexed and a closed order haunted the
+ * Open tab (S10885). Emitting order.updated reuses the full subscriber
+ * machinery (fulfillment SQL fallback, fully_invoiced stamp). Every
+ * listener of that event is an idempotent no-op for this transition.
+ */
+async function emitOrderUpdated(scope: any, orderId: string): Promise<void> {
+  try {
+    const eventBus = scope.resolve(Modules.EVENT_BUS) as any;
+    await eventBus.emit({ name: "order.updated", data: { id: orderId } });
+  } catch (err: any) {
+    console.warn(`${LOG_PREFIX} meili resync emit failed: ${err.message}`);
+  }
+}
 
 /** Count of non-voided invoices for an order. */
 async function countActiveInvoices(pg: any, orderId: string): Promise<number> {
@@ -40,12 +62,14 @@ async function countActiveInvoices(pg: any, orderId: string): Promise<number> {
  *   2. Invoiced AND fully paid + fulfilled → COMPLETE natively (status=completed).
  *      Releases leftover reservations of un-invoiced lines; enqueues QB so_close.
  *      Reopenable → status back to pending.
- *   3. Invoiced but NOT fully paid/fulfilled → POS-flag close (metadata.pos_closed
- *      = true), remaining reservations released; enqueues QB so_close.
- *      Reopenable via the flag (reopen re-holds with backorder).
+ *   3. Invoiced but NOT fully paid/fulfilled → ARCHIVE natively (status=archived
+ *      via the complete→archive workflow chain) + metadata.pos_closed = true;
+ *      remaining reservations released; enqueues QB so_close.
+ *      Reopenable (reopen re-holds with backorder).
  *
- * Reopen (metadata.pos_closed already true): if the order is `completed` it is
- * reverted to `pending`; otherwise the flag is cleared. Reservations recreated
+ * Reopen (metadata.pos_closed already true): if the order is `completed` or
+ * `archived` it is reverted to `pending` (module update + raw SQL enforce);
+ * otherwise the flag is cleared (legacy pos_flag rows). Reservations recreated
  * and QB so_reopen enqueued.
  *
  * Returns: { success, action, negative_stock_items[], qb_skipped, qb_error,
@@ -87,6 +111,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     // ─────────────────────────────────────────────────────────────────────
     if (isCurrentlyClosed) {
       const wasCompleted = order.status === "completed";
+      const wasArchived = order.status === "archived";
       const newMeta = {
         ...meta,
         pos_closed: false,
@@ -94,13 +119,29 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         pos_reopened_at: new Date().toISOString(),
       };
 
-      if (wasCompleted) {
-        // completed → pending (direct status flip; updateOrders status pattern is
-        // used elsewhere e.g. revert-to-draft).
-        await orderService.updateOrders([
-          { id: orderId, status: "pending", metadata: newMeta },
-        ]);
-        console.log(`${LOG_PREFIX} ↩️ Order ${orderId} reopened (completed → pending)`);
+      if (wasCompleted || wasArchived) {
+        // completed|archived → pending. The module can silently no-op a
+        // terminal-status downgrade (the completed→pending gotcha, see
+        // utils/order-utils.ts) — so flip via the module first, then enforce
+        // with raw SQL guarded to exactly the two states this route reopens.
+        try {
+          await orderService.updateOrders([
+            { id: orderId, status: "pending", metadata: newMeta },
+          ]);
+        } catch (statusErr: any) {
+          console.warn(
+            `${LOG_PREFIX} module status downgrade rejected (${statusErr.message}) — metadata only, SQL enforce follows`
+          );
+          await orderService.updateOrders([{ id: orderId, metadata: newMeta }]);
+        }
+        await pg.raw(
+          `UPDATE "order" SET status = 'pending'
+            WHERE id = ? AND status IN ('completed', 'archived')`,
+          [orderId]
+        );
+        console.log(
+          `${LOG_PREFIX} ↩️ Order ${orderId} reopened (${order.status} → pending)`
+        );
       } else {
         await orderService.updateOrders([{ id: orderId, metadata: newMeta }]);
         console.log(`${LOG_PREFIX} ↩️ Order ${orderId} reopened (pos flag cleared)`);
@@ -124,6 +165,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         meta: newMeta,
         action: "reopen",
       });
+
+      await emitOrderUpdated(req.scope, orderId!);
 
       return res.status(200).json({
         success: true,
@@ -182,6 +225,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
       console.log(`${LOG_PREFIX} 🚫 Order ${orderId} canceled (no invoices)`);
       // QB void_sales_order is enqueued by the order.canceled subscriber.
+      // order.canceled already reindexes, but it races our metadata tag above —
+      // emit again so the final state (order_status=Voided) lands in Meili.
+      await emitOrderUpdated(req.scope, orderId!);
       return res.status(200).json({
         success: true,
         action: "canceled",
@@ -223,6 +269,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       });
 
       console.log(`${LOG_PREFIX} ✅ Order ${orderId} completed natively`);
+      await emitOrderUpdated(req.scope, orderId!);
       return res.status(200).json({
         success: true,
         action: "completed",
@@ -232,18 +279,59 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       });
     }
 
-    // 3. Invoiced but not completable → POS-flag close (reversible). Remaining
-    //    allocations are RELEASED so the stock is sellable while closed; reopen
-    //    recreates them with backorder.
+    // 3. Invoiced but not completable → ARCHIVE (reversible via Reopen).
+    //    Remaining allocations are RELEASED so the stock is sellable while
+    //    closed; reopen recreates them with backorder.
+    //
+    //    Medusa only archives completed/canceled/draft orders, so the native
+    //    path is the two-workflow chain pending → completed → archived
+    //    (completeOrder_ only blocks CANCELED). The transient `completed` is
+    //    a stepping stone, never a resting state: if the archive leg fails we
+    //    compensate back to `pending` — a completed-but-unfulfilled order is
+    //    the exact phantom of the 2026-07-07 void bug (hides Mark as Picked
+    //    Up, wrong Closed-tab semantics). On any chain failure the close
+    //    still holds via metadata.pos_closed (legacy flag behavior).
     const newMeta = {
       ...meta,
       pos_closed: true,
       pos_closed_at: new Date().toISOString(),
-      pos_closed_via: "pos_flag",
+      pos_closed_via: "archive",
     };
     await orderService.updateOrders([{ id: orderId, metadata: newMeta }]);
 
     await releaseAllReservations(inventoryModule, pg, items);
+
+    let finalStatus = "pending";
+    try {
+      await completeOrderWorkflow(req.scope).run({
+        input: { orderIds: [orderId!] },
+      });
+      try {
+        await archiveOrderWorkflow(req.scope).run({
+          input: { orderIds: [orderId!] },
+        });
+        finalStatus = "archived";
+      } catch (archiveErr: any) {
+        console.error(
+          `${LOG_PREFIX} archive leg failed (${archiveErr.message}) — compensating completed → pending`
+        );
+        try {
+          await orderService.updateOrders([
+            { id: orderId, status: "pending" },
+          ]);
+        } catch {
+          /* raw SQL below is the enforcement */
+        }
+        await pg.raw(
+          `UPDATE "order" SET status = 'pending' WHERE id = ? AND status = 'completed'`,
+          [orderId]
+        );
+      }
+    } catch (completeErr: any) {
+      console.error(
+        `${LOG_PREFIX} complete leg failed (${completeErr.message}) — falling back to pos_flag-only close`
+      );
+    }
 
     const qb = await enqueueSoToggle({
       orderId: orderId!,
@@ -252,11 +340,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     });
 
     console.log(
-      `${LOG_PREFIX} 📦 Order ${orderId} POS-closed, reservations released (not completable: ${completeResult.reason})`
+      `${LOG_PREFIX} 📦 Order ${orderId} closed → status=${finalStatus} (not completable: ${completeResult.reason})`
     );
+    await emitOrderUpdated(req.scope, orderId!);
     return res.status(200).json({
       success: true,
       action: "closed",
+      final_status: finalStatus,
       complete_blocked_reason: completeResult.reason,
       negative_stock_items: [],
       qb_skipped: qb.qbSkipped,

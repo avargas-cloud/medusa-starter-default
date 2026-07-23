@@ -350,7 +350,18 @@ export function buildOrderDoc(order: OrderForMeili): OrderMeiliDoc {
   // forever (e.g. S10374). order.status='completed' is the authoritative
   // "this order is closed" signal, so it must force is_closed / clear is_open.
   const isCompleted = asString(order.status) === "completed";
-  const isClosed = isCompleted || CLOSED_FULFILLMENT.has(fulfillmentStatus);
+  // Archived = terminal state of a POS close on a partially-invoiced order
+  // (toggle-close complete→archive chain). Closed regardless of fulfillment.
+  const isArchived = asString(order.status) === "archived";
+  // Legacy POS-level close (pre-archived rows): order.status='pending' with
+  // only metadata.pos_closed marking it. Without honoring the flag here such
+  // an order reads is_open forever (e.g. S10885). Reopen clears the flag.
+  const isPosClosed = meta.pos_closed === true;
+  const isClosed =
+    isCompleted ||
+    isArchived ||
+    isPosClosed ||
+    CLOSED_FULFILLMENT.has(fulfillmentStatus);
   const isOpen = !isClosed && OPEN_FULFILLMENT.has(fulfillmentStatus);
   // A separated (layaway) order leaves the Separated view once it is no longer
   // an open order: either fulfilled/shipped/delivered OR fully invoiced (every

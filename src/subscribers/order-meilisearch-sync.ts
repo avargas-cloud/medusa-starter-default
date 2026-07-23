@@ -24,7 +24,10 @@ import { loadFullyInvoicedForOrder } from "../lib/invoices/load-fully-invoiced";
  *         order first, then upsert. Without this the doc reindexed on
  *         order.fulfillment_created races the delivered_at write and can
  *         stick at is_open=true even after the order is delivered.
- *   • order.archived / order.deleted
+ *   • order.archived
+ *       → upsert (POS close of a partially-invoiced order archives it; the
+ *         doc must land in the Closed tab, not vanish)
+ *   • order.deleted
  *       → drop from index
  *   • customer.updated
  *       → cascade: re-sync every order for that customer (so name/phone
@@ -311,11 +314,16 @@ function extractIds(data: unknown): string[] {
   return [];
 }
 
-const DELETE_EVENTS = new Set(["order.archived", "order.deleted"]);
+const DELETE_EVENTS = new Set(["order.deleted"]);
 const UPSERT_EVENTS = new Set([
   "order.placed",
   "order.updated",
   "order.canceled",
+  // Archived = the terminal state of a POS "Close Order" on a partially
+  // invoiced order (toggle-close branch 3: complete→archive native chain).
+  // These orders must LAND in the Closed tab, not vanish from the index —
+  // so archived upserts (build-order-doc maps archived → is_closed).
+  "order.archived",
   "order.payment_captured",
   "order.fulfillment_created",
   "order.customer_transferred",
