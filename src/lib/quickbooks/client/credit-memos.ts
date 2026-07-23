@@ -85,6 +85,9 @@ export async function updateCreditMemoInQb(
         ...(payload.items && payload.items.length > 0
           ? { items: payload.items }
           : {}),
+        ...(payload.qbLineOrder && payload.qbLineOrder.length > 0
+          ? { qbLineOrder: payload.qbLineOrder }
+          : {}),
       }
     );
     const operationId = modResp?.operationId;

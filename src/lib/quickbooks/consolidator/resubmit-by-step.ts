@@ -512,6 +512,8 @@ export async function resubmitByStep(
           date?: string;
           refNumber?: string;
           items?: Array<Record<string, unknown>>;
+          /** Set by the 3290 line-order self-heal — see heal-line-order.ts. */
+          qbLineOrder?: string[];
         };
         const modResult = await updateCreditMemoInQb({
           txnId: cm.qb_txn_id,
@@ -525,6 +527,7 @@ export async function resubmitByStep(
           date: modPayload.date,
           refNumber: modPayload.refNumber,
           items: modPayload.items as any,
+          qbLineOrder: modPayload.qbLineOrder,
         });
         if (modResult.success && modResult.data?.operationId) {
           await cmModPool.query(

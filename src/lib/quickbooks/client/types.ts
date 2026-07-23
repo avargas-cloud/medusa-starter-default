@@ -167,6 +167,13 @@ export interface QbUpdateCreditMemoPayload {
    * Lines from the original CM not included here are deleted by QB.
    */
   items?: QbOrderItem[];
+  /**
+   * Authoritative TxnLineID order as the document actually holds it in QB.
+   * Only set by the 3290 line-order self-heal (heal-line-order.ts) for
+   * documents whose real order is NOT ascending-by-TxnLineID — normally the
+   * bridge's ascending sort is correct and this stays undefined.
+   */
+  qbLineOrder?: string[];
 }
 
 export interface QbUpdateInvoicePayload {

@@ -25,6 +25,11 @@ import {
   refreshEditSequenceForRow,
   stepToCacheEntityType,
 } from "./refresh-edit-sequence";
+import {
+  canHealLineOrder,
+  healLineOrderForRow,
+  isLineOrderError,
+} from "./heal-line-order";
 import { buildEstimatePatch } from "../qb-metadata-types";
 import { resubmitByStep, type ResubmitRow } from "./resubmit-by-step";
 import { activateRefundPaymentRow } from "./refund-payment-activation";
@@ -1045,6 +1050,30 @@ export async function pollSubmittedRows(
               healErr instanceof Error ? healErr.message : String(healErr);
             logger.warn(
               `${LOG_PREFIX} ⚠️ Auto-heal threw for row ${row.id}: ${msg}`
+            );
+          });
+        }
+
+        // Auto-heal: QB error 3290 means our line ORDER disagrees with the
+        // document's. Unlike the EditSequence heal this one runs even when the
+        // retry budget is spent — 3290 is deterministic, so an exhausted row is
+        // exactly the row that needs it (the budget burned while it was
+        // unfixable). healLineOrderForRow re-arms the row itself.
+        if (
+          row.qb_txn_id &&
+          isLineOrderError(errMsg) &&
+          canHealLineOrder(row.step as string)
+        ) {
+          await healLineOrderForRow(
+            row.step as string,
+            row.qb_txn_id as string,
+            logger,
+            row.id as string
+          ).catch((healErr: unknown) => {
+            const msg =
+              healErr instanceof Error ? healErr.message : String(healErr);
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Line-order heal threw for row ${row.id}: ${msg}`
             );
           });
         }
