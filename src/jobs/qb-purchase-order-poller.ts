@@ -435,7 +435,8 @@ export default async function qbPurchaseOrderPoller(
         if (existing?.qb_purchase_order_list_id) {
           await knex.raw(
             `UPDATE qb_purchase_order_pipeline
-                SET status = 'synced', qb_list_id = ?, synced_at = NOW(), updated_at = NOW()
+                SET status = 'synced', qb_list_id = ?, last_error = NULL,
+                    next_retry_at = NULL, synced_at = NOW(), updated_at = NOW()
               WHERE id = ?`,
             [existing.qb_purchase_order_list_id, row.id]
           );
@@ -924,6 +925,8 @@ export default async function qbPurchaseOrderPoller(
             SET status = 'synced',
                 qb_list_id = ?,
                 qb_txn_number = COALESCE(?, qb_txn_number),
+                last_error = NULL,
+                next_retry_at = NULL,
                 synced_at = NOW(),
                 updated_at = NOW()
           WHERE id = ?`,

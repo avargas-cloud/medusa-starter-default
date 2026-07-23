@@ -510,6 +510,8 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
             SET status = 'synced',
                 qb_list_id = ?,
                 qb_txn_number = COALESCE(?, qb_txn_number),
+                last_error = NULL,
+                next_retry_at = NULL,
                 synced_at = NOW(),
                 updated_at = NOW()
           WHERE id = ?`,
