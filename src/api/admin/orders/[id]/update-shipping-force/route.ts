@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+import { assertOrderEditable } from "../_lib/assert-order-editable";
 import { Modules } from "@medusajs/utils";
 
 /**
@@ -16,6 +17,11 @@ export async function POST(
 ): Promise<void> {
   const { amount } = req.body as { amount: number };
   const orderId = req.params.id;
+  const archivedBlock = await assertOrderEditable(req.scope, String(orderId));
+  if (archivedBlock) {
+    res.status(409).json({ error: archivedBlock, code: "ORDER_ARCHIVED" });
+    return;
+  }
 
   if (amount === undefined || typeof amount !== "number") {
     res

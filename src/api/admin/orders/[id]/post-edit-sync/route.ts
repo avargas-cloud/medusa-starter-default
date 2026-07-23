@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+import { assertOrderEditable } from "../_lib/assert-order-editable";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 import { syncInventoryItemToMeiliSearchWorkflow } from "../../../../../workflows/sync-inventory-item-meilisearch";
 
@@ -29,6 +30,11 @@ export async function POST(
   res: MedusaResponse
 ): Promise<void> {
   const { id } = req.params as { id: string };
+  const archivedBlock = await assertOrderEditable(req.scope, id);
+  if (archivedBlock) {
+    res.status(409).json({ error: archivedBlock, code: "ORDER_ARCHIVED" });
+    return;
+  }
   const {
     discount_type,
     discount_value,

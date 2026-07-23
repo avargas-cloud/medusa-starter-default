@@ -1,8 +1,13 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { assertOrderEditable } from "../_lib/assert-order-editable";
 import { listActiveReservationsRaw } from "../../../../../lib/reservations";
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const { id } = req.params;
+  const archivedBlock = await assertOrderEditable(req.scope, String(id));
+  if (archivedBlock) {
+    return res.status(409).json({ error: archivedBlock, code: "ORDER_ARCHIVED" });
+  }
 
   try {
     const orderService = req.scope.resolve("order");

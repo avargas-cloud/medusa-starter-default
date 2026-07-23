@@ -6,6 +6,7 @@ import {
   cancelDraftOrderEditWorkflow,
 } from "@medusajs/core-flows";
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+import { assertOrderEditable } from "../_lib/assert-order-editable";
 import {
   Modules,
   PromotionType,
@@ -33,6 +34,11 @@ export async function POST(
   res: MedusaResponse
 ): Promise<void> {
   const { id } = req.params as { id: string };
+  const archivedBlock = await assertOrderEditable(req.scope, id);
+  if (archivedBlock) {
+    res.status(409).json({ error: archivedBlock, code: "ORDER_ARCHIVED" });
+    return;
+  }
   const { discount_type, discount_value, pos_total, pos_tax_rate } =
     req.body as {
       discount_type: "percent" | "fixed";

@@ -1,4 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework";
+import { assertOrderEditable } from "../_lib/assert-order-editable";
 import { Modules } from "@medusajs/utils";
 
 import { listActiveReservationsRaw } from "../../../../../lib/reservations";
@@ -16,6 +17,11 @@ async function handleDelete(
   req: MedusaRequest,
   res: MedusaResponse
 ): Promise<void> {
+  const archivedBlock = await assertOrderEditable(req.scope, String(req.params.id));
+  if (archivedBlock) {
+    res.status(409).json({ error: archivedBlock, code: "ORDER_ARCHIVED" });
+    return;
+  }
   const body = req.body as Record<string, any> | undefined;
   const line_item_id: string | undefined =
     body?.line_item_id ?? (req.query?.line_item_id as string | undefined);

@@ -97,7 +97,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     }
 
     const meta = (order.metadata || {}) as Record<string, any>;
-    const isCurrentlyClosed = meta.pos_closed === true;
+    // status==='archived' counts as closed even if the flag was lost — the
+    // reopen branch keys off status, so a flag-less archived order still
+    // reopens cleanly instead of falling into the close path.
+    const isCurrentlyClosed =
+      meta.pos_closed === true || order.status === "archived";
     const items = order.items || [];
     const locationId = await resolveStockLocation(stockLocationModule);
     if (!locationId) {

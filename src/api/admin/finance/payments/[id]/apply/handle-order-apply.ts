@@ -82,9 +82,16 @@ export async function handleOrderApply(
   }
 
   const orderStatus = String(order.status ?? "").toLowerCase();
-  if (orderStatus === "draft" || orderStatus === "canceled") {
+  // archived = POS-closed order (toggle-close on a partially-invoiced order).
+  // The open-orders picker already hides these; this keeps direct API calls
+  // consistent — reopen the order first if a deposit really must attach.
+  if (
+    orderStatus === "draft" ||
+    orderStatus === "canceled" ||
+    orderStatus === "archived"
+  ) {
     return res.status(400).json({
-      error: `Cannot apply payment to a ${orderStatus} order`,
+      error: `Cannot apply payment to ${orderStatus === "archived" ? "an" : "a"} ${orderStatus} order`,
     });
   }
 
