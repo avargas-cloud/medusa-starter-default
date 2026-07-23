@@ -254,8 +254,12 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         ...(transactionNumber !== null
           ? { transaction_number: transactionNumber }
           : {}),
-        // Show spinner immediately in the UI — the QB handler will update to 'synced'/'error'
-        ...(qbFlowEnabled ? { qb_sync_status: "pending" } : {}),
+        // Show spinner immediately in the UI — the QB handler will update to 'synced'/'error'.
+        // Skipped for $0 payments: they are never enqueued to QB (see the $0 guard
+        // below), so a 'pending' status would leave the spinner turning forever.
+        ...(qbFlowEnabled && Number(amount) !== 0
+          ? { qb_sync_status: "pending" }
+          : {}),
       },
       status: "available", // A new manual payment is always available until applied
     });
@@ -296,7 +300,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         );
       }
 
-      if (!skip_qb_sync) {
+      // $0 GUARD: a zero-amount payment has nothing to record in QuickBooks.
+      // Enqueuing it produces a $0 ReceivePaymentAdd that QB accepts WITHOUT
+      // minting a document — no TxnID comes back, so the poller can never
+      // confirm the row and it loops processing→timeout→failed→retry forever
+      // (cpay 3230 / PAY-3230, 2026-07-23). The mirror guard in the
+      // pos.payment.created subscriber (handle-pos-payment-created.ts) does not
+      // cover this route, which enqueues inline. The 'waiting' anchor row above
+      // is still written so every cpay keeps its pipeline anchor.
+      const isZeroAmount = Number(payment.amount) === 0;
+      if (isZeroAmount) {
+        console.info(
+          `[finance/payments] payment=${payment.id} amount=0 — not enqueueing QB payment row (nothing to record in QB)`
+        );
+      }
+
+      if (!skip_qb_sync && !isZeroAmount) {
         // 1.5.9: pipeline-only — enqueue 'payment' for consolidator pickup.
         try {
           const {
