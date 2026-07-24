@@ -9,7 +9,7 @@ import {
   SALES_DATE_FILTER_SQL,
   fetchCmRefundsCentsForPeriod,
 } from "../../_lib/sales-revenue"
-import { COGS_JOIN, COST_DOLLARS } from "../../_lib/cogs-join"
+import { COGS_JOIN, COST_DOLLARS, fetchReturnedProductCostDollars } from "../../_lib/cogs-join"
 
 // Same canonical warehouse ids as backend/src/lib/locations.ts — inlined
 // (matches the existing pattern in purchasing/snapshot, purchasing/alternatives,
@@ -92,19 +92,35 @@ async function fetchMiamiInventoryValueAtDate(pg: any, targetDate: string): Prom
        JOIN product_variant pv ON pv.id = pvii.variant_id AND pv.deleted_at IS NULL
        WHERE il.location_id = ?
      ),
+     -- Drafts excluded 2026-07-23 (was: status <> 'voided', which let them
+     -- through): a draft invoice has moved no stock yet, so walking its
+     -- quantities back misstates the reconstruction. Deliberately still keyed
+     -- on created_at, NOT the canonical fiscal issued_at -- this CTE has to
+     -- reproduce stocked_quantity, which moves at the real event, and
+     -- issued_at is backdatable by design (see payment_batch_day).
      sold AS (
        SELECT ii.variant_id, SUM(ii.quantity) AS qty
        FROM pos_invoice i
        JOIN pos_invoice_item ii ON ii.invoice_id = i.id AND ii.deleted_at IS NULL
-       WHERE i.deleted_at IS NULL AND i.voided_at IS NULL AND i.status <> 'voided'
+       WHERE i.deleted_at IS NULL AND i.voided_at IS NULL
+         AND i.status NOT IN ('draft','voided')
          AND i.created_at >= ?
        GROUP BY ii.variant_id
      ),
+     -- CORRECTED 2026-07-23 — this CTE used to be SUM(cmi.quantity) keyed on
+     -- cm.created_at with no status filter, which misstated the reconstruction
+     -- two ways: (1) damaged units are refunded but NEVER restocked
+     -- (credit_memos/[id]/complete restocks exactly quantity − damaged_qty),
+     -- so counting them walked stock back that never came back; (2) stock
+     -- returns when the memo is COMPLETED, so a drafted-but-not-completed
+     -- memo moved nothing yet. Now mirrors the real restock exactly, and its
+     -- window matches the canonical refund leg (sales-revenue.ts).
      returned AS (
-       SELECT cmi.variant_id, SUM(cmi.quantity) AS qty
+       SELECT cmi.variant_id, SUM(cmi.quantity - COALESCE(cmi.damaged_qty, 0)) AS qty
        FROM pos_credit_memo cm
        JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
-       WHERE cm.deleted_at IS NULL AND cm.voided_at IS NULL AND cm.created_at >= ?
+       WHERE cm.deleted_at IS NULL AND cm.voided_at IS NULL AND cm.status = 'completed'
+         AND COALESCE(cm.completed_at, cm.created_at) >= ?
        GROUP BY cmi.variant_id
      ),
      received AS (
@@ -275,6 +291,31 @@ async function fetchPoSpend(pg: any, from: string, to: string) {
   }
 }
 
+// Factory orders physically RECEIVED into the China warehouse during
+// [from, to), by the REAL receipt-event date — the factory-side mirror of
+// fetchPeriodReceivedSplit (user request 2026-07-23: "podemos tener en factory
+// orders CREATED / RECEIVED?").
+//
+// Valued at FACTORY_COST (purchase_cost), NOT the FO's own unit cost, for the
+// same reason the Miami arrows use average_cost: goods should be counted at
+// the cost they're CARRIED at once they land, and China stock is valued
+// pre-landed at factory cost throughout this route. Scoped identically to the
+// fo_receipts CTE of fetchChinaInventoryValueAtDate, so the arrow equals the
+// movement that actually hit China inventory.
+async function fetchFactoryOrderReceived(pg: any, from: string, to: string): Promise<number> {
+  const result = await pg.raw(
+    `SELECT COALESCE(ROUND(SUM(forl.qty_received_now * ${FACTORY_COST} * 100)), 0)::bigint AS cents
+     FROM factory_order_receipt_line forl
+     JOIN factory_order_receipt fore ON fore.id = forl.factory_order_receipt_id
+     LEFT JOIN product_variant pv ON pv.id = forl.product_variant_id AND pv.deleted_at IS NULL
+     WHERE forl.deleted_at IS NULL AND fore.deleted_at IS NULL AND fore.status = 'applied'
+       AND fore.voided_at IS NULL AND fore.stock_location_id = ?
+       AND fore.received_at >= ? AND fore.received_at < ?`,
+    [CHINA_SLOC, from, to]
+  )
+  return Number(result.rows[0]?.cents ?? 0)
+}
+
 // Factory orders actually PLACED in [from, to) — draft excluded, same reasoning
 // as purchase orders — cost basis, mirrors purchase orders.
 async function fetchFactoryOrderSpend(pg: any, from: string, to: string): Promise<number> {
@@ -301,33 +342,205 @@ async function fetchFactoryOrderSpend(pg: any, from: string, to: string): Promis
 // "Current" showed two different, hard-to-reconcile in-transit numbers for
 // the exact same open POs (This Month excluded June-placed POs still open in
 // July); now they always agree, and Received is the only period-scoped part.
-// Cost basis: the receipt's own override when present (the actual price paid
-// on that shipment), else the PO line's committed unit cost — real numbers,
-// not the agent's billed/estimated-landed blend (that blend exists for
-// still-open exposure where nothing better exists yet; a receipt is already
-// real data).
+// Cost basis (CORRECTED 2026-07-23 — was: the receipt's override, else the
+// PO line's committed unit cost): valued at the SAME canonical cost the goods
+// are carried at once they land — `average_cost` (QB average for USA product,
+// real landed cost for China product; see lib/cost/cost-sql.ts), NOT the PO's
+// own unit cost. The PO cost is what we OWE the vendor; for China product it
+// excludes the freight/tariff/commission that the landed cost already
+// includes, so valuing Received at PO cost understated what actually entered
+// Miami inventory by the entire landed uplift (June 2026: agent Received read
+// $22,548.55 while $30,640.74 of value landed — a $8,092 hole) and left the
+// page's Initial + Received − COGS ≈ Final identity permanently open.
+// This also makes Received agree with Created/In-Transit, which were ALREADY
+// on a landed basis for agent lines (EFFECTIVE_AGENT_LINE_TOTAL_CENTS).
+// Row set is now scoped exactly like the `received` CTE of
+// fetchMiamiInventoryValueAtDate (Miami location, soft-deletes excluded, no
+// purchase_order_line join) so the arrow equals the inventory movement to the
+// cent — an inner join on a soft-deleted PO line used to silently drop stock
+// that had physically arrived.
 async function fetchPeriodReceivedSplit(pg: any, from: string, to: string) {
   const result = await pg.raw(
     `SELECT
-       COALESCE(SUM(CASE WHEN NOT COALESCE(${VENDOR_IS_CHINA_AGENT_SQL}, false)
-                         THEN porl.qty_received_now * COALESCE(porl.unit_cost_cents_override, pol.unit_cost_cents)
-                         ELSE 0 END), 0)::bigint AS vendor_received_cents,
-       COALESCE(SUM(CASE WHEN COALESCE(${VENDOR_IS_CHINA_AGENT_SQL}, false)
-                         THEN porl.qty_received_now * COALESCE(porl.unit_cost_cents_override, pol.unit_cost_cents)
-                         ELSE 0 END), 0)::bigint AS agent_received_cents
+       COALESCE(ROUND(SUM(CASE WHEN NOT COALESCE(${VENDOR_IS_CHINA_AGENT_SQL}, false)
+                         THEN porl.qty_received_now * ${LANDED_COST} * 100
+                         ELSE 0 END)), 0)::bigint AS vendor_received_cents,
+       COALESCE(ROUND(SUM(CASE WHEN COALESCE(${VENDOR_IS_CHINA_AGENT_SQL}, false)
+                         THEN porl.qty_received_now * ${LANDED_COST} * 100
+                         ELSE 0 END)), 0)::bigint AS agent_received_cents
      FROM purchase_order_receipt por
      JOIN purchase_order_receipt_line porl ON porl.purchase_order_receipt_id = por.id
-     JOIN purchase_order_line pol ON pol.id = porl.purchase_order_line_id AND pol.deleted_at IS NULL
+       AND porl.deleted_at IS NULL
      JOIN purchase_order po ON po.id = por.purchase_order_id AND po.deleted_at IS NULL
      LEFT JOIN qb_vendor v ON v.id = po.vendor_id
-     WHERE por.voided_at IS NULL
+     LEFT JOIN product_variant pv ON pv.id = porl.product_variant_id AND pv.deleted_at IS NULL
+     WHERE por.voided_at IS NULL AND por.deleted_at IS NULL
+       AND por.stock_location_id = ?
        AND por.received_at >= ? AND por.received_at < ?`,
-    [from, to]
+    [USA_SLOC, from, to]
   )
   const r = result.rows[0]
   return {
     vendorReceivedCents: Number(r.vendor_received_cents),
     agentReceivedCents:  Number(r.agent_received_cents),
+  }
+}
+
+// Inventory-count adjustments applied to Miami in [from, to) — the third
+// movement source of the Miami ledger (alongside Received and Sold) and,
+// until now, the only one with no representation anywhere on the page.
+// Physical counts that write stock off (or find it) move real money in the
+// warehouse: June 2026 was −2,585 units / −$3,845.88, which read as an
+// unexplained gap between the arrows and the Initial→Final inventory swing.
+// Signed: negative = shrinkage, positive = found stock. Valued at the same
+// canonical `average_cost` as the inventory itself, and scoped identically to
+// the `adjusted` CTE of fetchMiamiInventoryValueAtDate so the number is
+// exactly the adjustment component of Final − Initial.
+async function fetchInventoryAdjustments(
+  pg: any,
+  from: string,
+  to: string
+): Promise<{ value: number; units: number }> {
+  const result = await pg.raw(
+    `SELECT
+       COALESCE(ROUND(SUM(icl.delta_applied * ${LANDED_COST})::numeric, 2), 0) AS value,
+       COALESCE(SUM(icl.delta_applied), 0)::int AS units
+     FROM inventory_count_line icl
+     JOIN inventory_count ic ON ic.id = icl.inventory_count_id
+     LEFT JOIN product_variant pv ON pv.id = icl.product_variant_id AND pv.deleted_at IS NULL
+     WHERE ic.stock_location_id = ? AND ic.status IN ('approved','partially_applied')
+       AND ic.applied_at IS NOT NULL AND icl.deleted_at IS NULL AND ic.deleted_at IS NULL
+       AND ic.voided_at IS NULL
+       AND ic.applied_at >= ? AND ic.applied_at < ?`,
+    [USA_SLOC, from, to]
+  )
+  return {
+    value: Number(result.rows[0]?.value ?? 0),
+    units: Number(result.rows[0]?.units ?? 0),
+  }
+}
+
+// The two Miami ledger terms the reconciliation panel needs in order to name
+// EVERY dollar of the Initial → Final walk instead of leaving a residual.
+// Reconstructs both period-end balances in ONE pass over the same movement
+// sources as fetchMiamiInventoryValueAtDate (same filters, same
+// location-scoped variant set, so the two can never drift), then reports:
+//
+//   netSold — what the stock ledger actually removed for sales, net of
+//     restocked returns, valued at TODAY's average_cost. Not a second opinion
+//     on COGS: the page charges Product Cost at each line's FROZEN cost
+//     snapshot (what the goods cost the day they sold — the accounting truth,
+//     and what QuickBooks agrees with), while the reconstruction has no
+//     historical unit cost and values every unit at today's. Subtracting the
+//     two gives the cost-basis term by name.
+//
+//   floorEffect — the value withheld by the per-variant GREATEST(0, balance −
+//     reserved) floor. Reservations have no history to walk back, so TODAY's
+//     reserved qty is applied at every date; a variant whose reconstructed
+//     balance lands below it would go negative, and both this reconstruction
+//     and the live snapshot hold such a variant at $0 rather than let negative
+//     inventory value leak in. That floor is non-linear, so it doesn't cancel
+//     between Initial and Final — this is exactly how much it moved, computed
+//     directly rather than inferred as whatever was left over.
+async function fetchMiamiPeriodLedger(
+  pg: any,
+  from: string,
+  to: string
+): Promise<{ netSold: number; floorEffect: number }> {
+  const result = await pg.raw(
+    `WITH current_stock AS (
+       SELECT pv.id AS variant_id, il.stocked_quantity AS stocked,
+         COALESCE(il.reserved_quantity, 0) AS reserved, ${LANDED_COST} AS unit_cost
+       FROM inventory_level il
+       JOIN inventory_item ii ON ii.id = il.inventory_item_id
+       JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = ii.id
+       JOIN product_variant pv ON pv.id = pvii.variant_id AND pv.deleted_at IS NULL
+       WHERE il.location_id = ?
+     ),
+     -- Each movement CTE reports its total AFTER 'from' and AFTER 'to' in one
+     -- pass; the difference is the movement INSIDE the period. Same filters as
+     -- fetchMiamiInventoryValueAtDate, deliberately duplicated rather than
+     -- shared so a future edit there fails loudly here instead of drifting.
+     sold AS (
+       SELECT ii.variant_id,
+         COALESCE(SUM(ii.quantity) FILTER (WHERE i.created_at >= ?), 0) AS qty_from,
+         COALESCE(SUM(ii.quantity) FILTER (WHERE i.created_at >= ?), 0) AS qty_to
+       FROM pos_invoice i
+       JOIN pos_invoice_item ii ON ii.invoice_id = i.id AND ii.deleted_at IS NULL
+       WHERE i.deleted_at IS NULL AND i.voided_at IS NULL
+         AND i.status NOT IN ('draft','voided')
+         AND i.created_at >= ?
+       GROUP BY ii.variant_id
+     ),
+     returned AS (
+       SELECT cmi.variant_id,
+         COALESCE(SUM(cmi.quantity - COALESCE(cmi.damaged_qty, 0))
+           FILTER (WHERE COALESCE(cm.completed_at, cm.created_at) >= ?), 0) AS qty_from,
+         COALESCE(SUM(cmi.quantity - COALESCE(cmi.damaged_qty, 0))
+           FILTER (WHERE COALESCE(cm.completed_at, cm.created_at) >= ?), 0) AS qty_to
+       FROM pos_credit_memo cm
+       JOIN pos_credit_memo_item cmi ON cmi.credit_memo_id = cm.id AND cmi.deleted_at IS NULL
+       WHERE cm.deleted_at IS NULL AND cm.voided_at IS NULL AND cm.status = 'completed'
+         AND COALESCE(cm.completed_at, cm.created_at) >= ?
+       GROUP BY cmi.variant_id
+     ),
+     received AS (
+       SELECT porl.product_variant_id AS variant_id,
+         COALESCE(SUM(porl.qty_received_now) FILTER (WHERE por.received_at >= ?), 0) AS qty_from,
+         COALESCE(SUM(porl.qty_received_now) FILTER (WHERE por.received_at >= ?), 0) AS qty_to
+       FROM purchase_order_receipt_line porl
+       JOIN purchase_order_receipt por ON por.id = porl.purchase_order_receipt_id
+       WHERE por.stock_location_id = ? AND por.voided_at IS NULL AND por.deleted_at IS NULL
+         AND porl.deleted_at IS NULL AND por.received_at >= ?
+       GROUP BY porl.product_variant_id
+     ),
+     adjusted AS (
+       SELECT icl.product_variant_id AS variant_id,
+         COALESCE(SUM(icl.delta_applied) FILTER (WHERE ic.applied_at >= ?), 0) AS qty_from,
+         COALESCE(SUM(icl.delta_applied) FILTER (WHERE ic.applied_at >= ?), 0) AS qty_to
+       FROM inventory_count_line icl
+       JOIN inventory_count ic ON ic.id = icl.inventory_count_id
+       WHERE ic.stock_location_id = ? AND ic.status IN ('approved','partially_applied')
+         AND ic.applied_at IS NOT NULL AND icl.deleted_at IS NULL AND ic.deleted_at IS NULL
+         AND ic.voided_at IS NULL AND ic.applied_at >= ?
+       GROUP BY icl.product_variant_id
+     ),
+     balances AS (
+       SELECT cs.reserved, cs.unit_cost,
+         (cs.stocked - (
+           -COALESCE(s.qty_from, 0) + COALESCE(r.qty_from, 0)
+           + COALESCE(rc.qty_from, 0) + COALESCE(a.qty_from, 0)
+         )) AS bal_initial,
+         (cs.stocked - (
+           -COALESCE(s.qty_to, 0) + COALESCE(r.qty_to, 0)
+           + COALESCE(rc.qty_to, 0) + COALESCE(a.qty_to, 0)
+         )) AS bal_final,
+         (COALESCE(s.qty_from, 0) - COALESCE(s.qty_to, 0)) AS sold_in_period,
+         (COALESCE(r.qty_from, 0) - COALESCE(r.qty_to, 0)) AS returned_in_period
+       FROM current_stock cs
+       LEFT JOIN sold s      ON s.variant_id  = cs.variant_id
+       LEFT JOIN returned r  ON r.variant_id  = cs.variant_id
+       LEFT JOIN received rc ON rc.variant_id = cs.variant_id
+       LEFT JOIN adjusted a  ON a.variant_id  = cs.variant_id
+     )
+     SELECT
+       COALESCE(ROUND(SUM(unit_cost * (sold_in_period - returned_in_period))::numeric, 2), 0) AS net_sold,
+       COALESCE(ROUND(SUM(unit_cost * (
+         GREATEST(0, bal_final - reserved) - GREATEST(0, bal_initial - reserved)
+         - (bal_final - bal_initial)
+       ))::numeric, 2), 0) AS floor_effect
+     FROM balances`,
+    [
+      USA_SLOC,
+      from, to, from,            // sold
+      from, to, from,            // returned
+      from, to, USA_SLOC, from,  // received
+      from, to, USA_SLOC, from,  // adjusted
+    ]
+  )
+  return {
+    netSold: Number(result.rows[0]?.net_sold ?? 0),
+    floorEffect: Number(result.rows[0]?.floor_effect ?? 0),
   }
 }
 
@@ -379,8 +592,15 @@ async function fetchCurrentFoOutstanding(pg: any): Promise<number> {
 }
 
 // Net sales revenue (canonical policy — see reports/_lib/sales-revenue.ts) for
-// [from, to), used to derive the daily average.
-async function fetchNetRevenueCents(pg: any, from: string, to: string): Promise<number> {
+// [from, to), used to derive the daily average. Returns the refund leg too:
+// it's already netted OUT of `netCents`, and the Sales pill surfaces it as its
+// own "Returns" row (user request 2026-07-23) so the deduction is visible
+// rather than silently baked into Sales.
+async function fetchNetRevenue(
+  pg: any,
+  from: string,
+  to: string
+): Promise<{ netCents: number; refundCents: number }> {
   const [grossResult, refundCents] = await Promise.all([
     pg.raw(
       `SELECT COALESCE(SUM(${NET_ITEM_REVENUE}), 0)::bigint AS revenue
@@ -393,23 +613,39 @@ async function fetchNetRevenueCents(pg: any, from: string, to: string): Promise<
     fetchCmRefundsCentsForPeriod(pg, from, to),
   ])
   const grossCents = Number(grossResult.rows[0]?.revenue ?? 0)
-  return Math.max(0, grossCents - refundCents)
+  return { netCents: Math.max(0, grossCents - refundCents), refundCents }
 }
 
-// Cost of the products sold in [from, to) — same COGS basis (landed cost,
-// canonical join) as reports/sales/summary. Returned already in dollars per
-// COST_DOLLARS's own contract (unlike NET_ITEM_REVENUE, which is cents).
-async function fetchProductCostDollars(pg: any, from: string, to: string): Promise<number> {
-  const result = await pg.raw(
-    `SELECT COALESCE(SUM(${COST_DOLLARS}), 0) AS cogs
-     FROM pos_invoice i
-     JOIN pos_invoice_item pii ON pii.invoice_id = i.id AND pii.deleted_at IS NULL
-     ${COGS_JOIN}
-     WHERE i.deleted_at IS NULL AND ${SALES_ACTIVE_STATUSES_SQL}
-       AND ${SALES_DATE_FILTER_SQL}`,
-    [from, to]
-  )
-  return Number(result.rows[0]?.cogs ?? 0)
+// Cost of the products sold in [from, to), NET of the cost of merchandise
+// returned to stock — same COGS basis (landed cost, canonical join) as
+// reports/sales/summary. Returned already in dollars per COST_DOLLARS's own
+// contract (unlike NET_ITEM_REVENUE, which is cents).
+//
+// The returns leg was added 2026-07-23: `sales_total` has always been NET of
+// refunds, so charging gross COGS against net revenue understated gross profit
+// (and with it Purchase ROI / GMROI, which both derive from it). Both legs now
+// use the canonical period policy — sales by `issued_at`, returns by
+// `completed_at` — so a return processed this month reverses this month's cost
+// even when the original sale was last month.
+async function fetchProductCostDollars(
+  pg: any,
+  from: string,
+  to: string
+): Promise<{ gross: number; returned: number; net: number }> {
+  const [soldResult, returned] = await Promise.all([
+    pg.raw(
+      `SELECT COALESCE(SUM(${COST_DOLLARS}), 0) AS cogs
+       FROM pos_invoice i
+       JOIN pos_invoice_item pii ON pii.invoice_id = i.id AND pii.deleted_at IS NULL
+       ${COGS_JOIN}
+       WHERE i.deleted_at IS NULL AND ${SALES_ACTIVE_STATUSES_SQL}
+         AND ${SALES_DATE_FILTER_SQL}`,
+      [from, to]
+    ),
+    fetchReturnedProductCostDollars(pg, from, to),
+  ])
+  const gross = Number(soldResult.rows[0]?.cogs ?? 0)
+  return { gross, returned, net: gross - returned }
 }
 
 // Bottom-left legend stats — Average Ticket (AOV, gross basis, same
@@ -458,6 +694,35 @@ interface PoAmounts {
   // fetchPeriodReceivedSplit's comment for why this is never period-scoped).
   localVendorInTransitCents?: number
   chinaAgentInTransitCents?: number
+}
+
+// Factory orders, same 3-way branch as fetchPoAmounts — "current" shows live
+// outstanding, "period" shows Created + Received, plus In Transit while the
+// period is still running. Reuses PoFlowAmounts' field names so the frontend
+// renders this arrow through the exact same buildPoRows() path as the two
+// purchase-order arrows instead of a special case (2026-07-23).
+async function fetchFactoryOrderAmounts(
+  pg: any,
+  mode: 'current' | 'period',
+  isInProgress: boolean,
+  from: string,
+  to: string
+): Promise<{ amount: number; created?: number; received?: number; in_transit?: number }> {
+  if (mode === 'current') {
+    const outstanding = await fetchCurrentFoOutstanding(pg)
+    return { amount: outstanding / 100, in_transit: outstanding / 100 }
+  }
+  const [createdCents, receivedCents, outstandingCents] = await Promise.all([
+    fetchFactoryOrderSpend(pg, from, to),
+    fetchFactoryOrderReceived(pg, from, to),
+    isInProgress ? fetchCurrentFoOutstanding(pg) : Promise.resolve(null),
+  ])
+  return {
+    amount: createdCents / 100,
+    created: createdCents / 100,
+    received: receivedCents / 100,
+    ...(outstandingCents !== null ? { in_transit: outstandingCents / 100 } : {}),
+  }
 }
 
 // Unifies the 3-way branch behind one shape. The user asked for MORE
@@ -596,10 +861,10 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   try {
     const [
       poAmounts,
-      factoryOrderCents,
+      factoryOrderAmounts,
       miamiInventoryValue,
       chinaInventoryValue,
-      netRevenueCents,
+      revenue,
       productCostDollars,
       miamiInitial,
       miamiFinal,
@@ -608,12 +873,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       legendStats,
       legendReceived,
       miamiDeadInventoryDeduction,
+      inventoryAdjustments,
+      periodLedger,
     ] = await Promise.all([
       fetchPoAmounts(pg, mode, isInProgress, range.from, range.to),
-      mode === 'current' ? fetchCurrentFoOutstanding(pg) : fetchFactoryOrderSpend(pg, range.from, range.to),
+      fetchFactoryOrderAmounts(pg, mode, isInProgress, range.from, range.to),
       fetchInventoryValue(pg, USA_SLOC, LANDED_COST),
       fetchInventoryValue(pg, CHINA_SLOC, FACTORY_COST),
-      fetchNetRevenueCents(pg, range.from, range.to),
+      fetchNetRevenue(pg, range.from, range.to),
       fetchProductCostDollars(pg, range.from, range.to),
       // Initial/Final inventory value — computed for EVERY mode (needed as
       // the Average Inventory input to the Rotation legend metric below,
@@ -629,6 +896,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       fetchSalesLegendStats(pg, range.from, range.to),
       fetchPeriodReceivedSplit(pg, range.from, range.to),
       fetchMiamiDeadInventoryDeduction(pg),
+      // Miami inventory-count adjustments for the period — the third Miami
+      // movement source, surfaced as its own vertical flow above the
+      // warehouse node (user request 2026-07-23).
+      fetchInventoryAdjustments(pg, range.from, range.to),
+      // Only used to NAME two terms of the reconciliation below (cost basis,
+      // reserved-stock floor) — never displayed as cost figures in their own
+      // right.
+      fetchMiamiPeriodLedger(pg, range.from, effectiveTo.toISOString()),
     ])
 
     // Apply the manual dead-inventory deduction to EVERY Miami figure before
@@ -649,6 +924,43 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     }
     daysElapsed = Math.max(1, daysElapsed)
 
+    // ─── Reconciliation — "where did every number come from?" ─────────────
+    // Walks Initial → Final as an explicit chain instead of leaving the
+    // reader to guess why the arrows don't add up to the warehouse's swing
+    // (user request 2026-07-23). EVERY term is computed and named — there is
+    // deliberately no "unexplained" plug, since a figure a colleague can't
+    // account for is worse than no figure at all:
+    //   • cost_basis — Product Cost is charged at each line's frozen cost
+    //     snapshot; the Initial/Final reconstruction values the same units at
+    //     today's cost (no historical unit cost exists to use instead).
+    //   • reserved_stock_floor — how much the per-variant
+    //     GREATEST(0, balance − reserved) floor withheld over the period.
+    //   • untracked_stock_movement — what's STILL left after all of the above,
+    //     and the only honest name for it: stock that moved in Miami without
+    //     going through invoices, credit memos, PO receipts or inventory
+    //     counts — i.e. a direct SQL/script write, or a movement source this
+    //     ledger doesn't know about yet. It is NOT a rounding bucket: at $0
+    //     the page is fully explained, and any drift from $0 is a real signal
+    //     worth chasing (the alarm the old tautological self-check could
+    //     never ring).
+    const receivedLocal = (poAmounts.localVendorReceivedCents ?? 0) / 100
+    const receivedChina = (poAmounts.chinaAgentReceivedCents ?? 0) / 100
+    const costBasis = productCostDollars.net - periodLedger.netSold
+    const chainBeforeResidual =
+      miamiInitialNet + receivedLocal + receivedChina - productCostDollars.net
+      + inventoryAdjustments.value + costBasis + periodLedger.floorEffect
+    const reconciliation = {
+      initial_inventory: miamiInitialNet,
+      received_local: receivedLocal,
+      received_china: receivedChina,
+      product_cost_net: productCostDollars.net,
+      inventory_adjustments: inventoryAdjustments.value,
+      cost_basis: costBasis,
+      reserved_stock_floor: periodLedger.floorEffect,
+      untracked_stock_movement: miamiFinalNet - chainBeforeResidual,
+      final_inventory: miamiFinalNet,
+    }
+
     return res.json({
       mode,
       is_in_progress: isInProgress,
@@ -661,7 +973,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         ...(poAmounts.localVendorReceivedCents !== undefined ? { received: poAmounts.localVendorReceivedCents / 100 } : {}),
         ...(poAmounts.localVendorInTransitCents !== undefined ? { in_transit: poAmounts.localVendorInTransitCents / 100 } : {}),
       },
-      factory_orders: { amount: factoryOrderCents / 100 },
+      // Factories → China arrow. Same shape as the two PO arrows: Created is
+      // what was placed with the factories in the period, Received is what
+      // physically landed in the China warehouse (receipt-event date, valued
+      // at factory cost — what China stock is carried at).
+      factory_orders: factoryOrderAmounts,
       // China → Miami arrow — sourced from china-agent purchase orders (not
       // inventory_transfer, per user decision 2026-07-14), valued at real
       // landed cost where a confirmed Regular Vendor Bill exists, estimated
@@ -684,12 +1000,29 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       ...(mode === 'period' ? { miami_final_inventory_value: miamiFinalNet } : {}),
       ...(mode === 'period' ? { china_initial_inventory_value: chinaInitial } : {}),
       ...(mode === 'period' ? { china_final_inventory_value: chinaFinal } : {}),
-      sales_total: netRevenueCents / 100,
-      product_cost: productCostDollars,
-      daily_sales_average: netRevenueCents / 100 / daysElapsed,
+      sales_total: revenue.netCents / 100,
+      // NET of the cost of merchandise returned to stock (see
+      // fetchProductCostDollars) — pairs with `sales_total`, which has always
+      // been net of the matching refunds. Gross/returned legs exposed too so
+      // the netting is inspectable, not just asserted.
+      product_cost: productCostDollars.net,
+      product_cost_gross: productCostDollars.gross,
+      product_cost_returned: productCostDollars.returned,
+      // Refunds (credit memos completed in the period) — ALREADY subtracted
+      // from `sales_total` and therefore from `daily_sales_average`; exposed
+      // so the Sales pill can show the deduction instead of hiding it.
+      returns_total: revenue.refundCents / 100,
+      daily_sales_average: revenue.netCents / 100 / daysElapsed,
+      // Signed $ / units that inventory counts added to (or wrote off from)
+      // Miami this period — negative = shrinkage.
+      inventory_adjustment_value: inventoryAdjustments.value,
+      inventory_adjustment_units: inventoryAdjustments.units,
+      // "period" mode only — the Initial → Final walk. Meaningless in
+      // "current" mode, which has no period to reconcile.
+      ...(mode === 'period' ? { reconciliation } : {}),
       legend: buildLegend({
-        salesTotal: netRevenueCents / 100,
-        productCost: productCostDollars,
+        salesTotal: revenue.netCents / 100,
+        productCost: productCostDollars.net,
         legendStats,
         legendReceived,
         miamiInitial: miamiInitialNet,
