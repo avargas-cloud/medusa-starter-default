@@ -150,7 +150,10 @@ export default defineMiddlewares({
     {
       matcher: "/admin/draft-orders",
       method: ["POST"],
-      middlewares: [validateDraftOrderCustomer],
+      middlewares: [
+        validateDraftOrderCustomer,
+        idempotency("admin.draft-orders.create"),
+      ],
     },
     // ── Idempotency-Key dedup (Phase 3a) — blocks same-key double-submit on
     // these create routes. No-op unless the client sends an Idempotency-Key.
