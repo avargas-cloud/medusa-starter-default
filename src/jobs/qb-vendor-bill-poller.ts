@@ -102,15 +102,17 @@ export type BillDispatchGate =
   | { blocked: true; reason: string };
 
 /**
- * Transition hazard #1 (plan §9, Codex CRITICAL): a PO that already has a
- * *synced* legacy ItemReceipt in QuickBooks has A/P posted via that receipt.
- * Sending a BillAdd for the same PO before that receipt is deleted/adopted
- * would double-post A/P. Blocks on any live (non-deleted) receipt row for
- * this PO with `qb_item_receipt_list_id` set — once the receipt is deleted
- * from QB, `qb-item-receipt-poller` Phase E hard-deletes the row, so it
- * naturally drops out of this query. The reconciliation pass (plan §10,
- * Phase 3, not built yet) is what "adopts" or clears these; until it ships
- * this fence just parks the row with a clear reason.
+ * ⚠️ NOT WIRED — kept as documentation of the non-EIR premise only.
+ *
+ * Transition hazard #1 (plan §9, Codex CRITICAL) ASSUMED a non-EIR company
+ * file, where a synced ItemReceipt posts A/P and a BillAdd on top would
+ * double-post. On 2026-07-23 the company file was CONFIRMED to run Enhanced
+ * Inventory Receiving (plan §0.11): receipts post inventory vs the Inventory
+ * Offset account, bills post A/P vs the same offset — the pair is the
+ * designed flow and never double-posts. Under EIR this fence would block
+ * every dispatch forever (every billable PO has synced receipts), so
+ * `checkAllDispatchGates` deliberately does NOT call it. Re-wire only if the
+ * integration is ever pointed at a non-EIR company file.
  */
 export async function checkLegacyApFence(
   knex: KnexRaw,
@@ -217,10 +219,21 @@ const holdRow = async (
 };
 
 /**
- * Runs the three Phase-A dispatch gates in order. Returns the first blocking
+ * Runs the Phase-A dispatch gates in order. Returns the first blocking
  * gate, or `{ blocked: false }` if the row is clear to dispatch. Shared by
- * Phase A (fresh dispatch) and Phase C (retry) — both must re-check all
- * three before spending a bridge call.
+ * Phase A (fresh dispatch) and Phase C (retry) — both must re-check before
+ * spending a bridge call.
+ *
+ * ⚠️ EIR PIVOT (2026-07-23, plan §0.11 CONFIRMED): the company file runs
+ * Enhanced Inventory Receiving — ItemReceipt posts inventory vs the
+ * Inventory Offset account and the Bill posts A/P vs the same offset. They
+ * are the DESIGNED PAIR: a Bill for a PO whose receipts are synced in QB is
+ * exactly right, never a double-post. `checkLegacyApFence` (built on the
+ * non-EIR premise that a synced ItemReceipt already posted A/P) is therefore
+ * NOT in the gate chain — under EIR it would have held EVERY bill forever,
+ * since every billable PO has synced receipts by design. The function is
+ * kept exported only as documentation of the non-EIR world; do not re-add
+ * it without re-verifying the company file's EIR preference.
  */
 const checkAllDispatchGates = async (
   knex: KnexRaw,
@@ -228,9 +241,6 @@ const checkAllDispatchGates = async (
 ): Promise<BillDispatchGate> => {
   const poGate = await checkPoQbSyncGate(knex, purchaseOrderId);
   if (poGate.blocked) return { blocked: true, reason: poGate.reason };
-
-  const apFence = await checkLegacyApFence(knex, purchaseOrderId);
-  if (apFence.blocked) return apFence;
 
   const inFlightFence = await checkInFlightReceiptFence(knex, purchaseOrderId);
   if (inFlightFence.blocked) return inFlightFence;
