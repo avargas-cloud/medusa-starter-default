@@ -162,6 +162,7 @@ export const listQuerySchema = z.object({
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
   q: z.string().optional(), // matches number LIKE
+  billed: z.enum(["yes", "no", "partial"]).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });

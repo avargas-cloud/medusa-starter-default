@@ -56,6 +56,30 @@ export async function GET(
   if (q.to) createdAt.$lte = new Date(q.to);
   if (Object.keys(createdAt).length > 0) where.created_at = createdAt;
 
+  // Billed filter (owner 2026-07-24): billed_status is DERIVED (enrichment,
+  // not a column), so filtering happens by pre-computing every PO's status
+  // with the SAME lib the page decoration uses (single grouped query — the
+  // table is small) and constraining ids. Keeps pagination/counts exact and
+  // the two computations definitionally identical.
+  if (q.billed) {
+    const knexForFilter = (req.scope as unknown as {
+      resolve: (k: string) => {
+        raw: (sql: string, b?: unknown[]) => Promise<{ rows: unknown[] }>;
+      };
+    }).resolve("__pg_connection__");
+    const allPos = (await knexForFilter.raw(
+      `SELECT id, status, total_units_received FROM purchase_order WHERE deleted_at IS NULL`
+    )).rows as Array<{ id: string; status: string; total_units_received: number | null }>;
+    const allMap = await enrichBilledStatusMap(knexForFilter, allPos);
+    const matching = allPos
+      .filter((p) => (allMap.get(p.id)?.billed_status ?? "no") === q.billed)
+      .map((p) => p.id);
+    if (matching.length === 0) {
+      return res.json({ purchase_orders: [], count: 0, limit: q.limit, offset: q.offset });
+    }
+    where.id = matching;
+  }
+
   const [rows, count] = await service.listAndCountPurchaseOrders(where, {
     take: q.limit,
     skip: q.offset,
