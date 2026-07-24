@@ -158,6 +158,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
 
     const billOut = bills.map((b) => {
       const alreadyRecorded = recordedSet.has(b.txn_id);
+      // qb_linked is an informational CAUTION, not an exclusion: a bill can be
+      // linked in QB to a PurchaseOrder whose TxnID does NOT match our PO's
+      // recorded qb_purchase_order_list_id (TxnID drift — the exact reason the
+      // automatic reconcile misses it, e.g. PO-1012's bill 6193 links to
+      // ...705 while store-pos has ...785). Those are precisely the bills the
+      // operator must resolve by eye, so adoptable is driven ONLY by "not
+      // already recorded locally".
       const qbLinked =
         b.linked_txns.some((l) => l.txn_type === "PurchaseOrder" || l.txn_type === "ItemReceipt") ||
         b.item_lines.some((il) => Boolean(il.linked_txn_id));
@@ -177,7 +184,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
         })),
         already_recorded_local: alreadyRecorded,
         qb_linked: qbLinked,
-        adoptable: !alreadyRecorded && !qbLinked,
+        adoptable: !alreadyRecorded,
       };
     });
 
