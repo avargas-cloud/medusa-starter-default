@@ -1,5 +1,7 @@
 import type { MedusaContainer } from "@medusajs/framework/types";
 
+import { roundCostDollars } from "./avco";
+
 /**
  * Origin-aware per-variant unit cost used to snapshot `average_unit_cost` on
  * invoice / credit-memo lines at creation time.
@@ -121,7 +123,9 @@ function resolveVariantCost(row: CostRow): VariantAvgCost {
     const landedCents = parseNumber(row.avg_landed_cost_cents);
     if (landedCents !== null && landedCents > 0) {
       return {
-        cost: landedCents / 100,
+        // Round the cents→dollars derivation so fractional-cents AVCO values
+        // (e.g. 2764.8¢) never carry float noise into stored/QB-bound costs.
+        cost: roundCostDollars(landedCents / 100),
         synced_at: parseDate(row.avg_landed_cost_updated_at),
         source: "landed_cost",
       };

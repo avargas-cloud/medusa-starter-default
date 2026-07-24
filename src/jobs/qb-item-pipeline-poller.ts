@@ -218,10 +218,30 @@ const dropFabricatedZeroPrices = (
  * or throws on bridge failure. The payload is sent verbatim — callers on a
  * recovery path pre-clean it via dropFabricatedZeroPrices().
  */
+// QB QBXML PRICETYPE accepts at most 5 decimal places. Cost/price values coming
+// from AVCO landed-cost math carry float noise (e.g. 27.648000000000003), which
+// QB rejects with error 3045 ("invalid amount"). Round to a QB-valid precision.
+const QB_PRICE_FIELDS = ["PurchaseCost", "SalesPrice"] as const;
+const roundQbPriceFields = (
+  payload: Record<string, unknown>
+): Record<string, unknown> => {
+  const p = { ...payload };
+  for (const field of QB_PRICE_FIELDS) {
+    const value = p[field];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      p[field] = Math.round(value * 1e5) / 1e5;
+    }
+  }
+  return p;
+};
+
 const resubmitToBridge = async (
   action: "add" | "mod",
-  payload: Record<string, unknown>
+  rawPayload: Record<string, unknown>
 ): Promise<string> => {
+  // Single chokepoint for every add/mod dispatch — guarantees QB never sees
+  // float-noise amounts regardless of which caller built the payload.
+  const payload = roundQbPriceFields(rawPayload);
   const url =
     action === "add"
       ? `${bridgeUrl()}/api/products`

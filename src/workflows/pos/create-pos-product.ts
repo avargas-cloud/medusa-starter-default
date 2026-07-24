@@ -7,6 +7,7 @@ import { createProductsWorkflow } from "@medusajs/medusa/core-flows";
 
 import { sendToQbStep } from "../qb/send-to-qb-step";
 import { buildPrefVendorRef } from "../../lib/quickbooks/pref-vendor-ref";
+import { roundCostDollarsOpt } from "../../lib/cost/avco";
 
 export type CreatePosProductInput = {
   title: string;
@@ -59,7 +60,7 @@ export const createPosProductWorkflow = createWorkflow(
                   Item: "Default Unit",
                 },
                 metadata: {
-                  purchase_cost: input.cost,
+                  purchase_cost: roundCostDollarsOpt(input.cost),
                   qb_vendor_name: input.vendor,
                   mpn: input.mpn,
                   sales_description: input.salesDescription,
@@ -83,7 +84,7 @@ export const createPosProductWorkflow = createWorkflow(
         SalesDesc: i.salesDescription,
         PurchaseDesc: i.salesDescription,
         SalesPrice: 0.0, // POS doesn't set selling price yet, edit later
-        PurchaseCost: i.cost,
+        PurchaseCost: roundCostDollarsOpt(i.cost),
         PrefVendorRef: buildPrefVendorRef({
           vendorIdOrListId: i.vendor_qb_id,
           vendorFullName: i.vendor,

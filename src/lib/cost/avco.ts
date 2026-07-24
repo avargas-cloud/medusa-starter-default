@@ -99,6 +99,31 @@ export function roundCents(value: number): number {
 }
 
 /**
+ * Round a DOLLAR cost to QB-safe precision (≤5 decimals). Cost dollars derived
+ * from fractional cents via `cents / 100` carry IEEE-754 float noise
+ * (`2764.8 / 100 === 27.648000000000003`), which QuickBooks' QBXML PRICETYPE
+ * rejects with error 3045. Apply this the moment a cost number is produced —
+ * when it is stored in `metadata.average_cost`/`purchase_cost` — not only just
+ * before the QB payload, so the stored value is clean at the source too.
+ */
+export function roundCostDollars(dollars: number): number {
+  return Math.round(dollars * 1e5) / 1e5;
+}
+
+/**
+ * Nullish-safe {@link roundCostDollars}: rounds finite numbers, passes
+ * `null`/`undefined`/non-finite through unchanged. Use at write boundaries
+ * (POS product create/update) where a cost field may be absent on the input.
+ */
+export function roundCostDollarsOpt<T extends number | null | undefined>(
+  dollars: T
+): T {
+  return typeof dollars === "number" && Number.isFinite(dollars)
+    ? (roundCostDollars(dollars) as T)
+    : dollars;
+}
+
+/**
  * Resolve the seed for a variant's running average, in cents, in descending
  * order of authority. This is the fix for defect #1: the old code read ONLY the
  * first source and fell to 0 when it was absent.

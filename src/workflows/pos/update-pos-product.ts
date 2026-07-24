@@ -11,6 +11,7 @@ import {
 import { sendToQbStep, type QbItemType } from "../qb/send-to-qb-step";
 import { syncProductToMeiliSearchWorkflow } from "../sync-product-meilisearch";
 import { buildPrefVendorRef } from "../../lib/quickbooks/pref-vendor-ref";
+import { roundCostDollarsOpt } from "../../lib/cost/avco";
 
 import { applyShippingAttributesStep } from "./steps/apply-shipping-attributes-step";
 import { linkQbVendorStep } from "./steps/link-qb-vendor-step";
@@ -140,12 +141,12 @@ export const buildQbStepInput = (i: UpdatePosProductInput) => {
       addData.IncomeAccountRef = { FullName: i.income_account_full_name };
     if (itemType === "Inventory") {
       addData.PurchaseDesc = addPurchaseDesc;
-      addData.PurchaseCost = i.cost ?? 0;
+      addData.PurchaseCost = roundCostDollarsOpt(i.cost) ?? 0;
       if (i.cogs_account_full_name)
         addData.COGSAccountRef = { FullName: i.cogs_account_full_name };
     } else if ((i.cost ?? 0) > 0) {
       addData.PurchaseDesc = addPurchaseDesc;
-      addData.PurchaseCost = i.cost ?? 0;
+      addData.PurchaseCost = roundCostDollarsOpt(i.cost) ?? 0;
       if (i.cogs_account_full_name)
         addData.ExpenseAccountRef = { FullName: i.cogs_account_full_name };
     }
@@ -194,7 +195,7 @@ export const buildQbStepInput = (i: UpdatePosProductInput) => {
       // edit leaves QB's PurchaseDesc (and any distinct purchase description)
       // untouched. Fresh adds use addPurchaseDesc above to avoid an empty value.
       PurchaseDesc: i.purchaseDescription,
-      PurchaseCost: i.cost,
+      PurchaseCost: roundCostDollarsOpt(i.cost),
       ManufacturerPartNumber: i.mpn || undefined,
       SalesIncomeAccountRef: i.income_account_full_name
         ? { FullName: i.income_account_full_name }
@@ -305,7 +306,7 @@ export const updatePosProductWorkflow = createWorkflow(
         // Edited variant: its own per-variant fields (cost/mpn/sku/sales_desc are
         // variant-specific) PLUS the shared canonical fields.
         const editedVariantMeta = pruneUndefined({
-          purchase_cost: i.cost,
+          purchase_cost: roundCostDollarsOpt(i.cost),
           qb_vendor_name: i.vendor,
           mpn: i.mpn,
           sales_description: i.salesDescription,

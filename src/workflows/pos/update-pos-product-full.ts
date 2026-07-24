@@ -9,6 +9,7 @@ import {
 } from "@medusajs/medusa/core-flows";
 
 import { syncProductToMeiliSearchWorkflow } from "../sync-product-meilisearch";
+import { roundCostDollarsOpt } from "../../lib/cost/avco";
 
 import { applyShippingAttributesStep } from "./steps/apply-shipping-attributes-step";
 import { createProductVariantsStep } from "./steps/create-product-variants-step";
@@ -192,7 +193,7 @@ export const updatePosProductFullWorkflow = createWorkflow(
               patch.origin_country = v.country_of_origin;
             if (v.mid_code !== undefined) patch.mid_code = v.mid_code;
             const metaPatch = pruneUndefined({
-              purchase_cost: v.cost,
+              purchase_cost: roundCostDollarsOpt(v.cost),
               mpn: v.mpn,
               sales_description: v.sales_description,
               ...canonical,
@@ -250,7 +251,7 @@ export const updatePosProductFullWorkflow = createWorkflow(
           mid_code: v.mid_code,
           options: v.options,
           metadata: pruneUndefined({
-            purchase_cost: v.cost,
+            purchase_cost: roundCostDollarsOpt(v.cost),
             mpn: v.mpn,
             sales_description: v.sales_description,
             ...data.canonicalMeta,
