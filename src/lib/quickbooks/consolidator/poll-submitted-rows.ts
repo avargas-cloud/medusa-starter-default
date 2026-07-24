@@ -622,15 +622,22 @@ export async function pollSubmittedRows(
             if (cmNumber) {
               const { rowCount } = await pool.query(
                 `UPDATE customer_payment
-                                 SET metadata = COALESCE(metadata, '{}') || $2::jsonb
+                                 SET metadata = COALESCE(metadata, '{}') || $2::jsonb,
+                                     qb = COALESCE(qb, '{}') || $3::jsonb,
+                                     updated_at = NOW()
                                  WHERE reference = $1
-                                   AND (metadata->>'qb_txn_id') IS NULL`,
+                                   AND type = 'credit_memo'
+                                   AND status <> 'voided'
+                                   AND deleted_at IS NULL
+                                   AND (metadata->>'qb_txn_id') IS DISTINCT FROM $4`,
                 [
                   cmNumber,
                   JSON.stringify({
                     qb_txn_id: txnId,
                     qb_sync_status: "synced",
                   }),
+                  JSON.stringify({ status: "yes", txn_id: txnId }),
+                  txnId,
                 ]
               );
               if (rowCount && rowCount > 0) {
