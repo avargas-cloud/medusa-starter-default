@@ -136,7 +136,13 @@ async function fetchBridgeJson(url: string): Promise<unknown> {
   return res.json();
 }
 
-async function fetchQbAverageCostItems(log: (line: string) => void) {
+/**
+ * Exported so read-only diagnostics can ask QuickBooks what it currently holds
+ * without duplicating the bridge's queue-and-poll dance (see
+ * `scripts/checks/fetch-qb-costs-for-missing.ts`). Callers that only want to
+ * LOOK must not go on to call `applyAverageCostUpdates`.
+ */
+export async function fetchQbAverageCostItems(log: (line: string) => void) {
   log(`[QB] Requesting active inventory items with AverageCost from ${BRIDGE_URL}`);
   const initJson = (await fetchBridgeJson(
     `${BRIDGE_URL}/api/products/active-with-description`
