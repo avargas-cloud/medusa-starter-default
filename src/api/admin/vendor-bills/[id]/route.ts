@@ -33,6 +33,16 @@ import {
   loadBillDrift,
   type BillDrift,
 } from "../../../../lib/china-finance/bill-drift";
+import {
+  validateFreightLines,
+  reconcileFreightLines,
+  type FreightAccount,
+} from "../../../../lib/purchase-orders/freight-charge-lines";
+import {
+  resolveBoundReceiptIds,
+  syncPrimaryReceiptPointer,
+  validateReceiptsForBinding,
+} from "../../../../lib/purchase-orders/vendor-bill-receipts";
 
 // ── Knex type ────────────────────────────────────────────────────────────────
 
@@ -61,6 +71,8 @@ interface VendorBillDetailRow {
   status: string;
   reference_id: string | null;
   document_date: string | null;
+  payment_terms_days: number | null;
+  due_date: string | null;
   commission_mode: string;
   commission_rate_bps: number;
   commission_amount_cents: number;
@@ -79,6 +91,10 @@ interface VendorBillDetailRow {
   confirmed_by_user_id: string | null;
   created_at: string;
   updated_at: string;
+  qb_txn_id: string | null;
+  qb_ref_number: string | null;
+  qb_synced_at: string | null;
+  qb_source: string | null;
   po_number: string | null;
   po_status: string | null;
   po_qb_ref_number: string | null;
@@ -94,6 +110,7 @@ interface VendorBillLineRow {
   receipt_line_id: string;
   purchase_order_line_id: string | null;
   line_type: string;
+  line_kind: string | null;
   qb_account_list_id: string | null;
   qb_account_full_name: string | null;
   qb_account_type: string | null;
@@ -108,6 +125,8 @@ interface VendorBillLineRow {
   freight_per_unit_cents: number;
   tariff_per_unit_cents: number;
   landed_unit_cost_cents: number;
+  freight_account_list_id: string | null;
+  amount_cents: number | null;
 }
 
 const vendorBillPatchSchema = z.object({
@@ -115,6 +134,11 @@ const vendorBillPatchSchema = z.object({
   bill_type: z.enum(["regular", "service", "freight", "tariff"]).optional(),
   reference_id: z.string().max(200).nullish(),
   document_date: z.string().datetime().nullish(),
+  // D9 — Payment Terms + Due Date. Terms default from the vendor's
+  // qb_vendor.metadata.default_payment_terms_days; Due Date is overridable.
+  // TermsRef is deliberately never sent to QB — see docs/VENDOR_BILL_QB_SYNC_PLAN.md D9.
+  payment_terms_days: z.number().int().min(0).max(365).nullish(),
+  due_date: z.string().datetime().nullish(),
   commission_mode: z.enum(["percent", "fixed"]).optional(),
   commission_rate_bps: z.number().int().min(0).max(100_000).optional(),
   commission_amount_cents: z.number().int().min(0).max(1_000_000_000).optional(),
@@ -166,8 +190,31 @@ const vendorBillPatchSchema = z.object({
       })
     )
     .optional(),
-  // Staged receipt pin (Update-From-Receipt); null clears the pin.
+  // Staged receipt pin (Update-From-Receipt); null clears the pin. LEGACY —
+  // single-receipt shape, kept for the store-pos UI that hasn't moved to
+  // `receipt_ids` yet. Both fields dual-write the same underlying binding
+  // (see lib/purchase-orders/vendor-bill-receipts.ts).
   purchase_order_receipt_id: z.string().nullable().optional(),
+  // D6 — full DESIRED set of receipts bound to this bill (multi-receipt
+  // binding). Reconciled like `lines`: ids present-but-not-yet-bound are
+  // bound, ids currently bound but absent from this set are unbound. See
+  // docs/VENDOR_BILL_QB_SYNC_PLAN.md §3.0.
+  receipt_ids: z.array(z.string().min(1)).optional(),
+  // §7 — Freight charge lines ("Add Freight Charges"). Full desired set for a
+  // staged save, mirroring `lines` above but for non-landed ExpenseLine-style
+  // charges. Deliberately a SEPARATE field from `lines`: freight charges carry
+  // no purchase_order_line_id and must never enter the PO qty-cap validation,
+  // the landed-cost allocation, or the drift engine (see confirm route + bill-drift.ts).
+  freight_lines: z
+    .array(
+      z.object({
+        id: z.string().optional(),
+        amount_cents: z.number().int().min(1).max(1_000_000_000),
+        freight_account_list_id: z.string().min(1),
+        description: z.string().max(500).nullable().optional(),
+      })
+    )
+    .optional(),
 });
 
 const LINKED_BILL_TYPE_BY_FIELD: Record<string, string> = {
@@ -198,6 +245,8 @@ export async function GET(
        vb.status,
        vb.reference_id,
        vb.document_date,
+       vb.payment_terms_days,
+       vb.due_date,
        vb.commission_mode,
        vb.commission_rate_bps,
        vb.commission_amount_cents,
@@ -216,6 +265,10 @@ export async function GET(
        vb.confirmed_by_user_id,
        vb.created_at,
        vb.updated_at,
+       vb.qb_txn_id,
+       vb.qb_ref_number,
+       vb.qb_synced_at,
+       vb.qb_source,
        po."number"                         AS po_number,
        po.status                           AS po_status,
        po.qb_purchase_order_txn_number      AS po_qb_ref_number,
@@ -258,6 +311,7 @@ export async function GET(
        receipt_line_id,
        purchase_order_line_id,
        line_type,
+       line_kind,
        qb_account_list_id,
        qb_account_full_name,
        qb_account_type,
@@ -271,7 +325,9 @@ export async function GET(
        commission_per_unit_cents,
        freight_per_unit_cents,
        tariff_per_unit_cents,
-       landed_unit_cost_cents
+       landed_unit_cost_cents,
+       freight_account_list_id,
+       amount_cents
      FROM vendor_bill_line
      WHERE vendor_bill_id = ? AND deleted_at IS NULL
      ORDER BY created_at ASC`,
@@ -312,10 +368,88 @@ export async function GET(
     }
   }
 
+  // Rcv'd column (D8 visibility) — CONTEXT-AWARE:
+  //   bill has BOUND receipts → received qty within THE BOUND SET (a partial
+  //     bill compares against its own receipts, not the whole PO — otherwise a
+  //     2-of-7-receipts bill shows Qty 30 / Rcv'd 60 and reads as wrong);
+  //   no bound receipts (Fill-from-PO draft) → the PO line's TOTAL received,
+  //     which is exactly the "did the goods arrive yet?" signal D8 wants.
+  // Display-only, read live — never snapshotted on the bill.
+  {
+    const poLineIds = [
+      ...new Set(
+        lines
+          .map((l) => l.purchase_order_line_id)
+          .filter((v): v is string => !!v)
+      ),
+    ];
+    if (poLineIds.length > 0) {
+      const boundRcvResult = await knex.raw(
+        `SELECT rl.purchase_order_line_id AS id,
+                SUM(rl.qty_received_now)::int AS qty
+           FROM purchase_order_receipt_line rl
+           JOIN purchase_order_receipt r ON r.id = rl.purchase_order_receipt_id
+          WHERE r.vendor_bill_id = ?
+            AND r.deleted_at IS NULL AND rl.deleted_at IS NULL
+          GROUP BY rl.purchase_order_line_id`,
+        [id]
+      );
+      const boundRows = boundRcvResult.rows as Array<{
+        id: string;
+        qty: number | null;
+      }>;
+      const hasBoundReceipts = boundRows.length > 0;
+
+      let rcvByPoLine: Map<string, number>;
+      if (hasBoundReceipts) {
+        rcvByPoLine = new Map(boundRows.map((r) => [r.id, Number(r.qty ?? 0)]));
+      } else {
+        const rcvResult = await knex.raw(
+          `SELECT id, qty_received FROM purchase_order_line
+            WHERE id IN (${poLineIds.map(() => "?").join(",")})`,
+          poLineIds
+        );
+        rcvByPoLine = new Map(
+          (
+            rcvResult.rows as Array<{ id: string; qty_received: number | null }>
+          ).map((r) => [r.id, Number(r.qty_received ?? 0)])
+        );
+      }
+      for (const l of lines) {
+        (l as VendorBillLineRow & { po_qty_received: number | null }).po_qty_received =
+          l.purchase_order_line_id
+            ? (rcvByPoLine.get(l.purchase_order_line_id) ?? (hasBoundReceipts ? 0 : null))
+            : null;
+      }
+    }
+  }
+
   const total_landed_cents = lines.reduce(
     (s, l) => s + l.landed_unit_cost_cents * l.qty,
     0
   );
+
+  // D9 — the vendor's default payment-terms (days), shown as a placeholder and
+  // used to drive the "save as default" prompt when the bill's term diverges.
+  // Read LIVE from qb_vendor.metadata (never a snapshot) — the default can be
+  // edited from this page and should reflect immediately.
+  let vendor_default_payment_terms_days: number | null = null;
+  if (header.vendor_id) {
+    const vendorMetaResult = await knex.raw(
+      `SELECT (metadata->>'default_payment_terms_days')::int AS default_payment_terms_days
+         FROM qb_vendor
+        WHERE id = ? AND deleted_at IS NULL
+        LIMIT 1`,
+      [header.vendor_id]
+    );
+    const vendorMetaRow = vendorMetaResult.rows[0] as
+      | { default_payment_terms_days: number | string | null }
+      | undefined;
+    vendor_default_payment_terms_days =
+      vendorMetaRow?.default_payment_terms_days != null
+        ? Number(vendorMetaRow.default_payment_terms_days)
+        : null;
+  }
 
   // Drift — does this bill still agree with the document it mirrors? Computed by
   // the SHARED engine (lib/china-finance/bill-drift.ts) so this page and the
@@ -346,8 +480,128 @@ export async function GET(
     );
   }
 
+  // D6 — the bound receipt SET + the PO's full bindable pool (with current
+  // binding), so the multi-select UI never needs a second round-trip. Dual-
+  // read: a receipt counts as "bound to this bill" via the new FK OR the
+  // legacy pointer (a bill created before this migration may still only have
+  // the legacy column populated for its one receipt).
+  let receipts: Array<{
+    id: string;
+    number: string;
+    seq: number;
+    received_at: string;
+    units: number;
+  }> = [];
+  let bindable_receipts: Array<{
+    id: string;
+    number: string;
+    seq: number;
+    received_at: string;
+    units: number;
+    bound_to: { bill_id: string; number: string | null } | null;
+  }> = [];
+  if (header.purchase_order_id) {
+    const bindableResult = await knex.raw(
+      `SELECT por.id, por.number, por.seq, por.received_at,
+              COALESCE(SUM(porl.qty_received_now), 0)::int AS units,
+              COALESCE(fk_vb.id, legacy_vb.id)         AS bound_bill_id,
+              COALESCE(fk_vb.number, legacy_vb.number) AS bound_bill_number
+         FROM purchase_order_receipt por
+         LEFT JOIN purchase_order_receipt_line porl
+           ON porl.purchase_order_receipt_id = por.id AND porl.deleted_at IS NULL
+         LEFT JOIN vendor_bill fk_vb
+           ON fk_vb.id = por.vendor_bill_id AND fk_vb.deleted_at IS NULL
+         LEFT JOIN vendor_bill legacy_vb
+           ON legacy_vb.purchase_order_receipt_id = por.id AND legacy_vb.deleted_at IS NULL
+        WHERE por.purchase_order_id = ?
+          AND por.status IN ('applied', 'synced')
+          AND por.deleted_at IS NULL
+        GROUP BY por.id, por.number, por.seq, por.received_at,
+                 fk_vb.id, fk_vb.number, legacy_vb.id, legacy_vb.number
+        ORDER BY por.seq ASC`,
+      [header.purchase_order_id]
+    );
+    type BindableRow = {
+      id: string;
+      number: string;
+      seq: number;
+      received_at: string;
+      units: number;
+      bound_bill_id: string | null;
+      bound_bill_number: string | null;
+    };
+    bindable_receipts = (bindableResult.rows as BindableRow[]).map((r) => ({
+      id: r.id,
+      number: r.number,
+      seq: r.seq,
+      received_at: r.received_at,
+      units: Number(r.units),
+      bound_to: r.bound_bill_id
+        ? { bill_id: r.bound_bill_id, number: r.bound_bill_number }
+        : null,
+    }));
+    receipts = bindable_receipts
+      .filter((r) => r.bound_to?.bill_id === id)
+      .map(({ id: rid, number, seq, received_at, units }) => ({
+        id: rid,
+        number,
+        seq,
+        received_at,
+        units,
+      }));
+  }
+
+  // B1 — QuickBooks sync surface (tracker items 1.8/1.10). `qb` is the
+  // synced-document identity (null until a BillAdd confirms); `qb_pipeline`
+  // is the current `qb_vendor_bill_pipeline` row (one per bill, deleted_at
+  // IS NULL — 2026-07-15 one-row-per-document convention), used to render
+  // "Syncing…"/"QB retry N"/"QB failed" while the bill hasn't synced yet.
+  // The flat qb_txn_id/qb_ref_number/qb_synced_at/qb_source columns stay on
+  // `header` too (spread below) — the list route (B2) exposes the same flat
+  // shape, so VendorBillSummaryDto stays a true subset of the detail DTO.
+  const qb =
+    header.qb_txn_id != null
+      ? {
+          txn_id: header.qb_txn_id,
+          ref_number: header.qb_ref_number,
+          synced_at: header.qb_synced_at,
+          source: header.qb_source,
+        }
+      : null;
+
+  const pipelineResult = await knex.raw(
+    `SELECT status, intent, last_error, retries, updated_at
+       FROM qb_vendor_bill_pipeline
+      WHERE vendor_bill_id = ? AND deleted_at IS NULL
+      LIMIT 1`,
+    [id]
+  );
+  const pipelineRow = (pipelineResult.rows[0] ?? null) as
+    | { status: string; intent: string; last_error: string | null; retries: number; updated_at: string }
+    | null;
+  const qb_pipeline = pipelineRow
+    ? {
+        status: pipelineRow.status,
+        intent: pipelineRow.intent,
+        last_error: pipelineRow.last_error,
+        retries: Number(pipelineRow.retries ?? 0),
+        updated_at: pipelineRow.updated_at,
+      }
+    : null;
+
   return res.json({
-    vendor_bill: { ...header, total_landed_cents, lines, po_drift, drift },
+    vendor_bill: {
+      ...header,
+      total_landed_cents,
+      lines,
+      po_drift,
+      drift,
+      vendor_default_payment_terms_days,
+      receipts,
+      bindable_receipts,
+      qb,
+      qb_pipeline,
+    },
   });
 }
 
@@ -386,6 +640,17 @@ export async function PATCH(
     return res
       .status(404)
       .json({ error: "Vendor bill not found", code: "not_found" });
+  }
+  // D6 — rebinding receipts on a SYNCED bill changes what QB's linked Bill
+  // covers; that's the future Unlock/rebuild path (§6 of the plan), not this
+  // route. Checked ahead of the generic status gate below so the caller gets
+  // the specific, future-facing code rather than the generic 'not_draft'.
+  if (patch.receipt_ids !== undefined && bill.status === "synced") {
+    return res.status(409).json({
+      error:
+        "This bill is synced to QuickBooks. Receipts can't be rebound until the Unlock path ships.",
+      code: "synced_bill_rebind_requires_unlock",
+    });
   }
   if (bill.status !== "draft" && bill.status !== "confirmed") {
     return res.status(409).json({
@@ -509,6 +774,8 @@ export async function PATCH(
     "bill_type",
     "reference_id",
     "document_date",
+    "payment_terms_days",
+    "due_date",
     "commission_mode",
     "commission_rate_bps",
     "commission_amount_cents",
@@ -535,6 +802,7 @@ export async function PATCH(
   const qtyEdits = hasFullLines ? [] : patch.line_quantities ?? [];
   const removedIds = hasFullLines ? [] : patch.removed_line_ids ?? [];
   const pinProvided = "purchase_order_receipt_id" in patch;
+  const receiptIdsProvided = patch.receipt_ids !== undefined;
   const hasLineEdits = hasFullLines || qtyEdits.length > 0 || removedIds.length > 0;
   // Set by the confirmed-wire gate below; drives the audited-adjustment write.
   let onConfirmedWire = false;
@@ -545,9 +813,9 @@ export async function PATCH(
     { po_qty: number; product_variant_id: string; sku: string; description: string; metadata: Record<string, unknown> | null }
   >();
 
-  if (hasLineEdits || pinProvided) {
+  if (hasLineEdits || pinProvided || receiptIdsProvided) {
     if (bill.status !== "draft" || effectiveBillType !== "regular") {
-      return res.status(409).json({ error: "Lines can only be edited on draft regular bills", code: "not_draft" });
+      return res.status(409).json({ error: "Lines and receipt bindings can only be edited on draft regular bills", code: "not_draft" });
     }
     if (!bill.purchase_order_id) {
       return res.status(422).json({ error: "This bill is not linked to a purchase order", code: "no_purchase_order" });
@@ -620,6 +888,34 @@ export async function PATCH(
     }
   }
 
+  // D6 — staged receipt SET reconciliation (full desired set, like `lines`).
+  // `receiptIdsToBind`/`receiptIdsToUnbind` are computed here (read-only) and
+  // written inside the transaction below, alongside `syncPrimaryReceiptPointer`
+  // so the legacy `purchase_order_receipt_id` mirror never drifts.
+  let receiptIdsToBind: string[] = [];
+  let receiptIdsToUnbind: string[] = [];
+  if (receiptIdsProvided) {
+    const desired = new Set(patch.receipt_ids!);
+    const currentBound = new Set(
+      await resolveBoundReceiptIds(knex, id, bill.purchase_order_receipt_id)
+    );
+    const toBind = [...desired].filter((rid) => !currentBound.has(rid));
+    const toUnbind = [...currentBound].filter((rid) => !desired.has(rid));
+
+    if (toBind.length > 0) {
+      const validation = await validateReceiptsForBinding(knex, {
+        purchaseOrderId: bill.purchase_order_id!,
+        billId: id,
+        receiptIds: toBind,
+      });
+      if (!validation.ok) {
+        return res.status(validation.status).json(validation.body);
+      }
+    }
+    receiptIdsToBind = toBind;
+    receiptIdsToUnbind = toUnbind;
+  }
+
   // Existing product lines on the bill (id → row). sku/qty/unit_cost are carried
   // so an audited adjustment can state exactly what moved ("RM5: 50 → 25").
   type ExistingLine = {
@@ -679,6 +975,37 @@ export async function PATCH(
     }
   }
 
+  // ── §7 — Freight charge lines: independent staged reconcile ─────────────────
+  // Deliberately kept OUT of `lines`/`line_quantities` above: freight charges
+  // have no purchase_order_line_id and no qty, so they never enter the PO
+  // qty-cap validation. They are also excluded from landed-cost allocation
+  // (see the confirm route, which only feeds `line_type='product'` lines into
+  // computeLandedLines) and from the drift engine (bill-drift.ts scopes its
+  // comparisons to line_kind <> 'freight_charge'). Validation + reconcile live
+  // in lib/purchase-orders/freight-charge-lines.ts — shared shape, kept out of
+  // this already-large route file.
+  const fullFreightLines = patch.freight_lines;
+  const hasFreightLines = fullFreightLines !== undefined;
+  let existingFreightIds = new Set<string>();
+  let freightAccountByListId = new Map<string, FreightAccount>();
+
+  if (hasFreightLines) {
+    if (bill.status !== "draft" || effectiveBillType !== "regular") {
+      return res.status(409).json({
+        error: "Freight charges can only be edited on draft regular bills",
+        code: "not_draft",
+      });
+    }
+    const freightValidation = await validateFreightLines(knex, id, fullFreightLines!);
+    if (!freightValidation.ok) {
+      return res
+        .status(freightValidation.error.status)
+        .json(freightValidation.error.body);
+    }
+    existingFreightIds = freightValidation.existingIds;
+    freightAccountByListId = freightValidation.accountByListId;
+  }
+
   // ── Apply header + staged line edits + recompute in ONE transaction ─────────
   const trx = knex.transaction ? await knex.transaction() : null;
   const db = trx ?? knex;
@@ -696,6 +1023,50 @@ export async function PATCH(
           WHERE id = ? AND deleted_at IS NULL`,
         [...values, id]
       );
+    }
+
+    // D6 — dual-write the new receipt-side FK. `syncPrimaryReceiptPointer`
+    // (called once at the end, whichever path ran) recomputes the legacy
+    // `vendor_bill.purchase_order_receipt_id` mirror from the LIVE bound set,
+    // so it always wins over whatever the plain header UPDATE above wrote.
+    if (pinProvided) {
+      const newPinId = patch.purchase_order_receipt_id ?? null;
+      const oldPinId = bill.purchase_order_receipt_id ?? null;
+      if (oldPinId && oldPinId !== newPinId) {
+        // Unbind the previous legacy pin — but ONLY if it still points at
+        // this bill, so a stale/racy pin never steals another bill's receipt.
+        await db.raw(
+          `UPDATE purchase_order_receipt SET vendor_bill_id = NULL, updated_at = NOW()
+            WHERE id = ? AND vendor_bill_id = ? AND deleted_at IS NULL`,
+          [oldPinId, id]
+        );
+      }
+      if (newPinId) {
+        await db.raw(
+          `UPDATE purchase_order_receipt SET vendor_bill_id = ?, updated_at = NOW()
+            WHERE id = ? AND deleted_at IS NULL`,
+          [id, newPinId]
+        );
+      }
+    }
+    if (receiptIdsProvided) {
+      if (receiptIdsToUnbind.length > 0) {
+        await db.raw(
+          `UPDATE purchase_order_receipt SET vendor_bill_id = NULL, updated_at = NOW()
+            WHERE id = ANY(?) AND vendor_bill_id = ? AND deleted_at IS NULL`,
+          [receiptIdsToUnbind, id]
+        );
+      }
+      if (receiptIdsToBind.length > 0) {
+        await db.raw(
+          `UPDATE purchase_order_receipt SET vendor_bill_id = ?, updated_at = NOW()
+            WHERE id = ANY(?) AND deleted_at IS NULL`,
+          [id, receiptIdsToBind]
+        );
+      }
+    }
+    if (pinProvided || receiptIdsProvided) {
+      await syncPrimaryReceiptPointer(db, id);
     }
 
     if (hasFullLines) {
@@ -725,11 +1096,11 @@ export async function PATCH(
           // New line — derive identity fields authoritatively from the PO line.
           await db.raw(
             `INSERT INTO vendor_bill_line (
-               id, vendor_bill_id, receipt_line_id, purchase_order_line_id, line_type,
+               id, vendor_bill_id, receipt_line_id, purchase_order_line_id, line_type, line_kind,
                product_variant_id, sku, mpn, description, qty, unit_cost_cents, cbm_per_unit,
                commission_per_unit_cents, freight_per_unit_cents, tariff_per_unit_cents,
                landed_unit_cost_cents, created_at, updated_at)
-             VALUES (?, ?, NULL, ?, 'product', ?, ?, ?, ?, ?, ?, ?::float, 0, 0, 0, 0, NOW(), NOW())`,
+             VALUES (?, ?, NULL, ?, 'product', 'po_item', ?, ?, ?, ?, ?, ?, ?::float, 0, 0, 0, 0, NOW(), NOW())`,
             [
               `vbl_${randomUUID().replace(/-/g, "")}`,
               id,
@@ -764,7 +1135,23 @@ export async function PATCH(
       }
     }
 
-    if (hasLineEdits) {
+    // Freight charge lines — full desired set, reconciled independently of the
+    // product lines above (add/update/remove by id). See
+    // lib/purchase-orders/freight-charge-lines.ts for why this line's dollar
+    // value flows into total_landed_cents / recomputeBillFinanceLinks like a
+    // product line's cost does, while being skipped entirely by the confirm
+    // route's landed-cost allocation and by the drift engine.
+    if (hasFreightLines) {
+      await reconcileFreightLines(
+        db,
+        id,
+        fullFreightLines!,
+        existingFreightIds,
+        freightAccountByListId
+      );
+    }
+
+    if (hasLineEdits || hasFreightLines) {
       const recompute = await recomputeBillFinanceLinks(db, id);
       if (!recompute.ok) {
         if (trx) await trx.rollback();
@@ -982,6 +1369,18 @@ export async function DELETE(
       // Delete cfb rows (china_wire_transfer_application cascades from cfb).
       await db.raw(`DELETE FROM china_finance_bill WHERE id = ANY(?)`, [cfbIds]);
     }
+
+    // D6 — release every receipt bound to this bill via the new FK BEFORE
+    // deleting it. `purchase_order_receipt.vendor_bill_id` has no cascade, so
+    // skipping this would leave receipts permanently "bound" to a
+    // now-nonexistent bill id — invisible in the UI, but
+    // `validateReceiptsForBinding`'s dual-read "already billed elsewhere"
+    // check would keep rejecting them for every future bill forever.
+    await db.raw(
+      `UPDATE purchase_order_receipt SET vendor_bill_id = NULL, updated_at = NOW()
+        WHERE vendor_bill_id = ? AND deleted_at IS NULL`,
+      [id]
+    );
 
     // FK on vendor_bill_line cascades — bill row + lines are removed.
     await db.raw(`DELETE FROM vendor_bill WHERE id = ?`, [id]);

@@ -38,6 +38,7 @@ import {
   reconcileReceiptModIfDrifted,
   type KnexRaw,
 } from "../lib/purchase-orders/item-receipt-mod-payload";
+import { checkPoQbSyncGate } from "../lib/purchase-orders/po-qb-sync-gate";
 
 const bridgeUrl = (): string =>
   process.env.QB_BRIDGE_URL || "https://qb.eptbridge.com";
@@ -340,6 +341,44 @@ const extractEditSequence = (data: BridgeStatus): string | null => {
   );
 };
 
+/**
+ * Park an ADD row while its Purchase Order still owes QuickBooks a change.
+ *
+ * The row stays in 'waiting' and `updated_at` is refreshed on purpose: the hold
+ * is deliberate, not a stuck row, so the stale-row cleanup must not demote it
+ * with a generic "Timeout" message that would bury the real reason. The reason
+ * lives in `last_error`, which the QB pipeline UI renders under the row.
+ */
+const holdRowForPoSync = async (
+  knex: KnexRaw,
+  rowId: string,
+  reason: string
+): Promise<void> => {
+  await knex.raw(
+    `UPDATE qb_item_receipt_pipeline
+        SET last_error = ?,
+            updated_at = NOW()
+      WHERE id = ?`,
+    [reason, rowId]
+  );
+};
+
+/** Same hold, for the MOD lane (separate status/error columns). */
+const holdModRowForPoSync = async (
+  knex: KnexRaw,
+  rowId: string,
+  reason: string
+): Promise<void> => {
+  await knex.raw(
+    `UPDATE qb_item_receipt_pipeline
+        SET mod_last_error    = ?,
+            mod_next_retry_at = NOW() + INTERVAL '5 minutes',
+            updated_at        = NOW()
+      WHERE id = ?`,
+    [reason, rowId]
+  );
+};
+
 export default async function qbItemReceiptPoller(container: MedusaContainer) {
   if (isScheduledJobsDisabled(container)) return;
 
@@ -368,6 +407,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
   let modToError = 0;
   let modRetried = 0;
   let modPermaFailed = 0;
+  let held = 0;
 
   // ── Phase A: Submit unsubmitted add rows ─────────────────────────────────
   const unsubmitted: any[] = await knex
@@ -389,6 +429,16 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
   }
 
   for (const row of unsubmitted) {
+    // Never overtake a pending PO change: QB validates receipt quantities
+    // against the PO as QuickBooks currently knows it. See po-qb-sync-gate.ts.
+    const gate = await checkPoQbSyncGate(knex, row.purchase_order_id);
+    if (gate.blocked) {
+      await holdRowForPoSync(knex, row.id, gate.reason);
+      held++;
+      logger.warn(`${TAG} row ${row.id} held: ${gate.reason}`);
+      continue;
+    }
+
     try {
       let freshPayload = await refreshNullPoLineIds(
         knex, logger, TAG, row.payload as Record<string, unknown>, row.id, "payload"
@@ -569,7 +619,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
   // ── Phase C: Retry error rows ─────────────────────────────────────────────
   const errorRows: any[] = await knex
     .raw(
-      `SELECT id, purchase_order_receipt_id, payload, retries, last_error
+      `SELECT id, purchase_order_receipt_id, purchase_order_id, payload, retries, last_error
        FROM qb_item_receipt_pipeline
       WHERE status = 'error'
         AND (next_retry_at IS NULL OR next_retry_at <= NOW())
@@ -584,6 +634,23 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
   }
 
   for (const row of errorRows) {
+    // A blocked PO must not burn the retry budget — defer without counting it,
+    // otherwise the row exhausts its retries waiting on something it can't fix.
+    const gate = await checkPoQbSyncGate(knex, row.purchase_order_id);
+    if (gate.blocked) {
+      await knex.raw(
+        `UPDATE qb_item_receipt_pipeline
+            SET last_error    = ?,
+                next_retry_at = NOW() + INTERVAL '5 minutes',
+                updated_at    = NOW()
+          WHERE id = ?`,
+        [gate.reason, row.id]
+      );
+      held++;
+      logger.warn(`${TAG} row ${row.id} retry held: ${gate.reason}`);
+      continue;
+    }
+
     const newRetries = (row.retries ?? 0) + 1;
     const exhausted = newRetries >= MAX_RETRIES;
 
@@ -769,7 +836,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
   // enqueued by the update workflow and hasn't been handed to the bridge yet.
   const modPending: any[] = await knex
     .raw(
-      `SELECT id, purchase_order_receipt_id, mod_payload, mod_retries
+      `SELECT id, purchase_order_receipt_id, purchase_order_id, mod_payload, mod_retries
          FROM qb_item_receipt_pipeline
         WHERE mod_status = 'waiting'
           AND mod_operation_id IS NULL
@@ -786,6 +853,16 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
   }
 
   for (const row of modPending) {
+    // A receipt Mod that raises a quantity hits the same QB 3060 wall as an Add
+    // when the PO in QuickBooks is still on the pre-edit quantities.
+    const gate = await checkPoQbSyncGate(knex, row.purchase_order_id);
+    if (gate.blocked) {
+      await holdModRowForPoSync(knex, row.id, gate.reason);
+      held++;
+      logger.warn(`${TAG} mod row ${row.id} held: ${gate.reason}`);
+      continue;
+    }
+
     try {
       const freshModPayload = await refreshNullPoLineIds(
         knex, logger, TAG, row.mod_payload as Record<string, unknown>, row.id, "mod_payload"
@@ -996,7 +1073,8 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     modResolved ||
     modToError ||
     modRetried ||
-    modPermaFailed
+    modPermaFailed ||
+    held
   ) {
     logger.info(
       `${TAG} tick: submitted=${submitted} resolved=${resolved} →error=${toError} ` +
@@ -1004,7 +1082,7 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
         `void_submitted=${voidSubmitted} void_resolved=${voidResolved} ` +
         `mod_submitted=${modSubmitted} mod_resolved=${modResolved} ` +
         `mod_→error=${modToError} mod_retried=${modRetried} ` +
-        `mod_failed_permanent=${modPermaFailed}`
+        `mod_failed_permanent=${modPermaFailed} held_on_po_sync=${held}`
     );
   }
 }

@@ -74,4 +74,17 @@ export const VendorBill = model.define("vendor_bill", {
   // Confirmation audit
   confirmed_at: model.dateTime().nullable(),
   confirmed_by_user_id: model.text().nullable(),
+
+  // QuickBooks sync (Phase 0 — dormant; columns promoted from
+  // Migration20260429000000 + new columns added here). See
+  // docs/VENDOR_BILL_QB_SYNC_PLAN.md §3.1.
+  qb_txn_id: model.text().nullable(), // QB Bill TxnID once synced/adopted
+  qb_edit_sequence: model.text().nullable(), // fresh EditSequence for BillMod/TxnDel
+  qb_ref_number: model.text().nullable(), // QB RefNumber = vendor invoice # (reference_id)
+  qb_synced_at: model.dateTime().nullable(), // when the Bill landed in QB
+  qb_source: model.text().nullable(), // 'owned' | 'adopted'
+
+  // Payment terms (Phase 0 — dormant; not yet consumed anywhere).
+  payment_terms_days: model.number().nullable(),
+  due_date: model.dateTime().nullable(),
 });

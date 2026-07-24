@@ -19,6 +19,7 @@ import { PurchaseOrderReceipt } from "./models/purchase-order-receipt";
 import { PurchaseOrderReceiptLine } from "./models/purchase-order-receipt-line";
 import { QbItemReceiptPipeline } from "./models/qb-item-receipt-pipeline";
 import { QbPurchaseOrderPipeline } from "./models/qb-purchase-order-pipeline";
+import { QbVendorBillPipeline } from "./models/qb-vendor-bill-pipeline";
 import { VendorBill } from "./models/vendor-bill";
 import { VendorBillLine } from "./models/vendor-bill-line";
 
@@ -29,6 +30,7 @@ class PurchaseOrdersModuleService extends MedusaService({
   PurchaseOrderReceiptLine,
   QbPurchaseOrderPipeline,
   QbItemReceiptPipeline,
+  QbVendorBillPipeline,
   VendorBill,
   VendorBillLine,
 }) {

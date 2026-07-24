@@ -39,6 +39,16 @@ export const PurchaseOrderReceipt = model.define("purchase_order_receipt", {
   vendor_bill_number: model.text().nullable(),
   vendor_bill_date: model.dateTime().nullable(),
 
+  // D6 — bill ↔ MANY receipts (docs/VENDOR_BILL_QB_SYNC_PLAN.md §3.0). Source
+  // of truth for "which vendor bill is this receipt bound to" — a receipt
+  // belongs to AT MOST one bill; a bill may bind one-or-more receipts. This
+  // REPLACES the old Option A model where `vendor_bill.purchase_order_receipt_id`
+  // was UNIQUE (one bill per receipt). That legacy column is kept as a
+  // nullable "primary receipt" pointer — dual-written to the FIRST bound
+  // receipt (by seq) for readers that haven't migrated to the receipt set yet.
+  // See lib/purchase-orders/vendor-bill-receipts.ts.
+  vendor_bill_id: model.text().nullable(),
+
   // Free-text
   notes: model.text().nullable(),
 

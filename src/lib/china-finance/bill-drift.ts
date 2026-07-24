@@ -179,9 +179,16 @@ export async function loadBillDrift(
             vb.freight_amount_cents,
             po.number AS po_number,
             r.number  AS receipt_number,
+            -- Excludes freight charge lines (§7 — a flat non-landed ExpenseLine
+            -- added directly to a regular bill): they carry real money owed
+            -- (decision D9, included in recomputeBillFinanceLinks' total) but
+            -- are NOT part of the goods/commission comparison this total feeds
+            -- below — including them would fabricate commission drift on any
+            -- China regular bill that also has a freight charge line.
             COALESCE((SELECT SUM(l.unit_cost_cents::bigint * l.qty)::bigint
                         FROM vendor_bill_line l
-                       WHERE l.vendor_bill_id = vb.id AND l.deleted_at IS NULL), 0) AS total_cents,
+                       WHERE l.vendor_bill_id = vb.id AND l.deleted_at IS NULL
+                         AND COALESCE(l.line_kind, '') <> 'freight_charge'), 0) AS total_cents,
             EXISTS (SELECT 1
                       FROM china_finance_bill cfb
                       JOIN china_wire_transfer_application a ON a.bill_id = cfb.id
@@ -216,9 +223,12 @@ export async function loadBillDrift(
         db,
         `SELECT vb.id, vb.number, vb.service_vendor_bill_id, vb.freight_vendor_bill_id,
                 vb.freight_amount_cents,
+                -- Same freight_charge exclusion as the main bills query above —
+                -- this is the "goods" total the commission reconciliation inverts.
                 COALESCE((SELECT SUM(l.unit_cost_cents::bigint * l.qty)::bigint
                             FROM vendor_bill_line l
-                           WHERE l.vendor_bill_id = vb.id AND l.deleted_at IS NULL), 0) AS total_cents
+                           WHERE l.vendor_bill_id = vb.id AND l.deleted_at IS NULL
+                             AND COALESCE(l.line_kind, '') <> 'freight_charge'), 0) AS total_cents
            FROM vendor_bill vb
           WHERE vb.deleted_at IS NULL
             AND vb.bill_type = 'regular'
@@ -325,6 +335,53 @@ export async function loadBillDrift(
     receiptMeta.map((m) => [m.purchase_order_id, m.numbers ?? "the receipts"])
   );
 
+  // D6 multi-receipt: a bill can be BOUND to a subset of its PO's receipts
+  // (purchase_order_receipt.vendor_bill_id). Such a bill legitimately covers
+  // only ITS receipts — comparing it against the PO-wide union would flag every
+  // partial bill as "missing" the other bills' receipts (bug seen live on
+  // VB-1066). We aggregate a second, per-BILL source and treat a bill as in
+  // sync when it matches EITHER its bound set OR the PO-wide union ("match
+  // either"): legacy whole-PO bills (backfilled with a single bound receipt)
+  // still match the PO-wide side — scoping them to their one bound receipt
+  // would reintroduce the VB-1004 false positive this file already fixed.
+  const regularBillIds = bills
+    .filter((b) => b.bill_type === "regular" && b.purchase_order_id)
+    .map((b) => b.id);
+  const boundReceiptLines = regularBillIds.length
+    ? await rows<SourceLineRow>(
+        db,
+        `SELECT MIN(rl.id) AS key_id,
+                r.vendor_bill_id AS parent_id,
+                rl.sku_snapshot AS sku,
+                SUM(rl.qty_received_now)::bigint AS qty,
+                MAX(rl.unit_cost_cents_override) AS unit_cost_cents
+           FROM purchase_order_receipt_line rl
+           JOIN purchase_order_receipt r ON r.id = rl.purchase_order_receipt_id
+          WHERE r.vendor_bill_id = ANY(?)
+            AND rl.deleted_at IS NULL
+            AND r.deleted_at IS NULL
+            AND r.status IN ('applied','synced')
+          GROUP BY r.vendor_bill_id, rl.sku_snapshot`,
+        [regularBillIds]
+      )
+    : [];
+  const boundReceiptLabels = regularBillIds.length
+    ? await rows<{ vendor_bill_id: string; numbers: string }>(
+        db,
+        `SELECT r.vendor_bill_id,
+                STRING_AGG(r.number, ', ' ORDER BY r.number) AS numbers
+           FROM purchase_order_receipt r
+          WHERE r.vendor_bill_id = ANY(?)
+            AND r.deleted_at IS NULL
+            AND r.status IN ('applied','synced')
+          GROUP BY r.vendor_bill_id`,
+        [regularBillIds]
+      )
+    : [];
+  const boundLabelByBill = new Map(
+    boundReceiptLabels.map((m) => [m.vendor_bill_id, m.numbers])
+  );
+
   const linesByBill = new Map<string, LineRow[]>();
   for (const l of billLines) {
     const arr = linesByBill.get(l.vendor_bill_id);
@@ -344,6 +401,8 @@ export async function loadBillDrift(
   // Both are keyed by purchase_order_id — the received side is aggregated per SKU
   // across every applied receipt on the order.
   const rcByOrder = groupByParent(receiptLines);
+  // Keyed by vendor_bill_id — only the receipts BOUND to that bill (D6).
+  const rcByBill = groupByParent(boundReceiptLines);
 
   const out = new Map<string, BillDrift>();
 
@@ -353,68 +412,107 @@ export async function loadBillDrift(
     // ── regular → PO or RECEIPT ────────────────────────────────────────────
     if (b.bill_type === "regular" && b.purchase_order_id) {
       const pinned = !!b.purchase_order_receipt_id;
-      const source = pinned
-        ? rcByOrder.get(b.purchase_order_id) ?? []
-        : poByOrder.get(b.purchase_order_id) ?? [];
-      // A receipt-pinned bill keys on receipt_line_id when the sync populated it
-      // (only ~13% of historical lines did) and falls back to SKU, which is safe
-      // because a receipt never repeats a SKU. PO comparison keys on the FK.
-      const srcById = new Map<string, SourceLineRow>();
-      const srcBySku = new Map<string, SourceLineRow>();
-      for (const s of source) {
-        srcById.set(s.key_id, s);
-        if (s.sku && !srcBySku.has(s.sku)) srcBySku.set(s.sku, s);
-      }
-
-      const driftLines: BillDriftLine[] = [];
-      const seen = new Set<string>();
       /**
-       * The received side is aggregated PER SKU across the order's receipts, so
-       * a bill line's `receipt_line_id` (which points at one specific receipt
-       * line) is not a usable key there — match by SKU. Against a PO the line FK
+       * Compares the bill's lines against ONE source line set and returns the
+       * drift lines (empty = in sync with that source).
+       *
+       * Matching: against receipts the received side is aggregated PER SKU, so
+       * SKU is the key (a bill line's receipt_line_id points at one specific
+       * receipt line — unusable against an aggregate). Against a PO the line FK
        * is authoritative, with SKU as the fallback for a line whose PO line was
        * replaced. A consumed source line is never matched twice.
        */
-      const resolve = (l: LineRow): SourceLineRow | undefined => {
-        if (pinned) return l.sku ? srcBySku.get(l.sku) : undefined;
-        const byFk = l.purchase_order_line_id
-          ? srcById.get(l.purchase_order_line_id)
-          : undefined;
-        if (byFk && !seen.has(byFk.key_id)) return byFk;
-        const bySku = l.sku ? srcBySku.get(l.sku) : undefined;
-        if (bySku && !seen.has(bySku.key_id)) return bySku;
-        return byFk ?? bySku;
-      };
-
-      for (const l of linesByBill.get(b.id) ?? []) {
-        const s = resolve(l);
-        if (s) seen.add(s.key_id);
-        const billQty = num(l.qty);
-        const srcQty = s ? num(s.qty) : 0;
-        const cost = num(l.unit_cost_cents);
-        const srcCost = s?.unit_cost_cents == null ? cost : num(s.unit_cost_cents);
-        if (billQty !== srcQty || cost !== srcCost) {
-          driftLines.push({
-            sku: l.sku ?? "",
-            bill_qty: billQty,
+      const compareAgainst = (
+        source: SourceLineRow[],
+        bySkuOnly: boolean
+      ): BillDriftLine[] => {
+        const srcById = new Map<string, SourceLineRow>();
+        const srcBySku = new Map<string, SourceLineRow>();
+        for (const s of source) {
+          srcById.set(s.key_id, s);
+          if (s.sku && !srcBySku.has(s.sku)) srcBySku.set(s.sku, s);
+        }
+        const drift: BillDriftLine[] = [];
+        const seen = new Set<string>();
+        const resolve = (l: LineRow): SourceLineRow | undefined => {
+          if (bySkuOnly) return l.sku ? srcBySku.get(l.sku) : undefined;
+          const byFk = l.purchase_order_line_id
+            ? srcById.get(l.purchase_order_line_id)
+            : undefined;
+          if (byFk && !seen.has(byFk.key_id)) return byFk;
+          const bySku = l.sku ? srcBySku.get(l.sku) : undefined;
+          if (bySku && !seen.has(bySku.key_id)) return bySku;
+          return byFk ?? bySku;
+        };
+        for (const l of linesByBill.get(b.id) ?? []) {
+          const s = resolve(l);
+          if (s) seen.add(s.key_id);
+          const billQty = num(l.qty);
+          const srcQty = s ? num(s.qty) : 0;
+          const cost = num(l.unit_cost_cents);
+          const srcCost =
+            s?.unit_cost_cents == null ? cost : num(s.unit_cost_cents);
+          if (billQty !== srcQty || cost !== srcCost) {
+            drift.push({
+              sku: l.sku ?? "",
+              bill_qty: billQty,
+              source_qty: srcQty,
+              unit_cost_cents: cost,
+              delta_cents: billQty * cost - srcQty * srcCost,
+            });
+          }
+        }
+        // Source lines the bill is missing entirely.
+        for (const s of source) {
+          if (seen.has(s.key_id)) continue;
+          const srcQty = num(s.qty);
+          const srcCost = num(s.unit_cost_cents);
+          drift.push({
+            sku: s.sku ?? "",
+            bill_qty: 0,
             source_qty: srcQty,
-            unit_cost_cents: cost,
-            delta_cents: billQty * cost - srcQty * srcCost,
+            unit_cost_cents: srcCost,
+            delta_cents: -(srcQty * srcCost),
           });
         }
-      }
-      // Source lines the bill is missing entirely (added to the PO afterwards).
-      for (const s of source) {
-        if (seen.has(s.key_id)) continue;
-        const srcQty = num(s.qty);
-        const srcCost = num(s.unit_cost_cents);
-        driftLines.push({
-          sku: s.sku ?? "",
-          bill_qty: 0,
-          source_qty: srcQty,
-          unit_cost_cents: srcCost,
-          delta_cents: -(srcQty * srcCost),
-        });
+        return drift;
+      };
+
+      // "Match either" (D6): in sync when the bill matches its BOUND receipt
+      // set (partial bill) OR the PO-wide union (legacy whole-PO bill) — see
+      // the aggregation comment above for why both sides are needed.
+      const boundSource = rcByBill.get(b.id);
+      let driftLines: BillDriftLine[];
+      let sourceLabel: string | null | undefined;
+      if (pinned || boundSource) {
+        const boundDrift = boundSource
+          ? compareAgainst(boundSource, true)
+          : null;
+        if (boundDrift && boundDrift.length === 0) {
+          driftLines = [];
+          sourceLabel = boundLabelByBill.get(b.id);
+        } else {
+          const poWideDrift = compareAgainst(
+            rcByOrder.get(b.purchase_order_id) ?? [],
+            true
+          );
+          if (poWideDrift.length === 0) {
+            driftLines = [];
+            sourceLabel = receiptLabelByPo.get(b.purchase_order_id);
+          } else {
+            // Both drift → report the more precise (bound) side when it exists.
+            driftLines = boundDrift ?? poWideDrift;
+            sourceLabel = boundDrift
+              ? (boundLabelByBill.get(b.id) ?? b.receipt_number)
+              : (receiptLabelByPo.get(b.purchase_order_id) ?? b.receipt_number);
+          }
+        }
+      } else {
+        driftLines = compareAgainst(
+          poByOrder.get(b.purchase_order_id) ?? [],
+          false
+        );
+        sourceLabel = b.po_number;
       }
 
       if (driftLines.length > 0) {
@@ -422,14 +520,11 @@ export async function loadBillDrift(
         out.set(b.id, {
           vendor_bill_id: b.id,
           vendor_bill_number: b.number,
-          kind: pinned ? "receipt_lines" : "po_lines",
+          kind: pinned || rcByBill.has(b.id) ? "receipt_lines" : "po_lines",
           delta_cents: delta,
           bill_total_cents: billTotal,
           expected_cents: billTotal - delta,
-          source_label:
-            (pinned
-              ? receiptLabelByPo.get(b.purchase_order_id) ?? b.receipt_number
-              : b.po_number) ?? "source",
+          source_label: sourceLabel ?? "source",
           on_confirmed_wire: !!b.on_confirmed_wire,
           lines: driftLines,
         });

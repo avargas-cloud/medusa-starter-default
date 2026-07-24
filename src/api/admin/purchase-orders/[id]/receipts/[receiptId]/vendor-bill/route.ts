@@ -111,6 +111,7 @@ interface VendorBillRow {
 
 async function resolveReceiptAndBill(
   service: ReturnType<typeof getPurchaseOrdersService>,
+  knex: KnexInstance,
   poId: string,
   receiptId: string
 ): Promise<
@@ -135,12 +136,30 @@ async function resolveReceiptAndBill(
     };
   }
 
-  const bills = (await service.listVendorBills(
-    { purchase_order_receipt_id: receiptId },
-    { take: 1 }
-  )) as unknown as VendorBillRow[];
+  // D6 dual-read: "does a bill already exist for this receipt" must check the
+  // new per-receipt FK too, not just the legacy `purchase_order_receipt_id`
+  // mirror — a receipt bound to a bill as its 2nd/3rd receipt (via the PATCH
+  // `receipt_ids` field) is NOT that bill's legacy "primary" pointer. Missing
+  // this would let this route's POST mint a SECOND, duplicate draft bill for
+  // an already-billed receipt (double-counted quantities).
+  const billResult = await knex.raw(
+    `SELECT vb.*
+       FROM vendor_bill vb
+       WHERE vb.deleted_at IS NULL
+         AND (
+           vb.purchase_order_receipt_id = ?
+           OR EXISTS (
+             SELECT 1 FROM purchase_order_receipt bpor
+             WHERE bpor.id = ? AND bpor.vendor_bill_id = vb.id
+           )
+         )
+       ORDER BY vb.created_at ASC
+       LIMIT 1`,
+    [receiptId, receiptId]
+  );
+  const bill = (billResult.rows[0] ?? null) as VendorBillRow | null;
 
-  return { receipt, bill: bills[0] ?? null };
+  return { receipt, bill };
 }
 
 function isErrorResult(
@@ -157,8 +176,9 @@ export async function GET(
 ) {
   const { id, receiptId } = req.params as { id: string; receiptId: string };
   const service = getPurchaseOrdersService(req);
+  const knex = resolveKnex(req);
 
-  const resolved = await resolveReceiptAndBill(service, id, receiptId);
+  const resolved = await resolveReceiptAndBill(service, knex, id, receiptId);
   if (isErrorResult(resolved)) {
     return res
       .status(resolved.status)
@@ -208,8 +228,9 @@ export async function POST(
   const body: VendorBillBody = parsed.data;
 
   const service = getPurchaseOrdersService(req);
+  const knex = resolveKnex(req);
 
-  const resolved = await resolveReceiptAndBill(service, id, receiptId);
+  const resolved = await resolveReceiptAndBill(service, knex, id, receiptId);
   if (isErrorResult(resolved)) {
     return res
       .status(resolved.status)
@@ -246,7 +267,6 @@ export async function POST(
   }
 
   // Fetch MPN + CBM from product_variant.metadata for each unique variant
-  const knex = resolveKnex(req);
   const uniqueVariantIds = [
     ...new Set(receiptLines.map((rl) => rl.product_variant_id)),
   ];
@@ -333,6 +353,14 @@ export async function POST(
     confirmed_by_user_id: null,
   })) as unknown as VendorBillRow;
 
+  // D6 dual-write: this create path only ever binds ONE (brand-new) receipt,
+  // so a direct bind is safe — no other receipt can already be on this bill.
+  await knex.raw(
+    `UPDATE purchase_order_receipt SET vendor_bill_id = ?, updated_at = NOW()
+      WHERE id = ? AND deleted_at IS NULL`,
+    [newBill.id, receiptId]
+  );
+
   // Create vendor bill lines
   const newLines = await Promise.all(
     resolvedLines.map((lineData) =>
@@ -375,8 +403,9 @@ export async function PATCH(
   const patch: VendorBillPatch = parsed.data;
 
   const service = getPurchaseOrdersService(req);
+  const knexForResolve = resolveKnex(req);
 
-  const resolved = await resolveReceiptAndBill(service, id, receiptId);
+  const resolved = await resolveReceiptAndBill(service, knexForResolve, id, receiptId);
   if (isErrorResult(resolved)) {
     return res
       .status(resolved.status)

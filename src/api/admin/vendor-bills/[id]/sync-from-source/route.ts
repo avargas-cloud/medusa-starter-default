@@ -2,18 +2,24 @@
  * POST /admin/vendor-bills/:id/sync-from-source
  *
  * "Update From…" — re-mirror a regular DRAFT bill's product lines from a source:
- *   { source: 'po' }                      → the PO's ordered qty (planning window)
- *   { source: 'receipt', receipt_id }     → a specific receipt's received qty
+ *   { source: 'po' }                                → the PO's ordered qty (planning window)
+ *   { source: 'receipt', receipt_id }               → a specific receipt's received qty
+ *   { source: 'receipt', receipt_ids: string[] }     → D6 — the UNION of several
+ *     receipts' received qty (SUM(qty_received_now) per purchase_order_line_id
+ *     across the set). `receipt_ids` takes precedence when both are present;
+ *     `receipt_id` stays supported for the single-receipt legacy caller.
  *
  * The bill's OWN purchase_order_id is used (an arbitrary PO is never accepted).
  * Merge is deterministic by purchase_order_line_id (Phase 0): updates changed
  * lines, adds new source lines, and REMOVES bill product lines no longer in the
  * source. qb_account lines are preserved. Landed cost fields reset to 0 on any
  * changed/added line (confirm recomputes them). Receipt source PINS the bill to
- * that receipt and clamps qty to the received qty (keeps confirm/AVCO sound).
+ * the receipt(s) (dual-write, see lib/purchase-orders/vendor-bill-receipts.ts)
+ * and clamps qty to the received qty (keeps confirm/AVCO sound).
  *
  * One transaction with row locks via recomputeBillFinanceLinks; returns a diff
- * { added, updated, removed }.
+ * { added, updated, removed }. `preview:true` stays read-only (no writes at all,
+ * including no binding) so the frontend can stage the result before Save.
  */
 
 import type {
@@ -26,6 +32,12 @@ import { z } from "zod";
 import { getActorUserId, UnauthenticatedError } from "../../../purchase-orders/_lib/auth";
 import { zodErrorToBody } from "../../../purchase-orders/_lib/format";
 import { recomputeBillFinanceLinks } from "../../../../../lib/finance/recompute-bill-finance";
+import {
+  resolveBoundReceiptIds,
+  resolveReceiptLineUnion,
+  syncPrimaryReceiptPointer,
+  validateReceiptsForBinding,
+} from "../../../../../lib/purchase-orders/vendor-bill-receipts";
 
 type Knex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -44,7 +56,12 @@ const bodySchema = z.discriminatedUnion("source", [
   z.object({ source: z.literal("po"), preview: z.boolean().optional() }),
   z.object({
     source: z.literal("receipt"),
-    receipt_id: z.string().min(1),
+    // D6 — either the legacy single id, or the new multi-select set.
+    // `receipt_ids` wins when both are present. At least one is required —
+    // checked in the handler (a `.refine()` here would turn this branch into
+    // a ZodEffects, which z.discriminatedUnion() can't accept as a member).
+    receipt_id: z.string().min(1).optional(),
+    receipt_ids: z.array(z.string().min(1)).optional(),
     preview: z.boolean().optional(),
   }),
 ]);
@@ -95,6 +112,16 @@ export async function POST(
   if (!parsed.success) {
     return res.status(400).json(zodErrorToBody(parsed.error));
   }
+  if (
+    parsed.data.source === "receipt" &&
+    !parsed.data.receipt_id &&
+    (!parsed.data.receipt_ids || parsed.data.receipt_ids.length === 0)
+  ) {
+    return res.status(400).json({
+      error: "receipt_id or receipt_ids is required for source='receipt'",
+      code: "receipt_id_required",
+    });
+  }
 
   const knex = resolveKnex(req);
 
@@ -136,73 +163,42 @@ export async function POST(
 
   // ── Resolve source lines ────────────────────────────────────────────────────
   let sourceLines: SourceLine[];
+  // D6 — the full receipt SET this "Update From Receipt(s)" call resolves to
+  // (kept for the persist path below, which binds every id in the set, not
+  // just a single legacy pin).
+  let pinReceiptIds: string[] = [];
+  // Legacy single-value mirror, used only for the response's `receipt_pinned`
+  // field (kept for existing frontend callers that read it).
   let pinReceiptId: string | null = null;
 
   if (parsed.data.source === "receipt") {
-    const receiptId = parsed.data.receipt_id;
-    const receiptResult = await knex.raw(
-      `SELECT id, purchase_order_id, status
-         FROM purchase_order_receipt
-        WHERE id = ? AND deleted_at IS NULL`,
-      [receiptId]
-    );
-    const receipt = (receiptResult.rows[0] ?? null) as
-      | { id: string; purchase_order_id: string; status: string }
-      | null;
-    if (!receipt) {
-      return res.status(404).json({ error: "Receipt not found", code: "receipt_not_found" });
-    }
-    if (receipt.purchase_order_id !== bill.purchase_order_id) {
-      return res.status(422).json({
-        error: "Receipt does not belong to this bill's purchase order",
-        code: "receipt_po_mismatch",
-      });
-    }
-    if (receipt.status !== "applied" && receipt.status !== "synced") {
-      return res.status(422).json({
-        error: "Receipt is not applied yet",
-        code: "receipt_not_applied",
-      });
-    }
+    const requestedReceiptIds =
+      parsed.data.receipt_ids && parsed.data.receipt_ids.length > 0
+        ? [...new Set(parsed.data.receipt_ids)]
+        : [parsed.data.receipt_id!];
 
-    // Receipt-pin conflict: another bill already owns this receipt.
-    const pinnedElsewhere = await knex.raw(
-      `SELECT id FROM vendor_bill
-        WHERE purchase_order_receipt_id = ? AND id <> ? AND deleted_at IS NULL
-        LIMIT 1`,
-      [receiptId, bill.id]
-    );
-    if (pinnedElsewhere.rows.length > 0) {
-      return res.status(409).json({
-        error: "Another vendor bill is already pinned to this receipt",
-        code: "receipt_already_pinned",
-      });
+    // Validate the whole set in one shot (existence, same PO, applied/synced,
+    // not already bound to a DIFFERENT bill — dual-read against both the new
+    // FK and the legacy pointer). A receipt already bound to THIS bill passes
+    // through as a no-op.
+    const validation = await validateReceiptsForBinding(knex, {
+      purchaseOrderId: bill.purchase_order_id!,
+      billId: id,
+      receiptIds: requestedReceiptIds,
+    });
+    if (!validation.ok) {
+      return res.status(validation.status).json(validation.body);
     }
-    pinReceiptId = receiptId;
+    pinReceiptIds = requestedReceiptIds;
+    pinReceiptId = requestedReceiptIds[0] ?? null;
 
-    const linesResult = await knex.raw(
-      `SELECT
-         porl.purchase_order_line_id,
-         porl.product_variant_id,
-         MAX(porl.sku_snapshot)         AS sku,
-         MAX(porl.description_snapshot) AS description,
-         COALESCE(SUM(porl.qty_received_now), 0)::int AS qty,
-         COALESCE(
-           MAX(porl.unit_cost_cents_override),
-           MAX(pol.unit_cost_cents),
-           0
-         )::int AS unit_cost_cents,
-         (array_agg(pv.metadata) FILTER (WHERE pv.metadata IS NOT NULL))[1] AS metadata
-       FROM purchase_order_receipt_line porl
-       JOIN purchase_order_line pol ON pol.id = porl.purchase_order_line_id
-       LEFT JOIN product_variant pv
-         ON pv.id = porl.product_variant_id AND pv.deleted_at IS NULL
-       WHERE porl.purchase_order_receipt_id = ? AND porl.deleted_at IS NULL
-       GROUP BY porl.purchase_order_line_id, porl.product_variant_id
-       HAVING COALESCE(SUM(porl.qty_received_now), 0) > 0`,
-      [receiptId]
-    );
-    sourceLines = linesResult.rows as SourceLine[];
+    // UNION across the set: SUM(qty_received_now) per purchase_order_line_id,
+    // grouped across every receipt in `requestedReceiptIds` (was scoped to a
+    // single receipt id before D6). Unit cost resolution is unchanged. Shared
+    // with POST /admin/vendor-bills/from-receipts via
+    // lib/purchase-orders/vendor-bill-receipts.ts so the two paths never
+    // drift on how a receipt set maps to bill lines.
+    sourceLines = await resolveReceiptLineUnion(knex, requestedReceiptIds);
   } else {
     const linesResult = await knex.raw(
       `SELECT
@@ -240,6 +236,7 @@ export async function POST(
       preview: true,
       source: parsed.data.source,
       receipt_pinned: pinReceiptId,
+      receipt_pinned_ids: pinReceiptIds,
       lines: sourceLines.map((s) => ({
         purchase_order_line_id: s.purchase_order_line_id,
         product_variant_id: s.product_variant_id,
@@ -356,14 +353,23 @@ export async function POST(
       }
     }
 
-    // Pin to the receipt (receipt source only).
-    if (pinReceiptId) {
-      await db.raw(
-        `UPDATE vendor_bill
-            SET purchase_order_receipt_id = ?, updated_at = NOW()
-          WHERE id = ? AND deleted_at IS NULL`,
-        [pinReceiptId, id]
+    // D6 — bind every receipt in the resolved set (dual-write: new FK +
+    // legacy mirror recomputed from the live bound set). Additive only — a
+    // receipt already bound to this bill is untouched; nothing is unbound
+    // here (that reconciliation lives in the PATCH route's `receipt_ids`).
+    if (pinReceiptIds.length > 0) {
+      const alreadyBound = new Set(
+        await resolveBoundReceiptIds(db, id, bill.purchase_order_receipt_id)
       );
+      const toBind = pinReceiptIds.filter((rid) => !alreadyBound.has(rid));
+      if (toBind.length > 0) {
+        await db.raw(
+          `UPDATE purchase_order_receipt SET vendor_bill_id = ?, updated_at = NOW()
+            WHERE id = ANY(?) AND deleted_at IS NULL`,
+          [id, toBind]
+        );
+      }
+      await syncPrimaryReceiptPointer(db, id);
     }
 
     // Reconcile China-Finance projection (delta/allocation-aware, row-locked).
@@ -387,6 +393,7 @@ export async function POST(
     vendor_bill_id: id,
     source: parsed.data.source,
     receipt_pinned: pinReceiptId,
+    receipt_pinned_ids: pinReceiptIds,
     diff: { added, updated, removed },
   });
 }

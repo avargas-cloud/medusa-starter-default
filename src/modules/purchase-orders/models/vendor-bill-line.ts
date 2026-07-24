@@ -49,4 +49,14 @@ export const VendorBillLine = model.define("vendor_bill_line", {
   freight_per_unit_cents: model.number().default(0),
   tariff_per_unit_cents: model.number().default(0),
   landed_unit_cost_cents: model.number().default(0),
+
+  // QuickBooks sync (Phase 0 — dormant). See docs/VENDOR_BILL_QB_SYNC_PLAN.md §3.2.
+  qb_txn_line_id: model.text().nullable(), // BillLineRet.TxnLineID, needed for BillMod
+
+  // Distinguishes a freight ExpenseLine from PO item lines and existing
+  // qb_account lines. Nullable — existing rows infer their kind from
+  // line_type until backfilled.
+  line_kind: model.text().nullable(), // 'po_item' | 'freight_charge' | 'qb_account'
+  freight_account_list_id: model.text().nullable(), // QB expense account for a freight charge line
+  amount_cents: model.number().nullable(), // freight charge amount (NOT allocated to landed cost)
 });

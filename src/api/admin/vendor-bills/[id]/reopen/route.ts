@@ -129,6 +129,35 @@ export async function POST(
     });
   }
 
+  // D6 blocker: a bill confirmed against MULTIPLE receipts writes one cost-log
+  // row PER RECEIPT per variant (chronological AVCO replay — see the confirm
+  // route). This reversal loop below undoes ONE row at a time against a
+  // single LIVE inventory read that never changes between iterations (reopen
+  // never touches stock) — correct for exactly one row per variant, but NOT
+  // order-independent for N>1 rows on the same variant (each step should
+  // really use the qty_on_hand snapshot the replay actually produced at that
+  // point, not a single live read reused across steps). Refuse rather than
+  // silently apply a reversal whose correctness hasn't been proven for the
+  // multi-row case — a real Unlock/multi-step-reversal is future work.
+  const multiRowVariants = new Map<string, number>();
+  for (const log of costLogs) {
+    multiRowVariants.set(
+      log.product_variant_id,
+      (multiRowVariants.get(log.product_variant_id) ?? 0) + 1
+    );
+  }
+  const unsupportedVariants = [...multiRowVariants.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([variantId]) => variantId);
+  if (unsupportedVariants.length > 0) {
+    return res.status(409).json({
+      error:
+        "This bill was confirmed against multiple receipts, which recorded more than one cost-log step for at least one product. Reopening a multi-receipt confirm isn't supported yet — void/correct via the receipts directly, or ask engineering for a manual reversal.",
+      code: "multi_receipt_avco_reversal_unsupported",
+      variants: unsupportedVariants,
+    });
+  }
+
   // C6 blocker: a LATER active confirm on any of the same variants would make
   // the AVCO replay inconsistent. Refuse and name the variants.
   const laterResult = await knex.raw(

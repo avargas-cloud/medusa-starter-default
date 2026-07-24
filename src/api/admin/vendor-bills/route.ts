@@ -61,8 +61,11 @@ interface VendorBillListRow {
   bill_type: string;
   reference_id: string | null;
   document_date: string | null;
+  due_date: string | null;
   status: string;
   confirmed_at: string | null;
+  qb_txn_id: string | null;
+  qb_source: string | null;
   commission_mode: string;
   commission_rate_bps: number;
   commission_amount_cents: number;
@@ -161,8 +164,11 @@ export async function GET(
        vb.bill_type,
        vb.reference_id,
        vb.document_date,
+       vb.due_date,
        vb.status,
        vb.confirmed_at,
+       vb.qb_txn_id,
+       vb.qb_source,
        vb.commission_mode,
        vb.commission_rate_bps,
        vb.commission_amount_cents,

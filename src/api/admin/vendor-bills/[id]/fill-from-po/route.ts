@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import { getActorUserId, UnauthenticatedError } from "../../../purchase-orders/_lib/auth";
 import { zodErrorToBody } from "../../../purchase-orders/_lib/format";
+import { syncPrimaryReceiptPointer } from "../../../../../lib/purchase-orders/vendor-bill-receipts";
 
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -127,25 +128,15 @@ export async function POST(
     });
   }
 
-  // Anchor to the first applied/synced receipt NOT already pinned to another
-  // bill (Option A + UNIQUE preflight). If every receipt is already pinned the
-  // bill stays unpinned (a PO-ordered planning bill).
-  const receiptResult = await knex.raw(
-    `SELECT por.id
-     FROM purchase_order_receipt por
-     WHERE por.purchase_order_id = ?
-       AND por.status IN ('applied','synced')
-       AND por.deleted_at IS NULL
-       AND NOT EXISTS (
-         SELECT 1 FROM vendor_bill vb
-         WHERE vb.purchase_order_receipt_id = por.id
-           AND vb.deleted_at IS NULL
-       )
-     ORDER BY por.received_at ASC
-     LIMIT 1`,
-    [parsed.data.purchase_order_id]
-  );
-  const anchorReceipt = (receiptResult.rows[0] ?? null) as { id: string } | null;
+  // D8(a): "Fill from PO" builds a PO-ordered DRAFT and binds NO receipts.
+  // (It used to auto-pin an "anchor" receipt — an Option A relic. Under the
+  // context-aware D6 model that accidental binding made the Rcv'd column and
+  // the drift engine compare the WHOLE-PO bill against ONE receipt: a bill
+  // claiming the full order showed "claims $X more than RCP-####" the moment
+  // it was created — seen live on VB-1068. Receipts now enter the picture at
+  // confirm time — which resolves the PO's applied receipts and requires the
+  // billed quantities to be fully received — or explicitly via "Fill from
+  // Receipts" / the receipt chips.)
 
   const poLinesResult = await knex.raw(
     `WITH po_lines AS (
@@ -235,19 +226,20 @@ export async function POST(
   await knex.raw(
     `UPDATE vendor_bill
      SET purchase_order_id = ?,
-         purchase_order_receipt_id = ?,
          vendor_name_snapshot = COALESCE(vendor_name_snapshot, ?),
          vendor_qb_list_id_snapshot = COALESCE(vendor_qb_list_id_snapshot, ?),
          updated_at = NOW()
      WHERE id = ? AND deleted_at IS NULL`,
     [
       parsed.data.purchase_order_id,
-      anchorReceipt?.id ?? null,
       po.vendor_name_snapshot,
       po.vendor_qb_list_id_snapshot,
       id,
     ]
   );
+  // Keep the legacy mirror consistent with whatever is (not) bound — for a
+  // fresh fill-from-po bill this simply leaves both sides NULL (no receipts).
+  await syncPrimaryReceiptPointer(knex, id);
 
   await knex.raw(
     `UPDATE vendor_bill linked

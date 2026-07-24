@@ -6,8 +6,16 @@
  *   2. Assigns the sequential VB-XXXX number (drafts have no number until confirm)
  *   3. Updates product_variant.metadata.avg_landed_cost_cents using QB-style AVCO:
  *        new_avg = (Q_before × old_avg + received_qty × landed_cost) / Q_on_hand
- *      where Q_before = Q_on_hand - received_qty (inventory before this receipt)
- *   4. Writes one vendor_bill_cost_log row per variant for audit + cancel reversal
+ *      where Q_before = Q_on_hand - received_qty (inventory before that receipt)
+ *   4. Writes one vendor_bill_cost_log row PER RECEIPT for audit + cancel reversal
+ *
+ * D6 (docs/VENDOR_BILL_QB_SYNC_PLAN.md §3.0 + §5) — a bill may cover MULTIPLE
+ * receipts. Pass `receipt_ids: string[]` in the body to confirm against an
+ * explicit set (validated + auto-bound); the URL `receiptId` must be a member.
+ * Without it, the bill's already-bound receipts are used (dual-read), falling
+ * back to the single URL receiptId for the original single-receipt flow. AVCO
+ * replays each variant chronologically across the set (oldest receipt first)
+ * instead of a single aggregate step — see the AVCO section below.
  */
 
 import type {
@@ -18,6 +26,16 @@ import type {
 import { getActorUserId, UnauthenticatedError } from "../../../../../_lib/auth";
 import { getPurchaseOrdersService } from "../../../../../_lib/service-resolver";
 import { computeLandedLines } from "../../../../../../../../lib/purchase-orders/landed-allocation";
+import {
+  applyReceiptToAvco,
+  resolveAvgCostSeedCents,
+} from "../../../../../../../../lib/cost/avco";
+import {
+  resolveBoundReceiptIds,
+  syncPrimaryReceiptPointer,
+  validateReceiptsForBinding,
+} from "../../../../../../../../lib/purchase-orders/vendor-bill-receipts";
+import { enqueueQbVendorBillAdd } from "../../../../../../../../lib/purchase-orders/qb-vendor-bill-enqueue";
 
 // ── Typed shapes ─────────────────────────────────────────────────────────────
 
@@ -25,6 +43,7 @@ interface VendorBillRow {
   id: string;
   number: string | null;
   status: string;
+  reference_id: string | null;
   purchase_order_id: string;
   purchase_order_receipt_id: string;
   commission_mode: string;
@@ -87,6 +106,10 @@ export async function POST(
 
   const service = getPurchaseOrdersService(req);
   const knex = resolveKnex(req);
+  // Used by the AVCO step to surface a negative-inventory settlement: that
+  // true-up is a real COGS correction that deliberately does NOT go into the
+  // average, so it must never be silent.
+  const logger = req.scope.resolve("logger") as { warn: (message: string) => void };
 
   // 1. Validate receipt belongs to PO
   const receipt = (await service
@@ -137,10 +160,25 @@ export async function POST(
   //    EXPLICITLY: prefer the caller's vendor_bill_id, else the bill pinned to
   //    THIS receipt. The legacy "earliest unpinned PO bill" fallback is removed —
   //    with multiple regular bills per PO it could confirm the wrong one.
+  //
+  //    D6 dual-read: a bill can also be found by the NEW receipt-side FK, not
+  //    just the legacy `purchase_order_receipt_id` mirror — e.g. confirming via
+  //    a receipt that was bound to this bill as its 2nd/3rd receipt (so it is
+  //    NOT the bill's legacy "primary" pointer).
   const explicitBillId =
     typeof (req.body as { vendor_bill_id?: unknown })?.vendor_bill_id === "string"
       ? (req.body as { vendor_bill_id: string }).vendor_bill_id
       : null;
+  // Normalized to `null` when absent OR an explicit empty array — an empty
+  // set must fall through to the same "nothing given" branches below, not a
+  // half-handled state where the legacy auto-pin is skipped but nothing else
+  // binds the receipt either.
+  const rawBodyReceiptIds = Array.isArray((req.body as { receipt_ids?: unknown })?.receipt_ids)
+    ? ((req.body as { receipt_ids: unknown[] }).receipt_ids.filter(
+        (v): v is string => typeof v === "string" && v.length > 0
+      ) as string[])
+    : null;
+  const bodyReceiptIds = rawBodyReceiptIds && rawBodyReceiptIds.length > 0 ? rawBodyReceiptIds : null;
 
   const billResult = explicitBillId
     ? await knex.raw(
@@ -150,19 +188,32 @@ export async function POST(
            AND deleted_at IS NULL
            AND bill_type = 'regular'
            AND purchase_order_id = ?
-           AND (purchase_order_receipt_id = ? OR purchase_order_receipt_id IS NULL)
+           AND (
+             purchase_order_receipt_id = ?
+             OR purchase_order_receipt_id IS NULL
+             OR EXISTS (
+               SELECT 1 FROM purchase_order_receipt bpor
+               WHERE bpor.id = ? AND bpor.vendor_bill_id = vendor_bill.id
+             )
+           )
          LIMIT 1`,
-        [explicitBillId, poId, receiptId]
+        [explicitBillId, poId, receiptId, receiptId]
       )
     : await knex.raw(
         `SELECT *
          FROM vendor_bill
          WHERE deleted_at IS NULL
            AND bill_type = 'regular'
-           AND purchase_order_receipt_id = ?
+           AND (
+             purchase_order_receipt_id = ?
+             OR EXISTS (
+               SELECT 1 FROM purchase_order_receipt bpor
+               WHERE bpor.id = ? AND bpor.vendor_bill_id = vendor_bill.id
+             )
+           )
          ORDER BY created_at ASC
          LIMIT 1`,
-        [receiptId]
+        [receiptId, receiptId]
       );
 
   const bill = (billResult.rows[0] ?? null) as VendorBillRow | null;
@@ -178,27 +229,156 @@ export async function POST(
       code: "not_draft",
     });
   }
-  if (!bill.purchase_order_receipt_id) {
-    // Pin the explicit bill to this receipt — preflight the UNIQUE(receipt) index.
+  // Vendor Invoice Reference is MANDATORY at confirm (owner 2026-07-23): it
+  // becomes the QuickBooks Bill "Ref No." — the accountant reconciles and ages
+  // payables by it, and the QB pipeline's duplicate existence-check matches on
+  // it. Drafts may exist without one (proforma, D7); confirming may not.
+  if (!bill.reference_id || !bill.reference_id.trim()) {
+    return res.status(409).json({
+      error:
+        "Vendor invoice reference is required before confirming — it becomes the Bill's Ref No. in QuickBooks",
+      code: "vendor_reference_required",
+    });
+  }
+
+  // 2b. Resolve the RECEIPT SET this confirm covers (D6):
+  //   - body.receipt_ids (validated + auto-bound, additive only — never
+  //     unbinds; that's the PATCH route's job) if provided; the URL receiptId
+  //     must be a member.
+  //   - else the bill's already-bound receipts (dual-read).
+  //   - else (nothing bound yet, no receipt_ids given) the legacy single
+  //     receiptId from the URL — original single-receipt behaviour, pinned
+  //     below exactly as before.
+  let receiptIdSet: string[];
+  if (bodyReceiptIds && bodyReceiptIds.length > 0) {
+    if (!bodyReceiptIds.includes(receiptId)) {
+      return res.status(400).json({
+        error: "receipt_ids must include the receipt referenced in the URL",
+        code: "receipt_id_not_in_set",
+      });
+    }
+    const validation = await validateReceiptsForBinding(knex, {
+      purchaseOrderId: poId,
+      billId: bill.id,
+      receiptIds: bodyReceiptIds,
+    });
+    if (!validation.ok) {
+      return res.status(validation.status).json(validation.body);
+    }
+    const alreadyBound = new Set(
+      await resolveBoundReceiptIds(knex, bill.id, bill.purchase_order_receipt_id)
+    );
+    const toBind = bodyReceiptIds.filter((rid) => !alreadyBound.has(rid));
+    if (toBind.length > 0) {
+      await knex.raw(
+        `UPDATE purchase_order_receipt SET vendor_bill_id = ?, updated_at = NOW()
+          WHERE id = ANY(?) AND deleted_at IS NULL`,
+        [bill.id, toBind]
+      );
+      await syncPrimaryReceiptPointer(knex, bill.id);
+      const refreshed = await knex.raw(
+        `SELECT purchase_order_receipt_id FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
+        [bill.id]
+      );
+      bill.purchase_order_receipt_id =
+        (refreshed.rows[0] as { purchase_order_receipt_id: string | null } | undefined)
+          ?.purchase_order_receipt_id ?? bill.purchase_order_receipt_id;
+    }
+    receiptIdSet = bodyReceiptIds;
+  } else {
+    const bound = await resolveBoundReceiptIds(knex, bill.id, bill.purchase_order_receipt_id);
+    if (bound.length > 0) {
+      receiptIdSet = bound;
+    } else {
+      // Receipt-less bill (a "Fill from PO" draft, D8a): the whole-order bill
+      // confirms against ALL of the PO's applied receipts not owned by another
+      // bill — NOT just the URL's single receipt (a partial receipt would fail
+      // the qty-match against full-PO quantities; seen on VB-1068). The URL
+      // receiptId is required to be in that set (sanity: same PO, applied).
+      const allUnbound = await knex.raw(
+        `SELECT por.id
+           FROM purchase_order_receipt por
+          WHERE por.purchase_order_id = ?
+            AND por.status IN ('applied','synced')
+            AND por.deleted_at IS NULL
+            AND (por.vendor_bill_id IS NULL OR por.vendor_bill_id = ?)
+            AND NOT EXISTS (
+              SELECT 1 FROM vendor_bill vb
+              WHERE vb.purchase_order_receipt_id = por.id
+                AND vb.id <> ? AND vb.deleted_at IS NULL
+            )
+          ORDER BY por.received_at ASC, por.seq ASC`,
+        [poId, bill.id, bill.id]
+      );
+      const unboundIds = (allUnbound.rows as Array<{ id: string }>).map((r) => r.id);
+      receiptIdSet = unboundIds.includes(receiptId)
+        ? unboundIds
+        : [receiptId];
+      if (receiptIdSet.length > 1) {
+        // Bind the resolved set so the bill's receipts are explicit from here
+        // on (chips, drift, Rcv'd all read the binding).
+        await knex.raw(
+          `UPDATE purchase_order_receipt SET vendor_bill_id = ?, updated_at = NOW()
+            WHERE id = ANY(?) AND deleted_at IS NULL`,
+          [bill.id, receiptIdSet]
+        );
+        await syncPrimaryReceiptPointer(knex, bill.id);
+        const refreshedPin = await knex.raw(
+          `SELECT purchase_order_receipt_id FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
+          [bill.id]
+        );
+        bill.purchase_order_receipt_id =
+          (refreshedPin.rows[0] as { purchase_order_receipt_id: string | null } | undefined)
+            ?.purchase_order_receipt_id ?? bill.purchase_order_receipt_id;
+      }
+    }
+  }
+
+  if (!bodyReceiptIds && !bill.purchase_order_receipt_id) {
+    // Legacy single-receipt behaviour, unchanged: pin the explicit bill to
+    // this receipt — preflight the UNIQUE(receipt) index (legacy column) AND
+    // the new per-receipt FK (dual-read/dual-write).
     const pinnedElsewhere = await knex.raw(
       `SELECT id FROM vendor_bill
        WHERE purchase_order_receipt_id = ? AND id <> ? AND deleted_at IS NULL
        LIMIT 1`,
       [receiptId, bill.id]
     );
-    if (pinnedElsewhere.rows.length > 0) {
+    const fkPinnedElsewhere = await knex.raw(
+      `SELECT vendor_bill_id FROM purchase_order_receipt
+       WHERE id = ? AND vendor_bill_id IS NOT NULL AND vendor_bill_id <> ? AND deleted_at IS NULL`,
+      [receiptId, bill.id]
+    );
+    if (pinnedElsewhere.rows.length > 0 || fkPinnedElsewhere.rows.length > 0) {
       return res.status(409).json({
         error: "Another vendor bill is already pinned to this receipt",
         code: "receipt_already_pinned",
       });
     }
     await knex.raw(
-      `UPDATE vendor_bill
-       SET purchase_order_receipt_id = ?, updated_at = NOW()
+      `UPDATE purchase_order_receipt SET vendor_bill_id = ?, updated_at = NOW()
        WHERE id = ? AND deleted_at IS NULL`,
-      [receiptId, bill.id]
+      [bill.id, receiptId]
     );
+    await syncPrimaryReceiptPointer(knex, bill.id);
     bill.purchase_order_receipt_id = receiptId;
+    receiptIdSet = [receiptId];
+  }
+
+  // 2c. Every receipt in the resolved set must be applied/synced (D6 — was
+  // previously checked only for the single URL receiptId).
+  const setStatusResult = await knex.raw(
+    `SELECT id, status FROM purchase_order_receipt
+      WHERE id = ANY(?) AND deleted_at IS NULL`,
+    [receiptIdSet]
+  );
+  const setStatusRows = setStatusResult.rows as Array<{ id: string; status: string }>;
+  const notApplied = setStatusRows.find((r) => r.status !== "applied" && r.status !== "synced");
+  if (notApplied || setStatusRows.length !== receiptIdSet.length) {
+    return res.status(422).json({
+      error: "All receipts bound to this vendor bill must be applied before confirming",
+      code: "receipt_not_applied",
+    });
   }
 
   // 3. Fetch vendor bill lines
@@ -214,12 +394,13 @@ export async function POST(
     });
   }
 
-  // 3b. AVCO safety: the bill's product lines MUST mirror THIS receipt's
-  //     received lines by purchase_order_line_id AND quantity. Confirm uses the
-  //     bill-line qty as the AVCO numerator but receipt snapshots as the
-  //     denominator — a divergence (e.g. a PO-ordered-sourced bill confirmed
-  //     against a partial receipt) corrupts landed cost. Reconcile via
-  //     "Update from Receipt" before confirming.
+  // 3b. AVCO safety: the bill's product lines MUST mirror the received lines
+  //     ACROSS THE WHOLE RECEIPT SET (D6 — was a single receipt) by
+  //     purchase_order_line_id AND quantity. Confirm uses the bill-line qty as
+  //     the AVCO numerator but the receipts' snapshots as the denominator — a
+  //     divergence (e.g. a PO-ordered-sourced bill confirmed against a partial
+  //     receipt) corrupts landed cost. Reconcile via "Update from Receipt(s)"
+  //     before confirming.
   const productLines = lines.filter(
     (l) => (l.line_type ?? "product") === "product"
   );
@@ -227,9 +408,9 @@ export async function POST(
     `SELECT purchase_order_line_id,
             COALESCE(SUM(qty_received_now), 0)::int AS qty
        FROM purchase_order_receipt_line
-      WHERE purchase_order_receipt_id = ? AND deleted_at IS NULL
+      WHERE purchase_order_receipt_id = ANY(?) AND deleted_at IS NULL
       GROUP BY purchase_order_line_id`,
-    [receiptId]
+    [receiptIdSet]
   )) as { rows: Array<{ purchase_order_line_id: string; qty: number }> };
 
   const billByPol = new Map<string, number>();
@@ -264,8 +445,14 @@ export async function POST(
     });
   }
 
-  // 4. Fetch CBM from product_variant.metadata for each unique variant
-  const uniqueVariantIds = [...new Set(lines.map((l) => l.product_variant_id))];
+  // 4. Fetch CBM from product_variant.metadata for each unique variant.
+  //    Scoped to productLines — freight charge lines (line_type='qb_account',
+  //    line_kind='freight_charge') carry no product_variant_id and must never
+  //    enter the landed-cost allocation below (§7 of the QB sync plan: a
+  //    freight charge is a flat non-landed ExpenseLine, not a cost pool input).
+  const uniqueVariantIds = [
+    ...new Set(productLines.map((l) => l.product_variant_id)),
+  ];
 
   const cbmByVariantId = new Map<string, number | null>();
   await Promise.all(
@@ -319,11 +506,11 @@ export async function POST(
   // rounding drift, no manual "plug" line on the QuickBooks bill. Pools are
   // gated exactly as before: commission only when a service bill is linked
   // (serviceBillTotalCents=0 otherwise), freight/tariff only when included.
-  const cbmPerLine = lines.map(
+  const cbmPerLine = productLines.map(
     (line) => cbmByVariantId.get(line.product_variant_id) ?? null
   );
   const landed = computeLandedLines(
-    lines.map((line, i) => ({
+    productLines.map((line, i) => ({
       qty: line.qty,
       unit_cost_cents: line.unit_cost_cents,
       cbm_per_unit: cbmPerLine[i] ?? null,
@@ -335,7 +522,7 @@ export async function POST(
     }
   );
 
-  const lineUpdates: LineUpdate[] = lines.map((line, i) => {
+  const lineUpdates: LineUpdate[] = productLines.map((line, i) => {
     const r = landed.lines[i]!;
     return {
       id: line.id,
@@ -394,15 +581,30 @@ export async function POST(
 
   // 10. AVCO: update avg_landed_cost_cents per variant using QB weighted-average formula
   //     new_avg = (Q_before × old_avg + received_qty × batch_landed) / Q_on_hand
-  //     where Q_before = Q_on_hand - received_qty (inventory before this receipt)
+  //     where Q_before = Q_on_hand - received_qty (inventory before that receipt)
+  //
+  //     D6 — CHRONOLOGICAL REPLAY (plan §5): summing q_before across several
+  //     receipts double-counts pre-existing/inter-receipt stock, so when this
+  //     bill covers MULTIPLE receipts each variant is replayed one receipt at
+  //     a time, oldest first, chaining the running average:
+  //       avg_i = (q_before_i × avg_{i-1} + qty_i × landed_unit) / (q_before_i + qty_i)
+  //     using EACH receipt's own captured qty_on_hand_at_receive as q_before_i.
+  //     Landed unit cost is uniform across the bill's receipts (one invoice —
+  //     the bill has ONE set of lines summed across the set), so only the
+  //     quantities are replayed step by step. One vendor_bill_cost_log row is
+  //     written PER RECEIPT (not per variant) so reversal/audit stays granular.
+  //     For a single-receipt bill this is byte-identical to the old formula
+  //     (the loop below runs exactly once).
 
   // Aggregate by variant: totalLanded and totalQty across all lines for this bill
+  // (bill lines are already summed across the receipt set — see qty-match guard
+  // above — so this landed-per-unit figure is uniform for the whole replay).
   const landedByVariant = new Map<
     string,
     { totalLanded: number; totalQty: number }
   >();
   for (const update of lineUpdates) {
-    const line = lines.find((l) => l.id === update.id)!;
+    const line = productLines.find((l) => l.id === update.id)!;
     const prev = landedByVariant.get(line.product_variant_id) ?? {
       totalLanded: 0,
       totalQty: 0,
@@ -413,35 +615,79 @@ export async function POST(
     });
   }
 
+  // Chronological order (oldest first) for the whole receipt set — shared
+  // across every variant's replay below.
+  const receiptOrderResult = await knex.raw(
+    `SELECT id, received_at, seq FROM purchase_order_receipt
+      WHERE id = ANY(?) AND deleted_at IS NULL`,
+    [receiptIdSet]
+  );
+  const receiptOrderById = new Map(
+    (
+      receiptOrderResult.rows as Array<{
+        id: string;
+        received_at: string;
+        seq: number;
+      }>
+    ).map((r) => [r.id, r])
+  );
+  const chronologicalReceiptIds = [...receiptIdSet].sort((a, b) => {
+    const ra = receiptOrderById.get(a);
+    const rb = receiptOrderById.get(b);
+    const ta = ra ? new Date(ra.received_at).getTime() : 0;
+    const tb = rb ? new Date(rb.received_at).getTime() : 0;
+    if (ta !== tb) return ta - tb;
+    return (ra?.seq ?? 0) - (rb?.seq ?? 0);
+  });
+
   await Promise.all(
     [...landedByVariant.entries()].map(async ([variantId, { totalLanded, totalQty: receivedQty }]) => {
       const batchLandedPerUnit = receivedQty > 0 ? totalLanded / receivedQty : 0;
 
-      // Read qty_on_hand captured at receive time (per-location, same scope as receipt).
-      // For pre-fix receipts the column is NULL — fall back to live cross-location sum.
+      // Per-receipt qty_on_hand_at_receive / qty_received_now for THIS variant,
+      // across every receipt in the set. Pre-fix receipts (rare, historical)
+      // have no capture — same live-inventory fallback as before, applied
+      // per-step (see route docstring / project_qb_editsequence... memory for
+      // why the capture-fix predates D6: every receipt eligible for a
+      // multi-receipt bill today already carries the capture).
       const stockRes = await knex.raw(
         `SELECT
-           COALESCE(SUM(rl.qty_on_hand_at_receive)::int, 0) AS q_before,
-           COALESCE(SUM(rl.qty_received_now)::int, 0)       AS q_received,
-           BOOL_AND(rl.qty_on_hand_at_receive IS NOT NULL)  AS has_capture
+           rl.purchase_order_receipt_id                     AS receipt_id,
+           COALESCE(SUM(rl.qty_on_hand_at_receive)::int, 0)  AS q_before,
+           COALESCE(SUM(rl.qty_received_now)::int, 0)        AS q_received,
+           BOOL_AND(rl.qty_on_hand_at_receive IS NOT NULL)   AS has_capture
          FROM purchase_order_receipt_line rl
-         WHERE rl.purchase_order_receipt_id = ?
+         WHERE rl.purchase_order_receipt_id = ANY(?)
            AND rl.product_variant_id = ?
-           AND rl.deleted_at IS NULL`,
-        [receiptId, variantId]
+           AND rl.deleted_at IS NULL
+         GROUP BY rl.purchase_order_receipt_id`,
+        [receiptIdSet, variantId]
       );
-      const stockRow = stockRes.rows[0] as
-        | { q_before: number; q_received: number; has_capture: boolean }
-        | undefined;
+      const stockByReceipt = new Map(
+        (
+          stockRes.rows as Array<{
+            receipt_id: string;
+            q_before: number;
+            q_received: number;
+            has_capture: boolean;
+          }>
+        ).map((r) => [r.receipt_id, r])
+      );
 
-      let qBefore: number;
-      let qOnHand: number;
-      if (stockRow?.has_capture) {
-        // Post-fix path: use the historical snapshot
-        qBefore = stockRow.q_before;
-        qOnHand = qBefore + stockRow.q_received;
-      } else {
-        // Pre-fix fallback: read current inventory (old behaviour)
+      const contributingReceiptIds = chronologicalReceiptIds.filter((rid) => {
+        const r = stockByReceipt.get(rid);
+        return r && r.q_received > 0;
+      });
+      if (contributingReceiptIds.length === 0) return;
+
+      // Live-inventory fallback (pre-capture-fix legacy data only) — read once
+      // per variant and reused for any step lacking a capture, same formula
+      // the single-receipt path always used.
+      let liveQty: number | null = null;
+      const needsLiveFallback = contributingReceiptIds.some(
+        (rid) => !stockByReceipt.get(rid)?.has_capture
+      );
+      if (needsLiveFallback) {
         const fallbackRes = await knex.raw(
           `SELECT COALESCE(SUM(il.stocked_quantity)::int, 0) AS qty
            FROM inventory_level il
@@ -449,27 +695,82 @@ export async function POST(
            WHERE pvii.variant_id = ? AND il.deleted_at IS NULL`,
           [variantId]
         );
-        const currentQty =
-          (fallbackRes.rows[0] as { qty: number } | undefined)?.qty ?? 0;
-        qOnHand = currentQty;
-        qBefore = Math.max(0, qOnHand - receivedQty);
+        liveQty = (fallbackRes.rows[0] as { qty: number } | undefined)?.qty ?? 0;
       }
 
-      // Read current avg (prev avg before this bill)
+      // avg_0 = current stored average (before this bill's replay).
       const metaResult = await knex.raw(
         `SELECT metadata FROM product_variant WHERE id = ? AND deleted_at IS NULL`,
         [variantId]
       );
       const meta = (metaResult.rows[0] as VariantMetadataRow | undefined)?.metadata;
-      const prevAvg = Number(meta?.avg_landed_cost_cents ?? 0) || 0;
+      // Seed the running average from the canonical cost, in descending order
+      // of authority (landed state -> average_cost -> QB average -> purchase).
+      //
+      // This used to read ONLY `avg_landed_cost_cents` and fall back to 0. That
+      // key is NULL on a variant's FIRST bill, so every pre-existing unit on
+      // the shelf entered the weighted average valued at nothing and collapsed
+      // the result: 14 units at $0.00 plus 3 at $14.14 produced $2.50 when
+      // QuickBooks said the item was worth $23.55. Nine China SKUs ended up
+      // carrying an average cost BELOW their own factory cost that way.
+      const { seedCents } = resolveAvgCostSeedCents(
+        meta as Record<string, unknown> | null | undefined
+      );
+      let runningAvg: number | null = seedCents;
 
-      // QB-style AVCO: new_avg = (Q_before × old_avg + received × landed) / Q_on_hand
-      const newAvg =
-        qOnHand > 0
-          ? (qBefore * prevAvg + receivedQty * batchLandedPerUnit) / qOnHand
-          : batchLandedPerUnit;
+      // Chronological AVCO replay — one step per contributing receipt.
+      for (const rid of contributingReceiptIds) {
+        const r = stockByReceipt.get(rid)!;
+        const qtyThisReceipt = r.q_received;
+        const qBeforeThisReceipt = r.has_capture
+          ? r.q_before
+          : (liveQty ?? 0) - qtyThisReceipt;
 
-      // Persist new running average
+        // The engine owns the arithmetic — including negative on-hand, where a
+        // receipt first SETTLES the oversold units (retro-pricing what was
+        // already issued to COGS) and only the remainder joins the average.
+        // Feeding a negative quantity straight into the formula shrank the
+        // denominator and inflated the cost 3.3x on ESP-SFA50W0830.
+        const step = applyReceiptToAvco(runningAvg, {
+          quantity: qtyThisReceipt,
+          landedUnitCostCents: batchLandedPerUnit,
+          quantityOnHandBefore: qBeforeThisReceipt,
+        });
+
+        if (step.cogsTrueUpCents !== 0) {
+          logger.warn(
+            `[vendor-bill ${bill.id}] variant ${variantId}: settled ` +
+              `${step.negativeSettledQuantity} oversold units against this receipt; ` +
+              `COGS true-up of ${(step.cogsTrueUpCents / 100).toFixed(2)} is NOT in the average ` +
+              `and needs an accounting entry.`
+          );
+        }
+
+        // Write cost log row — used for cancel reversal and audit trail. One
+        // row per receipt (D6), not one per variant.
+        await knex.raw(
+          `INSERT INTO vendor_bill_cost_log
+             (vendor_bill_id, product_variant_id, received_qty, landed_unit_cost_cents,
+              prev_qty_on_hand, prev_avg_cost_cents, new_avg_cost_cents)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            bill.id,
+            variantId,
+            qtyThisReceipt,
+            batchLandedPerUnit,
+            qBeforeThisReceipt,
+            step.previousAvgCostCents,
+            step.newAvgCostCents,
+          ]
+        );
+
+        runningAvg = step.newAvgCostCents;
+      }
+
+      // Persist the FINAL running average once per variant. A null here means
+      // no receipt contributed (nothing to average) — writing it would blank a
+      // perfectly good cost, so skip instead.
+      if (runningAvg === null) return;
       await knex.raw(
         `UPDATE product_variant
          SET metadata = COALESCE(metadata, '{}'::jsonb)
@@ -480,21 +781,30 @@ export async function POST(
                                  'average_cost_source', 'landed'),
              updated_at = NOW()
          WHERE id = ?`,
-        [newAvg, newAvg, variantId]
-      );
-
-      // Write cost log row — used for cancel reversal and audit trail
-      await knex.raw(
-        `INSERT INTO vendor_bill_cost_log
-           (vendor_bill_id, product_variant_id, received_qty, landed_unit_cost_cents,
-            prev_qty_on_hand, prev_avg_cost_cents, new_avg_cost_cents)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [bill.id, variantId, receivedQty, batchLandedPerUnit, qBefore, prevAvg, newAvg]
+        [runningAvg, runningAvg, variantId]
       );
     })
   );
 
-  // 11. Return confirmed bill with updated lines
+  // 11. Phase 1.1 — enqueue the QuickBooks BillAdd (plan §5). Non-fatal by
+  // contract: the local confirm above is already committed and must stand
+  // even if the enqueue fails; flag-gated + China-agent-fenced inside.
+  try {
+    const enq = await enqueueQbVendorBillAdd(knex, bill.id);
+    if (!enq.queued) {
+      console.info(
+        `[vendor-bill-confirm] QB enqueue skipped for ${bill.id}: ${enq.reason}`
+      );
+    }
+  } catch (enqErr) {
+    console.warn(
+      `[vendor-bill-confirm] QB enqueue FAILED for ${bill.id}: ${
+        enqErr instanceof Error ? enqErr.message : String(enqErr)
+      }`
+    );
+  }
+
+  // 12. Return confirmed bill with updated lines
   const confirmedBill = await service.listVendorBills({ id: bill.id }, { take: 1 });
   const confirmedLines = await service.listVendorBillLines(
     { vendor_bill_id: bill.id },
