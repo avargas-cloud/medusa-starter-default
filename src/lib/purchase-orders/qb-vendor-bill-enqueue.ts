@@ -50,6 +50,7 @@ interface BillRow {
   purchase_order_id: string | null;
   vendor_qb_list_id_snapshot: string | null;
   vendor_name_snapshot: string | null;
+  qb_source: string | null;
 }
 
 interface PoRow {
@@ -83,13 +84,23 @@ export async function enqueueQbVendorBillAdd(
 
   const billResult = await knex.raw(
     `SELECT id, number, reference_id, document_date, due_date,
-            purchase_order_id, vendor_qb_list_id_snapshot, vendor_name_snapshot
+            purchase_order_id, vendor_qb_list_id_snapshot, vendor_name_snapshot,
+            qb_source
        FROM vendor_bill
       WHERE id = ? AND deleted_at IS NULL AND bill_type = 'regular'`,
     [vendorBillId]
   );
   const bill = (billResult.rows[0] ?? null) as BillRow | null;
   if (!bill) return { queued: false, reason: "bill not found or not regular" };
+  // Fail-closed fence (durable invariant): an ADOPTED bill mirrors a QB bill
+  // that already exists in QuickBooks — it must NEVER be (re)dispatched to QB,
+  // even if some future caller reaches enqueue on one. Adopted bills (both the
+  // legacy zero-line imports and the new "Full match" line-level mirrors) are
+  // read-only w.r.t. the QB pipeline. See qb-vendor-bill-unlock.ts / PATCH /
+  // bill-drift.ts for the sibling guards (owner rule 2026-07-23).
+  if (bill.qb_source === "adopted") {
+    return { queued: false, reason: "adopted_bill_readonly" };
+  }
   if (!bill.purchase_order_id) {
     return { queued: false, reason: "bill has no purchase order" };
   }
