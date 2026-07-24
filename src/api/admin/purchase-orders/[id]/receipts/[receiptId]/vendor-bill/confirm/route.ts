@@ -817,7 +817,22 @@ export async function POST(
       //
       // Non-fatal on purpose: the bill is confirmed and its average stored, and
       // an append-only journal must never be the thing that fails a confirm.
-      // The idempotency key makes a re-confirm a no-op instead of a duplicate.
+      //
+      // Generation-suffixed id/key (2026-07-24) — a plain per-(bill,variant)
+      // key was WRONG for the confirm → reopen → re-confirm cycle: reopen only
+      // REVERSES the confirm's event (it stays in the table), so the second
+      // confirm hit `ON CONFLICT DO NOTHING` on the reversed row's key and was
+      // silently swallowed. The new cost got no event AND the variant was left
+      // with no active event at all, breaking recost-window's boundary lookup.
+      //   • `gen.n` = 1 + count of prior vendor_bill_receipt events for this
+      //     (bill, variant), so every fresh confirm gets a key nothing else
+      //     owns — a re-confirm after a reopen records instead of vanishing.
+      //   • `WHERE NOT EXISTS (active …)` keeps a genuine RETRY idempotent: if
+      //     an active event is already there (same confirm re-running), insert
+      //     nothing. Only when none is active (first confirm, or post-reopen)
+      //     does a new generation get minted. ON CONFLICT stays as a race
+      //     backstop.
+      // Single statement so the count, the guard and the insert can't interleave.
       try {
         await knex.raw(
           `INSERT INTO variant_cost_event
@@ -826,9 +841,20 @@ export async function POST(
               source_system, source_type, source_id, status, idempotency_key,
               vendor_bill_id, receipt_id, quantity_delta, cogs_true_up_cents,
               negative_settled_quantity, reason_code)
-           VALUES (?, ?, 'vendor_bill_receipt', 'average_cost', ?::timestamptz, NOW(),
-                   ?::numeric, ?::numeric, ?::int, 'medusa', 'vendor_bill_confirm', ?,
-                   'active', ?, ?, ?, ?::int, ?::bigint, ?::int, 'vendor_bill_confirm')
+           SELECT ? || '_g' || gen.n, ?, 'vendor_bill_receipt', 'average_cost', ?::timestamptz, NOW(),
+                  ?::numeric, ?::numeric, ?::int, 'medusa', 'vendor_bill_confirm', ?,
+                  'active', ? || ':g' || gen.n, ?, ?, ?::int, ?::bigint, ?::int, 'vendor_bill_confirm'
+             FROM (
+               SELECT COUNT(*) + 1 AS n
+                 FROM variant_cost_event
+                WHERE vendor_bill_id = ? AND product_variant_id = ?
+                  AND event_type = 'vendor_bill_receipt'
+             ) gen
+            WHERE NOT EXISTS (
+               SELECT 1 FROM variant_cost_event
+                WHERE vendor_bill_id = ? AND product_variant_id = ?
+                  AND event_type = 'vendor_bill_receipt' AND status = 'active'
+             )
            ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
           [
             `vce_cf_${bill.id.slice(-12)}_${variantId.slice(-12)}`,
@@ -844,6 +870,10 @@ export async function POST(
             variantQtyReceived,
             Math.round(variantTrueUpCents),
             variantSettledQty,
+            bill.id,
+            variantId,
+            bill.id,
+            variantId,
           ]
         );
       } catch (error) {

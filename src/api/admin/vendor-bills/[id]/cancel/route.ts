@@ -195,11 +195,24 @@ export async function POST(
       // so the cancel can simply be retried.
       const trx = knex.transaction ? await knex.transaction() : null;
       const run = trx ?? knex;
-      // Deterministic id minted by the confirm route for this (bill, variant).
-      // Kept in sync with that route's own format — the reversal points at it
-      // and retires it, rather than leaving two live events claiming different
-      // costs for the same variant.
-      const confirmEventId = `vce_cf_${bill.id.slice(-12)}_${log.product_variant_id.slice(-12)}`;
+      // Look the confirm's event UP rather than rebuilding its id from a format
+      // string (2026-07-24): the confirm route now generation-suffixes its ids
+      // (`…_g2`, `…_g3`) so a re-confirm after a reopen isn't swallowed by its
+      // own key, which means there is no single id this route could
+      // reconstruct. The active vendor_bill_receipt event for this
+      // (bill, variant) IS that event; NULL when the bill predates the journal,
+      // in which case the reversal still records with nothing to point back at.
+      const priorEvent = await run.raw(
+        `SELECT id FROM variant_cost_event
+          WHERE vendor_bill_id = ? AND product_variant_id = ?
+            AND cost_field = 'average_cost' AND event_type = 'vendor_bill_receipt'
+            AND status = 'active'
+          ORDER BY effective_at DESC, event_sequence DESC
+          LIMIT 1`,
+        [bill.id, log.product_variant_id]
+      );
+      const confirmEventId =
+        (priorEvent.rows[0] as { id: string } | undefined)?.id ?? null;
       try {
         await run.raw(
           `UPDATE product_variant
