@@ -127,8 +127,22 @@ async function buildPlan(db: KnexLike): Promise<RepairPlan> {
        AND vb.qb_txn_id IS NOT NULL
        AND al.line_count > 0
        AND vb.created_at < ?::timestamptz
-       AND vb.updated_at >= ?::timestamptz
-       AND vb.updated_at < ?::timestamptz
+       AND (
+             (
+               vb.updated_at >= ?::timestamptz
+               AND vb.updated_at < ?::timestamptz
+             )
+             OR (
+               -- The operator-wide Net 21 correction on 2026-07-24 changed
+               -- updated_at after the incident. Preserve the original guard,
+               -- but explicitly recognize only Veetech rows carrying that
+               -- verified correction.
+               lower(qv.company_name) = lower('Shenzhen Veetech Co., Ltd')
+               AND vb.payment_terms_days = 21
+               AND vb.document_date IS NOT NULL
+               AND vb.due_date = vb.document_date + INTERVAL '21 days'
+             )
+           )
        AND COALESCE(
              (qv.metadata ->> 'is_china_agent') = 'true'
              OR qv.metadata @> '{"is_china_agent": true}'::jsonb,
