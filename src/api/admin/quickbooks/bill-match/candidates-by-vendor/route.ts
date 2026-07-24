@@ -10,8 +10,9 @@ import { queryVendorBills } from "../_lib/bill-query";
  * Bill-first flow: ONE QuickBooks BillQuery for a whole vendor (instead of one
  * per PO), plus the vendor's not-fully-billed POs so the operator can map each
  * adoptable bill to the right PO in a single pass. The date window defaults to
- * (oldest unbilled PO − 30d → today); for a vendor with no unbilled POs (e.g. a
- * future service bill) it defaults to the last 120 days. Both are overridable.
+ * (oldest unbilled PO − 2 months → today) so a bill entered before its PO date
+ * (deposit/prepay) is still caught; for a vendor with no unbilled POs (e.g. a
+ * future service bill) it defaults to the last 4 months. Both are overridable.
  *
  * Each bill is flagged: already_recorded_local (its TxnID is already a local
  * vendor_bill) and qb_linked (it already links to a PO/receipt inside QB). The
@@ -126,12 +127,19 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
         has_qb_txnid: Boolean(r.qb_purchase_order_list_id),
       }));
 
-    // ── Date window ──
+    // ── Date window: 2 calendar months before the oldest unbilled PO → today ──
     const oldest = unbilledPos.reduce<number | null>((min, p) => {
       const t = new Date(p.doc_date).getTime();
       return min === null || t < min ? t : min;
     }, null);
-    const defFromMs = oldest !== null ? oldest - 30 * 86_400_000 : Date.now() - 120 * 86_400_000;
+    const anchor = new Date(oldest ?? Date.now());
+    // No unbilled POs (service vendor): fall back to a 4-month lookback from today.
+    const monthsBack = oldest !== null ? 2 : 4;
+    const defFromMs = Date.UTC(
+      anchor.getUTCFullYear(),
+      anchor.getUTCMonth() - monthsBack,
+      anchor.getUTCDate()
+    );
     const fromDate = String((req.query.from as string) ?? "").trim() || fmtUtc(new Date(defFromMs));
     const toDate = String((req.query.to as string) ?? "").trim() || fmtUtc(new Date());
 
