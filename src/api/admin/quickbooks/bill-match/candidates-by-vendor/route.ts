@@ -147,17 +147,31 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
     const bills = await queryVendorBills({ vendorListId: vendor.qb_list_id, fromDate, toDate });
 
     const txnIds = bills.map((b) => b.txn_id).filter(Boolean);
-    const recordedSet = new Set<string>();
+    const recordedMap = new Map<string, { vendor_bill_id: string; po_number: string | null; qb_source: string | null }>();
     if (txnIds.length > 0) {
-      const { rows: rec } = await client.query<{ qb_txn_id: string }>(
-        `SELECT qb_txn_id FROM vendor_bill WHERE qb_txn_id = ANY($1::text[]) AND deleted_at IS NULL`,
+      const { rows: rec } = await client.query<{
+        qb_txn_id: string;
+        vendor_bill_id: string;
+        po_number: string | null;
+        qb_source: string | null;
+      }>(
+        `SELECT vb.qb_txn_id, vb.id AS vendor_bill_id, vb.qb_source, p.number AS po_number
+           FROM vendor_bill vb
+           LEFT JOIN purchase_order p ON p.id = vb.purchase_order_id AND p.deleted_at IS NULL
+          WHERE vb.qb_txn_id = ANY($1::text[]) AND vb.deleted_at IS NULL`,
         [txnIds]
       );
-      for (const r of rec) recordedSet.add(r.qb_txn_id);
+      for (const r of rec)
+        recordedMap.set(r.qb_txn_id, {
+          vendor_bill_id: r.vendor_bill_id,
+          po_number: r.po_number,
+          qb_source: r.qb_source,
+        });
     }
 
     const billOut = bills.map((b) => {
-      const alreadyRecorded = recordedSet.has(b.txn_id);
+      const recorded = recordedMap.get(b.txn_id);
+      const alreadyRecorded = Boolean(recorded);
       // qb_linked is an informational CAUTION, not an exclusion: a bill can be
       // linked in QB to a PurchaseOrder whose TxnID does NOT match our PO's
       // recorded qb_purchase_order_list_id (TxnID drift — the exact reason the
@@ -183,6 +197,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse): Promise<void
           amount_cents: l.amount_cents,
         })),
         already_recorded_local: alreadyRecorded,
+        recorded_vendor_bill_id: recorded?.vendor_bill_id ?? null,
+        recorded_po_number: recorded?.po_number ?? null,
         qb_linked: qbLinked,
         adoptable: !alreadyRecorded,
       };
