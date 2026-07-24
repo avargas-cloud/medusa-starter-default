@@ -169,6 +169,7 @@ export async function GET(
        vb.confirmed_at,
        vb.qb_txn_id,
        vb.qb_source,
+       vb.qb_amount_due_cents,
        vb.commission_mode,
        vb.commission_rate_bps,
        vb.commission_amount_cents,
@@ -222,7 +223,12 @@ export async function GET(
        WHERE vbl.vendor_bill_id = vb.id AND vbl.deleted_at IS NULL
      ) agg ON TRUE
      WHERE ${whereStr}
-     ORDER BY vb.created_at DESC
+     -- Owner rule (2026-07-23): the list reads in BILL-DATE order (the legal
+     -- vendor-document date shown in the DATE column), newest first — not
+     -- row-creation order (adopted legacy imports all "created" the same day
+     -- scrambled the timeline). created_at is the fallback for undated drafts
+     -- and the deterministic tie-break.
+     ORDER BY COALESCE(vb.document_date, vb.created_at) DESC, vb.created_at DESC
      LIMIT ${limit} OFFSET ${offset}`,
     bindings
   );

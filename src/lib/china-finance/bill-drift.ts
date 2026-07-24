@@ -202,6 +202,11 @@ export async function loadBillDrift(
        LEFT JOIN purchase_order_receipt r ON r.id = vb.purchase_order_receipt_id
       WHERE vb.deleted_at IS NULL
         AND vb.bill_type IN ('regular','service','freight')
+        -- Adopted legacy bills (accountant's hand-entered QB bills, imported as
+        -- header-only mirrors) carry NO lines — computing drift for them would
+        -- flag every one as "missing everything". They are read-only by rule;
+        -- QuickBooks itself is their source of truth.
+        AND COALESCE(vb.qb_source, '') <> 'adopted'
         AND (${scope.join(" AND ")})`,
     bind
   );

@@ -40,6 +40,7 @@ export type ClaimUnlockResult =
   | { ok: true; pipelineRowId: string }
   | { ok: false; code: "bill_not_found"; message: string }
   | { ok: false; code: "bill_not_synced"; message: string }
+  | { ok: false; code: "adopted_bill_readonly"; message: string }
   | { ok: false; code: "china_agent_unlock_blocked"; message: string }
   | { ok: false; code: "unlock_already_in_flight"; message: string };
 
@@ -49,6 +50,7 @@ export interface ClaimUnlockInput {
 }
 
 interface BillRow {
+  qb_source: string | null;
   id: string;
   purchase_order_id: string | null;
   qb_txn_id: string | null;
@@ -72,7 +74,7 @@ export async function claimUnlock(
   input: ClaimUnlockInput
 ): Promise<ClaimUnlockResult> {
   const billResult = await knex.raw(
-    `SELECT id, purchase_order_id, qb_txn_id, status, bill_type
+    `SELECT id, purchase_order_id, qb_txn_id, status, bill_type, qb_source
        FROM vendor_bill
       WHERE id = ? AND deleted_at IS NULL AND bill_type = 'regular'`,
     [vendorBillId]
@@ -90,6 +92,18 @@ export async function claimUnlock(
       ok: false,
       code: "bill_not_synced",
       message: "This bill has not synced to QuickBooks yet — nothing to unlock",
+    };
+  }
+  // ADOPTED legacy bills (owner rule 2026-07-23) are a read-only mirror of a
+  // bill the accountant entered BY HAND in QuickBooks. Unlock would TxnDel a
+  // document we do not own — if it must change, the accountant edits it in
+  // QB Desktop directly.
+  if (bill.qb_source === "adopted") {
+    return {
+      ok: false,
+      code: "adopted_bill_readonly",
+      message:
+        "This is an adopted legacy bill (entered by hand in QuickBooks) — unlock is disabled; the accountant manages it in QB Desktop",
     };
   }
 

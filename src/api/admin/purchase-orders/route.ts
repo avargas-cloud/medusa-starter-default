@@ -14,6 +14,7 @@ import type {
 } from "@medusajs/framework/http";
 
 import { getActorUserId, UnauthenticatedError } from "./_lib/auth";
+import { enrichBilledStatusMap } from "./_lib/billed-status";
 import { enrichChinaTransferMap } from "./_lib/china-transfer";
 import { zodErrorToBody } from "./_lib/format";
 import { getPurchaseOrdersService } from "./_lib/service-resolver";
@@ -78,9 +79,17 @@ export async function GET(
       };
     }).resolve("__pg_connection__");
     const ctMap = await enrichChinaTransferMap(knex, typedRows);
+    let billedMap: Map<string, { billed_status: string; billed_qty: number }> = new Map();
+    try {
+      billedMap = await enrichBilledStatusMap(knex, typedRows);
+    } catch {
+      // Non-fatal: fall back to no billed_status decoration.
+    }
     purchase_orders = typedRows.map((r) => ({
       ...r,
       china_transfer: ctMap.get(r.id) ?? null,
+      billed_status: billedMap.get(r.id)?.billed_status ?? "no",
+      billed_qty: billedMap.get(r.id)?.billed_qty ?? 0,
     }));
   } catch {
     // Non-fatal: fall back to raw rows without china_transfer decoration.

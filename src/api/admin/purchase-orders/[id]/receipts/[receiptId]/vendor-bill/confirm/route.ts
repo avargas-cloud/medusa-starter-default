@@ -32,6 +32,7 @@ import {
 } from "../../../../../../../../lib/cost/avco";
 import {
   recostSalesWindow,
+  type RecostEvent,
   type RecostKnex,
 } from "../../../../../../../../lib/cost/recost-window";
 import {
@@ -644,11 +645,14 @@ export async function POST(
     return (ra?.seq ?? 0) - (rb?.seq ?? 0);
   });
 
-  // The cost each variant ENDS this confirm at, collected as the replay runs.
-  // The window repricing below needs exactly this value — re-reading
-  // `average_cost` afterwards would work today but breaks the moment a variant
-  // has more than one event in play.
-  const finalCostByVariant = new Map<string, number>();
+  // What each variant ends this confirm at, collected as the replay runs: the
+  // cost, and the date ITS OWN goods arrived.
+  //
+  // Re-reading `average_cost` afterwards would work today but breaks the moment
+  // a variant has more than one event in play. And the date has to be
+  // per-variant: a bill can cover receipts that landed on different days, and a
+  // variant only rides on some of them.
+  const recostEvents: RecostEvent[] = [];
 
   await Promise.all(
     [...landedByVariant.entries()].map(async ([variantId, { totalLanded, totalQty: receivedQty }]) => {
@@ -798,7 +802,13 @@ export async function POST(
       // no receipt contributed (nothing to average) — writing it would blank a
       // perfectly good cost, so skip instead.
       if (runningAvg === null) return;
-      finalCostByVariant.set(variantId, runningAvg / 100);
+      if (variantEffectiveAt) {
+        recostEvents.push({
+          variantId,
+          newCost: runningAvg / 100,
+          from: new Date(variantEffectiveAt),
+        });
+      }
 
       // Append the cost event. `variant_cost_event` is the reconstructable
       // history of every cost change; the one-off restatement seeded it, and
@@ -870,30 +880,26 @@ export async function POST(
   // Non-fatal by the same contract as the QuickBooks enqueue below: the bill is
   // already confirmed and must stand. A failure is loud, and
   // `scripts/fix/recost-vendor-bill-window.ts` re-runs it for a single bill.
-  const recostFrom = chronologicalReceiptIds
-    .map((rid) => receiptOrderById.get(rid)?.received_at)
-    .filter((value): value is string => Boolean(value))
-    .map((value) => new Date(value))
-    .sort((a, b) => a.getTime() - b.getTime())[0];
-
-  if (recostFrom && finalCostByVariant.size > 0) {
+  if (recostEvents.length > 0) {
     try {
       // `KnexInstance` above is a deliberately narrow view (raw only); the
       // resolved object is the real knex instance and does have `transaction`,
       // which the repricing needs to keep its writes atomic.
       const recost = await recostSalesWindow(knex as unknown as RecostKnex, {
-        costByVariant: finalCostByVariant,
-        from: recostFrom,
+        events: recostEvents,
         // Deterministic: re-confirming the same bill reuses these rows rather
         // than stacking a second correction on top of the first.
         runId: `rw_${bill.id}`,
         reason: "receipt_to_bill_window",
       });
       if (recost.invoiceLinesRepriced + recost.creditMemoLinesRepriced > 0) {
+        const earliest = recostEvents
+          .map((event) => event.from)
+          .sort((a, b) => a.getTime() - b.getTime())[0];
         logger.warn(
           `[vendor-bill ${bill.id}] repriced ${recost.invoiceLinesRepriced} invoice and ` +
             `${recost.creditMemoLinesRepriced} credit-memo lines sold between ` +
-            `${recostFrom.toISOString().slice(0, 10)} and this confirm; COGS moved ` +
+            `${earliest?.toISOString().slice(0, 10) ?? "?"} and this confirm; COGS moved ` +
             `${(recost.cogsDeltaCents / 100).toFixed(2)}. Reports for those days change.`
         );
       }

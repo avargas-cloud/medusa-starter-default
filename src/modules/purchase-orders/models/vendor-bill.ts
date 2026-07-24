@@ -81,6 +81,7 @@ export const VendorBill = model.define("vendor_bill", {
   qb_txn_id: model.text().nullable(), // QB Bill TxnID once synced/adopted
   qb_edit_sequence: model.text().nullable(), // fresh EditSequence for BillMod/TxnDel
   qb_ref_number: model.text().nullable(), // QB RefNumber = vendor invoice # (reference_id)
+  qb_amount_due_cents: model.number().nullable(),
   qb_synced_at: model.dateTime().nullable(), // when the Bill landed in QB
   qb_source: model.text().nullable(), // 'owned' | 'adopted'
 

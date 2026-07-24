@@ -119,6 +119,10 @@ interface ParsedBill {
   vendorFullName: string | null;
   amountDue: string | null;
   linkedPoTxnIds: string[];
+  /** EIR (confirmed §0.11): the accountant enters bills against ITEM RECEIPTS,
+   * so LinkedTxn usually carries TxnType='ItemReceipt' — resolved to a PO via
+   * our own purchase_order_receipt.qb_item_receipt_list_id. */
+  linkedReceiptTxnIds: string[];
   /** Sum of ItemLineRet Quantity, or null if any line's qty wasn't parseable. */
   itemQtySum: number | null;
 }
@@ -134,6 +138,9 @@ function parseBillRet(raw: QbBillRet): ParsedBill | null {
   const linked = asArray<QbLinkedTxn>(raw.LinkedTxn as QbLinkedTxn | QbLinkedTxn[]);
   const linkedPoTxnIds = linked
     .filter((l) => l.TxnType === "PurchaseOrder" && l.TxnID)
+    .map((l) => String(l.TxnID));
+  const linkedReceiptTxnIds = linked
+    .filter((l) => l.TxnType === "ItemReceipt" && l.TxnID)
     .map((l) => String(l.TxnID));
 
   const itemLines = asArray<Record<string, unknown>>(
@@ -157,6 +164,7 @@ function parseBillRet(raw: QbBillRet): ParsedBill | null {
     vendorFullName: raw.VendorRef?.FullName ?? null,
     amountDue: raw.AmountDue ?? null,
     linkedPoTxnIds,
+    linkedReceiptTxnIds,
     itemQtySum,
   };
 }
@@ -245,44 +253,90 @@ function extractBillQueryRs(result: unknown): Record<string, unknown> | null {
   return (rs as Record<string, unknown>) ?? null;
 }
 
-/** One bulk, paged BillQuery(IncludeLinkedTxns=true) sweep — never per-PO (§10, D5). */
-async function fetchAllQbBills(log: (msg: string) => void): Promise<ParsedBill[]> {
-  const out: ParsedBill[] = [];
-  let iterator: "Start" | "Continue" = "Start";
-  let iteratorId: string | undefined;
-  let page = 0;
+/**
+ * One bulk BillQuery(IncludeLinkedTxns=true) sweep — never per-PO (§10, D5).
+ *
+ * ⚠️ DATE-WINDOW CHUNKING, NOT ITERATORS (learned live 2026-07-23): a QBXML
+ * iterator is only valid WITHIN the session that created it. The bridge
+ * processes every queued op in its own session (other ops even interleave
+ * between our pages), so `iterator="Continue"` from a previous op dies with
+ * QB Error 3391 "iteratorID is not valid" — always, not sometimes. Instead
+ * each request is fully self-contained: a TxnDateRangeFilter window with a
+ * generous MaxReturned; a window that comes back AT the cap is split in half
+ * and re-fetched (recursively), so nothing is ever silently truncated.
+ */
+const WINDOW_DAYS = 14;
+const WINDOW_MAX_RETURNED = 500;
 
-  for (;;) {
-    page++;
-    const body =
-      iterator === "Start"
-        ? { iterator: "Start", max_returned: ITERATOR_PAGE_SIZE }
-        : { iterator_id: iteratorId, max_returned: ITERATOR_PAGE_SIZE };
-    log(`BillQuery page ${page} (${iterator})...`);
-    const { operationId } = await bridgePost("/api/bills/query", body);
-    if (!operationId) throw new Error("Bridge returned no operationId for /api/bills/query");
-    const result = await pollUntilDone(operationId, log);
+async function fetchWindow(
+  log: (msg: string) => void,
+  from: Date,
+  to: Date,
+  depth: number
+): Promise<ParsedBill[]> {
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  const { operationId } = await bridgePost("/api/bills/query", {
+    from_date: fmt(from),
+    to_date: fmt(to),
+    max_returned: WINDOW_MAX_RETURNED,
+  });
+  if (!operationId) throw new Error("Bridge returned no operationId for /api/bills/query");
+  const result = await pollUntilDone(operationId, log);
+  const billQueryRs = extractBillQueryRs(result);
+  const rawBills = asArray<QbBillRet>(
+    (billQueryRs?.BillRet ?? undefined) as QbBillRet | QbBillRet[] | undefined
+  );
+  log(`  window ${fmt(from)}..${fmt(to)}: ${rawBills.length} bill(s)`);
 
-    const billQueryRs = extractBillQueryRs(result);
-    if (!billQueryRs) {
-      log(`  page ${page}: no BillQueryRs in response, stopping`);
-      break;
+  if (rawBills.length >= WINDOW_MAX_RETURNED) {
+    // At the cap → possible truncation. Split the window and refetch halves.
+    if (depth >= 6 || to.getTime() - from.getTime() <= 24 * 3600 * 1000) {
+      log(
+        `  ⚠️ window ${fmt(from)}..${fmt(to)} hit MaxReturned=${WINDOW_MAX_RETURNED} and cannot split further — results may be truncated`
+      );
+    } else {
+      const mid = new Date((from.getTime() + to.getTime()) / 2);
+      log(`  window at cap — splitting at ${fmt(mid)}`);
+      const left = await fetchWindow(log, from, mid, depth + 1);
+      const right = await fetchWindow(
+        log,
+        new Date(mid.getTime() + 24 * 3600 * 1000),
+        to,
+        depth + 1
+      );
+      return [...left, ...right];
     }
-    const rawBills = asArray<QbBillRet>(
-      billQueryRs.BillRet as QbBillRet | QbBillRet[] | undefined
-    );
-    for (const raw of rawBills) {
-      const parsed = parseBillRet(raw);
-      if (parsed) out.push(parsed);
-    }
-    log(`  page ${page}: ${rawBills.length} bill(s), ${out.length} total so far`);
-
-    const remaining = Number(readIteratorAttr(billQueryRs, "iteratorRemainingCount") ?? 0);
-    const nextId = readIteratorAttr(billQueryRs, "iteratorID");
-    if (!Number.isFinite(remaining) || remaining <= 0 || !nextId) break;
-    iterator = "Continue";
-    iteratorId = String(nextId);
   }
+
+  const out: ParsedBill[] = [];
+  for (const raw of rawBills) {
+    const parsed = parseBillRet(raw);
+    if (parsed) out.push(parsed);
+  }
+  return out;
+}
+
+async function fetchAllQbBills(log: (msg: string) => void, fromDateArg: string | null): Promise<ParsedBill[]> {
+  const start = new Date(`${fromDateArg ?? "2026-03-01"}T00:00:00Z`);
+  const end = new Date();
+  const out: ParsedBill[] = [];
+  const seen = new Set<string>();
+
+  let cursor = new Date(start);
+  while (cursor <= end) {
+    const winEnd = new Date(
+      Math.min(cursor.getTime() + (WINDOW_DAYS - 1) * 24 * 3600 * 1000, end.getTime())
+    );
+    const bills = await fetchWindow(log, cursor, winEnd, 0);
+    for (const b of bills) {
+      // Windows are inclusive on both ends — dedupe on TxnID at the seams.
+      if (seen.has(b.txnId)) continue;
+      seen.add(b.txnId);
+      out.push(b);
+    }
+    cursor = new Date(winEnd.getTime() + 24 * 3600 * 1000);
+  }
+  log(`swept ${out.length} unique bill(s) from ${fromDateArg ?? "2026-03-01"} to today`);
   return out;
 }
 
@@ -476,12 +530,12 @@ async function adoptBill(
       id, purchase_order_id, vendor_id, vendor_name_snapshot,
       vendor_qb_list_id_snapshot, bill_type, status, qb_source,
       qb_txn_id, qb_edit_sequence, qb_ref_number, reference_id,
-      document_date, qb_synced_at, number, created_at, updated_at
+      document_date, qb_synced_at, qb_amount_due_cents, number, created_at, updated_at
     ) VALUES (
       ?, ?, ?, ?,
       ?, 'regular', 'synced', 'adopted',
       ?, ?, ?, ?,
-      ?, NOW(), NULL, NOW(), NOW()
+      ?, NOW(), ?, NULL, NOW(), NOW()
     )`,
     [
       id,
@@ -494,6 +548,9 @@ async function adoptBill(
       bill.refNumber,
       bill.refNumber,
       documentDate,
+      bill.amountDue != null && Number.isFinite(Number(bill.amountDue))
+        ? Math.round(Number(bill.amountDue) * 100)
+        : null,
     ]
   );
 }
@@ -557,6 +614,11 @@ export default async function reconcilePoVendorBillsFromQb({
   const argv = args || [];
   const apply = argv.includes("apply");
   const parseonly = argv.includes("parseonly");
+  const fromToken = argv.find((a) => a.startsWith("from="));
+  const fromDateArg = fromToken ? fromToken.slice(5) : null;
+  if (fromDateArg && !/^\d{4}-\d{2}-\d{2}$/.test(fromDateArg)) {
+    throw new Error(`from= must be YYYY-MM-DD, got '${fromDateArg}'`);
+  }
   const log = (msg: string) => console.log(msg);
 
   const pg = container.resolve("__pg_connection__") as unknown as KnexLike;
@@ -571,16 +633,37 @@ export default async function reconcilePoVendorBillsFromQb({
   ]);
   console.log(`Loaded ${pos.length} relevant PO(s) (submitted/partially_received/received, QB-synced).`);
 
-  const bills = parseonly ? [] : await fetchAllQbBills(log);
+  const bills = parseonly ? [] : await fetchAllQbBills(log, fromDateArg);
   if (!parseonly) console.log(`QB BillQuery returned ${bills.length} bill(s) total.`);
 
   const relevantTxnIds = new Set(pos.map((p) => p.qb_purchase_order_list_id));
   const billsByPoTxnId = new Map<string, ParsedBill[]>();
   let ignoredBillCount = 0;
 
+  // EIR (confirmed §0.11): bills are normally entered against ITEM RECEIPTS,
+  // so the PO link is indirect: LinkedTxn(ItemReceipt).TxnID → our
+  // purchase_order_receipt.qb_item_receipt_list_id → its PO's QB TxnID.
+  const receiptTxnRows = (await pg.raw(`
+    SELECT por.qb_item_receipt_list_id AS receipt_txn,
+           po.qb_purchase_order_list_id AS po_txn
+      FROM purchase_order_receipt por
+      JOIN purchase_order po ON po.id = por.purchase_order_id AND po.deleted_at IS NULL
+     WHERE por.qb_item_receipt_list_id IS NOT NULL
+       AND por.deleted_at IS NULL
+       AND po.qb_purchase_order_list_id IS NOT NULL`)).rows as Array<{
+    receipt_txn: string;
+    po_txn: string;
+  }>;
+  const poTxnByReceiptTxn = new Map(receiptTxnRows.map((r) => [r.receipt_txn, r.po_txn]));
+
   const billPoLinkCount = new Map<string, number>();
   for (const bill of bills) {
-    const relevantLinks = bill.linkedPoTxnIds.filter((t) => relevantTxnIds.has(t));
+    const viaReceipts = bill.linkedReceiptTxnIds
+      .map((t) => poTxnByReceiptTxn.get(t))
+      .filter((t): t is string => !!t);
+    const relevantLinks = [
+      ...new Set([...bill.linkedPoTxnIds, ...viaReceipts]),
+    ].filter((t) => relevantTxnIds.has(t));
     billPoLinkCount.set(bill.txnId, relevantLinks.length);
     if (relevantLinks.length === 0) {
       ignoredBillCount++;

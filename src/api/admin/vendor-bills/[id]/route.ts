@@ -630,16 +630,26 @@ export async function PATCH(
   const knex = resolveKnex(req);
 
   const lookup = await knex.raw(
-    `SELECT id, number, status, bill_type, purchase_order_id, purchase_order_receipt_id FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
+    `SELECT id, number, status, bill_type, purchase_order_id, purchase_order_receipt_id, qb_source FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
     [id]
   );
   const bill = (lookup.rows[0] ?? null) as
-    | { id: string; number: string | null; status: string; bill_type: string; purchase_order_id: string | null; purchase_order_receipt_id: string | null }
+    | { id: string; number: string | null; status: string; bill_type: string; purchase_order_id: string | null; purchase_order_receipt_id: string | null; qb_source: string | null }
     | null;
   if (!bill) {
     return res
       .status(404)
       .json({ error: "Vendor bill not found", code: "not_found" });
+  }
+  // ADOPTED bills (owner rule 2026-07-23): legacy QB bills imported by the
+  // reconciliation pass are a READ-ONLY mirror of what the accountant entered
+  // by hand — never editable from the POS (their source of truth is QB).
+  if (bill.qb_source === "adopted") {
+    return res.status(409).json({
+      error:
+        "This is an adopted legacy bill (entered by hand in QuickBooks) — it is read-only here",
+      code: "adopted_bill_readonly",
+    });
   }
   // D6 — rebinding receipts on a SYNCED bill changes what QB's linked Bill
   // covers; that's the future Unlock/rebuild path (§6 of the plan), not this
