@@ -265,6 +265,18 @@ function toCostChange(row: CostChangeRow) {
 /**
  * Content hash of the frozen inputs. A dry-run and its apply MUST produce the
  * same hash; a difference means the source data moved and the plan is stale.
+ *
+ * It covers only what DETERMINES the plan — the anchor, the pool quantity, the
+ * landed-cost receipts, and each line's identity, quantity and economic date.
+ *
+ * It deliberately does NOT include `average_unit_cost`. That column is an
+ * OUTPUT of the run, not an input to it: the restated cost is derived purely
+ * from the timeline. Hashing it made the value change the moment the run
+ * applied, so a second apply saw a different hash and reported "the source data
+ * moved" when nothing had — breaking the very no-op guarantee the hash exists
+ * to provide. The prior cost still gates every write, but as the
+ * compare-and-swap expectation, which is a per-row check rather than a
+ * plan-identity one.
  */
 function hashInputs(
   scope: readonly ScopeVariantRow[],
@@ -280,10 +292,12 @@ function hashInputs(
     hash.update(`c|${row.source_id}|${row.received_qty}|${row.landed_unit_cost_cents}\n`);
   }
   for (const row of invoiceLines) {
-    hash.update(`i|${row.line_id}|${row.quantity}|${row.average_unit_cost}\n`);
+    hash.update(`i|${row.line_id}|${row.quantity}|${row.economic_posted_at}\n`);
   }
   for (const row of creditMemoLines) {
-    hash.update(`m|${row.line_id}|${row.quantity}|${row.average_unit_cost}\n`);
+    hash.update(
+      `m|${row.line_id}|${row.quantity}|${row.economic_posted_at}|${row.parent_invoice_line_id}\n`
+    );
   }
   return hash.digest("hex");
 }
