@@ -21,6 +21,7 @@ import { z } from "zod";
 import { getActorUserId, UnauthenticatedError } from "../../../../_lib/auth";
 import { zodErrorToBody } from "../../../../_lib/format";
 import { getPurchaseOrdersService } from "../../../../_lib/service-resolver";
+import { resolveVendorBillPaymentTermsDays } from "../../../../../../../lib/purchase-orders/vendor-bill-payment-terms";
 
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -252,6 +253,11 @@ export async function POST(
       .status(404)
       .json({ error: "Purchase order not found", code: "not_found" });
   }
+  const vendorId = (po as { vendor_id?: string }).vendor_id ?? null;
+  const paymentTermsDays = await resolveVendorBillPaymentTermsDays(
+    knex,
+    vendorId
+  );
 
   // Fetch receipt lines to create bill lines
   const receiptLines = (await service.listPurchaseOrderReceiptLines(
@@ -332,12 +338,14 @@ export async function POST(
   const newBill = (await service.createVendorBills({
     purchase_order_receipt_id: receiptId,
     purchase_order_id: id,
-    vendor_id: (po as { vendor_id?: string }).vendor_id ?? null,
+    vendor_id: vendorId,
     vendor_name_snapshot: (po as { vendor_name_snapshot?: string | null }).vendor_name_snapshot ?? null,
     vendor_qb_list_id_snapshot: (po as { vendor_qb_list_id_snapshot?: string | null }).vendor_qb_list_id_snapshot ?? null,
     number: vbNumber,
     status: "draft",
     reference_id: body.reference_id ?? null,
+    payment_terms_days: paymentTermsDays,
+    due_date: new Date(Date.now() + paymentTermsDays * 24 * 60 * 60 * 1000),
     commission_mode: body.commission_mode,
     commission_rate_bps: body.commission_rate_bps,
     commission_amount_cents: body.commission_amount_cents,

@@ -10,6 +10,7 @@ import {
   UnauthenticatedError,
 } from "../../_lib/auth";
 import { zodErrorToBody } from "../../_lib/format";
+import { resolveVendorBillPaymentTermsDays } from "../../../../../lib/purchase-orders/vendor-bill-payment-terms";
 
 type Knex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -81,6 +82,10 @@ export async function POST(
       code: "vendor_required",
     });
   }
+  const paymentTermsDays = await resolveVendorBillPaymentTermsDays(
+    knex,
+    po.vendor_id
+  );
 
   const existing = await knex.raw(
     `SELECT id, number
@@ -144,13 +149,16 @@ export async function POST(
       `INSERT INTO vendor_bill (
          id, number, purchase_order_id, purchase_order_receipt_id,
          vendor_id, vendor_name_snapshot, vendor_qb_list_id_snapshot,
-         bill_type, status, reference_id, document_date, commission_mode,
+         bill_type, status, reference_id, document_date,
+         payment_terms_days, due_date, commission_mode,
          commission_rate_bps, commission_amount_cents,
          freight_included, freight_amount_cents,
          tariff_included, tariff_amount_cents, notes, created_at, updated_at
        ) VALUES (
          ?, ?, ?, NULL, ?, ?, ?, 'regular', 'draft', ?,
-         COALESCE(?::timestamptz, NOW()), ?, 0, 0, false, 0, false, 0, ?,
+         COALESCE(?::timestamptz, NOW()), ?,
+         COALESCE(?::timestamptz, NOW()) + (? * INTERVAL '1 day'),
+         ?, 0, 0, false, 0, false, 0, ?,
          NOW(), NOW()
        )`,
       [
@@ -162,6 +170,9 @@ export async function POST(
         po.vendor_qb_list_id_snapshot,
         parsed.data.reference_id ?? null,
         parsed.data.document_date ?? null,
+        paymentTermsDays,
+        parsed.data.document_date ?? null,
+        paymentTermsDays,
         parsed.data.commission_mode,
         parsed.data.notes ?? null,
       ]

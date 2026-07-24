@@ -42,6 +42,7 @@ import {
   syncPrimaryReceiptPointer,
   validateReceiptsForBinding,
 } from "../../../../lib/purchase-orders/vendor-bill-receipts";
+import { resolveVendorBillPaymentTermsDays } from "../../../../lib/purchase-orders/vendor-bill-payment-terms";
 
 type Knex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -146,6 +147,10 @@ export async function POST(
   if (!po) {
     return res.status(404).json({ error: "Purchase order not found", code: "not_found" });
   }
+  const paymentTermsDays = await resolveVendorBillPaymentTermsDays(
+    knex,
+    po.vendor_id
+  );
 
   // ── Union lines across the receipt set ──────────────────────────────────────
   const sourceLines = await resolveReceiptLineUnion(knex, receiptIds);
@@ -174,6 +179,7 @@ export async function POST(
          id, number, purchase_order_receipt_id, purchase_order_id,
          vendor_id, vendor_name_snapshot, vendor_qb_list_id_snapshot,
          bill_type, status, reference_id, document_date,
+         payment_terms_days, due_date,
          commission_mode, commission_rate_bps, commission_amount_cents,
          freight_included, freight_amount_cents,
          tariff_included, tariff_amount_cents,
@@ -183,6 +189,7 @@ export async function POST(
          ?, ?, NULL, ?,
          ?, ?, ?,
          'regular', 'draft', NULL, NOW(),
+         ?, NOW() + (? * INTERVAL '1 day'),
          'percent', 0, 0,
          false, 0,
          false, 0,
@@ -196,6 +203,8 @@ export async function POST(
         po.vendor_id,
         po.vendor_name_snapshot,
         po.vendor_qb_list_id_snapshot,
+        paymentTermsDays,
+        paymentTermsDays,
       ]
     );
 
