@@ -51,6 +51,8 @@ export type UpdatePosProductInput = {
   // ── Basic (available to pos_user view) ──────────────────────────────────
   title?: string;
   salesDescription?: string;
+  /** Per-variant QB PurchaseDesc → variant.metadata.qb_purchase_desc. Falls back to salesDescription for the QB payload when empty. */
+  purchaseDescription?: string;
   sku?: string;
   barcode?: string;
   mpn?: string;
@@ -118,6 +120,12 @@ export const buildQbStepInput = (i: UpdatePosProductInput) => {
     vendorFullName: i.vendor_full_name ?? i.vendor,
   });
 
+  // First-time "add": PurchaseDesc falls back to the sales description so a
+  // fresh QB item never syncs an empty PurchaseDesc. On a "mod" we send it ONLY
+  // when the purchase description was explicitly edited (see the mod payload) —
+  // otherwise a sales-only edit would clobber a distinct purchase description.
+  const addPurchaseDesc = i.purchaseDescription ?? i.salesDescription;
+
   if (!i.qb_id) {
     const itemType: QbItemType = i.item_type ?? "Inventory";
     const addData: Record<string, unknown> = {
@@ -131,12 +139,12 @@ export const buildQbStepInput = (i: UpdatePosProductInput) => {
     if (i.income_account_full_name)
       addData.IncomeAccountRef = { FullName: i.income_account_full_name };
     if (itemType === "Inventory") {
-      addData.PurchaseDesc = i.salesDescription;
+      addData.PurchaseDesc = addPurchaseDesc;
       addData.PurchaseCost = i.cost ?? 0;
       if (i.cogs_account_full_name)
         addData.COGSAccountRef = { FullName: i.cogs_account_full_name };
     } else if ((i.cost ?? 0) > 0) {
-      addData.PurchaseDesc = i.salesDescription;
+      addData.PurchaseDesc = addPurchaseDesc;
       addData.PurchaseCost = i.cost ?? 0;
       if (i.cogs_account_full_name)
         addData.ExpenseAccountRef = { FullName: i.cogs_account_full_name };
@@ -158,6 +166,7 @@ export const buildQbStepInput = (i: UpdatePosProductInput) => {
   const hasQbFields =
     i.sku !== undefined ||
     i.salesDescription !== undefined ||
+    i.purchaseDescription !== undefined ||
     i.retail_price !== undefined ||
     i.cost !== undefined ||
     i.mpn !== undefined ||
@@ -181,7 +190,10 @@ export const buildQbStepInput = (i: UpdatePosProductInput) => {
       Name: i.sku,
       SalesDesc: i.salesDescription,
       SalesPrice: i.retail_price,
-      PurchaseDesc: i.salesDescription,
+      // Only when explicitly edited — undefined drops the key so a sales-only
+      // edit leaves QB's PurchaseDesc (and any distinct purchase description)
+      // untouched. Fresh adds use addPurchaseDesc above to avoid an empty value.
+      PurchaseDesc: i.purchaseDescription,
       PurchaseCost: i.cost,
       ManufacturerPartNumber: i.mpn || undefined,
       SalesIncomeAccountRef: i.income_account_full_name
@@ -297,6 +309,7 @@ export const updatePosProductWorkflow = createWorkflow(
           qb_vendor_name: i.vendor,
           mpn: i.mpn,
           sales_description: i.salesDescription,
+          qb_purchase_desc: i.purchaseDescription,
           // Variant-level lifecycle flag (never fanned out to siblings; each
           // variant can be discontinued independently). false is a legitimate
           // "reactivate" write, so it must survive pruneUndefined (it does).

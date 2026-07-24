@@ -11,6 +11,8 @@ export type EnqueueQbItemInput = {
   sku: string;
   title: string;
   sales_description: string;
+  /** QB PurchaseDesc. Falls back to sales_description || title when omitted. */
+  purchase_description?: string | null;
   cost: number;
   retail_price: number;
   item_type: QbItemType;
@@ -50,15 +52,18 @@ const buildQbPayload = (item: EnqueueQbItemInput) => {
   if (item.income_account_full_name)
     base.IncomeAccountRef = { FullName: item.income_account_full_name };
 
+  const purchaseDesc =
+    item.purchase_description || item.sales_description || item.title;
+
   if (item.item_type === "Inventory") {
-    base.PurchaseDesc = item.sales_description || item.title;
+    base.PurchaseDesc = purchaseDesc;
     base.PurchaseCost = item.cost ?? 0;
     if (item.cogs_account_full_name) {
       base.COGSAccountRef = { FullName: item.cogs_account_full_name };
     }
   } else {
     if ((item.cost ?? 0) > 0) {
-      base.PurchaseDesc = item.sales_description || item.title;
+      base.PurchaseDesc = purchaseDesc;
       base.PurchaseCost = item.cost ?? 0;
       if (item.cogs_account_full_name) {
         base.ExpenseAccountRef = { FullName: item.cogs_account_full_name };

@@ -30,6 +30,8 @@ export type CreatePosProductV2VariantInput = {
   retail_price: number;
   wholesale_price?: number;
   sales_description?: string;
+  /** Per-variant QB PurchaseDesc → variant.metadata.qb_purchase_desc. Falls back to sales_description when empty. */
+  purchase_description?: string;
   options?: Record<string, string>;
   overrides?: {
     cogs_account_full_name?: string;
@@ -172,6 +174,13 @@ export const createPosProductV2Workflow = createWorkflow(
             ...sharedMeta,
             sales_description:
               v.sales_description ?? i.sales_description ?? i.title,
+            // Canonical per-variant QB PurchaseDesc. Falls back to the sales
+            // description so QB's PurchaseDesc is never empty on a fresh item.
+            qb_purchase_desc:
+              v.purchase_description ??
+              v.sales_description ??
+              i.sales_description ??
+              i.title,
             purchase_cost: v.cost,
             qb_retail_price: v.retail_price,
             qb_wholesale_price: v.wholesale_price ?? null,
@@ -297,6 +306,11 @@ export const createPosProductV2Workflow = createWorkflow(
             sku: v.sku,
             title: v.title ?? v.sku,
             sales_description:
+              v.sales_description ??
+              data.input.sales_description ??
+              data.input.title,
+            purchase_description:
+              v.purchase_description ??
               v.sales_description ??
               data.input.sales_description ??
               data.input.title,
