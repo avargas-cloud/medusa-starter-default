@@ -31,6 +31,10 @@ import {
   resolveAvgCostSeedCents,
 } from "../../../../../../../../lib/cost/avco";
 import {
+  recostSalesWindow,
+  type RecostKnex,
+} from "../../../../../../../../lib/cost/recost-window";
+import {
   resolveBoundReceiptIds,
   syncPrimaryReceiptPointer,
   validateReceiptsForBinding,
@@ -640,6 +644,12 @@ export async function POST(
     return (ra?.seq ?? 0) - (rb?.seq ?? 0);
   });
 
+  // The cost each variant ENDS this confirm at, collected as the replay runs.
+  // The window repricing below needs exactly this value — re-reading
+  // `average_cost` afterwards would work today but breaks the moment a variant
+  // has more than one event in play.
+  const finalCostByVariant = new Map<string, number>();
+
   await Promise.all(
     [...landedByVariant.entries()].map(async ([variantId, { totalLanded, totalQty: receivedQty }]) => {
       const batchLandedPerUnit = receivedQty > 0 ? totalLanded / receivedQty : 0;
@@ -718,6 +728,15 @@ export async function POST(
       );
       let runningAvg: number | null = seedCents;
 
+      // Aggregates for this variant's cost event, accumulated as the replay
+      // runs. `effectiveAt` is the FIRST receipt that contributed — the moment
+      // the goods came under our control, which is when the cost attaches.
+      let variantEffectiveAt: string | null = null;
+      let variantQtyReceived = 0;
+      let variantQtyAfter = 0;
+      let variantTrueUpCents = 0;
+      let variantSettledQty = 0;
+
       // Chronological AVCO replay — one step per contributing receipt.
       for (const rid of contributingReceiptIds) {
         const r = stockByReceipt.get(rid)!;
@@ -765,12 +784,65 @@ export async function POST(
         );
 
         runningAvg = step.newAvgCostCents;
+
+        if (variantEffectiveAt === null) {
+          variantEffectiveAt = receiptOrderById.get(rid)?.received_at ?? null;
+        }
+        variantQtyReceived += qtyThisReceipt;
+        variantQtyAfter = step.quantityOnHandAfter;
+        variantTrueUpCents += step.cogsTrueUpCents;
+        variantSettledQty += step.negativeSettledQuantity;
       }
 
       // Persist the FINAL running average once per variant. A null here means
       // no receipt contributed (nothing to average) — writing it would blank a
       // perfectly good cost, so skip instead.
       if (runningAvg === null) return;
+      finalCostByVariant.set(variantId, runningAvg / 100);
+
+      // Append the cost event. `variant_cost_event` is the reconstructable
+      // history of every cost change; the one-off restatement seeded it, and
+      // without this write it would stop dead there — future windows would find
+      // no later event and reach forward indefinitely.
+      //
+      // Non-fatal on purpose: the bill is confirmed and its average stored, and
+      // an append-only journal must never be the thing that fails a confirm.
+      // The idempotency key makes a re-confirm a no-op instead of a duplicate.
+      try {
+        await knex.raw(
+          `INSERT INTO variant_cost_event
+             (id, product_variant_id, event_type, cost_field, effective_at, recorded_at,
+              previous_unit_cost, new_unit_cost, quantity_on_hand_at_event,
+              source_system, source_type, source_id, status, idempotency_key,
+              vendor_bill_id, receipt_id, quantity_delta, cogs_true_up_cents,
+              negative_settled_quantity, reason_code)
+           VALUES (?, ?, 'vendor_bill_receipt', 'average_cost', ?::timestamptz, NOW(),
+                   ?::numeric, ?::numeric, ?::int, 'medusa', 'vendor_bill_confirm', ?,
+                   'active', ?, ?, ?, ?::int, ?::bigint, ?::int, 'vendor_bill_confirm')
+           ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
+          [
+            `vce_cf_${bill.id.slice(-12)}_${variantId.slice(-12)}`,
+            variantId,
+            variantEffectiveAt ?? new Date().toISOString(),
+            seedCents === null ? null : seedCents / 100,
+            runningAvg / 100,
+            variantQtyAfter,
+            bill.id,
+            `confirm:${bill.id}:${variantId}`,
+            bill.id,
+            chronologicalReceiptIds[0] ?? null,
+            variantQtyReceived,
+            Math.round(variantTrueUpCents),
+            variantSettledQty,
+          ]
+        );
+      } catch (error) {
+        logger.warn(
+          `[vendor-bill ${bill.id}] could not append variant_cost_event for ${variantId}: ` +
+            `${error instanceof Error ? error.message : String(error)}. The cost is stored; ` +
+            `the history journal is missing this entry.`
+        );
+      }
       await knex.raw(
         `UPDATE product_variant
          SET metadata = COALESCE(metadata, '{}'::jsonb)
@@ -785,6 +857,55 @@ export async function POST(
       );
     })
   );
+
+  // 10b. Reprice the sales that happened between the goods ARRIVING and this
+  // bill being confirmed.
+  //
+  // Those units went out the door from THIS shipment, but they were invoiced
+  // before anyone knew what the shipment cost, so their frozen COGS still
+  // belongs to the previous one. In production this window averaged 6.4 days
+  // (max 20) and had left 224 invoice lines mispriced; without this step every
+  // late confirmation opens a fresh one.
+  //
+  // Non-fatal by the same contract as the QuickBooks enqueue below: the bill is
+  // already confirmed and must stand. A failure is loud, and
+  // `scripts/fix/recost-vendor-bill-window.ts` re-runs it for a single bill.
+  const recostFrom = chronologicalReceiptIds
+    .map((rid) => receiptOrderById.get(rid)?.received_at)
+    .filter((value): value is string => Boolean(value))
+    .map((value) => new Date(value))
+    .sort((a, b) => a.getTime() - b.getTime())[0];
+
+  if (recostFrom && finalCostByVariant.size > 0) {
+    try {
+      // `KnexInstance` above is a deliberately narrow view (raw only); the
+      // resolved object is the real knex instance and does have `transaction`,
+      // which the repricing needs to keep its writes atomic.
+      const recost = await recostSalesWindow(knex as unknown as RecostKnex, {
+        costByVariant: finalCostByVariant,
+        from: recostFrom,
+        // Deterministic: re-confirming the same bill reuses these rows rather
+        // than stacking a second correction on top of the first.
+        runId: `rw_${bill.id}`,
+        reason: "receipt_to_bill_window",
+      });
+      if (recost.invoiceLinesRepriced + recost.creditMemoLinesRepriced > 0) {
+        logger.warn(
+          `[vendor-bill ${bill.id}] repriced ${recost.invoiceLinesRepriced} invoice and ` +
+            `${recost.creditMemoLinesRepriced} credit-memo lines sold between ` +
+            `${recostFrom.toISOString().slice(0, 10)} and this confirm; COGS moved ` +
+            `${(recost.cogsDeltaCents / 100).toFixed(2)}. Reports for those days change.`
+        );
+      }
+    } catch (error) {
+      logger.warn(
+        `[vendor-bill ${bill.id}] receipt-to-confirm repricing FAILED: ` +
+          `${error instanceof Error ? error.message : String(error)}. The bill is confirmed ` +
+          `and the new average is stored, but sales in the window keep the old cost. ` +
+          `Re-run: BILL_ID=${bill.id} medusa exec ./src/scripts/fix/recost-vendor-bill-window.ts`
+      );
+    }
+  }
 
   // 11. Phase 1.1 — enqueue the QuickBooks BillAdd (plan §5). Non-fatal by
   // contract: the local confirm above is already committed and must stand
