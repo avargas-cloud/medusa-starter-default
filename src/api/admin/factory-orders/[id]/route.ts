@@ -19,6 +19,7 @@ import { zodErrorToBody } from "../_lib/format";
 import { getFactoryOrdersService } from "../_lib/service-resolver";
 import { computeTotals, normalizeLine } from "../_lib/totals";
 import { updateDraftSchema } from "../_lib/validators";
+import { resolveVendorDisplayName } from "../../../../lib/vendors/vendor-display-name";
 
 interface QbVendorLike {
   id: string;
@@ -50,11 +51,7 @@ async function resolveVendorSnapshot(
     ) as unknown as QbCatalogServiceLike;
     const vendor = await qbCatalog.retrieveQbVendor(vendorId);
     return {
-      name:
-        vendor?.company_name ??
-        vendor?.full_name ??
-        vendor?.name ??
-        vendorId,
+      name: resolveVendorDisplayName(vendor ?? {}, vendorId) ?? vendorId,
       qb_list_id: vendor?.qb_list_id ?? null,
     };
   } catch {

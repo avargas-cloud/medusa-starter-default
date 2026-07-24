@@ -21,6 +21,7 @@ import {
   createDraftSchema,
   listQuerySchema,
 } from "./_lib/validators";
+import { resolveVendorDisplayName } from "../../../lib/vendors/vendor-display-name";
 
 export async function GET(
   req: AuthenticatedMedusaRequest,
@@ -126,7 +127,7 @@ export async function POST(
   }
 
   const vendorNameSnapshot = vendorRow
-    ? (vendorRow.company_name ?? vendorRow.full_name ?? vendorRow.name ?? null)
+    ? resolveVendorDisplayName(vendorRow)
     : null;
   const vendorListIdSnapshot = vendorRow?.qb_list_id ?? null;
 

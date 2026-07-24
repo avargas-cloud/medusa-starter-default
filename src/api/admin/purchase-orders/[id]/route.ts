@@ -32,6 +32,7 @@ import {
   poHasTracking,
   reconcileReceivedPoStatus,
 } from "../../../../lib/purchase-orders/po-received-status";
+import { resolveVendorDisplayName } from "../../../../lib/vendors/vendor-display-name";
 
 interface QbVendorLike {
   id: string;
@@ -563,7 +564,7 @@ export async function PATCH(
       ) as unknown as QbCatalogServiceLike;
       const v = await qbCatalog.retrieveQbVendor(body.vendor_id);
       vendorSnapshot = {
-        name: v?.full_name ?? v?.name ?? body.vendor_id,
+        name: resolveVendorDisplayName(v ?? {}, body.vendor_id) ?? body.vendor_id,
         qb_list_id: v?.qb_list_id ?? null,
       };
     } catch {
