@@ -234,6 +234,71 @@ export async function POST(
         [restoredAvg, restoredAvg, log.product_variant_id]
       );
 
+      // Journal the reversal. Already inside this route's transaction, so the
+      // guarantee comes for free here: the restored average and its history
+      // entry commit together or not at all.
+      //
+      // Same shape as the cancel path — the two are the AVCO reversal twins
+      // (reopen returns the bill to draft for editing, cancel retires it), so
+      // the only differences are event_type and reason_code. currentAvg and
+      // restoredAvg are CENTS, so qty x their difference is already a cents
+      // delta; no x100, unlike the QB sync where costs arrive in dollars.
+      // Look the confirm's event UP rather than recomputing its id from a
+      // string format. The confirm route mints generation-suffixed ids so a
+      // re-confirm after a reopen isn't swallowed by its own idempotency key,
+      // which means there is no single id this route could reconstruct. NULL
+      // when the bill predates the journal — the reversal still records, it
+      // just has nothing to point back at.
+      const priorEvent = await db.raw(
+        `SELECT id FROM variant_cost_event
+          WHERE vendor_bill_id = ? AND product_variant_id = ?
+            AND cost_field = 'average_cost' AND event_type = 'vendor_bill_receipt'
+            AND status = 'active'
+          ORDER BY effective_at DESC, event_sequence DESC
+          LIMIT 1`,
+        [bill.id, log.product_variant_id]
+      );
+      const confirmEventId =
+        (priorEvent.rows[0] as { id: string } | undefined)?.id ?? null;
+      await db.raw(
+        `INSERT INTO variant_cost_event
+           (id, product_variant_id, event_type, cost_field, effective_at, recorded_at,
+            previous_unit_cost, new_unit_cost, quantity_on_hand_at_event,
+            inventory_value_delta_cents, source_system, source_type, source_id,
+            status, idempotency_key, vendor_bill_id, quantity_delta,
+            reverses_event_id, reason_code)
+         VALUES (?, ?, 'vendor_bill_reopen', 'average_cost', NOW(), NOW(),
+                 ?::numeric, ?::numeric, ?::int, ?::bigint,
+                 'medusa', 'vendor_bill_reopen', ?, 'active', ?, ?, ?::int, ?,
+                 'vendor_bill_reopen')
+         ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
+        [
+          `vce_vr_${bill.id.slice(-12)}_${log.product_variant_id.slice(-12)}`,
+          log.product_variant_id,
+          currentAvg / 100,
+          restoredAvg / 100,
+          qCurrent,
+          Math.round(qCurrent * (restoredAvg - currentAvg)),
+          bill.id,
+          `reopen:${bill.id}:${log.product_variant_id}`,
+          bill.id,
+          -log.received_qty,
+          confirmEventId,
+        ]
+      );
+
+      // Retire the confirm's event: recost-window walks `status = 'active'` to
+      // find a variant's next cost change, and an undone confirm must stop
+      // acting as that boundary. Unlike cancel, this bill can be confirmed
+      // again later — that re-confirm appends its own fresh event rather than
+      // reviving this one.
+      await db.raw(
+        `UPDATE variant_cost_event
+            SET status = 'reversed'
+          WHERE id = ? AND status = 'active'`,
+        [confirmEventId]
+      );
+
       await db.raw(
         `UPDATE vendor_bill_cost_log SET reversed_at = NOW(), updated_at = NOW()
           WHERE id = ?`,

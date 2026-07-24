@@ -25,19 +25,40 @@ const FACTORY_COST = `COALESCE(${purchaseCostDollars("pv")}, 0)`
 
 const LANDED_COST = `COALESCE(${avgCostDollars("pv")}, 0)`
 
-const AVAILABLE_QTY = `GREATEST(0, il.stocked_quantity - COALESCE(il.reserved_quantity, 0))`
+// Owned quantity — the WHOLE shelf (2026-07-24). This used to be
+// GREATEST(0, stocked - reserved), which was wrong twice over:
+//
+//   1. Reserved stock has not been sold. It is still owned, still on the
+//      balance sheet, and QuickBooks counts it in Inventory Asset. Subtracting
+//      it answered "how much can I still sell" while the page labelled the
+//      answer "how much do I have". Those are different questions; the
+//      availability one now lives on its own, next to the value.
+//   2. The GREATEST(0, ...) floor was the only non-linear term in the whole
+//      Initial -> Final walk, so it did not cancel between the two ends and
+//      left a residual nobody could account for ("Reserved-stock floor").
+//      Without it, Final - Initial IS the sum of the movements, by definition,
+//      and the walk reconciles to $0.00 exactly.
+//
+// The price is that oversold SKUs now contribute NEGATIVE value instead of
+// being hidden at zero. That is the correct reading — owing inventory you do
+// not have is a real liability, QuickBooks treats it the same way, and it
+// matches the costing engine's own rule that negative stock is liquidated,
+// never clamped. The `stocked_quantity > 0` filter is gone for the same
+// reason: excluding negative rows here while the reconstruction includes them
+// would make the live number and the period-close number disagree.
+const OWNED_QTY = `il.stocked_quantity`
 
 const INVENTORY_VALUE_JOINS = `
   FROM inventory_level il
   JOIN inventory_item ii ON ii.id = il.inventory_item_id
   JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = ii.id
   JOIN product_variant pv ON pv.id = pvii.variant_id AND pv.deleted_at IS NULL
-  WHERE il.location_id = ? AND il.stocked_quantity > 0
+  WHERE il.location_id = ?
 `
 
 async function fetchInventoryValue(pg: any, locationId: string, costExpr: string): Promise<number> {
   const result = await pg.raw(
-    `SELECT COALESCE(ROUND(SUM(${AVAILABLE_QTY} * ${costExpr})::numeric, 2), 0) AS value
+    `SELECT COALESCE(ROUND(SUM(${OWNED_QTY} * ${costExpr})::numeric, 2), 0) AS value
      ${INVENTORY_VALUE_JOINS}`,
     [locationId]
   )
@@ -71,21 +92,29 @@ async function fetchMiamiDeadInventoryDeduction(pg: any): Promise<number> {
 // "every variant at the location" and from "quantity" to "quantity × current
 // cost" (we don't track historical unit cost, so — same as the rest of this
 // route — current cost is used as the best available estimate throughout).
-// balance_at(date) = current_stocked − net_movements_between(date, now), then
-// valued the SAME way fetchInventoryValue values live stock: GREATEST(0,
-// balance − reserved) — reserved has no history to walk back (reservations
-// aren't logged with a date the way receipts/sales are), so CURRENT reserved
-// is used for every date as the best available stand-in.
-// Verified 2026-07-14: fetch*InventoryValueAtDate(pg, now) reproduces
-// fetchInventoryValue's live number to the cent for both locations — that
-// equivalence is the correctness check for the whole reconstruction.
+// balance_at(date) = current_stocked − net_movements_between(date, now),
+// valued the SAME way fetchInventoryValue values live stock: the whole owned
+// balance, no reserved subtraction and no zero floor (see OWNED_QTY). Keeping
+// these two in lockstep is what makes the period-close number and the live
+// number the same number.
+//
+// NOTE on the "self-check" this used to claim (reconstruct at now == live
+// snapshot): that test is TAUTOLOGICAL and proves nothing. At t = now every
+// movement CTE filters `>= now`, returns empty, and the whole expression
+// collapses to `live == live` — it cannot detect a missing, mis-dated or
+// wrongly-filtered movement source, which is exactly the bug class in play
+// here. Three real defects hid behind it (drafts counted as sold, damaged
+// returns counted as restocked, returns keyed on created_at instead of
+// completed_at). The actual check is the reconciliation walk's
+// `untracked_stock_movement` term, which is only zero when every movement is
+// accounted for.
 
 // Miami: sold(−) / returned(+) / received(+) / inventory-count adjusted(±).
 async function fetchMiamiInventoryValueAtDate(pg: any, targetDate: string): Promise<number> {
   const result = await pg.raw(
     `WITH current_stock AS (
        SELECT pv.id AS variant_id, il.stocked_quantity AS stocked,
-         COALESCE(il.reserved_quantity, 0) AS reserved, ${LANDED_COST} AS unit_cost
+         ${LANDED_COST} AS unit_cost
        FROM inventory_level il
        JOIN inventory_item ii ON ii.id = il.inventory_item_id
        JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = ii.id
@@ -141,11 +170,9 @@ async function fetchMiamiInventoryValueAtDate(pg: any, targetDate: string): Prom
        GROUP BY icl.product_variant_id
      )
      SELECT COALESCE(SUM(
-       GREATEST(0,
-         (cs.stocked - (
-           -COALESCE(sold.qty, 0) + COALESCE(returned.qty, 0) + COALESCE(received.qty, 0) + COALESCE(adjusted.qty, 0)
-         )) - cs.reserved
-       ) * cs.unit_cost
+       (cs.stocked - (
+         -COALESCE(sold.qty, 0) + COALESCE(returned.qty, 0) + COALESCE(received.qty, 0) + COALESCE(adjusted.qty, 0)
+       )) * cs.unit_cost
      ), 0) AS value
      FROM current_stock cs
      LEFT JOIN sold ON sold.variant_id = cs.variant_id
@@ -167,7 +194,7 @@ async function fetchChinaInventoryValueAtDate(pg: any, targetDate: string): Prom
   const result = await pg.raw(
     `WITH current_stock AS (
        SELECT pv.id AS variant_id, ii.id AS inventory_item_id, il.stocked_quantity AS stocked,
-         COALESCE(il.reserved_quantity, 0) AS reserved, ${FACTORY_COST} AS unit_cost
+         ${FACTORY_COST} AS unit_cost
        FROM inventory_level il
        JOIN inventory_item ii ON ii.id = il.inventory_item_id
        JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = ii.id
@@ -198,11 +225,9 @@ async function fetchChinaInventoryValueAtDate(pg: any, targetDate: string): Prom
        GROUP BY cl.inventory_item_id
      )
      SELECT COALESCE(SUM(
-       GREATEST(0,
-         (cs.stocked - (
-           COALESCE(fo.qty, 0) - COALESCE(tr.qty, 0) + COALESCE(adj.delta, 0)
-         )) - cs.reserved
-       ) * cs.unit_cost
+       (cs.stocked - (
+         COALESCE(fo.qty, 0) - COALESCE(tr.qty, 0) + COALESCE(adj.delta, 0)
+       )) * cs.unit_cost
      ), 0) AS value
      FROM current_stock cs
      LEFT JOIN fo_receipts fo ON fo.variant_id = cs.variant_id
@@ -434,23 +459,18 @@ async function fetchInventoryAdjustments(
 //     historical unit cost and values every unit at today's. Subtracting the
 //     two gives the cost-basis term by name.
 //
-//   floorEffect — the value withheld by the per-variant GREATEST(0, balance −
-//     reserved) floor. Reservations have no history to walk back, so TODAY's
-//     reserved qty is applied at every date; a variant whose reconstructed
-//     balance lands below it would go negative, and both this reconstruction
-//     and the live snapshot hold such a variant at $0 rather than let negative
-//     inventory value leak in. That floor is non-linear, so it doesn't cancel
-//     between Initial and Final — this is exactly how much it moved, computed
-//     directly rather than inferred as whatever was left over.
+// The zero floor that used to need its own term here is gone (2026-07-24):
+// inventory is valued on the whole owned balance now, so the walk has no
+// non-linear step left and needs no floor line to absorb one.
 async function fetchMiamiPeriodLedger(
   pg: any,
   from: string,
   to: string
-): Promise<{ netSold: number; floorEffect: number }> {
+): Promise<{ netSold: number }> {
   const result = await pg.raw(
     `WITH current_stock AS (
        SELECT pv.id AS variant_id, il.stocked_quantity AS stocked,
-         COALESCE(il.reserved_quantity, 0) AS reserved, ${LANDED_COST} AS unit_cost
+         ${LANDED_COST} AS unit_cost
        FROM inventory_level il
        JOIN inventory_item ii ON ii.id = il.inventory_item_id
        JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = ii.id
@@ -506,7 +526,7 @@ async function fetchMiamiPeriodLedger(
        GROUP BY icl.product_variant_id
      ),
      balances AS (
-       SELECT cs.reserved, cs.unit_cost,
+       SELECT cs.unit_cost,
          (cs.stocked - (
            -COALESCE(s.qty_from, 0) + COALESCE(r.qty_from, 0)
            + COALESCE(rc.qty_from, 0) + COALESCE(a.qty_from, 0)
@@ -524,11 +544,7 @@ async function fetchMiamiPeriodLedger(
        LEFT JOIN adjusted a  ON a.variant_id  = cs.variant_id
      )
      SELECT
-       COALESCE(ROUND(SUM(unit_cost * (sold_in_period - returned_in_period))::numeric, 2), 0) AS net_sold,
-       COALESCE(ROUND(SUM(unit_cost * (
-         GREATEST(0, bal_final - reserved) - GREATEST(0, bal_initial - reserved)
-         - (bal_final - bal_initial)
-       ))::numeric, 2), 0) AS floor_effect
+       COALESCE(ROUND(SUM(unit_cost * (sold_in_period - returned_in_period))::numeric, 2), 0) AS net_sold
      FROM balances`,
     [
       USA_SLOC,
@@ -538,10 +554,7 @@ async function fetchMiamiPeriodLedger(
       from, to, USA_SLOC, from,  // adjusted
     ]
   )
-  return {
-    netSold: Number(result.rows[0]?.net_sold ?? 0),
-    floorEffect: Number(result.rows[0]?.floor_effect ?? 0),
-  }
+  return { netSold: Number(result.rows[0]?.net_sold ?? 0) }
 }
 
 // ─── "Current" mode — live pipeline exposure, no date range ────────────────
@@ -900,9 +913,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       // movement source, surfaced as its own vertical flow above the
       // warehouse node (user request 2026-07-23).
       fetchInventoryAdjustments(pg, range.from, range.to),
-      // Only used to NAME two terms of the reconciliation below (cost basis,
-      // reserved-stock floor) — never displayed as cost figures in their own
-      // right.
+      // Only used to NAME the cost-basis term of the reconciliation below —
+      // never displayed as a cost figure in its own right.
       fetchMiamiPeriodLedger(pg, range.from, effectiveTo.toISOString()),
     ])
 
@@ -933,8 +945,6 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     //   • cost_basis — Product Cost is charged at each line's frozen cost
     //     snapshot; the Initial/Final reconstruction values the same units at
     //     today's cost (no historical unit cost exists to use instead).
-    //   • reserved_stock_floor — how much the per-variant
-    //     GREATEST(0, balance − reserved) floor withheld over the period.
     //   • untracked_stock_movement — what's STILL left after all of the above,
     //     and the only honest name for it: stock that moved in Miami without
     //     going through invoices, credit memos, PO receipts or inventory
@@ -948,7 +958,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const costBasis = productCostDollars.net - periodLedger.netSold
     const chainBeforeResidual =
       miamiInitialNet + receivedLocal + receivedChina - productCostDollars.net
-      + inventoryAdjustments.value + costBasis + periodLedger.floorEffect
+      + inventoryAdjustments.value + costBasis
     const reconciliation = {
       initial_inventory: miamiInitialNet,
       received_local: receivedLocal,
@@ -956,7 +966,6 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       product_cost_net: productCostDollars.net,
       inventory_adjustments: inventoryAdjustments.value,
       cost_basis: costBasis,
-      reserved_stock_floor: periodLedger.floorEffect,
       untracked_stock_movement: miamiFinalNet - chainBeforeResidual,
       final_inventory: miamiFinalNet,
     }
