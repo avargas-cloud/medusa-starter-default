@@ -43,6 +43,7 @@ import {
   syncPrimaryReceiptPointer,
   validateReceiptsForBinding,
 } from "../../../../lib/purchase-orders/vendor-bill-receipts";
+import { enqueueChinaAgencyVendorBillModGroup } from "../../../../lib/purchase-orders/qb-vendor-bill-mod-enqueue";
 
 // ── Knex type ────────────────────────────────────────────────────────────────
 
@@ -92,6 +93,10 @@ interface VendorBillDetailRow {
   created_at: string;
   updated_at: string;
   qb_txn_id: string | null;
+  qb_amount_due_cents: number | null;
+  qb_is_paid: boolean;
+  qb_balance_remaining_cents: number | null;
+  qb_payment_checked_at: string | null;
   qb_ref_number: string | null;
   qb_synced_at: string | null;
   qb_source: string | null;
@@ -266,6 +271,10 @@ export async function GET(
        vb.created_at,
        vb.updated_at,
        vb.qb_txn_id,
+       vb.qb_amount_due_cents,
+       vb.qb_is_paid,
+       vb.qb_balance_remaining_cents,
+       vb.qb_payment_checked_at,
        vb.qb_ref_number,
        vb.qb_synced_at,
        vb.qb_source,
@@ -641,15 +650,34 @@ export async function PATCH(
       .status(404)
       .json({ error: "Vendor bill not found", code: "not_found" });
   }
-  // ADOPTED bills (owner rule 2026-07-23): legacy QB bills imported by the
-  // reconciliation pass are a READ-ONLY mirror of what the accountant entered
-  // by hand — never editable from the POS (their source of truth is QB).
+  // ADOPTED bills remain read-only for accounting content. Payment terms are
+  // the one local planning exception: operators may set days and the derived
+  // due date without changing the legacy QB document itself.
   if (bill.qb_source === "adopted") {
-    return res.status(409).json({
-      error:
-        "This is an adopted legacy bill (entered by hand in QuickBooks) — it is read-only here",
-      code: "adopted_bill_readonly",
-    });
+    const keys = Object.keys(patch);
+    const allowedKeys = new Set(["payment_terms_days", "due_date"]);
+    if (keys.some((key) => !allowedKeys.has(key))) {
+      return res.status(409).json({
+        error:
+          "This adopted legacy bill is read-only except for local payment terms and due date",
+        code: "adopted_bill_readonly",
+      });
+    }
+    if (keys.length === 0) {
+      return GET(req, res);
+    }
+    const entries = keys.map((key) => [
+      key,
+      patch[key as keyof typeof patch] ?? null,
+    ] as const);
+    await knex.raw(
+      `UPDATE vendor_bill
+          SET ${entries.map(([key]) => `${key} = ?`).join(", ")},
+              updated_at = NOW()
+        WHERE id = ? AND deleted_at IS NULL`,
+      [...entries.map(([, value]) => value), id]
+    );
+    return GET(req, res);
   }
   // D6 — rebinding receipts on a SYNCED bill changes what QB's linked Bill
   // covers; that's the future Unlock/rebuild path (§6 of the plan), not this
@@ -662,9 +690,13 @@ export async function PATCH(
       code: "synced_bill_rebind_requires_unlock",
     });
   }
-  if (bill.status !== "draft" && bill.status !== "confirmed") {
+  if (
+    bill.status !== "draft" &&
+    bill.status !== "confirmed" &&
+    bill.status !== "synced"
+  ) {
     return res.status(409).json({
-      error: `Cannot update a vendor bill in status '${bill.status}'. Only draft or confirmed bills can be edited.`,
+      error: `Cannot update a vendor bill in status '${bill.status}'.`,
       code: "not_draft",
     });
   }
@@ -768,9 +800,13 @@ export async function PATCH(
         code: "linked_bill_wrong_type",
       });
     }
-    if (linked.status !== "draft" && linked.status !== "confirmed") {
+    if (
+      linked.status !== "draft" &&
+      linked.status !== "confirmed" &&
+      linked.status !== "synced"
+    ) {
       return res.status(422).json({
-        error: `Linked ${requiredType} bill must be draft or confirmed`,
+        error: `Linked ${requiredType} bill is not editable`,
         code: "linked_bill_not_open",
       });
     }
@@ -824,8 +860,20 @@ export async function PATCH(
   >();
 
   if (hasLineEdits || pinProvided || receiptIdsProvided) {
-    if (bill.status !== "draft" || effectiveBillType !== "regular") {
-      return res.status(409).json({ error: "Lines and receipt bindings can only be edited on draft regular bills", code: "not_draft" });
+    if (
+      (bill.status !== "draft" && bill.status !== "synced") ||
+      effectiveBillType !== "regular" ||
+      (bill.status === "synced" && (pinProvided || receiptIdsProvided))
+    ) {
+      return res.status(409).json({
+        error:
+          bill.status === "synced"
+            ? "A synced bill can edit its existing lines, but its receipt bindings are locked"
+            : "Lines and receipt bindings can only be edited on regular bills",
+        code: bill.status === "synced"
+          ? "synced_bill_rebind_requires_unlock"
+          : "not_draft",
+      });
     }
     if (!bill.purchase_order_id) {
       return res.status(422).json({ error: "This bill is not linked to a purchase order", code: "no_purchase_order" });
@@ -965,7 +1013,7 @@ export async function PATCH(
       }
     }
   } else if (hasLineEdits) {
-    if (bill.purchase_order_receipt_id) {
+    if (bill.purchase_order_receipt_id && bill.status !== "synced") {
       return res.status(409).json({ error: "This bill is pinned to a receipt. Use 'Update from Receipt' to change its lines.", code: "bill_receipt_pinned" });
     }
     for (const edit of qtyEdits) {
@@ -985,6 +1033,71 @@ export async function PATCH(
     }
   }
 
+  // Keep the original receipt guard on post-sync edits. A BillMod may reduce
+  // or reshape already-billed quantities, but it can never bill more units
+  // than the applied receipts bound to this bill actually received.
+  if (bill.status === "synced" && hasLineEdits) {
+    const desiredByPoLine = new Map<string, number>();
+    if (hasFullLines) {
+      for (const line of fullLines!) {
+        desiredByPoLine.set(
+          line.purchase_order_line_id,
+          (desiredByPoLine.get(line.purchase_order_line_id) ?? 0) + line.qty
+        );
+      }
+    } else {
+      const removed = new Set(removedIds);
+      const qtyById = new Map(qtyEdits.map((line) => [line.id, line.qty]));
+      for (const line of existingProductLines) {
+        if (!line.purchase_order_line_id || removed.has(line.id)) continue;
+        desiredByPoLine.set(
+          line.purchase_order_line_id,
+          (desiredByPoLine.get(line.purchase_order_line_id) ?? 0) +
+            (qtyById.get(line.id) ?? line.qty)
+        );
+      }
+    }
+    const received = await knex.raw(
+      `SELECT porl.purchase_order_line_id,
+              SUM(porl.qty_received_now)::int AS qty_received
+         FROM purchase_order_receipt por
+         JOIN purchase_order_receipt_line porl
+           ON porl.purchase_order_receipt_id = por.id
+          AND porl.deleted_at IS NULL
+        WHERE (por.vendor_bill_id = ?
+            OR por.id = (
+              SELECT purchase_order_receipt_id
+                FROM vendor_bill
+               WHERE id = ?
+            ))
+          AND por.deleted_at IS NULL
+          AND por.status IN ('applied', 'synced')
+        GROUP BY porl.purchase_order_line_id`,
+      [id, id]
+    );
+    const receivedByPoLine = new Map(
+      (received.rows as Array<{
+        purchase_order_line_id: string;
+        qty_received: number | string;
+      }>).map((row) => [
+        row.purchase_order_line_id,
+        Number(row.qty_received),
+      ])
+    );
+    for (const [poLineId, desiredQty] of desiredByPoLine) {
+      const receivedQty = receivedByPoLine.get(poLineId) ?? 0;
+      if (desiredQty > receivedQty) {
+        return res.status(422).json({
+          error:
+            `Cannot bill ${desiredQty} units; only ${receivedQty} were received`,
+          code: "qty_exceeds_received",
+          purchase_order_line_id: poLineId,
+          qty_received: receivedQty,
+        });
+      }
+    }
+  }
+
   // ── §7 — Freight charge lines: independent staged reconcile ─────────────────
   // Deliberately kept OUT of `lines`/`line_quantities` above: freight charges
   // have no purchase_order_line_id and no qty, so they never enter the PO
@@ -1000,9 +1113,12 @@ export async function PATCH(
   let freightAccountByListId = new Map<string, FreightAccount>();
 
   if (hasFreightLines) {
-    if (bill.status !== "draft" || effectiveBillType !== "regular") {
+    if (
+      (bill.status !== "draft" && bill.status !== "synced") ||
+      effectiveBillType !== "regular"
+    ) {
       return res.status(409).json({
-        error: "Freight charges can only be edited on draft regular bills",
+        error: "Freight charges can only be edited on regular POS-owned bills",
         code: "not_draft",
       });
     }
@@ -1253,6 +1369,21 @@ export async function PATCH(
               AND deleted_at IS NULL
               AND bill_type IN ('service', 'freight', 'tariff')`,
           [bill.purchase_order_id, linkedIds]
+        );
+      }
+    }
+
+    // A synced POS-owned China Agency bill remains editable. Freeze the FULL
+    // Regular + Service/Freight/Tariff BillMod group in this same transaction
+    // so a local save can never commit with only part of its QB work queued.
+    if (
+      bill.status === "synced" &&
+      (entries.length > 0 || hasLineEdits || hasFreightLines)
+    ) {
+      const queued = await enqueueChinaAgencyVendorBillModGroup(db, id);
+      if (!queued.queued) {
+        throw new Error(
+          `QuickBooks update could not be queued: ${queued.reason}`
         );
       }
     }

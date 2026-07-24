@@ -49,6 +49,7 @@ export type SubmittedRow = {
   bridge_op_id: string;
   retry_count: number;
   qb_txn_id: string | null;
+  payload?: Record<string, unknown> | null;
 };
 
 function compareTxnLineIds(a: string, b: string): number {
@@ -59,6 +60,23 @@ function compareTxnLineIds(a: string, b: string): number {
   const hexB = parseInt((b ?? "").split("-")[0] ?? b, 16);
   if (!isNaN(hexA) && !isNaN(hexB)) return hexA - hexB;
   return String(a).localeCompare(String(b));
+}
+
+function extractVendorBillQueryRet(msgs: any, txnId: string | null): any | null {
+  const raw = msgs?.BillQueryRs?.BillRet;
+  const bills = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
+  return (
+    bills.find((bill: any) => String(bill?.TxnID ?? "") === String(txnId ?? "")) ??
+    bills[0] ??
+    null
+  );
+}
+
+function vendorBillIsPaid(bill: any): boolean {
+  const raw = bill?.IsPaid;
+  if (raw === true || raw === "true" || raw === "1") return true;
+  const amountDue = Number(bill?.AmountDue);
+  return Number.isFinite(amountDue) && amountDue <= 0;
 }
 
 export async function pollSubmittedRows(
@@ -85,6 +103,41 @@ export async function pollSubmittedRows(
 
       if (op.status === "completed") {
         const msgs = op.result?.QBXML?.QBXMLMsgsRs || op.result?.QBXMLMsgsRs;
+        const paymentBill =
+          row.step === "vendor_bill_payment_check"
+            ? extractVendorBillQueryRet(msgs, row.qb_txn_id)
+            : null;
+        const modifiedBill =
+          row.step === "vendor_bill_mod"
+            ? msgs?.BillModRs?.BillRet ?? null
+            : null;
+        if (row.step === "vendor_bill_payment_check" && !paymentBill) {
+          await failOrRetryPipelineRow(
+            row.id,
+            "BillQuery completed without a matching QuickBooks Bill",
+            row.retry_count
+          );
+          continue;
+        }
+        if (row.step === "vendor_bill_mod" && !modifiedBill) {
+          const statusMessage =
+            msgs?.BillModRs?.statusMessage ??
+            msgs?.BillModRs?.["@statusMessage"] ??
+            "BillMod completed without BillRet";
+          await pool.query(
+            `UPDATE qb_vendor_bill_pipeline
+                SET status = 'error', qb_operation_id = NULL,
+                    last_error = $2, updated_at = NOW()
+              WHERE vendor_bill_id = $1 AND intent = 'mod' AND deleted_at IS NULL`,
+            [row.reference_id, String(statusMessage)]
+          );
+          await failOrRetryPipelineRow(
+            row.id,
+            String(statusMessage),
+            row.retry_count
+          );
+          continue;
+        }
         const txnId =
           op.txnId ||
           op.result?.TxnID ||
@@ -94,6 +147,7 @@ export async function pollSubmittedRows(
           msgs?.ReceivePaymentAddRs?.ReceivePaymentRet?.TxnID ||
           msgs?.ReceivePaymentModRs?.ReceivePaymentRet?.TxnID ||
           msgs?.CreditMemoAddRs?.CreditMemoRet?.TxnID ||
+          modifiedBill?.TxnID ||
           null;
         const refNumber =
           op.refNumber ||
@@ -102,7 +156,75 @@ export async function pollSubmittedRows(
           msgs?.ReceivePaymentAddRs?.ReceivePaymentRet?.RefNumber ||
           msgs?.ReceivePaymentModRs?.ReceivePaymentRet?.RefNumber ||
           msgs?.CreditMemoAddRs?.CreditMemoRet?.RefNumber ||
+          modifiedBill?.RefNumber ||
           null;
+
+        if (
+          row.step === "vendor_bill_payment_check" &&
+          row.reference_id &&
+          paymentBill
+        ) {
+          const amountDue = Number(paymentBill.AmountDue);
+          const balanceCents = Number.isFinite(amountDue)
+            ? Math.round(amountDue * 100)
+            : null;
+          await pool.query(
+            `UPDATE vendor_bill
+                SET qb_is_paid = $2,
+                    qb_balance_remaining_cents = $3,
+                    qb_payment_checked_at = NOW(),
+                    qb_edit_sequence = COALESCE($4, qb_edit_sequence),
+                    updated_at = NOW()
+              WHERE id = $1 AND deleted_at IS NULL`,
+            [
+              row.reference_id,
+              vendorBillIsPaid(paymentBill),
+              balanceCents,
+              paymentBill.EditSequence
+                ? String(paymentBill.EditSequence)
+                : null,
+            ]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ Vendor Bill ${row.reference_id} payment status refreshed from QuickBooks`
+          );
+        }
+
+        if (row.step === "vendor_bill_mod" && row.reference_id && modifiedBill) {
+          const editSequence = modifiedBill.EditSequence
+            ? String(modifiedBill.EditSequence)
+            : null;
+          if (!editSequence) {
+            await failOrRetryPipelineRow(
+              row.id,
+              "BillMod completed without EditSequence",
+              row.retry_count
+            );
+            continue;
+          }
+          await pool.query(
+            `UPDATE qb_vendor_bill_pipeline
+                  SET status = 'synced', qb_operation_id = NULL,
+                      qb_txn_id = COALESCE($2, qb_txn_id),
+                      qb_ref_number = COALESCE($3, qb_ref_number),
+                      edit_sequence = $4, synced_at = NOW(), retries = 0,
+                      last_error = NULL, next_retry_at = NULL, updated_at = NOW()
+                WHERE vendor_bill_id = $1 AND intent = 'mod' AND deleted_at IS NULL`,
+            [row.reference_id, txnId, refNumber, editSequence]
+          );
+          await pool.query(
+            `UPDATE vendor_bill
+                  SET status = 'synced', qb_source = 'owned',
+                      qb_txn_id = COALESCE($2, qb_txn_id),
+                      qb_ref_number = COALESCE($3, qb_ref_number),
+                      qb_edit_sequence = $4, qb_synced_at = NOW(), updated_at = NOW()
+                WHERE id = $1 AND deleted_at IS NULL`,
+            [row.reference_id, txnId, refNumber, editSequence]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ Vendor Bill ${row.reference_id} modified in QuickBooks`
+          );
+        }
 
         const wonConfirm = await confirmPipelineRow(
           row.id,
@@ -113,7 +235,9 @@ export async function pollSubmittedRows(
         // CAS: if another poller (consolidator Phase A vs the standalone
         // submitted-poller) already confirmed this row, skip ALL dependent
         // side-effects below (wake-dependents, metadata writes) so they never
-        // run twice.
+        // run twice. The payment refresh above is intentionally idempotent and
+        // happens first, so a transient pipeline-confirm failure cannot lose a
+        // successfully queried QuickBooks balance.
         if (!wonConfirm) {
           continue;
         }
@@ -1094,6 +1218,15 @@ export async function pollSubmittedRows(
           errMsg,
           row.retry_count ?? 0
         );
+        if (row.step === "vendor_bill_mod" && row.reference_id) {
+          await pool.query(
+            `UPDATE qb_vendor_bill_pipeline
+                SET status = 'error', qb_operation_id = NULL,
+                    last_error = $2, updated_at = NOW()
+              WHERE vendor_bill_id = $1 AND intent = 'mod' AND deleted_at IS NULL`,
+            [row.reference_id, errMsg]
+          );
+        }
         // Invalidate cached EditSequence — but only when the error implies
         // the cached value is wrong. Error 3175 ("transaction locked") means
         // QB never touched the document, so the cache is still valid.

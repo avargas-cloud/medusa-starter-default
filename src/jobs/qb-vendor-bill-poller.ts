@@ -679,6 +679,8 @@ const extractBillRetByTxnId = (data: BridgeStatus, txnId: string): any | null =>
 const isBillPaid = (billRet: any): boolean => {
   const raw = billRet?.IsPaid;
   if (raw === true || raw === "true" || raw === "1") return true;
+  const amountDue = Number(billRet?.AmountDue);
+  if (Number.isFinite(amountDue) && amountDue <= 0) return true;
   const paidStatus = String(billRet?.PaidStatus ?? billRet?.["@PaidStatus"] ?? "");
   return /paid/i.test(paidStatus) && !/unpaid/i.test(paidStatus);
 };

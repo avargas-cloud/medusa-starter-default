@@ -12,6 +12,8 @@
  *   status   (draft | confirmed | synced)
  *   po_id    (purchase_order.id)
  *   q        search bill #, Vendor PI/ref, PO, QB ref, vendor, receipt
+ *   sort_by  (bill_number | document_date | due_date | po_number)
+ *   sort_dir (asc | desc)
  */
 
 import type {
@@ -23,6 +25,7 @@ import { z } from "zod";
 
 import { getActorUserId, UnauthenticatedError } from "../purchase-orders/_lib/auth";
 import { zodErrorToBody } from "../purchase-orders/_lib/format";
+import { accountAllowedForVendorBillType } from "../../../lib/purchase-orders/vendor-bill-account-rules";
 
 // ── Zod query schema ──────────────────────────────────────────────────────────
 
@@ -33,6 +36,10 @@ const listQuerySchema = z.object({
   po_id: z.string().optional(),
   bill_type: z.enum(["regular", "service", "freight", "tariff"]).optional(),
   q: z.string().trim().max(100).optional(),
+  sort_by: z
+    .enum(["bill_number", "document_date", "due_date", "po_number"])
+    .default("document_date"),
+  sort_dir: z.enum(["asc", "desc"]).default("desc"),
 });
 
 const createVendorBillSchema = z.object({
@@ -42,12 +49,25 @@ const createVendorBillSchema = z.object({
   document_date: z.string().datetime().nullish(),
   commission_mode: z.enum(["percent", "fixed"]).default("percent"),
   notes: z.string().max(2000).nullish(),
+  initial_account_line: z
+    .object({
+      qb_account_list_id: z.string().min(1),
+      description: z.string().max(500).optional(),
+      amount_cents: z.number().int().positive().max(1_000_000_000),
+    })
+    .optional(),
 });
 
 // ── Knex type ────────────────────────────────────────────────────────────────
 
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+  transaction?: () => Promise<
+    KnexInstance & {
+      commit: () => Promise<void>;
+      rollback: () => Promise<void>;
+    }
+  >;
 };
 
 interface VendorBillListRow {
@@ -64,6 +84,10 @@ interface VendorBillListRow {
   due_date: string | null;
   status: string;
   confirmed_at: string | null;
+  qb_amount_due_cents: number | null;
+  qb_is_paid: boolean;
+  qb_balance_remaining_cents: number | null;
+  qb_payment_checked_at: string | null;
   qb_txn_id: string | null;
   qb_source: string | null;
   commission_mode: string;
@@ -100,7 +124,8 @@ export async function GET(
   if (!parsed.success) {
     return res.status(400).json(zodErrorToBody(parsed.error));
   }
-  const { limit, offset, status, po_id, bill_type, q } = parsed.data;
+  const { limit, offset, status, po_id, bill_type, q, sort_by, sort_dir } =
+    parsed.data;
 
   const knex = (
     req.scope as unknown as { resolve: (k: string) => unknown }
@@ -137,6 +162,19 @@ export async function GET(
   }
 
   const whereStr = whereClauses.join(" AND ");
+  const direction = sort_dir === "asc" ? "ASC" : "DESC";
+  const orderExpression: Record<typeof sort_by, string> = {
+    bill_number: `
+      CASE WHEN vb.number ~ '^VB-[0-9]+$'
+           THEN substring(vb.number FROM '[0-9]+$')::bigint END ${direction} NULLS LAST,
+      vb.number ${direction} NULLS LAST`,
+    document_date: `COALESCE(vb.document_date, vb.created_at) ${direction}`,
+    due_date: `vb.due_date ${direction} NULLS LAST`,
+    po_number: `
+      CASE WHEN po."number" ~ '^PO-[0-9]+$'
+           THEN substring(po."number" FROM '[0-9]+$')::bigint END ${direction} NULLS LAST,
+      po."number" ${direction} NULLS LAST`,
+  };
 
   // Count query
   const countResult = await knex.raw(
@@ -170,6 +208,9 @@ export async function GET(
        vb.qb_txn_id,
        vb.qb_source,
        vb.qb_amount_due_cents,
+       vb.qb_is_paid,
+       vb.qb_balance_remaining_cents,
+       vb.qb_payment_checked_at,
        vb.commission_mode,
        vb.commission_rate_bps,
        vb.commission_amount_cents,
@@ -223,12 +264,7 @@ export async function GET(
        WHERE vbl.vendor_bill_id = vb.id AND vbl.deleted_at IS NULL
      ) agg ON TRUE
      WHERE ${whereStr}
-     -- Owner rule (2026-07-23): the list reads in BILL-DATE order (the legal
-     -- vendor-document date shown in the DATE column), newest first — not
-     -- row-creation order (adopted legacy imports all "created" the same day
-     -- scrambled the timeline). created_at is the fallback for undated drafts
-     -- and the deterministic tie-break.
-     ORDER BY COALESCE(vb.document_date, vb.created_at) DESC, vb.created_at DESC
+     ORDER BY ${orderExpression[sort_by]}, vb.created_at DESC, vb.id ASC
      LIMIT ${limit} OFFSET ${offset}`,
     bindings
   );
@@ -276,14 +312,22 @@ export async function POST(
   }
 
   const body = parsed.data;
+  if (body.bill_type === "regular") {
+    return res.status(422).json({
+      error:
+        "Regular Bills must be created from a purchase order or item receipt so they can never be empty",
+      code: "regular_bill_requires_source",
+    });
+  }
+  if (!body.initial_account_line) {
+    return res.status(422).json({
+      error: "A Vendor Bill cannot be saved without at least one line",
+      code: "vendor_bill_line_required",
+    });
+  }
   const knex = (
     req.scope as unknown as { resolve: (k: string) => unknown }
   ).resolve("__pg_connection__") as KnexInstance;
-
-  const seqResult = await knex.raw(
-    `SELECT nextval('custom_vendor_bill_seq') AS seq`
-  );
-  const vbNumber = `VB-${(seqResult.rows[0] as { seq: string | number }).seq}`;
 
   const vendorResult = await knex.raw(
     `SELECT id, qb_list_id, full_name, name, company_name
@@ -310,8 +354,39 @@ export async function POST(
   const vendorName =
     vendor.company_name ?? vendor.full_name ?? vendor.name ?? vendor.id;
 
-  const result = await knex.raw(
-    `INSERT INTO vendor_bill (
+  const accountResult = await knex.raw(
+    `SELECT qb_list_id, full_name, account_type
+       FROM qb_account
+      WHERE qb_list_id = ? AND is_active = true AND deleted_at IS NULL
+      LIMIT 1`,
+    [body.initial_account_line.qb_account_list_id]
+  );
+  const account = (accountResult.rows[0] ?? null) as
+    | { qb_list_id: string; full_name: string; account_type: string }
+    | null;
+  if (!account) {
+    return res.status(404).json({
+      error: "QuickBooks account not found",
+      code: "account_not_found",
+    });
+  }
+  if (!accountAllowedForVendorBillType(body.bill_type, account)) {
+    return res.status(422).json({
+      error: `Account '${account.full_name}' is not valid for ${body.bill_type} bills`,
+      code: "account_not_allowed",
+    });
+  }
+
+  const trx = knex.transaction ? await knex.transaction() : null;
+  const db = trx ?? knex;
+  try {
+    const seqResult = await db.raw(
+      `SELECT nextval('custom_vendor_bill_seq') AS seq`
+    );
+    const vbNumber = `VB-${(seqResult.rows[0] as { seq: string | number }).seq}`;
+    const billId = `vb_${randomUUID().replace(/-/g, "")}`;
+    const result = await db.raw(
+      `INSERT INTO vendor_bill (
        id,
        number,
        purchase_order_receipt_id,
@@ -338,27 +413,55 @@ export async function POST(
        ?, NULL, NULL, ?, ?, ?, ?, 'draft', ?, COALESCE(?::timestamptz, NOW()), ?, 0, 0, false, 0, false, 0, ?, NOW(), NOW()
      )
      RETURNING *`,
-    [
-      `vb_${randomUUID().replace(/-/g, "")}`,
-      vbNumber,
-      vendor.id,
-      vendorName,
-      vendor.qb_list_id,
-      body.bill_type,
-      body.reference_id ?? null,
-      body.document_date ?? null,
-      body.commission_mode,
-      body.notes ?? null,
-    ]
-  );
-
-  return res.status(201).json({
-    vendor_bill: {
-      ...(result.rows[0] as Record<string, unknown>),
-      lines: [],
-      line_count: 0,
-      total_landed_cents: 0,
-      billed_receipt_ids: [],
-    },
-  });
+      [
+        billId,
+        vbNumber,
+        vendor.id,
+        vendorName,
+        vendor.qb_list_id,
+        body.bill_type,
+        body.reference_id ?? null,
+        body.document_date ?? null,
+        body.commission_mode,
+        body.notes ?? null,
+      ]
+    );
+    const lineResult = await db.raw(
+      `INSERT INTO vendor_bill_line (
+         id, vendor_bill_id, receipt_line_id, line_type,
+         qb_account_list_id, qb_account_full_name, qb_account_type,
+         product_variant_id, sku, mpn, description, qty, unit_cost_cents,
+         cbm_per_unit, commission_per_unit_cents, freight_per_unit_cents,
+         tariff_per_unit_cents, landed_unit_cost_cents, created_at, updated_at
+       ) VALUES (
+         ?, ?, NULL, 'qb_account', ?, ?, ?, NULL, ?, NULL, ?, 1, ?,
+         NULL, 0, 0, 0, ?, NOW(), NOW()
+       )
+       RETURNING *`,
+      [
+        `vbl_${randomUUID().replace(/-/g, "")}`,
+        billId,
+        account.qb_list_id,
+        account.full_name,
+        account.account_type,
+        account.full_name,
+        body.initial_account_line.description || account.full_name,
+        body.initial_account_line.amount_cents,
+        body.initial_account_line.amount_cents,
+      ]
+    );
+    if (trx) await trx.commit();
+    return res.status(201).json({
+      vendor_bill: {
+        ...(result.rows[0] as Record<string, unknown>),
+        lines: lineResult.rows,
+        line_count: 1,
+        total_landed_cents: body.initial_account_line.amount_cents,
+        billed_receipt_ids: [],
+      },
+    });
+  } catch (error) {
+    if (trx) await trx.rollback();
+    throw error;
+  }
 }

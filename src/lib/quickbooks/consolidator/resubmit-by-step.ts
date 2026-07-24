@@ -50,6 +50,7 @@ import {
   processCustomerPipelineRow,
   processCustomerDataExtPipelineRow,
 } from "./customer-pass";
+import { bridgeFetch } from "../client/core";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -1612,6 +1613,82 @@ export async function resubmitByStep(
         break;
       }
 
+      case "vendor_bill_payment_check": {
+        const txnId =
+          row.qb_txn_id ??
+          (typeof row.payload?.txn_id === "string" ? row.payload.txn_id : null);
+        if (!txnId) {
+          await failPipelineRow(
+            row.id,
+            "vendor_bill_payment_check: missing QB TxnID"
+          );
+          break;
+        }
+        const result = await bridgeFetch("POST", "/api/bills/query", {
+          txn_id: txnId,
+          max_returned: 5,
+        });
+        if (!result?.operationId) {
+          await failPipelineRow(
+            row.id,
+            result?.error ?? "BillQuery returned no operationId"
+          );
+          break;
+        }
+        const pool = getDbPool();
+        await pool.query(
+          `UPDATE qb_order_pipeline
+              SET status = 'submitted',
+                  bridge_op_id = $2,
+                  submitted_at = NOW(),
+                  updated_at = NOW()
+            WHERE id = $1`,
+          [row.id, result.operationId]
+        );
+        logger.info(
+          `${LOG_PREFIX} ✅ vendor_bill_payment_check ${row.id} submitted op=${result.operationId}`
+        );
+        break;
+      }
+
+      case "vendor_bill_mod": {
+        const txnId =
+          row.qb_txn_id ??
+          (typeof row.payload?.txn_id === "string" ? row.payload.txn_id : null);
+        if (!txnId || !row.payload) {
+          throw new Error("vendor_bill_mod: missing QB TxnID or payload");
+        }
+        const result = await bridgeFetch(
+          "PUT",
+          `/api/bills/${encodeURIComponent(txnId)}`,
+          row.payload
+        );
+        if (!result?.operationId) {
+          throw new Error(
+            result?.error ?? "BillMod returned no operationId"
+          );
+        }
+        const pool = getDbPool();
+        await pool.query(
+          `UPDATE qb_order_pipeline
+              SET status = 'submitted', bridge_op_id = $2,
+                  submitted_at = NOW(), updated_at = NOW()
+            WHERE id = $1`,
+          [row.id, result.operationId]
+        );
+        await pool.query(
+          `UPDATE qb_vendor_bill_pipeline
+              SET status = 'submitted', qb_operation_id = $2,
+                  last_error = NULL, next_retry_at = NULL, updated_at = NOW()
+            WHERE vendor_bill_id = $1 AND intent = 'mod' AND deleted_at IS NULL`,
+          [row.reference_id, result.operationId]
+        );
+        logger.info(
+          `${LOG_PREFIX} ✅ vendor_bill_mod ${row.id} submitted op=${result.operationId}`
+        );
+        break;
+      }
+
       default:
         logger.info(
           `${LOG_PREFIX} ℹ️ Coalesced resubmit for step=${row.step} — row reset to pending, will be picked up by next cron`
@@ -1621,6 +1698,24 @@ export async function resubmitByStep(
     logger.warn(
       `${LOG_PREFIX} ⚠️ resubmitByStep failed for row ${row.id} (${row.step}): ${err.message}`
     );
-    await failPipelineRow(row.id, err.message || "resubmitByStep failed");
+    if (row.step === "vendor_bill_mod") {
+      await failOrRetryPipelineRow(
+        row.id,
+        err.message || "BillMod dispatch failed",
+        row.retry_count ?? 0
+      );
+    } else {
+      await failPipelineRow(row.id, err.message || "resubmitByStep failed");
+    }
+    if (row.step === "vendor_bill_mod" && row.reference_id) {
+      const pool = getDbPool();
+      await pool.query(
+        `UPDATE qb_vendor_bill_pipeline
+            SET status = 'error', qb_operation_id = NULL,
+                last_error = $2, updated_at = NOW()
+          WHERE vendor_bill_id = $1 AND intent = 'mod' AND deleted_at IS NULL`,
+        [row.reference_id, err.message || "BillMod dispatch failed"]
+      );
+    }
   }
 }

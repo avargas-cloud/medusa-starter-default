@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import { getActorUserId, UnauthenticatedError } from "../../../purchase-orders/_lib/auth";
 import { zodErrorToBody } from "../../../purchase-orders/_lib/format";
+import { accountAllowedForVendorBillType } from "../../../../../lib/purchase-orders/vendor-bill-account-rules";
 
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -23,31 +24,6 @@ const bodySchema = z.object({
   description: z.string().max(500).optional(),
   amount_cents: z.number().int().min(0).max(1_000_000_000),
 });
-
-function accountAllowedForBillType(
-  billType: string,
-  account: { full_name: string; account_type: string }
-) {
-  const fullName = account.full_name.toLowerCase();
-  if (billType === "service") {
-    return fullName === "commission for purchase:veetech representative";
-  }
-  if (billType === "freight") {
-    return (
-      account.account_type === "CostOfGoodsSold" &&
-      fullName.startsWith("freight and shipping costs")
-    );
-  }
-  if (billType === "tariff") {
-    return (
-      fullName === "special duties" ||
-      (account.account_type === "CostOfGoodsSold" &&
-        fullName.startsWith("duties") &&
-        fullName !== "duties payable")
-    );
-  }
-  return false;
-}
 
 export async function POST(
   req: AuthenticatedMedusaRequest,
@@ -110,7 +86,7 @@ export async function POST(
       .status(404)
       .json({ error: "QuickBooks account not found", code: "account_not_found" });
   }
-  if (!accountAllowedForBillType(bill.bill_type, account)) {
+  if (!accountAllowedForVendorBillType(bill.bill_type, account)) {
     return res.status(422).json({
       error: `Account '${account.full_name}' is not valid for ${bill.bill_type} bills`,
       code: "account_not_allowed",

@@ -82,8 +82,15 @@ export const VendorBill = model.define("vendor_bill", {
   qb_edit_sequence: model.text().nullable(), // fresh EditSequence for BillMod/TxnDel
   qb_ref_number: model.text().nullable(), // QB RefNumber = vendor invoice # (reference_id)
   qb_amount_due_cents: model.number().nullable(),
+  qb_is_paid: model.boolean().default(false),
+  qb_balance_remaining_cents: model.number().nullable(),
+  qb_payment_checked_at: model.dateTime().nullable(),
   qb_synced_at: model.dateTime().nullable(), // when the Bill landed in QB
   qb_source: model.text().nullable(), // 'owned' | 'adopted'
+  // China-agent regular Bills have negative QB Expense lines that clear the
+  // positive Service/Freight/Tariff bills. They are not landed-cost input rows,
+  // but BillMod must preserve them by their own QB TxnLineID.
+  qb_clearing_lines: model.json().nullable(),
 
   // Payment terms (Phase 0 — dormant; not yet consumed anywhere).
   payment_terms_days: model.number().nullable(),

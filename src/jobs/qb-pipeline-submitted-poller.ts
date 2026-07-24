@@ -43,7 +43,7 @@ export default async function qbPipelineSubmittedPoller(
   let submittedRows: SubmittedRow[];
   try {
     const { rows } = await pool.query(`
-      SELECT id, order_id, reference_id, reference_type, step, bridge_op_id, retry_count, qb_txn_id
+      SELECT id, order_id, reference_id, reference_type, step, bridge_op_id, retry_count, qb_txn_id, payload
       FROM qb_order_pipeline
       WHERE status = 'submitted'
         AND bridge_op_id IS NOT NULL
