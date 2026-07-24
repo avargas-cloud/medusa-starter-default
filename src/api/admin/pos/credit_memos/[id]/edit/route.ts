@@ -13,6 +13,11 @@ import {
   writePipelineRow,
   requireQbCustomer,
 } from "../../../../../../lib/quickbooks/qb-pipeline";
+import {
+  CM_SYNTHETIC_LINE_IDS_META_KEY,
+  applyQbSyntheticLineIds,
+  readQbSyntheticLineIds,
+} from "../../../../../../lib/quickbooks/credit-memo-synthetic-lines";
 import { getVariantAvgCostBatch } from "../../../../../../lib/cost/get-variant-avg-cost";
 import { CREDIT_MEMO_MODULE } from "../../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../../modules/credit_memos/service";
@@ -493,6 +498,18 @@ export async function PATCH(
       ...((creditMemo as any).metadata ?? {}),
       ...(payload?.metadata ?? {}),
     };
+    // The QB Subtotal/Discount TxnLineIDs are owned exclusively by the pipeline
+    // poller, which writes them from the real CreditMemoRet. Omit the key here
+    // rather than echo back the snapshot this request read at its start: a
+    // confirm landing mid-request would otherwise be overwritten with a stale
+    // pair, and a stale synthetic id makes the next Mod fail outright. Medusa's
+    // update deep-MERGES jsonb, so an omitted key keeps whatever the DB holds.
+    delete mergedMetadata[CM_SYNTHETIC_LINE_IDS_META_KEY];
+
+    // Read the pair BEFORE the update, off the row this request loaded.
+    const storedSyntheticLineIds = readQbSyntheticLineIds(
+      (creditMemo as any).metadata
+    );
 
     await (creditMemoService as any)[updateMethodName]({
       id,
@@ -654,9 +671,20 @@ export async function PATCH(
         });
 
         if (dbTotals.discount > 0) {
-          buildQbOrderDiscountLines(dbTotals.discount / 100).forEach(
-            (l: any) => qbItems.push(l)
+          // Reuse the Subtotal/Discount TxnLineIDs QB already holds so the Mod
+          // UPDATES that pair instead of deleting and recreating it. Suppressed
+          // whenever a product line is being ADDED: a QB Subtotal totals the
+          // lines above it, and new lines are appended after existing ones, so
+          // a reused Subtotal would stop covering the line just added. In that
+          // case the pair is recreated at the end, exactly as before.
+          const hasNewProductLines = positiveItemPlans.some(
+            ({ reusedTxnLineId }) => !reusedTxnLineId
           );
+          applyQbSyntheticLineIds(
+            buildQbOrderDiscountLines(dbTotals.discount / 100),
+            storedSyntheticLineIds,
+            { isMod: !!oldQbTxnId, hasNewProductLines }
+          ).forEach((l: any) => qbItems.push(l));
         }
         if (dbTotals.shipping > 0) {
           const shippingItem = buildShippingQbItem([

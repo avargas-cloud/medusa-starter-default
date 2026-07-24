@@ -3,6 +3,10 @@ import { Modules } from "@medusajs/utils";
 
 import { getDbPool } from "../../../api/utils/db-pool";
 import { performMedusaRefundRevert } from "../../finance/revert-refund";
+import {
+  CM_SYNTHETIC_LINE_IDS_META_KEY,
+  extractQbSyntheticLineIds,
+} from "../credit-memo-synthetic-lines";
 import { bridgeFetch } from "../client/core";
 import { voidCreditMemoInQb } from "../client/credit-memos";
 import { voidInvoiceInQb } from "../client/invoices";
@@ -184,6 +188,16 @@ export async function pollSubmittedRows(
           extractLineIds(
             msgs?.CreditMemoModRs?.CreditMemoRet?.CreditMemoLineRet
           ) ??
+          null;
+
+        // Raw credit-memo line array (NOT the productId→ids map above): the
+        // Subtotal / Discount lines are addressed by ItemRef.FullName, so they
+        // never appear in a map keyed by ListID. Used below to persist their
+        // TxnLineIDs so the next Mod can update them instead of recreating
+        // them — see credit-memo-synthetic-lines.ts.
+        const creditMemoLineRet =
+          msgs?.CreditMemoAddRs?.CreditMemoRet?.CreditMemoLineRet ??
+          msgs?.CreditMemoModRs?.CreditMemoRet?.CreditMemoLineRet ??
           null;
 
         // Cache EditSequence (+ TxnLineIDs when available) so next mod can skip the GET round-trip
@@ -554,6 +568,44 @@ export async function pollSubmittedRows(
             } catch (lineErr: any) {
               logger.warn(
                 `${LOG_PREFIX} ⚠️ Could not persist TxnLineIDs for CM ${row.reference_id}: ${lineErr.message}`
+              );
+            }
+          }
+
+          // Same idea for the two SYNTHETIC lines (QB "Subtotal" / "Discount"),
+          // which have no pos_credit_memo_item row to hang a TxnLineID on and
+          // were therefore deleted + recreated by QB on every single Mod. They
+          // go on the credit memo's metadata instead.
+          //
+          // QB is the authority here, including when it says "gone": a Mod that
+          // dropped the discount stores nulls, so the map can never outlive the
+          // document and hand a stale TxnLineID to the next Mod. Only skipped
+          // when QB returned no line array at all (nothing was learned).
+          if (creditMemoLineRet) {
+            try {
+              const syntheticLineIds =
+                extractQbSyntheticLineIds(creditMemoLineRet);
+              await pool.query(
+                `UPDATE pos_credit_memo
+                    SET metadata = jsonb_set(
+                                     COALESCE(metadata, '{}'::jsonb),
+                                     $2::text[],
+                                     $3::jsonb,
+                                     true
+                                   )
+                  WHERE id = $1`,
+                [
+                  row.reference_id,
+                  `{${CM_SYNTHETIC_LINE_IDS_META_KEY}}`,
+                  JSON.stringify(syntheticLineIds),
+                ]
+              );
+              logger.info(
+                `${LOG_PREFIX} ✅ Persisted synthetic line ids for CM ${row.reference_id} (subtotal=${syntheticLineIds.subtotal ?? "none"}, discount=${syntheticLineIds.discount ?? "none"})`
+              );
+            } catch (synthErr: any) {
+              logger.warn(
+                `${LOG_PREFIX} ⚠️ Could not persist synthetic line ids for CM ${row.reference_id}: ${synthErr.message}`
               );
             }
           }

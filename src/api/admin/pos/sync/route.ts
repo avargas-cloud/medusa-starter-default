@@ -1353,8 +1353,21 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         });
 
         if (Number((creditMemo as any).discount || 0) > 0) {
-          buildQbOrderDiscountLines(
-            Number((creditMemo as any).discount) / 100
+          // Same rule as the CM edit route: reuse the QB Subtotal/Discount
+          // TxnLineIDs so the Mod updates that pair, but only while no product
+          // line is new — a QB Subtotal totals the lines above it and new lines
+          // land after the existing ones. See credit-memo-synthetic-lines.ts.
+          const {
+            applyQbSyntheticLineIds,
+            readQbSyntheticLineIds,
+          } = require("../../../../lib/quickbooks/credit-memo-synthetic-lines");
+          const hasNewProductLines = positiveItems.some(
+            (item: any) => !item.qb_txn_line_id
+          );
+          applyQbSyntheticLineIds(
+            buildQbOrderDiscountLines(Number((creditMemo as any).discount) / 100),
+            readQbSyntheticLineIds((creditMemo as any).metadata),
+            { isMod: !!cmTxnId, hasNewProductLines }
           ).forEach((line: any) => qbItems.push(line));
         }
         if (Number((creditMemo as any).shipping || 0) > 0) {
