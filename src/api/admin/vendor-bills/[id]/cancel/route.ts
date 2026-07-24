@@ -29,6 +29,12 @@ import { writePipelineRow } from "../../../../../lib/quickbooks/qb-pipeline";
 
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+  // Optional, mirroring vendor-bills/[id]/route.ts: the resolved
+  // __pg_connection__ is a real knex instance at runtime, but the container
+  // types it loosely, so callers guard with `knex.transaction ? … : null`.
+  transaction?: () => Promise<
+    KnexInstance & { commit: () => Promise<void>; rollback: () => Promise<void> }
+  >;
 };
 
 function resolveKnex(req: AuthenticatedMedusaRequest): KnexInstance {
@@ -176,26 +182,89 @@ export async function POST(
         );
       }
 
-      // Persist restored avg
-      await knex.raw(
-        `UPDATE product_variant
-         SET metadata = COALESCE(metadata, '{}'::jsonb)
-           || jsonb_build_object('avg_landed_cost_cents', ?::float,
-                                 'avg_landed_cost_updated_at', now()::text,
-                                 'average_cost', (?::float) / 100.0,
-                                 'average_cost_updated_at', now()::text,
-                                 'average_cost_source', 'landed'),
-             updated_at = NOW()
-         WHERE id = ?`,
-        [restoredAvg, restoredAvg, log.product_variant_id]
-      );
+      // Restore the average, journal the reversal, retire the confirm's own
+      // event, and close the cost-log row — as ONE unit.
+      //
+      // Transactional on purpose (2026-07-23). The confirm path appends to
+      // variant_cost_event non-fatally, because there a lost journal entry
+      // still leaves a correctly-costed bill. Here the write IS the cost
+      // change: letting the metadata update land without its event would
+      // recreate the exact failure this table exists to prevent — a cost that
+      // moved with no record of what it used to be. If any statement fails,
+      // the variant keeps its current average and the cost-log row stays open,
+      // so the cancel can simply be retried.
+      const trx = knex.transaction ? await knex.transaction() : null;
+      const run = trx ?? knex;
+      // Deterministic id minted by the confirm route for this (bill, variant).
+      // Kept in sync with that route's own format — the reversal points at it
+      // and retires it, rather than leaving two live events claiming different
+      // costs for the same variant.
+      const confirmEventId = `vce_cf_${bill.id.slice(-12)}_${log.product_variant_id.slice(-12)}`;
+      try {
+        await run.raw(
+          `UPDATE product_variant
+           SET metadata = COALESCE(metadata, '{}'::jsonb)
+             || jsonb_build_object('avg_landed_cost_cents', ?::float,
+                                   'avg_landed_cost_updated_at', now()::text,
+                                   'average_cost', (?::float) / 100.0,
+                                   'average_cost_updated_at', now()::text,
+                                   'average_cost_source', 'landed'),
+               updated_at = NOW()
+           WHERE id = ?`,
+          [restoredAvg, restoredAvg, log.product_variant_id]
+        );
 
-      // Mark log entry as reversed
-      await knex.raw(
-        `UPDATE vendor_bill_cost_log SET reversed_at = NOW(), updated_at = NOW()
-         WHERE id = ?`,
-        [log.id]
-      );
+        // currentAvg/restoredAvg are CENTS, so qty × their difference is
+        // already a cents delta — no ×100. Negative when the cancel takes
+        // value back out of the warehouse, which is the normal direction.
+        await run.raw(
+          `INSERT INTO variant_cost_event
+             (id, product_variant_id, event_type, cost_field, effective_at, recorded_at,
+              previous_unit_cost, new_unit_cost, quantity_on_hand_at_event,
+              inventory_value_delta_cents, source_system, source_type, source_id,
+              status, idempotency_key, vendor_bill_id, quantity_delta,
+              reverses_event_id, reason_code)
+           VALUES (?, ?, 'vendor_bill_cancel', 'average_cost', NOW(), NOW(),
+                   ?::numeric, ?::numeric, ?::int, ?::bigint,
+                   'medusa', 'vendor_bill_cancel', ?, 'active', ?, ?, ?::int, ?,
+                   'vendor_bill_cancel')
+           ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
+          [
+            `vce_vx_${bill.id.slice(-12)}_${log.product_variant_id.slice(-12)}`,
+            log.product_variant_id,
+            currentAvg / 100,
+            restoredAvg / 100,
+            qCurrent,
+            Math.round(qCurrent * (restoredAvg - currentAvg)),
+            bill.id,
+            `cancel:${bill.id}:${log.product_variant_id}`,
+            bill.id,
+            -log.received_qty,
+            confirmEventId,
+          ]
+        );
+
+        // Retire the confirm's event. recost-window walks `status = 'active'`
+        // to find a variant's next cost change; an undone confirm must stop
+        // acting as that boundary — this cancel event takes its place.
+        await run.raw(
+          `UPDATE variant_cost_event
+              SET status = 'reversed'
+            WHERE id = ? AND status = 'active'`,
+          [confirmEventId]
+        );
+
+        await run.raw(
+          `UPDATE vendor_bill_cost_log SET reversed_at = NOW(), updated_at = NOW()
+           WHERE id = ?`,
+          [log.id]
+        );
+
+        await trx?.commit();
+      } catch (error) {
+        await trx?.rollback().catch(() => {});
+        throw error;
+      }
     })
   );
 

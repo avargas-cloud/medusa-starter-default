@@ -58,7 +58,11 @@ SELECT vb.id, vb.number, vb.confirmed_at, r.received_at
 const VARIANT_COSTS_SQL = `
 SELECT DISTINCT ON (e.product_variant_id)
        e.product_variant_id AS variant_id,
-       e.new_unit_cost      AS new_cost
+       e.new_unit_cost      AS new_cost,
+       -- Each variant's own arrival, not the bill's earliest: one bill can
+       -- cover receipts that landed days apart, and a variant only rides on
+       -- some of them.
+       e.effective_at       AS window_start
   FROM variant_cost_event e
  WHERE e.vendor_bill_id = ?
    AND e.status = 'active'
@@ -107,20 +111,25 @@ export default async function recostVendorBillWindow({
     }
 
     const variantsResult = await knex.raw(VARIANT_COSTS_SQL, [bill.id]);
-    const costByVariant = new Map(
-      (variantsResult.rows as Array<{ variant_id: string; new_cost: string | number }>).map(
-        (row) => [row.variant_id, Number(row.new_cost)]
-      )
-    );
-    if (costByVariant.size === 0) {
+    const events = (
+      variantsResult.rows as Array<{
+        variant_id: string;
+        new_cost: string | number;
+        window_start: string | Date;
+      }>
+    ).map((row) => ({
+      variantId: row.variant_id,
+      newCost: Number(row.new_cost),
+      from: new Date(iso(row.window_start)),
+    }));
+    if (events.length === 0) {
       skipped++;
       continue;
     }
 
     const from = new Date(iso(bill.received_at));
     const result = await recostSalesWindow(knex, {
-      costByVariant,
-      from,
+      events,
       runId: `rw_${bill.id}`,
       reason: "receipt_to_bill_window",
       dryRun: !apply,

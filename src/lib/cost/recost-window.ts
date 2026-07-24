@@ -37,10 +37,12 @@ export interface RecostKnex {
   transaction: <T>(handler: (trx: any) => Promise<T>) => Promise<T>;
 }
 
-export interface RecostWindowInput {
+/** One variant's cost change, with the moment its own goods arrived. */
+export interface RecostEvent {
+  variantId: string;
   /**
-   * The cost THIS event established, per variant, in dollars — not whatever the
-   * variant carries right now.
+   * The cost THIS event established, in dollars — not whatever the variant
+   * carries right now.
    *
    * Reading the current `average_cost` instead looks equivalent and is not: for
    * any variant with more than one bill, today's average already includes the
@@ -48,9 +50,23 @@ export interface RecostWindowInput {
    * at a cost that did not exist yet. A dry run over production's history moved
    * 262 lines that were already correct, which is how this surfaced.
    */
-  costByVariant: ReadonlyMap<string, number>;
-  /** Start of the window: when the goods physically arrived. */
+  newCost: number;
+  /**
+   * When THIS variant's goods arrived — its own receipt, not the bill's
+   * earliest.
+   *
+   * One bill can cover several receipts landing on different days, and a
+   * variant only appears on some of them. An end-to-end confirm caught this:
+   * a bill spanning RCP-1142 (14 Jul) and RCP-1143 (24 Jul) used the earliest
+   * date for both variants, so a sale on the 19th was repriced with goods that
+   * did not arrive until the 24th — the exact anachronism this design exists to
+   * prevent.
+   */
   from: Date;
+}
+
+export interface RecostWindowInput {
+  events: readonly RecostEvent[];
   /**
    * End of the window, exclusive. Defaults to the next cost event for each
    * variant, so one bill's pass can never reach into the next bill's window.
@@ -101,10 +117,11 @@ interface WindowLine {
  */
 const WINDOW_SQL = `
 WITH input AS (
-  SELECT * FROM UNNEST(?::text[], ?::numeric[]) AS u(variant_id, new_cost)
+  SELECT * FROM UNNEST(?::text[], ?::numeric[], ?::timestamptz[])
+              AS u(variant_id, new_cost, window_start)
 ),
 target AS (
-  SELECT pv.id, pv.sku, i.new_cost,
+  SELECT pv.id, pv.sku, i.new_cost, i.window_start,
          -- Window end: the variant's next cost event after the one being
          -- processed. Without it, an early bill's pass would reach forward over
          -- every later bill's window and undo them.
@@ -120,7 +137,7 @@ target AS (
              WHERE e2.product_variant_id = pv.id
                AND e2.status = 'active'
                AND e2.cost_field = 'average_cost'
-               AND e2.effective_at > ?::timestamptz),
+               AND e2.effective_at > i.window_start),
            'infinity'::timestamptz
          ) AS window_end
     FROM product_variant pv
@@ -138,7 +155,8 @@ invoice_lines AS (
     JOIN target t ON t.sku = ii.sku
    WHERE ii.deleted_at IS NULL AND i.deleted_at IS NULL AND i.voided_at IS NULL
      AND ii.quantity <> 0
-     AND COALESCE(i.issued_at, i.created_at) >= ?::timestamptz
+     -- Each variant's window opens when ITS OWN goods landed.
+     AND COALESCE(i.issued_at, i.created_at) >= t.window_start
      AND COALESCE(i.issued_at, i.created_at) < t.window_end
 )
 SELECT * FROM invoice_lines
@@ -193,15 +211,14 @@ export async function recostSalesWindow(
     alreadyCorrect: 0,
     details: [],
   };
-  const entries = [...input.costByVariant.entries()].filter(([, cost]) => cost > 0);
+  const entries = input.events.filter((event) => event.newCost > 0);
   if (entries.length === 0) return empty;
 
   const { rows } = await knex.raw(WINDOW_SQL, [
-    entries.map(([variantId]) => variantId),
-    entries.map(([, cost]) => cost),
+    entries.map((event) => event.variantId),
+    entries.map((event) => event.newCost),
+    entries.map((event) => event.from.toISOString()),
     input.until ? input.until.toISOString() : null,
-    input.from.toISOString(),
-    input.from.toISOString(),
   ]);
   const lines = rows as WindowLine[];
   if (lines.length === 0) return empty;
