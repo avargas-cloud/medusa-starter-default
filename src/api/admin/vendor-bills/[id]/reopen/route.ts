@@ -1,56 +1,27 @@
-/**
- * POST /admin/vendor-bills/:id/reopen
- *
- * Reopens a confirmed-and-locked regular vendor bill back to draft so its
- * quantities/costs can be corrected, then re-confirmed. HIGH RISK: re-running
- * confirm replays AVCO, so we reverse this bill's landed-cost contribution and
- * refuse whenever a later confirm could make the replay inconsistent (C6).
- *
- * Strict blockers (all must hold):
- *   - status === 'confirmed' (synced bills are out of scope — need QB void/mod)
- *   - no QuickBooks TxnID (defensive "unsynced")
- *   - no application on a CONFIRMED China wire (real money moved)
- *   - no LATER active vendor_bill_cost_log for the same variants (a newer
- *     confirm sits on top of this one in the AVCO chain → reversing now corrupts)
- *
- * Behaviour (transactional — cancel's reversal is NOT wrapped, this one is):
- *   - reverse AVCO per variant (same formula as cancel), mark cost logs reversed
- *   - status confirmed → draft, clear confirmed_at / confirmed_by_user_id
- *   - KEEP purchase_order_receipt_id (confirm depends on the receipt pin)
- *   - PO status is left untouched (confirm never mutated it)
- */
-
 import type {
   AuthenticatedMedusaRequest,
   MedusaResponse,
 } from "@medusajs/framework/http";
 
-import { getActorUserId, UnauthenticatedError } from "../../../purchase-orders/_lib/auth";
+import {
+  getActorUserId,
+  UnauthenticatedError,
+} from "../../../purchase-orders/_lib/auth";
 
-type KnexInstance = {
-  raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
+type Db = {
+  raw: (
+    sql: string,
+    bindings?: unknown[]
+  ) => Promise<{ rows: unknown[]; rowCount?: number }>;
   transaction?: () => Promise<
-    KnexInstance & { commit: () => Promise<void>; rollback: () => Promise<void> }
+    Db & { commit: () => Promise<void>; rollback: () => Promise<void> }
   >;
 };
-
-function resolveKnex(req: AuthenticatedMedusaRequest): KnexInstance {
-  return (req.scope as unknown as { resolve: (k: string) => unknown }).resolve(
-    "__pg_connection__"
-  ) as KnexInstance;
-}
 
 interface BillRow {
   id: string;
   status: string;
   qb_txn_id: string | null;
-}
-
-interface CostLogRow {
-  id: string;
-  product_variant_id: string;
-  received_qty: number;
-  landed_unit_cost_cents: number;
 }
 
 export async function POST(
@@ -59,29 +30,38 @@ export async function POST(
 ) {
   try {
     getActorUserId(req);
-  } catch (err) {
-    if (err instanceof UnauthenticatedError) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+  } catch (error) {
+    if (error instanceof UnauthenticatedError) {
+      return res
+        .status(error.status)
+        .json({ error: error.message, code: error.code });
     }
-    throw err as Error;
+    throw error;
   }
 
-  const { id } = req.params as { id: string };
-  const knex = resolveKnex(req);
-
+  const id = req.params.id;
+  if (!id) {
+    return res
+      .status(400)
+      .json({ error: "Vendor bill id is required", code: "missing_id" });
+  }
+  const knex = (
+    req.scope as unknown as { resolve: (key: string) => unknown }
+  ).resolve("__pg_connection__") as Db;
   const billResult = await knex.raw(
-    `SELECT id, status, qb_txn_id FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
+    `SELECT id, status, qb_txn_id FROM vendor_bill
+      WHERE id = ? AND deleted_at IS NULL`,
     [id]
   );
-  const bill = (billResult.rows[0] ?? null) as BillRow | null;
-  if (!bill) {
-    return res.status(404).json({ error: "Vendor bill not found", code: "not_found" });
-  }
-  if (bill.status === "synced") {
+  const bill = billResult.rows[0] as BillRow | undefined;
+  if (!bill)
+    return res
+      .status(404)
+      .json({ error: "Vendor bill not found", code: "not_found" });
+  if (bill.status === "synced" || bill.qb_txn_id) {
     return res.status(422).json({
-      error:
-        "Synced bills can't be reopened here — void it in QuickBooks first (out of scope).",
-      code: "synced_out_of_scope",
+      error: "Void this bill in QuickBooks before reopening it.",
+      code: "has_qb_txn",
     });
   }
   if (bill.status !== "confirmed") {
@@ -90,244 +70,76 @@ export async function POST(
       code: "not_confirmed",
     });
   }
-  if (bill.qb_txn_id) {
-    return res.status(422).json({
-      error: "This bill already has a QuickBooks TxnID — void in QB before reopening.",
-      code: "has_qb_txn",
-    });
-  }
 
-  // Blocker: application on a CONFIRMED China wire.
   const confirmedWire = await knex.raw(
     `SELECT 1
        FROM china_finance_bill cfb
-       JOIN china_wire_transfer_application cwta ON cwta.bill_id = cfb.id
-       JOIN china_wire_transfer cwt ON cwt.id = cwta.wire_transfer_id
-      WHERE cfb.vendor_bill_id = ? AND cwt.status = 'confirmed'
+       JOIN china_wire_transfer_application a ON a.bill_id = cfb.id
+       JOIN china_wire_transfer w ON w.id = a.wire_transfer_id
+      WHERE cfb.vendor_bill_id = ? AND w.status = 'confirmed'
       LIMIT 1`,
     [id]
   );
   if (confirmedWire.rows.length > 0) {
     return res.status(409).json({
-      error: "This bill is paid by a confirmed wire transfer — reverse the payment first.",
+      error: "Reverse the confirmed wire payment before reopening this bill.",
       code: "on_confirmed_wire",
     });
   }
 
-  // Active cost logs for this bill.
-  const logResult = await knex.raw(
-    `SELECT id, product_variant_id, received_qty, landed_unit_cost_cents
-       FROM vendor_bill_cost_log
-      WHERE vendor_bill_id = ? AND reversed_at IS NULL`,
-    [id]
-  );
-  const costLogs = logResult.rows as CostLogRow[];
-  if (costLogs.length === 0) {
-    return res.status(422).json({
-      error: "No active cost log entries found — nothing to reverse.",
-      code: "no_cost_log",
-    });
-  }
-
-  // D6 blocker: a bill confirmed against MULTIPLE receipts writes one cost-log
-  // row PER RECEIPT per variant (chronological AVCO replay — see the confirm
-  // route). This reversal loop below undoes ONE row at a time against a
-  // single LIVE inventory read that never changes between iterations (reopen
-  // never touches stock) — correct for exactly one row per variant, but NOT
-  // order-independent for N>1 rows on the same variant (each step should
-  // really use the qty_on_hand snapshot the replay actually produced at that
-  // point, not a single live read reused across steps). Refuse rather than
-  // silently apply a reversal whose correctness hasn't been proven for the
-  // multi-row case — a real Unlock/multi-step-reversal is future work.
-  const multiRowVariants = new Map<string, number>();
-  for (const log of costLogs) {
-    multiRowVariants.set(
-      log.product_variant_id,
-      (multiRowVariants.get(log.product_variant_id) ?? 0) + 1
-    );
-  }
-  const unsupportedVariants = [...multiRowVariants.entries()]
-    .filter(([, count]) => count > 1)
-    .map(([variantId]) => variantId);
-  if (unsupportedVariants.length > 0) {
-    return res.status(409).json({
-      error:
-        "This bill was confirmed against multiple receipts, which recorded more than one cost-log step for at least one product. Reopening a multi-receipt confirm isn't supported yet — void/correct via the receipts directly, or ask engineering for a manual reversal.",
-      code: "multi_receipt_avco_reversal_unsupported",
-      variants: unsupportedVariants,
-    });
-  }
-
-  // C6 blocker: a LATER active confirm on any of the same variants would make
-  // the AVCO replay inconsistent. Refuse and name the variants.
-  const laterResult = await knex.raw(
-    `SELECT DISTINCT later.product_variant_id
-       FROM vendor_bill_cost_log mine
-       JOIN vendor_bill_cost_log later
-         ON later.product_variant_id = mine.product_variant_id
-        AND later.reversed_at IS NULL
-        AND later.vendor_bill_id <> mine.vendor_bill_id
-        AND later.created_at > mine.created_at
-      WHERE mine.vendor_bill_id = ? AND mine.reversed_at IS NULL`,
-    [id]
-  );
-  if (laterResult.rows.length > 0) {
-    const variants = (laterResult.rows as Array<{ product_variant_id: string }>).map(
-      (r) => r.product_variant_id
-    );
-    return res.status(409).json({
-      error:
-        "A newer confirmed bill already updated the landed cost of one or more of these variants. Reopen/cancel that bill first.",
-      code: "later_cost_log_exists",
-      variants,
-    });
-  }
-
-  // ── Reverse AVCO + flip to draft, transactionally ───────────────────────────
   const trx = knex.transaction ? await knex.transaction() : null;
-  const db = trx ?? knex;
-  const warnings: string[] = [];
+  if (!trx) {
+    return res.status(500).json({
+      error: "Transactions unavailable",
+      code: "transaction_required",
+    });
+  }
+
   try {
-    for (const log of costLogs) {
-      const qResult = await db.raw(
-        `SELECT COALESCE(SUM(il.stocked_quantity)::int, 0) AS qty
-           FROM inventory_level il
-           JOIN product_variant_inventory_item pvii ON pvii.inventory_item_id = il.inventory_item_id
-          WHERE pvii.variant_id = ? AND il.deleted_at IS NULL`,
-        [log.product_variant_id]
-      );
-      const qCurrent = Number(
-        (qResult.rows[0] as { qty: number } | undefined)?.qty ?? 0
-      );
-
-      const metaResult = await db.raw(
-        `SELECT metadata FROM product_variant WHERE id = ? AND deleted_at IS NULL`,
-        [log.product_variant_id]
-      );
-      const meta = (metaResult.rows[0] as { metadata: Record<string, unknown> | null } | undefined)?.metadata;
-      const currentAvg = Number(meta?.avg_landed_cost_cents ?? 0) || 0;
-
-      const qBefore = qCurrent - log.received_qty;
-      let restoredAvg: number;
-      if (qBefore > 0) {
-        restoredAvg =
-          (qCurrent * currentAvg - log.received_qty * log.landed_unit_cost_cents) /
-          qBefore;
-        restoredAvg = Math.max(0, restoredAvg);
-      } else {
-        restoredAvg = 0;
-        warnings.push(
-          `variant ${log.product_variant_id}: inventory fully consumed, avg cost reset to 0`
-        );
-      }
-
-      await db.raw(
-        `UPDATE product_variant
-            SET metadata = COALESCE(metadata, '{}'::jsonb)
-              || jsonb_build_object('avg_landed_cost_cents', ?::float,
-                                    'avg_landed_cost_updated_at', now()::text,
-                                    'average_cost', (?::float) / 100.0,
-                                    'average_cost_updated_at', now()::text,
-                                    'average_cost_source', 'landed'),
-                updated_at = NOW()
-          WHERE id = ?`,
-        [restoredAvg, restoredAvg, log.product_variant_id]
-      );
-
-      // Journal the reversal. Already inside this route's transaction, so the
-      // guarantee comes for free here: the restored average and its history
-      // entry commit together or not at all.
-      //
-      // Same shape as the cancel path — the two are the AVCO reversal twins
-      // (reopen returns the bill to draft for editing, cancel retires it), so
-      // the only differences are event_type and reason_code. currentAvg and
-      // restoredAvg are CENTS, so qty x their difference is already a cents
-      // delta; no x100, unlike the QB sync where costs arrive in dollars.
-      // Look the confirm's event UP rather than recomputing its id from a
-      // string format. The confirm route mints generation-suffixed ids so a
-      // re-confirm after a reopen isn't swallowed by its own idempotency key,
-      // which means there is no single id this route could reconstruct. NULL
-      // when the bill predates the journal — the reversal still records, it
-      // just has nothing to point back at.
-      const priorEvent = await db.raw(
-        `SELECT id FROM variant_cost_event
-          WHERE vendor_bill_id = ? AND product_variant_id = ?
-            AND cost_field = 'average_cost' AND event_type = 'vendor_bill_receipt'
-            AND status = 'active'
-          ORDER BY effective_at DESC, event_sequence DESC
-          LIMIT 1`,
-        [bill.id, log.product_variant_id]
-      );
-      const confirmEventId =
-        (priorEvent.rows[0] as { id: string } | undefined)?.id ?? null;
-      await db.raw(
-        `INSERT INTO variant_cost_event
-           (id, product_variant_id, event_type, cost_field, effective_at, recorded_at,
-            previous_unit_cost, new_unit_cost, quantity_on_hand_at_event,
-            inventory_value_delta_cents, source_system, source_type, source_id,
-            status, idempotency_key, vendor_bill_id, quantity_delta,
-            reverses_event_id, reason_code)
-         VALUES (?, ?, 'vendor_bill_reopen', 'average_cost', NOW(), NOW(),
-                 ?::numeric, ?::numeric, ?::int, ?::bigint,
-                 'medusa', 'vendor_bill_reopen', ?, 'active', ?, ?, ?::int, ?,
-                 'vendor_bill_reopen')
-         ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
-        [
-          `vce_vr_${bill.id.slice(-12)}_${log.product_variant_id.slice(-12)}`,
-          log.product_variant_id,
-          currentAvg / 100,
-          restoredAvg / 100,
-          qCurrent,
-          Math.round(qCurrent * (restoredAvg - currentAvg)),
-          bill.id,
-          `reopen:${bill.id}:${log.product_variant_id}`,
-          bill.id,
-          -log.received_qty,
-          confirmEventId,
-        ]
-      );
-
-      // Retire the confirm's event: recost-window walks `status = 'active'` to
-      // find a variant's next cost change, and an undone confirm must stop
-      // acting as that boundary. Unlike cancel, this bill can be confirmed
-      // again later — that re-confirm appends its own fresh event rather than
-      // reviving this one.
-      await db.raw(
-        `UPDATE variant_cost_event
-            SET status = 'reversed'
-          WHERE id = ? AND status = 'active'`,
-        [confirmEventId]
-      );
-
-      await db.raw(
-        `UPDATE vendor_bill_cost_log SET reversed_at = NOW(), updated_at = NOW()
-          WHERE id = ?`,
-        [log.id]
+    const locked = await trx.raw(
+      `SELECT status FROM vendor_bill WHERE id = ? FOR UPDATE`,
+      [id]
+    );
+    if (
+      (locked.rows[0] as { status?: string } | undefined)?.status !==
+      "confirmed"
+    ) {
+      throw new Error(
+        "Vendor bill changed after preview; refresh and try again"
       );
     }
 
-    await db.raw(
+    // Reopen is an editing-state transition only. The currently confirmed
+    // generation remains the accounting truth while the replacement is a
+    // draft. Its cost facts/events are retired atomically by the next Confirm,
+    // immediately before the replacement generation is replayed.
+    await trx.raw(
       `UPDATE vendor_bill
-          SET status = 'draft',
-              confirmed_at = NULL,
+          SET status = 'draft', confirmed_at = NULL,
               confirmed_by_user_id = NULL,
+              draft_revision_number = COALESCE((
+                SELECT MAX(revision_number) + 1
+                  FROM vendor_bill_revision
+                 WHERE vendor_bill_id = ?
+              ), 2),
               updated_at = NOW()
-        WHERE id = ? AND deleted_at IS NULL`,
-      [id]
+        WHERE id = ?`,
+      [id, id]
     );
+    await trx.commit();
 
-    if (trx) await trx.commit();
-  } catch (err) {
-    if (trx) await trx.rollback();
-    throw err;
+    const updated = await knex.raw(`SELECT * FROM vendor_bill WHERE id = ?`, [
+      id,
+    ]);
+    return res.json({
+      vendor_bill: updated.rows[0] ?? {},
+      cost_replay: { applied: false, applies_on: "confirm" },
+    });
+  } catch (error) {
+    await trx.rollback().catch(() => undefined);
+    return res.status(409).json({
+      error: error instanceof Error ? error.message : "Cost replay failed",
+      code: "cost_replay_conflict",
+    });
   }
-
-  const updated = await knex.raw(
-    `SELECT * FROM vendor_bill WHERE id = ?`,
-    [id]
-  );
-  return res.json({
-    vendor_bill: updated.rows[0] ?? {},
-    ...(warnings.length > 0 ? { warnings } : {}),
-  });
 }

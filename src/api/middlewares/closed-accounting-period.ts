@@ -51,7 +51,7 @@ function pathAllowed(resource: ResourceType, path: string): boolean {
     );
   }
   if (resource === "vendor_bill") {
-    return /\/check-payment(\/|$)/.test(path);
+    return /\/(check-payment|cost-replay-preview)(\/|$)/.test(path);
   }
   return false;
 }

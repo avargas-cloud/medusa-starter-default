@@ -81,7 +81,10 @@ WITH china_variants AS (
    WHERE pv.deleted_at IS NULL
      -- COALESCE to false: (NULL = 'true') is NULL, and NOT NULL is NULL, so a
      -- product without the key would silently fall out of every branch.
-     AND COALESCE((p.metadata->>'is_sourced_via_agent') = 'true', false)
+     AND (
+       COALESCE((p.metadata->>'is_sourced_via_agent') = 'true', false)
+       OR pv.id = ANY(?::text[])
+     )
 ),
 movements AS (
   -- Goods arriving from the vendor. Voided receipts never happened.
@@ -178,7 +181,9 @@ export interface VariantTimeline {
  * ordered by the SQL above — this preserves that order rather than re-sorting,
  * so the economic sequence has exactly one authority.
  */
-export function groupMovements(rows: readonly MovementLedgerRow[]): Map<string, VariantTimeline> {
+export function groupMovements(
+  rows: readonly MovementLedgerRow[]
+): Map<string, VariantTimeline> {
   const byVariant = new Map<string, VariantTimeline>();
 
   for (const row of rows) {

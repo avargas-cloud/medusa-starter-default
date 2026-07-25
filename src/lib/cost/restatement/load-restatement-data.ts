@@ -12,7 +12,10 @@
  */
 
 export interface KnexLike {
-  raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: any[]; rowCount?: number }>;
+  raw: (
+    sql: string,
+    bindings?: unknown[]
+  ) => Promise<{ rows: any[]; rowCount?: number }>;
 }
 
 export interface ScopeVariantRow {
@@ -59,7 +62,10 @@ SELECT pv.id AS variant_id,
   FROM product_variant pv
   JOIN product p ON p.id = pv.product_id
  WHERE pv.deleted_at IS NULL
-   AND COALESCE((p.metadata->>'is_sourced_via_agent') = 'true', false)
+   AND (
+     COALESCE((p.metadata->>'is_sourced_via_agent') = 'true', false)
+     OR pv.id = ANY(?::text[])
+   )
  ORDER BY pv.sku
 `;
 
@@ -89,7 +95,7 @@ export const COST_CHANGES_SQL = `
 SELECT l.id                       AS source_id,
        l.product_variant_id       AS variant_id,
        l.vendor_bill_id,
-       vb.purchase_order_receipt_id AS receipt_id,
+       COALESCE(l.receipt_id, vb.purchase_order_receipt_id) AS receipt_id,
        r.received_at,
        l.applied_at,
        l.received_qty,
@@ -97,7 +103,8 @@ SELECT l.id                       AS source_id,
   FROM vendor_bill_cost_log l
   JOIN vendor_bill vb ON vb.id = l.vendor_bill_id AND vb.deleted_at IS NULL
   LEFT JOIN purchase_order_receipt r
-         ON r.id = vb.purchase_order_receipt_id AND r.deleted_at IS NULL AND r.voided_at IS NULL
+         ON r.id = COALESCE(l.receipt_id, vb.purchase_order_receipt_id)
+        AND r.deleted_at IS NULL AND r.voided_at IS NULL
  WHERE l.reversed_at IS NULL
    AND l.applied_at <= ?
    AND l.received_qty > 0
@@ -146,7 +153,10 @@ SELECT ii.id                                  AS line_id,
   ) adj ON true
  WHERE ii.deleted_at IS NULL AND i.deleted_at IS NULL AND pv.deleted_at IS NULL
    AND i.voided_at IS NULL
-   AND COALESCE((p.metadata->>'is_sourced_via_agent') = 'true', false)
+   AND (
+     COALESCE((p.metadata->>'is_sourced_via_agent') = 'true', false)
+     OR pv.id = ANY(?::text[])
+   )
    AND COALESCE(i.issued_at, i.created_at) <= ?
  ORDER BY COALESCE(i.issued_at, i.created_at), ii.id
 `;
@@ -188,7 +198,10 @@ SELECT cmi.id                                  AS line_id,
   ) adj ON true
  WHERE cmi.deleted_at IS NULL AND cm.deleted_at IS NULL AND pv.deleted_at IS NULL
    AND cm.voided_at IS NULL
-   AND COALESCE((p.metadata->>'is_sourced_via_agent') = 'true', false)
+   AND (
+     COALESCE((p.metadata->>'is_sourced_via_agent') = 'true', false)
+     OR pv.id = ANY(?::text[])
+   )
    AND COALESCE(cm.completed_at, cm.created_at) <= ?
  ORDER BY COALESCE(cm.completed_at, cm.created_at), cmi.id
 `;
@@ -212,7 +225,9 @@ SELECT to_regclass('treasury_day_lock') IS NOT NULL AS has_table
  * line and the LATERAL join is dropped.
  */
 export async function hasAdjustmentTable(knex: KnexLike): Promise<boolean> {
-  const { rows } = await knex.raw(`SELECT to_regclass('sale_cost_adjustment') IS NOT NULL AS present`);
+  const { rows } = await knex.raw(
+    `SELECT to_regclass('sale_cost_adjustment') IS NOT NULL AS present`
+  );
   return Boolean((rows[0] as { present: boolean } | undefined)?.present);
 }
 
@@ -227,15 +242,24 @@ function withoutAdjustmentJoin(sql: string): string {
       /\s*LEFT JOIN LATERAL \(\s*SELECT a\.original_unit_cost[\s\S]*?\) adj ON true/g,
       ""
     )
-    .replace(/adj\.original_unit_cost::text\s+AS original_unit_cost/g, "NULL::text AS original_unit_cost");
+    .replace(
+      /adj\.original_unit_cost::text\s+AS original_unit_cost/g,
+      "NULL::text AS original_unit_cost"
+    );
 }
 
-export async function loadScope(knex: KnexLike): Promise<ScopeVariantRow[]> {
-  const { rows } = await knex.raw(SCOPE_SQL);
+export async function loadScope(
+  knex: KnexLike,
+  includedVariantIds: readonly string[] = []
+): Promise<ScopeVariantRow[]> {
+  const { rows } = await knex.raw(SCOPE_SQL, [[...includedVariantIds]]);
   return rows as ScopeVariantRow[];
 }
 
-export async function loadCostChanges(knex: KnexLike, cutoff: Date): Promise<CostChangeRow[]> {
+export async function loadCostChanges(
+  knex: KnexLike,
+  cutoff: Date
+): Promise<CostChangeRow[]> {
   const { rows } = await knex.raw(COST_CHANGES_SQL, [cutoff.toISOString()]);
   return rows as CostChangeRow[];
 }
@@ -243,21 +267,31 @@ export async function loadCostChanges(knex: KnexLike, cutoff: Date): Promise<Cos
 export async function loadInvoiceLines(
   knex: KnexLike,
   cutoff: Date,
-  adjustmentTableExists: boolean
+  adjustmentTableExists: boolean,
+  includedVariantIds: readonly string[] = []
 ): Promise<SaleLineRow[]> {
-  const sql = adjustmentTableExists ? INVOICE_LINES_SQL : withoutAdjustmentJoin(INVOICE_LINES_SQL);
-  const { rows } = await knex.raw(sql, [cutoff.toISOString()]);
+  const sql = adjustmentTableExists
+    ? INVOICE_LINES_SQL
+    : withoutAdjustmentJoin(INVOICE_LINES_SQL);
+  const { rows } = await knex.raw(sql, [
+    [...includedVariantIds],
+    cutoff.toISOString(),
+  ]);
   return rows as SaleLineRow[];
 }
 
 export async function loadCreditMemoLines(
   knex: KnexLike,
   cutoff: Date,
-  adjustmentTableExists: boolean
+  adjustmentTableExists: boolean,
+  includedVariantIds: readonly string[] = []
 ): Promise<SaleLineRow[]> {
   const sql = adjustmentTableExists
     ? CREDIT_MEMO_LINES_SQL
     : withoutAdjustmentJoin(CREDIT_MEMO_LINES_SQL);
-  const { rows } = await knex.raw(sql, [cutoff.toISOString()]);
+  const { rows } = await knex.raw(sql, [
+    [...includedVariantIds],
+    cutoff.toISOString(),
+  ]);
   return rows as SaleLineRow[];
 }

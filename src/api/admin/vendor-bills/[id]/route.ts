@@ -43,7 +43,6 @@ import {
   syncPrimaryReceiptPointer,
   validateReceiptsForBinding,
 } from "../../../../lib/purchase-orders/vendor-bill-receipts";
-import { enqueueChinaAgencyVendorBillModGroup } from "../../../../lib/purchase-orders/qb-vendor-bill-mod-enqueue";
 import { findDuplicateVendorBillReference } from "../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
 
 // ── Knex type ────────────────────────────────────────────────────────────────
@@ -599,6 +598,21 @@ export async function GET(
       }
     : null;
 
+  const revisionsResult = await knex.raw(
+    `SELECT r.revision_number, r.status, r.input_hash, r.confirmed_at,
+            r.confirmed_by_user_id,
+            NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), '') AS confirmed_by_name,
+            u.email AS confirmed_by_email
+       FROM vendor_bill_revision r
+       LEFT JOIN "user" u
+         ON u.id = r.confirmed_by_user_id AND u.deleted_at IS NULL
+      WHERE r.vendor_bill_id = ?
+        AND r.confirmed_at IS NOT NULL
+      ORDER BY r.revision_number`,
+    [id]
+  );
+  const revisions = revisionsResult.rows;
+
   return res.json({
     vendor_bill: {
       ...header,
@@ -611,6 +625,7 @@ export async function GET(
       bindable_receipts,
       qb,
       qb_pipeline,
+      revisions,
     },
   });
 }
@@ -1399,19 +1414,25 @@ export async function PATCH(
       }
     }
 
-    // A synced POS-owned China Agency bill remains editable. Freeze the FULL
-    // Regular + Service/Freight/Tariff BillMod group in this same transaction
-    // so a local save can never commit with only part of its QB work queued.
+    // Editing a synced bill creates a draft replacement. Do not enqueue
+    // BillMod on Save: average costs and QuickBooks move together only when
+    // the operator explicitly reconfirms the revision.
     if (
       bill.status === "synced" &&
       (entries.length > 0 || hasLineEdits || hasFreightLines)
     ) {
-      const queued = await enqueueChinaAgencyVendorBillModGroup(db, id);
-      if (!queued.queued) {
-        throw new Error(
-          `QuickBooks update could not be queued: ${queued.reason}`
-        );
-      }
+      await db.raw(
+        `UPDATE vendor_bill
+            SET status = 'draft',
+                draft_revision_number = COALESCE((
+                  SELECT MAX(revision_number) + 1
+                    FROM vendor_bill_revision
+                   WHERE vendor_bill_id = ?
+                ), 2),
+                updated_at = NOW()
+          WHERE id = ? AND status = 'synced'`,
+        [id, id]
+      );
     }
 
     if (trx) await trx.commit();

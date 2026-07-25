@@ -16,6 +16,18 @@
  */
 
 import { createHash } from "crypto";
+
+import {
+  hasAdjustmentTable,
+  loadCostChanges,
+  loadCreditMemoLines,
+  loadInvoiceLines,
+  loadScope,
+  type CostChangeRow,
+  type KnexLike,
+  type SaleLineRow,
+  type ScopeVariantRow,
+} from "./load-restatement-data";
 import {
   groupMovements,
   solveOpeningQuantity,
@@ -36,17 +48,6 @@ import {
   type SaleLineInput,
   type SaleRestatement,
 } from "./restate-sales";
-import {
-  hasAdjustmentTable,
-  loadCostChanges,
-  loadCreditMemoLines,
-  loadInvoiceLines,
-  loadScope,
-  type CostChangeRow,
-  type KnexLike,
-  type SaleLineRow,
-  type ScopeVariantRow,
-} from "./load-restatement-data";
 
 export const METHODOLOGY_VERSION = "china-avco-v1";
 /** The QuickBooks catalog load — the opening balance of the reconstruction. */
@@ -58,6 +59,12 @@ export interface RestatementOptions {
   sourceDataCutoff: Date;
   reason: string;
   requestedBy?: string | null;
+  /** Optional incremental replay scope. Omitted by the original full rebuild. */
+  variantIds?: readonly string[];
+  /** Facts to omit from the projection, e.g. a bill being reopened/cancelled. */
+  excludedVendorBillIds?: readonly string[];
+  /** Proposed facts used by confirmation preview before they exist in the log. */
+  replacementCostChanges?: readonly CostChangeRow[];
 }
 
 export interface RestatementPlan {
@@ -104,19 +111,62 @@ export async function buildPlan(
   options: RestatementOptions
 ): Promise<RestatementPlan> {
   const cutoff = options.sourceDataCutoff;
+  const includedVariantIds = options.variantIds ?? [];
   // Absent before the restatement migration runs — a dry run must still work.
   const adjustmentTableExists = await hasAdjustmentTable(knex);
 
-  const [scope, costChangeRows, invoiceRows, creditMemoRows, movementResult] = await Promise.all([
-    loadScope(knex),
-    loadCostChanges(knex, cutoff),
-    loadInvoiceLines(knex, cutoff, adjustmentTableExists),
-    loadCreditMemoLines(knex, cutoff, adjustmentTableExists),
-    knex.raw(MOVEMENT_LEDGER_SQL, [cutoff.toISOString()]),
-  ]);
+  const [scope, costChangeRows, invoiceRows, creditMemoRows, movementResult] =
+    await Promise.all([
+      loadScope(knex, includedVariantIds),
+      loadCostChanges(knex, cutoff),
+      loadInvoiceLines(knex, cutoff, adjustmentTableExists, includedVariantIds),
+      loadCreditMemoLines(
+        knex,
+        cutoff,
+        adjustmentTableExists,
+        includedVariantIds
+      ),
+      knex.raw(MOVEMENT_LEDGER_SQL, [
+        [...includedVariantIds],
+        cutoff.toISOString(),
+      ]),
+    ]);
 
-  const timelines = groupMovements(movementResult.rows as MovementLedgerRow[]);
-  const changesByVariant = groupCostChanges(costChangeRows);
+  const variantFilter = options.variantIds?.length
+    ? new Set(options.variantIds)
+    : null;
+  const excludedBills = new Set(options.excludedVendorBillIds ?? []);
+  const scopedVariants = variantFilter
+    ? scope.filter((row) => variantFilter.has(row.variant_id))
+    : scope;
+  const scopedChanges = [
+    ...costChangeRows.filter(
+      (row) =>
+        (!variantFilter || variantFilter.has(row.variant_id)) &&
+        !excludedBills.has(row.vendor_bill_id)
+    ),
+    ...(options.replacementCostChanges ?? []).filter(
+      (row) => !variantFilter || variantFilter.has(row.variant_id)
+    ),
+  ];
+  const scopedInvoices = variantFilter
+    ? invoiceRows.filter(
+        (row) => row.variant_id && variantFilter.has(row.variant_id)
+      )
+    : invoiceRows;
+  const scopedCreditMemos = variantFilter
+    ? creditMemoRows.filter(
+        (row) => row.variant_id && variantFilter.has(row.variant_id)
+      )
+    : creditMemoRows;
+  const movementRows = variantFilter
+    ? (movementResult.rows as MovementLedgerRow[]).filter((row) =>
+        variantFilter.has(row.variant_id)
+      )
+    : (movementResult.rows as MovementLedgerRow[]);
+
+  const timelines = groupMovements(movementRows);
+  const changesByVariant = groupCostChanges(scopedChanges);
 
   const rebuilds: VariantRebuild[] = [];
   const exceptions: RebuildException[] = [];
@@ -128,13 +178,14 @@ export async function buildPlan(
   let cogsTrueUpCents = 0;
   let variantsWithAnchor = 0;
 
-  for (const row of scope) {
+  for (const row of scopedVariants) {
     const timeline: VariantTimeline | undefined = timelines.get(row.variant_id);
     const currentQuantity = num(row.miami_qty);
     chinaWarehouseUnits += num(row.china_qty);
 
     const anchorDollars = parseCost(row.qb_avg_cost);
-    const anchorCents = anchorDollars === null ? null : Math.round(anchorDollars * 100);
+    const anchorCents =
+      anchorDollars === null ? null : Math.round(anchorDollars * 100);
     if (anchorCents !== null && anchorCents > 0) variantsWithAnchor++;
 
     const { openingQuantity } = timeline
@@ -163,12 +214,18 @@ export async function buildPlan(
     const storedCost = parseCost(row.average_cost);
     inventoryBeforeCents += valuedQty * Math.round((storedCost ?? 0) * 100);
     inventoryAfterCents += valuedQty * rebuild.finalUnitCostCents;
-    cogsTrueUpCents += rebuild.events.reduce((sum, e) => sum + e.cogsTrueUpCents, 0);
+    cogsTrueUpCents += rebuild.events.reduce(
+      (sum, e) => sum + e.cogsTrueUpCents,
+      0
+    );
   }
 
   // --- Price the sales. Invoices first: returns mirror them. ---
-  const invoiceLines = invoiceRows.map(toSaleLineInput);
-  const invoiceRestatements = restateInvoiceLines(invoiceLines, eventsByVariant);
+  const invoiceLines = scopedInvoices.map(toSaleLineInput);
+  const invoiceRestatements = restateInvoiceLines(
+    invoiceLines,
+    eventsByVariant
+  );
 
   const restatedInvoiceCosts = new Map<string, number>();
   for (const result of invoiceRestatements) {
@@ -177,7 +234,7 @@ export async function buildPlan(
     }
   }
 
-  const creditMemoLines = creditMemoRows.map(toSaleLineInput);
+  const creditMemoLines = scopedCreditMemos.map(toSaleLineInput);
   const creditMemoRestatements = restateCreditMemoLines(
     creditMemoLines,
     eventsByVariant,
@@ -189,11 +246,12 @@ export async function buildPlan(
 
   const exceptionsByCode: Record<string, number> = {};
   for (const exception of exceptions) {
-    exceptionsByCode[exception.code] = (exceptionsByCode[exception.code] ?? 0) + 1;
+    exceptionsByCode[exception.code] =
+      (exceptionsByCode[exception.code] ?? 0) + 1;
   }
 
   const reconciliation: Reconciliation = {
-    variantsInScope: scope.length,
+    variantsInScope: scopedVariants.length,
     variantsWithAnchor,
     costEvents: rebuilds.reduce((sum, r) => sum + r.events.length, 0),
     inventoryValueBeforeCents: inventoryBeforeCents,
@@ -205,14 +263,21 @@ export async function buildPlan(
     creditMemos: creditMemoSummary,
     // A return REDUCES COGS, so its delta subtracts from the sales restatement.
     totalCogsDelta:
-      Math.round((invoiceSummary.deltaCogs - creditMemoSummary.deltaCogs) * 10_000) / 10_000,
+      Math.round(
+        (invoiceSummary.deltaCogs - creditMemoSummary.deltaCogs) * 10_000
+      ) / 10_000,
     exceptionsByCode,
   };
 
   return {
     options,
     methodologyVersion: METHODOLOGY_VERSION,
-    inputHash: hashInputs(scope, costChangeRows, invoiceRows, creditMemoRows),
+    inputHash: hashInputs(
+      scopedVariants,
+      scopedChanges,
+      scopedInvoices,
+      scopedCreditMemos
+    ),
     rebuilds,
     invoiceRestatements,
     creditMemoRestatements,
@@ -249,7 +314,9 @@ function toCostChange(row: CostChangeRow) {
   // received_at is the economic date; if the anchor receipt is gone (voided or
   // deleted) the confirm date is the only date left, and the missing link shows
   // up downstream as a `receipt_not_in_ledger` exception.
-  const receivedAt = row.received_at ? new Date(row.received_at) : new Date(row.applied_at);
+  const receivedAt = row.received_at
+    ? new Date(row.received_at)
+    : new Date(row.applied_at);
   return {
     variantId: row.variant_id,
     effectiveAt: receivedAt,
@@ -289,7 +356,9 @@ function hashInputs(
     hash.update(`v|${row.variant_id}|${row.qb_avg_cost}|${row.miami_qty}\n`);
   }
   for (const row of costChanges) {
-    hash.update(`c|${row.source_id}|${row.received_qty}|${row.landed_unit_cost_cents}\n`);
+    hash.update(
+      `c|${row.source_id}|${row.received_qty}|${row.landed_unit_cost_cents}\n`
+    );
   }
   for (const row of invoiceLines) {
     hash.update(`i|${row.line_id}|${row.quantity}|${row.economic_posted_at}\n`);

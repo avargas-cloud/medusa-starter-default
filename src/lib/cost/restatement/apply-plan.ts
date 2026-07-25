@@ -16,16 +16,22 @@
  * the audit trail, not the audit trail itself.
  */
 
-import type { RestatementPlan } from "./run-restatement";
-import type { SaleRestatement } from "./restate-sales";
 import { centsToDollars } from "./rebuild-timeline";
+import type { SaleRestatement } from "./restate-sales";
+import type { RestatementPlan } from "./run-restatement";
 
 export interface TrxLike {
-  raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: any[]; rowCount?: number }>;
+  raw: (
+    sql: string,
+    bindings?: unknown[]
+  ) => Promise<{ rows: any[]; rowCount?: number }>;
 }
 
 export interface KnexWithTransaction {
-  raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: any[]; rowCount?: number }>;
+  raw: (
+    sql: string,
+    bindings?: unknown[]
+  ) => Promise<{ rows: any[]; rowCount?: number }>;
   transaction: <T>(handler: (trx: TrxLike) => Promise<T>) => Promise<T>;
 }
 
@@ -42,7 +48,11 @@ export interface ApplyResult {
 function eventId(runId: string, idempotencyKey: string): string {
   return `vce_${hashish(`${runId}:${idempotencyKey}`)}`;
 }
-function adjustmentId(runId: string, sourceType: string, lineId: string): string {
+function adjustmentId(
+  runId: string,
+  sourceType: string,
+  lineId: string
+): string {
   return `sca_${hashish(`${runId}:${sourceType}:${lineId}`)}`;
 }
 /**
@@ -63,35 +73,43 @@ export async function applyPlan(
   knex: KnexWithTransaction,
   plan: RestatementPlan
 ): Promise<ApplyResult> {
+  return knex.transaction((trx) => applyPlanInTransaction(trx, plan));
+}
+
+/** Apply inside a caller-owned transaction (vendor-bill replay uses this). */
+export async function applyPlanInTransaction(
+  trx: TrxLike,
+  plan: RestatementPlan
+): Promise<ApplyResult> {
   const { runId } = plan.options;
-
-  return knex.transaction(async (trx) => {
-    // --- 1. The manifest. Re-applying an applied run is a no-op by design. ---
-    const existing = await trx.raw(
-      `SELECT status, input_hash FROM cost_restatement_run WHERE id = ?`,
-      [runId]
-    );
-    const priorRun = existing.rows[0] as { status: string; input_hash: string } | undefined;
-    if (priorRun?.status === "applied") {
-      if (priorRun.input_hash !== plan.inputHash) {
-        throw new Error(
-          `Run ${runId} is already applied with a DIFFERENT input hash ` +
-            `(${priorRun.input_hash} vs ${plan.inputHash}). Create a new run id; ` +
-            `never re-apply a run against moved source data.`
-        );
-      }
-      return {
-        runId,
-        costEventsWritten: 0,
-        variantsUpdated: 0,
-        invoiceLinesRestated: 0,
-        creditMemoLinesRestated: 0,
-        adjustmentsWritten: 0,
-      };
+  // --- 1. The manifest. Re-applying an applied run is a no-op by design. ---
+  const existing = await trx.raw(
+    `SELECT status, input_hash FROM cost_restatement_run WHERE id = ?`,
+    [runId]
+  );
+  const priorRun = existing.rows[0] as
+    | { status: string; input_hash: string }
+    | undefined;
+  if (priorRun?.status === "applied") {
+    if (priorRun.input_hash !== plan.inputHash) {
+      throw new Error(
+        `Run ${runId} is already applied with a DIFFERENT input hash ` +
+          `(${priorRun.input_hash} vs ${plan.inputHash}). Create a new run id; ` +
+          `never re-apply a run against moved source data.`
+      );
     }
+    return {
+      runId,
+      costEventsWritten: 0,
+      variantsUpdated: 0,
+      invoiceLinesRestated: 0,
+      creditMemoLinesRestated: 0,
+      adjustmentsWritten: 0,
+    };
+  }
 
-    await trx.raw(
-      `INSERT INTO cost_restatement_run
+  await trx.raw(
+    `INSERT INTO cost_restatement_run
          (id, reason, methodology_version, scope, source_data_cutoff, anchor_date,
           status, input_hash, requested_by, variants_affected, cost_events_written,
           lines_restated, cogs_delta_cents, inventory_delta_cents, exceptions, reconciliation)
@@ -100,31 +118,50 @@ export async function applyPlan(
          status = 'applied', input_hash = EXCLUDED.input_hash,
          exceptions = EXCLUDED.exceptions, reconciliation = EXCLUDED.reconciliation,
          applied_at = NOW(), updated_at = NOW()`,
-      [
-        runId,
-        plan.options.reason,
-        plan.methodologyVersion,
-        plan.options.sourceDataCutoff.toISOString(),
-        plan.options.anchorDate.toISOString(),
-        plan.inputHash,
-        plan.options.requestedBy ?? null,
-        plan.rebuilds.length,
-        plan.reconciliation.costEvents,
-        plan.reconciliation.invoices.changedLines + plan.reconciliation.creditMemos.changedLines,
-        Math.round(plan.reconciliation.totalCogsDelta * 100),
-        plan.reconciliation.inventoryDeltaCents,
-        JSON.stringify(plan.exceptions),
-        JSON.stringify(plan.reconciliation),
-      ]
-    );
-    await trx.raw(`UPDATE cost_restatement_run SET applied_at = NOW() WHERE id = ?`, [runId]);
+    [
+      runId,
+      plan.options.reason,
+      plan.methodologyVersion,
+      plan.options.sourceDataCutoff.toISOString(),
+      plan.options.anchorDate.toISOString(),
+      plan.inputHash,
+      plan.options.requestedBy ?? null,
+      plan.rebuilds.length,
+      plan.reconciliation.costEvents,
+      plan.reconciliation.invoices.changedLines +
+        plan.reconciliation.creditMemos.changedLines,
+      Math.round(plan.reconciliation.totalCogsDelta * 100),
+      plan.reconciliation.inventoryDeltaCents,
+      JSON.stringify(plan.exceptions),
+      JSON.stringify(plan.reconciliation),
+    ]
+  );
+  await trx.raw(
+    `UPDATE cost_restatement_run SET applied_at = NOW() WHERE id = ?`,
+    [runId]
+  );
 
-    // --- 2. Cost events. Append-only; the idempotency key makes retries safe. ---
-    const allEvents = plan.rebuilds.flatMap((rebuild) => rebuild.events);
-    let costEventsWritten = 0;
-    for (const chunk of chunked(allEvents, WRITE_CHUNK)) {
-      const result = await trx.raw(
-        `INSERT INTO variant_cost_event
+  // The rows remain immutable, but only one reconstructed projection may be
+  // active for a variant. Retire the prior projection before appending this
+  // run's version; source facts and reversal events are never touched.
+  const replayVariantIds = plan.rebuilds.map((r) => r.variantId);
+  if (replayVariantIds.length > 0) {
+    await trx.raw(
+      `UPDATE variant_cost_event
+            SET status = 'superseded'
+          WHERE product_variant_id = ANY(?::text[])
+            AND restatement_run_id IS NOT NULL
+            AND status = 'active'`,
+      [replayVariantIds]
+    );
+  }
+
+  // --- 2. Cost events. Append-only; the run-scoped key makes retries safe. ---
+  const allEvents = plan.rebuilds.flatMap((rebuild) => rebuild.events);
+  let costEventsWritten = 0;
+  for (const chunk of chunked(allEvents, WRITE_CHUNK)) {
+    const result = await trx.raw(
+      `INSERT INTO variant_cost_event
            (id, product_variant_id, event_type, cost_field, effective_at, recorded_at,
             previous_unit_cost, new_unit_cost, quantity_on_hand_at_event,
             inventory_value_delta_cents, source_system, source_type, source_id,
@@ -147,50 +184,59 @@ export async function applyPlan(
                        source_system, source_type, source_id, idem_key, economic_seq,
                        receipt_id, bill_id, qty_delta, true_up, settled, meta)
          ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
-        [
-          runId,
-          plan.methodologyVersion,
-          chunk.map((e) => eventId(runId, e.idempotencyKey)),
-          chunk.map((e) => e.variantId),
-          chunk.map((e) => e.eventType),
-          chunk.map((e) => e.effectiveAt.toISOString()),
-          chunk.map((e) => e.recordedAt.toISOString()),
-          chunk.map((e) =>
-            e.previousUnitCostCents === null ? null : centsToDollars(e.previousUnitCostCents)
-          ),
-          chunk.map((e) => centsToDollars(e.newUnitCostCents)),
-          chunk.map((e) => e.quantityOnHandAfter),
-          chunk.map((e) => e.inventoryValueDeltaCents),
-          chunk.map((e) => (e.eventType === "opening_balance" ? "quickbooks" : "medusa")),
-          chunk.map((e) =>
-            e.eventType === "opening_balance" ? "qb_catalog_load" : "vendor_bill_cost_log"
-          ),
-          chunk.map((e) => e.sourceId),
-          chunk.map((e) => e.idempotencyKey),
-          chunk.map((e) => e.economicSequence),
-          chunk.map((e) => e.receiptId),
-          chunk.map((e) => e.vendorBillId),
-          chunk.map((e) => e.quantityDelta),
-          chunk.map((e) => Math.round(e.cogsTrueUpCents)),
-          chunk.map((e) => e.negativeSettledQuantity),
-          chunk.map((e) =>
-            JSON.stringify({ sku: e.sku, quantityOnHandBefore: e.quantityOnHandBefore })
-          ),
-        ]
-      );
-      costEventsWritten += result.rowCount ?? 0;
-    }
-
-    // --- 3. The variant's current carrying cost. ---
-    // JSONB merge (||) — a full-blob write would stomp quickbooks_id and the
-    // rest of the variant's metadata.
-    const variantWrites = plan.rebuilds.filter(
-      (rebuild) => rebuild.anchorUnitCostCents > 0 || rebuild.events.length > 1
+      [
+        runId,
+        plan.methodologyVersion,
+        chunk.map((e) => eventId(runId, e.idempotencyKey)),
+        chunk.map((e) => e.variantId),
+        chunk.map((e) => e.eventType),
+        chunk.map((e) => e.effectiveAt.toISOString()),
+        chunk.map((e) => e.recordedAt.toISOString()),
+        chunk.map((e) =>
+          e.previousUnitCostCents === null
+            ? null
+            : centsToDollars(e.previousUnitCostCents)
+        ),
+        chunk.map((e) => centsToDollars(e.newUnitCostCents)),
+        chunk.map((e) => e.quantityOnHandAfter),
+        chunk.map((e) => e.inventoryValueDeltaCents),
+        chunk.map((e) =>
+          e.eventType === "opening_balance" ? "quickbooks" : "medusa"
+        ),
+        chunk.map((e) =>
+          e.eventType === "opening_balance"
+            ? "qb_catalog_load"
+            : "vendor_bill_cost_log"
+        ),
+        chunk.map((e) => e.sourceId),
+        chunk.map((e) => `${runId}:${e.idempotencyKey}`),
+        chunk.map((e) => e.economicSequence),
+        chunk.map((e) => e.receiptId),
+        chunk.map((e) => e.vendorBillId),
+        chunk.map((e) => e.quantityDelta),
+        chunk.map((e) => Math.round(e.cogsTrueUpCents)),
+        chunk.map((e) => e.negativeSettledQuantity),
+        chunk.map((e) =>
+          JSON.stringify({
+            sku: e.sku,
+            quantityOnHandBefore: e.quantityOnHandBefore,
+          })
+        ),
+      ]
     );
-    let variantsUpdated = 0;
-    for (const chunk of chunked(variantWrites, WRITE_CHUNK)) {
-      const result = await trx.raw(
-        `UPDATE product_variant AS pv
+    costEventsWritten += result.rowCount ?? 0;
+  }
+
+  // --- 3. The variant's current carrying cost. ---
+  // JSONB merge (||) — a full-blob write would stomp quickbooks_id and the
+  // rest of the variant's metadata.
+  const variantWrites = plan.rebuilds.filter(
+    (rebuild) => rebuild.anchorUnitCostCents > 0 || rebuild.events.length > 1
+  );
+  let variantsUpdated = 0;
+  for (const chunk of chunked(variantWrites, WRITE_CHUNK)) {
+    const result = await trx.raw(
+      `UPDATE product_variant AS pv
             SET metadata = COALESCE(pv.metadata, '{}'::jsonb) || jsonb_build_object(
                   'average_cost', u.cost_dollars,
                   'average_cost_source', u.source,
@@ -201,47 +247,46 @@ export async function applyPlan(
            FROM UNNEST(?::text[], ?::float[], ?::text[], ?::float[])
                 AS u(variant_id, cost_dollars, source, cost_cents)
           WHERE pv.id = u.variant_id AND pv.deleted_at IS NULL`,
-        [
-          runId,
-          chunk.map((r) => r.variantId),
-          chunk.map((r) => centsToDollars(r.finalUnitCostCents)),
-          chunk.map((r) => (r.events.length > 1 ? "landed" : "sync")),
-          chunk.map((r) => r.finalUnitCostCents),
-        ]
-      );
-      variantsUpdated += result.rowCount ?? 0;
-    }
-
-    // --- 4 & 5. Audit row first, then the visible column, under CAS. ---
-    const invoiceLinesRestated = await applySaleRestatements(
-      trx,
-      runId,
-      plan.invoiceRestatements,
-      "invoice_item",
-      "pos_invoice_item"
+      [
+        runId,
+        chunk.map((r) => r.variantId),
+        chunk.map((r) => centsToDollars(r.finalUnitCostCents)),
+        chunk.map((r) => (r.events.length > 1 ? "landed" : "sync")),
+        chunk.map((r) => r.finalUnitCostCents),
+      ]
     );
-    const creditMemoLinesRestated = await applySaleRestatements(
-      trx,
-      runId,
-      plan.creditMemoRestatements,
-      "credit_memo_item",
-      "pos_credit_memo_item"
-    );
+    variantsUpdated += result.rowCount ?? 0;
+  }
 
-    await trx.raw(
-      `UPDATE cost_restatement_run SET cost_events_written = ?, updated_at = NOW() WHERE id = ?`,
-      [costEventsWritten, runId]
-    );
+  // --- 4 & 5. Audit row first, then the visible column, under CAS. ---
+  const invoiceLinesRestated = await applySaleRestatements(
+    trx,
+    runId,
+    plan.invoiceRestatements,
+    "invoice_item",
+    "pos_invoice_item"
+  );
+  const creditMemoLinesRestated = await applySaleRestatements(
+    trx,
+    runId,
+    plan.creditMemoRestatements,
+    "credit_memo_item",
+    "pos_credit_memo_item"
+  );
 
-    return {
-      runId,
-      costEventsWritten,
-      variantsUpdated,
-      invoiceLinesRestated,
-      creditMemoLinesRestated,
-      adjustmentsWritten: invoiceLinesRestated + creditMemoLinesRestated,
-    };
-  });
+  await trx.raw(
+    `UPDATE cost_restatement_run SET cost_events_written = ?, updated_at = NOW() WHERE id = ?`,
+    [costEventsWritten, runId]
+  );
+
+  return {
+    runId,
+    costEventsWritten,
+    variantsUpdated,
+    invoiceLinesRestated,
+    creditMemoLinesRestated,
+    adjustmentsWritten: invoiceLinesRestated + creditMemoLinesRestated,
+  };
 }
 
 /**
@@ -263,7 +308,8 @@ const WRITE_CHUNK = 500;
 
 function chunked<T>(items: readonly T[], size: number): T[][] {
   const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  for (let i = 0; i < items.length; i += size)
+    out.push(items.slice(i, i + size));
   return out;
 }
 
