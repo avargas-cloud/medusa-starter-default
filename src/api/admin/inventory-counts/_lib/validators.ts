@@ -10,13 +10,6 @@ import { z } from "zod";
 
 import { APPROVAL_LINE_ACTIONS } from "../../../../modules/inventory-count/types";
 
-export const createDraftSchema = z.object({
-  stock_location_id: z.string().min(1, "stock_location_id is required"),
-  category_filter_id: z.string().nullish(),
-  sku_prefix_filter: z.string().nullish(),
-  default_qb_account_list_id: z.string().min(1).optional(),
-});
-
 export const updateDraftLineSchema = z.object({
   product_variant_id: z.string().min(1),
   inventory_item_id: z.string().min(1),
@@ -27,6 +20,17 @@ export const updateDraftLineSchema = z.object({
   qty_counted_available: z.number().int().min(0).nullable(),
   qty_counted_reserved: z.number().int().min(0).nullable(),
   qb_account_list_id: z.string().min(1).nullish(),
+});
+
+export const createDraftSchema = z.object({
+  stock_location_id: z.string().min(1, "stock_location_id is required"),
+  category_filter_id: z.string().nullish(),
+  sku_prefix_filter: z.string().nullish(),
+  default_qb_account_list_id: z.string().min(1).optional(),
+  lines: z
+    .array(updateDraftLineSchema)
+    .min(1, "At least one product is required")
+    .max(2000),
 });
 
 export const updateDraftSchema = z.object({

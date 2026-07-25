@@ -257,6 +257,15 @@ export async function DELETE(
     });
   }
 
+  const lines = await service.listInventoryCountLines(
+    { inventory_count_id: id },
+    { take: 1 }
+  );
+  if (lines.length === 0) {
+    await service.deleteInventoryCounts([id]);
+    return res.json({ id, deleted: true });
+  }
+
   await service.updateInventoryCounts([{ id, status: "cancelled" }]);
 
   return res.json({ id, cancelled: true });

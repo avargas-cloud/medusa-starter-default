@@ -3,9 +3,9 @@
  *
  * POST /admin/inventory-counts/:id/clear-lines
  *
- * Wipes every line on a draft. Only allowed while status='draft' so the
- * cashier can start a recount from scratch without leaving residue rows
- * behind. The header counters are reset alongside the deletion.
+ * Wipes every line on a draft. The editor may remain open so the cashier can
+ * add a different product set. If they abandon the empty draft, DELETE removes
+ * the header instead of keeping a zero-line document.
  */
 
 import type {

@@ -11,6 +11,7 @@ import type {
 } from "@medusajs/framework/http";
 
 import { DEFAULT_QB_INVENTORY_ADJUSTMENT_ACCOUNT_LIST_ID } from "../../../modules/inventory-count/types";
+import { CHINA_LOC } from "../../../lib/locations";
 
 import { getActorUserId, UnauthenticatedError } from "./_lib/auth";
 import { buildEnrichmentMaps, decorateCount } from "./_lib/enrich";
@@ -86,6 +87,13 @@ export async function POST(
   }
   const body = parsed.data;
 
+  if (body.stock_location_id === CHINA_LOC) {
+    return res.status(400).json({
+      error: "China Warehouse is not available for inventory counts",
+      code: "china_inventory_count_not_allowed",
+    });
+  }
+
   const service = getInventoryCountService(req);
 
   // Allocate the canonical INVCNT-{seq} number AT CREATION (matches the
@@ -110,6 +118,32 @@ export async function POST(
       created_by_user_id: userId,
     },
   ]);
+  if (!created) {
+    throw new Error("Inventory count draft creation returned no record");
+  }
+
+  try {
+    await service.createInventoryCountLines(
+      body.lines.map((line) => ({
+        inventory_count_id: created.id,
+        product_variant_id: line.product_variant_id,
+        inventory_item_id: line.inventory_item_id,
+        sku: line.sku,
+        product_title: line.product_title,
+        qty_counted: null,
+        qty_counted_available: null,
+        qty_counted_reserved: null,
+        qb_account_list_id: line.qb_account_list_id ?? null,
+        status: "pending",
+      }))
+    );
+    await service.updateInventoryCounts([
+      { id: created.id, total_lines: body.lines.length },
+    ]);
+  } catch (error) {
+    await service.deleteInventoryCounts([created.id]);
+    throw error;
+  }
 
   return res.status(201).json({ inventory_count: created });
 }
