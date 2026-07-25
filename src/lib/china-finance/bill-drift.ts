@@ -116,6 +116,7 @@ interface SourceLineRow {
   sku: string | null;
   qty: number | string;
   unit_cost_cents: number | string | null;
+  total_cents?: number | string | null;
 }
 
 /** pg returns `bigint`/`numeric` aggregates as strings — never trust the type. */
@@ -280,7 +281,8 @@ export async function loadBillDrift(
         `SELECT pol.id AS key_id, pol.purchase_order_id AS parent_id,
                 pol.sku_snapshot AS sku,
                 GREATEST(pol.qty_ordered - COALESCE(pol.qty_cancelled,0),0) AS qty,
-                COALESCE(pol.unit_cost_cents,0) AS unit_cost_cents
+                COALESCE(pol.unit_cost_cents,0) AS unit_cost_cents,
+                pol.total_cents
            FROM purchase_order_line pol
           WHERE pol.purchase_order_id = ANY(?)
             AND pol.deleted_at IS NULL
@@ -457,13 +459,24 @@ export async function loadBillDrift(
           const cost = num(l.unit_cost_cents);
           const srcCost =
             s?.unit_cost_cents == null ? cost : num(s.unit_cost_cents);
-          if (billQty !== srcQty || cost !== srcCost) {
+          // Purchase costs can carry fractional cents per unit. The source PO
+          // persists the authoritative rounded line total, while a bill may
+          // distribute that same total across qty (for example 9747 / 2 =
+          // 4873.5) and therefore legitimately differ from the PO's raw
+          // 4873.6 unit cost. Compare accounting totals at cent precision so
+          // equal documents do not produce a phantom $0.01 drift.
+          const billLineTotal = Math.round(billQty * cost);
+          const sourceLineTotal =
+            s?.total_cents == null
+              ? Math.round(srcQty * srcCost)
+              : Math.round(num(s.total_cents));
+          if (billQty !== srcQty || billLineTotal !== sourceLineTotal) {
             drift.push({
               sku: l.sku ?? "",
               bill_qty: billQty,
               source_qty: srcQty,
               unit_cost_cents: cost,
-              delta_cents: billQty * cost - srcQty * srcCost,
+              delta_cents: billLineTotal - sourceLineTotal,
             });
           }
         }
@@ -472,12 +485,16 @@ export async function loadBillDrift(
           if (seen.has(s.key_id)) continue;
           const srcQty = num(s.qty);
           const srcCost = num(s.unit_cost_cents);
+          const sourceLineTotal =
+            s.total_cents == null
+              ? Math.round(srcQty * srcCost)
+              : Math.round(num(s.total_cents));
           drift.push({
             sku: s.sku ?? "",
             bill_qty: 0,
             source_qty: srcQty,
             unit_cost_cents: srcCost,
-            delta_cents: -(srcQty * srcCost),
+            delta_cents: -sourceLineTotal,
           });
         }
         return drift;

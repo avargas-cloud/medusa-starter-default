@@ -6,6 +6,10 @@ import type {
 import { defineMiddlewares } from "@medusajs/medusa";
 
 import { addCategoryBreadcrumbs } from "./middlewares/add-category-breadcrumbs";
+import {
+  protectClosedDocument,
+  rejectClosedEffectiveDate,
+} from "./middlewares/closed-accounting-period";
 import { idempotency } from "./middlewares/idempotency";
 import { syncCustomerMeili } from "./middlewares/sync-customer-meili";
 import { validateDraftOrderCustomer } from "./middlewares/validate-draft-order-customer";
@@ -95,6 +99,84 @@ function pubCorsMiddleware(
 
 export default defineMiddlewares({
   routes: [
+    // Accounting period lock. Historical document content is immutable after
+    // close; explicit later-period operations (payments, PO receipts and
+    // order→invoice creation) remain available through their own routes.
+    {
+      matcher: "/admin/orders/:id/*",
+      method: ["POST", "PATCH", "PUT", "DELETE"],
+      middlewares: [protectClosedDocument("order")],
+    },
+    {
+      matcher: "/admin/orders/:id",
+      method: ["POST", "PATCH", "PUT", "DELETE"],
+      middlewares: [protectClosedDocument("order")],
+    },
+    {
+      matcher: "/admin/invoices/:id/*",
+      method: ["POST", "PATCH", "PUT", "DELETE"],
+      middlewares: [protectClosedDocument("invoice")],
+    },
+    {
+      matcher: "/admin/invoices/:id",
+      method: ["PATCH", "PUT", "DELETE"],
+      middlewares: [protectClosedDocument("invoice")],
+    },
+    {
+      matcher: "/admin/pos/credit_memos/:id/*",
+      method: ["POST", "PATCH", "PUT", "DELETE"],
+      middlewares: [protectClosedDocument("credit_memo")],
+    },
+    {
+      matcher: "/admin/pos/credit_memos/:id",
+      method: ["PATCH", "PUT", "DELETE"],
+      middlewares: [protectClosedDocument("credit_memo")],
+    },
+    {
+      matcher: "/admin/purchase-orders/:id/*",
+      method: ["POST", "PATCH", "PUT", "DELETE"],
+      middlewares: [protectClosedDocument("purchase_order")],
+    },
+    {
+      matcher: "/admin/purchase-orders/:id",
+      method: ["PATCH", "PUT", "DELETE"],
+      middlewares: [protectClosedDocument("purchase_order")],
+    },
+    {
+      matcher: "/admin/vendor-bills/:id/*",
+      method: ["POST", "PATCH", "PUT", "DELETE"],
+      middlewares: [protectClosedDocument("vendor_bill")],
+    },
+    {
+      matcher: "/admin/vendor-bills/:id",
+      method: ["PATCH", "PUT", "DELETE"],
+      middlewares: [protectClosedDocument("vendor_bill")],
+    },
+    {
+      matcher: "/admin/inventory-counts/:id/*",
+      method: ["POST", "PATCH", "PUT", "DELETE"],
+      middlewares: [protectClosedDocument("inventory_count")],
+    },
+    {
+      matcher: "/admin/inventory-counts/:id",
+      method: ["PATCH", "PUT", "DELETE"],
+      middlewares: [protectClosedDocument("inventory_count")],
+    },
+    {
+      matcher: "/admin/invoices",
+      method: "POST",
+      middlewares: [rejectClosedEffectiveDate],
+    },
+    {
+      matcher: "/admin/vendor-bills",
+      method: "POST",
+      middlewares: [rejectClosedEffectiveDate],
+    },
+    {
+      matcher: "/admin/purchase-orders",
+      method: "POST",
+      middlewares: [rejectClosedEffectiveDate],
+    },
     // Increase body parser limit for send-email routes — extra attachments arrive as base64
     {
       matcher: "/admin/draft-orders/:id/send-email",
