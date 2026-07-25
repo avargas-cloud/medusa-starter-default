@@ -12,13 +12,24 @@ import { PAGE_SIZE, PipelinePagination } from "./PipelinePagination";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type PoStatus = "waiting" | "submitted" | "error" | "synced" | "failed_permanent";
+type PoStatus =
+  | "waiting"
+  | "processing"
+  | "submitted"
+  | "completed"
+  | "error"
+  | "synced"
+  | "failed_permanent";
 type PoStep =
   | "purchase_order"
   | "void_purchase_order"
   | "mod_purchase_order"
   | "add_item_receipt"
-  | "delete_item_receipt";
+  | "mod_item_receipt"
+  | "delete_item_receipt"
+  | "add_vendor_bill"
+  | "mod_vendor_bill"
+  | "delete_vendor_bill";
 
 interface PoRow {
   id: string;
@@ -28,6 +39,7 @@ interface PoRow {
   po_number: string | null;
   draft_number: string | null;
   receipt_number: string | null;
+  vendor_bill_number: string | null;
   vendor_name: string | null;
   status: PoStatus;
   step: PoStep;
@@ -43,7 +55,9 @@ interface PoRow {
 
 interface Counts {
   waiting: number;
+  processing: number;
   submitted: number;
+  completed: number;
   error: number;
   synced: number;
   failed_permanent: number;
@@ -56,7 +70,11 @@ const STEP_ICON: Record<PoStep, string> = {
   void_purchase_order: "🚫",
   mod_purchase_order: "✏️",
   add_item_receipt: "📦",
+  mod_item_receipt: "✏️",
   delete_item_receipt: "🗑️",
+  add_vendor_bill: "🧾",
+  mod_vendor_bill: "✏️",
+  delete_vendor_bill: "🗑️",
 };
 
 const STEP_LABEL: Record<PoStep, string> = {
@@ -64,7 +82,11 @@ const STEP_LABEL: Record<PoStep, string> = {
   void_purchase_order: "Void PO",
   mod_purchase_order: "Modify PO",
   add_item_receipt: "Item Receipt",
+  mod_item_receipt: "Modify Receipt",
   delete_item_receipt: "Delete Receipt",
+  add_vendor_bill: "Vendor Bill",
+  mod_vendor_bill: "Modify Bill",
+  delete_vendor_bill: "Delete Bill",
 };
 
 type BadgeColor = "orange" | "blue" | "green" | "red" | "grey";
@@ -72,7 +94,9 @@ type BadgeColor = "orange" | "blue" | "green" | "red" | "grey";
 function StatusBadge({ status }: { status: PoStatus }) {
   const map: Record<PoStatus, { color: BadgeColor; label: string }> = {
     waiting: { color: "orange", label: "Waiting" },
+    processing: { color: "blue", label: "Processing" },
     submitted: { color: "blue", label: "Submitted" },
+    completed: { color: "green", label: "Completed" },
     error: { color: "red", label: "Error" },
     synced: { color: "green", label: "Synced" },
     failed_permanent: { color: "red", label: "Failed" },
@@ -132,7 +156,8 @@ function PipelinePoRow({
   const [expanded, setExpanded] = useState(false);
   const step = (row.step ?? "purchase_order") as PoStep;
 
-  const updatedAt = row.status === "synced" ? row.synced_at : (row.updated_at ?? null);
+  const updatedAt =
+    row.status === "synced" ? row.synced_at : (row.updated_at ?? null);
 
   return (
     <>
@@ -158,11 +183,13 @@ function PipelinePoRow({
         <td className="px-3 py-2 whitespace-nowrap">
           <span className="flex items-center gap-1.5">
             <span>{STEP_ICON[step] ?? "📎"}</span>
-            <span className="font-medium text-ui-fg-base">{STEP_LABEL[step] ?? step}</span>
+            <span className="font-medium text-ui-fg-base">
+              {STEP_LABEL[step] ?? step}
+            </span>
           </span>
         </td>
 
-        {/* PO # / Receipt # */}
+        {/* PO # / Receipt # / Bill # */}
         <td className="px-3 py-2 whitespace-nowrap">
           <span className="flex flex-col leading-tight">
             <span className="font-mono font-semibold text-ui-fg-base">
@@ -171,6 +198,11 @@ function PipelinePoRow({
             {row.receipt_number && (
               <span className="font-mono text-[10px] text-emerald-600 font-semibold">
                 {row.receipt_number}
+              </span>
+            )}
+            {row.vendor_bill_number && (
+              <span className="font-mono text-[10px] text-violet-600 font-semibold">
+                {row.vendor_bill_number}
               </span>
             )}
           </span>
@@ -202,9 +234,13 @@ function PipelinePoRow({
         {/* QB ListID / Op */}
         <td className="px-3 py-2 font-mono text-[11px] text-ui-fg-subtle">
           {row.qb_list_id ? (
-            <span className="text-green-700 font-semibold">{row.qb_list_id}</span>
+            <span className="text-green-700 font-semibold">
+              {row.qb_list_id}
+            </span>
           ) : row.qb_operation_id ? (
-            <span className="text-blue-600">op:{row.qb_operation_id.slice(-6)}</span>
+            <span className="text-blue-600">
+              op:{row.qb_operation_id.slice(-6)}
+            </span>
           ) : (
             <span className="text-ui-fg-muted">—</span>
           )}
@@ -220,7 +256,9 @@ function PipelinePoRow({
         </td>
 
         {/* Created */}
-        <td className="px-3 py-2 text-ui-fg-muted">{formatDate(row.created_at)}</td>
+        <td className="px-3 py-2 text-ui-fg-muted">
+          {formatDate(row.created_at)}
+        </td>
 
         {/* Updated */}
         <td className="px-3 py-2">
@@ -305,7 +343,9 @@ export const PurchaseOrderPipelineSection = () => {
   const [rows, setRows] = useState<PoRow[]>([]);
   const [counts, setCounts] = useState<Counts>({
     waiting: 0,
+    processing: 0,
     submitted: 0,
+    completed: 0,
     error: 0,
     synced: 0,
     failed_permanent: 0,
@@ -338,7 +378,9 @@ export const PurchaseOrderPipelineSection = () => {
         setCounts(
           data.counts ?? {
             waiting: 0,
+            processing: 0,
             submitted: 0,
+            completed: 0,
             error: 0,
             synced: 0,
             failed_permanent: 0,
@@ -360,13 +402,13 @@ export const PurchaseOrderPipelineSection = () => {
 
   useEffect(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
-    if (counts.waiting > 0 || counts.submitted > 0) {
+    if (counts.waiting > 0 || counts.processing > 0 || counts.submitted > 0) {
       intervalRef.current = setInterval(() => fetchRows(true), 10_000);
     }
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [counts.waiting, counts.submitted, fetchRows]);
+  }, [counts.waiting, counts.processing, counts.submitted, fetchRows]);
 
   const handleRetry = async (id: string) => {
     setRetryingId(id);
@@ -399,7 +441,8 @@ export const PurchaseOrderPipelineSection = () => {
     }
   };
 
-  const hasPending = counts.waiting > 0 || counts.submitted > 0;
+  const hasPending =
+    counts.waiting > 0 || counts.processing > 0 || counts.submitted > 0;
 
   return (
     <Container>
@@ -411,7 +454,7 @@ export const PurchaseOrderPipelineSection = () => {
               level="h3"
               className="text-sm font-medium flex items-center gap-2"
             >
-              🏭 QB Purchase + Receipts Pipeline
+              🏭 QB Purchases Pipeline
               {hasPending && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-normal text-blue-600 animate-pulse">
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block" />
@@ -420,8 +463,8 @@ export const PurchaseOrderPipelineSection = () => {
               )}
             </Heading>
             <Text className="text-xs text-ui-fg-subtle mt-0.5">
-              Real-time queue of QuickBooks purchase order + item-receipt operations
-              (add / mod / void / delete) — auto-refreshes while active
+              Purchase orders, item receipts, and vendor bills, including add,
+              modify, void, and delete operations.
             </Text>
           </div>
           <Button
@@ -440,7 +483,9 @@ export const PurchaseOrderPipelineSection = () => {
           {(
             [
               { key: "waiting", label: "Waiting", color: "orange" },
+              { key: "processing", label: "Processing", color: "blue" },
               { key: "submitted", label: "Submitted", color: "blue" },
+              { key: "completed", label: "Completed", color: "green" },
               { key: "error", label: "Error", color: "red" },
               { key: "synced", label: "Synced", color: "green" },
               { key: "failed_permanent", label: "Failed", color: "red" },
@@ -455,7 +500,9 @@ export const PurchaseOrderPipelineSection = () => {
             );
           })}
           {Object.values(counts).every((v) => v === 0) && (
-            <span className="text-xs text-ui-fg-muted">No operations recorded yet</span>
+            <span className="text-xs text-ui-fg-muted">
+              No operations recorded yet
+            </span>
           )}
         </div>
 
@@ -463,7 +510,7 @@ export const PurchaseOrderPipelineSection = () => {
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <input
             type="text"
-            placeholder="Search PO / receipt / vendor / QB ref / error…"
+            placeholder="Search PO / receipt / bill / vendor / QB ref / error…"
             value={searchQuery}
             onChange={(e) => {
               setSearchQuery(e.target.value);
@@ -481,7 +528,9 @@ export const PurchaseOrderPipelineSection = () => {
           >
             <option value="all">All Statuses</option>
             <option value="waiting">Waiting</option>
+            <option value="processing">Processing</option>
             <option value="submitted">Submitted</option>
+            <option value="completed">Completed</option>
             <option value="error">Error</option>
             <option value="synced">Synced</option>
             <option value="failed_permanent">Failed</option>
@@ -498,7 +547,8 @@ export const PurchaseOrderPipelineSection = () => {
               No pipeline operations found.
             </Text>
             <Text className="text-xs text-ui-fg-muted mt-1">
-              Operations appear here when POs or item receipts sync to QuickBooks.
+              Operations appear here when POs or item receipts sync to
+              QuickBooks.
             </Text>
           </div>
         ) : (
@@ -506,17 +556,39 @@ export const PurchaseOrderPipelineSection = () => {
             <table className="w-full text-xs">
               <thead className="bg-ui-bg-subtle border-b border-ui-border-base">
                 <tr>
-                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle w-10">#</th>
-                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Step</th>
-                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">PO # / Receipt #</th>
-                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">QB Ref #</th>
-                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Vendor</th>
-                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Status</th>
-                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">QB ListID</th>
-                  <th className="px-3 py-2 text-center font-semibold text-ui-fg-subtle">Retries</th>
-                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Created</th>
-                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Updated</th>
-                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">Actions</th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle w-10">
+                    #
+                  </th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">
+                    Step
+                  </th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">
+                    PO / Receipt / Bill
+                  </th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">
+                    QB Ref #
+                  </th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">
+                    Vendor
+                  </th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">
+                    Status
+                  </th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">
+                    QB ListID
+                  </th>
+                  <th className="px-3 py-2 text-center font-semibold text-ui-fg-subtle">
+                    Retries
+                  </th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">
+                    Created
+                  </th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">
+                    Updated
+                  </th>
+                  <th className="px-3 py-2 text-left font-semibold text-ui-fg-subtle">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -534,11 +606,7 @@ export const PurchaseOrderPipelineSection = () => {
             </table>
           </div>
         )}
-        <PipelinePagination
-          page={page}
-          total={total}
-          onPageChange={setPage}
-        />
+        <PipelinePagination page={page} total={total} onPageChange={setPage} />
       </div>
     </Container>
   );

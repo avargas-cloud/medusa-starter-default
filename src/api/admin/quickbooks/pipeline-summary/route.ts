@@ -59,7 +59,9 @@ const bucketOf = (status: string | null | undefined): Bucket | null => {
 
 type StatusRow = { status: string; count: string };
 
-const accumulate = (rows: StatusRow[]): { counts: Record<Bucket, number>; total: number } => {
+const accumulate = (
+  rows: StatusRow[]
+): { counts: Record<Bucket, number>; total: number } => {
   const counts = zeroCounts();
   let total = 0;
   for (const row of rows) {
@@ -74,7 +76,10 @@ const accumulate = (rows: StatusRow[]): { counts: Record<Bucket, number>; total:
 
 const CUSTOMER_STEPS = ["customer", "customer_data_ext"];
 
-export async function GET(_req: MedusaRequest, res: MedusaResponse): Promise<void> {
+export async function GET(
+  _req: MedusaRequest,
+  res: MedusaResponse
+): Promise<void> {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
 
   try {
@@ -108,11 +113,8 @@ export async function GET(_req: MedusaRequest, res: MedusaResponse): Promise<voi
       `SELECT status, COUNT(*) AS count FROM qb_inventory_adjustment_pipeline
         WHERE deleted_at IS NULL GROUP BY status`
     );
-    // Purchase pipeline = the SAME three-source union the "Purchase Pipeline"
-    // tab renders (see admin/purchase-orders/qb-pipeline/route.ts): PO rows +
-    // ItemReceipt add (status) + ItemReceipt void/delete (void_status, only
-    // when the void lifecycle has started). Counting only the PO table here
-    // undercounted — ItemReceipt errors never reached the breakdown.
+    // Purchase pipeline = the same purchase-side families rendered by the
+    // Purchase Pipeline tab: PO, ItemReceipt, and Vendor Bill operations.
     const purchases = await client.query<StatusRow>(
       `SELECT status, COUNT(*) AS count FROM (
          SELECT status
@@ -125,6 +127,30 @@ export async function GET(_req: MedusaRequest, res: MedusaResponse): Promise<voi
          UNION ALL
          SELECT void_status AS status
            FROM qb_item_receipt_pipeline
+          WHERE deleted_at IS NULL AND void_status IS NOT NULL
+         UNION ALL
+         SELECT CASE
+                  WHEN intent = 'add' THEN status
+                  WHEN qb_txn_id IS NOT NULL THEN 'synced'
+                  ELSE status
+                END AS status
+           FROM qb_vendor_bill_pipeline
+          WHERE deleted_at IS NULL
+            AND (intent = 'add' OR qb_txn_id IS NOT NULL)
+         UNION ALL
+         SELECT CASE
+                  WHEN status IN ('confirmed','fixed','skipped') THEN 'synced'
+                  WHEN status = 'failed' AND next_retry_at IS NULL THEN 'failed_permanent'
+                  WHEN status = 'failed' THEN 'error'
+                  WHEN status IN ('submitted','processing') THEN 'submitted'
+                  ELSE 'waiting'
+                END AS status
+           FROM qb_order_pipeline
+          WHERE step = 'vendor_bill_mod'
+         UNION ALL
+         SELECT CASE WHEN void_status = 'completed' THEN 'synced'
+                     ELSE void_status END AS status
+           FROM qb_vendor_bill_pipeline
           WHERE deleted_at IS NULL AND void_status IS NOT NULL
        ) feed
        GROUP BY status`

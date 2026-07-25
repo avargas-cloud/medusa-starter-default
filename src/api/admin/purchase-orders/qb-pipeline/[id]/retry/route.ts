@@ -9,6 +9,11 @@
  *                                 (mod_status, mod_operation_id, mod_*...)
  *   - qbrcpipe_<ulid>__void     → qb_item_receipt_pipeline VOID/DELETE lane
  *                                 (void_status, void_operation_id, void_*...)
+ *   - qbvbpipe_<ulid>__vendor_bill_add
+ *                               → qb_vendor_bill_pipeline ADD lane
+ *   - <uuid>__vendor_bill_mod   → qb_order_pipeline Vendor Bill MOD row
+ *   - qbvbpipe_<ulid>__vendor_bill_delete
+ *                               → qb_vendor_bill_pipeline DELETE lane
  *
  * The MOD lane doesn't need a fresh-EditSequence dance before resubmitting:
  * the bridge's POST /api/item-receipts/mod always re-queries the receipt's
@@ -29,6 +34,116 @@ import type PurchaseOrdersModuleService from "../../../../../../modules/purchase
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const { id: rawId } = req.params as { id: string };
   const knex = (req.scope as any).resolve("__pg_connection__");
+
+  const isVendorBillAdd = rawId.endsWith("__vendor_bill_add");
+  const isVendorBillMod = rawId.endsWith("__vendor_bill_mod");
+  const isVendorBillDelete = rawId.endsWith("__vendor_bill_delete");
+  const vendorBillSuffix = isVendorBillAdd
+    ? "__vendor_bill_add"
+    : isVendorBillMod
+      ? "__vendor_bill_mod"
+      : isVendorBillDelete
+        ? "__vendor_bill_delete"
+        : null;
+  const vendorBillId = vendorBillSuffix
+    ? rawId.slice(0, -vendorBillSuffix.length)
+    : null;
+
+  if (isVendorBillAdd && vendorBillId) {
+    const rows = await knex
+      .raw(
+        `SELECT id, status, intent FROM qb_vendor_bill_pipeline
+          WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
+        [vendorBillId]
+      )
+      .then((r: any) => r.rows);
+    const row = rows[0];
+    if (!row)
+      return res.status(404).json({ error: "Pipeline entry not found" });
+    if (row.intent !== "add") {
+      return res.status(409).json({
+        error: "The original BillAdd is historical and cannot be retried",
+      });
+    }
+    if (!["waiting", "error", "failed_permanent"].includes(row.status)) {
+      return res
+        .status(409)
+        .json({ error: `Cannot retry add lane in status '${row.status}'` });
+    }
+    await knex.raw(
+      `UPDATE qb_vendor_bill_pipeline
+          SET status = 'waiting', qb_operation_id = NULL, retries = 0,
+              last_error = NULL, next_retry_at = NULL, updated_at = NOW()
+        WHERE id = ?`,
+      [vendorBillId]
+    );
+    return res.json({ success: true, message: "Vendor Bill add re-queued" });
+  }
+
+  if (isVendorBillMod && vendorBillId) {
+    const rows = await knex
+      .raw(
+        `SELECT id, reference_id, status FROM qb_order_pipeline
+          WHERE id = ?::uuid AND step = 'vendor_bill_mod' LIMIT 1`,
+        [vendorBillId]
+      )
+      .then((r: any) => r.rows);
+    const row = rows[0];
+    if (!row)
+      return res.status(404).json({ error: "Pipeline entry not found" });
+    if (!["pending", "failed"].includes(row.status)) {
+      return res
+        .status(409)
+        .json({ error: `Cannot retry BillMod in status '${row.status}'` });
+    }
+    await knex.raw(
+      `UPDATE qb_order_pipeline
+          SET status = 'pending', bridge_op_id = NULL, retry_count = 0,
+              error = NULL, next_retry_at = NULL, failed_at = NULL,
+              updated_at = NOW()
+        WHERE id = ?::uuid`,
+      [vendorBillId]
+    );
+    await knex.raw(
+      `UPDATE qb_vendor_bill_pipeline
+          SET status = 'waiting', intent = 'mod', qb_operation_id = NULL,
+              retries = 0, last_error = NULL, next_retry_at = NULL,
+              updated_at = NOW()
+        WHERE vendor_bill_id = ? AND deleted_at IS NULL`,
+      [row.reference_id]
+    );
+    return res.json({
+      success: true,
+      message: "Vendor Bill modification re-queued",
+    });
+  }
+
+  if (isVendorBillDelete && vendorBillId) {
+    const rows = await knex
+      .raw(
+        `SELECT id, void_status FROM qb_vendor_bill_pipeline
+          WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
+        [vendorBillId]
+      )
+      .then((r: any) => r.rows);
+    const row = rows[0];
+    if (!row)
+      return res.status(404).json({ error: "Pipeline entry not found" });
+    if (!["waiting", "error", "failed_permanent"].includes(row.void_status)) {
+      return res.status(409).json({
+        error: `Cannot retry delete lane in status '${row.void_status}'`,
+      });
+    }
+    await knex.raw(
+      `UPDATE qb_vendor_bill_pipeline
+          SET void_status = 'waiting', void_operation_id = NULL,
+              void_retries = 0, void_last_error = NULL,
+              void_next_retry_at = NULL, updated_at = NOW()
+        WHERE id = ?`,
+      [vendorBillId]
+    );
+    return res.json({ success: true, message: "Vendor Bill delete re-queued" });
+  }
 
   const isVoidLane = rawId.endsWith("__void");
   const isModLane = !isVoidLane && rawId.endsWith("__mod");
@@ -167,9 +282,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const isEditSeqErr = /editsequence|edit.?sequence|3[12]00/i.test(
     row.last_error ?? ""
   );
-  const needsQuery = (pl.is_mod || pl.is_void) && (!pl.edit_sequence || isEditSeqErr);
+  const needsQuery =
+    (pl.is_mod || pl.is_void) && (!pl.edit_sequence || isEditSeqErr);
   // Strip _query_attempts so the re-queued query gets fresh retries.
-  const { _query_attempts: _removed, ...plClean } = pl as Record<string, unknown>;
+  const { _query_attempts: _removed, ...plClean } = pl as Record<
+    string,
+    unknown
+  >;
   const sortedLines =
     plClean.is_mod && Array.isArray(plClean.lines)
       ? orderPurchaseOrderModLines(
