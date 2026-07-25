@@ -148,9 +148,15 @@ export async function POST(
       code: "wrong_bill_type",
     });
   }
-  if (bill.status !== "draft") {
+  if (
+    bill.status !== "draft" &&
+    !(bill.status === "synced" && parsed.data.preview === true)
+  ) {
     return res.status(409).json({
-      error: "Only draft vendor bills can be updated from a source",
+      error:
+        bill.status === "synced"
+          ? "Preview the source first, then save the reviewed changes from the Vendor Bill"
+          : "Only draft vendor bills can be updated from a source",
       code: "not_draft",
     });
   }

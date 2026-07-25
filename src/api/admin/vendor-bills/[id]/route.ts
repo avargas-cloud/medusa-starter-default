@@ -683,17 +683,6 @@ export async function PATCH(
     );
     return GET(req, res);
   }
-  // D6 — rebinding receipts on a SYNCED bill changes what QB's linked Bill
-  // covers; that's the future Unlock/rebuild path (§6 of the plan), not this
-  // route. Checked ahead of the generic status gate below so the caller gets
-  // the specific, future-facing code rather than the generic 'not_draft'.
-  if (patch.receipt_ids !== undefined && bill.status === "synced") {
-    return res.status(409).json({
-      error:
-        "This bill is synced to QuickBooks. Receipts can't be rebound until the Unlock path ships.",
-      code: "synced_bill_rebind_requires_unlock",
-    });
-  }
   if (
     bill.status !== "draft" &&
     bill.status !== "confirmed" &&
@@ -866,17 +855,11 @@ export async function PATCH(
   if (hasLineEdits || pinProvided || receiptIdsProvided) {
     if (
       (bill.status !== "draft" && bill.status !== "synced") ||
-      effectiveBillType !== "regular" ||
-      (bill.status === "synced" && (pinProvided || receiptIdsProvided))
+      effectiveBillType !== "regular"
     ) {
       return res.status(409).json({
-        error:
-          bill.status === "synced"
-            ? "A synced bill can edit its existing lines, but its receipt bindings are locked"
-            : "Lines and receipt bindings can only be edited on regular bills",
-        code: bill.status === "synced"
-          ? "synced_bill_rebind_requires_unlock"
-          : "not_draft",
+        error: "Lines and receipt bindings can only be edited on regular bills",
+        code: "not_draft",
       });
     }
     if (!bill.purchase_order_id) {
@@ -983,6 +966,7 @@ export async function PATCH(
   type ExistingLine = {
     id: string;
     purchase_order_line_id: string | null;
+    qb_txn_line_id: string | null;
     sku: string | null;
     qty: number;
     unit_cost_cents: number;
@@ -990,7 +974,8 @@ export async function PATCH(
   let existingProductLines: ExistingLine[] = [];
   if (hasLineEdits) {
     const plResult = await knex.raw(
-      `SELECT id, purchase_order_line_id, sku, qty::int AS qty, unit_cost_cents::int AS unit_cost_cents
+      `SELECT id, purchase_order_line_id, qb_txn_line_id, sku,
+              qty::int AS qty, unit_cost_cents::int AS unit_cost_cents
          FROM vendor_bill_line
         WHERE vendor_bill_id = ? AND deleted_at IS NULL AND COALESCE(line_type,'product') = 'product'`,
       [id]
@@ -1014,6 +999,19 @@ export async function PATCH(
       }
       if (l.id && !existingById.has(l.id)) {
         return res.status(404).json({ error: `Line ${l.id} not found on this bill`, code: "line_not_found" });
+      }
+      if (bill.status === "synced") {
+        const existingLine = l.id ? existingById.get(l.id) : undefined;
+        if (!existingLine?.qb_txn_line_id) {
+          return res.status(409).json({
+            error:
+              `${l.sku} is a new PO-linked line. QuickBooks cannot attach it ` +
+              "to an existing Bill through BillMod; this change requires a reviewed Bill rebuild.",
+            code: "bill_rebuild_required",
+            strategy: "bill_rebuild",
+            purchase_order_line_id: l.purchase_order_line_id,
+          });
+        }
       }
     }
   } else if (hasLineEdits) {
@@ -1073,11 +1071,12 @@ export async function PATCH(
               SELECT purchase_order_receipt_id
                 FROM vendor_bill
                WHERE id = ?
-            ))
+            )
+            OR por.id = ANY(?))
           AND por.deleted_at IS NULL
           AND por.status IN ('applied', 'synced')
         GROUP BY porl.purchase_order_line_id`,
-      [id, id]
+      [id, id, patch.receipt_ids ?? []]
     );
     const receivedByPoLine = new Map(
       (received.rows as Array<{
