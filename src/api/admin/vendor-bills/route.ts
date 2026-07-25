@@ -27,6 +27,7 @@ import { getActorUserId, UnauthenticatedError } from "../purchase-orders/_lib/au
 import { zodErrorToBody } from "../purchase-orders/_lib/format";
 import { accountAllowedForVendorBillType } from "../../../lib/purchase-orders/vendor-bill-account-rules";
 import { resolveVendorBillPaymentTermsDays } from "../../../lib/purchase-orders/vendor-bill-payment-terms";
+import { findDuplicateVendorBillReference } from "../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
 
 // ── Zod query schema ──────────────────────────────────────────────────────────
 
@@ -385,6 +386,20 @@ export async function POST(
   const trx = knex.transaction ? await knex.transaction() : null;
   const db = trx ?? knex;
   try {
+    const duplicate = await findDuplicateVendorBillReference(db, {
+      vendorId: vendor.id,
+      referenceId: body.reference_id ?? null,
+    });
+    if (duplicate) {
+      if (trx) await trx.rollback();
+      return res.status(409).json({
+        error: `Purchase Invoice '${body.reference_id?.trim()}' already exists for this vendor on ${duplicate.number ?? "an adopted bill"}.`,
+        code: "duplicate_vendor_invoice",
+        duplicate_vendor_bill_id: duplicate.id,
+        duplicate_vendor_bill_number: duplicate.number,
+      });
+    }
+
     const seqResult = await db.raw(
       `SELECT nextval('custom_vendor_bill_seq') AS seq`
     );

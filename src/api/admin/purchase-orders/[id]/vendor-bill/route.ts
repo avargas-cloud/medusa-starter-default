@@ -11,6 +11,7 @@ import {
 } from "../../_lib/auth";
 import { zodErrorToBody } from "../../_lib/format";
 import { resolveVendorBillPaymentTermsDays } from "../../../../../lib/purchase-orders/vendor-bill-payment-terms";
+import { findDuplicateVendorBillReference } from "../../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
 
 type Knex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -141,6 +142,20 @@ export async function POST(
   const db = trx ?? knex;
   const billId = `vb_${randomUUID().replace(/-/g, "")}`;
   try {
+    const duplicate = await findDuplicateVendorBillReference(db, {
+      vendorId: po.vendor_id,
+      referenceId: parsed.data.reference_id ?? null,
+    });
+    if (duplicate) {
+      if (trx) await trx.rollback();
+      return res.status(409).json({
+        error: `Purchase Invoice '${parsed.data.reference_id?.trim()}' already exists for this vendor on ${duplicate.number ?? "an adopted bill"}.`,
+        code: "duplicate_vendor_invoice",
+        duplicate_vendor_bill_id: duplicate.id,
+        duplicate_vendor_bill_number: duplicate.number,
+      });
+    }
+
     const seq = await db.raw(
       `SELECT nextval('custom_vendor_bill_seq') AS seq`
     );

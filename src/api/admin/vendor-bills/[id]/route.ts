@@ -44,6 +44,7 @@ import {
   validateReceiptsForBinding,
 } from "../../../../lib/purchase-orders/vendor-bill-receipts";
 import { enqueueChinaAgencyVendorBillModGroup } from "../../../../lib/purchase-orders/qb-vendor-bill-mod-enqueue";
+import { findDuplicateVendorBillReference } from "../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
 
 // ── Knex type ────────────────────────────────────────────────────────────────
 
@@ -639,11 +640,14 @@ export async function PATCH(
   const knex = resolveKnex(req);
 
   const lookup = await knex.raw(
-    `SELECT id, number, status, bill_type, purchase_order_id, purchase_order_receipt_id, qb_source FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
+    `SELECT id, number, status, bill_type, purchase_order_id, purchase_order_receipt_id,
+            vendor_id, reference_id, qb_source
+       FROM vendor_bill
+      WHERE id = ? AND deleted_at IS NULL`,
     [id]
   );
   const bill = (lookup.rows[0] ?? null) as
-    | { id: string; number: string | null; status: string; bill_type: string; purchase_order_id: string | null; purchase_order_receipt_id: string | null; qb_source: string | null }
+    | { id: string; number: string | null; status: string; bill_type: string; purchase_order_id: string | null; purchase_order_receipt_id: string | null; vendor_id: string | null; reference_id: string | null; qb_source: string | null }
     | null;
   if (!bill) {
     return res
@@ -1136,6 +1140,29 @@ export async function PATCH(
   const trx = knex.transaction ? await knex.transaction() : null;
   const db = trx ?? knex;
   try {
+    const duplicate = await findDuplicateVendorBillReference(db, {
+      vendorId:
+        typeof updatePayload.vendor_id === "string"
+          ? updatePayload.vendor_id
+          : bill.vendor_id,
+      referenceId:
+        typeof updatePayload.reference_id === "string"
+          ? updatePayload.reference_id
+          : updatePayload.reference_id === null
+            ? null
+            : bill.reference_id,
+      excludeBillId: id,
+    });
+    if (duplicate) {
+      if (trx) await trx.rollback();
+      return res.status(409).json({
+        error: `Purchase Invoice '${String(updatePayload.reference_id ?? bill.reference_id).trim()}' already exists for this vendor on ${duplicate.number ?? "an adopted bill"}.`,
+        code: "duplicate_vendor_invoice",
+        duplicate_vendor_bill_id: duplicate.id,
+        duplicate_vendor_bill_number: duplicate.number,
+      });
+    }
+
     // Staged receipt pin (Update-From-Receipt) — write with the header set.
     if (pinProvided) {
       updatePayload.purchase_order_receipt_id = patch.purchase_order_receipt_id ?? null;

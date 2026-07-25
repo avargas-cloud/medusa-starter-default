@@ -22,6 +22,7 @@ import { getActorUserId, UnauthenticatedError } from "../../../../_lib/auth";
 import { zodErrorToBody } from "../../../../_lib/format";
 import { getPurchaseOrdersService } from "../../../../_lib/service-resolver";
 import { resolveVendorBillPaymentTermsDays } from "../../../../../../../lib/purchase-orders/vendor-bill-payment-terms";
+import { findDuplicateVendorBillReference } from "../../../../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
 
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -329,6 +330,19 @@ export async function POST(
     })
   );
 
+  const duplicate = await findDuplicateVendorBillReference(knex, {
+    vendorId,
+    referenceId: body.reference_id ?? null,
+  });
+  if (duplicate) {
+    return res.status(409).json({
+      error: `Purchase Invoice '${body.reference_id?.trim()}' already exists for this vendor on ${duplicate.number ?? "an adopted bill"}.`,
+      code: "duplicate_vendor_invoice",
+      duplicate_vendor_bill_id: duplicate.id,
+      duplicate_vendor_bill_number: duplicate.number,
+    });
+  }
+
   const seqResult = await knex.raw(
     `SELECT nextval('custom_vendor_bill_seq') AS seq`
   );
@@ -464,6 +478,34 @@ export async function PATCH(
   let updated: VendorBillRow = bill;
 
   if (entries.length > 0) {
+    if ("reference_id" in updatePayload) {
+      const vendorResult = await knex.raw(
+        `SELECT vendor_id, reference_id
+           FROM vendor_bill
+          WHERE id = ? AND deleted_at IS NULL`,
+        [bill.id]
+      );
+      const current = vendorResult.rows[0] as
+        | { vendor_id: string | null; reference_id: string | null }
+        | undefined;
+      const duplicate = await findDuplicateVendorBillReference(knex, {
+        vendorId: current?.vendor_id ?? null,
+        referenceId:
+          typeof updatePayload.reference_id === "string"
+            ? updatePayload.reference_id
+            : null,
+        excludeBillId: bill.id,
+      });
+      if (duplicate) {
+        return res.status(409).json({
+          error: `Purchase Invoice '${String(updatePayload.reference_id).trim()}' already exists for this vendor on ${duplicate.number ?? "an adopted bill"}.`,
+          code: "duplicate_vendor_invoice",
+          duplicate_vendor_bill_id: duplicate.id,
+          duplicate_vendor_bill_number: duplicate.number,
+        });
+      }
+    }
+
     const assignments = entries.map(([key]) => `${key} = ?`).join(", ");
     const values = entries.map(([, value]) => value);
     const result = await knex.raw(
