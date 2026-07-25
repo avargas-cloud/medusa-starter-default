@@ -148,13 +148,14 @@ export async function POST(
       code: "wrong_bill_type",
     });
   }
-  if (
-    bill.status !== "draft" &&
-    !(bill.status === "synced" && parsed.data.preview === true)
-  ) {
+  const canPreviewLockedBill =
+    parsed.data.preview === true &&
+    (bill.status === "confirmed" || bill.status === "synced");
+
+  if (bill.status !== "draft" && !canPreviewLockedBill) {
     return res.status(409).json({
       error:
-        bill.status === "synced"
+        bill.status === "confirmed" || bill.status === "synced"
           ? "Preview the source first, then save the reviewed changes from the Vendor Bill"
           : "Only draft vendor bills can be updated from a source",
       code: "not_draft",
