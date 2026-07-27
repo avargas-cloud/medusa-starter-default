@@ -12,6 +12,7 @@ import type {
 } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 
+import { buildInventoryCountStockBaseline } from "../../../../lib/inventory-count/stock-baseline";
 import {
   buildEnrichmentMaps,
   buildSalesDescriptionMap,
@@ -113,9 +114,7 @@ export async function PATCH(
   // Live stocked snapshot for staleness detection (Phase 2). When a line's count
   // changes we freeze the stocked_quantity it was counted against; the DB trigger
   // later flags needs_recount if that stock moves while the draft is still open.
-  const inventoryService = req.scope.resolve(
-    Modules.INVENTORY
-  ) as unknown as {
+  const inventoryService = req.scope.resolve(Modules.INVENTORY) as unknown as {
     listInventoryLevels: (
       filters: Record<string, unknown>,
       options?: { take?: number }
@@ -157,9 +156,12 @@ export async function PATCH(
     const qtyCounted = onHand === null ? null : onHand + (reserved ?? 0);
     const found = existingByVariant.get(inLine.product_variant_id);
 
-    // Did the counted total change on this save? Re-snapshot the baseline and
-    // clear any prior stale flag; uncounting clears the snapshot entirely.
-    const countChanged = !found || found.qty_counted !== qtyCounted;
+    // Re-snapshot when either physical rack count changes. The combined total
+    // can stay unchanged while units move between available and reserved.
+    const countChanged =
+      !found ||
+      (found.qty_counted_available ?? null) !== onHand ||
+      (found.qty_counted_reserved ?? null) !== reserved;
     let staleness: Record<string, unknown> = {};
     if (countChanged) {
       if (qtyCounted === null) {
@@ -167,16 +169,24 @@ export async function PATCH(
           counted_at: null,
           stocked_at_count: null,
           reserved_at_count_time: null,
+          effective_reserved_at_count_time: null,
           needs_recount: false,
           stock_moved_at: null,
           stocked_after_movement: null,
         };
       } else {
+        const stockAtCount = stockedByItem.get(inLine.inventory_item_id) ?? 0;
+        const rawReservedAtCount =
+          reservedByItem.get(inLine.inventory_item_id) ?? 0;
+        const baseline = buildInventoryCountStockBaseline(
+          stockAtCount,
+          rawReservedAtCount
+        );
         staleness = {
           counted_at: new Date(),
-          stocked_at_count: stockedByItem.get(inLine.inventory_item_id) ?? null,
-          reserved_at_count_time:
-            reservedByItem.get(inLine.inventory_item_id) ?? null,
+          stocked_at_count: stockAtCount,
+          reserved_at_count_time: rawReservedAtCount,
+          effective_reserved_at_count_time: baseline.effectiveReserved,
           needs_recount: false,
           stock_moved_at: null,
           stocked_after_movement: null,

@@ -51,9 +51,11 @@ export const InventoryCountLine = model.define("inventory_count_line", {
   // Reserved / holding-area ("apartados") count (maps to reserved_quantity).
   // Required at submit whenever the system shows reserved > 0 for the item.
   qty_counted_reserved: model.number().nullable(),
-  // Snapshot of the system reserved_quantity at submit — audit + drives the
-  // "reserved was required" validation.
+  // Raw system reserved_quantity snapshot for audit.
   reserved_at_count_time: model.number().nullable(),
+  // Physical reserved-rack baseline used by the count. Raw reservations can
+  // exceed on-hand, so this is capped at max(stocked_quantity, 0).
+  effective_reserved_at_count_time: model.number().nullable(),
   qty_at_count_time: model.number().nullable(),
   delta_original: model.number().nullable(),
   delta_applied: model.number().nullable(),

@@ -19,6 +19,10 @@ import type {
 } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
 
+import {
+  buildInventoryCountStockBaseline,
+  calculateInventoryCountDelta,
+} from "../../../../../lib/inventory-count/stock-baseline";
 import { zodErrorToBody } from "../../_lib/format";
 import { getInventoryCountService } from "../../_lib/service-resolver";
 import { submitSchema } from "../../_lib/validators";
@@ -121,11 +125,16 @@ export async function POST(
   // Guard: whenever the system holds reserved (apartados) units for an item,
   // the clerk MUST have counted that shelf — leaving qty_counted_reserved null
   // silently undercounts and drives the delta negative (the INVCNT-1059 bug).
-  const missingReserved = lines.filter(
-    (l) =>
-      (reservedByItem.get(l.inventory_item_id) ?? 0) > 0 &&
+  const missingReserved = lines.filter((l) => {
+    const baseline = buildInventoryCountStockBaseline(
+      stockByItem.get(l.inventory_item_id) ?? 0,
+      reservedByItem.get(l.inventory_item_id) ?? 0
+    );
+    return (
+      baseline.effectiveReserved > 0 &&
       (l.qty_counted_reserved === null || l.qty_counted_reserved === undefined)
-  );
+    );
+  });
   if (missingReserved.length > 0) {
     return res.status(400).json({
       error:
@@ -137,22 +146,40 @@ export async function POST(
     });
   }
 
-  // Guard: block submit when a counted line's stock moved after it was counted
-  // (Phase 2). `needs_recount` is set by the DB trigger; the stocked_at_count vs
-  // live-stocked check is a belt-and-suspenders that catches the narrow race
-  // where a movement lands before the count autosave persisted counted_at.
-  const staleLines = lines.filter(
-    (l) =>
+  // Guard both physical baselines. A reservation movement can change which rack
+  // must be counted even when total on-hand stays unchanged.
+  const staleLines = lines.filter((l) => {
+    const liveStock = stockByItem.get(l.inventory_item_id) ?? 0;
+    const liveBaseline = buildInventoryCountStockBaseline(
+      liveStock,
+      reservedByItem.get(l.inventory_item_id) ?? 0
+    );
+    const snapshottedEffectiveReserved =
+      l.effective_reserved_at_count_time ??
+      (l.stocked_at_count !== null &&
+      l.stocked_at_count !== undefined &&
+      l.reserved_at_count_time !== null &&
+      l.reserved_at_count_time !== undefined
+        ? buildInventoryCountStockBaseline(
+            l.stocked_at_count,
+            l.reserved_at_count_time
+          ).effectiveReserved
+        : null);
+
+    return (
       l.needs_recount === true ||
       (l.stocked_at_count !== null &&
         l.stocked_at_count !== undefined &&
-        l.stocked_at_count !== (stockByItem.get(l.inventory_item_id) ?? 0))
-  );
+        l.stocked_at_count !== liveStock) ||
+      (snapshottedEffectiveReserved !== null &&
+        snapshottedEffectiveReserved !== liveBaseline.effectiveReserved)
+    );
+  });
   if (staleLines.length > 0) {
     return res.status(400).json({
       error:
-        "Stock moved for some counted lines after they were counted (e.g. a " +
-        "sale shipped mid-count). Re-count these SKUs before submitting.",
+        "Stock or reserved allocation moved for some counted lines after they " +
+        "were counted. Re-count these SKUs before submitting.",
       code: "recount_required",
       skus: staleLines.map((l) => l.sku),
     });
@@ -164,15 +191,28 @@ export async function POST(
   let totalDeltaUnits = 0;
   for (const line of lines) {
     const stockAtCount = stockByItem.get(line.inventory_item_id) ?? 0;
-    const reservedAtCount = reservedByItem.get(line.inventory_item_id) ?? 0;
+    const rawReservedAtCount = reservedByItem.get(line.inventory_item_id) ?? 0;
+    const baseline = buildInventoryCountStockBaseline(
+      stockAtCount,
+      rawReservedAtCount
+    );
     const isUncounted =
       line.qty_counted === null || line.qty_counted === undefined;
-    const delta = isUncounted ? 0 : (line.qty_counted as number) - stockAtCount;
+    const deltaResult = isUncounted
+      ? null
+      : calculateInventoryCountDelta({
+          onHand: stockAtCount,
+          rawReserved: rawReservedAtCount,
+          countedAvailable: line.qty_counted_available ?? 0,
+          countedReserved: line.qty_counted_reserved ?? 0,
+        });
+    const delta = deltaResult?.delta ?? 0;
     totalDeltaUnits += Math.abs(delta);
     lineUpdates.push({
       id: line.id,
       qty_at_count_time: stockAtCount,
-      reserved_at_count_time: reservedAtCount,
+      reserved_at_count_time: rawReservedAtCount,
+      effective_reserved_at_count_time: baseline.effectiveReserved,
       delta_original: delta,
       status: "pending",
     });

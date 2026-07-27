@@ -52,6 +52,7 @@ export interface InventoryCountLineDto {
   qty_counted_available: number | null;
   qty_counted_reserved: number | null;
   reserved_at_count_time: number | null;
+  effective_reserved_at_count_time: number | null;
   qty_at_count_time: number | null;
   delta_original: number | null;
   delta_applied: number | null;
