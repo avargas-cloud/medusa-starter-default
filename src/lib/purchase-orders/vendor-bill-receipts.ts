@@ -91,6 +91,46 @@ export interface ReceiptLineUnionRow {
   metadata: Record<string, unknown> | null;
 }
 
+export interface BillReceiptQuantityRow {
+  purchase_order_line_id: string | null;
+  qty: number;
+}
+
+/**
+ * Exact product-quantity equality by PO line. This deliberately ignores SKU
+ * labels and totals: the PO line id is the stable accounting identity shared
+ * by a bill and its receipts.
+ */
+export function receiptQuantitiesMatchBill(
+  billLines: BillReceiptQuantityRow[],
+  receiptLines: BillReceiptQuantityRow[]
+): boolean {
+  const billByPoLine = new Map<string, number>();
+  for (const line of billLines) {
+    if (!line.purchase_order_line_id) return false;
+    billByPoLine.set(
+      line.purchase_order_line_id,
+      (billByPoLine.get(line.purchase_order_line_id) ?? 0) + Number(line.qty)
+    );
+  }
+
+  const receiptByPoLine = new Map<string, number>();
+  for (const line of receiptLines) {
+    if (!line.purchase_order_line_id) return false;
+    receiptByPoLine.set(
+      line.purchase_order_line_id,
+      (receiptByPoLine.get(line.purchase_order_line_id) ?? 0) + Number(line.qty)
+    );
+  }
+
+  if (billByPoLine.size === 0 || billByPoLine.size !== receiptByPoLine.size) {
+    return false;
+  }
+  return [...billByPoLine.entries()].every(
+    ([poLineId, qty]) => receiptByPoLine.get(poLineId) === qty
+  );
+}
+
 /**
  * UNION across `receiptIds`: SUM(qty_received_now) per purchase_order_line_id,
  * grouped across every receipt in the set — the D6/D8 "sum quantities across

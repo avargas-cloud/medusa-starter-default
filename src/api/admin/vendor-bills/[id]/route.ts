@@ -39,7 +39,9 @@ import {
   type FreightAccount,
 } from "../../../../lib/purchase-orders/freight-charge-lines";
 import {
+  receiptQuantitiesMatchBill,
   resolveBoundReceiptIds,
+  resolveReceiptLineUnion,
   syncPrimaryReceiptPointer,
   validateReceiptsForBinding,
 } from "../../../../lib/purchase-orders/vendor-bill-receipts";
@@ -509,6 +511,7 @@ export async function GET(
     units: number;
     bound_to: { bill_id: string; number: string | null } | null;
   }> = [];
+  let suggested_receipt_ids: string[] = [];
   if (header.purchase_order_id) {
     const bindableResult = await knex.raw(
       `SELECT por.id, por.number, por.seq, por.received_at,
@@ -558,6 +561,32 @@ export async function GET(
         received_at,
         units,
       }));
+
+    // A whole-PO draft intentionally starts without receipt ownership. Suggest
+    // every still-unbound applied receipt only when their quantities match the
+    // bill exactly by PO line. Anything partial or ambiguous stays unselected
+    // and requires an explicit operator choice.
+    if (
+      header.status === "draft" &&
+      header.bill_type === "regular" &&
+      receipts.length === 0
+    ) {
+      const candidateIds = bindable_receipts
+        .filter((receipt) => receipt.bound_to === null)
+        .map((receipt) => receipt.id);
+      if (candidateIds.length > 0) {
+        const receiptLines = await resolveReceiptLineUnion(knex, candidateIds);
+        const productBillLines = lines
+          .filter((line) => line.line_type === "product")
+          .map((line) => ({
+            purchase_order_line_id: line.purchase_order_line_id,
+            qty: line.qty,
+          }));
+        if (receiptQuantitiesMatchBill(productBillLines, receiptLines)) {
+          suggested_receipt_ids = candidateIds;
+        }
+      }
+    }
   }
 
   // B1 — QuickBooks sync surface (tracker items 1.8/1.10). `qb` is the
@@ -623,6 +652,7 @@ export async function GET(
       vendor_default_payment_terms_days,
       receipts,
       bindable_receipts,
+      suggested_receipt_ids,
       qb,
       qb_pipeline,
       revisions,

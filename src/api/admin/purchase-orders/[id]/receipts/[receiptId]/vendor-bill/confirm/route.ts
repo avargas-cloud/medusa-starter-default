@@ -42,6 +42,7 @@ import { computeLandedLines } from "../../../../../../../../lib/purchase-orders/
 import { enqueueQbVendorBillAdd } from "../../../../../../../../lib/purchase-orders/qb-vendor-bill-enqueue";
 import { enqueueChinaAgencyVendorBillModGroup } from "../../../../../../../../lib/purchase-orders/qb-vendor-bill-mod-enqueue";
 import {
+  receiptQuantitiesMatchBill,
   resolveBoundReceiptIds,
   syncPrimaryReceiptPointer,
   validateReceiptsForBinding,
@@ -68,6 +69,7 @@ interface VendorBillRow {
   tariff_amount_cents: number;
   qb_txn_id: string | null;
   document_date: string | null;
+  updated_at_token: string;
 }
 
 interface VendorBillLineRow {
@@ -223,7 +225,8 @@ export async function POST(
 
   const billResult = explicitBillId
     ? await knex.raw(
-        `SELECT *
+        `SELECT vendor_bill.*,
+                vendor_bill.updated_at::text AS updated_at_token
          FROM vendor_bill
          WHERE id = ?
            AND deleted_at IS NULL
@@ -241,7 +244,8 @@ export async function POST(
         [explicitBillId, poId, receiptId, receiptId]
       )
     : await knex.raw(
-        `SELECT *
+        `SELECT vendor_bill.*,
+                vendor_bill.updated_at::text AS updated_at_token
          FROM vendor_bill
          WHERE deleted_at IS NULL
            AND bill_type = 'regular'
@@ -300,13 +304,14 @@ export async function POST(
   }
 
   // 2b. Resolve the RECEIPT SET this confirm covers (D6):
-  //   - body.receipt_ids (validated + auto-bound, additive only — never
-  //     unbinds; that's the PATCH route's job) if provided; the URL receiptId
-  //     must be a member.
+  //   - body.receipt_ids (the exact desired set) if provided; the URL
+  //     receiptId must be a member.
   //   - else the bill's already-bound receipts (dual-read).
-  //   - else (nothing bound yet, no receipt_ids given) the legacy single
-  //     receiptId from the URL — original single-receipt behaviour, pinned
-  //     below exactly as before.
+  //   - else (nothing bound yet, no receipt_ids given) all still-unbound,
+  //     applied receipts of the PO, with the URL receipt as a legacy fallback.
+  //
+  // This section is read-only. Binding happens later inside the same database
+  // transaction as the cost revision and QB outbox.
   let receiptIdSet: string[];
   if (bodyReceiptIds && bodyReceiptIds.length > 0) {
     if (!bodyReceiptIds.includes(receiptId)) {
@@ -322,32 +327,6 @@ export async function POST(
     });
     if (!validation.ok) {
       return res.status(validation.status).json(validation.body);
-    }
-    const alreadyBound = new Set(
-      await resolveBoundReceiptIds(
-        knex,
-        bill.id,
-        bill.purchase_order_receipt_id
-      )
-    );
-    const toBind = bodyReceiptIds.filter((rid) => !alreadyBound.has(rid));
-    if (toBind.length > 0) {
-      await knex.raw(
-        `UPDATE purchase_order_receipt SET vendor_bill_id = ?, updated_at = NOW()
-          WHERE id = ANY(?) AND deleted_at IS NULL`,
-        [bill.id, toBind]
-      );
-      await syncPrimaryReceiptPointer(knex, bill.id);
-      const refreshed = await knex.raw(
-        `SELECT purchase_order_receipt_id FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
-        [bill.id]
-      );
-      bill.purchase_order_receipt_id =
-        (
-          refreshed.rows[0] as
-            | { purchase_order_receipt_id: string | null }
-            | undefined
-        )?.purchase_order_receipt_id ?? bill.purchase_order_receipt_id;
     }
     receiptIdSet = bodyReceiptIds;
   } else {
@@ -383,58 +362,7 @@ export async function POST(
         (r) => r.id
       );
       receiptIdSet = unboundIds.includes(receiptId) ? unboundIds : [receiptId];
-      if (receiptIdSet.length > 1) {
-        // Bind the resolved set so the bill's receipts are explicit from here
-        // on (chips, drift, Rcv'd all read the binding).
-        await knex.raw(
-          `UPDATE purchase_order_receipt SET vendor_bill_id = ?, updated_at = NOW()
-            WHERE id = ANY(?) AND deleted_at IS NULL`,
-          [bill.id, receiptIdSet]
-        );
-        await syncPrimaryReceiptPointer(knex, bill.id);
-        const refreshedPin = await knex.raw(
-          `SELECT purchase_order_receipt_id FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
-          [bill.id]
-        );
-        bill.purchase_order_receipt_id =
-          (
-            refreshedPin.rows[0] as
-              | { purchase_order_receipt_id: string | null }
-              | undefined
-          )?.purchase_order_receipt_id ?? bill.purchase_order_receipt_id;
-      }
     }
-  }
-
-  if (!bodyReceiptIds && !bill.purchase_order_receipt_id) {
-    // Legacy single-receipt behaviour, unchanged: pin the explicit bill to
-    // this receipt — preflight the UNIQUE(receipt) index (legacy column) AND
-    // the new per-receipt FK (dual-read/dual-write).
-    const pinnedElsewhere = await knex.raw(
-      `SELECT id FROM vendor_bill
-       WHERE purchase_order_receipt_id = ? AND id <> ? AND deleted_at IS NULL
-       LIMIT 1`,
-      [receiptId, bill.id]
-    );
-    const fkPinnedElsewhere = await knex.raw(
-      `SELECT vendor_bill_id FROM purchase_order_receipt
-       WHERE id = ? AND vendor_bill_id IS NOT NULL AND vendor_bill_id <> ? AND deleted_at IS NULL`,
-      [receiptId, bill.id]
-    );
-    if (pinnedElsewhere.rows.length > 0 || fkPinnedElsewhere.rows.length > 0) {
-      return res.status(409).json({
-        error: "Another vendor bill is already pinned to this receipt",
-        code: "receipt_already_pinned",
-      });
-    }
-    await knex.raw(
-      `UPDATE purchase_order_receipt SET vendor_bill_id = ?, updated_at = NOW()
-       WHERE id = ? AND deleted_at IS NULL`,
-      [bill.id, receiptId]
-    );
-    await syncPrimaryReceiptPointer(knex, bill.id);
-    bill.purchase_order_receipt_id = receiptId;
-    receiptIdSet = [receiptId];
   }
 
   // 2c. Every receipt in the resolved set must be applied/synced (D6 — was
@@ -491,30 +419,10 @@ export async function POST(
     [receiptIdSet]
   )) as { rows: Array<{ purchase_order_line_id: string; qty: number }> };
 
-  const billByPol = new Map<string, number>();
-  let billHasUnlinked = false;
-  for (const l of productLines) {
-    if (!l.purchase_order_line_id) {
-      billHasUnlinked = true;
-      break;
-    }
-    billByPol.set(
-      l.purchase_order_line_id,
-      (billByPol.get(l.purchase_order_line_id) ?? 0) + l.qty
-    );
-  }
-  const rcptByPol = new Map<string, number>();
-  for (const r of receiptAggRows) {
-    rcptByPol.set(
-      r.purchase_order_line_id,
-      (rcptByPol.get(r.purchase_order_line_id) ?? 0) + r.qty
-    );
-  }
-  const qtyMismatch =
-    billHasUnlinked ||
-    billByPol.size !== rcptByPol.size ||
-    [...billByPol.entries()].some(([pol, q]) => rcptByPol.get(pol) !== q) ||
-    [...rcptByPol.entries()].some(([pol, q]) => billByPol.get(pol) !== q);
+  const qtyMismatch = !receiptQuantitiesMatchBill(
+    productLines,
+    receiptAggRows
+  );
   if (qtyMismatch) {
     return res.status(422).json({
       error:
@@ -616,17 +524,113 @@ export async function POST(
   const rootKnex = knex;
   const trx = await rootKnex.transaction();
   knex = trx;
-  const priorCostLogResult = await trx.raw(
-    `SELECT id FROM vendor_bill_cost_log
-      WHERE vendor_bill_id = ? AND reversed_at IS NULL
-      ORDER BY id`,
-    [bill.id]
-  );
-  const priorCostLogIds = (
-    priorCostLogResult.rows as Array<{ id: string }>
-  ).map((row) => row.id);
 
   try {
+    // The receipt ownership, cost revision and QB outbox are one accounting
+    // operation. Lock the document and receipt set, then repeat the critical
+    // validations inside the transaction so two operators cannot claim the
+    // same receipt or confirm against a stale quantity set.
+    const lockedBillResult = await trx.raw(
+      `SELECT status, updated_at::text = ? AS unchanged
+         FROM vendor_bill
+        WHERE id = ? AND deleted_at IS NULL
+        FOR UPDATE`,
+      [bill.updated_at_token, bill.id]
+    );
+    const lockedBill = lockedBillResult.rows[0] as
+      | { status: string; unchanged: boolean }
+      | undefined;
+    const lockedBillStatus = lockedBill?.status;
+    if (lockedBillStatus !== "draft") {
+      throw new Error(
+        `Vendor bill is already in status '${lockedBillStatus ?? "missing"}'`
+      );
+    }
+    if (!lockedBill?.unchanged) {
+      throw new Error(
+        "Vendor bill changed before confirmation. Reload it and review the receipt selection."
+      );
+    }
+
+    await trx.raw(
+      `SELECT id FROM purchase_order_receipt
+        WHERE id = ANY(?) AND deleted_at IS NULL
+        ORDER BY id
+        FOR UPDATE`,
+      [receiptIdSet]
+    );
+    const lockedBindingValidation = await validateReceiptsForBinding(trx, {
+      purchaseOrderId: poId,
+      billId: bill.id,
+      receiptIds: receiptIdSet,
+    });
+    if (!lockedBindingValidation.ok) {
+      throw new Error(lockedBindingValidation.body.error);
+    }
+
+    const lockedBillLinesResult = await trx.raw(
+      `SELECT purchase_order_line_id, qty
+         FROM vendor_bill_line
+        WHERE vendor_bill_id = ?
+          AND deleted_at IS NULL
+          AND COALESCE(line_type, 'product') = 'product'
+        ORDER BY id
+        FOR UPDATE`,
+      [bill.id]
+    );
+    const lockedReceiptLinesResult = await trx.raw(
+      `SELECT purchase_order_line_id,
+              COALESCE(SUM(qty_received_now), 0)::int AS qty
+         FROM purchase_order_receipt_line
+        WHERE purchase_order_receipt_id = ANY(?) AND deleted_at IS NULL
+        GROUP BY purchase_order_line_id`,
+      [receiptIdSet]
+    );
+    if (
+      !receiptQuantitiesMatchBill(
+        lockedBillLinesResult.rows as Array<{
+          purchase_order_line_id: string | null;
+          qty: number;
+        }>,
+        lockedReceiptLinesResult.rows as Array<{
+          purchase_order_line_id: string;
+          qty: number;
+        }>
+      )
+    ) {
+      throw new Error(
+        "Vendor bill quantities changed before confirmation. Review the selected receipts and try again."
+      );
+    }
+
+    if (bodyReceiptIds) {
+      await trx.raw(
+        `UPDATE purchase_order_receipt
+            SET vendor_bill_id = NULL, updated_at = NOW()
+          WHERE vendor_bill_id = ?
+            AND NOT (id = ANY(?))
+            AND deleted_at IS NULL`,
+        [bill.id, receiptIdSet]
+      );
+    }
+    await trx.raw(
+      `UPDATE purchase_order_receipt
+          SET vendor_bill_id = ?, updated_at = NOW()
+        WHERE id = ANY(?) AND deleted_at IS NULL`,
+      [bill.id, receiptIdSet]
+    );
+    await syncPrimaryReceiptPointer(trx, bill.id);
+
+    const priorCostLogResult = await trx.raw(
+      `SELECT id FROM vendor_bill_cost_log
+        WHERE vendor_bill_id = ? AND reversed_at IS NULL
+        ORDER BY id`,
+      [bill.id]
+    );
+    const priorCostLogIds = (
+      priorCostLogResult.rows as Array<{ id: string }>
+    ).map((row) => row.id);
+
     // 7. Persist line updates
     await Promise.all(
       lineUpdates.map((fields) =>
@@ -1116,13 +1120,8 @@ export async function POST(
       ? await enqueueChinaAgencyVendorBillModGroup(trx, bill.id)
       : await enqueueQbVendorBillAdd(trx, bill.id);
     if (!enq.queued) {
-      if (bill.qb_txn_id) {
-        throw new Error(
-          `QuickBooks BillMod could not be queued: ${enq.reason}`
-        );
-      }
-      console.info(
-        `[vendor-bill-confirm] QB enqueue skipped for ${bill.id}: ${enq.reason}`
+      throw new Error(
+        `QuickBooks ${bill.qb_txn_id ? "BillMod" : "BillAdd"} could not be queued: ${enq.reason}`
       );
     }
     await trx.commit();
