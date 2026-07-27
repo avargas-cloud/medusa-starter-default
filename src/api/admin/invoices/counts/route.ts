@@ -21,6 +21,7 @@ export type InvoicesCountsResponse = {
     all: number;
     unpaid: number;
     unfulfilled: number;
+    deliveries: number;
   };
   voidedCount: number;
 };
@@ -72,7 +73,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
             SELECT 1 FROM fulfillment_label l
             WHERE l.fulfillment_id = i.fulfillment_id
               AND l.deleted_at IS NULL
-          ) AS has_tracking
+          ) AS has_tracking,
+          EXISTS (
+            SELECT 1 FROM order_delivery d
+            WHERE d.invoice_id = i.id
+              AND d.deleted_at IS NULL
+              AND d.voided_at IS NULL
+              AND d.status <> 'canceled'
+          ) AS has_delivery
         FROM pos_invoice i
         LEFT JOIN fulfillment f
           ON f.id = i.fulfillment_id AND f.deleted_at IS NULL
@@ -90,6 +98,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
             OR (shipped_at IS NULL AND delivered_at IS NULL AND NOT has_tracking)
           )
         )                                                                     AS unfulfilled,
+        COUNT(*) FILTER (
+          WHERE status != '${VOIDED_STATUS}' AND has_delivery
+        )                                                                     AS deliveries,
         COUNT(*) FILTER (WHERE status = '${VOIDED_STATUS}')                  AS voided,
         COUNT(*)                                                              AS total
       FROM inv;
@@ -100,6 +111,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const nonVoided = Number(row.non_voided ?? 0);
     const unpaid = Number(row.unpaid ?? 0);
     const unfulfilled = Number(row.unfulfilled ?? 0);
+    const deliveries = Number(row.deliveries ?? 0);
     const voided = Number(row.voided ?? 0);
     const total = Number(row.total ?? 0);
 
@@ -108,6 +120,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         all: showVoided ? total : nonVoided,
         unpaid,
         unfulfilled,
+        deliveries,
       },
       voidedCount: voided,
     };

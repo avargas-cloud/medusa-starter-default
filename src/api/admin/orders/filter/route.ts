@@ -1,71 +1,20 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { computeFulfillmentStatus } from "../../../../lib/meilisearch/build-order-doc";
+import {
+  computeFulfillmentStatus,
+  type OrderForMeili,
+} from "../../../../lib/meilisearch/build-order-doc";
 
 /**
- * GET /admin/orders/filter?tab=<tab>&payment=<effective>&limit=<n>
+ * GET /admin/orders/filter?tab=<tab>&payment=<effective>
  *
- * Server-side tab/payment filtering across the ENTIRE orders database via
- * MeiliSearch. The POS /orders page only loads the 200 most-recent orders
- * for its idle feed; the native Medusa `/admin/orders` endpoint does NOT
- * support filtering by payment/fulfillment status (those are computed fields,
- * silently stripped from the query), so a tab could never reach orders
- * outside that 200-window. This endpoint fixes that: Meili holds derived
- * flags (is_unpaid, is_open, is_closed, is_separated, is_web,
- * effective_payment) computed identically to the POS UI helpers, so a filter
- * returns the true full set regardless of recency.
- *
- * Returns the same `{ orders: [...] }` shape as `/admin/orders` so the
- * frontend can merge it transparently.
- *
- *   tab     — one of: unpaid | open | closed | web | separated  (optional)
- *   payment — effective payment status: not_paid | deposited |
- *             fully_paid | captured | voided                    (optional)
- *
- * Cancelled/voided orders are NOT pre-excluded here — the frontend already
- * hides them unless "show cancelled" is on, so leaving them in keeps the
- * client filter authoritative and matches existing behavior exactly.
+ * MeiliSearch owns the exact membership of each derived tab. PostgreSQL then
+ * supplies a compact list projection in one query. This avoids query.graph's
+ * deep relationship hydration, which took several seconds for the Closed tab.
  */
 
 const ORDERS_INDEX = "orders";
-
-const HYDRATE_FIELDS = [
-  "id",
-  "display_id",
-  "status",
-  "payment_status",
-  "fulfillment_status",
-  "total",
-  "created_at",
-  "email",
-  "metadata",
-  "summary.*",
-  "customer.first_name",
-  "customer.last_name",
-  "customer.email",
-  "customer.phone",
-  "customer.company_name",
-  "billing_address.company",
-  "sales_channel.id",
-  "sales_channel.name",
-  "payment_collections.captured_amount",
-  "payment_collections.refunded_amount",
-  "shipping_methods.name",
-  "shipping_methods.amount",
-  "shipping_methods.tax_total",
-  // Needed so we can compute fulfillment_status server-side before
-  // returning — query.graph silently drops the top-level field, so the
-  // hydrated rows ship to the client with fulfillment_status missing and
-  // every UI predicate (isOpen / isClosed) evaluates false.
-  "fulfillments.packed_at",
-  "fulfillments.shipped_at",
-  "fulfillments.delivered_at",
-  "fulfillments.canceled_at",
-  // Line-item fulfilled qty — lets computeFulfillmentStatus demote a
-  // fully-delivered fulfillment set to partially_delivered when some line
-  // items were never fulfilled (mirrors Medusa's hasUnfulfilledItems guard).
-  "items.quantity",
-  "items.detail.fulfilled_quantity",
-];
+const PAGE = 1000;
+const MAX_TOTAL = 10000;
 
 const TAB_FILTER: Record<string, string> = {
   unpaid: "is_unpaid = true",
@@ -83,26 +32,276 @@ const VALID_PAYMENTS = new Set([
   "voided",
 ]);
 
-// Meili caps a single search at maxTotalHits (default 1000); page through
-// to stay correct even if the order count grows past that.
-const PAGE = 1000;
-const MAX_TOTAL = 10000;
+type EffectivePayment =
+  | "not_paid"
+  | "deposited"
+  | "fully_paid"
+  | "captured"
+  | "voided";
+
+interface MeiliOrderListDoc {
+  id: string;
+  payment_status: string;
+  effective_payment: EffectivePayment;
+  created_at_ts: number;
+}
+
+const MEILI_FIELDS: Array<keyof MeiliOrderListDoc> = [
+  "id",
+  "payment_status",
+  "effective_payment",
+  "created_at_ts",
+];
+
+interface OrderListRow {
+  id: string;
+  display_id: number;
+  status: string;
+  email: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  summary: Record<string, unknown> | null;
+  customer: Record<string, unknown> | null;
+  billing_address: Record<string, unknown> | null;
+  sales_channel: Record<string, unknown> | null;
+  payment_collections: Array<Record<string, unknown>>;
+  shipping_methods: Array<Record<string, unknown>>;
+  fulfillments: NonNullable<OrderForMeili["fulfillments"]>;
+  items: NonNullable<OrderForMeili["items"]>;
+}
+
+type SqlClient = {
+  raw: (
+    sql: string,
+    bindings?: unknown[]
+  ) => Promise<{ rows: unknown[] }>;
+};
+
+type HydratedOrderListRow = Omit<OrderListRow, "fulfillments" | "items"> & {
+  payment_status: string;
+  fulfillment_status: string;
+  total: number | null;
+};
+
+function resolveSql(req: MedusaRequest): SqlClient {
+  return (req.scope as unknown as { resolve: (key: string) => unknown }).resolve(
+    "__pg_connection__"
+  ) as SqlClient;
+}
+
+function parseTs(value: unknown): number | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function fallbackPaymentStatus(doc: MeiliOrderListDoc): string {
+  if (doc.payment_status) return doc.payment_status;
+  return doc.effective_payment === "captured" ? "captured" : "not_paid";
+}
+
+async function hydrateOrderRows(
+  req: MedusaRequest,
+  docs: MeiliOrderListDoc[]
+): Promise<HydratedOrderListRow[]> {
+  if (docs.length === 0) return [];
+
+  const ids = docs.map((doc) => doc.id);
+  const pg = resolveSql(req);
+  const result = await pg.raw(
+    `
+      WITH payment_agg AS (
+        SELECT
+          opc.order_id,
+          jsonb_agg(
+            jsonb_build_object(
+              'captured_amount', pc.captured_amount,
+              'refunded_amount', pc.refunded_amount
+            )
+            ORDER BY pc.created_at
+          ) AS payment_collections
+        FROM order_payment_collection opc
+        JOIN payment_collection pc
+          ON pc.id = opc.payment_collection_id
+         AND pc.deleted_at IS NULL
+        WHERE opc.deleted_at IS NULL
+        GROUP BY opc.order_id
+      ),
+      shipping_agg AS (
+        SELECT
+          os.order_id,
+          jsonb_agg(
+            jsonb_build_object(
+              'name', osm.name,
+              'amount', osm.amount
+            )
+            ORDER BY osm.created_at
+          ) AS shipping_methods
+        FROM order_shipping os
+        JOIN "order" current_order
+          ON current_order.id = os.order_id
+         AND current_order.version = os.version
+         AND current_order.deleted_at IS NULL
+        JOIN order_shipping_method osm
+          ON osm.id = os.shipping_method_id
+         AND osm.deleted_at IS NULL
+        WHERE os.deleted_at IS NULL
+        GROUP BY os.order_id
+      ),
+      fulfillment_agg AS (
+        SELECT
+          order_fulfillment.order_id,
+          jsonb_agg(jsonb_build_object(
+            'packed_at', fulfillment.packed_at,
+            'shipped_at', fulfillment.shipped_at,
+            'delivered_at', fulfillment.delivered_at,
+            'canceled_at', fulfillment.canceled_at
+          )) AS fulfillments
+        FROM order_fulfillment
+        JOIN fulfillment
+          ON fulfillment.id = order_fulfillment.fulfillment_id
+         AND fulfillment.deleted_at IS NULL
+        WHERE order_fulfillment.deleted_at IS NULL
+        GROUP BY order_fulfillment.order_id
+      ),
+      item_agg AS (
+        SELECT
+          order_item.order_id,
+          jsonb_agg(jsonb_build_object(
+            'quantity', order_item.quantity,
+            'detail', jsonb_build_object(
+              'fulfilled_quantity', order_item.fulfilled_quantity
+            )
+          )) AS items
+        FROM order_item
+        JOIN "order" current_order
+          ON current_order.id = order_item.order_id
+         AND current_order.version = order_item.version
+         AND current_order.deleted_at IS NULL
+        WHERE order_item.deleted_at IS NULL
+        GROUP BY order_item.order_id
+      )
+      SELECT
+        o.id,
+        o.display_id,
+        o.status,
+        o.email,
+        jsonb_strip_nulls(jsonb_build_object(
+          'qb_sales_order', o.metadata->'qb_sales_order',
+          'qb_invoice', o.metadata->'qb_invoice',
+          'qb_invoices', o.metadata->'qb_invoices',
+          'qb_sync_status', o.metadata->'qb_sync_status',
+          'qb_synced_at', o.metadata->'qb_synced_at',
+          'qb_sales_order_ref_num', o.metadata->'qb_sales_order_ref_num',
+          'qb_invoice_ref_num', o.metadata->'qb_invoice_ref_num',
+          'order_placed_at', o.metadata->'order_placed_at',
+          'referential_deposit', o.metadata->'referential_deposit',
+          'document_number', o.metadata->'document_number',
+          'pos_total', o.metadata->'pos_total',
+          'is_separated', o.metadata->'is_separated',
+          'fully_invoiced', o.metadata->'fully_invoiced',
+          'order_status', o.metadata->'order_status',
+          'estimate_status', o.metadata->'estimate_status',
+          'pos_closed', o.metadata->'pos_closed',
+          'pos_created', o.metadata->'pos_created',
+          'sales_rep', o.metadata->'sales_rep'
+        )) AS metadata,
+        o.created_at,
+        CASE WHEN summary.totals IS NULL THEN NULL ELSE jsonb_build_object(
+          'current_order_total', summary.totals->'current_order_total',
+          'original_order_total', summary.totals->'original_order_total',
+          'paid_total', summary.totals->'paid_total',
+          'pending_difference', summary.totals->'pending_difference'
+        ) END AS summary,
+        CASE WHEN c.id IS NULL THEN NULL ELSE jsonb_build_object(
+          'first_name', c.first_name,
+          'last_name', c.last_name,
+          'email', c.email,
+          'phone', c.phone,
+          'company_name', c.company_name
+        ) END AS customer,
+        CASE WHEN ba.id IS NULL THEN NULL ELSE jsonb_build_object(
+          'company', ba.company
+        ) END AS billing_address,
+        CASE WHEN sc.id IS NULL THEN NULL ELSE jsonb_build_object(
+          'id', sc.id,
+          'name', sc.name
+        ) END AS sales_channel,
+        COALESCE(pa.payment_collections, '[]'::jsonb) AS payment_collections,
+        COALESCE(sa.shipping_methods, '[]'::jsonb) AS shipping_methods,
+        COALESCE(fa.fulfillments, '[]'::jsonb) AS fulfillments,
+        COALESCE(ia.items, '[]'::jsonb) AS items
+      FROM "order" o
+      LEFT JOIN customer c
+        ON c.id = o.customer_id
+       AND c.deleted_at IS NULL
+      LEFT JOIN order_address ba
+        ON ba.id = o.billing_address_id
+       AND ba.deleted_at IS NULL
+      LEFT JOIN sales_channel sc
+        ON sc.id = o.sales_channel_id
+       AND sc.deleted_at IS NULL
+      LEFT JOIN order_summary summary
+        ON summary.order_id = o.id
+       AND summary.version = o.version
+       AND summary.deleted_at IS NULL
+      LEFT JOIN payment_agg pa ON pa.order_id = o.id
+      LEFT JOIN shipping_agg sa ON sa.order_id = o.id
+      LEFT JOIN fulfillment_agg fa ON fa.order_id = o.id
+      LEFT JOIN item_agg ia ON ia.order_id = o.id
+      WHERE o.deleted_at IS NULL
+        AND o.id = ANY(?::text[])
+    `,
+    [ids]
+  );
+
+  const rows = result.rows as OrderListRow[];
+  const rowsById = new Map(rows.map((row) => [row.id, row]));
+
+  return docs.flatMap((doc) => {
+    const row = rowsById.get(doc.id);
+    if (!row) return [];
+    const { fulfillments, items, ...listRow } = row;
+
+    const summaryTotal = row.summary?.current_order_total;
+    const numericSummaryTotal =
+      typeof summaryTotal === "number"
+        ? summaryTotal
+        : typeof summaryTotal === "string"
+          ? Number(summaryTotal)
+          : null;
+
+    return [{
+      ...listRow,
+      payment_status: fallbackPaymentStatus(doc),
+      fulfillment_status: computeFulfillmentStatus(fulfillments, items),
+      total:
+        numericSummaryTotal !== null && Number.isFinite(numericSummaryTotal)
+          ? numericSummaryTotal
+          : null,
+    }];
+  });
+}
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const tab = (req.query.tab as string | undefined)?.trim();
   const payment = (req.query.payment as string | undefined)?.trim();
+  const from = parseTs(req.query.from);
+  const to = parseTs(req.query.to);
+  const showCancelled = req.query.showCancelled === "true";
 
-  // Exclude POS estimates via the canonical is_draft_order boolean (is_draft).
-  // status != "draft" was fragile — canceled estimates keep is_draft_order=true
-  // but status="canceled", so they slipped past the string check.
   const filters: string[] = ["is_draft = false"];
   if (tab && TAB_FILTER[tab]) filters.push(TAB_FILTER[tab]);
   if (payment && VALID_PAYMENTS.has(payment)) {
     filters.push(`effective_payment = "${payment}"`);
   }
+  if (from !== null) filters.push(`effective_date_ts >= ${from}`);
+  if (to !== null) filters.push(`effective_date_ts <= ${to}`);
+  if (!showCancelled) {
+    filters.push("is_canceled = false", "is_voided = false");
+  }
 
-  // Nothing to filter on → return empty (the base feed already covers "all").
-  if (filters.length === 1) {
+  if (!tab && !payment) {
     return res.json({ orders: [], estimatedTotalHits: 0 });
   }
 
@@ -114,59 +313,30 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     });
     const index = meili.index(ORDERS_INDEX);
 
-    const ids: string[] = [];
-    let offset = 0;
+    const docs: MeiliOrderListDoc[] = [];
     let estimatedTotalHits = 0;
-    for (let guard = 0; guard < MAX_TOTAL / PAGE + 1; guard++) {
-      const meiliRes = await index.search("", {
+
+    for (let offset = 0; offset < MAX_TOTAL; offset += PAGE) {
+      const page = await index.getDocuments<MeiliOrderListDoc>({
         filter: filters,
+        fields: MEILI_FIELDS,
         limit: PAGE,
         offset,
-        attributesToRetrieve: ["id"],
-        sort: ["created_at_ts:desc"],
       });
-      estimatedTotalHits = meiliRes.estimatedTotalHits ?? ids.length;
-      const pageIds = meiliRes.hits
-        .map((h: any) => h?.id)
-        .filter((id: unknown): id is string => typeof id === "string" && !!id);
-      ids.push(...pageIds);
-      if (pageIds.length < PAGE || ids.length >= MAX_TOTAL) break;
-      offset += PAGE;
+      estimatedTotalHits = page.total;
+      docs.push(...page.results);
+      if (page.results.length < PAGE) break;
     }
 
-    if (ids.length === 0) {
-      return res.json({ orders: [], estimatedTotalHits });
-    }
-
-    const query = (req.scope as any).resolve("query");
-    const { data: hydrated } = await query.graph({
-      entity: "order",
-      fields: HYDRATE_FIELDS,
-      filters: { id: ids },
-    });
-
-    // Stamp fulfillment_status onto each row using the same compute that the
-    // Meili indexer uses. query.graph drops the top-level fulfillment_status,
-    // so without this the client sees `undefined` and isOpen/isClosed both
-    // return false — orders pulled in by the tab filter would be invisible.
-    const enriched = (hydrated || []).map((o: Record<string, unknown>) => ({
-      ...o,
-      fulfillment_status:
-        (o.fulfillment_status as string | undefined) ||
-        computeFulfillmentStatus(
-          o.fulfillments as Parameters<typeof computeFulfillmentStatus>[0],
-          o.items as Parameters<typeof computeFulfillmentStatus>[1]
-        ),
-    }));
-
-    return res.json({
-      orders: enriched,
-      estimatedTotalHits,
-    });
-  } catch (err: any) {
+    docs.sort((a, b) => b.created_at_ts - a.created_at_ts);
+    const orders = await hydrateOrderRows(req, docs);
+    return res.json({ orders, estimatedTotalHits });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown filter error";
     return res.status(500).json({
       error: "filter_failed",
-      message: err?.message || "Unknown error",
+      message,
       orders: [],
     });
   }

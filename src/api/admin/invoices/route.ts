@@ -40,7 +40,18 @@ import { registerMedusaPayment } from "./register-medusa-payment";
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const invoiceService = req.scope.resolve(INVOICE_MODULE);
   const customerModule = req.scope.resolve(Modules.CUSTOMER);
-  const { order_id, customer_id, created_at, status, limit, offset, balance_due_gt, delivery_active } =
+  const {
+    order_id,
+    customer_id,
+    created_at,
+    status,
+    limit,
+    offset,
+    balance_due_gt,
+    delivery_active,
+    unfulfilled,
+    list_view,
+  } =
     req.query as Record<string, any>;
 
   const filters: Record<string, unknown> = {};
@@ -49,6 +60,46 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   if (created_at) filters.created_at = created_at;
   if (status) filters.status = status;
   if (balance_due_gt !== undefined) filters.balance_due = { $gt: parseInt(balance_due_gt, 10) };
+
+  // The list page only needs the exact invoices that are still unfulfilled.
+  // Resolve those ids in SQL instead of hydrating every invoice plus its items
+  // and then asking the browser to classify fulfillment state.
+  if (unfulfilled !== undefined) {
+    const pg = req.scope.resolve("__pg_connection__") as {
+      raw: (
+        sql: string
+      ) => Promise<{ rows?: Array<{ id: string }> }>;
+    };
+    const result = await pg.raw(`
+      SELECT i.id
+        FROM pos_invoice i
+        LEFT JOIN fulfillment f
+          ON f.id = i.fulfillment_id
+         AND f.deleted_at IS NULL
+       WHERE i.deleted_at IS NULL
+         AND i.status != 'voided'
+         AND (
+           i.fulfillment_id IS NULL
+           OR f.canceled_at IS NOT NULL
+           OR (
+             f.shipped_at IS NULL
+             AND f.delivered_at IS NULL
+             AND NOT EXISTS (
+               SELECT 1
+                 FROM fulfillment_label l
+                WHERE l.fulfillment_id = i.fulfillment_id
+                  AND l.deleted_at IS NULL
+             )
+           )
+         )
+       ORDER BY i.created_at DESC
+    `);
+    const unfulfilledIds = (result.rows ?? []).map((row) => row.id);
+    if (unfulfilledIds.length === 0) {
+      return res.json({ invoices: [] });
+    }
+    filters.id = unfulfilledIds;
+  }
 
   // [Deliveries] tab: every invoice with a shipment on record (order_delivery
   // not canceled/voided) — DELIVERED rows stay in the tab as the registry of
@@ -79,11 +130,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     filters.id = deliveryIds;
   }
 
+  const isListView = list_view === "1" || list_view === "true";
   const config: Record<string, any> = {
-    relations: ["items", "tracking_links"],
     order: { created_at: "DESC" },
     take: limit ? parseInt(limit, 10) : 200,
   };
+  if (!isListView) {
+    config.relations = ["items", "tracking_links"];
+  }
   if (offset) config.skip = parseInt(offset, 10);
 
   const invoices = await invoiceService.listPosInvoices(filters, config);
@@ -113,7 +167,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     ...inv,
     // The `items` hasMany has no default ORDER BY → restore insertion (ULID id)
     // order so comment/header lines stay where the operator placed them.
-    items: sortDocItemsByInsertion(inv.items),
+    ...(isListView
+      ? {}
+      : { items: sortDocItemsByInsertion(inv.items) }),
     customer: customerMap[inv.customer_id] ?? null,
   }));
 

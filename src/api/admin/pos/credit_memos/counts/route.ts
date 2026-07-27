@@ -8,7 +8,9 @@ export type CreditMemoCountsResponse = {
 function parseRange(v: unknown): string | null {
   if (typeof v !== "string" || v.length === 0) return null;
   const ms = Number(v);
-  if (Number.isFinite(ms) && ms > 0) return new Date(ms).toISOString();
+  if (Number.isFinite(ms)) {
+    return ms > 0 ? new Date(ms).toISOString() : null;
+  }
   const d = new Date(v);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }

@@ -25,6 +25,8 @@ const POS_INVOICES_INDEX = "pos_invoices";
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const q = (req.query.q as string | undefined)?.trim() ?? "";
   const limit = Math.min(Number(req.query.limit ?? 50) || 50, 200);
+  const isListView =
+    req.query.list_view === "1" || req.query.list_view === "true";
 
   if (!q) {
     return res.json({
@@ -73,9 +75,11 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
     const invoices = await invoiceService.listPosInvoices(
       { id: ids },
-      {
-        relations: ["items", "tracking_links"],
-      }
+      isListView
+        ? {}
+        : {
+            relations: ["items", "tracking_links"],
+          }
     );
 
     const customerIds = [
@@ -108,7 +112,9 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
       ...inv,
       // The `items` hasMany has no default ORDER BY → restore insertion (ULID id)
       // order so comment/header lines stay where the operator placed them.
-      items: sortDocItemsByInsertion(inv.items),
+      ...(isListView
+        ? {}
+        : { items: sortDocItemsByInsertion(inv.items) }),
       customer: customerMap[inv.customer_id] ?? null,
     }));
 
