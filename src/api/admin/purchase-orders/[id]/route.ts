@@ -250,7 +250,7 @@ export async function GET(
        JOIN vendor_bill vb
          ON vb.id = vbl.vendor_bill_id
         AND vb.deleted_at IS NULL
-        AND vb.status NOT IN ('cancelled', 'voided')
+        AND vb.status NOT IN ('cancelled', 'voided', 'deleted')
        WHERE porl.id = ANY(?)`,
       [receiptLineIds]
     ).then((r: any) => r.rows);

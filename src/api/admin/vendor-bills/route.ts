@@ -139,10 +139,18 @@ export async function GET(
   ).resolve("__pg_connection__") as KnexInstance;
 
   // Build WHERE clauses — use ? (Knex binding placeholder, not pg $n)
-  const whereClauses: string[] = [`vb.deleted_at IS NULL`];
+  //
+  // A deleted bill keeps its row and its VB-#### but carries `deleted_at`, so
+  // it is invisible here — and everywhere else — by default. Asking for it by
+  // name (`?status=deleted`) is the one way to see it: without that, a number
+  // missing from the series has nothing to explain it.
+  const showingDeleted = status === "deleted";
+  const whereClauses: string[] = showingDeleted
+    ? [`vb.status = 'deleted'`]
+    : [`vb.deleted_at IS NULL`];
   const bindings: unknown[] = [];
 
-  if (status) {
+  if (status && !showingDeleted) {
     whereClauses.push(`vb.status = ?`);
     bindings.push(status);
   }

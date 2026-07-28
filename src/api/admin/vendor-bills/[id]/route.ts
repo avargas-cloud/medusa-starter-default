@@ -1602,7 +1602,15 @@ export async function PATCH(
   return GET(req, res);
 }
 
-// ── DELETE — hard delete, draft only ─────────────────────────────────────────
+// ── DELETE — soft delete, draft only ─────────────────────────────────────────
+//
+// The row and its VB-#### survive as `status='deleted'`. Removing the row threw
+// the number away: the sequence never reuses one, so the document just vanished
+// from the series with nothing to explain the gap.
+//
+// `deleted_at` is stamped too, so every query that already ends in
+// `deleted_at IS NULL` — billed-status maths, receipt binding, drift, duplicate
+// reference — drops the bill without needing a status filter of its own.
 
 export async function DELETE(
   req: AuthenticatedMedusaRequest,
@@ -1612,9 +1620,18 @@ export async function DELETE(
   const knex = resolveKnex(req);
 
   const lookup = (await knex.raw(
-    `SELECT id, status FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
+    `SELECT id, number, status, bill_type, qb_txn_id
+       FROM vendor_bill WHERE id = ? AND deleted_at IS NULL`,
     [id]
-  )) as { rows: Array<{ id: string; status: string }> };
+  )) as {
+    rows: Array<{
+      id: string;
+      number: string | null;
+      status: string;
+      bill_type: string;
+      qb_txn_id: string | null;
+    }>;
+  };
 
   const existing = lookup.rows[0] ?? null;
   if (!existing) {
@@ -1629,6 +1646,68 @@ export async function DELETE(
         "Only draft vendor bills can be deleted — confirmed bills have already affected variant landed-cost averages.",
       code: "not_draft",
     });
+  }
+
+  // A REOPENED bill is 'draft' again but is not a blank one: Reopen is an
+  // editing-state transition that deliberately leaves the confirmed generation
+  // standing — its QuickBooks Bill, its posted AVCO/COGS and its immutable
+  // revisions all survive. Deleting it would strand a live Bill in QuickBooks
+  // with an AP balance nothing local answers for, and leave variant_cost_event
+  // (the canonical cost source) pointing at a bill that no longer exists.
+  // Cancel reverses those facts; delete never did.
+  if (existing.qb_txn_id) {
+    return res.status(409).json({
+      error:
+        "This bill still exists in QuickBooks. Cancel it instead — deleting it here would leave the QuickBooks Bill behind with a balance nothing local answers for.",
+      code: "bill_in_quickbooks",
+      qb_txn_id: existing.qb_txn_id,
+    });
+  }
+  const postedResult = await knex.raw(
+    `SELECT
+       (SELECT COUNT(*) FROM vendor_bill_revision WHERE vendor_bill_id = ?)::int AS revisions,
+       (SELECT COUNT(*) FROM variant_cost_event WHERE vendor_bill_id = ?)::int AS cost_events`,
+    [id, id]
+  );
+  const posted = postedResult.rows[0] as {
+    revisions: number;
+    cost_events: number;
+  };
+  if (posted.revisions > 0 || posted.cost_events > 0) {
+    return res.status(409).json({
+      error:
+        "This bill was confirmed once already, so it has posted costs behind it. Cancel it instead — cancelling replays the cost timeline, deleting would leave those costs applied with no bill to explain them.",
+      code: "bill_has_posted_costs",
+      revisions: posted.revisions,
+      cost_events: posted.cost_events,
+    });
+  }
+
+  // A secondary bill is a cost POOL of the regular bill that points at it
+  // (service_/freight_/tariff_vendor_bill_id — plain columns, no FK, no
+  // cascade). Deleting it would leave that pointer dangling and the parent's
+  // pool would silently resolve to zero, quietly lowering its landed cost.
+  if (existing.bill_type !== "regular") {
+    const linkedResult = await knex.raw(
+      `SELECT id, number
+         FROM vendor_bill
+        WHERE deleted_at IS NULL
+          AND (service_vendor_bill_id = ? OR freight_vendor_bill_id = ?
+               OR tariff_vendor_bill_id = ?)`,
+      [id, id, id]
+    );
+    const linked = linkedResult.rows as Array<{
+      id: string;
+      number: string | null;
+    }>;
+    if (linked.length > 0) {
+      const names = linked.map((b) => b.number ?? b.id).join(", ");
+      return res.status(409).json({
+        error: `This ${existing.bill_type} bill is linked as a cost pool on ${names}. Unlink it there first — deleting it would silently drop that cost from the regular bill.`,
+        code: "linked_to_regular_bill",
+        linked_bills: linked,
+      });
+    }
   }
 
   // Safe delete (Phase 4): china_finance_bill.vendor_bill_id has NO cascade, so a
@@ -1716,20 +1795,39 @@ export async function DELETE(
       await db.raw(`DELETE FROM china_finance_bill WHERE id = ANY(?)`, [cfbIds]);
     }
 
-    // D6 — release every receipt bound to this bill via the new FK BEFORE
-    // deleting it. `purchase_order_receipt.vendor_bill_id` has no cascade, so
-    // skipping this would leave receipts permanently "bound" to a
-    // now-nonexistent bill id — invisible in the UI, but
-    // `validateReceiptsForBinding`'s dual-read "already billed elsewhere"
-    // check would keep rejecting them for every future bill forever.
+    // D6 — release every receipt bound to this bill. `vendor_bill_id` on the
+    // receipt has no cascade and, more to the point, the bill row now SURVIVES:
+    // leaving the pointer would keep those receipts "already billed" against a
+    // deleted document, so `validateReceiptsForBinding` would reject them for
+    // every future bill forever.
     await db.raw(
       `UPDATE purchase_order_receipt SET vendor_bill_id = NULL, updated_at = NOW()
         WHERE vendor_bill_id = ? AND deleted_at IS NULL`,
       [id]
     );
 
-    // FK on vendor_bill_line cascades — bill row + lines are removed.
-    await db.raw(`DELETE FROM vendor_bill WHERE id = ?`, [id]);
+    // The QuickBooks queue row is per-bill and never cascaded. Nothing reached
+    // QB (guarded above on qb_txn_id), so anything queued must not outlive the
+    // document that produced it.
+    await db.raw(
+      `DELETE FROM qb_vendor_bill_pipeline WHERE vendor_bill_id = ?`,
+      [id]
+    );
+
+    // Soft delete: the row and its number stay, the document stops existing
+    // everywhere. Lines are marked too so a stray join without a bill-side
+    // filter cannot resurrect them.
+    await db.raw(
+      `UPDATE vendor_bill_line SET deleted_at = NOW(), updated_at = NOW()
+        WHERE vendor_bill_id = ? AND deleted_at IS NULL`,
+      [id]
+    );
+    await db.raw(
+      `UPDATE vendor_bill
+          SET status = 'deleted', deleted_at = NOW(), updated_at = NOW()
+        WHERE id = ? AND deleted_at IS NULL`,
+      [id]
+    );
 
     if (trx) await trx.commit();
   } catch (err) {
@@ -1737,5 +1835,11 @@ export async function DELETE(
     throw err;
   }
 
-  return res.json({ id, deleted: true, hard: true });
+  return res.json({
+    id,
+    number: existing.number,
+    deleted: true,
+    hard: false,
+    status: "deleted",
+  });
 }

@@ -110,7 +110,7 @@ export async function POST(
         AND vb.deleted_at IS NULL
         AND vb.purchase_order_id = ?
         AND vb.bill_type = 'regular'
-        AND vb.status NOT IN ('cancelled', 'voided')
+        AND vb.status NOT IN ('cancelled', 'voided', 'deleted')
       WHERE vbl.deleted_at IS NULL
         AND COALESCE(vbl.line_type, 'product') = 'product'
         AND vbl.purchase_order_line_id = ANY(?)`,
