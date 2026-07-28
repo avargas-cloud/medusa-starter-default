@@ -55,6 +55,12 @@ import {
   normalizeRequiredVendorBillReference,
   VENDOR_BILL_REFERENCE_REQUIRED_BODY,
 } from "../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
+import {
+  propagateUnitCostsToPurchaseOrder,
+  resolvePoCostChanges,
+  type PoLineCostChange,
+} from "../../../../lib/purchase-orders/po-cost-propagation";
+import type { PurchaseDependencyKnex } from "../../../../lib/purchase-orders/qb-purchase-dependency-chain";
 
 // ── Knex type ────────────────────────────────────────────────────────────────
 
@@ -133,6 +139,8 @@ interface VendorBillLineRow {
   qb_account_full_name: string | null;
   qb_account_type: string | null;
   product_variant_id: string | null;
+  /** Hydrated (not stored) — the variant's owning product; see the GET. */
+  product_id?: string | null;
   sku: string;
   mpn: string | null;
   description: string;
@@ -363,6 +371,36 @@ export async function GET(
   );
 
   const lines = linesResult.rows as VendorBillLineRow[];
+
+  // Owning product of each line's variant. Needed by the POS so a unit-cost
+  // edit can offer "also make this the product's permanent purchase cost" —
+  // that write is product-scoped (POST /admin/pos/products/:productId), and the
+  // bill only stores the variant. Display/action field, never snapshotted.
+  const lineVariantIds = [
+    ...new Set(
+      lines
+        .map((l) => l.product_variant_id)
+        .filter((v): v is string => !!v)
+    ),
+  ];
+  if (lineVariantIds.length > 0) {
+    const productResult = await knex.raw(
+      `SELECT id, product_id
+         FROM product_variant
+        WHERE id = ANY(?)`,
+      [lineVariantIds]
+    );
+    const productByVariant = new Map(
+      (productResult.rows as Array<{ id: string; product_id: string | null }>).map(
+        (r) => [r.id, r.product_id]
+      )
+    );
+    for (const l of lines) {
+      l.product_id = l.product_variant_id
+        ? (productByVariant.get(l.product_variant_id) ?? null)
+        : null;
+    }
+  }
 
   // On opening a DRAFT bill, refresh each line's cbm_per_unit from the current
   // product CBM (source of truth = Freight Specs / product_variant.metadata.cbm),
@@ -1237,6 +1275,19 @@ export async function PATCH(
     taxAccount = taxValidation.account;
   }
 
+  // ── Unit-cost corrections that must reach the purchase order ────────────────
+  // The vendor's invoice is the authoritative price document: repricing a line
+  // here reprices the PO line it came from (and its QuickBooks PurchaseOrder),
+  // otherwise the drift engine reports a permanent mismatch against a bill that
+  // is, in fact, correct. Selection rules live in resolvePoCostChanges.
+  const poCostChanges: PoLineCostChange[] =
+    hasFullLines && bill.purchase_order_id
+      ? resolvePoCostChanges(
+          fullLines!,
+          new Map(existingProductLines.map((l) => [l.id, l.unit_cost_cents]))
+        )
+      : [];
+
   // ── Apply header + staged line edits + recompute in ONE transaction ─────────
   const trx = knex.transaction ? await knex.transaction() : null;
   const db = trx ?? knex;
@@ -1527,6 +1578,18 @@ export async function PATCH(
                 updated_at = NOW()
           WHERE id = ? AND status = 'synced'`,
         [id, id]
+      );
+    }
+
+    // Repriced PO lines + their PurchaseOrderMod, inside the SAME transaction:
+    // a rolled-back bill save must never leave a repriced purchase order (or a
+    // queued QB operation) behind. Runs last so the QB chain appends the PO Mod
+    // after anything else this save enqueued.
+    if (poCostChanges.length > 0) {
+      await propagateUnitCostsToPurchaseOrder(
+        db as unknown as PurchaseDependencyKnex,
+        bill.purchase_order_id!,
+        poCostChanges
       );
     }
 

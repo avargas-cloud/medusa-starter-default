@@ -65,6 +65,10 @@ function resolveKnex(req: AuthenticatedMedusaRequest): Knex {
 const bodySchema = z.object({
   receipt_ids: z.array(z.string().min(1)).min(1, "At least one receipt is required"),
   reference_id: z.string().max(200).nullish(),
+  // The date printed on the vendor's own invoice. Omitted → today. Also the
+  // anchor the due date counts payment terms from, exactly like the sibling
+  // create paths (POST /admin/vendor-bills, purchase-orders/:id/vendor-bill).
+  document_date: z.string().datetime().nullish(),
 });
 
 interface ReceiptPoRow {
@@ -103,6 +107,7 @@ export async function POST(
     return res.status(422).json(VENDOR_BILL_REFERENCE_REQUIRED_BODY);
   }
   const receiptIds = [...new Set(parsed.data.receipt_ids)];
+  const documentDate = parsed.data.document_date ?? null;
 
   const knex = resolveKnex(req);
 
@@ -214,8 +219,8 @@ export async function POST(
        ) VALUES (
          ?, ?, NULL, ?,
          ?, ?, ?,
-         'regular', 'draft', ?, NOW(),
-         ?, NOW() + (? * INTERVAL '1 day'),
+         'regular', 'draft', ?, COALESCE(?::timestamptz, NOW()),
+         ?, COALESCE(?::timestamptz, NOW()) + (? * INTERVAL '1 day'),
          'percent', 0, 0,
          false, 0,
          false, 0,
@@ -230,7 +235,9 @@ export async function POST(
         po.vendor_name_snapshot,
         po.vendor_qb_list_id_snapshot,
         referenceId,
+        documentDate,
         paymentTermsDays,
+        documentDate,
         paymentTermsDays,
       ]
     );
