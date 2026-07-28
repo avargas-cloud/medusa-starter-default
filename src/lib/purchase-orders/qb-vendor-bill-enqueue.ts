@@ -45,6 +45,7 @@ import {
   enqueuePurchaseQbOperation,
   purchaseOperationKey,
 } from "./qb-purchase-dependency-chain";
+import { allocateLineTotalsCents } from "./landed-allocation";
 
 export type EnqueueKnex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number }>;
@@ -168,22 +169,52 @@ export async function enqueueQbVendorBillAdd(
   );
   const lines = linesResult.rows as LineRow[];
 
-  const itemLines = lines
-    .filter(
-      (l) =>
-        (l.line_type ?? "product") === "product" &&
-        (l.line_kind ?? "po_item") !== "freight_charge"
-    )
-    .map((l) => ({
+  const productLines = lines.filter(
+    (l) =>
+      (l.line_type ?? "product") === "product" &&
+      (l.line_kind ?? "po_item") !== "freight_charge"
+  );
+
+  // Sales tax rides INSIDE the item cost, not as its own ExpenseLine.
+  //
+  // WHY, and why it differs from freight/commission/tariff (which do go to
+  // their own COGS accounts): ownership of `average_cost` depends on origin.
+  // For a CHINA product the vendor bill owns it, so a pool can sit in a QB
+  // expense account and our landed value still stands. For a USA product
+  // QUICKBOOKS owns it — `sync-average-cost-core.ts` stamps
+  // `average_cost = qb.avgCost` for every non-China variant. Anything not in
+  // QB's item cost is therefore erased from our cost on the next Cost Sync.
+  // Sales tax is a USA-vendor charge, so it has to be in the item cost or it
+  // does not survive at all.
+  //
+  // Allocated by VALUE with the exact line-total allocator — the same basis
+  // and the same engine as the landed pool — so Σ(line amounts) hits the
+  // vendor invoice total to the penny. QB derives Amount = Quantity × Cost,
+  // and the bridge caps Cost at 5 decimals (QBXML PRICETYPE; more triggers
+  // error 3045), which the fractional per-unit below stays within.
+  const taxCents = Number(bill.tax_amount_cents ?? 0);
+  const taxByLine = allocateLineTotalsCents(
+    Math.max(0, Math.round(taxCents)),
+    productLines.map((l) => l.unit_cost_cents * l.qty)
+  );
+
+  const itemLines = productLines.map((l, i) => {
+    const taxShare = taxByLine[i] ?? 0;
+    const qty = Number(l.qty);
+    return {
       vendor_bill_line_id: l.id,
       purchase_order_line_id: l.purchase_order_line_id,
       sku: l.sku,
       qb_po_txn_line_id: l.qb_po_txn_line_id,
       quantity: l.qty,
-      unit_cost_cents: l.unit_cost_cents,
+      unit_cost_cents:
+        qty > 0 && taxShare > 0
+          ? (l.unit_cost_cents * qty + taxShare) / qty
+          : l.unit_cost_cents,
       qb_item_list_id: l.variant_qb_item_list_id,
       description: l.description,
-    }));
+    };
+  });
   // Non-item charges, all positive ExpenseLines. Keep this set identical to
   // what the Mod path retains — QB deletes by omission on BillMod.
   const expenseLines: Array<{
@@ -192,7 +223,16 @@ export async function enqueueQbVendorBillAdd(
     amount_cents: number;
     memo: string | null;
   }> = lines
-    .filter((l) => (l.line_type ?? "product") === "qb_account")
+    .filter(
+      (l) =>
+        (l.line_type ?? "product") === "qb_account" &&
+        // The tax_charge row is LOCAL bookkeeping only: it makes the bill's
+        // payable (`SUM(unit_cost_cents × qty)`, read by
+        // recomputeBillFinanceLinks) come to the vendor invoice total. Its
+        // money reaches QuickBooks inside the item cost above — emitting it
+        // here as well would bill the tax twice.
+        l.line_kind !== "tax_charge"
+    )
     .map((l) => ({
       vendor_bill_line_id: l.id,
       account_list_id: l.freight_account_list_id ?? l.qb_account_list_id,
@@ -200,26 +240,17 @@ export async function enqueueQbVendorBillAdd(
       memo: l.description,
     }));
 
-  // Fail-closed on sales tax. The header amount is the operator's copy of the
-  // vendor document; a `tax_charge` line is materialized from it on save. If
-  // the header says there is tax but no line carries it (account unresolved,
-  // legacy row), sending anyway would post an AP balance SHORT by the tax that
-  // never clears against the real payment. Leaving the bill un-enqueued is the
-  // safer failure — the drift/digest tooling surfaces the gap.
-  const taxCents = Number(bill.tax_amount_cents ?? 0);
+  // Fail-closed: tax with nowhere to ride. Every cent of the header amount must
+  // land on a product line, or the QB bill posts an AP balance short by the
+  // difference that never clears against the real payment. A tax-only bill (no
+  // product lines) has no item cost to absorb it.
   if (taxCents > 0) {
-    const taxLine = lines.find((l) => l.line_kind === "tax_charge");
-    if (!taxLine) {
+    const placed = taxByLine.reduce((s, c) => s + c, 0);
+    if (placed !== Math.round(taxCents)) {
       return {
         queued: false,
-        reason:
-          "bill carries sales tax but no tax_charge line was materialized — " +
-          "create the 'Sales Tax Paid' COGS account in QuickBooks, run the " +
-          "account sync, and re-save the bill",
+        reason: `sales tax ${taxCents}c could not be placed on the item lines (placed ${placed}c)`,
       };
-    }
-    if (!taxLine.qb_account_list_id) {
-      return { queued: false, reason: "tax_charge line has no QB account" };
     }
   }
 
