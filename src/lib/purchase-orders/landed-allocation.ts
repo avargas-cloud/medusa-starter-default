@@ -143,6 +143,65 @@ export function allocatePerUnitCents(
   return { perUnit, residualCents: residual - best };
 }
 
+/**
+ * Allocate `totalCents` across lines as integer LINE totals (largest remainder).
+ *
+ * WHY THIS EXISTS ALONGSIDE `allocatePerUnitCents`
+ * The per-unit allocator is constrained: its output is an integer cost PER UNIT,
+ * so a line of qty Q can only ever absorb multiples of Q cents. A single-line
+ * bill therefore CANNOT represent most pools exactly — PO-1029 (37 units, $12.90
+ * of sales tax) allocates 34¢/unit = $12.58 and strands 32¢, because rescuing it
+ * would need a line with qty ≤ 32 to bump and there is only the one line of 37.
+ * The ceiling scales with quantity: a 250-unit line can strand $2.49.
+ *
+ * Line totals have no such constraint — one cent can go to any line — so this
+ * allocator ALWAYS sums to exactly `totalCents`. It is the basis for the money
+ * that matters (the AVCO numerator and the displayed landed total); the per-unit
+ * figures stay purely presentational.
+ *
+ * Ties in the fractional remainder break by index, so this is deterministic.
+ */
+export function allocateLineTotalsCents(
+  totalCents: number,
+  weights: number[]
+): number[] {
+  const n = weights.length;
+  const out = new Array<number>(n).fill(0);
+  if (totalCents <= 0 || n === 0) return out;
+
+  const totalWeight = weights.reduce((s, w) => s + Math.max(0, w), 0);
+  if (totalWeight <= 0) return out;
+
+  const frac = new Array<number>(n).fill(0);
+  let allocated = 0;
+  for (let i = 0; i < n; i++) {
+    const w = Math.max(0, weights[i] ?? 0);
+    if (w <= 0) continue;
+    const exact = (w / totalWeight) * totalCents;
+    const floored = Math.floor(exact);
+    out[i] = floored;
+    allocated += floored;
+    frac[i] = exact - floored;
+  }
+
+  // Hand the leftover cents to the largest fractional remainders, one each.
+  let leftover = Math.round(totalCents - allocated);
+  const order = [...Array(n).keys()]
+    .filter((i) => (weights[i] ?? 0) > 0)
+    .sort((a, b) => (frac[b] ?? 0) - (frac[a] ?? 0) || a - b);
+  for (let k = 0; leftover > 0 && k < order.length; k++, leftover--) {
+    const i = order[k]!;
+    out[i] = (out[i] ?? 0) + 1;
+  }
+  // Only reachable when every weight is 0 (guarded above) — kept so the
+  // function's contract "sums to totalCents" holds unconditionally.
+  if (leftover > 0 && order.length > 0) {
+    const i = order[0]!;
+    out[i] = (out[i] ?? 0) + leftover;
+  }
+  return out;
+}
+
 export interface LandedInput {
   qty: number;
   unit_cost_cents: number;
@@ -178,6 +237,17 @@ export interface LandedLineResult {
   tariff_per_unit_cents: number;
   tax_per_unit_cents: number;
   landed_unit_cost_cents: number;
+  /**
+   * EXACT landed money for this line: goods + its share of every pool, with
+   * Σ over all lines equal to Σ(unit_cost × qty) + every pool, to the penny.
+   *
+   * This — NOT `landed_unit_cost_cents × qty` — is the cost basis. The per-unit
+   * value is an integer and therefore lossy: it can only express multiples of
+   * `qty` cents per line, so multiplying it back out strands up to `qty − 1`
+   * cents of real money per pool. Use this for the AVCO numerator and for any
+   * total shown against the bill; use the per-unit figures for display only.
+   */
+  landed_total_cents: number;
 }
 
 /**
@@ -225,6 +295,33 @@ export function computeLandedLines(
     lines.map((l) => ({ qty: l.qty, weight: l.unit_cost_cents * l.qty }))
   );
 
+  // EXACT line totals, allocated independently of the per-unit figures above.
+  // Same weight bases, but no per-unit integer constraint, so each pool lands on
+  // the penny. Deliberately additive: the per-unit algorithm is untouched, so
+  // already-confirmed bills still recompute to the same stored per-unit values
+  // and the drift engine sees no phantom change.
+  const weightsQty = lines.map((l) => l.qty);
+  const weightsCbm = lines.map((l) =>
+    l.cbm_per_unit != null ? l.cbm_per_unit * l.qty : 0
+  );
+  const weightsValue = lines.map((l) => l.unit_cost_cents * l.qty);
+  const commTotals = allocateLineTotalsCents(
+    Math.max(0, Math.round(pools.commissionCents)),
+    weightsQty
+  );
+  const freightTotals = allocateLineTotalsCents(
+    Math.max(0, Math.round(pools.freightCents)),
+    weightsCbm
+  );
+  const tariffTotals = allocateLineTotalsCents(
+    Math.max(0, Math.round(pools.tariffCents)),
+    weightsValue
+  );
+  const taxTotals = allocateLineTotalsCents(
+    Math.max(0, Math.round(pools.taxCents)),
+    weightsValue
+  );
+
   const out: LandedLineResult[] = lines.map((l, i) => {
     const commission_per_unit_cents = comm.perUnit[i] ?? 0;
     const freight_per_unit_cents = freight.perUnit[i] ?? 0;
@@ -241,6 +338,12 @@ export function computeLandedLines(
         freight_per_unit_cents +
         tariff_per_unit_cents +
         tax_per_unit_cents,
+      landed_total_cents:
+        l.unit_cost_cents * l.qty +
+        (commTotals[i] ?? 0) +
+        (freightTotals[i] ?? 0) +
+        (tariffTotals[i] ?? 0) +
+        (taxTotals[i] ?? 0),
     };
   });
 

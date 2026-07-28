@@ -511,6 +511,8 @@ export async function POST(
     tariff_per_unit_cents: number;
     tax_per_unit_cents: number;
     landed_unit_cost_cents: number;
+    /** Exact landed money for the line — the AVCO numerator. See below. */
+    landed_total_cents: number;
   };
 
   // Largest-remainder allocation (shared with the store-pos draft preview via
@@ -547,6 +549,7 @@ export async function POST(
       tariff_per_unit_cents: r.tariff_per_unit_cents,
       tax_per_unit_cents: r.tax_per_unit_cents,
       landed_unit_cost_cents: r.landed_unit_cost_cents,
+      landed_total_cents: r.landed_total_cents,
     };
   });
 
@@ -725,9 +728,13 @@ export async function POST(
         totalLanded: 0,
         totalQty: 0,
       };
+      // `landed_total_cents`, NOT `landed_unit_cost_cents × qty`. The per-unit
+      // value is an integer, so multiplying it back out strands up to `qty − 1`
+      // cents of every pool: PO-1029's $12.90 of sales tax over one 37-unit line
+      // allocates 34¢/unit and loses 32¢, and a 250-unit line can lose $2.49.
+      // That shortfall used to flow straight into average_cost.
       landedByVariant.set(line.product_variant_id, {
-        totalLanded:
-          prev.totalLanded + update.landed_unit_cost_cents * line.qty,
+        totalLanded: prev.totalLanded + update.landed_total_cents,
         totalQty: prev.totalQty + line.qty,
       });
     }

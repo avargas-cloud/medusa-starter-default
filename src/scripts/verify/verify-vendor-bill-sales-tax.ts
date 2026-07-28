@@ -43,11 +43,26 @@ console.log("\n1. PO-1029 / Parts Express — the incident that motivated this")
     ...NO_POOLS,
     taxCents: 1290,
   });
-  const allocated = out[0]!.tax_per_unit_cents * 37;
+  // NOTE: `allocated + residual === pool` is true BY CONSTRUCTION — asserting it
+  // proves nothing. The real question is whether the money survives, and via the
+  // per-unit route it does NOT: 1290/37 floors to 34¢/unit = 1258¢, stranding
+  // 32¢ that no line can absorb (the subset-sum rescue needs a line of qty ≤ 32
+  // and the only line has 37). That shortfall used to reach average_cost.
+  const perUnitRoute = out[0]!.tax_per_unit_cents * 37;
   check(
-    "the whole tax pool lands on the line",
-    allocated + residualCents.tax === 1290,
-    `allocated ${allocated} + residual ${residualCents.tax}`
+    "the per-unit route is lossy — this is why landed_total_cents exists",
+    perUnitRoute === 1258 && residualCents.tax === 32,
+    `perUnit×qty ${perUnitRoute}, residual ${residualCents.tax}`
+  );
+  check(
+    "landed_total_cents carries the goods AND the whole tax, to the penny",
+    out[0]!.landed_total_cents === 498 * 37 + 1290,
+    `${out[0]!.landed_total_cents} vs ${498 * 37 + 1290}`
+  );
+  check(
+    "the bill reconciles: landed total === goods + tax ($197.16)",
+    out[0]!.landed_total_cents === 19716,
+    `$${(out[0]!.landed_total_cents / 100).toFixed(2)}`
   );
   check(
     "landed = unit + tax share",
@@ -179,7 +194,64 @@ console.log("\n4. Tax composes with the other three pools without drift");
   );
 }
 
-console.log("\n5. Determinism — the POS preview must equal the confirm");
+console.log("\n5. Exactness across ALL pools, over adversarial shapes");
+{
+  // Brute-force the property that broke: for any line shape and any pool mix,
+  // Σ landed_total_cents must equal Σ(unit×qty) + every pool, to the penny.
+  const shapes: LandedInput[][] = [
+    [{ qty: 37, unit_cost_cents: 498, cbm_per_unit: null }],
+    [{ qty: 250, unit_cost_cents: 1, cbm_per_unit: 0.001 }],
+    [
+      { qty: 7, unit_cost_cents: 101, cbm_per_unit: null },
+      { qty: 11, unit_cost_cents: 13, cbm_per_unit: 0.5 },
+    ],
+    [
+      { qty: 1, unit_cost_cents: 999999, cbm_per_unit: 3 },
+      { qty: 999, unit_cost_cents: 1, cbm_per_unit: null },
+      { qty: 13, unit_cost_cents: 77, cbm_per_unit: 0.02 },
+    ],
+  ];
+  let worstDrift = 0;
+  let cases = 0;
+  for (const lines of shapes) {
+    for (const c of [0, 1, 1290, 45375]) {
+      for (const f of [0, 7, 88000]) {
+        for (const t of [0, 999]) {
+          for (const x of [0, 3, 1290, 12345]) {
+            const pools = {
+              commissionCents: c,
+              freightCents: f,
+              tariffCents: t,
+              taxCents: x,
+            };
+            const { lines: res } = computeLandedLines(lines, pools);
+            const goods = lines.reduce(
+              (s, l) => s + l.unit_cost_cents * l.qty,
+              0
+            );
+            // A pool with no positive weight anywhere cannot be placed — freight
+            // over lines that all lack CBM is the real case. Expected, not drift.
+            const cbmW = lines.reduce(
+              (s, l) => s + (l.cbm_per_unit != null ? l.cbm_per_unit * l.qty : 0),
+              0
+            );
+            const placeable = c + (cbmW > 0 ? f : 0) + t + x;
+            const got = res.reduce((s, r) => s + r.landed_total_cents, 0);
+            worstDrift = Math.max(worstDrift, Math.abs(got - (goods + placeable)));
+            cases++;
+          }
+        }
+      }
+    }
+  }
+  check(
+    `every pool lands to the penny across ${cases} pool/shape combinations`,
+    worstDrift === 0,
+    `worst drift ${worstDrift}c`
+  );
+}
+
+console.log("\n6. Determinism — the POS preview must equal the confirm");
 {
   const lines: LandedInput[] = [
     { qty: 13, unit_cost_cents: 777, cbm_per_unit: 0.03 },
