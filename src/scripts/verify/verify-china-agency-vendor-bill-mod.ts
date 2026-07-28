@@ -61,11 +61,11 @@ export default async function verifyChinaAgencyVendorBillMod({
       );
     }
     const centralRows = await trx.raw(
-      `SELECT reference_id, step, status, payload
+      `SELECT id, reference_id, step, status, depends_on, payload
          FROM qb_order_pipeline
         WHERE reference_id = ANY(?)
           AND step = 'vendor_bill_mod'
-        ORDER BY reference_id`,
+        ORDER BY created_at, id`,
       [result.billIds]
     );
     if (centralRows.rows.length !== result.billIds.length) {
@@ -73,19 +73,33 @@ export default async function verifyChinaAgencyVendorBillMod({
         `Expected ${result.billIds.length} central rows, found ${centralRows.rows.length}`
       );
     }
-    for (const raw of centralRows.rows) {
+    let previousCentralId: string | null = null;
+    for (let index = 0; index < centralRows.rows.length; index++) {
+      const raw = centralRows.rows[index];
       const row = raw as {
+        id: string;
         step: string;
         status: string;
+        depends_on: string | null;
         payload: { qb_vendor_bill_pipeline_id?: string };
       };
+      const expectedStatusOk =
+        index === 0
+          ? row.status === "pending" || row.status === "waiting"
+          : row.status === "waiting";
+      const expectedDependencyOk =
+        index === 0 || row.depends_on === previousCentralId;
       if (
         row.step !== "vendor_bill_mod" ||
-        row.status !== "pending" ||
+        !expectedStatusOk ||
+        !expectedDependencyOk ||
         !row.payload.qb_vendor_bill_pipeline_id
       ) {
-        throw new Error("Central BillMod row is missing dispatch identity");
+        throw new Error(
+          "Central BillMod rows are not one serialized dependency chain"
+        );
       }
+      previousCentralId = row.id;
     }
     for (const raw of rows.rows) {
       const row = raw as {

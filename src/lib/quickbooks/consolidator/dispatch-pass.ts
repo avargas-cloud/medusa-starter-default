@@ -3,8 +3,225 @@ import type { MedusaContainer } from "@medusajs/framework/types";
 import { getDbPool } from "../../../api/utils/db-pool";
 import type { ResubmitRow } from "./resubmit-by-step";
 import { resubmitByStep } from "./resubmit-by-step";
+import {
+  enqueuePurchaseQbOperation,
+  purchaseOperationKey,
+  type PurchaseDependencyKnex,
+} from "../../purchase-orders/qb-purchase-dependency-chain";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
+
+/**
+ * Repairs the narrow crash window between writing the operator-facing PO row
+ * and attaching its universal dependency row. These rows are explicitly
+ * marked delegated, so the legacy poller will never send them directly.
+ */
+export async function runPurchaseDelegationRepairPass(
+  container: MedusaContainer,
+  logger: any
+): Promise<void> {
+  const knex = container.resolve(
+    "__pg_connection__"
+  ) as PurchaseDependencyKnex;
+  const result = await knex.raw(
+    `SELECT id, purchase_order_id, payload
+       FROM qb_purchase_order_pipeline
+      WHERE order_pipeline_id IS NULL
+        AND deleted_at IS NULL
+        AND status IN ('waiting', 'error')
+        AND COALESCE(payload->>'is_mod', 'false') = 'true'
+        AND COALESCE(
+          payload->>'delegated_to_consolidator',
+          'false'
+        ) = 'true'
+      ORDER BY updated_at ASC
+      LIMIT 20`
+  );
+  for (const rawRow of result.rows) {
+    const row = rawRow as {
+      id: string;
+      purchase_order_id: string;
+      payload: Record<string, unknown>;
+    };
+    try {
+      const payload: Record<string, unknown> = {
+        ...row.payload,
+        qb_purchase_order_pipeline_id: row.id,
+      };
+      const operation = await enqueuePurchaseQbOperation(knex, {
+        purchaseOrderId: row.purchase_order_id,
+        referenceId: row.purchase_order_id,
+        referenceType: "purchase_order",
+        step: "purchase_order_mod",
+        qbTxnId:
+          typeof payload.txn_id === "string" ? payload.txn_id : null,
+        payload,
+        operationKey: purchaseOperationKey(
+          "purchase_order_mod",
+          row.purchase_order_id,
+          payload
+        ),
+      });
+      await knex.raw(
+        `UPDATE qb_purchase_order_pipeline
+            SET order_pipeline_id = ?, status = 'waiting',
+                last_error = NULL, next_retry_at = NULL,
+                updated_at = NOW()
+          WHERE id = ?`,
+        [operation.id, row.id]
+      );
+      logger.warn(
+        `${LOG_PREFIX} 🩹 Repaired missing dependency row for PO pipeline ${row.id}`
+      );
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : String(error);
+      await knex.raw(
+        `UPDATE qb_purchase_order_pipeline
+            SET status = 'error', last_error = ?,
+                next_retry_at = NOW() + INTERVAL '2 minutes',
+                updated_at = NOW()
+          WHERE id = ?`,
+        [message, row.id]
+      );
+      logger.warn(
+        `${LOG_PREFIX} ⚠️ Could not repair PO delegation ${row.id}: ${message}`
+      );
+    }
+  }
+
+  const receiptResult = await knex.raw(
+    `SELECT id, purchase_order_id, purchase_order_receipt_id,
+            status, payload, mod_status, mod_payload
+       FROM qb_item_receipt_pipeline
+      WHERE deleted_at IS NULL
+        AND (
+          (
+            add_order_pipeline_id IS NULL
+            AND status IN ('waiting', 'error')
+            AND COALESCE(
+              payload->>'delegated_to_consolidator',
+              'false'
+            ) = 'true'
+          )
+          OR (
+            mod_order_pipeline_id IS NULL
+            AND mod_status IN ('waiting', 'error')
+            AND COALESCE(
+              mod_payload->>'delegated_to_consolidator',
+              'false'
+            ) = 'true'
+          )
+        )
+      ORDER BY updated_at ASC
+      LIMIT 20`
+  );
+  for (const rawRow of receiptResult.rows) {
+    const row = rawRow as {
+      id: string;
+      purchase_order_id: string;
+      purchase_order_receipt_id: string;
+      status: string | null;
+      payload: Record<string, unknown> | null;
+      mod_status: string | null;
+      mod_payload: Record<string, unknown> | null;
+    };
+    try {
+      if (
+        !row.payload ||
+        !["waiting", "error"].includes(String(row.status))
+      ) {
+        // Nothing to repair in the ADD lane.
+      } else {
+        const payload: Record<string, unknown> = {
+          ...row.payload,
+          qb_item_receipt_pipeline_id: row.id,
+        };
+        const operation = await enqueuePurchaseQbOperation(knex, {
+          purchaseOrderId: row.purchase_order_id,
+          referenceId: row.purchase_order_receipt_id,
+          referenceType: "item_receipt",
+          step: "item_receipt_add",
+          payload,
+          operationKey: purchaseOperationKey(
+            "item_receipt_add",
+            row.purchase_order_receipt_id,
+            payload
+          ),
+        });
+        await knex.raw(
+          `UPDATE qb_item_receipt_pipeline
+              SET add_order_pipeline_id = ?, status = 'waiting',
+                  last_error = NULL, next_retry_at = NULL,
+                  updated_at = NOW()
+            WHERE id = ?`,
+          [operation.id, row.id]
+        );
+        logger.warn(
+          `${LOG_PREFIX} 🩹 Repaired missing ADD dependency for receipt pipeline ${row.id}`
+        );
+      }
+
+      if (
+        !row.mod_payload ||
+        !["waiting", "error"].includes(String(row.mod_status))
+      ) {
+        continue;
+      }
+      const modPayload: Record<string, unknown> = {
+        ...row.mod_payload,
+        qb_item_receipt_pipeline_id: row.id,
+      };
+      const modOperation = await enqueuePurchaseQbOperation(knex, {
+        purchaseOrderId: row.purchase_order_id,
+        referenceId: row.purchase_order_receipt_id,
+        referenceType: "item_receipt",
+        step: "item_receipt_mod",
+        qbTxnId:
+          typeof modPayload.txn_id === "string"
+            ? modPayload.txn_id
+            : null,
+        payload: modPayload,
+        operationKey: purchaseOperationKey(
+          "item_receipt_mod",
+          row.purchase_order_receipt_id,
+          modPayload
+        ),
+      });
+      await knex.raw(
+        `UPDATE qb_item_receipt_pipeline
+            SET mod_order_pipeline_id = ?, mod_status = 'waiting',
+                mod_last_error = NULL, mod_next_retry_at = NULL,
+                updated_at = NOW()
+          WHERE id = ?`,
+        [modOperation.id, row.id]
+      );
+      logger.warn(
+        `${LOG_PREFIX} 🩹 Repaired missing MOD dependency for receipt pipeline ${row.id}`
+      );
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : String(error);
+      await knex.raw(
+        `UPDATE qb_item_receipt_pipeline
+            SET last_error = CASE
+                  WHEN add_order_pipeline_id IS NULL THEN ?
+                  ELSE last_error
+                END,
+                mod_last_error = CASE
+                  WHEN mod_order_pipeline_id IS NULL THEN ?
+                  ELSE mod_last_error
+                END,
+                updated_at = NOW()
+          WHERE id = ?`,
+        [message, message, row.id]
+      );
+      logger.warn(
+        `${LOG_PREFIX} ⚠️ Could not repair receipt delegation ${row.id}: ${message}`
+      );
+    }
+  }
+}
 
 /**
  * Pending dispatch pass: processes pending rows for steps that are enqueued
@@ -23,7 +240,7 @@ export async function runPendingDispatchPass(
       WITH claim AS (
         SELECT id
           FROM qb_order_pipeline
-         WHERE step IN ('estimate_cancel', 'estimate_deactivate', 'credit_memo_mod', 'transfer_customer', 'transfer_payment', 'payment_txndate_change', 'payment_method_change', 'refund_check_mod', 'refund_payment_txndate_change', 'refund_apply_del', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'invoice_update', 'sales_receipt_update', 'credit_memo', 'void_credit_memo', 'void_invoice', 'void_sales_order', 'void_sales_receipt', 'void_check', 'payment', 'apply_payment', 'inventory_adjustment', 'void_inventory_adjustment', 'vendor_bill_mod', 'vendor_bill_payment_check')
+         WHERE step IN ('estimate_cancel', 'estimate_deactivate', 'credit_memo_mod', 'transfer_customer', 'transfer_payment', 'payment_txndate_change', 'payment_method_change', 'refund_check_mod', 'refund_payment_txndate_change', 'refund_apply_del', 'estimate', 'sales_order', 'so_close', 'so_reopen', 'sales_receipt', 'invoice', 'invoice_update', 'sales_receipt_update', 'credit_memo', 'void_credit_memo', 'void_invoice', 'void_sales_order', 'void_sales_receipt', 'void_check', 'payment', 'apply_payment', 'inventory_adjustment', 'void_inventory_adjustment', 'purchase_order_mod', 'item_receipt_add', 'item_receipt_mod', 'vendor_bill_add', 'vendor_bill_mod', 'vendor_bill_rebuild_preflight', 'vendor_bill_rebuild_delete', 'vendor_bill_payment_check')
            AND (
              status = 'pending'
              OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= NOW())
@@ -68,7 +285,7 @@ export async function runPendingDispatchPass(
 }
 
 /**
- * Wake dependents pass: any 'waiting' row whose depends_on row is now 'confirmed'
+ * Wake dependents pass: any 'waiting' row whose depends_on row is now resolved
  * is claimed as 'processing' AND immediately dispatched via resubmitByStep.
  * Typical case: a document was blocked on customer creation; once the customer
  * confirms, the dependent document auto-resubmits with no user intervention.
@@ -90,8 +307,9 @@ export async function runWakeDependentsPass(
          FROM qb_order_pipeline d
         WHERE w.depends_on = d.id
           AND w.status     = 'waiting'
-          AND d.status     = 'confirmed'
-        RETURNING w.id, w.order_id, w.reference_id, w.reference_type, w.step, w.qb_txn_id`
+          AND d.status     IN ('confirmed', 'fixed')
+        RETURNING w.id, w.order_id, w.reference_id, w.reference_type, w.step,
+                  w.qb_txn_id, w.retry_count, w.payload`
     );
     if (awakenedRows.length > 0) {
       logger.info(
@@ -108,6 +326,8 @@ export async function runWakeDependentsPass(
               reference_type: r.reference_type,
               step: r.step,
               qb_txn_id: r.qb_txn_id,
+              retry_count: r.retry_count,
+              payload: r.payload,
             } as ResubmitRow,
             container,
             logger
@@ -124,6 +344,42 @@ export async function runWakeDependentsPass(
   } catch (wakeErr: unknown) {
     const msg = wakeErr instanceof Error ? wakeErr.message : String(wakeErr);
     logger.warn(`${LOG_PREFIX} ⚠️ Wake-dependents pass error: ${msg}`);
+  }
+}
+
+/**
+ * Keeps terminal dependency failures visible without dispatching the child.
+ * The child remains `waiting`, so retrying/fixing the parent can still wake it.
+ */
+export async function runBlockedDependentsPass(logger: any): Promise<void> {
+  const pool = getDbPool();
+  try {
+    const { rows } = await pool.query(
+      `UPDATE qb_order_pipeline child
+          SET error = 'Blocked by ' || parent.status || ' dependency ' ||
+                      parent.id::text || ' (' || parent.step || ')',
+              updated_at = NOW()
+         FROM qb_order_pipeline parent
+        WHERE child.depends_on = parent.id
+          AND child.status = 'waiting'
+          AND parent.status IN ('failed', 'skipped')
+          AND parent.next_retry_at IS NULL
+          AND child.error IS DISTINCT FROM
+              ('Blocked by ' || parent.status || ' dependency ' ||
+               parent.id::text || ' (' || parent.step || ')')
+        RETURNING child.id, child.step, parent.id AS parent_id,
+                  parent.status AS parent_status`
+    );
+    for (const row of rows) {
+      logger.warn(
+        `${LOG_PREFIX} ⛔ ${row.step} row ${row.id} remains waiting: dependency ${row.parent_id} is ${row.parent_status}`
+      );
+    }
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn(
+      `${LOG_PREFIX} ⚠️ Blocked-dependents pass error: ${message}`
+    );
   }
 }
 

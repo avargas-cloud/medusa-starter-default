@@ -23,6 +23,13 @@
  * re-emitted and the PO↔Receipt linkage is preserved.
  */
 
+import {
+  enqueuePurchaseQbOperation,
+  purchaseOperationKey,
+} from "./qb-purchase-dependency-chain";
+import { randomUUID } from "crypto";
+import { qbItemReceiptIdentityMemo } from "./qb-item-receipt-identity";
+
 export type KnexRaw = {
   raw: (
     sql: string,
@@ -42,6 +49,9 @@ export interface ItemReceiptModPayloadLine {
 }
 
 export interface ItemReceiptModPayload {
+  delegated_to_consolidator: true;
+  qb_identity_memo: string;
+  operation_revision: string;
   txn_id: string;
   edit_sequence: string | null;
   po_id: string;
@@ -152,6 +162,13 @@ export async function buildItemReceiptModPayload(
   }
 
   const payload: ItemReceiptModPayload = {
+    delegated_to_consolidator: true,
+    qb_identity_memo: qbItemReceiptIdentityMemo({
+      receiptId: String(header.receipt_id),
+      receiptNumber: String(header.receipt_number),
+      memo: (header.memo as string | null) ?? null,
+    }),
+    operation_revision: randomUUID(),
     txn_id: String(header.txn_id),
     edit_sequence: (header.qb_edit_sequence as string | null) ?? null,
     po_id: String(header.po_id),
@@ -213,7 +230,32 @@ export async function enqueueItemReceiptModAtomic(
         AND COALESCE(mod_status, '') NOT IN ('waiting', 'submitted')`,
     [JSON.stringify(payload), pipelineId]
   );
-  return (res.rowCount ?? 0) > 0;
+  if ((res.rowCount ?? 0) <= 0) return false;
+
+  const orderPayload = {
+    ...payload,
+    qb_item_receipt_pipeline_id: pipelineId,
+  };
+  const operation = await enqueuePurchaseQbOperation(knex, {
+    purchaseOrderId: payload.po_id,
+    referenceId: payload.receipt_id,
+    referenceType: "item_receipt",
+    step: "item_receipt_mod",
+    qbTxnId: payload.txn_id,
+    payload: orderPayload,
+    operationKey: purchaseOperationKey(
+      "item_receipt_mod",
+      payload.receipt_id,
+      orderPayload
+    ),
+  });
+  await knex.raw(
+    `UPDATE qb_item_receipt_pipeline
+        SET mod_order_pipeline_id = ?, updated_at = NOW()
+      WHERE id = ?`,
+    [operation.id, pipelineId]
+  );
+  return true;
 }
 
 export interface ReceiptDriftLine {

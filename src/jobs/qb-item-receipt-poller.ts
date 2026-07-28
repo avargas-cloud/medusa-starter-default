@@ -392,7 +392,9 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
     knex,
     "qb_item_receipt_pipeline",
     STANDARD_STALE_CONFIG,
-    { warn: (m) => logger.warn?.(`${TAG} ${m}`) }
+    { warn: (m) => logger.warn?.(`${TAG} ${m}`) },
+    `AND add_order_pipeline_id IS NULL
+     AND COALESCE(payload->>'delegated_to_consolidator', 'false') <> 'true'`
   );
 
   let submitted = 0;
@@ -416,6 +418,8 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
        FROM qb_item_receipt_pipeline
       WHERE status = 'waiting'
         AND qb_operation_id IS NULL
+        AND add_order_pipeline_id IS NULL
+        AND COALESCE(payload->>'delegated_to_consolidator', 'false') <> 'true'
         AND deleted_at IS NULL
       LIMIT ?`,
       [MAX_ROWS_PER_TICK]
@@ -476,6 +480,8 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
        FROM qb_item_receipt_pipeline
       WHERE status = 'waiting'
         AND qb_operation_id IS NOT NULL
+        AND add_order_pipeline_id IS NULL
+        AND COALESCE(payload->>'delegated_to_consolidator', 'false') <> 'true'
         AND deleted_at IS NULL
       LIMIT ?`,
       [MAX_ROWS_PER_TICK]
@@ -623,6 +629,8 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
        FROM qb_item_receipt_pipeline
       WHERE status = 'error'
         AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+        AND add_order_pipeline_id IS NULL
+        AND COALESCE(payload->>'delegated_to_consolidator', 'false') <> 'true'
         AND deleted_at IS NULL
       LIMIT ?`,
       [MAX_ROWS_PER_TICK]
@@ -841,6 +849,8 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
         WHERE mod_status = 'waiting'
           AND mod_operation_id IS NULL
           AND mod_payload IS NOT NULL
+          AND mod_order_pipeline_id IS NULL
+          AND COALESCE(mod_payload->>'delegated_to_consolidator', 'false') <> 'true'
           AND (mod_next_retry_at IS NULL OR mod_next_retry_at <= NOW())
           AND deleted_at IS NULL
         LIMIT ?`,
@@ -903,6 +913,8 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
          FROM qb_item_receipt_pipeline
         WHERE mod_status = 'submitted'
           AND mod_operation_id IS NOT NULL
+          AND mod_order_pipeline_id IS NULL
+          AND COALESCE(mod_payload->>'delegated_to_consolidator', 'false') <> 'true'
           AND deleted_at IS NULL
         LIMIT ?`,
       [MAX_ROWS_PER_TICK]
@@ -1000,6 +1012,8 @@ export default async function qbItemReceiptPoller(container: MedusaContainer) {
         WHERE mod_status = 'error'
           AND mod_payload IS NOT NULL
           AND mod_next_retry_at <= NOW()
+          AND mod_order_pipeline_id IS NULL
+          AND COALESCE(mod_payload->>'delegated_to_consolidator', 'false') <> 'true'
           AND deleted_at IS NULL
         LIMIT ?`,
       [MAX_ROWS_PER_TICK]

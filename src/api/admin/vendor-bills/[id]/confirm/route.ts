@@ -11,6 +11,10 @@ import type {
 } from "@medusajs/framework/http";
 
 import { getActorUserId, UnauthenticatedError } from "../../../purchase-orders/_lib/auth";
+import {
+  normalizeRequiredVendorBillReference,
+  VENDOR_BILL_REFERENCE_REQUIRED_BODY,
+} from "../../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
 
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -40,13 +44,19 @@ export async function POST(
   const knex = resolveKnex(req);
 
   const billResult = await knex.raw(
-    `SELECT id, number, status, bill_type
+    `SELECT id, number, status, bill_type, reference_id
      FROM vendor_bill
      WHERE id = ? AND deleted_at IS NULL`,
     [id]
   );
   const bill = (billResult.rows[0] ?? null) as
-    | { id: string; number: string | null; status: string; bill_type: string }
+    | {
+        id: string;
+        number: string | null;
+        status: string;
+        bill_type: string;
+        reference_id: string | null;
+      }
     | null;
 
   if (!bill) {
@@ -63,6 +73,9 @@ export async function POST(
       error: `Vendor bill is already in status '${bill.status}'`,
       code: "not_draft",
     });
+  }
+  if (!normalizeRequiredVendorBillReference(bill.reference_id)) {
+    return res.status(409).json(VENDOR_BILL_REFERENCE_REQUIRED_BODY);
   }
 
   const linesResult = await knex.raw(

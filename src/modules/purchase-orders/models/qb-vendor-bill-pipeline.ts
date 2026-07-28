@@ -8,9 +8,6 @@ import { model } from "@medusajs/utils";
  * (2026-07-15 rule). Mirrors qb_purchase_order_pipeline's shape with the
  * extra fields the Bill flow needs (intent, snapshot, edit_sequence).
  *
- * Phase 0 (this table): schema only. No poller/dispatcher reads or writes
- * this table yet — it is fully dormant until the cron + routes land.
- *
  * Lifecycle (status):
  *   waiting          → ready for the cron poller
  *   submitted        → bridge accepted the op, awaiting QB Desktop response
@@ -21,7 +18,9 @@ import { model } from "@medusajs/utils";
  * intent:
  *   add           → BillAdd (linked to PO — the create)
  *   mod           → BillMod (header/date/freight edits only — NOT relink)
- *   unlock_rebuild→ compound TxnDel Bill → PurchaseOrderMod → BillAdd
+ *   rebuild_prepare  → universal-chain BillQuery preflight
+ *   rebuild_deleting → universal-chain TxnDel Bill
+ *   rebuild_ready    → old QB Bill is gone; wait for operator Reconfirm
  *   void          → TxnDel Bill (cancellation / live-test cleanup)
  *
  * payload is a frozen snapshot of the bill header + lines at dispatch time —
@@ -38,10 +37,11 @@ export const QbVendorBillPipeline = model.define("qb_vendor_bill_pipeline", {
   purchase_order_id: model.text().nullable(), // denormalized for admin views
 
   status: model.text().default("waiting"),
-  intent: model.text().default("add"), // add | mod | unlock_rebuild | void
+  intent: model.text().default("add"), // add | mod | rebuild_* | void
 
   // Bridge / QB identifiers
   qb_operation_id: model.text().nullable(),
+  order_pipeline_id: model.text().nullable(),
   qb_txn_id: model.text().nullable(), // TxnID of the Bill in QB
   qb_ref_number: model.text().nullable(),
 

@@ -1,6 +1,16 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 import { Client } from "pg";
 
+const PURCHASE_PIPELINE_STEPS = [
+  "purchase_order_mod",
+  "item_receipt_add",
+  "item_receipt_mod",
+  "vendor_bill_add",
+  "vendor_bill_mod",
+  "vendor_bill_rebuild_preflight",
+  "vendor_bill_rebuild_delete",
+] as const;
+
 export async function GET(
   req: MedusaRequest,
   res: MedusaResponse
@@ -30,9 +40,10 @@ export async function GET(
                 next_retry_at = CASE WHEN COALESCE(retry_count, 0) < 5 THEN NOW() + INTERVAL '2 minutes' ELSE NULL END
             WHERE status = 'submitted'
               AND bridge_op_id IS NULL
+              AND step <> ALL($1::text[])
               AND submitted_at < NOW() - INTERVAL '10 minutes'
             RETURNING step, qb_txn_id
-        `);
+        `, [PURCHASE_PIPELINE_STEPS]);
 
     // Auto-timeout: submitted rows with bridge_op_id older than 15 min (QBWC not responding) → failed + schedule retry
     const { rows: timeout2 } = await client.query(`
@@ -45,9 +56,10 @@ export async function GET(
                 next_retry_at = CASE WHEN COALESCE(retry_count, 0) < 5 THEN NOW() + INTERVAL '2 minutes' ELSE NULL END
             WHERE status = 'submitted'
               AND bridge_op_id IS NOT NULL
+              AND step <> ALL($1::text[])
               AND submitted_at < NOW() - INTERVAL '15 minutes'
             RETURNING step, qb_txn_id
-        `);
+        `, [PURCHASE_PIPELINE_STEPS]);
 
     // Auto-timeout: pending rows older than 30 min (handler never re-submitted) → failed + schedule retry
     // Uses updated_at so reactivated rows (confirmed→pending) don't immediately time out
@@ -60,9 +72,10 @@ export async function GET(
                 error         = 'Operation stuck in pending — handler did not re-submit within 30 minutes',
                 next_retry_at = CASE WHEN COALESCE(retry_count, 0) < 5 THEN NOW() + INTERVAL '2 minutes' ELSE NULL END
             WHERE status = 'pending'
+              AND step <> ALL($1::text[])
               AND COALESCE(updated_at, created_at) < NOW() - INTERVAL '30 minutes'
             RETURNING step, qb_txn_id
-        `);
+        `, [PURCHASE_PIPELINE_STEPS]);
 
     // Invalidate cached EditSequence for all timed-out rows
     const {
@@ -87,7 +100,16 @@ export async function GET(
       values.push(step);
     } else {
       // Exclude steps that have dedicated tabs in the QB pipeline UI.
-      conditions.push(`p.step NOT IN ('customer_data_ext', 'inventory_adjustment', 'void_inventory_adjustment')`);
+      conditions.push(
+        `p.step NOT IN (
+          'customer_data_ext', 'inventory_adjustment',
+          'void_inventory_adjustment', 'purchase_order_mod',
+          'item_receipt_add', 'item_receipt_mod',
+          'vendor_bill_add', 'vendor_bill_mod',
+          'vendor_bill_rebuild_preflight',
+          'vendor_bill_rebuild_delete'
+        )`
+      );
     }
     if (refId) {
       conditions.push(`(p.order_id = $${p} OR p.reference_id = $${p})`);

@@ -34,6 +34,7 @@ export const QbItemReceiptPipeline = model.define("qb_item_receipt_pipeline", {
 
   // Bridge / QB identifiers
   qb_operation_id: model.text().nullable(),
+  add_order_pipeline_id: model.text().nullable(),
   qb_list_id: model.text().nullable(), // TxnID of the ItemReceipt in QB
   qb_txn_number: model.text().nullable(),
 
@@ -59,6 +60,7 @@ export const QbItemReceiptPipeline = model.define("qb_item_receipt_pipeline", {
   // the bridge re-mands LinkToTxn and the PO ↔ Receipt linkage survives.
   mod_status: model.text().nullable(),
   mod_operation_id: model.text().nullable(),
+  mod_order_pipeline_id: model.text().nullable(),
   mod_synced_at: model.dateTime().nullable(),
   mod_last_error: model.text().nullable(),
   mod_retries: model.number().default(0),

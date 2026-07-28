@@ -14,6 +14,11 @@ import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
 
 import { PURCHASE_ORDERS_MODULE } from "../../../modules/purchase-orders";
 import type PurchaseOrdersModuleService from "../../../modules/purchase-orders/service";
+import {
+  enqueuePurchaseQbOperation,
+  purchaseOperationKey,
+} from "../../../lib/purchase-orders/qb-purchase-dependency-chain";
+import { qbItemReceiptIdentityMemo } from "../../../lib/purchase-orders/qb-item-receipt-identity";
 
 export interface EnqueueQbItemReceiptStepInputLine {
   receipt_line_id: string;
@@ -47,6 +52,8 @@ export interface EnqueueQbItemReceiptStepOutput {
 }
 
 interface QbItemReceiptPayload {
+  delegated_to_consolidator: true;
+  qb_identity_memo: string;
   po_id: string;
   po_number: string;
   receipt_id: string;
@@ -82,6 +89,12 @@ export const enqueueQbItemReceiptStep = createStep(
     ) as unknown as PurchaseOrdersModuleService;
 
     const payload: QbItemReceiptPayload = {
+      delegated_to_consolidator: true,
+      qb_identity_memo: qbItemReceiptIdentityMemo({
+        receiptId: input.receipt_id,
+        receiptNumber: input.receipt_number,
+        memo: input.memo,
+      }),
       po_id: input.po_id,
       po_number: input.po_number,
       receipt_id: input.receipt_id,
@@ -124,6 +137,34 @@ export const enqueueQbItemReceiptStep = createStep(
 
     const arr = Array.isArray(created) ? created : [created];
     const row = arr[0] as { id: string };
+    const knex = container.resolve("__pg_connection__") as {
+      raw: (
+        sql: string,
+        bindings?: unknown[]
+      ) => Promise<{ rows: unknown[]; rowCount?: number }>;
+    };
+    const orderPayload = {
+      ...payload,
+      qb_item_receipt_pipeline_id: row.id,
+    };
+    const operation = await enqueuePurchaseQbOperation(knex, {
+      purchaseOrderId: input.po_id,
+      referenceId: input.receipt_id,
+      referenceType: "item_receipt",
+      step: "item_receipt_add",
+      payload: orderPayload,
+      operationKey: purchaseOperationKey(
+        "item_receipt_add",
+        input.receipt_id,
+        orderPayload
+      ),
+    });
+    await knex.raw(
+      `UPDATE qb_item_receipt_pipeline
+          SET add_order_pipeline_id = ?, updated_at = NOW()
+        WHERE id = ?`,
+      [operation.id, row.id]
+    );
 
     return new StepResponse({ pipeline_id: row.id }, null);
   }

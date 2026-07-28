@@ -75,6 +75,15 @@ const accumulate = (
 };
 
 const CUSTOMER_STEPS = ["customer", "customer_data_ext"];
+const PURCHASE_STEPS = [
+  "purchase_order_mod",
+  "item_receipt_add",
+  "item_receipt_mod",
+  "vendor_bill_add",
+  "vendor_bill_mod",
+  "vendor_bill_rebuild_preflight",
+  "vendor_bill_rebuild_delete",
+];
 
 export async function GET(
   _req: MedusaRequest,
@@ -90,9 +99,11 @@ export async function GET(
     const sales = await client.query<StatusRow>(
       `SELECT status, COUNT(*) AS count
          FROM qb_order_pipeline
-        WHERE step NOT IN (${CUSTOMER_STEPS.map((_, i) => `$${i + 1}`).join(", ")})
+        WHERE step NOT IN (${[...CUSTOMER_STEPS, ...PURCHASE_STEPS]
+          .map((_, i) => `$${i + 1}`)
+          .join(", ")})
         GROUP BY status`,
-      CUSTOMER_STEPS
+      [...CUSTOMER_STEPS, ...PURCHASE_STEPS]
     );
 
     // 2) Customer sync = qb_order_pipeline restricted to customer steps.

@@ -77,6 +77,7 @@ interface VendorBillLineRow {
   product_variant_id: string;
   purchase_order_line_id: string | null;
   line_type: string | null;
+  qb_txn_line_id: string | null;
   qty: number;
   unit_cost_cents: number;
 }
@@ -275,10 +276,8 @@ export async function POST(
       code: "not_draft",
     });
   }
-  // Vendor Invoice Reference is MANDATORY at confirm (owner 2026-07-23): it
-  // becomes the QuickBooks Bill "Ref No." — the accountant reconciles and ages
-  // payables by it, and the QB pipeline's duplicate existence-check matches on
-  // it. Drafts may exist without one (proforma, D7); confirming may not.
+  // Legacy drafts may predate the create/save guard. Confirmation still checks
+  // the Vendor Invoice Reference because it becomes QuickBooks' Bill Ref No.
   if (!bill.reference_id || !bill.reference_id.trim()) {
     return res.status(409).json({
       error:
@@ -398,6 +397,30 @@ export async function POST(
       error: "Vendor bill has no lines",
       code: "no_lines",
     });
+  }
+
+  // BillMod cannot attach a brand-new PO-linked line to an existing QB Bill.
+  // Stop before any cost/accounting write and require the durable rebuild:
+  // BillQuery (unpaid) -> TxnDel -> operator Reconfirm -> fresh BillAdd.
+  if (bill.qb_txn_id) {
+    const unlinkedLines = lines.filter(
+      (line) =>
+        (line.line_type ?? "product") === "product" &&
+        Boolean(line.purchase_order_line_id) &&
+        !line.qb_txn_line_id
+    );
+    if (unlinkedLines.length > 0) {
+      return res.status(409).json({
+        error:
+          "This draft contains lines that are not present on the existing QuickBooks Bill. Prepare the QB rebuild, wait until the old Bill is removed, then Reconfirm.",
+        code: "bill_rebuild_required",
+        strategy: "qb_rebuild_prepare",
+        lines: unlinkedLines.map((line) => ({
+          id: line.id,
+          purchase_order_line_id: line.purchase_order_line_id,
+        })),
+      });
+    }
   }
 
   // 3b. AVCO safety: the bill's product lines MUST mirror the received lines
@@ -913,9 +936,6 @@ export async function POST(
           // without this write it would stop dead there — future windows would find
           // no later event and reach forward indefinitely.
           //
-          // Non-fatal on purpose: the bill is confirmed and its average stored, and
-          // an append-only journal must never be the thing that fails a confirm.
-          //
           // Generation-suffixed id/key (2026-07-24) — a plain per-(bill,variant)
           // key was WRONG for the confirm → reopen → re-confirm cycle: reopen only
           // REVERSES the confirm's event (it stays in the table), so the second
@@ -931,15 +951,20 @@ export async function POST(
           //     does a new generation get minted. ON CONFLICT stays as a race
           //     backstop.
           // Single statement so the count, the guard and the insert can't interleave.
-          try {
-            await knex.raw(
-              `INSERT INTO variant_cost_event
+          // Use a digest of the full bill+variant identity. Slicing the last 12
+          // characters collides for legacy variant IDs that share suffixes such
+          // as `24vdc_default`, aborting the whole PostgreSQL transaction.
+          // This event is part of the accounting revision, so a write failure
+          // must roll back Confirm instead of being reported as non-fatal.
+          await knex.raw(
+            `INSERT INTO variant_cost_event
              (id, product_variant_id, event_type, cost_field, effective_at, recorded_at,
               previous_unit_cost, new_unit_cost, quantity_on_hand_at_event,
               source_system, source_type, source_id, status, idempotency_key,
               vendor_bill_id, receipt_id, quantity_delta, cogs_true_up_cents,
               negative_settled_quantity, reason_code)
-           SELECT ? || '_g' || gen.n, ?, 'vendor_bill_receipt', 'average_cost', ?::timestamptz, NOW(),
+           SELECT 'vce_cf_' || md5(? || ':' || ?) || '_g' || gen.n,
+                  ?, 'vendor_bill_receipt', 'average_cost', ?::timestamptz, NOW(),
                   ?::numeric, ?::numeric, ?::int, 'medusa', 'vendor_bill_confirm', ?,
                   'active', ? || ':g' || gen.n, ?, ?, ?::int, ?::bigint, ?::int, 'vendor_bill_confirm'
              FROM (
@@ -954,33 +979,27 @@ export async function POST(
                   AND event_type = 'vendor_bill_receipt' AND status = 'active'
              )
            ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
-              [
-                `vce_cf_${bill.id.slice(-12)}_${variantId.slice(-12)}`,
-                variantId,
-                variantEffectiveAt ?? new Date().toISOString(),
-                seedCents === null ? null : seedCents / 100,
-                runningAvg / 100,
-                variantQtyAfter,
-                bill.id,
-                `confirm:${bill.id}:${variantId}`,
-                bill.id,
-                chronologicalReceiptIds[0] ?? null,
-                variantQtyReceived,
-                Math.round(variantTrueUpCents),
-                variantSettledQty,
-                bill.id,
-                variantId,
-                bill.id,
-                variantId,
-              ]
-            );
-          } catch (error) {
-            logger.warn(
-              `[vendor-bill ${bill.id}] could not append variant_cost_event for ${variantId}: ` +
-                `${error instanceof Error ? error.message : String(error)}. The cost is stored; ` +
-                `the history journal is missing this entry.`
-            );
-          }
+            [
+              bill.id,
+              variantId,
+              variantId,
+              variantEffectiveAt ?? new Date().toISOString(),
+              seedCents === null ? null : seedCents / 100,
+              runningAvg / 100,
+              variantQtyAfter,
+              bill.id,
+              `confirm:${bill.id}:${variantId}`,
+              bill.id,
+              chronologicalReceiptIds[0] ?? null,
+              variantQtyReceived,
+              Math.round(variantTrueUpCents),
+              variantSettledQty,
+              bill.id,
+              variantId,
+              bill.id,
+              variantId,
+            ]
+          );
           await knex.raw(
             `UPDATE product_variant
          SET metadata = COALESCE(metadata, '{}'::jsonb)

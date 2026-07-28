@@ -11,7 +11,11 @@ import {
 } from "../../_lib/auth";
 import { zodErrorToBody } from "../../_lib/format";
 import { resolveVendorBillPaymentTermsDays } from "../../../../../lib/purchase-orders/vendor-bill-payment-terms";
-import { findDuplicateVendorBillReference } from "../../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
+import {
+  findDuplicateVendorBillReference,
+  normalizeRequiredVendorBillReference,
+  VENDOR_BILL_REFERENCE_REQUIRED_BODY,
+} from "../../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
 
 type Knex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -44,6 +48,12 @@ export async function POST(
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json(zodErrorToBody(parsed.error));
+  }
+  const referenceId = normalizeRequiredVendorBillReference(
+    parsed.data.reference_id
+  );
+  if (!referenceId) {
+    return res.status(422).json(VENDOR_BILL_REFERENCE_REQUIRED_BODY);
   }
   const { id: purchaseOrderId } = req.params as { id: string };
   const knex = (req.scope as unknown as { resolve: (key: string) => unknown })
@@ -144,7 +154,7 @@ export async function POST(
   try {
     const duplicate = await findDuplicateVendorBillReference(db, {
       vendorId: po.vendor_id,
-      referenceId: parsed.data.reference_id ?? null,
+      referenceId,
     });
     if (duplicate) {
       if (trx) await trx.rollback();
@@ -183,7 +193,7 @@ export async function POST(
         po.vendor_id,
         po.vendor_name_snapshot,
         po.vendor_qb_list_id_snapshot,
-        parsed.data.reference_id ?? null,
+        referenceId,
         parsed.data.document_date ?? null,
         paymentTermsDays,
         parsed.data.document_date ?? null,

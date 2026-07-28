@@ -32,6 +32,7 @@ export const QbPurchaseOrderPipeline = model.define(
 
     // Bridge / QB identifiers
     qb_operation_id: model.text().nullable(),
+    order_pipeline_id: model.text().nullable(),
     qb_list_id: model.text().nullable(), // TxnID of the PurchaseOrder in QB
     qb_txn_number: model.text().nullable(),
 

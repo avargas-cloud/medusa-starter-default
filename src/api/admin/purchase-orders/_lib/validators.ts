@@ -57,6 +57,10 @@ export const updateDraftSchema = z.object({
   tax_cents: z.number().int().min(0).optional(),
   other_fees_cents: z.number().int().min(0).optional(),
   lines: z.array(draftLineInputSchema).max(500).optional(),
+  // Required only when an edit reduces a line that already participates in a
+  // synced/confirmed Vendor Bill. The backend returns the affected lines first
+  // so the POS can show a precise confirmation modal.
+  confirm_billed_reduction: z.boolean().optional(),
 });
 
 export const submitSchema = z.object({});

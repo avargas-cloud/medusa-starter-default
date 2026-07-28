@@ -1,5 +1,6 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { ContainerRegistrationKeys, Modules } from "@medusajs/utils";
+import { randomUUID } from "crypto";
 
 // 1.5.7: handleFulfillmentCreated import removed — pos/sync enqueues now.
 // 1.5.5: handleOrderPlaced import removed — pos/sync enqueues now.
@@ -18,6 +19,10 @@ import { FINANCE_MODULE } from "../../../../modules/finance";
 import { INVOICE_MODULE } from "../../../../modules/invoices";
 import { PURCHASE_ORDERS_MODULE } from "../../../../modules/purchase-orders";
 import type PurchaseOrdersModuleService from "../../../../modules/purchase-orders/service";
+import {
+  enqueuePurchaseQbOperation,
+  purchaseOperationKey,
+} from "../../../../lib/purchase-orders/qb-purchase-dependency-chain";
 // 1.5.4: handleDraftOrderCreated import removed — pos/sync now enqueues
 // 'pending' rows for the consolidator's pending-dispatch pass.
 
@@ -108,6 +113,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
         const modPayload = {
           is_mod: true,
+          delegated_to_consolidator: true,
+          operation_revision: randomUUID(),
           txn_id: po.qb_purchase_order_list_id,
           edit_sequence: po.qb_edit_sequence ?? undefined,
           po_id: id,
@@ -144,11 +151,50 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           [JSON.stringify(modPayload), id]
         );
 
+        let legacyPipelineId = String(
+          (
+            await knex.raw(
+              `SELECT id FROM qb_purchase_order_pipeline
+                WHERE purchase_order_id = ? AND deleted_at IS NULL LIMIT 1`,
+              [id]
+            )
+          ).rows[0]?.id ?? ""
+        );
         if ((updated.rowCount ?? 0) === 0) {
-          await service.createQbPurchaseOrderPipelines([
+          const created = await service.createQbPurchaseOrderPipelines([
             { purchase_order_id: id, status: "waiting", payload: modPayload },
           ]);
+          const createdRows = Array.isArray(created) ? created : [created];
+          legacyPipelineId = String(
+            (createdRows[0] as { id?: string } | undefined)?.id ?? ""
+          );
         }
+        if (!legacyPipelineId) {
+          throw new Error("Purchase Order pipeline row was not created");
+        }
+        const orderPayload = {
+          ...modPayload,
+          qb_purchase_order_pipeline_id: legacyPipelineId,
+        };
+        const operation = await enqueuePurchaseQbOperation(knex, {
+          purchaseOrderId: id,
+          referenceId: id,
+          referenceType: "purchase_order",
+          step: "purchase_order_mod",
+          qbTxnId: po.qb_purchase_order_list_id,
+          payload: orderPayload,
+          operationKey: purchaseOperationKey(
+            "purchase_order_mod",
+            id,
+            orderPayload
+          ),
+        });
+        await knex.raw(
+          `UPDATE qb_purchase_order_pipeline
+              SET order_pipeline_id = ?, updated_at = NOW()
+            WHERE id = ?`,
+          [operation.id, legacyPipelineId]
+        );
 
         return res.json({
           success: true,

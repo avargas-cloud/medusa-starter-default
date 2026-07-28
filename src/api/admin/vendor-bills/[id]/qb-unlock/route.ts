@@ -1,18 +1,20 @@
 /**
  * POST /admin/vendor-bills/:id/qb-unlock
  *
- * Item 1.9 (`docs/VENDOR_BILL_QB_SYNC_PLAN.md` §6.2/§9 — SIMPLIFIED MVP,
- * Fable design decision 2026-07-23). Unlock = delete-then-re-add BEHIND THE
- * EXISTING DISPATCH GATES: this route only claims the pipeline row (PIN +
- * guards), it never talks to the bridge directly — `qb-vendor-bill-poller.ts`
- * Phase D does the BillQuery preflight, `TxnDel Bill`, and re-`BillAdd`.
+ * Prepares the destructive half of a reviewed Bill rebuild. This route only
+ * freezes two universal purchase-chain operations (PIN + guards):
+ * BillQuery preflight -> TxnDel Bill. The consolidator is the only bridge
+ * caller. After TxnDel confirms, the bill remains a local `rebuild_ready`
+ * draft until the operator Reconfirms it; only then is a fresh BillAdd queued
+ * in the same accounting transaction.
  *
  * Body: { supervisor_pin: string, reason: string }
  *
- * 202 { status: 'unlock_queued', pipeline_row_id } on success. 409 with one
+ * 202 { status: 'rebuild_queued', ...operation ids } on success. 409 with one
  * of `bill_not_synced` / `china_agent_unlock_blocked` /
- * `unlock_already_in_flight` (see `claimUnlock`); 404 `bill_not_found`; 403
- * `invalid_supervisor_pin`; 400 `validation_error`.
+ * `bill_rebuild_not_required` / `unlock_already_in_flight` (see
+ * `claimUnlock`); 404 `bill_not_found`; 403 `invalid_supervisor_pin`; 400
+ * `validation_error`.
  */
 
 import type {
@@ -78,7 +80,9 @@ export async function POST(
   }
 
   return res.status(202).json({
-    status: "unlock_queued",
+    status: "rebuild_queued",
     pipeline_row_id: result.pipelineRowId,
+    preflight_operation_id: result.preflightOperationId,
+    delete_operation_id: result.deleteOperationId,
   });
 }

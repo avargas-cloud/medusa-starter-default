@@ -9,14 +9,45 @@
  *   - qbrcpipe_<ulid>__void     → qb_item_receipt_pipeline VOID/DELETE lane
  *   - qbvbpipe_<ulid>__vendor_bill_add
  *   - <uuid>__vendor_bill_mod
+ *   - <uuid>__vendor_bill_rebuild_preflight / __vendor_bill_rebuild_delete
+ *     are intentionally NOT mark-fixable; skipping either verification would
+ *     make the dependent chain unsafe.
  *   - qbvbpipe_<ulid>__vendor_bill_delete
  */
 
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+async function markDelegatedOperationFixed(
+  knex: any,
+  orderPipelineId: string | null | undefined
+): Promise<void> {
+  if (!orderPipelineId) return;
+  await knex.raw(
+    `UPDATE qb_order_pipeline
+        SET status = 'fixed', error = NULL, next_retry_at = NULL,
+            bridge_op_id = NULL, failed_at = NULL,
+            confirmed_at = COALESCE(confirmed_at, NOW()),
+            updated_at = NOW()
+      WHERE id = ?::uuid
+        AND status NOT IN ('confirmed', 'fixed')`,
+    [orderPipelineId]
+  );
+}
+
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const { id: rawId } = req.params as { id: string };
   const knex = (req.scope as any).resolve("__pg_connection__");
+
+  if (
+    rawId.endsWith("__vendor_bill_rebuild_preflight") ||
+    rawId.endsWith("__vendor_bill_rebuild_delete")
+  ) {
+    return res.status(409).json({
+      error:
+        "Reviewed Vendor Bill rebuild steps cannot be marked fixed. Retry the step so QuickBooks verifies the real Bill state.",
+      code: "vendor_bill_rebuild_mark_fixed_blocked",
+    });
+  }
 
   const isVendorBillAdd = rawId.endsWith("__vendor_bill_add");
   const isVendorBillMod = rawId.endsWith("__vendor_bill_mod");
@@ -35,7 +66,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   if (isVendorBillAdd && vendorBillId) {
     const rows = await knex
       .raw(
-        `SELECT id, vendor_bill_id, intent FROM qb_vendor_bill_pipeline
+        `SELECT id, vendor_bill_id, intent, order_pipeline_id
+           FROM qb_vendor_bill_pipeline
           WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
         [vendorBillId]
       )
@@ -60,6 +92,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         WHERE id = ? AND deleted_at IS NULL`,
       [row.vendor_bill_id]
     );
+    await markDelegatedOperationFixed(knex, row.order_pipeline_id);
     return res.json({
       success: true,
       message: "Vendor Bill add marked as fixed",
@@ -137,7 +170,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   if (isModLane) {
     const rows = await knex
       .raw(
-        `SELECT id FROM qb_item_receipt_pipeline
+        `SELECT id, mod_order_pipeline_id FROM qb_item_receipt_pipeline
           WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
         [id]
       )
@@ -154,6 +187,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         WHERE id = ?`,
       [id]
     );
+    await markDelegatedOperationFixed(
+      knex,
+      rows[0].mod_order_pipeline_id
+    );
     return res.json({ success: true, message: "Marked as fixed" });
   }
 
@@ -161,7 +198,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   if (isVoidLane) {
     const rows = await knex
       .raw(
-        `SELECT id FROM qb_item_receipt_pipeline
+        `SELECT id, add_order_pipeline_id FROM qb_item_receipt_pipeline
           WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
         [id]
       )
@@ -177,6 +214,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
               updated_at         = NOW()
         WHERE id = ?`,
       [id]
+    );
+    await markDelegatedOperationFixed(
+      knex,
+      rows[0].add_order_pipeline_id
     );
     return res.json({ success: true, message: "Marked as fixed" });
   }
@@ -208,7 +249,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   // ── Purchase Order pipeline (default) ───────────────────────────────────
   const rows = await knex
     .raw(
-      `SELECT id, status FROM qb_purchase_order_pipeline WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
+      `SELECT id, status, order_pipeline_id
+         FROM qb_purchase_order_pipeline
+        WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
       [id]
     )
     .then((r: any) => r.rows);
@@ -225,6 +268,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
             updated_at = NOW()
       WHERE id = ?`,
     [id]
+  );
+  await markDelegatedOperationFixed(
+    knex,
+    rows[0].order_pipeline_id
   );
 
   return res.json({ success: true, message: "Marked as fixed" });

@@ -22,6 +22,12 @@
  */
 
 import { createStep, StepResponse } from "@medusajs/framework/workflows-sdk";
+import { randomUUID } from "crypto";
+import {
+  enqueuePurchaseQbOperation,
+  purchaseOperationKey,
+} from "../../../lib/purchase-orders/qb-purchase-dependency-chain";
+import { qbItemReceiptIdentityMemo } from "../../../lib/purchase-orders/qb-item-receipt-identity";
 
 export interface EnqueueQbItemReceiptModStepInput {
   receipt_id: string;
@@ -49,6 +55,9 @@ interface QbItemReceiptModPayloadLine {
 }
 
 interface QbItemReceiptModPayload {
+  delegated_to_consolidator: true;
+  qb_identity_memo: string;
+  operation_revision: string;
   txn_id: string;
   edit_sequence: string | null;
   po_id: string;
@@ -169,6 +178,13 @@ export const enqueueQbItemReceiptModStep = createStep(
     }
 
     const payload: QbItemReceiptModPayload = {
+      delegated_to_consolidator: true,
+      qb_identity_memo: qbItemReceiptIdentityMemo({
+        receiptId: header.receipt_id,
+        receiptNumber: header.receipt_number,
+        memo: header.memo,
+      }),
+      operation_revision: randomUUID(),
       txn_id: header.txn_id,
       edit_sequence: header.qb_edit_sequence ?? null,
       po_id: header.po_id,
@@ -211,6 +227,29 @@ export const enqueueQbItemReceiptModStep = createStep(
               updated_at        = NOW()
         WHERE id = ?`,
       [JSON.stringify(payload), header.pipeline_id]
+    );
+    const orderPayload = {
+      ...payload,
+      qb_item_receipt_pipeline_id: String(header.pipeline_id),
+    };
+    const operation = await enqueuePurchaseQbOperation(knex, {
+      purchaseOrderId: String(header.po_id),
+      referenceId: input.receipt_id,
+      referenceType: "item_receipt",
+      step: "item_receipt_mod",
+      qbTxnId: String(header.txn_id),
+      payload: orderPayload,
+      operationKey: purchaseOperationKey(
+        "item_receipt_mod",
+        input.receipt_id,
+        orderPayload
+      ),
+    });
+    await knex.raw(
+      `UPDATE qb_item_receipt_pipeline
+          SET mod_order_pipeline_id = ?, updated_at = NOW()
+        WHERE id = ?`,
+      [operation.id, header.pipeline_id]
     );
 
     return new StepResponse(

@@ -13,6 +13,7 @@
  *                                        in QB Desktop — there is no void).
  *   - qb_vendor_bill_pipeline rows      → Vendor Bill add / delete
  *   - qb_order_pipeline rows            → append-only Vendor Bill mod history
+ *                                        and reviewed rebuild preflight/delete
  *
  * The frontend renders both kinds in the same table. To keep React keys
  * unique, mod rows for ItemReceipts use the composite id `<pipeline_id>__mod`
@@ -249,6 +250,60 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         JOIN vendor_bill vb ON vb.id = qop.reference_id AND vb.deleted_at IS NULL
         LEFT JOIN purchase_order po ON po.id = qop.order_id
         WHERE qop.step = 'vendor_bill_mod'
+
+        UNION ALL
+
+        -- ── Vendor Bill reviewed REBUILD history ─────────────────────────
+        SELECT
+          qop.id::text || CASE
+            WHEN qop.step = 'vendor_bill_rebuild_preflight'
+              THEN '__vendor_bill_rebuild_preflight'
+            ELSE '__vendor_bill_rebuild_delete'
+          END                                              AS id,
+          NULL::bigint                                     AS seq,
+          ('B' || COALESCE(regexp_replace(vb.number, '\\D', '', 'g'), '?'))
+                                                             AS seq_label,
+          qop.order_id                                     AS parent_id,
+          po.number                                        AS po_number,
+          po.draft_number                                  AS draft_number,
+          NULL::text                                       AS receipt_number,
+          vb.number                                        AS vendor_bill_number,
+          CASE
+            WHEN qop.status IN ('confirmed','fixed') THEN 'synced'
+            WHEN qop.status = 'failed' AND qop.next_retry_at IS NULL
+              THEN 'failed_permanent'
+            WHEN qop.status = 'failed' THEN 'error'
+            WHEN qop.status IN ('submitted','processing') THEN 'submitted'
+            ELSE 'waiting'
+          END                                              AS status,
+          qop.bridge_op_id                                 AS qb_operation_id,
+          qop.qb_txn_id                                    AS qb_list_id,
+          COALESCE(qop.qb_ref_number, vb.reference_id)     AS qb_txn_number,
+          qop.error                                        AS last_error,
+          COALESCE(qop.retry_count, 0)                     AS retries,
+          qop.next_retry_at                                AS next_retry_at,
+          qop.confirmed_at                                 AS synced_at,
+          qop.created_at                                   AS created_at,
+          COALESCE(
+            qop.updated_at, qop.confirmed_at, qop.failed_at,
+            qop.submitted_at, qop.created_at
+          )                                                AS updated_at,
+          COALESCE(
+            vb.vendor_name_snapshot, po.vendor_name_snapshot, po.vendor_id
+          )                                                AS vendor_name,
+          CASE
+            WHEN qop.step = 'vendor_bill_rebuild_preflight'
+              THEN 'preflight_vendor_bill_rebuild'
+            ELSE 'delete_vendor_bill_rebuild'
+          END                                              AS step
+        FROM qb_order_pipeline qop
+        JOIN vendor_bill vb
+          ON vb.id = qop.reference_id AND vb.deleted_at IS NULL
+        LEFT JOIN purchase_order po ON po.id = qop.order_id
+        WHERE qop.step IN (
+          'vendor_bill_rebuild_preflight',
+          'vendor_bill_rebuild_delete'
+        )
 
         UNION ALL
 

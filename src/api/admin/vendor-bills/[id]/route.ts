@@ -45,7 +45,11 @@ import {
   syncPrimaryReceiptPointer,
   validateReceiptsForBinding,
 } from "../../../../lib/purchase-orders/vendor-bill-receipts";
-import { findDuplicateVendorBillReference } from "../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
+import {
+  findDuplicateVendorBillReference,
+  normalizeRequiredVendorBillReference,
+  VENDOR_BILL_REFERENCE_REQUIRED_BODY,
+} from "../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
 
 // ── Knex type ────────────────────────────────────────────────────────────────
 
@@ -118,6 +122,7 @@ interface VendorBillLineRow {
   purchase_order_line_id: string | null;
   line_type: string;
   line_kind: string | null;
+  qb_txn_line_id: string | null;
   qb_account_list_id: string | null;
   qb_account_full_name: string | null;
   qb_account_type: string | null;
@@ -323,6 +328,7 @@ export async function GET(
        purchase_order_line_id,
        line_type,
        line_kind,
+       qb_txn_line_id,
        qb_account_list_id,
        qb_account_full_name,
        qb_account_type,
@@ -686,13 +692,13 @@ export async function PATCH(
 
   const lookup = await knex.raw(
     `SELECT id, number, status, bill_type, purchase_order_id, purchase_order_receipt_id,
-            vendor_id, reference_id, qb_source
+            vendor_id, reference_id, qb_source, qb_txn_id
        FROM vendor_bill
       WHERE id = ? AND deleted_at IS NULL`,
     [id]
   );
   const bill = (lookup.rows[0] ?? null) as
-    | { id: string; number: string | null; status: string; bill_type: string; purchase_order_id: string | null; purchase_order_receipt_id: string | null; vendor_id: string | null; reference_id: string | null; qb_source: string | null }
+    | { id: string; number: string | null; status: string; bill_type: string; purchase_order_id: string | null; purchase_order_receipt_id: string | null; vendor_id: string | null; reference_id: string | null; qb_source: string | null; qb_txn_id: string | null }
     | null;
   if (!bill) {
     return res
@@ -737,6 +743,16 @@ export async function PATCH(
       error: `Cannot update a vendor bill in status '${bill.status}'.`,
       code: "not_draft",
     });
+  }
+
+  const effectiveReferenceId = normalizeRequiredVendorBillReference(
+    "reference_id" in patch ? patch.reference_id : bill.reference_id
+  );
+  if (!effectiveReferenceId) {
+    return res.status(422).json(VENDOR_BILL_REFERENCE_REQUIRED_BODY);
+  }
+  if ("reference_id" in patch) {
+    patch.reference_id = effectiveReferenceId;
   }
 
   if (patch.vendor_id !== undefined && patch.vendor_id !== null) {
@@ -1045,19 +1061,6 @@ export async function PATCH(
       if (l.id && !existingById.has(l.id)) {
         return res.status(404).json({ error: `Line ${l.id} not found on this bill`, code: "line_not_found" });
       }
-      if (bill.status === "synced") {
-        const existingLine = l.id ? existingById.get(l.id) : undefined;
-        if (!existingLine?.qb_txn_line_id) {
-          return res.status(409).json({
-            error:
-              `${l.sku} is a new PO-linked line. QuickBooks cannot attach it ` +
-              "to an existing Bill through BillMod; this change requires a reviewed Bill rebuild.",
-            code: "bill_rebuild_required",
-            strategy: "bill_rebuild",
-            purchase_order_line_id: l.purchase_order_line_id,
-          });
-        }
-      }
     }
   } else if (hasLineEdits) {
     if (bill.purchase_order_receipt_id && bill.status !== "synced") {
@@ -1080,10 +1083,17 @@ export async function PATCH(
     }
   }
 
-  // Keep the original receipt guard on post-sync edits. A BillMod may reduce
-  // or reshape already-billed quantities, but it can never bill more units
-  // than the applied receipts bound to this bill actually received.
-  if (bill.status === "synced" && hasLineEdits) {
+  // A receipt-bound Bill must always stay at or below applied receipt qty.
+  // `qb_txn_id` covers a synced Bill whose local status was moved back to
+  // draft; the receipt predicates also keep the guard active after a reviewed
+  // rebuild has removed the old QB identity but before the operator Reconfirms.
+  // Truly receipt-less planning drafts may still mirror a not-yet-received PO.
+  if (
+    hasLineEdits &&
+    (bill.qb_txn_id ||
+      bill.purchase_order_receipt_id ||
+      receiptIdsProvided)
+  ) {
     const desiredByPoLine = new Map<string, number>();
     if (hasFullLines) {
       for (const line of fullLines!) {

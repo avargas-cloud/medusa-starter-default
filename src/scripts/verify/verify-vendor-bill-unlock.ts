@@ -2,15 +2,13 @@
  * verify-vendor-bill-unlock.ts
  *
  * Verifies `claimUnlock` (`lib/purchase-orders/qb-vendor-bill-unlock.ts`) —
- * the guard/claim logic shared by `POST /admin/vendor-bills/:id/qb-unlock`
- * (item 1.9, `docs/VENDOR_BILL_QB_SYNC_PLAN.md` §6.2/§9, SIMPLIFIED MVP).
+ * the guard/claim logic shared by `POST /admin/vendor-bills/:id/qb-unlock`.
  *
  * Cases:
  *   1. Bill not synced (`qb_txn_id IS NULL`) → `bill_not_synced`.
- *   2. Synced bill with a `synced` pipeline row → claim succeeds, row flips
- *      to `intent='unlock_rebuild'`/`status='waiting'`, `snapshot` carries
- *      the audit trail (reason/actor/previous_payload).
- *   3. Same bill claimed again while still `unlock_rebuild` →
+ *   2. Synced bill with a `synced` pipeline row → claim succeeds, freezes
+ *      preflight + delete in one PO dependency chain, and audits the request.
+ *   3. Same bill claimed again while still `rebuild_prepare` →
  *      `unlock_already_in_flight`.
  *
  * SANDBOX ONLY. Connects to the sandbox DB by default. Everything happens
@@ -40,14 +38,17 @@ function assert(label: string, cond: boolean, detail?: string): void {
 
 /** Adapts a pg Client to the `?`-placeholder knex.raw shape claimUnlock expects. */
 function asKnexRaw(client: Client): UnlockKnex {
-  return {
+  const adapter: UnlockKnex = {
     raw: async (sql: string, bindings: unknown[] = []) => {
       let i = 0;
       const pgSql = sql.replace(/\?/g, () => `$${++i}`);
       const res = await client.query(pgSql, bindings as never[]);
       return { rows: res.rows, rowCount: res.rowCount ?? undefined };
     },
+    transaction: async <T>(handler: (trx: UnlockKnex) => Promise<T>) =>
+      handler(adapter),
   };
+  return adapter;
 }
 
 async function tableExists(client: Client, table: string): Promise<boolean> {
@@ -72,10 +73,11 @@ async function main(): Promise<void> {
   try {
     if (
       !(await tableExists(client, "qb_vendor_bill_pipeline")) ||
-      !(await tableExists(client, "vendor_bill"))
+      !(await tableExists(client, "vendor_bill")) ||
+      !(await tableExists(client, "qb_purchase_dependency_chain"))
     ) {
       console.log(
-        "\n⏭  SKIP: `qb_vendor_bill_pipeline`/`vendor_bill` do not exist in this " +
+        "\n⏭  SKIP: the Vendor Bill purchase-chain tables do not exist in this " +
           "database yet. Nothing to verify; re-run once the migration is applied.\n"
       );
       process.exit(0);
@@ -89,6 +91,7 @@ async function main(): Promise<void> {
       const billId = `vb_verify_unlock_${stamp}`;
       const pipelineRowId = `qbvbpipe_verify_unlock_${stamp}`;
       const fakeTxnId = `TXN-VERIFY-${stamp}`;
+      const fakePoId = `po_verify_unlock_${stamp}`;
       const previousPayload = { po_id: "po_verify", item_lines: [{ sku: "SKU-1" }] };
 
       // ── Seed a minimal synthetic vendor_bill (no FK constraints outside
@@ -96,8 +99,8 @@ async function main(): Promise<void> {
       await client.query(
         `INSERT INTO vendor_bill
            (id, status, bill_type, purchase_order_id, qb_txn_id)
-         VALUES ($1, 'draft', 'regular', NULL, NULL)`,
-        [billId]
+         VALUES ($1, 'draft', 'regular', $2, NULL)`,
+        [billId, fakePoId]
       );
 
       // ── Case 1: bill not synced (qb_txn_id IS NULL) → bill_not_synced ──────
@@ -117,17 +120,49 @@ async function main(): Promise<void> {
         `UPDATE vendor_bill SET status = 'synced', qb_txn_id = $2 WHERE id = $1`,
         [billId, fakeTxnId]
       );
+
+      // ── Case 2: existing-line edits must never trigger a rebuild ─────────
+      console.log("\n=== 2. No new PO line → bill_rebuild_not_required ===");
+      const notRequiredResult = await claimUnlock(knex, billId, {
+        reason: "verify: case 2",
+        actorId: "user_verify",
+      });
+      assert(
+        "claimUnlock rejects rebuild when no new PO-linked line exists",
+        !notRequiredResult.ok &&
+          notRequiredResult.code === "bill_rebuild_not_required",
+        JSON.stringify(notRequiredResult)
+      );
+
+      await client.query(
+        `INSERT INTO vendor_bill_line
+           (id, vendor_bill_id, purchase_order_line_id, line_type,
+            sku, description, qty, unit_cost_cents, qb_txn_line_id)
+         VALUES ($1, $2, $3, 'product',
+                 'VERIFY-NEW-LINE', 'Verifier new PO line', 1, 100, NULL)`,
+        [
+          `vbl_verify_unlock_${stamp}`,
+          billId,
+          `pol_verify_unlock_${stamp}`,
+        ]
+      );
       await client.query(
         `INSERT INTO qb_vendor_bill_pipeline
            (id, vendor_bill_id, purchase_order_id, status, intent, qb_txn_id, payload)
-         VALUES ($1, $2, NULL, 'synced', 'add', $3, $4::jsonb)`,
-        [pipelineRowId, billId, fakeTxnId, JSON.stringify(previousPayload)]
+         VALUES ($1, $2, $3, 'synced', 'add', $4, $5::jsonb)`,
+        [
+          pipelineRowId,
+          billId,
+          fakePoId,
+          fakeTxnId,
+          JSON.stringify(previousPayload),
+        ]
       );
 
-      // ── Case 2: synced bill → claim succeeds, row flips + audits ──────────
-      console.log("\n=== 2. Synced bill → claim succeeds (intent flips, snapshot audited) ===");
+      // ── Case 3: new PO-linked line → chain + audit frozen ─────────────────
+      console.log("\n=== 3. New PO line → preflight/delete chain is frozen ===");
       const claimResult = await claimUnlock(knex, billId, {
-        reason: "verify: case 2 — testing unlock",
+        reason: "verify: case 3 — testing rebuild",
         actorId: "user_verify_actor",
       });
       assert(
@@ -138,31 +173,32 @@ async function main(): Promise<void> {
 
       const rowAfterClaim = (
         await client.query(
-          `SELECT intent, status, qb_operation_id, retries, snapshot
+          `SELECT intent, status, qb_operation_id, retries, snapshot,
+                  order_pipeline_id::text
              FROM qb_vendor_bill_pipeline WHERE id = $1`,
           [pipelineRowId]
         )
       ).rows[0];
       assert(
-        "row flipped to intent='unlock_rebuild'",
-        rowAfterClaim?.intent === "unlock_rebuild",
+        "row flipped to intent='rebuild_prepare'",
+        rowAfterClaim?.intent === "rebuild_prepare",
         JSON.stringify(rowAfterClaim)
       );
       assert("row flipped to status='waiting'", rowAfterClaim?.status === "waiting");
       assert("qb_operation_id cleared", rowAfterClaim?.qb_operation_id === null);
       assert("retries reset to 0", rowAfterClaim?.retries === 0);
       assert(
-        "snapshot carries unlock_reason",
-        rowAfterClaim?.snapshot?.unlock_reason === "verify: case 2 — testing unlock",
+        "snapshot carries rebuild_reason",
+        rowAfterClaim?.snapshot?.rebuild_reason === "verify: case 3 — testing rebuild",
         JSON.stringify(rowAfterClaim?.snapshot)
       );
       assert(
-        "snapshot carries unlocked_by",
-        rowAfterClaim?.snapshot?.unlocked_by === "user_verify_actor"
+        "snapshot carries requested_by",
+        rowAfterClaim?.snapshot?.requested_by === "user_verify_actor"
       );
       assert(
-        "snapshot carries unlocked_at",
-        typeof rowAfterClaim?.snapshot?.unlocked_at === "string"
+        "snapshot carries requested_at",
+        typeof rowAfterClaim?.snapshot?.requested_at === "string"
       );
       assert(
         "snapshot.previous_payload matches the pre-unlock payload",
@@ -171,10 +207,46 @@ async function main(): Promise<void> {
         JSON.stringify(rowAfterClaim?.snapshot?.previous_payload)
       );
 
-      // ── Case 3: double-claim while still unlock_rebuild → 409-equivalent ──
-      console.log("\n=== 3. Double-claim while unlock_rebuild → unlock_already_in_flight ===");
+      const chainRows = (
+        await client.query(
+          `SELECT id::text, step, status, depends_on::text
+             FROM qb_order_pipeline
+            WHERE order_id = $1
+              AND step IN (
+                'vendor_bill_rebuild_preflight',
+                'vendor_bill_rebuild_delete'
+              )
+            ORDER BY created_at, id`,
+          [fakePoId]
+        )
+      ).rows;
+      const preflight = chainRows.find(
+        (row) => row.step === "vendor_bill_rebuild_preflight"
+      );
+      const deletion = chainRows.find(
+        (row) => row.step === "vendor_bill_rebuild_delete"
+      );
+      assert(
+        "preflight is the first runnable operation",
+        preflight?.status === "pending" && preflight?.depends_on === null,
+        JSON.stringify(chainRows)
+      );
+      assert(
+        "delete waits on the preflight",
+        deletion?.status === "waiting" &&
+          deletion?.depends_on === preflight?.id,
+        JSON.stringify(chainRows)
+      );
+      assert(
+        "legacy row points at the destructive chain tail",
+        rowAfterClaim?.order_pipeline_id === deletion?.id,
+        JSON.stringify(rowAfterClaim)
+      );
+
+      // ── Case 4: double-claim while rebuild is active → 409-equivalent ─────
+      console.log("\n=== 4. Double-claim while rebuilding → unlock_already_in_flight ===");
       const doubleClaimResult = await claimUnlock(knex, billId, {
-        reason: "verify: case 3 — double claim",
+        reason: "verify: case 4 — double claim",
         actorId: "user_verify_actor_2",
       });
       assert(

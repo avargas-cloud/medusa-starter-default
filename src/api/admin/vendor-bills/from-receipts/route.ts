@@ -10,7 +10,7 @@
  * existing single-receipt create path
  * (purchase-orders/[id]/receipts/[receiptId]/vendor-bill) and "Fill from PO".
  *
- * Body: { receipt_ids: string[] }  (non-empty; at least one receipt)
+ * Body: { receipt_ids: string[], reference_id: string }
  *
  * Validation (in order):
  *   1. every id must exist, deleted_at NULL                → 404 receipt_not_found
@@ -43,6 +43,11 @@ import {
   validateReceiptsForBinding,
 } from "../../../../lib/purchase-orders/vendor-bill-receipts";
 import { resolveVendorBillPaymentTermsDays } from "../../../../lib/purchase-orders/vendor-bill-payment-terms";
+import {
+  findDuplicateVendorBillReference,
+  normalizeRequiredVendorBillReference,
+  VENDOR_BILL_REFERENCE_REQUIRED_BODY,
+} from "../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
 
 type Knex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -59,6 +64,7 @@ function resolveKnex(req: AuthenticatedMedusaRequest): Knex {
 
 const bodySchema = z.object({
   receipt_ids: z.array(z.string().min(1)).min(1, "At least one receipt is required"),
+  reference_id: z.string().max(200).nullish(),
 });
 
 interface ReceiptPoRow {
@@ -89,6 +95,12 @@ export async function POST(
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json(zodErrorToBody(parsed.error));
+  }
+  const referenceId = normalizeRequiredVendorBillReference(
+    parsed.data.reference_id
+  );
+  if (!referenceId) {
+    return res.status(422).json(VENDOR_BILL_REFERENCE_REQUIRED_BODY);
   }
   const receiptIds = [...new Set(parsed.data.receipt_ids)];
 
@@ -166,6 +178,20 @@ export async function POST(
   const db = trx ?? knex;
 
   try {
+    const duplicate = await findDuplicateVendorBillReference(db, {
+      vendorId: po.vendor_id,
+      referenceId,
+    });
+    if (duplicate) {
+      if (trx) await trx.rollback();
+      return res.status(409).json({
+        error: `Purchase Invoice '${referenceId}' already exists for this vendor on ${duplicate.number ?? "an adopted bill"}.`,
+        code: "duplicate_vendor_invoice",
+        duplicate_vendor_bill_id: duplicate.id,
+        duplicate_vendor_bill_number: duplicate.number,
+      });
+    }
+
     const seqResult = await db.raw(`SELECT nextval('custom_vendor_bill_seq') AS seq`);
     const vbNumber = `VB-${(seqResult.rows[0] as { seq: string | number }).seq}`;
 
@@ -188,7 +214,7 @@ export async function POST(
        ) VALUES (
          ?, ?, NULL, ?,
          ?, ?, ?,
-         'regular', 'draft', NULL, NOW(),
+         'regular', 'draft', ?, NOW(),
          ?, NOW() + (? * INTERVAL '1 day'),
          'percent', 0, 0,
          false, 0,
@@ -203,6 +229,7 @@ export async function POST(
         po.vendor_id,
         po.vendor_name_snapshot,
         po.vendor_qb_list_id_snapshot,
+        referenceId,
         paymentTermsDays,
         paymentTermsDays,
       ]

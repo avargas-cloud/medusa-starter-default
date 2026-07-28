@@ -27,7 +27,11 @@ import { getActorUserId, UnauthenticatedError } from "../purchase-orders/_lib/au
 import { zodErrorToBody } from "../purchase-orders/_lib/format";
 import { accountAllowedForVendorBillType } from "../../../lib/purchase-orders/vendor-bill-account-rules";
 import { resolveVendorBillPaymentTermsDays } from "../../../lib/purchase-orders/vendor-bill-payment-terms";
-import { findDuplicateVendorBillReference } from "../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
+import {
+  findDuplicateVendorBillReference,
+  normalizeRequiredVendorBillReference,
+  VENDOR_BILL_REFERENCE_REQUIRED_BODY,
+} from "../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
 
 // ── Zod query schema ──────────────────────────────────────────────────────────
 
@@ -102,6 +106,7 @@ interface VendorBillListRow {
   freight_amount_cents: number;
   tariff_included: boolean;
   tariff_amount_cents: number;
+  product_qty: string | null;
   item_subtotal_cents: string | null;
   line_count: string; // bigint from COUNT — convert to number
   total_landed_cents: string | null; // bigint from SUM — convert to number
@@ -225,6 +230,7 @@ export async function GET(
        vb.tariff_amount_cents,
        vb.created_at,
        COALESCE(agg.line_count, 0)         AS line_count,
+       COALESCE(agg.product_qty, 0)        AS product_qty,
        COALESCE(agg.item_subtotal_cents, 0) AS item_subtotal_cents,
        COALESCE(agg.total_landed_cents, 0) AS total_landed_cents,
        CASE WHEN vb.service_vendor_bill_id IS NOT NULL THEN (
@@ -255,6 +261,9 @@ export async function GET(
      LEFT JOIN LATERAL (
        SELECT
          COUNT(*)                                        AS line_count,
+         SUM(vbl.qty) FILTER (
+           WHERE COALESCE(vbl.line_type, 'product') = 'product'
+         )                                               AS product_qty,
          SUM(vbl.unit_cost_cents * vbl.qty)              AS item_subtotal_cents,
          SUM(vbl.landed_unit_cost_cents * vbl.qty)       AS total_landed_cents,
          ARRAY_AGG(DISTINCT porl.purchase_order_receipt_id)
@@ -274,6 +283,7 @@ export async function GET(
   const rows = (dataResult.rows as VendorBillListRow[]).map((r) => ({
     ...r,
     line_count: Number(r.line_count),
+    product_qty: Number(r.product_qty ?? 0),
     item_subtotal_cents: Number(r.item_subtotal_cents ?? 0),
     total_landed_cents: Number(r.total_landed_cents ?? 0),
     service_bill_total_landed_cents:
@@ -314,6 +324,10 @@ export async function POST(
   }
 
   const body = parsed.data;
+  const referenceId = normalizeRequiredVendorBillReference(body.reference_id);
+  if (!referenceId) {
+    return res.status(422).json(VENDOR_BILL_REFERENCE_REQUIRED_BODY);
+  }
   if (body.bill_type === "regular") {
     return res.status(422).json({
       error:
@@ -388,7 +402,7 @@ export async function POST(
   try {
     const duplicate = await findDuplicateVendorBillReference(db, {
       vendorId: vendor.id,
-      referenceId: body.reference_id ?? null,
+      referenceId,
     });
     if (duplicate) {
       if (trx) await trx.rollback();
@@ -445,7 +459,7 @@ export async function POST(
         vendorName,
         vendor.qb_list_id,
         body.bill_type,
-        body.reference_id ?? null,
+        referenceId,
         body.document_date ?? null,
         paymentTermsDays,
         body.document_date ?? null,

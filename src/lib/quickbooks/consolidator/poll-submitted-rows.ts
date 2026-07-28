@@ -4,6 +4,10 @@ import { Modules } from "@medusajs/utils";
 import { getDbPool } from "../../../api/utils/db-pool";
 import { performMedusaRefundRevert } from "../../finance/revert-refund";
 import {
+  reconcileReceiptModIfDrifted,
+  type KnexRaw,
+} from "../../purchase-orders/item-receipt-mod-payload";
+import {
   CM_SYNTHETIC_LINE_IDS_META_KEY,
   extractQbSyntheticLineIds,
 } from "../credit-memo-synthetic-lines";
@@ -17,6 +21,7 @@ import {
 import { deactivateEstimateInQb } from "../client/estimates";
 import {
   confirmPipelineRow,
+  failPipelineRow,
   failOrRetryPipelineRow,
   cacheEditSequence,
   claimAndResetForResubmit,
@@ -37,6 +42,19 @@ import {
 import { buildEstimatePatch } from "../qb-metadata-types";
 import { resubmitByStep, type ResubmitRow } from "./resubmit-by-step";
 import { activateRefundPaymentRow } from "./refund-payment-activation";
+import {
+  completePurchaseAddExistenceCheck,
+  completePurchaseOperation,
+  isPurchaseOperationStep,
+  mirrorPurchaseOperationFailure,
+  PURCHASE_EXISTENCE_CHECK_KEY,
+  schedulePurchaseAddExistenceCheck,
+} from "./purchase-operations";
+import {
+  completeVendorBillRebuildDelete,
+  isAlreadyMissingBillDeleteError,
+  PermanentPurchaseOperationError,
+} from "./vendor-bill-rebuild-operations";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -102,6 +120,59 @@ export async function pollSubmittedRows(
       }
 
       if (op.status === "completed") {
+        let purchaseCompletion:
+          | Awaited<ReturnType<typeof completePurchaseOperation>>
+          | null = null;
+        if (isPurchaseOperationStep(row.step)) {
+          try {
+            if (row.payload?.[PURCHASE_EXISTENCE_CHECK_KEY] === true) {
+              purchaseCompletion =
+                await completePurchaseAddExistenceCheck(
+                  row as ResubmitRow,
+                  op as Record<string, unknown>
+                );
+              if (!purchaseCompletion) {
+                logger.info(
+                  `${LOG_PREFIX} 🔎 ${row.step} ${row.id} verified absent in QuickBooks — Add is now safe to dispatch`
+                );
+                continue;
+              }
+              logger.warn(
+                `${LOG_PREFIX} ♻️ ${row.step} ${row.id} already existed in QuickBooks after a lost response — adopted without duplicate Add`
+              );
+            } else {
+              purchaseCompletion = await completePurchaseOperation(
+                row as ResubmitRow,
+                op as Record<string, unknown>
+              );
+            }
+          } catch (completionError: unknown) {
+            const message =
+              completionError instanceof Error
+                ? completionError.message
+                : String(completionError);
+            const permanent =
+              completionError instanceof PermanentPurchaseOperationError;
+            await mirrorPurchaseOperationFailure(
+              row as ResubmitRow,
+              message,
+              permanent
+            );
+            if (permanent) {
+              await failPipelineRow(row.id, message);
+            } else {
+              await failOrRetryPipelineRow(
+                row.id,
+                message,
+                row.retry_count ?? 0
+              );
+            }
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ ${row.step} ${row.id} completed at the bridge but could not be reconciled: ${message}`
+            );
+            continue;
+          }
+        }
         const msgs = op.result?.QBXML?.QBXMLMsgsRs || op.result?.QBXMLMsgsRs;
         const paymentBill =
           row.step === "vendor_bill_payment_check"
@@ -139,6 +210,7 @@ export async function pollSubmittedRows(
           continue;
         }
         const txnId =
+          purchaseCompletion?.txnId ||
           op.txnId ||
           op.result?.TxnID ||
           op.listId ||
@@ -150,6 +222,7 @@ export async function pollSubmittedRows(
           modifiedBill?.TxnID ||
           null;
         const refNumber =
+          purchaseCompletion?.refNumber ||
           op.refNumber ||
           op.result?.RefNumber ||
           msgs?.CheckAddRs?.CheckRet?.RefNumber ||
@@ -202,6 +275,14 @@ export async function pollSubmittedRows(
             );
             continue;
           }
+          const amountDue = Number(modifiedBill.AmountDue);
+          const balanceCents = Number.isFinite(amountDue)
+            ? Math.round(amountDue * 100)
+            : null;
+          const paidState =
+            modifiedBill.IsPaid !== undefined || balanceCents !== null
+              ? vendorBillIsPaid(modifiedBill)
+              : null;
           await pool.query(
             `UPDATE qb_vendor_bill_pipeline
                   SET status = 'synced', qb_operation_id = NULL,
@@ -217,9 +298,25 @@ export async function pollSubmittedRows(
                   SET status = 'synced', qb_source = 'owned',
                       qb_txn_id = COALESCE($2, qb_txn_id),
                       qb_ref_number = COALESCE($3, qb_ref_number),
-                      qb_edit_sequence = $4, qb_synced_at = NOW(), updated_at = NOW()
+                      qb_edit_sequence = $4, qb_synced_at = NOW(),
+                      qb_is_paid = COALESCE($5, qb_is_paid),
+                      qb_balance_remaining_cents =
+                        COALESCE($6, qb_balance_remaining_cents),
+                      qb_payment_checked_at = CASE
+                        WHEN $5::boolean IS NOT NULL OR $6::bigint IS NOT NULL
+                          THEN NOW()
+                        ELSE qb_payment_checked_at
+                      END,
+                      updated_at = NOW()
                 WHERE id = $1 AND deleted_at IS NULL`,
-            [row.reference_id, txnId, refNumber, editSequence]
+            [
+              row.reference_id,
+              txnId,
+              refNumber,
+              editSequence,
+              paidState,
+              balanceCents,
+            ]
           );
           logger.info(
             `${LOG_PREFIX} ✅ Vendor Bill ${row.reference_id} modified in QuickBooks`
@@ -240,6 +337,33 @@ export async function pollSubmittedRows(
         // successfully queried QuickBooks balance.
         if (!wonConfirm) {
           continue;
+        }
+
+        if (row.step === "item_receipt_add" && row.reference_id) {
+          try {
+            const knex = container.resolve("__pg_connection__") as KnexRaw;
+            const reconciliation = await reconcileReceiptModIfDrifted(
+              knex,
+              row.reference_id
+            );
+            if (reconciliation.enqueued) {
+              logger.info(
+                `${LOG_PREFIX} 🔁 Receipt ${row.reference_id} changed while its Add was in flight; corrective ItemReceiptMod queued behind the confirmed Add (${reconciliation.driftedSkus.join(", ")})`
+              );
+            } else if (reconciliation.driftedSkus.length > 0) {
+              logger.warn(
+                `${LOG_PREFIX} ⚠️ Receipt ${row.reference_id} drifted after Add but corrective Mod was not queued: ${reconciliation.reason}`
+              );
+            }
+          } catch (reconcileError: unknown) {
+            const message =
+              reconcileError instanceof Error
+                ? reconcileError.message
+                : String(reconcileError);
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Could not reconcile receipt ${row.reference_id} after Add confirmation: ${message}`
+            );
+          }
         }
 
         // EditSequence: prefer the top-level field (set by bridge since fix),
@@ -1130,7 +1254,13 @@ export async function pollSubmittedRows(
           }
         }
 
-        if (txnId && row.order_id && row.step !== "transfer_customer") {
+        if (
+          txnId &&
+          row.order_id &&
+          row.step !== "transfer_customer" &&
+          row.step !== "vendor_bill_mod" &&
+          !isPurchaseOperationStep(row.step)
+        ) {
           try {
             const orderModule = container.resolve(Modules.ORDER);
             const { rows: metaRows } = await pool.query(
@@ -1213,11 +1343,47 @@ export async function pollSubmittedRows(
         }
       } else if (op.status === "failed") {
         const errMsg = op.error || "QB operation failed (no details)";
+        if (
+          row.step === "vendor_bill_rebuild_delete" &&
+          isAlreadyMissingBillDeleteError(errMsg)
+        ) {
+          try {
+            await completeVendorBillRebuildDelete(row as ResubmitRow);
+            await confirmPipelineRow(row.id, null, null, {
+              already_missing: true,
+              bridge_error: errMsg,
+            });
+            logger.warn(
+              `${LOG_PREFIX} ♻️ ${row.step} ${row.id} returned 3120; treated as success because the QB Bill is already absent`
+            );
+          } catch (completionError: unknown) {
+            const message =
+              completionError instanceof Error
+                ? completionError.message
+                : String(completionError);
+            await mirrorPurchaseOperationFailure(
+              row as ResubmitRow,
+              message
+            );
+            await failOrRetryPipelineRow(
+              row.id,
+              message,
+              row.retry_count ?? 0
+            );
+          }
+          continue;
+        }
         const decision = await failOrRetryPipelineRow(
           row.id,
           errMsg,
           row.retry_count ?? 0
         );
+        if (isPurchaseOperationStep(row.step)) {
+          await mirrorPurchaseOperationFailure(
+            row as ResubmitRow,
+            errMsg
+          );
+        }
         if (row.step === "vendor_bill_mod" && row.reference_id) {
           await pool.query(
             `UPDATE qb_vendor_bill_pipeline
@@ -1388,8 +1554,41 @@ export async function pollSubmittedRows(
         );
       }
     } catch (pollErr: any) {
+      const message =
+        pollErr instanceof Error ? pollErr.message : String(pollErr);
+      if (
+        isPurchaseOperationStep(row.step) &&
+        /\b404\b|expired|no longer in bridge/i.test(message)
+      ) {
+        if (
+          row.step === "item_receipt_add" ||
+          row.step === "vendor_bill_add"
+        ) {
+          await schedulePurchaseAddExistenceCheck(
+            row as ResubmitRow,
+            `Lost bridge operation ${row.bridge_op_id}; verifying QuickBooks before retry`
+          );
+          logger.warn(
+            `${LOG_PREFIX} 🔎 Lost ${row.step} operation ${row.bridge_op_id}; scheduled read-only existence check before any retry`
+          );
+          continue;
+        }
+        const decision = await failOrRetryPipelineRow(
+          row.id,
+          message,
+          row.retry_count ?? 0
+        );
+        await mirrorPurchaseOperationFailure(
+          row as ResubmitRow,
+          message
+        );
+        logger.warn(
+          `${LOG_PREFIX} ⚠️ Lost ${row.step} operation ${row.bridge_op_id}; MOD is safe to retry (${decision.newStatus})`
+        );
+        continue;
+      }
       logger.warn(
-        `${LOG_PREFIX} ⚠️ Error polling row ${row.id} op ${row.bridge_op_id}: ${pollErr.message}`
+        `${LOG_PREFIX} ⚠️ Error polling row ${row.id} op ${row.bridge_op_id}: ${message}`
       );
     }
   }

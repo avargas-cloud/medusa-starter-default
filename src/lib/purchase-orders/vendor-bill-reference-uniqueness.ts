@@ -11,6 +11,20 @@ export type DuplicateVendorBillReference = {
   reference_id: string;
 };
 
+export const VENDOR_BILL_REFERENCE_REQUIRED_BODY = {
+  error:
+    "Vendor PI / Commercial Invoice # is required before a Vendor Bill can be saved",
+  code: "vendor_reference_required",
+} as const;
+
+export function normalizeRequiredVendorBillReference(
+  reference: unknown
+): string | null {
+  if (typeof reference !== "string") return null;
+  const normalized = reference.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
 function normalizeVendorBillReference(reference: string): string {
   return reference.trim().toLocaleLowerCase("en-US").replace(/[^a-z0-9]/g, "");
 }

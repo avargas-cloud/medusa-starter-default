@@ -101,6 +101,115 @@ export async function DELETE(
     });
   }
 
+  const billingKnex = (req.scope as unknown as {
+    resolve: (key: string) => {
+      raw: (
+        sql: string,
+        bindings?: unknown[]
+      ) => Promise<{ rows: unknown[] }>;
+    };
+  }).resolve("__pg_connection__");
+  const activeBilling = await billingKnex.raw(
+    `SELECT DISTINCT vb.id, vb.number, vb.status
+       FROM vendor_bill vb
+      WHERE vb.deleted_at IS NULL
+        AND vb.status IN ('draft', 'confirmed', 'synced')
+        AND (
+          vb.purchase_order_receipt_id = ?
+          OR EXISTS (
+            SELECT 1
+              FROM purchase_order_receipt por
+             WHERE por.id = ?
+               AND por.vendor_bill_id = vb.id
+               AND por.deleted_at IS NULL
+          )
+          OR EXISTS (
+            SELECT 1
+              FROM vendor_bill_line vbl
+             WHERE vbl.vendor_bill_id = vb.id
+               AND vbl.deleted_at IS NULL
+               AND vbl.receipt_line_id IN (
+                 SELECT id
+                   FROM purchase_order_receipt_line
+                  WHERE purchase_order_receipt_id = ?
+                    AND deleted_at IS NULL
+               )
+          )
+        )
+      ORDER BY vb.number`,
+    [receiptId, receiptId, receiptId]
+  );
+  if (activeBilling.rows.length > 0) {
+    return res.status(409).json({
+      error:
+        "This receipt is linked to an active Vendor Bill. Reduce or cancel the bill first; deleting the receipt would break the QuickBooks chain.",
+      code: "receipt_has_active_vendor_bill",
+      bills: activeBilling.rows,
+    });
+  }
+
+  // A legacy/header-only bill may not expose a direct receipt-line link.
+  // Protect the global invariant too: deleting this receipt must never leave
+  // total active billed qty above the remaining applied receipt qty on a PO
+  // line.
+  const billedFloorAfterDelete = await billingKnex.raw(
+    `WITH deleting AS (
+       SELECT purchase_order_line_id, SUM(qty_received_now)::int AS qty
+         FROM purchase_order_receipt_line
+        WHERE purchase_order_receipt_id = ?
+          AND deleted_at IS NULL
+        GROUP BY purchase_order_line_id
+     ),
+     received AS (
+       SELECT porl.purchase_order_line_id,
+              COALESCE(SUM(porl.qty_received_now), 0)::int AS qty
+         FROM purchase_order_receipt_line porl
+         JOIN purchase_order_receipt por
+           ON por.id = porl.purchase_order_receipt_id
+          AND por.deleted_at IS NULL
+          AND por.status IN ('applied', 'synced')
+        WHERE por.purchase_order_id = ?
+          AND por.id <> ?
+          AND porl.deleted_at IS NULL
+        GROUP BY porl.purchase_order_line_id
+     ),
+     billed AS (
+       SELECT vbl.purchase_order_line_id,
+              COALESCE(SUM(vbl.qty), 0)::int AS qty
+         FROM vendor_bill_line vbl
+         JOIN vendor_bill vb
+           ON vb.id = vbl.vendor_bill_id
+          AND vb.deleted_at IS NULL
+          AND vb.purchase_order_id = ?
+          AND vb.bill_type = 'regular'
+          AND vb.status IN ('draft', 'confirmed', 'synced')
+        WHERE vbl.deleted_at IS NULL
+          AND COALESCE(vbl.line_type, 'product') = 'product'
+          AND vbl.purchase_order_line_id IN (
+            SELECT purchase_order_line_id FROM deleting
+          )
+        GROUP BY vbl.purchase_order_line_id
+     )
+     SELECT d.purchase_order_line_id,
+            d.qty AS deleting_qty,
+            COALESCE(r.qty, 0) AS remaining_received_qty,
+            b.qty AS billed_qty
+       FROM deleting d
+       JOIN billed b ON b.purchase_order_line_id = d.purchase_order_line_id
+       LEFT JOIN received r
+         ON r.purchase_order_line_id = d.purchase_order_line_id
+      WHERE b.qty > COALESCE(r.qty, 0)`,
+    [receiptId, id, receiptId, id]
+  );
+  if (billedFloorAfterDelete.rows.length > 0) {
+    return res.status(409).json({
+      error:
+        "Deleting this receipt would leave one or more PO lines billed above their remaining received quantity. Reduce and reconfirm the Vendor Bill first.",
+      code: "receipt_delete_below_billed",
+      lines: billedFloorAfterDelete.rows,
+    });
+  }
+
   const wasAlreadyVoided = receipt.status === "voided";
 
   // Collect lines that still need stock reversal (only for applied/synced).
@@ -271,11 +380,11 @@ export async function PATCH(
     });
   }
 
-  // ItemReceiptMod pipeline (chunk 3+). Gate behind env flag until the
-  // qb-bridge ships the ItemReceiptModRq builder (chunk 2). When disabled
-  // we keep the pre-Mod behavior: synced receipts can only be edited via
-  // delete-and-recreate.
-  const qbModEnabled = process.env.QB_ITEM_RECEIPT_MOD_ENABLED === "true";
+  // ItemReceiptMod is the normal correction path now that the bridge builder
+  // and PO-scoped dependency chain are shipped. Keep only an explicit
+  // emergency kill switch; an unset env must not silently regress operators
+  // to delete-and-recreate.
+  const qbModEnabled = process.env.QB_ITEM_RECEIPT_MOD_ENABLED !== "false";
 
   // "Synced to QB" is NOT the receipt header status — the poller leaves the
   // header at 'applied' and records the QB TxnID in qb_item_receipt_list_id.
@@ -431,6 +540,120 @@ export async function PATCH(
         new_qty: change.new_qty,
         delta,
       });
+    }
+
+    const reductions = lineChanges.filter((line) => line.delta < 0);
+    if (reductions.length > 0) {
+      const billingKnex = (req.scope as unknown as {
+        resolve: (key: string) => {
+          raw: (
+            sql: string,
+            bindings?: unknown[]
+          ) => Promise<{ rows: unknown[] }>;
+        };
+      }).resolve("__pg_connection__");
+      const billingResult = await billingKnex.raw(
+        `SELECT vbl.purchase_order_line_id,
+                COALESCE(SUM(vbl.qty), 0)::int AS billed_qty,
+                BOOL_OR(vb.status = 'draft') AS has_draft_revision,
+                jsonb_agg(DISTINCT jsonb_build_object(
+                  'id', vb.id,
+                  'number', vb.number,
+                  'status', vb.status
+                )) AS bills
+           FROM vendor_bill_line vbl
+           JOIN vendor_bill vb
+             ON vb.id = vbl.vendor_bill_id
+            AND vb.deleted_at IS NULL
+            AND vb.purchase_order_id = ?
+            AND vb.bill_type = 'regular'
+            AND vb.status IN ('draft', 'confirmed', 'synced')
+          WHERE vbl.purchase_order_line_id = ANY(?)
+            AND vbl.deleted_at IS NULL
+            AND COALESCE(vbl.line_type, 'product') = 'product'
+          GROUP BY vbl.purchase_order_line_id`,
+        [id, reductions.map((line) => line.po_line_id)]
+      );
+      const billedByPoLine = new Map(
+        (
+          billingResult.rows as Array<{
+            purchase_order_line_id: string;
+            billed_qty: number | string;
+            has_draft_revision: boolean;
+            bills: unknown;
+          }>
+        ).map((row) => [
+          row.purchase_order_line_id,
+          {
+            billed_qty: Number(row.billed_qty ?? 0),
+            has_draft_revision: Boolean(row.has_draft_revision),
+            bills: row.bills,
+          },
+        ])
+      );
+      const adoptedHeaderOnly = await billingKnex.raw(
+        `SELECT vb.id, vb.number
+           FROM vendor_bill vb
+          WHERE vb.purchase_order_id = ?
+            AND vb.bill_type = 'regular'
+            AND vb.qb_source = 'adopted'
+            AND vb.status IN ('confirmed', 'synced')
+            AND vb.deleted_at IS NULL
+            AND NOT EXISTS (
+              SELECT 1
+                FROM vendor_bill_line vbl
+               WHERE vbl.vendor_bill_id = vb.id
+                 AND vbl.deleted_at IS NULL
+            )
+          LIMIT 1`,
+        [id]
+      );
+      if (adoptedHeaderOnly.rows.length > 0) {
+        return res.status(409).json({
+          error:
+            "This PO has an adopted QuickBooks Bill without line quantities. Its billed floor cannot be verified automatically.",
+          code: "adopted_bill_qty_unknown",
+          bill: adoptedHeaderOnly.rows[0],
+        });
+      }
+      const affected = reductions
+        .map((line) => ({
+          ...line,
+          ...(billedByPoLine.get(line.po_line_id) ?? {
+            billed_qty: 0,
+            has_draft_revision: false,
+            bills: [],
+          }),
+        }))
+        .filter((line) => line.billed_qty > 0);
+      const belowBilled = affected.filter(
+        (line) => {
+          const poLine = poLineById.get(line.po_line_id);
+          return (
+            Number(poLine?.qty_received ?? 0) + line.delta <
+            line.billed_qty
+          );
+        }
+      );
+      if (belowBilled.length > 0) {
+        return res.status(409).json({
+          error:
+            "Reduce and reconfirm the linked Vendor Bill before reducing this receipt.",
+          code: "receipt_qty_below_billed",
+          lines: belowBilled,
+        });
+      }
+      const draftBills = affected.filter(
+        (line) => line.has_draft_revision
+      );
+      if (draftBills.length > 0) {
+        return res.status(409).json({
+          error:
+            "The linked Vendor Bill has an unconfirmed revision. Confirm its BillMod before reducing this receipt.",
+          code: "vendor_bill_revision_pending",
+          lines: draftBills,
+        });
+      }
     }
   }
 

@@ -15,6 +15,7 @@ import type {
 } from "@medusajs/framework/http";
 import type { IUserModuleService } from "@medusajs/framework/types";
 import { Modules } from "@medusajs/utils";
+import { randomUUID } from "crypto";
 
 import { generateEntityId } from "@medusajs/utils";
 
@@ -33,6 +34,10 @@ import {
   reconcileReceivedPoStatus,
 } from "../../../../lib/purchase-orders/po-received-status";
 import { resolveVendorDisplayName } from "../../../../lib/vendors/vendor-display-name";
+import {
+  enqueuePurchaseQbOperation,
+  purchaseOperationKey,
+} from "../../../../lib/purchase-orders/qb-purchase-dependency-chain";
 
 interface QbVendorLike {
   id: string;
@@ -228,14 +233,14 @@ export async function GET(
     const billedRows: Array<{
       receipt_line_id: string;
       purchase_order_line_id: string;
-      qty_received_now: number;
+      billed_qty: number;
       vendor_bill_id: string;
       vendor_bill_number: string | null;
     }> = await knex.raw(
       `SELECT
          porl.id AS receipt_line_id,
          porl.purchase_order_line_id,
-         porl.qty_received_now,
+         vbl.qty AS billed_qty,
          vb.id AS vendor_bill_id,
          vb.number AS vendor_bill_number
        FROM purchase_order_receipt_line porl
@@ -255,11 +260,37 @@ export async function GET(
         vendor_bill_id: row.vendor_bill_id,
         vendor_bill_number: row.vendor_bill_number,
       });
-      billedQtyByPoLineId.set(
-        row.purchase_order_line_id,
-        (billedQtyByPoLineId.get(row.purchase_order_line_id) ?? 0) + Number(row.qty_received_now ?? 0)
-      );
     }
+  }
+
+  // Bill quantities belong to PO lines even when a legacy/header-bound Bill
+  // has no receipt_line_id. Compute the PO editor's billed floor directly from
+  // active regular bill lines so its warning modal matches the backend guard.
+  const billingKnex = (req.scope as any).resolve("__pg_connection__");
+  const billedTotals = await billingKnex.raw(
+    `SELECT vbl.purchase_order_line_id,
+            COALESCE(SUM(vbl.qty), 0)::int AS billed_qty
+       FROM vendor_bill_line vbl
+       JOIN vendor_bill vb
+         ON vb.id = vbl.vendor_bill_id
+        AND vb.deleted_at IS NULL
+        AND vb.purchase_order_id = ?
+        AND vb.bill_type = 'regular'
+        AND vb.status IN ('draft', 'confirmed', 'synced')
+      WHERE vbl.deleted_at IS NULL
+        AND COALESCE(vbl.line_type, 'product') = 'product'
+        AND vbl.purchase_order_line_id IS NOT NULL
+      GROUP BY vbl.purchase_order_line_id`,
+    [id]
+  );
+  for (const row of billedTotals.rows as Array<{
+    purchase_order_line_id: string;
+    billed_qty: number | string;
+  }>) {
+    billedQtyByPoLineId.set(
+      row.purchase_order_line_id,
+      Number(row.billed_qty ?? 0)
+    );
   }
 
   const linesByReceipt = new Map<string, Array<Record<string, unknown>>>();
@@ -687,6 +718,153 @@ export async function PATCH(
     const toDeleteLines = oldLines.filter((l) => !keepIds.has(l.id));
     const toDelete = toDeleteLines.map((l) => l.id);
 
+    // A QB-linked Vendor Bill constrains the safe ordering of PO reductions.
+    // The bill must already carry the desired lower quantity locally and must
+    // have been reconfirmed before this PO save. Its BillMod then becomes the
+    // dependency parent of the PurchaseOrderMod enqueued below.
+    const reductions = [
+      ...toUpdate
+        .map((update) => {
+          const old = oldById.get(update.id);
+          const previousQty = Number(old?.qty_ordered ?? 0);
+          const nextQty = Number(update.data.qty_ordered ?? 0);
+          return {
+            line_id: update.id,
+            sku: String(old?.sku_snapshot ?? update.id),
+            previous_qty: previousQty,
+            next_qty: nextQty,
+          };
+        })
+        .filter((line) => line.next_qty < line.previous_qty),
+      ...toDeleteLines.map((line) => ({
+        line_id: line.id,
+        sku: String(line.sku_snapshot ?? line.id),
+        previous_qty: Number(line.qty_ordered ?? 0),
+        next_qty: 0,
+      })),
+    ];
+
+    if (reductions.length > 0) {
+      const knex = req.scope.resolve("__pg_connection__") as {
+        raw: (
+          sql: string,
+          bindings?: unknown[]
+        ) => Promise<{ rows: unknown[]; rowCount?: number }>;
+      };
+      const billingResult = await knex.raw(
+        `SELECT vbl.purchase_order_line_id,
+                COALESCE(SUM(vbl.qty), 0)::int AS billed_qty,
+                BOOL_OR(vb.status = 'draft') AS has_draft_revision,
+                BOOL_OR(vb.qb_source = 'adopted') AS has_adopted_bill,
+                jsonb_agg(DISTINCT jsonb_build_object(
+                  'id', vb.id,
+                  'number', vb.number,
+                  'status', vb.status,
+                  'qb_source', vb.qb_source
+                )) AS bills
+           FROM vendor_bill vb
+           JOIN vendor_bill_line vbl
+             ON vbl.vendor_bill_id = vb.id
+            AND vbl.deleted_at IS NULL
+            AND COALESCE(vbl.line_type, 'product') = 'product'
+          WHERE vb.purchase_order_id = ?
+            AND vb.bill_type = 'regular'
+            AND vb.status IN ('draft', 'confirmed', 'synced')
+            AND vb.deleted_at IS NULL
+            AND vbl.purchase_order_line_id = ANY(?)
+          GROUP BY vbl.purchase_order_line_id`,
+        [id, reductions.map((line) => line.line_id)]
+      );
+      const billingByLine = new Map(
+        (
+          billingResult.rows as Array<{
+            purchase_order_line_id: string;
+            billed_qty: number | string;
+            has_draft_revision: boolean;
+            has_adopted_bill: boolean;
+            bills: unknown;
+          }>
+        ).map((row) => [
+          row.purchase_order_line_id,
+          {
+            billed_qty: Number(row.billed_qty ?? 0),
+            has_draft_revision: Boolean(row.has_draft_revision),
+            has_adopted_bill: Boolean(row.has_adopted_bill),
+            bills: row.bills,
+          },
+        ])
+      );
+
+      const adoptedHeaderOnly = await knex.raw(
+        `SELECT vb.id, vb.number
+           FROM vendor_bill vb
+          WHERE vb.purchase_order_id = ?
+            AND vb.bill_type = 'regular'
+            AND vb.qb_source = 'adopted'
+            AND vb.status IN ('confirmed', 'synced')
+            AND vb.deleted_at IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM vendor_bill_line vbl
+               WHERE vbl.vendor_bill_id = vb.id
+                 AND vbl.deleted_at IS NULL
+            )
+          LIMIT 1`,
+        [id]
+      );
+      if (adoptedHeaderOnly.rows.length > 0) {
+        return res.status(409).json({
+          error:
+            "This PO has an adopted QuickBooks Bill without line quantities. " +
+            "Its billed floor cannot be verified automatically.",
+          code: "adopted_bill_qty_unknown",
+          bill: adoptedHeaderOnly.rows[0],
+        });
+      }
+
+      const affected = reductions
+        .map((line) => ({
+          ...line,
+          ...(billingByLine.get(line.line_id) ?? {
+            billed_qty: 0,
+            has_draft_revision: false,
+            has_adopted_bill: false,
+            bills: [],
+          }),
+        }))
+        .filter((line) => line.billed_qty > 0);
+
+      const belowBilled = affected.filter(
+        (line) => line.next_qty < line.billed_qty
+      );
+      if (belowBilled.length > 0) {
+        return res.status(409).json({
+          error:
+            "Reduce the linked Vendor Bill first, reconfirm it, then retry this PO reduction.",
+          code: "po_qty_below_billed",
+          lines: belowBilled,
+        });
+      }
+
+      const draftBills = affected.filter((line) => line.has_draft_revision);
+      if (draftBills.length > 0) {
+        return res.status(409).json({
+          error:
+            "The linked Vendor Bill has an unconfirmed revision. Confirm and queue its BillMod before reducing the PO.",
+          code: "vendor_bill_revision_pending",
+          lines: draftBills,
+        });
+      }
+
+      if (affected.length > 0 && body.confirm_billed_reduction !== true) {
+        return res.status(409).json({
+          error:
+            "This reduction affects quantities already billed in QuickBooks and requires confirmation.",
+          code: "billed_reduction_confirmation_required",
+          lines: affected,
+        });
+      }
+    }
+
     // Per-item guard: block only the affected lines, not the whole PO.
     // A line with any received units cannot be deleted; a fully-received
     // line cannot be modified; qty_ordered cannot drop below qty_received.
@@ -971,6 +1149,7 @@ export async function PATCH(
     existing.qb_purchase_order_list_id &&
     requiresQbMod
   ) {
+    let delegatedPipelineRowIsDurable = false;
     try {
       // Fetch fresh lines (with their qb_txn_line_id if available)
       const freshLines = (await service.listPurchaseOrderLines(
@@ -988,6 +1167,8 @@ export async function PATCH(
 
       const modPayload = {
         is_mod: true,
+        delegated_to_consolidator: true,
+        operation_revision: randomUUID(),
         txn_id: existing.qb_purchase_order_list_id,
         edit_sequence: existing.qb_edit_sequence ?? undefined,
         po_id: id,
@@ -1026,7 +1207,7 @@ export async function PATCH(
       // Reset existing pipeline row to waiting, or create one if this PO has never been queued.
       // Medusa enforces uniqueness at service level (no DB constraint), so we use raw UPDATE first.
       const knex = (req.scope as any).resolve("__pg_connection__");
-      const updated = await knex.raw(
+      const updatedPipeline = await knex.raw(
         `UPDATE qb_purchase_order_pipeline
             SET status          = 'waiting',
                 qb_operation_id = NULL,
@@ -1040,14 +1221,72 @@ export async function PATCH(
             AND deleted_at IS NULL`,
         [JSON.stringify(modPayload), id]
       );
-      if ((updated.rowCount ?? 0) === 0) {
-        await service.createQbPurchaseOrderPipelines([
+      let legacyPipelineId = String(
+        (
+          await knex.raw(
+            `SELECT id
+               FROM qb_purchase_order_pipeline
+              WHERE purchase_order_id = ? AND deleted_at IS NULL
+              LIMIT 1`,
+            [id]
+          )
+        ).rows[0]?.id ?? ""
+      );
+      if ((updatedPipeline.rowCount ?? 0) === 0) {
+        const createdPipeline = await service.createQbPurchaseOrderPipelines([
           { purchase_order_id: id, status: "waiting", payload: modPayload },
         ]);
+        const createdRows = Array.isArray(createdPipeline)
+          ? createdPipeline
+          : [createdPipeline];
+        legacyPipelineId = String(
+          (createdRows[0] as { id: string } | undefined)?.id ?? ""
+        );
       }
+      if (!legacyPipelineId) {
+        throw new Error("Purchase Order pipeline row was not created");
+      }
+      // From this point the consolidator repair pass can recreate the universal
+      // dependency row after any narrow crash/error below.
+      delegatedPipelineRowIsDurable = true;
+
+      const orderPayload = {
+        ...modPayload,
+        qb_purchase_order_pipeline_id: legacyPipelineId,
+      };
+      const operation = await enqueuePurchaseQbOperation(knex, {
+        purchaseOrderId: id,
+        referenceId: id,
+        referenceType: "purchase_order",
+        step: "purchase_order_mod",
+        qbTxnId: existing.qb_purchase_order_list_id,
+        payload: orderPayload,
+        operationKey: purchaseOperationKey(
+          "purchase_order_mod",
+          id,
+          orderPayload
+        ),
+      });
+      await knex.raw(
+        `UPDATE qb_purchase_order_pipeline
+            SET order_pipeline_id = ?, updated_at = NOW()
+          WHERE id = ?`,
+        [operation.id, legacyPipelineId]
+      );
     } catch (qbErr) {
-      // Non-fatal: the local save succeeded; QB MOD will be retried next session
       console.error("[po-patch] Failed to enqueue QB MOD:", qbErr);
+      if (!delegatedPipelineRowIsDurable) {
+        return res.status(503).json({
+          error:
+            "The PO was saved locally, but its QuickBooks update could not be queued. Retry Save before continuing with receipts or bills.",
+          code: "qb_purchase_mod_enqueue_failed",
+          local_save_succeeded: true,
+          purchase_order: updated,
+        });
+      }
+      // The operator-facing row is durable and marked as delegated, so the
+      // repair pass will attach it to the PO dependency chain. The legacy
+      // poller cannot dispatch it out of order.
     }
   }
 

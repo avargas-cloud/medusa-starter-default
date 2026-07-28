@@ -12,6 +12,9 @@
  *   - qbvbpipe_<ulid>__vendor_bill_add
  *                               → qb_vendor_bill_pipeline ADD lane
  *   - <uuid>__vendor_bill_mod   → qb_order_pipeline Vendor Bill MOD row
+ *   - <uuid>__vendor_bill_rebuild_preflight
+ *   - <uuid>__vendor_bill_rebuild_delete
+ *                               → qb_order_pipeline reviewed rebuild rows
  *   - qbvbpipe_<ulid>__vendor_bill_delete
  *                               → qb_vendor_bill_pipeline DELETE lane
  *
@@ -28,12 +31,95 @@ import {
   orderPurchaseOrderModLines,
   type PurchaseOrderModLineLike,
 } from "../../../../../../lib/quickbooks/purchase-order-line-order";
-import { PURCHASE_ORDERS_MODULE } from "../../../../../../modules/purchase-orders";
-import type PurchaseOrdersModuleService from "../../../../../../modules/purchase-orders/service";
+import { PURCHASE_EXISTENCE_CHECK_KEY } from "../../../../../../lib/quickbooks/consolidator/purchase-operations";
+
+async function rearmDelegatedOperation(
+  knex: any,
+  orderPipelineId: string | null | undefined,
+  requireExistenceCheck = false
+): Promise<void> {
+  if (!orderPipelineId) return;
+  await knex.raw(
+    `UPDATE qb_order_pipeline operation
+        SET status = CASE
+              WHEN operation.depends_on IS NULL
+                OR EXISTS (
+                  SELECT 1 FROM qb_order_pipeline parent
+                   WHERE parent.id = operation.depends_on
+                     AND parent.status IN ('confirmed', 'fixed')
+                )
+              THEN 'pending'
+              ELSE 'waiting'
+            END,
+            payload = CASE WHEN ?
+              THEN COALESCE(operation.payload, '{}'::jsonb) ||
+                   jsonb_build_object(?, true)
+              ELSE operation.payload
+            END,
+            bridge_op_id = NULL, submitted_at = NULL,
+            retry_count = 0, error = NULL, next_retry_at = NULL,
+            failed_at = NULL, updated_at = NOW()
+      WHERE operation.id = ?::uuid
+        AND operation.status NOT IN ('confirmed', 'fixed')`,
+    [
+      requireExistenceCheck,
+      PURCHASE_EXISTENCE_CHECK_KEY,
+      orderPipelineId,
+    ]
+  );
+}
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const { id: rawId } = req.params as { id: string };
   const knex = (req.scope as any).resolve("__pg_connection__");
+
+  const rebuildStep = rawId.endsWith("__vendor_bill_rebuild_preflight")
+    ? "vendor_bill_rebuild_preflight"
+    : rawId.endsWith("__vendor_bill_rebuild_delete")
+      ? "vendor_bill_rebuild_delete"
+      : null;
+  if (rebuildStep) {
+    const suffix = `__${rebuildStep}`;
+    const orderPipelineId = rawId.slice(0, -suffix.length);
+    const rows = await knex
+      .raw(
+        `SELECT id, reference_id, status
+           FROM qb_order_pipeline
+          WHERE id = ?::uuid AND step = ? LIMIT 1`,
+        [orderPipelineId, rebuildStep]
+      )
+      .then((r: any) => r.rows);
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ error: "Pipeline entry not found" });
+    }
+    if (!["pending", "waiting", "failed"].includes(String(row.status))) {
+      return res.status(409).json({
+        error: `Cannot retry rebuild step in status '${row.status}'`,
+      });
+    }
+    await rearmDelegatedOperation(knex, orderPipelineId);
+    await knex.raw(
+      `UPDATE qb_vendor_bill_pipeline
+          SET intent = ?, status = 'waiting', qb_operation_id = NULL,
+              retries = 0, last_error = NULL, next_retry_at = NULL,
+              updated_at = NOW()
+        WHERE vendor_bill_id = ? AND deleted_at IS NULL`,
+      [
+        rebuildStep === "vendor_bill_rebuild_preflight"
+          ? "rebuild_prepare"
+          : "rebuild_deleting",
+        row.reference_id,
+      ]
+    );
+    return res.json({
+      success: true,
+      message:
+        rebuildStep === "vendor_bill_rebuild_preflight"
+          ? "Vendor Bill payment preflight re-queued"
+          : "Vendor Bill rebuild delete re-queued",
+    });
+  }
 
   const isVendorBillAdd = rawId.endsWith("__vendor_bill_add");
   const isVendorBillMod = rawId.endsWith("__vendor_bill_mod");
@@ -52,7 +138,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   if (isVendorBillAdd && vendorBillId) {
     const rows = await knex
       .raw(
-        `SELECT id, status, intent FROM qb_vendor_bill_pipeline
+        `SELECT id, status, intent, order_pipeline_id FROM qb_vendor_bill_pipeline
           WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
         [vendorBillId]
       )
@@ -76,6 +162,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
               last_error = NULL, next_retry_at = NULL, updated_at = NOW()
         WHERE id = ?`,
       [vendorBillId]
+    );
+    await rearmDelegatedOperation(
+      knex,
+      row.order_pipeline_id,
+      true
     );
     return res.json({ success: true, message: "Vendor Bill add re-queued" });
   }
@@ -157,7 +248,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   if (isModLane) {
     const rows = await knex
       .raw(
-        `SELECT id, mod_status FROM qb_item_receipt_pipeline
+        `SELECT id, mod_status, mod_order_pipeline_id
+           FROM qb_item_receipt_pipeline
           WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
         [id]
       )
@@ -182,6 +274,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         WHERE id = ?`,
       [id]
     );
+    await rearmDelegatedOperation(knex, row.mod_order_pipeline_id);
     return res.json({ success: true, message: "Re-queued for processing" });
   }
 
@@ -219,7 +312,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   if (id.startsWith("qbrcpipe_")) {
     const rows = await knex
       .raw(
-        `SELECT id, status FROM qb_item_receipt_pipeline
+        `SELECT id, status, add_order_pipeline_id
+           FROM qb_item_receipt_pipeline
           WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
         [id]
       )
@@ -245,22 +339,29 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         WHERE id = ?`,
       [id]
     );
+    await rearmDelegatedOperation(
+      knex,
+      row.add_order_pipeline_id,
+      true
+    );
     return res.json({ success: true, message: "Re-queued for processing" });
   }
 
   // ── Purchase Order pipeline (default) ───────────────────────────────────
-  const service = req.scope.resolve(
-    PURCHASE_ORDERS_MODULE
-  ) as unknown as PurchaseOrdersModuleService;
-
-  const rows = (await service.listQbPurchaseOrderPipelines(
-    { id },
-    { take: 1 }
-  )) as Array<{
+  const rows = (await knex
+    .raw(
+      `SELECT id, status, payload, last_error, order_pipeline_id
+         FROM qb_purchase_order_pipeline
+        WHERE id = ? AND deleted_at IS NULL
+        LIMIT 1`,
+      [id]
+    )
+    .then((result: any) => result.rows)) as Array<{
     id: string;
     status: string;
     payload: unknown;
     last_error: string | null;
+    order_pipeline_id: string | null;
   }>;
 
   const row = rows[0];
@@ -313,6 +414,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       WHERE id = ?`,
     [JSON.stringify(newPayload), id]
   );
+  await rearmDelegatedOperation(knex, row.order_pipeline_id);
 
   return res.json({ success: true, message: "Re-queued for processing" });
 }

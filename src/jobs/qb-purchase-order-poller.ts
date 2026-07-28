@@ -361,7 +361,14 @@ export default async function qbPurchaseOrderPoller(
     knex,
     "qb_purchase_order_pipeline",
     STANDARD_STALE_CONFIG,
-    { warn: (m) => logger.warn?.(`${TAG} ${m}`) }
+    { warn: (m) => logger.warn?.(`${TAG} ${m}`) },
+    `AND NOT (
+       COALESCE(payload->>'is_mod', 'false') = 'true'
+       AND (
+         order_pipeline_id IS NOT NULL
+         OR COALESCE(payload->>'delegated_to_consolidator', 'false') = 'true'
+       )
+     )`
   );
 
   let submitted = 0;
@@ -377,6 +384,13 @@ export default async function qbPurchaseOrderPoller(
        FROM qb_purchase_order_pipeline
       WHERE status = 'waiting'
         AND qb_operation_id IS NULL
+        AND NOT (
+          COALESCE(payload->>'is_mod', 'false') = 'true'
+          AND (
+            order_pipeline_id IS NOT NULL
+            OR COALESCE(payload->>'delegated_to_consolidator', 'false') = 'true'
+          )
+        )
         AND deleted_at IS NULL
       LIMIT ?`,
       [MAX_ROWS_PER_TICK]
@@ -477,6 +491,13 @@ export default async function qbPurchaseOrderPoller(
       `SELECT id, purchase_order_id, qb_operation_id, qb_list_id, payload
        FROM qb_purchase_order_pipeline
       WHERE status = 'submitted'
+        AND NOT (
+          COALESCE(payload->>'is_mod', 'false') = 'true'
+          AND (
+            order_pipeline_id IS NOT NULL
+            OR COALESCE(payload->>'delegated_to_consolidator', 'false') = 'true'
+          )
+        )
         AND deleted_at IS NULL
       LIMIT ?`,
       [MAX_ROWS_PER_TICK]
@@ -949,6 +970,13 @@ export default async function qbPurchaseOrderPoller(
        FROM qb_purchase_order_pipeline
       WHERE status = 'error'
         AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+        AND NOT (
+          COALESCE(payload->>'is_mod', 'false') = 'true'
+          AND (
+            order_pipeline_id IS NOT NULL
+            OR COALESCE(payload->>'delegated_to_consolidator', 'false') = 'true'
+          )
+        )
         AND deleted_at IS NULL
       LIMIT ?`,
       [MAX_ROWS_PER_TICK]

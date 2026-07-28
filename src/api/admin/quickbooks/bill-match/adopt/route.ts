@@ -4,6 +4,10 @@ import { Client } from "pg";
 
 import { queryBillByTxnId } from "../_lib/bill-query";
 import { reconstructLocalBill, type PoLineForMatch } from "../_lib/reconstruct";
+import {
+  normalizeRequiredVendorBillReference,
+  VENDOR_BILL_REFERENCE_REQUIRED_BODY,
+} from "../../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
 
 interface AdoptBody {
   po_id?: string;
@@ -96,6 +100,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
       res.status(404).json({ error: "QB bill not found for that TxnID" });
       return;
     }
+    const referenceId = normalizeRequiredVendorBillReference(bill.ref_number);
+    if (!referenceId) {
+      res.status(422).json(VENDOR_BILL_REFERENCE_REQUIRED_BODY);
+      return;
+    }
     if (bill.vendor_list_id && po.vendor_qb_list_id_snapshot && bill.vendor_list_id !== po.vendor_qb_list_id_snapshot) {
       res.status(409).json({ error: "vendor_mismatch", message: "QB bill vendor differs from the PO vendor." });
       return;
@@ -184,8 +193,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
           po.vendor_qb_list_id_snapshot,
           bill.txn_id,
           bill.edit_sequence,
-          bill.ref_number,
-          bill.ref_number,
+          referenceId,
+          referenceId,
           documentDate,
           bill.amount_due_cents,
           note,

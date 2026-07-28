@@ -35,6 +35,11 @@ const IDEMPOTENT_REDISPATCH_STEPS = [
   "void_check",
   "refund_apply_del",
   "void_inventory_adjustment",
+  "purchase_order_mod",
+  "item_receipt_mod",
+  "vendor_bill_mod",
+  "vendor_bill_rebuild_preflight",
+  "vendor_bill_rebuild_delete",
 ];
 
 /**

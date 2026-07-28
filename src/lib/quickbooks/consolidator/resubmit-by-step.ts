@@ -51,6 +51,12 @@ import {
   processCustomerDataExtPipelineRow,
 } from "./customer-pass";
 import { bridgeFetch } from "../client/core";
+import {
+  dispatchPurchaseOperation,
+  mirrorPurchaseOperationFailure,
+  PURCHASE_OPERATION_STEPS,
+  refreshVendorBillModSnapshot,
+} from "./purchase-operations";
 
 const LOG_PREFIX = "[QB-CONSOLIDATOR]";
 
@@ -91,6 +97,19 @@ export async function resubmitByStep(
 
   try {
     switch (row.step) {
+      case "purchase_order_mod":
+      case "item_receipt_add":
+      case "item_receipt_mod":
+      case "vendor_bill_add":
+      case "vendor_bill_rebuild_preflight":
+      case "vendor_bill_rebuild_delete": {
+        const dispatched = await dispatchPurchaseOperation(row, logger);
+        logger.info(
+          `${LOG_PREFIX} ✅ ${row.step} ${row.id} submitted op=${dispatched.operationId}`
+        );
+        break;
+      }
+
       case "estimate":
         if (!row.order_id) break;
         // Always attempt MOD first — handleDraftOrderUpdated reads the FRESH
@@ -1658,10 +1677,14 @@ export async function resubmitByStep(
         if (!txnId || !row.payload) {
           throw new Error("vendor_bill_mod: missing QB TxnID or payload");
         }
+        const refreshedPayload = await refreshVendorBillModSnapshot(
+          row.payload,
+          logger
+        );
         const result = await bridgeFetch(
           "PUT",
           `/api/bills/${encodeURIComponent(txnId)}`,
-          row.payload
+          refreshedPayload
         );
         if (!result?.operationId) {
           throw new Error(
@@ -1672,16 +1695,23 @@ export async function resubmitByStep(
         await pool.query(
           `UPDATE qb_order_pipeline
               SET status = 'submitted', bridge_op_id = $2,
+                  payload = $3::jsonb,
                   submitted_at = NOW(), updated_at = NOW()
             WHERE id = $1`,
-          [row.id, result.operationId]
+          [row.id, result.operationId, JSON.stringify(refreshedPayload)]
         );
         await pool.query(
           `UPDATE qb_vendor_bill_pipeline
               SET status = 'submitted', qb_operation_id = $2,
+                  payload = $3::jsonb, edit_sequence = $4,
                   last_error = NULL, next_retry_at = NULL, updated_at = NOW()
             WHERE vendor_bill_id = $1 AND intent = 'mod' AND deleted_at IS NULL`,
-          [row.reference_id, result.operationId]
+          [
+            row.reference_id,
+            result.operationId,
+            JSON.stringify(refreshedPayload),
+            refreshedPayload.edit_sequence,
+          ]
         );
         logger.info(
           `${LOG_PREFIX} ✅ vendor_bill_mod ${row.id} submitted op=${result.operationId}`
@@ -1698,10 +1728,15 @@ export async function resubmitByStep(
     logger.warn(
       `${LOG_PREFIX} ⚠️ resubmitByStep failed for row ${row.id} (${row.step}): ${err.message}`
     );
-    if (row.step === "vendor_bill_mod") {
+    if (
+      row.step === "vendor_bill_mod" ||
+      PURCHASE_OPERATION_STEPS.includes(
+        row.step as (typeof PURCHASE_OPERATION_STEPS)[number]
+      )
+    ) {
       await failOrRetryPipelineRow(
         row.id,
-        err.message || "BillMod dispatch failed",
+        err.message || `${row.step} dispatch failed`,
         row.retry_count ?? 0
       );
     } else {
@@ -1716,6 +1751,16 @@ export async function resubmitByStep(
           WHERE vendor_bill_id = $1 AND intent = 'mod' AND deleted_at IS NULL`,
         [row.reference_id, err.message || "BillMod dispatch failed"]
       );
+    }
+    if (
+      PURCHASE_OPERATION_STEPS.includes(
+        row.step as (typeof PURCHASE_OPERATION_STEPS)[number]
+      )
+    ) {
+      await mirrorPurchaseOperationFailure(
+        row,
+        err.message || `${row.step} dispatch failed`
+      ).catch(() => undefined);
     }
   }
 }

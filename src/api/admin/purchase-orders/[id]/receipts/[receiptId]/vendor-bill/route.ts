@@ -22,7 +22,11 @@ import { getActorUserId, UnauthenticatedError } from "../../../../_lib/auth";
 import { zodErrorToBody } from "../../../../_lib/format";
 import { getPurchaseOrdersService } from "../../../../_lib/service-resolver";
 import { resolveVendorBillPaymentTermsDays } from "../../../../../../../lib/purchase-orders/vendor-bill-payment-terms";
-import { findDuplicateVendorBillReference } from "../../../../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
+import {
+  findDuplicateVendorBillReference,
+  normalizeRequiredVendorBillReference,
+  VENDOR_BILL_REFERENCE_REQUIRED_BODY,
+} from "../../../../../../../lib/purchase-orders/vendor-bill-reference-uniqueness";
 
 type KnexInstance = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
@@ -228,6 +232,10 @@ export async function POST(
     return res.status(400).json(zodErrorToBody(parsed.error));
   }
   const body: VendorBillBody = parsed.data;
+  const referenceId = normalizeRequiredVendorBillReference(body.reference_id);
+  if (!referenceId) {
+    return res.status(422).json(VENDOR_BILL_REFERENCE_REQUIRED_BODY);
+  }
 
   const service = getPurchaseOrdersService(req);
   const knex = resolveKnex(req);
@@ -332,7 +340,7 @@ export async function POST(
 
   const duplicate = await findDuplicateVendorBillReference(knex, {
     vendorId,
-    referenceId: body.reference_id ?? null,
+    referenceId,
   });
   if (duplicate) {
     return res.status(409).json({
@@ -357,7 +365,7 @@ export async function POST(
     vendor_qb_list_id_snapshot: (po as { vendor_qb_list_id_snapshot?: string | null }).vendor_qb_list_id_snapshot ?? null,
     number: vbNumber,
     status: "draft",
-    reference_id: body.reference_id ?? null,
+    reference_id: referenceId,
     payment_terms_days: paymentTermsDays,
     due_date: new Date(Date.now() + paymentTermsDays * 24 * 60 * 60 * 1000),
     commission_mode: body.commission_mode,
@@ -445,6 +453,16 @@ export async function PATCH(
       error: `Cannot update a vendor bill in status '${bill.status}'. Only draft bills can be edited.`,
       code: "not_draft",
     });
+  }
+
+  const effectiveReferenceId = normalizeRequiredVendorBillReference(
+    "reference_id" in patch ? patch.reference_id : bill.reference_id
+  );
+  if (!effectiveReferenceId) {
+    return res.status(422).json(VENDOR_BILL_REFERENCE_REQUIRED_BODY);
+  }
+  if ("reference_id" in patch) {
+    patch.reference_id = effectiveReferenceId;
   }
 
   const updatePayload: Record<string, unknown> = {};

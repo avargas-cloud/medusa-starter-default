@@ -43,7 +43,8 @@ export async function markStaleRowsAsFailed(
   knex: Knex,
   table: string,
   staleStatuses: StaleStatusConfig[],
-  logger?: { warn: (msg: string) => void }
+  logger?: { warn: (msg: string) => void },
+  additionalWhereSql = ""
 ): Promise<StaleCleanupResult> {
   const result: StaleCleanupResult = { marked: 0, byStatus: {} };
 
@@ -64,7 +65,8 @@ export async function markStaleRowsAsFailed(
       `UPDATE ${table}
        SET ${setClauses.join(", ")}
        WHERE status = ?
-         AND updated_at < NOW() - INTERVAL '${cfg.timeoutMin} minutes'`,
+         AND updated_at < NOW() - INTERVAL '${cfg.timeoutMin} minutes'
+         ${additionalWhereSql}`,
       [errorMsg, cfg.status]
     );
 

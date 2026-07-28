@@ -1,4 +1,8 @@
 import { randomUUID } from "crypto";
+import {
+  enqueuePurchaseQbOperation,
+  purchaseOperationKey,
+} from "./qb-purchase-dependency-chain";
 
 export type VendorBillModKnex = {
   raw: (
@@ -325,22 +329,31 @@ export async function enqueueChinaAgencyVendorBillModGroup(
       );
     }
 
-    await db.raw(
-      `INSERT INTO qb_order_pipeline
-         (id, order_id, reference_id, reference_type, step, status,
-          qb_txn_id, payload, created_at, updated_at)
-       VALUES (?, ?, ?, 'vendor_bill', 'vendor_bill_mod', 'pending',
-               ?, ?::jsonb, NOW(), NOW())`,
-      [
-        randomUUID(),
-        regular.purchase_order_id,
+    if (!regular.purchase_order_id) {
+      throw new Error(`${regular.number ?? regular.id}: missing purchase order`);
+    }
+    const orderPayload = {
+      ...payload,
+      qb_vendor_bill_pipeline_id: vendorBillPipelineId,
+    };
+    const operation = await enqueuePurchaseQbOperation(db, {
+      purchaseOrderId: regular.purchase_order_id,
+      referenceId: bill.id,
+      referenceType: "vendor_bill",
+      step: "vendor_bill_mod",
+      qbTxnId: bill.qb_txn_id,
+      payload: orderPayload,
+      operationKey: purchaseOperationKey(
+        "vendor_bill_mod",
         bill.id,
-        bill.qb_txn_id,
-        JSON.stringify({
-          ...payload,
-          qb_vendor_bill_pipeline_id: vendorBillPipelineId,
-        }),
-      ]
+        orderPayload
+      ),
+    });
+    await db.raw(
+      `UPDATE qb_vendor_bill_pipeline
+          SET order_pipeline_id = ?, updated_at = NOW()
+        WHERE id = ?`,
+      [operation.id, vendorBillPipelineId]
     );
   }
   return { queued: true, groupId, billIds: bills.map((bill) => bill.id) };

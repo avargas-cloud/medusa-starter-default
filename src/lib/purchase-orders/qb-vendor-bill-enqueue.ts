@@ -33,6 +33,11 @@
  *   expense_lines[]: the bill's freight_charge lines, positive amounts.
  */
 
+import {
+  enqueuePurchaseQbOperation,
+  purchaseOperationKey,
+} from "./qb-purchase-dependency-chain";
+
 export type EnqueueKnex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number }>;
 };
@@ -51,6 +56,7 @@ interface BillRow {
   vendor_qb_list_id_snapshot: string | null;
   vendor_name_snapshot: string | null;
   qb_source: string | null;
+  rebuild_generation: number;
 }
 
 interface PoRow {
@@ -83,11 +89,15 @@ export async function enqueueQbVendorBillAdd(
   }
 
   const billResult = await knex.raw(
-    `SELECT id, number, reference_id, document_date, due_date,
-            purchase_order_id, vendor_qb_list_id_snapshot, vendor_name_snapshot,
-            qb_source
-       FROM vendor_bill
-      WHERE id = ? AND deleted_at IS NULL AND bill_type = 'regular'`,
+    `SELECT vb.id, vb.number, vb.reference_id, vb.document_date, vb.due_date,
+            vb.purchase_order_id, vb.vendor_qb_list_id_snapshot,
+            vb.vendor_name_snapshot, vb.qb_source,
+            COALESCE(qvb.rebuild_generation, 0)::int AS rebuild_generation
+       FROM vendor_bill vb
+       LEFT JOIN qb_vendor_bill_pipeline qvb
+         ON qvb.vendor_bill_id = vb.id AND qvb.deleted_at IS NULL
+      WHERE vb.id = ? AND vb.deleted_at IS NULL
+        AND vb.bill_type = 'regular'`,
     [vendorBillId]
   );
   const bill = (billResult.rows[0] ?? null) as BillRow | null;
@@ -154,6 +164,7 @@ export async function enqueueQbVendorBillAdd(
     )
     .map((l) => ({
       vendor_bill_line_id: l.id,
+      purchase_order_line_id: l.purchase_order_line_id,
       sku: l.sku,
       qb_po_txn_line_id: l.qb_po_txn_line_id,
       quantity: l.qty,
@@ -190,6 +201,7 @@ export async function enqueueQbVendorBillAdd(
     vendor_name: bill.vendor_name_snapshot,
     txn_date: toDateOnly(bill.document_date),
     due_date: toDateOnly(bill.due_date),
+    rebuild_generation: bill.rebuild_generation,
     po_txn_id: po.qb_purchase_order_list_id,
     item_lines: itemLines,
     expense_lines: expenseLines,
@@ -215,34 +227,66 @@ export async function enqueueQbVendorBillAdd(
     [JSON.stringify(payload), vendorBillId]
   );
   const updatedRow = updateResult.rows[0] as { id: string } | undefined;
-  if (updatedRow) return { queued: true, pipelineRowId: updatedRow.id };
+  let pipelineRowId = updatedRow?.id ?? null;
 
-  const existing = await knex.raw(
-    `SELECT id, status FROM qb_vendor_bill_pipeline
-      WHERE vendor_bill_id = ? AND deleted_at IS NULL LIMIT 1`,
-    [vendorBillId]
-  );
-  const existingRow = existing.rows[0] as { id: string; status: string } | undefined;
-  if (existingRow) {
-    // submitted/synced — never clobber an in-flight or completed ADD (2026-07-01).
-    return {
-      queued: false,
-      reason: `pipeline row already '${existingRow.status}' — not re-enqueued`,
-    };
+  if (!pipelineRowId) {
+    const existing = await knex.raw(
+      `SELECT id, status FROM qb_vendor_bill_pipeline
+        WHERE vendor_bill_id = ? AND deleted_at IS NULL LIMIT 1`,
+      [vendorBillId]
+    );
+    const existingRow = existing.rows[0] as
+      | { id: string; status: string }
+      | undefined;
+    if (existingRow) {
+      // submitted/synced — never clobber an in-flight or completed ADD.
+      return {
+        queued: false,
+        reason: `pipeline row already '${existingRow.status}' — not re-enqueued`,
+      };
+    }
+
+    const insertResult = await knex.raw(
+      `INSERT INTO qb_vendor_bill_pipeline
+         (id, vendor_bill_id, purchase_order_id, status, intent, payload,
+          created_at, updated_at)
+       VALUES (?, ?, ?, 'waiting', 'add', ?::jsonb, NOW(), NOW())
+       RETURNING id`,
+      [
+        `qbvbpipe_${Date.now().toString(36)}${Math.random()
+          .toString(36)
+          .slice(2, 10)}`,
+        vendorBillId,
+        bill.purchase_order_id,
+        JSON.stringify(payload),
+      ]
+    );
+    pipelineRowId = String(
+      (insertResult.rows[0] as { id: string }).id
+    );
   }
 
-  const insertResult = await knex.raw(
-    `INSERT INTO qb_vendor_bill_pipeline
-       (id, vendor_bill_id, purchase_order_id, status, intent, payload, created_at, updated_at)
-     VALUES (?, ?, ?, 'waiting', 'add', ?::jsonb, NOW(), NOW())
-     RETURNING id`,
-    [
-      `qbvbpipe_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`,
+  const orderPayload = {
+    ...payload,
+    qb_vendor_bill_pipeline_id: pipelineRowId,
+  };
+  const operation = await enqueuePurchaseQbOperation(knex, {
+    purchaseOrderId: bill.purchase_order_id,
+    referenceId: vendorBillId,
+    referenceType: "vendor_bill",
+    step: "vendor_bill_add",
+    payload: orderPayload,
+    operationKey: purchaseOperationKey(
+      "vendor_bill_add",
       vendorBillId,
-      bill.purchase_order_id,
-      JSON.stringify(payload),
-    ]
+      orderPayload
+    ),
+  });
+  await knex.raw(
+    `UPDATE qb_vendor_bill_pipeline
+        SET order_pipeline_id = ?, updated_at = NOW()
+      WHERE id = ?`,
+    [operation.id, pipelineRowId]
   );
-  const inserted = insertResult.rows[0] as { id: string };
-  return { queued: true, pipelineRowId: inserted.id };
+  return { queued: true, pipelineRowId };
 }

@@ -29,6 +29,8 @@ type PoStep =
   | "delete_item_receipt"
   | "add_vendor_bill"
   | "mod_vendor_bill"
+  | "preflight_vendor_bill_rebuild"
+  | "delete_vendor_bill_rebuild"
   | "delete_vendor_bill";
 
 interface PoRow {
@@ -74,6 +76,8 @@ const STEP_ICON: Record<PoStep, string> = {
   delete_item_receipt: "🗑️",
   add_vendor_bill: "🧾",
   mod_vendor_bill: "✏️",
+  preflight_vendor_bill_rebuild: "🔎",
+  delete_vendor_bill_rebuild: "🧹",
   delete_vendor_bill: "🗑️",
 };
 
@@ -86,6 +90,8 @@ const STEP_LABEL: Record<PoStep, string> = {
   delete_item_receipt: "Delete Receipt",
   add_vendor_bill: "Vendor Bill",
   mod_vendor_bill: "Modify Bill",
+  preflight_vendor_bill_rebuild: "Verify Bill Rebuild",
+  delete_vendor_bill_rebuild: "Prepare Bill Rebuild",
   delete_vendor_bill: "Delete Bill",
 };
 
@@ -155,6 +161,9 @@ function PipelinePoRow({
 }) {
   const [expanded, setExpanded] = useState(false);
   const step = (row.step ?? "purchase_order") as PoStep;
+  const isReviewedRebuild =
+    step === "preflight_vendor_bill_rebuild" ||
+    step === "delete_vendor_bill_rebuild";
 
   const updatedAt =
     row.status === "synced" ? row.synced_at : (row.updated_at ?? null);
@@ -303,7 +312,8 @@ function PipelinePoRow({
                 {retrying ? "…" : "Retry"}
               </button>
             )}
-            {(row.status === "error" || row.status === "failed_permanent") && (
+            {(row.status === "error" || row.status === "failed_permanent") &&
+              !isReviewedRebuild && (
               <button
                 onClick={() => {
                   if (

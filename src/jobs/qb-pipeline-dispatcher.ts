@@ -3,7 +3,9 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { isScheduledJobsDisabled } from "./_lib/_scheduled-jobs-guard";
 import {
+  runBlockedDependentsPass,
   runPendingDispatchPass,
+  runPurchaseDelegationRepairPass,
   runWakeDependentsPass,
   runOrphanedWaitingPass,
 } from "../lib/quickbooks/consolidator/dispatch-pass";
@@ -44,8 +46,10 @@ export default async function qbPipelineDispatcher(
 
   try {
     await runOrphanedWaitingPass(logger);
+    await runPurchaseDelegationRepairPass(container, logger);
     await runPendingDispatchPass(container, logger);
     await runWakeDependentsPass(container, logger);
+    await runBlockedDependentsPass(logger);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(`${LOG_PREFIX} dispatch run failed: ${msg}`);
