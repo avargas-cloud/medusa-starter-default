@@ -11,7 +11,7 @@ El directorio `backend/` es el **núcleo compartido (backbone)** de todo el ecos
 **ATENCIÓN AGENTE:** Para reglas transversales de manejo de la terminal, lineamientos de confirmaciones en GitHub o cómo crear herramientas globales, DEBES usar el policy original en:
 👉 `../.agent/Agent-Policy.md`
 
-**Slash commands del workspace** (ej. `/finish`, `/test`, `/graphify`) viven en `../.claude/commands/` — el resolver de Claude Code los descubre solo si el cwd es la raíz del workspace. Si estás dentro de `backend/` y un `/comando` falla con "Unknown skill", `cd ..` al workspace antes de invocarlo.
+**Slash commands del workspace** (ej. `/finish`, `/test`, `/sync-memory`) viven en `../.claude/commands/` — el resolver de Claude Code los descubre solo si el cwd es la raíz del workspace. Si estás dentro de `backend/` y un `/comando` falla con "Unknown skill", `cd ..` al workspace antes de invocarlo.
 
 Toda la documentación debajo de esta línea es **exclusiva para desarrollo dentro de `backend/`**.
 
@@ -83,26 +83,6 @@ done | sort -u
 ```
 
 Si :9090 muestra `127.0.0.1:5501` o :9000 muestra Railway, algo está cruzado — matar ambas tmux sessions y rearrancar via wrappers.
-
----
-
-## 🗺️ graphify — Knowledge Graph (OBLIGATORIO)
-
-El workspace tiene un grafo de conocimiento en `../graphify-out/` que cubre todos los proyectos incluyendo backend.
-
-**ANTES de hacer Grep/Glob/Read exploratorio, consulta el grafo:**
-
-| Necesitas | Acción |
-|-----------|--------|
-| ¿Dónde está implementado X? | `../graphify-out/wiki/index.md` → artículo relevante |
-| ¿Qué archivos tocan feature Y? | `../graphify-out/graph.json` → campo `source_file` |
-| ¿Cómo se conectan A y B? | `../graphify-out/GRAPH_REPORT.md` → "Surprising Connections" o "Communities" |
-| Arquitectura general | `../graphify-out/GRAPH_REPORT.md` completo |
-
-**Flujo correcto:**
-1. Nueva sesión → leer `../graphify-out/GRAPH_REPORT.md`
-2. Pregunta específica → navegar `../graphify-out/wiki/index.md`
-3. **Solo si el grafo no tiene la info** → usar Grep/Glob/Read en archivos fuente
 
 ---
 

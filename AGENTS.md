@@ -150,3 +150,26 @@ yarn type-check
 
 For risky backend behavior, add or run a focused `verify-*` script and report the
 result.
+
+## Domain Rules — LECTURA OBLIGATORIA
+
+Las reglas de negocio de esta app viven en `.claude/rules/*.md` (rutas relativas a
+la raíz del workspace), no en este archivo.
+
+**Claude Code** las carga solo por el frontmatter `paths:`.
+**Codex y otros agentes NO tienen carga automática por scope: abrí el archivo con
+`Read`/`cat` antes de trabajar en ese dominio.** Es la única vía por la que las ves.
+
+| Si vas a tocar… | Leé primero |
+|---|---|
+| QB pipeline, bridge, QBXML, `src/jobs/`, `src/subscribers/` | `.claude/rules/qb-pipeline.md` |
+| Pagos, créditos, Treasury, invoices | `.claude/rules/payments-treasury.md` |
+| PO, FO, vendor bills, purchasing, China Finance | `.claude/rules/purchasing-po-fo.md` |
+| Inventario, counts, China, transfers, reports | `.claude/rules/inventory-china.md` |
+| Órdenes, invoices, reservas, delivery | `.claude/rules/orders-fulfillment.md` |
+| **Cualquier archivo de `backend/`** (gotchas transversales) | `.claude/rules/medusa-core.md` |
+| Reglas durables por incidente (QB, vendor bills, deposits) | `.claude/rules/architecture-reminders.md` |
+| Cualquier cosa que toque un secreto | `.claude/rules/secrets.md` |
+
+Una regla nueva va al rules file de su dominio como entrada fechada de 1-4 líneas.
+Nunca como párrafo en este archivo ni en el `AGENTS.md` raíz.
