@@ -302,6 +302,7 @@ export async function POST(
                     commission_per_unit_cents = 0,
                     freight_per_unit_cents = 0,
                     tariff_per_unit_cents = 0,
+                    tax_per_unit_cents = 0,
                     landed_unit_cost_cents = 0,
                     updated_at = NOW()
               WHERE id = ? AND deleted_at IS NULL`,

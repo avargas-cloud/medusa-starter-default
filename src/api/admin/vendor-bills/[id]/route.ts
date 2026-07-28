@@ -39,6 +39,11 @@ import {
   type FreightAccount,
 } from "../../../../lib/purchase-orders/freight-charge-lines";
 import {
+  validateTaxCharge,
+  reconcileTaxChargeLine,
+  type TaxAccount,
+} from "../../../../lib/purchase-orders/tax-charge-lines";
+import {
   receiptQuantitiesMatchBill,
   resolveBoundReceiptIds,
   resolveReceiptLineUnion,
@@ -93,6 +98,7 @@ interface VendorBillDetailRow {
   tariff_amount_cents: number;
   tariff_number: string | null;
   tariff_vendor_bill_id: string | null;
+  tax_amount_cents: number;
   notes: string | null;
   confirmed_at: string | null;
   confirmed_by_user_id: string | null;
@@ -164,6 +170,10 @@ const vendorBillPatchSchema = z.object({
   tariff_amount_cents: z.number().int().min(0).max(1_000_000_000).optional(),
   tariff_number: z.string().max(200).nullish(),
   tariff_vendor_bill_id: z.string().max(200).nullish(),
+  // Sales tax the vendor charged on THIS invoice. REGULAR bills only — a
+  // service/freight/tariff bill is our own reconstruction of a cost pool, not
+  // a taxed goods purchase, and is forced back to 0 below.
+  tax_amount_cents: z.number().int().min(0).max(1_000_000_000).optional(),
   notes: z.string().max(2000).nullish(),
   clear_lines_for_type_change: z.boolean().optional(),
   // Editing a bill already paid by a CONFIRMED wire is refused by default (the
@@ -272,6 +282,7 @@ export async function GET(
        vb.tariff_amount_cents,
        vb.tariff_number,
        vb.tariff_vendor_bill_id,
+       vb.tax_amount_cents,
        vb.notes,
        vb.confirmed_at,
        vb.confirmed_by_user_id,
@@ -688,17 +699,22 @@ export async function PATCH(
     return res.status(400).json(zodErrorToBody(parsed.error));
   }
   const patch = parsed.data;
+  // Captured BEFORE the non-regular normalisation below, which writes
+  // `tax_amount_cents = 0` into `patch` for every other bill type — after that
+  // runs, `"tax_amount_cents" in patch` no longer distinguishes "the caller
+  // asked to change the tax" from "we zeroed it ourselves".
+  const taxEditRequested = "tax_amount_cents" in patch;
   const knex = resolveKnex(req);
 
   const lookup = await knex.raw(
     `SELECT id, number, status, bill_type, purchase_order_id, purchase_order_receipt_id,
-            vendor_id, reference_id, qb_source, qb_txn_id
+            vendor_id, reference_id, qb_source, qb_txn_id, tax_amount_cents
        FROM vendor_bill
       WHERE id = ? AND deleted_at IS NULL`,
     [id]
   );
   const bill = (lookup.rows[0] ?? null) as
-    | { id: string; number: string | null; status: string; bill_type: string; purchase_order_id: string | null; purchase_order_receipt_id: string | null; vendor_id: string | null; reference_id: string | null; qb_source: string | null; qb_txn_id: string | null }
+    | { id: string; number: string | null; status: string; bill_type: string; purchase_order_id: string | null; purchase_order_receipt_id: string | null; vendor_id: string | null; reference_id: string | null; qb_source: string | null; qb_txn_id: string | null; tax_amount_cents: number | string | null }
     | null;
   if (!bill) {
     return res
@@ -822,6 +838,17 @@ export async function PATCH(
     patch.tariff_amount_cents = 0;
     patch.tariff_number = null;
     patch.tariff_vendor_bill_id = null;
+    // Sales tax is a REGULAR-bill concept: a service/freight/tariff bill is our
+    // own reconstruction of a cost pool, not a taxed goods purchase. Refuse
+    // explicitly rather than silently discarding, so an API caller learns the
+    // amount did not stick.
+    if (Number(patch.tax_amount_cents ?? 0) > 0) {
+      return res.status(422).json({
+        error: "Sales tax can only be recorded on a regular vendor bill",
+        code: "tax_not_allowed_for_bill_type",
+      });
+    }
+    patch.tax_amount_cents = 0;
   }
 
   for (const [field, requiredType] of Object.entries(LINKED_BILL_TYPE_BY_FIELD)) {
@@ -889,6 +916,7 @@ export async function PATCH(
     "tariff_amount_cents",
     "tariff_number",
     "tariff_vendor_bill_id",
+    "tax_amount_cents",
     "notes",
   ]) {
     if (key in patch) {
@@ -1190,6 +1218,25 @@ export async function PATCH(
     freightAccountByListId = freightValidation.accountByListId;
   }
 
+  // Sales tax — resolve the COGS account BEFORE any write. Failing here (the
+  // account does not exist in QuickBooks yet) is a 422 the operator can act on;
+  // letting the save through would only defer the failure to the QB enqueue,
+  // where it becomes an invisible un-synced bill.
+  const hasTaxEdit = taxEditRequested;
+  const effectiveTaxCents = hasTaxEdit
+    ? Number(patch.tax_amount_cents ?? 0)
+    : Number(bill.tax_amount_cents ?? 0);
+  let taxAccount: TaxAccount | null = null;
+  if (hasTaxEdit) {
+    const taxValidation = await validateTaxCharge(knex, effectiveTaxCents);
+    if (!taxValidation.ok) {
+      return res
+        .status(taxValidation.error.status)
+        .json(taxValidation.error.body);
+    }
+    taxAccount = taxValidation.account;
+  }
+
   // ── Apply header + staged line edits + recompute in ONE transaction ─────────
   const trx = knex.transaction ? await knex.transaction() : null;
   const db = trx ?? knex;
@@ -1295,7 +1342,7 @@ export async function PATCH(
             `UPDATE vendor_bill_line
                 SET qty = ?, unit_cost_cents = ?, cbm_per_unit = ?::float, mpn = ?,
                     commission_per_unit_cents = 0, freight_per_unit_cents = 0,
-                    tariff_per_unit_cents = 0, landed_unit_cost_cents = 0, updated_at = NOW()
+                    tariff_per_unit_cents = 0, tax_per_unit_cents = 0, landed_unit_cost_cents = 0, updated_at = NOW()
               WHERE id = ? AND vendor_bill_id = ? AND deleted_at IS NULL`,
             [l.qty, l.unit_cost_cents, cbm, l.mpn ?? null, l.id, id]
           );
@@ -1328,7 +1375,7 @@ export async function PATCH(
         await db.raw(
           `UPDATE vendor_bill_line
               SET qty = ?, commission_per_unit_cents = 0, freight_per_unit_cents = 0,
-                  tariff_per_unit_cents = 0, landed_unit_cost_cents = 0, updated_at = NOW()
+                  tariff_per_unit_cents = 0, tax_per_unit_cents = 0, landed_unit_cost_cents = 0, updated_at = NOW()
             WHERE id = ? AND vendor_bill_id = ? AND deleted_at IS NULL`,
           [edit.qty, edit.id, id]
         );
@@ -1358,7 +1405,15 @@ export async function PATCH(
       );
     }
 
-    if (hasLineEdits || hasFreightLines) {
+    // Sales tax charge line — materialized from the header amount so it can
+    // reach QuickBooks as an ExpenseLine and be RETAINED by TxnLineID on a
+    // later BillMod. Runs before the finance recompute because the tax is real
+    // money owed on this bill (it feeds SUM(unit_cost_cents × qty)).
+    if (hasTaxEdit) {
+      await reconcileTaxChargeLine(db, id, effectiveTaxCents, taxAccount);
+    }
+
+    if (hasLineEdits || hasFreightLines || hasTaxEdit) {
       const recompute = await recomputeBillFinanceLinks(db, id);
       if (!recompute.ok) {
         if (trx) await trx.rollback();

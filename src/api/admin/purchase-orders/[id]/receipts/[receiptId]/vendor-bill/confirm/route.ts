@@ -67,6 +67,7 @@ interface VendorBillRow {
   freight_amount_cents: number;
   tariff_included: boolean;
   tariff_amount_cents: number;
+  tax_amount_cents: number;
   qb_txn_id: string | null;
   document_date: string | null;
   updated_at_token: string;
@@ -508,6 +509,7 @@ export async function POST(
     commission_per_unit_cents: number;
     freight_per_unit_cents: number;
     tariff_per_unit_cents: number;
+    tax_per_unit_cents: number;
     landed_unit_cost_cents: number;
   };
 
@@ -529,6 +531,9 @@ export async function POST(
       commissionCents: serviceBillTotalCents,
       freightCents: bill.freight_included ? bill.freight_amount_cents : 0,
       tariffCents: bill.tariff_included ? bill.tariff_amount_cents : 0,
+      // No `_included` gate: the tax lives on this same vendor document, so a
+      // non-zero amount IS the inclusion signal.
+      taxCents: bill.tax_amount_cents,
     }
   );
 
@@ -540,6 +545,7 @@ export async function POST(
       commission_per_unit_cents: r.commission_per_unit_cents,
       freight_per_unit_cents: r.freight_per_unit_cents,
       tariff_per_unit_cents: r.tariff_per_unit_cents,
+      tax_per_unit_cents: r.tax_per_unit_cents,
       landed_unit_cost_cents: r.landed_unit_cost_cents,
     };
   });
@@ -663,6 +669,7 @@ export async function POST(
              commission_per_unit_cents = ?,
              freight_per_unit_cents = ?,
              tariff_per_unit_cents = ?,
+             tax_per_unit_cents = ?,
              landed_unit_cost_cents = ?,
              updated_at = NOW()
          WHERE id = ? AND deleted_at IS NULL`,
@@ -671,6 +678,7 @@ export async function POST(
             fields.commission_per_unit_cents,
             fields.freight_per_unit_cents,
             fields.tariff_per_unit_cents,
+            fields.tax_per_unit_cents,
             fields.landed_unit_cost_cents,
             fields.id,
           ]

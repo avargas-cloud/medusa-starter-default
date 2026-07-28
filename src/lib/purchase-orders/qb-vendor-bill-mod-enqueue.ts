@@ -169,14 +169,29 @@ async function buildPayload(
   const localExpenseLines = lineRows
     .filter((line) => String(line.line_type ?? "") === "qb_account")
     .map((line) => {
-      if (!line.qb_txn_line_id || !line.account_list_id) {
+      if (!line.account_list_id) {
+        throw new Error(
+          `${bill.number ?? bill.id}: account line ${String(line.id)} lacks a QB account`
+        );
+      }
+      // A MISSING TxnLineID is only legal on a REGULAR bill, where it means a
+      // charge line added after the bill was already synced (e.g. the operator
+      // enters sales tax on an existing bill). QBXML allows exactly that: an
+      // ExpenseLineMod with no TxnLineID is sent as -1 and QuickBooks appends
+      // it — unlike an ITEM line, which cannot be added PO-linked via Mod and
+      // is what the rebuild flow exists for. Service/freight bills keep the
+      // strict guard: their lines are always created by us with an Add first,
+      // so a null there is a real integrity problem, not a new charge.
+      if (!line.qb_txn_line_id && bill.bill_type !== "regular") {
         throw new Error(
           `${bill.number ?? bill.id}: account line ${String(line.id)} lacks QB identity`
         );
       }
       return {
         vendor_bill_line_id: String(line.id),
-        qb_txn_line_id: String(line.qb_txn_line_id),
+        qb_txn_line_id: line.qb_txn_line_id
+          ? String(line.qb_txn_line_id)
+          : null,
         account_list_id: String(line.account_list_id),
         amount_cents: Number(line.amount_cents ?? line.unit_cost_cents),
         memo: line.description ? String(line.description) : undefined,
@@ -215,8 +230,17 @@ async function buildPayload(
         })()
       : [];
 
+  // BillMod DELETES BY OMISSION (quickbooks-bridge/src/qbxml/builders/bill.ts
+  // §BillMod): every line the caller leaves out is removed from the QB bill.
+  // A regular bill used to send ONLY its China-agent clearing lines here, so
+  // any freight-charge / account / sales-tax ExpenseLine the Add had created
+  // silently vanished from QuickBooks on the first edit — leaving the QB bill
+  // short by exactly those amounts against a payment that still had to clear.
+  // The retained set must be everything the Add path emits.
   const expenseLines =
-    bill.bill_type === "regular" ? retainedClearing : localExpenseLines;
+    bill.bill_type === "regular"
+      ? [...retainedClearing, ...localExpenseLines]
+      : localExpenseLines;
   if (itemLines.length === 0 && expenseLines.length === 0) {
     throw new Error(`${bill.number ?? bill.id}: no retained QB lines`);
   }

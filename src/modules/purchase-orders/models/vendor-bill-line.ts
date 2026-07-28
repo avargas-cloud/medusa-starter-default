@@ -13,6 +13,7 @@ import { model } from "@medusajs/utils";
  *                        + commission_per_unit_cents
  *                        + freight_per_unit_cents
  *                        + tariff_per_unit_cents
+ *                        + tax_per_unit_cents
  */
 export const VendorBillLine = model.define("vendor_bill_line", {
   id: model.id({ prefix: "vbl" }).primaryKey(),
@@ -48,6 +49,11 @@ export const VendorBillLine = model.define("vendor_bill_line", {
   commission_per_unit_cents: model.number().default(0),
   freight_per_unit_cents: model.number().default(0),
   tariff_per_unit_cents: model.number().default(0),
+  // Sales tax share. Persisted so the landed identity below stays
+  // reconstructible by the replay/drift engines — deliberately NOT rendered as
+  // a column in the POS items table (the operator reads tax in the totals
+  // footer only, the way QuickBooks shows it).
+  tax_per_unit_cents: model.number().default(0),
   landed_unit_cost_cents: model.number().default(0),
 
   // QuickBooks sync (Phase 0 — dormant). See docs/VENDOR_BILL_QB_SYNC_PLAN.md §3.2.

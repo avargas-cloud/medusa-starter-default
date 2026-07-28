@@ -107,7 +107,7 @@ export async function previewVendorBillConfirmation(
 ): Promise<VendorBillConfirmationPreview> {
   const billResult = await knex.raw(
     `SELECT service_vendor_bill_id, freight_included, freight_amount_cents,
-            tariff_included, tariff_amount_cents
+            tariff_included, tariff_amount_cents, tax_amount_cents
        FROM vendor_bill
       WHERE id = ? AND deleted_at IS NULL`,
     [vendorBillId]
@@ -119,6 +119,7 @@ export async function previewVendorBillConfirmation(
         freight_amount_cents: number;
         tariff_included: boolean;
         tariff_amount_cents: number;
+        tax_amount_cents: number | string;
       }
     | undefined;
   if (!bill) throw new Error("Vendor bill not found");
@@ -170,6 +171,7 @@ export async function previewVendorBillConfirmation(
       commissionCents,
       freightCents: bill.freight_included ? bill.freight_amount_cents : 0,
       tariffCents: bill.tariff_included ? bill.tariff_amount_cents : 0,
+      taxCents: Number(bill.tax_amount_cents ?? 0),
     }
   );
   const usable = sourceLines.map((line, index) => ({

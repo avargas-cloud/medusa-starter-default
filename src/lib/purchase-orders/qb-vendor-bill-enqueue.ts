@@ -30,7 +30,15 @@
  *                  Local bills carry the RAW goods unit cost (plan §A.4:
  *                  no negative clearing — freight is a separate positive
  *                  ExpenseLine, never folded into the item cost).
- *   expense_lines[]: the bill's freight_charge lines, positive amounts.
+ *   expense_lines[]: the bill's non-item charges as positive ExpenseLines —
+ *                  freight_charge lines, qb_account lines, and the header
+ *                  sales tax. QBXML BillAdd has NO header tax field (its only
+ *                  slots are ExpenseLineAdd / ItemLineAdd), so vendor-charged
+ *                  sales tax rides as its own ExpenseLine against a COGS
+ *                  account. Whatever is emitted here MUST be the same set the
+ *                  Mod path retains (qb-vendor-bill-mod-enqueue.ts) — a line
+ *                  the Add creates but the Mod omits is DELETED BY OMISSION
+ *                  the first time the bill is edited.
  */
 
 import {
@@ -57,6 +65,8 @@ interface BillRow {
   vendor_name_snapshot: string | null;
   qb_source: string | null;
   rebuild_generation: number;
+  tax_amount_cents: number | string | null;
+  tax_account_list_id: string | null;
 }
 
 interface PoRow {
@@ -75,6 +85,7 @@ interface LineRow {
   unit_cost_cents: number;
   amount_cents: number | null;
   freight_account_list_id: string | null;
+  qb_account_list_id: string | null;
   purchase_order_line_id: string | null;
   qb_po_txn_line_id: string | null;
   variant_qb_item_list_id: string | null;
@@ -92,6 +103,7 @@ export async function enqueueQbVendorBillAdd(
     `SELECT vb.id, vb.number, vb.reference_id, vb.document_date, vb.due_date,
             vb.purchase_order_id, vb.vendor_qb_list_id_snapshot,
             vb.vendor_name_snapshot, vb.qb_source,
+            vb.tax_amount_cents, vb.tax_account_list_id,
             COALESCE(qvb.rebuild_generation, 0)::int AS rebuild_generation
        FROM vendor_bill vb
        LEFT JOIN qb_vendor_bill_pipeline qvb
@@ -141,7 +153,7 @@ export async function enqueueQbVendorBillAdd(
   const linesResult = await knex.raw(
     `SELECT vbl.id, vbl.line_kind, vbl.line_type, vbl.sku, vbl.description,
             vbl.qty, vbl.unit_cost_cents, vbl.amount_cents,
-            vbl.freight_account_list_id,
+            vbl.freight_account_list_id, vbl.qb_account_list_id,
             vbl.purchase_order_line_id,
             pol.qb_txn_line_id AS qb_po_txn_line_id,
             pv.metadata ->> 'quickbooks_id' AS variant_qb_item_list_id
@@ -172,14 +184,48 @@ export async function enqueueQbVendorBillAdd(
       qb_item_list_id: l.variant_qb_item_list_id,
       description: l.description,
     }));
-  const expenseLines = lines
-    .filter((l) => l.line_kind === "freight_charge")
+  // Non-item charges, all positive ExpenseLines. Keep this set identical to
+  // what the Mod path retains — QB deletes by omission on BillMod.
+  const expenseLines: Array<{
+    vendor_bill_line_id: string | null;
+    account_list_id: string | null;
+    amount_cents: number;
+    memo: string | null;
+  }> = lines
+    .filter((l) => (l.line_type ?? "product") === "qb_account")
     .map((l) => ({
       vendor_bill_line_id: l.id,
-      account_list_id: l.freight_account_list_id,
+      account_list_id: l.freight_account_list_id ?? l.qb_account_list_id,
       amount_cents: l.amount_cents ?? l.unit_cost_cents,
       memo: l.description,
     }));
+
+  // Fail-closed on sales tax. The header amount is the operator's copy of the
+  // vendor document; a `tax_charge` line is materialized from it on save. If
+  // the header says there is tax but no line carries it (account unresolved,
+  // legacy row), sending anyway would post an AP balance SHORT by the tax that
+  // never clears against the real payment. Leaving the bill un-enqueued is the
+  // safer failure — the drift/digest tooling surfaces the gap.
+  const taxCents = Number(bill.tax_amount_cents ?? 0);
+  if (taxCents > 0) {
+    const taxLine = lines.find((l) => l.line_kind === "tax_charge");
+    if (!taxLine) {
+      return {
+        queued: false,
+        reason:
+          "bill carries sales tax but no tax_charge line was materialized — " +
+          "create the 'Sales Tax Paid' COGS account in QuickBooks, run the " +
+          "account sync, and re-save the bill",
+      };
+    }
+    if (!taxLine.qb_account_list_id) {
+      return { queued: false, reason: "tax_charge line has no QB account" };
+    }
+  }
+
+  if (expenseLines.some((l) => !l.account_list_id)) {
+    return { queued: false, reason: "an expense line has no QB account" };
+  }
 
   if (itemLines.length === 0 && expenseLines.length === 0) {
     return { queued: false, reason: "bill has no lines to send" };

@@ -189,7 +189,7 @@ export async function loadBillDrift(
             COALESCE((SELECT SUM(l.unit_cost_cents::bigint * l.qty)::bigint
                         FROM vendor_bill_line l
                        WHERE l.vendor_bill_id = vb.id AND l.deleted_at IS NULL
-                         AND COALESCE(l.line_kind, '') <> 'freight_charge'), 0) AS total_cents,
+                         AND COALESCE(l.line_kind, '') NOT IN ('freight_charge', 'tax_charge')), 0) AS total_cents,
             EXISTS (SELECT 1
                       FROM china_finance_bill cfb
                       JOIN china_wire_transfer_application a ON a.bill_id = cfb.id
@@ -234,7 +234,7 @@ export async function loadBillDrift(
                 COALESCE((SELECT SUM(l.unit_cost_cents::bigint * l.qty)::bigint
                             FROM vendor_bill_line l
                            WHERE l.vendor_bill_id = vb.id AND l.deleted_at IS NULL
-                             AND COALESCE(l.line_kind, '') <> 'freight_charge'), 0) AS total_cents
+                             AND COALESCE(l.line_kind, '') NOT IN ('freight_charge', 'tax_charge')), 0) AS total_cents
            FROM vendor_bill vb
           WHERE vb.deleted_at IS NULL
             AND vb.bill_type = 'regular'

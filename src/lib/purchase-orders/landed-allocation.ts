@@ -41,6 +41,7 @@ export interface AllocLine {
    *   - commission (flat per unit): weight = qty
    *   - freight (by volume):        weight = cbm_per_unit × qty  (0 if CBM unknown)
    *   - tariff (by value):          weight = unit_cost_cents × qty
+   *   - sales tax (by value):       weight = unit_cost_cents × qty
    * A line with weight 0 receives nothing.
    */
   weight: number;
@@ -156,12 +157,26 @@ export interface LandedPools {
   freightCents: number;
   /** total tariff/duties cents to spread (0 to skip) */
   tariffCents: number;
+  /**
+   * Sales tax the vendor charged on this invoice (0 to skip).
+   *
+   * Non-recoverable tax on goods bought for resale is part of the acquisition
+   * cost, so it capitalizes into the landed unit cost exactly like tariff.
+   * It is deliberately NOT surfaced as a per-line column in the POS items
+   * table — the operator enters ONE header amount copied off the vendor
+   * document and reads it in the totals footer, mirroring how QuickBooks
+   * presents it. The per-unit split is persisted only so the landed identity
+   *   landed = unit + commission + freight + tariff + tax
+   * stays reconstructible by the replay/drift engines.
+   */
+  taxCents: number;
 }
 
 export interface LandedLineResult {
   commission_per_unit_cents: number;
   freight_per_unit_cents: number;
   tariff_per_unit_cents: number;
+  tax_per_unit_cents: number;
   landed_unit_cost_cents: number;
 }
 
@@ -175,13 +190,20 @@ export interface LandedLineResult {
  *   commission → qty (flat per unit)
  *   freight    → cbm_per_unit × qty (by volume; lines without CBM get none)
  *   tariff     → unit_cost_cents × qty (by value)
+ *   tax        → unit_cost_cents × qty (by value — sales tax is levied on the
+ *                taxable value of the goods, so value is the faithful basis)
  */
 export function computeLandedLines(
   lines: LandedInput[],
   pools: LandedPools
 ): {
   lines: LandedLineResult[];
-  residualCents: { commission: number; freight: number; tariff: number };
+  residualCents: {
+    commission: number;
+    freight: number;
+    tariff: number;
+    tax: number;
+  };
 } {
   const comm = allocatePerUnitCents(
     Math.max(0, Math.round(pools.commissionCents)),
@@ -198,20 +220,27 @@ export function computeLandedLines(
     Math.max(0, Math.round(pools.tariffCents)),
     lines.map((l) => ({ qty: l.qty, weight: l.unit_cost_cents * l.qty }))
   );
+  const tax = allocatePerUnitCents(
+    Math.max(0, Math.round(pools.taxCents)),
+    lines.map((l) => ({ qty: l.qty, weight: l.unit_cost_cents * l.qty }))
+  );
 
   const out: LandedLineResult[] = lines.map((l, i) => {
     const commission_per_unit_cents = comm.perUnit[i] ?? 0;
     const freight_per_unit_cents = freight.perUnit[i] ?? 0;
     const tariff_per_unit_cents = tariff.perUnit[i] ?? 0;
+    const tax_per_unit_cents = tax.perUnit[i] ?? 0;
     return {
       commission_per_unit_cents,
       freight_per_unit_cents,
       tariff_per_unit_cents,
+      tax_per_unit_cents,
       landed_unit_cost_cents:
         l.unit_cost_cents +
         commission_per_unit_cents +
         freight_per_unit_cents +
-        tariff_per_unit_cents,
+        tariff_per_unit_cents +
+        tax_per_unit_cents,
     };
   });
 
@@ -221,6 +250,7 @@ export function computeLandedLines(
       commission: comm.residualCents,
       freight: freight.residualCents,
       tariff: tariff.residualCents,
+      tax: tax.residualCents,
     },
   };
 }

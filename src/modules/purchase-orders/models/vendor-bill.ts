@@ -61,6 +61,22 @@ export const VendorBill = model.define("vendor_bill", {
   tariff_number: model.text().nullable(),
   tariff_vendor_bill_id: model.text().nullable(),
 
+  // Sales tax the vendor charged on THIS invoice (US vendors that bill us tax
+  // instead of honouring a resale certificate). Unlike commission/freight/
+  // tariff there is no linked sibling bill: the tax is a line of the same
+  // vendor document, so a single header amount copied off that document is
+  // the whole input — no `_included` flag, 0 means "no tax".
+  //
+  // It capitalizes into the landed unit cost (non-recoverable tax on goods for
+  // resale is part of acquisition cost) AND ships to QuickBooks as its own
+  // positive ExpenseLine, because QBXML BillAdd has no header tax field —
+  // ExpenseLineAdd / ItemLineAdd are the only slots a Bill has.
+  tax_amount_cents: model.number().default(0),
+  // Snapshot of the QB COGS account the tax posts to, resolved from qb_account
+  // at save time. Snapshotted (not resolved at dispatch) so a chart-of-accounts
+  // rename can never silently retarget an already-saved bill.
+  tax_account_list_id: model.text().nullable(),
+
   // Vendor's own reference / PI number for this shipment
   reference_id: model.text().nullable(),
 
