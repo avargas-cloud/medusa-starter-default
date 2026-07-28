@@ -300,20 +300,25 @@ export async function handleFulfillmentCreated(
   let invoiceDate: string | Date | null = null;
 
   try {
-    let sql = `SELECT invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, discount, created_at, issued_at FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
+    let sql = `SELECT invoice_number, shipping, discount, created_at, issued_at FROM pos_invoice WHERE fulfillment_id = $1 LIMIT 1`;
     let params: any[] = [data.fulfillment_id];
 
     if (data.invoice_id) {
-      sql = `SELECT invoice_number, metadata->>'qb_ref_number' AS qb_ref_number, shipping, discount, created_at, issued_at FROM pos_invoice WHERE id = $1 LIMIT 1`;
+      sql = `SELECT invoice_number, shipping, discount, created_at, issued_at FROM pos_invoice WHERE id = $1 LIMIT 1`;
       params = [data.invoice_id];
     }
 
     const invRes = await pool.query(sql, params);
     const row = invRes.rows[0];
     if (row) {
-      const seq = row.qb_ref_number || row.invoice_number;
-      if (seq) {
-        memo = `POS Invoice ${seq}`;
+      // Memo = POS invoice_number ONLY (same as the Sales Receipt handler).
+      // Never metadata.qb_ref_number: for invoices that key is PRE-SEEDED at
+      // creation with a `qb_invoice` counter value that never reaches QB (the
+      // create sends no <RefNumber>, QB mints its own), and after the confirm
+      // it is overwritten with QB's real RefNumber — so reading it stamped a
+      // number that matches nothing the cashier can look up.
+      if (row.invoice_number) {
+        memo = `POS Invoice ${row.invoice_number}`;
         invoiceMedusaRefNumber = `INV-${row.invoice_number}`;
       }
       if (row.shipping !== undefined && row.shipping !== null) {
