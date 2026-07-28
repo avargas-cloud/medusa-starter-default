@@ -88,13 +88,14 @@ export const enqueueQbItemReceiptStep = createStep(
       PURCHASE_ORDERS_MODULE
     ) as unknown as PurchaseOrdersModuleService;
 
+    const identityMemo = qbItemReceiptIdentityMemo({
+      receiptId: input.receipt_id,
+      receiptNumber: input.receipt_number,
+      memo: input.memo,
+    });
     const payload: QbItemReceiptPayload = {
       delegated_to_consolidator: true,
-      qb_identity_memo: qbItemReceiptIdentityMemo({
-        receiptId: input.receipt_id,
-        receiptNumber: input.receipt_number,
-        memo: input.memo,
-      }),
+      qb_identity_memo: identityMemo,
       po_id: input.po_id,
       po_number: input.po_number,
       receipt_id: input.receipt_id,
@@ -112,7 +113,8 @@ export const enqueueQbItemReceiptStep = createStep(
             input.vendor_bill_date as unknown as string | Date
           ).toISOString()
         : null,
-      memo: input.memo,
+      // Keep legacy bridge builds safe until the Windows service is restarted.
+      memo: identityMemo,
       lines: input.lines.map((l) => ({
         receipt_line_id: l.receipt_line_id,
         po_line_id: l.po_line_id,

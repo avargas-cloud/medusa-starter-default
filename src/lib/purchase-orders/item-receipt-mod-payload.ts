@@ -161,13 +161,14 @@ export async function buildItemReceiptModPayload(
     return { ok: false, reason: `receipt ${receiptId} has no qty>0 lines to send` };
   }
 
+  const identityMemo = qbItemReceiptIdentityMemo({
+    receiptId: String(header.receipt_id),
+    receiptNumber: String(header.receipt_number),
+    memo: (header.memo as string | null) ?? null,
+  });
   const payload: ItemReceiptModPayload = {
     delegated_to_consolidator: true,
-    qb_identity_memo: qbItemReceiptIdentityMemo({
-      receiptId: String(header.receipt_id),
-      receiptNumber: String(header.receipt_number),
-      memo: (header.memo as string | null) ?? null,
-    }),
+    qb_identity_memo: identityMemo,
     operation_revision: randomUUID(),
     txn_id: String(header.txn_id),
     edit_sequence: (header.qb_edit_sequence as string | null) ?? null,
@@ -184,7 +185,8 @@ export async function buildItemReceiptModPayload(
     vendor_bill_date: header.vendor_bill_date
       ? new Date(header.vendor_bill_date as string).toISOString()
       : null,
-    memo: (header.memo as string | null) ?? null,
+    // Keep legacy bridge builds safe until the Windows service is restarted.
+    memo: identityMemo,
     lines: lines.map((l) => ({
       receipt_line_id: String(l.receipt_line_id),
       po_line_id: String(l.po_line_id),
