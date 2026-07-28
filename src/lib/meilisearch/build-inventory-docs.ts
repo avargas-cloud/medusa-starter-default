@@ -153,7 +153,10 @@ export function buildInventoryDocsForVariants(
         productId: product?.id || null,
         handle: product?.handle || null,
         salesDescription: (vmeta.sales_description as string) || null,
-        purchaseDescription: (vmeta.purchase_description as string) || null,
+        purchaseDescription:
+          (vmeta.qb_purchase_desc as string) ||
+          (vmeta.purchase_description as string) ||
+          null,
         quickbooks_id: (vmeta.quickbooks_id as string) || null,
         purchaseCost: (vmeta.purchase_cost as number) || null,
         cost: (vmeta.average_cost as number) || (vmeta.purchase_cost as number) || null,
@@ -199,7 +202,10 @@ export function buildInventoryDocsForVariants(
         productId: product?.id || null,
         handle: product?.handle || null,
         salesDescription: (vmeta.sales_description as string) || null,
-        purchaseDescription: (vmeta.purchase_description as string) || null,
+        purchaseDescription:
+          (vmeta.qb_purchase_desc as string) ||
+          (vmeta.purchase_description as string) ||
+          null,
         quickbooks_id: (vmeta.quickbooks_id as string) || null,
         purchaseCost: (vmeta.purchase_cost as number) || null,
         cost: (vmeta.average_cost as number) || (vmeta.purchase_cost as number) || null,
