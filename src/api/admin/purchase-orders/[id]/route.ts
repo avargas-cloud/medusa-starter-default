@@ -293,6 +293,86 @@ export async function GET(
     );
   }
 
+  // Vendor bill lines that cover each PO line. The PO editor uses this to ask
+  // whether a unit-cost correction should also reach the bill it was raised
+  // against — the mirror of the bill→PO propagation in the vendor-bill PATCH.
+  // Only DRAFT bills are listed: a confirmed/synced bill has already moved
+  // average costs and posted to QuickBooks, so its cost is not a field the PO
+  // page may quietly rewrite (it takes Reopen → edit → Reconfirm).
+  const billLinesByPoLineId = new Map<
+    string,
+    Array<{
+      vendor_bill_id: string;
+      vendor_bill_number: string | null;
+      vendor_bill_reference_id: string | null;
+      vendor_bill_document_date: string | null;
+      vendor_bill_line_id: string;
+      unit_cost_cents: number;
+      qty: number;
+      vendor_bill_item_subtotal_cents: number;
+    }>
+  >();
+  const billLineRows = await billingKnex.raw(
+    `SELECT vbl.id AS vendor_bill_line_id,
+            vbl.purchase_order_line_id,
+            vbl.unit_cost_cents::int AS unit_cost_cents,
+            vbl.qty::int AS qty,
+            vb.id AS vendor_bill_id,
+            vb.number AS vendor_bill_number,
+            vb.reference_id AS vendor_bill_reference_id,
+            COALESCE(vb.document_date, vb.created_at) AS vendor_bill_document_date,
+            -- The bill's "Item Total" exactly as its own page computes it:
+            -- every live line except the server-owned tax charge (freight
+            -- charges DO count — they are money owed on the document).
+            (SELECT COALESCE(SUM(x.unit_cost_cents::bigint * x.qty), 0)::bigint
+               FROM vendor_bill_line x
+              WHERE x.vendor_bill_id = vb.id
+                AND x.deleted_at IS NULL
+                AND COALESCE(x.line_kind, 'po_item') <> 'tax_charge'
+            ) AS vendor_bill_item_subtotal_cents
+       FROM vendor_bill_line vbl
+       JOIN vendor_bill vb
+         ON vb.id = vbl.vendor_bill_id
+        AND vb.deleted_at IS NULL
+        AND vb.purchase_order_id = ?
+        AND vb.bill_type = 'regular'
+        AND vb.status = 'draft'
+      WHERE vbl.deleted_at IS NULL
+        AND COALESCE(vbl.line_type, 'product') = 'product'
+        AND vbl.purchase_order_line_id IS NOT NULL
+      ORDER BY vb.created_at ASC, vbl.created_at ASC`,
+    [id]
+  );
+  for (const row of billLineRows.rows as Array<{
+    vendor_bill_line_id: string;
+    purchase_order_line_id: string;
+    unit_cost_cents: number;
+    qty: number;
+    vendor_bill_id: string;
+    vendor_bill_number: string | null;
+    vendor_bill_reference_id: string | null;
+    vendor_bill_document_date: string | Date | null;
+    vendor_bill_item_subtotal_cents: number | string;
+  }>) {
+    const bucket = billLinesByPoLineId.get(row.purchase_order_line_id) ?? [];
+    bucket.push({
+      vendor_bill_id: row.vendor_bill_id,
+      vendor_bill_number: row.vendor_bill_number,
+      vendor_bill_reference_id: row.vendor_bill_reference_id,
+      vendor_bill_document_date: row.vendor_bill_document_date
+        ? new Date(row.vendor_bill_document_date).toISOString()
+        : null,
+      vendor_bill_line_id: row.vendor_bill_line_id,
+      unit_cost_cents: Number(row.unit_cost_cents ?? 0),
+      qty: Number(row.qty ?? 0),
+      // bigint → string over the wire; coerce here, never at the callsite.
+      vendor_bill_item_subtotal_cents: Number(
+        row.vendor_bill_item_subtotal_cents ?? 0
+      ),
+    });
+    billLinesByPoLineId.set(row.purchase_order_line_id, bucket);
+  }
+
   const linesByReceipt = new Map<string, Array<Record<string, unknown>>>();
   for (const rl of receiptLines) {
     const billed = billedByReceiptLineId.get(rl.id as string) ?? null;
@@ -455,6 +535,7 @@ export async function GET(
       billed_qty: billedQty,
       unbilled_received_qty: Math.max(0, qtyReceived - billedQty),
       billing_status: billingStatus,
+      vendor_bill_lines: billLinesByPoLineId.get(lineId) ?? [],
       non_receivable: nonReceivableReasonForLine !== null,
       non_receivable_reason: nonReceivableReasonForLine,
     };
