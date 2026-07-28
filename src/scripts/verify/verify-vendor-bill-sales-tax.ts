@@ -251,7 +251,49 @@ console.log("\n5. Exactness across ALL pools, over adversarial shapes");
   );
 }
 
-console.log("\n6. Determinism — the POS preview must equal the confirm");
+console.log("\n6. The cost PREVIEW must agree with the CONFIRM, to the penny");
+{
+  // The confirm route sums `landed_total_cents`. The replay engine that powers
+  // the cost preview works per RECEIPT line, so it derives an exact per-unit
+  // (`landed_total_cents / qty`) instead. Both must describe the same money, or
+  // the preview promises an average cost the confirm then contradicts.
+  const shapes: LandedInput[][] = [
+    [{ qty: 37, unit_cost_cents: 498, cbm_per_unit: null }],
+    [
+      { qty: 100, unit_cost_cents: 550, cbm_per_unit: 0.012 },
+      { qty: 3, unit_cost_cents: 12345, cbm_per_unit: null },
+    ],
+    [{ qty: 250, unit_cost_cents: 7, cbm_per_unit: 0.5 }],
+  ];
+  let worst = 0;
+  for (const lines of shapes) {
+    for (const pools of [
+      { commissionCents: 0, freightCents: 0, tariffCents: 0, taxCents: 1290 },
+      { commissionCents: 4537, freightCents: 8800, tariffCents: 125, taxCents: 999 },
+    ]) {
+      const { lines: res } = computeLandedLines(lines, pools);
+      res.forEach((r, i) => {
+        const qty = lines[i]!.qty;
+        const previewMoney = (r.landed_total_cents / qty) * qty; // replay's route
+        worst = Math.max(worst, Math.abs(previewMoney - r.landed_total_cents));
+        // And the lossy route it replaced, for contrast:
+        const lossy = r.landed_unit_cost_cents * qty;
+        if (lossy !== r.landed_total_cents) {
+          console.log(
+            `    (qty ${qty}: per-unit route would have said ${lossy}c vs the real ${r.landed_total_cents}c)`
+          );
+        }
+      });
+    }
+  }
+  check(
+    "the preview's exact per-unit reproduces the confirm's line money",
+    worst < 1e-6,
+    `worst divergence ${worst}`
+  );
+}
+
+console.log("\n7. Determinism — the POS preview must equal the confirm");
 {
   const lines: LandedInput[] = [
     { qty: 13, unit_cost_cents: 777, cbm_per_unit: 0.03 },

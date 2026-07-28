@@ -174,13 +174,27 @@ export async function previewVendorBillConfirmation(
       taxCents: Number(bill.tax_amount_cents ?? 0),
     }
   );
-  const usable = sourceLines.map((line, index) => ({
-    variantId: line.product_variant_id,
-    sku: line.sku,
-    description: line.description,
-    quantity: Number(line.qty),
-    landedUnitCostCents: allocation.lines[index]!.landed_unit_cost_cents,
-  }));
+  const usable = sourceLines.map((line, index) => {
+    const qty = Number(line.qty);
+    const alloc = allocation.lines[index]!;
+    return {
+      variantId: line.product_variant_id,
+      sku: line.sku,
+      description: line.description,
+      quantity: qty,
+      /** Integer per-unit — for DISPLAY in the preview table only. */
+      landedUnitCostCents: alloc.landed_unit_cost_cents,
+      /**
+       * Exact per-unit as a real number, derived from the line's exact money.
+       * The cost projection MUST use this: the integer above strands up to
+       * `qty − 1` cents of every pool, so a preview built on it would show a
+       * different average cost than the Confirm that follows it — the confirm
+       * route reads `landed_total_cents` directly.
+       */
+      exactUnitCostCents:
+        qty > 0 ? alloc.landed_total_cents / qty : alloc.landed_unit_cost_cents,
+    };
+  });
   const variantIds = [...new Set(usable.map((row) => row.variantId))];
   if (variantIds.length === 0) {
     throw new Error("No product cost lines are available to preview");
@@ -230,7 +244,7 @@ export async function previewVendorBillConfirmation(
         received_at: receipt.received_at,
         applied_at: now.toISOString(),
         received_qty: Number(receipt.quantity),
-        landed_unit_cost_cents: row.landedUnitCostCents,
+        landed_unit_cost_cents: row.exactUnitCostCents,
       },
     ];
   });
