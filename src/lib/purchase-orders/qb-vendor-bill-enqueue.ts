@@ -252,6 +252,28 @@ export async function enqueueQbVendorBillAdd(
         reason: `sales tax ${taxCents}c could not be placed on the item lines (placed ${placed}c)`,
       };
     }
+    // QBXML carries Cost, not Amount, and caps it at 5 decimals (PRICETYPE —
+    // more is error 3045). QuickBooks then derives Amount = Quantity × Cost.
+    // Below ~1,000 units a line that round-trip is exact; past ~2,500 the
+    // truncated cost can land a cent off, and a cent off is a bill that never
+    // clears. Simulate the bridge's own formatting and refuse rather than post
+    // a total we know is wrong.
+    const drift = productLines.reduce((worst, l, i) => {
+      const qty = Number(l.qty);
+      if (qty <= 0) return worst;
+      const exact = l.unit_cost_cents * qty + (taxByLine[i] ?? 0);
+      const sentCost = Number((exact / qty / 100).toFixed(5));
+      return Math.max(worst, Math.abs(Math.round(sentCost * qty * 100) - exact));
+    }, 0);
+    if (drift > 0) {
+      return {
+        queued: false,
+        reason:
+          `sales tax cannot be expressed within QuickBooks' 5-decimal unit cost ` +
+          `on these quantities (off by ${drift}c) — split the bill or enter the ` +
+          `tax on a smaller line`,
+      };
+    }
   }
 
   if (expenseLines.some((l) => !l.account_list_id)) {

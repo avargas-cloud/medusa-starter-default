@@ -3,6 +3,7 @@ import {
   enqueuePurchaseQbOperation,
   purchaseOperationKey,
 } from "./qb-purchase-dependency-chain";
+import { allocateLineTotalsCents } from "./landed-allocation";
 
 export type VendorBillModKnex = {
   raw: (
@@ -35,6 +36,7 @@ interface BillRow {
   commission_amount_cents: number;
   freight_amount_cents: number;
   tariff_amount_cents: number;
+  tax_amount_cents: number | string | null;
 }
 
 interface ClearingLine {
@@ -60,7 +62,7 @@ async function loadBill(
             document_date, due_date, qb_txn_id, qb_edit_sequence, qb_source,
             qb_clearing_lines, service_vendor_bill_id, freight_vendor_bill_id,
             tariff_vendor_bill_id, commission_amount_cents,
-            freight_amount_cents, tariff_amount_cents
+            freight_amount_cents, tariff_amount_cents, tax_amount_cents
        FROM vendor_bill
       WHERE id = ? AND deleted_at IS NULL`,
     [id]
@@ -144,30 +146,75 @@ async function buildPayload(
   );
 
   const lineRows = lineResult.rows as Record<string, unknown>[];
-  const itemLines = lineRows
-    .filter((line) => String(line.line_type ?? "product") === "product")
-    .map((line) => {
-      if (!line.qb_txn_line_id) {
-        throw new Error(
-          `${bill.number ?? bill.id}: line ${String(line.id)} has no QB TxnLineID`
-        );
-      }
-      return {
-        vendor_bill_line_id: String(line.id),
-        qb_txn_line_id: String(line.qb_txn_line_id),
-        qb_item_list_id: line.qb_item_list_id
-          ? String(line.qb_item_list_id)
-          : null,
-        quantity: Number(line.qty),
-        unit_cost_cents:
-          bill.bill_type === "regular"
-            ? Number(line.landed_unit_cost_cents || line.unit_cost_cents)
-            : Number(line.unit_cost_cents),
-      };
-    });
+  const productRows = lineRows.filter(
+    (line) => String(line.line_type ?? "product") === "product"
+  );
+
+  // WHICH COST BASIS — this must match whatever the Add put in QuickBooks, or
+  // the first edit silently restates the bill.
+  //
+  // There are two document shapes behind `bill_type = 'regular'`:
+  //
+  //  · CHINA AGENT — item lines at the FULL landed cost, with negative
+  //    clearing ExpenseLines cancelling the sibling service/freight/tariff
+  //    bills so A/P still nets to what is owed. `qb_clearing_lines` is
+  //    populated exactly for these, so it is the shape's own fingerprint.
+  //
+  //  · LOCAL / USA — item lines at the RAW invoice cost (plus sales tax, which
+  //    has to be in the item cost to survive Cost Sync: see
+  //    qb-vendor-bill-enqueue.ts), with freight as its own positive
+  //    ExpenseLine. This is what qb-vendor-bill-enqueue.ts sends.
+  //
+  // Sending landed for BOTH — the previous behaviour — meant a Mod on a local
+  // bill folded commission/freight/tariff into the item cost while ALSO
+  // leaving their positive ExpenseLines in place, double-counting them in
+  // QuickBooks and inflating the bill.
+  const usesClearingStructure = (bill.qb_clearing_lines ?? []).length > 0;
+
+  // Sales tax, allocated by value on exact line totals — identical basis and
+  // engine to the Add, so a Mod reproduces the same per-unit cost.
+  const taxCents = Number(regular.tax_amount_cents ?? 0);
+  const taxByLine = allocateLineTotalsCents(
+    Math.max(0, Math.round(taxCents)),
+    productRows.map((l) => Number(l.unit_cost_cents) * Number(l.qty))
+  );
+
+  const itemLines = productRows.map((line, i) => {
+    if (!line.qb_txn_line_id) {
+      throw new Error(
+        `${bill.number ?? bill.id}: line ${String(line.id)} has no QB TxnLineID`
+      );
+    }
+    const qty = Number(line.qty);
+    const raw = Number(line.unit_cost_cents);
+    let cost: number;
+    if (bill.bill_type !== "regular") {
+      cost = raw;
+    } else if (usesClearingStructure) {
+      cost = Number(line.landed_unit_cost_cents || line.unit_cost_cents);
+    } else {
+      const share = taxByLine[i] ?? 0;
+      cost = qty > 0 && share > 0 ? (raw * qty + share) / qty : raw;
+    }
+    return {
+      vendor_bill_line_id: String(line.id),
+      qb_txn_line_id: String(line.qb_txn_line_id),
+      qb_item_list_id: line.qb_item_list_id
+        ? String(line.qb_item_list_id)
+        : null,
+      quantity: qty,
+      unit_cost_cents: cost,
+    };
+  });
 
   const localExpenseLines = lineRows
-    .filter((line) => String(line.line_type ?? "") === "qb_account")
+    .filter(
+      (line) =>
+        String(line.line_type ?? "") === "qb_account" &&
+        // Local-only bookkeeping row; its money is already inside the item
+        // cost above. Same exclusion as the Add path.
+        String(line.line_kind ?? "") !== "tax_charge"
+    )
     .map((line) => {
       if (!line.account_list_id) {
         throw new Error(
