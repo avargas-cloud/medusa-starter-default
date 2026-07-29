@@ -4,6 +4,7 @@ import { Modules } from "@medusajs/utils";
 import { parseSalesRepInitials } from "../../../../../../lib/quickbooks/parse-sales-rep";
 import { getBusinessDateString } from "../../../../../../lib/quickbooks/order-flow-core";
 import { getQbConfig } from "../../../../../../lib/quickbooks/qb-config";
+import { verifySupervisorPin } from "../../../../../../lib/pos/verify-supervisor-pin";
 import { resolveTaxListid } from "../../../../../../lib/quickbooks/resolve-tax-listid";
 import {
   buildQbOrderDiscountLines,
@@ -35,12 +36,24 @@ const NON_INVENTORY_QB_TYPES = new Set([
 /**
  * PATCH /admin/pos/credit_memos/:id/edit
  *
- * PIN-protected edit of a completed credit memo.
+ * Edit de un credit memo completado.
  * - Adjusts inventory levels by delta (new restockable − old restockable per variant)
  * - Updates customer_payment amount (guarded: cannot reduce below already-applied credit)
  * - Updates parent invoice refunded amounts + per-item refunded_quantity
  * - Replaces CM items in DB
  * - Voids old QB credit memo + enqueues a fresh one
+ *
+ * ── PIN de supervisor para editar un día PASADO ──────────────────────────────
+ * Este docstring decía "PIN-protected" y la ruta no verificaba ningún PIN. El
+ * gate existía sólo en la pantalla (`returns/[id]` abre un modal cuyo texto
+ * avisa "los cambios se enviarán a QuickBooks"), y la comparación ocurría en el
+ * navegador — así que cualquiera que llamara a esta ruta directamente editaba un
+ * credit memo de un día ya cerrado sin encontrar ninguna puerta, y el cambio
+ * salía hacia QuickBooks.
+ *
+ * Quién decide si hace falta PIN es ESTA ruta, nunca el cliente: el frontend
+ * podría simplemente no pedirlo. Se compara el día de negocio de creación contra
+ * el de hoy (misma zona horaria que usan los documentos QB).
  */
 export async function PATCH(
   req: MedusaRequest,
@@ -70,6 +83,28 @@ export async function PATCH(
         .status(400)
         .json({ message: "Only completed credit memos can be edited" });
       return;
+    }
+
+    // Gate de PIN, decidido acá y no por el cliente. Un credit memo del MISMO
+    // día de negocio se edita libre (es la corrección natural de un error
+    // reciente); uno de un día anterior ya salió en los reportes y en
+    // QuickBooks, así que exige autorización de supervisor.
+    const createdBusinessDay = getBusinessDateString(creditMemo.created_at);
+    const todayBusinessDay = getBusinessDateString();
+    if (createdBusinessDay !== todayBusinessDay) {
+      const { supervisor_pin } = (req.body ?? {}) as {
+        supervisor_pin?: unknown;
+      };
+      const pinOk = await verifySupervisorPin(pgConnection, supervisor_pin);
+      if (!pinOk) {
+        res.status(403).json({
+          message:
+            "Este credit memo se creó un día anterior — requiere PIN de supervisor para editarse.",
+          code: "SUPERVISOR_PIN_REQUIRED",
+          created_business_day: createdBusinessDay,
+        });
+        return;
+      }
     }
 
     const {

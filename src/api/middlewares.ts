@@ -11,6 +11,7 @@ import {
   rejectClosedEffectiveDate,
 } from "./middlewares/closed-accounting-period";
 import { idempotency } from "./middlewares/idempotency";
+import { protectSupervisorPin } from "./middlewares/protect-supervisor-pin";
 import { syncCustomerMeili } from "./middlewares/sync-customer-meili";
 import { validateDraftOrderCustomer } from "./middlewares/validate-draft-order-customer";
 
@@ -99,6 +100,22 @@ function pubCorsMiddleware(
 
 export default defineMiddlewares({
   routes: [
+    // El PIN de supervisor NO se cambia por la ruta nativa de Medusa. Vive en
+    // `store.metadata`, y `POST /admin/stores/:id` acepta cualquier metadata sin
+    // saber nada de PINes — así que cualquier cajero (todos son usuarios admin
+    // en este sistema) podía reemplazarlo SIN conocer el anterior y pasarse
+    // todos los gates, incluidos los que sí verifican del lado del servidor.
+    // El único camino legítimo es POST /admin/pos/supervisor-pin.
+    {
+      matcher: "/admin/stores/:id",
+      method: ["POST", "PATCH", "PUT"],
+      middlewares: [protectSupervisorPin],
+    },
+    {
+      matcher: "/admin/stores",
+      method: ["POST", "PATCH", "PUT"],
+      middlewares: [protectSupervisorPin],
+    },
     // Accounting period lock. Historical document content is immutable after
     // close; explicit later-period operations (payments, PO receipts and
     // order→invoice creation) remain available through their own routes.

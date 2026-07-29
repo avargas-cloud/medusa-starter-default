@@ -14,6 +14,13 @@ import type {
   MedusaResponse,
 } from "@medusajs/framework/http";
 import { Modules } from "@medusajs/utils";
+
+import {
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../../lib/pos/verify-supervisor-pin";
 import {
   CHINA_LOCATION_ID,
   type InventoryServiceLike,
@@ -52,6 +59,28 @@ export async function POST(
   const { id } = req.params;
   const reason = req.body?.reason?.trim() || null;
   const knex = resolveKnex(req);
+
+  // PIN de supervisor. Las reglas del repo describen este void como "PIN +
+  // razón" desde el 2026-07-06, pero el PIN existía SOLO en la pantalla y se
+  // comparaba en el navegador: un POST directo a esta ruta revertía el delta de
+  // stock de cada línea sin encontrar ninguna puerta. La razón sí se pedía acá;
+  // el PIN no.
+  //
+  // Incondicional: revertir un ajuste de inventario mueve stock real y es
+  // terminal.
+  {
+    const guard = await guardSupervisorPin({
+      scope: req.scope as unknown as { resolve: (k: string) => unknown },
+      db: knex as unknown as PinConn,
+      pin: (req.body as { supervisor_pin?: unknown } | undefined)
+        ?.supervisor_pin,
+      actorId: resolveActorId(req),
+    });
+    if (!guard.ok) {
+      const { status, body } = pinGuardResponse(guard);
+      return res.status(status).json(body);
+    }
+  }
 
   // Must exist (distinguish 404 from 409-already-voided).
   const docRes = await knex.raw(

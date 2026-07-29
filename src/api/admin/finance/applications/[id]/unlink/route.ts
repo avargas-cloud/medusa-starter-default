@@ -1,5 +1,11 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
+import {
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../../../lib/pos/verify-supervisor-pin";
 import { FINANCE_MODULE } from "../../../../../../modules/finance";
 import { refreshOrderDocsForPayment } from "../../../_lib/refresh-order-docs";
 
@@ -25,6 +31,32 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const applicationId = req.params.id!;
 
   const financeService = req.scope.resolve(FINANCE_MODULE);
+
+  // PIN de supervisor, incondicional. Deslinkear le SACA plata atribuida a una
+  // orden, y sus dos callsites son de contabilidad (StoreCreditLinkPanel y
+  // LinkOrderModal) — ninguno es un flujo de venta de rutina.
+  //
+  // Nota deliberada sobre el hermano `apply`: ahí NO se exige PIN. Aplicar un
+  // crédito se hace desde siete pantallas del día a día (cerrar orden, capturar
+  // pago, capturar depósito, cubrir con crédito…) y no existe ninguna señal del
+  // lado del servidor que separe "linkear desde contabilidad" de "aplicar
+  // durante una venta". Exigirlo ahí frenaría la caja sin cerrar nada: el
+  // riesgo real de esa ruta ya lo cubren la inmutabilidad de los pagos web y el
+  // clamp de reservas.
+  {
+    const db = req.scope.resolve("__pg_connection__") as PinConn;
+    const guard = await guardSupervisorPin({
+      scope: req.scope as unknown as { resolve: (k: string) => unknown },
+      db,
+      pin: (req.body as { supervisor_pin?: unknown } | undefined)
+        ?.supervisor_pin,
+      actorId: resolveActorId(req),
+    });
+    if (!guard.ok) {
+      const { status, body } = pinGuardResponse(guard);
+      return res.status(status).json(body);
+    }
+  }
 
   try {
     const apps = await financeService.listPaymentApplications(

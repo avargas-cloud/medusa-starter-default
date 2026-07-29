@@ -17,6 +17,13 @@ import type {
 import { randomUUID } from "crypto";
 import { z } from "zod";
 
+import {
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../lib/pos/supervisor-pin-guard";
+import type { PinConn } from "../../../../../lib/pos/verify-supervisor-pin";
+
 type Knex = {
   raw: (sql: string, bindings?: unknown[]) => Promise<{ rows: unknown[] }>;
   transaction?: () => Promise<
@@ -218,6 +225,28 @@ export const DELETE = async (
     .resolve("__pg_connection__") as Knex;
 
   const { id } = req.params;
+
+  // PIN de supervisor. La pantalla de China Finance ya abría un modal antes de
+  // borrar ("Enter supervisor PIN to delete this wire transfer and return its
+  // bills to pending"), pero el gate vivía SOLO ahí y la comparación ocurría en
+  // el navegador: un DELETE directo a esta ruta borraba el wire y devolvía sus
+  // bills a pendiente sin encontrar ninguna puerta.
+  //
+  // Acá es incondicional — no hay caso en que borrar un wire transfer sea una
+  // operación de rutina.
+  {
+    const guard = await guardSupervisorPin({
+      scope: req.scope as unknown as { resolve: (k: string) => unknown },
+      db: knex as unknown as PinConn,
+      pin: (req.body as { supervisor_pin?: unknown } | undefined)
+        ?.supervisor_pin,
+      actorId: resolveActorId(req),
+    });
+    if (!guard.ok) {
+      const { status, body } = pinGuardResponse(guard);
+      return res.status(status).json(body);
+    }
+  }
 
   const { rows: wires } = await knex.raw(
     `SELECT id FROM china_wire_transfer WHERE id = ?`,

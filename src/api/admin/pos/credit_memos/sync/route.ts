@@ -1,8 +1,21 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
 
 import { getVariantAvgCostBatch } from "../../../../../lib/cost/get-variant-avg-cost";
+import {
+  guardSupervisorPin,
+  pinGuardResponse,
+  resolveActorId,
+} from "../../../../../lib/pos/supervisor-pin-guard";
 import { CREDIT_MEMO_MODULE } from "../../../../../modules/credit_memos";
 import CreditMemoModuleService from "../../../../../modules/credit_memos/service";
+
+/**
+ * Umbral de "factura vieja" para exigir PIN al crear un credit memo.
+ * Espeja el que usaba la pantalla de invoice (`useInvoiceDetail.ts`), que era el
+ * único lugar donde vivía la regla. Si se cambia, cambiar los dos — o mejor,
+ * que la pantalla lo lea de acá.
+ */
+const OLD_INVOICE_DAYS = 30;
 
 export async function POST(
   req: MedusaRequest,
@@ -14,6 +27,52 @@ export async function POST(
 
   try {
     const { id, payload, items, totals, action, shipping } = req.body as any;
+
+    // ── PIN de supervisor para devolver contra una invoice VIEJA ──────────────
+    //
+    // La pantalla de invoice pedía PIN cuando la factura tenía más de 30 días,
+    // pero el gate vivía SOLO ahí: llegar a esta ruta por cualquier otra vía
+    // (la API, o la pantalla de returns) creaba el credit memo sin encontrar
+    // ninguna puerta. Proteger la pantalla no protege la operación.
+    //
+    // La regla ahora vive donde ocurre el hecho, así vale para todas las vías.
+    // Una devolución reciente sigue libre — el cajero no necesita supervisor
+    // para corregir una venta de esta semana.
+    if (payload?.invoice_id && !id) {
+      const pinPg = req.scope.resolve("__pg_connection__") as any;
+      let invoiceAgeDays: number | null = null;
+      try {
+        const { rows } = await pinPg.raw(
+          `SELECT EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400 AS age_days
+             FROM pos_invoice WHERE id = ? LIMIT 1`,
+          [payload.invoice_id]
+        );
+        const raw = rows?.[0]?.age_days;
+        invoiceAgeDays = raw == null ? null : Number(raw);
+      } catch {
+        // Fail-CLOSED: si no se puede establecer la edad de la factura, se
+        // exige PIN. Es más seguro pedir autorización de más que de menos.
+        invoiceAgeDays = Number.POSITIVE_INFINITY;
+      }
+
+      if (invoiceAgeDays !== null && invoiceAgeDays > OLD_INVOICE_DAYS) {
+        const guard = await guardSupervisorPin({
+          scope: req.scope as unknown as { resolve: (k: string) => unknown },
+          db: pinPg,
+          pin: (req.body as any)?.supervisor_pin,
+          actorId: resolveActorId(req),
+        });
+        if (!guard.ok) {
+          const { status, body } = pinGuardResponse(guard);
+          res.status(status).json({
+            ...body,
+            invoice_age_days: Math.floor(invoiceAgeDays),
+            old_invoice_threshold_days: OLD_INVOICE_DAYS,
+          });
+          return;
+        }
+      }
+    }
 
     let resolvedId = id;
 
