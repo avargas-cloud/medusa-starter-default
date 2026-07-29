@@ -3,6 +3,7 @@ import type { EntityReconciler } from "../drift-reconciler";
 import { QUICKBOOKS_CATALOG_MODULE } from "../../../modules/quickbooks-catalog";
 import type QuickbooksCatalogModuleService from "../../../modules/quickbooks-catalog/service";
 import { updateSingleVendorMeiliWorkflow } from "../../../workflows/update-single-vendor-meili";
+import { transformVendor, VENDORS_INDEX } from "../vendor-doc";
 
 /**
  * `vendors` index reconciler — Capa 2 counterpart for `qb_vendor`.
@@ -17,20 +18,6 @@ import { updateSingleVendorMeiliWorkflow } from "../../../workflows/update-singl
  * The trigger (`trg_meili_sync_qb_vendor`) is writer-agnostic: psql, fix
  * scripts, cron runners and routes all enqueue alike.
  */
-
-/** Loads the shared `.mts` Meili helpers (same dynamic-import shape the
- *  vendor workflows use — the module is ESM-only). */
-async function loadMeiliHelpers(): Promise<{
-  transformVendor: (v: unknown) => Record<string, unknown>;
-  VENDORS_INDEX: string;
-}> {
-  return (await import(
-    /* @vite-ignore */ "../../meili-backend.mts" as unknown as string
-  )) as {
-    transformVendor: (v: unknown) => Record<string, unknown>;
-    VENDORS_INDEX: string;
-  };
-}
 
 /**
  * Builds the canonical `vendors` doc through the exact same `transformVendor`
@@ -48,7 +35,6 @@ async function buildExpectedVendorDoc(
   const vendor = await service.retrieveQbVendor(vendorId).catch(() => null);
   if (!vendor) return null;
 
-  const { transformVendor } = await loadMeiliHelpers();
   return transformVendor(vendor);
 }
 
@@ -88,7 +74,6 @@ export const vendorReconciler: EntityReconciler = {
     const vendor = await service.retrieveQbVendor(id).catch(() => null);
     if (!vendor) {
       const { MeiliSearch } = await import("meilisearch");
-      const { VENDORS_INDEX } = await loadMeiliHelpers();
       const client = new MeiliSearch({
         host: process.env.MEILISEARCH_HOST!,
         apiKey: process.env.MEILISEARCH_API_KEY!,

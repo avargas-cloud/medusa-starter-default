@@ -19,6 +19,7 @@ import {
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../modules/quickbooks-catalog";
 import type QuickbooksCatalogModuleService from "../modules/quickbooks-catalog/service";
+import { transformVendor, VENDORS_INDEX } from "../lib/meilisearch/vendor-doc";
 
 let isSyncing = false;
 
@@ -56,13 +57,6 @@ export const syncVendorsToMeiliStep = createStep(
 
     try {
       const { MeiliSearch } = await import("meilisearch");
-      const meili = (await import(
-        /* @vite-ignore */ "../lib/meili-backend.mts" as unknown as string
-      )) as {
-        transformVendor: (v: unknown) => Record<string, unknown>;
-        VENDORS_INDEX: string;
-      };
-      const { transformVendor, VENDORS_INDEX } = meili;
       const service = container.resolve(
         QUICKBOOKS_CATALOG_MODULE
       ) as unknown as QuickbooksCatalogModuleService;

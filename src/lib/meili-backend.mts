@@ -40,59 +40,16 @@ export function transformProduct(product: any) {
 }
 
 /**
- * Vendor transformer — maps a qb_vendor DB row to a Meili document.
+ * MOVED — the vendor transformer now lives in
+ * `src/lib/meilisearch/vendor-doc.ts` (a plain `.ts` module).
  *
- * Searchable surface: full_name, name, company_name, email, phone,
- * qb_list_id, account_number, tax_identity, city, state, contact.
- * Used by the Purchase Order vendor picker (store-pos) and future
- * vendor-facing UIs.
+ * Every consumer reached this file through a dynamic
+ * `await import("../lib/meili-backend.mts")`, which resolves in dev but NOT in
+ * the production build (`medusa build` emits `meili-backend.mjs`), so vendor
+ * sync silently threw "Cannot find module" in prod. Do not re-add a vendor
+ * transformer here — there must be exactly one, and it must be statically
+ * importable.
  */
-export function transformVendor(vendor: any) {
-    return {
-        id: vendor.id,
-        qb_list_id: vendor.qb_list_id ?? null,
-        full_name: vendor.full_name ?? null,
-        name: vendor.name ?? null,
-        company_name: vendor.company_name ?? null,
-        account_number: vendor.account_number ?? null,
-        is_active: vendor.is_active ?? true,
-
-        first_name: vendor.first_name ?? null,
-        last_name: vendor.last_name ?? null,
-        contact: vendor.contact ?? null,
-
-        email: vendor.email ?? null,
-        phone: vendor.phone ?? null,
-        alt_phone: vendor.alt_phone ?? null,
-        fax: vendor.fax ?? null,
-
-        addr1: vendor.addr1 ?? null,
-        addr2: vendor.addr2 ?? null,
-        city: vendor.city ?? null,
-        state: vendor.state ?? null,
-        postal_code: vendor.postal_code ?? null,
-        country: vendor.country ?? null,
-
-        terms_ref_name: vendor.terms_ref_name ?? null,
-        payment_terms: (vendor.metadata as Record<string, unknown> | null)?.payment_terms as string ?? null,
-        vendor_type_ref_name: vendor.vendor_type_ref_name ?? null,
-        currency_ref_name: vendor.currency_ref_name ?? null,
-
-        tax_identity: vendor.tax_identity ?? null,
-        is_vendor_eligible_for_1099: vendor.is_vendor_eligible_for_1099 ?? null,
-        credit_limit: vendor.credit_limit ?? null,
-
-        sync_status: vendor.sync_status ?? null,
-
-        updated_at: vendor.updated_at
-            ? new Date(vendor.updated_at).getTime()
-            : Date.now(),
-        created_at: vendor.created_at
-            ? new Date(vendor.created_at).getTime()
-            : Date.now(),
-    }
-}
-
 /**
  * Customer transformer
  */

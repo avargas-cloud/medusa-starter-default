@@ -21,6 +21,7 @@ import type { MedusaContainer } from "@medusajs/framework/types";
 
 import { QUICKBOOKS_CATALOG_MODULE } from "../../modules/quickbooks-catalog";
 import type QuickbooksCatalogModuleService from "../../modules/quickbooks-catalog/service";
+import { VENDORS_INDEX } from "../../lib/meilisearch/vendor-doc";
 
 interface VendorRow {
   id: string;
@@ -35,9 +36,6 @@ export default async function run({
   container: MedusaContainer;
 }): Promise<void> {
   const { MeiliSearch } = await import("meilisearch");
-  const { VENDORS_INDEX } = (await import(
-    /* @vite-ignore */ "../../lib/meili-backend.mts" as unknown as string
-  )) as { VENDORS_INDEX: string };
 
   const service = container.resolve(
     QUICKBOOKS_CATALOG_MODULE
