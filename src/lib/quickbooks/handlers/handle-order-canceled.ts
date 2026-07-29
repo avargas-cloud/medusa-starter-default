@@ -90,22 +90,24 @@ export async function handleOrderCanceled(
           // (SalesOrderQueryRq/Mod) fails permanently because that TxnID is an Estimate,
           // not a Sales Order in QB — route it through the existing estimate_deactivate
           // step instead (deactivateEstimateInQb), same as the SO-conversion path uses.
-          const voidStep =
-            inFlightRow.step === "invoice" ||
-            inFlightRow.step === "sales_receipt"
-              ? ("void_invoice" as const)
-              : inFlightRow.step === "estimate"
-                ? ("estimate_deactivate" as const)
-                : ("void_sales_order" as const);
-          await writePipelineRow({
-            orderId,
-            step: voidStep,
-            status: "waiting",
-            dependsOn: inFlightRow.id,
-            medusaRefNumber: soMedusaRef,
-          });
+          // NO se encadena con `depends_on`. Se probó y no funciona:
+          //
+          //  - la fila hija nace sin `qb_txn_id` (acá todavía no existe), y
+          //    `runWakeDependentsPass` sólo flipea el status — no copia el
+          //    TxnID del padre. La hija despierta sin TxnID y muere en
+          //    `resubmit-by-step` con "missing qb_txn_id — cannot void".
+          //  - un padre que termina `skipped` o `failed` no despierta a nadie
+          //    nunca, y `runOrphanedWaitingPass` sólo rescata `step='payment'`.
+          //
+          // Las dos únicas filas de void con `depends_on` que existieron en
+          // producción terminaron ambas en `fixed`: las dos necesitaron mano.
+          //
+          // La intención de void ya es durable — la orden está `canceled` — y
+          // `enqueueVoidIfAlreadyVoided` la materializa en el confirm del ADD,
+          // que es el primer momento en que se conoce el TxnID.
           logger.info(
-            `${LOG_PREFIX} ⏳ Chained ${voidStep} (waiting) on in-flight ${inFlightRow.step} row ${inFlightRow.id}`
+            `${LOG_PREFIX} ⏳ Void diferido — ${inFlightRow.step} row ${inFlightRow.id} sigue en vuelo (${inFlightRow.status}); ` +
+              `se materializará al confirmar el ADD (ver pipeline/void-intent.ts)`
           );
           chainedCount++;
         }

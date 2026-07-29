@@ -9,6 +9,7 @@ import {
   buildQbOrderDiscountLines,
   getEffectiveOrderDiscount,
 } from "../order-flow-core";
+import { enqueueVoidIfAlreadyVoided } from "../pipeline/void-intent";
 import { parseSalesRepInitials } from "../parse-sales-rep";
 import {
   getEstimateTxnId,
@@ -462,6 +463,20 @@ export async function handleOrderPlaced(
         logger.warn(
           `${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`
         );
+      }
+
+      // Camino INLINE de confirmación — ver pipeline/void-intent.ts. Cubre la
+      // orden cancelada mientras su Sales Order todavía se estaba creando en QB.
+      if (result.soTxnId) {
+        await enqueueVoidIfAlreadyVoided({
+          createStep: "sales_order",
+          referenceId: null,
+          orderId,
+          qbTxnId: result.soTxnId,
+          qbRefNumber: result.soRefNumber || null,
+          medusaRefNumber: result.soRefNumber || null,
+          logger,
+        });
       }
     } else {
       logger.warn(

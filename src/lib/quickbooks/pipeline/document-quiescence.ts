@@ -181,6 +181,100 @@ export async function findApplyPaymentBlockers(
     }));
 }
 
+// ── Quiescence para los VOIDS ────────────────────────────────────────────────
+//
+// Un void tiene la misma carrera que un apply — despacharlo mientras una
+// mutación del mismo documento sigue encolada la corre en carrera — pero NO
+// puede reusar el gate de arriba tal cual, por dos razones que sólo aparecen
+// acá:
+//
+//   1. El void está DENTRO de INVOICE_MUTATION_STEPS / CREDIT_MEMO_MUTATION_STEPS.
+//      Sin excluir su propia fila se auto-bloquearía y no despacharía nunca.
+//   2. Dos voids del mismo documento se bloquearían mutuamente. Por eso sólo
+//      cuentan como bloqueantes las operaciones creadas ANTES que la fila de
+//      void: el orden de creación es total y desempata siempre en la misma
+//      dirección, así que no hay ciclo posible.
+
+/** Los steps que pueden mutar cada tipo de documento voideable. */
+const VOID_BLOCKING_STEPS: Record<string, readonly string[]> = {
+  void_invoice: ["invoice", "invoice_update"],
+  void_sales_receipt: ["sales_receipt", "sales_receipt_update"],
+  void_credit_memo: ["credit_memo", "credit_memo_mod"],
+  void_sales_order: ["sales_order", "so_close", "so_reopen"],
+  void_estimate: ["estimate", "estimate_cancel", "estimate_deactivate"],
+  void_inventory_adjustment: ["inventory_adjustment"],
+  // `estimate_deactivate` es el void efectivo de un Estimate en el camino de
+  // order-canceled (QB no tiene void real de Estimate: se desactiva). Bloquea
+  // sobre el ADD del estimate, no sobre `void_estimate` — que si existiera sería
+  // la otra mitad del mismo par y se bloquearían mutuamente.
+  estimate_deactivate: ["estimate"],
+  estimate_cancel: ["estimate"],
+};
+
+export type VoidBlockerInput = {
+  /** El step de void que está por despachar. */
+  voidStep: string;
+  /** La fila de void, para que nunca se bloquee a sí misma. */
+  rowId: string;
+  /** Clave del documento: `reference_id`, o `order_id` cuando aquél es NULL. */
+  referenceId: string | null;
+  orderId: string | null;
+};
+
+/**
+ * Operaciones vivas sobre el documento que este void está por tocar.
+ * Array vacío = el documento está quieto y el void puede despachar.
+ */
+export async function findVoidBlockers(
+  pool: Queryable,
+  input: VoidBlockerInput
+): Promise<QuiescenceBlocker[]> {
+  const blockingSteps = VOID_BLOCKING_STEPS[input.voidStep];
+  if (!blockingSteps) return [];
+
+  const { rows } = await pool.query(
+    `SELECT p.id, p.step, p.status, p.reference_id, p.medusa_ref_number,
+            p.next_retry_at
+       FROM qb_order_pipeline p
+      WHERE p.step = ANY($1::text[])
+        AND (
+              ($2::text IS NOT NULL AND p.reference_id = $2::text)
+              OR ($2::text IS NULL AND $3::text IS NOT NULL
+                  AND p.reference_id IS NULL AND p.order_id = $3::text)
+            )
+        -- Nunca bloquearse a sí misma. p.id es uuid: comparar como text para
+        -- que el parámetro no tenga que inferirse uuid (un "$n::text" suelto de
+        -- un lado hace que Postgres rechace la sentencia entera con
+        -- "operator does not exist: uuid <> text").
+        AND p.id::text <> $4::text
+        -- Sólo lo creado ANTES que este void. Rompe el empate entre dos voids
+        -- del mismo documento, que si no se bloquearían mutuamente para siempre.
+        -- El id del subquery también va casteado: la columna es uuid y el
+        -- parámetro llega text, y un uuid = text sin castear rechaza la
+        -- sentencia entera (el mismo operator-does-not-exist de acá arriba).
+        -- Sin backticks en este comentario: cierran el template literal JS.
+        AND p.created_at < (
+              SELECT created_at FROM qb_order_pipeline WHERE id::text = $4::text
+            )`,
+    [blockingSteps, input.referenceId, input.orderId, input.rowId]
+  );
+
+  // El SQL ya excluye la propia fila y los steps que no mutan este documento;
+  // se re-chequea acá para que el invariante valga sin importar cómo se
+  // obtuvieron las filas.
+  const allowed = new Set(blockingSteps);
+  return rows
+    .filter((r) => r.id !== input.rowId)
+    .filter((r) => allowed.has(r.step))
+    .filter(isLiveOperation)
+    .map((r) => ({
+      id: r.id,
+      step: r.step,
+      status: r.status,
+      reference: r.medusa_ref_number,
+    }));
+}
+
 /** One-line, operator-readable summary of why an apply is waiting. */
 export function describeBlockers(blockers: QuiescenceBlocker[]): string {
   return blockers

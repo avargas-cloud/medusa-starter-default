@@ -3,6 +3,7 @@ import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 import { FINANCE_MODULE } from "../../../modules/finance";
 import { bridgeFetch, pollRawOperationResult } from "../client/core";
+import { findInFlightQbRowsByRef } from "../pipeline/in-flight";
 import { writePipelineRow } from "../qb-pipeline";
 
 const LOG_PREFIX = "[QB-POS-PAYMENT-VOIDED]";
@@ -75,16 +76,64 @@ export async function handlePosPaymentVoided({
   const qbTxnId = payment.metadata?.qb_txn_id as string | undefined;
 
   if (!qbTxnId) {
-    // Payment was never synced to QB (e.g. orphaned Dejavoo payment from CompleteOrderModal
-    // that was superseded by a Sales Receipt). Mark voided locally and close the
-    // pipeline row so it doesn't stay stuck in "waiting" forever.
-    logger.warn(
-      `${LOG_PREFIX} Payment ${payment_id} has no qb_txn_id — marking voided locally only`
-    );
+    // Ojo: la ausencia de TxnID tiene DOS causas y sólo una es benigna.
+    //
+    //   (a) el pago nunca fue a QB (ej. un Dejavoo huérfano del
+    //       CompleteOrderModal superado por un Sales Receipt) → cerrar la fila
+    //       es correcto: no hay nada en QuickBooks.
+    //   (b) su ReceivePaymentAdd está EN VUELO → el TxnID no existe TODAVÍA,
+    //       pero el documento sí va a existir. Marcar la fila 'confirmed' acá
+    //       es escribir una mentira: nada se voideó, y el ReceivePayment queda
+    //       vivo en QB sin que nadie lo borre nunca.
+    //
+    // El void de pago es un TxnDel directo al bridge (QB rechaza TxnVoid sobre
+    // ReceivePayment con 3110), no una fila de pipeline, así que no hay step de
+    // void que materializar en el confirm. Hasta que exista, el caso (b) queda
+    // VISIBLE como fila fallada en vez de silenciosamente "confirmado".
+    let paymentInFlight: Array<{ id: string; step: string; status: string }> =
+      [];
+    try {
+      paymentInFlight = await findInFlightQbRowsByRef(
+        payment_id,
+        "customer_payment",
+        ["payment"]
+      );
+    } catch (e: any) {
+      logger.warn(
+        `${LOG_PREFIX} ⚠️ Could not check in-flight payment rows: ${e.message}`
+      );
+    }
+
     await financeService.updateCustomerPayments({
       id: payment_id,
       metadata: { ...(payment.metadata || {}), qb_sync_status: "voided" },
     });
+
+    if (paymentInFlight.length > 0) {
+      const detail = paymentInFlight
+        .map((r) => `${r.step}:${r.status}`)
+        .join(", ");
+      logger.error(
+        `${LOG_PREFIX} ❌ Payment ${payment_id} fue voideado mientras su create seguía en vuelo (${detail}) — ` +
+          `el ReceivePayment puede existir en QuickBooks y necesita un TxnDel manual`
+      );
+      if (orderId) {
+        await writePipelineRow({
+          orderId,
+          referenceId: payment_id,
+          step: "payment",
+          status: "failed",
+          error:
+            `Voideado mientras su ReceivePaymentAdd estaba en vuelo (${detail}). ` +
+            `El pago puede haberse creado en QuickBooks después del void — verificar y borrarlo a mano (TxnDel).`,
+        }).catch(() => {});
+      }
+      return;
+    }
+
+    logger.warn(
+      `${LOG_PREFIX} Payment ${payment_id} has no qb_txn_id — marking voided locally only`
+    );
     if (orderId) {
       await writePipelineRow({
         orderId,

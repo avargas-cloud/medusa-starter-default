@@ -155,25 +155,26 @@ export async function POST(
     }
 
     // 3. Void in QuickBooks (if CM was synced)
-    // If the credit_memo pipeline row is still in-flight (submitted to bridge but
-    // qb_txn_id not written to pos_credit_memo yet), chain a waiting void that the
-    // consolidator will activate once the CM creation is confirmed.
+    //
+    // Si el ADD del credit memo sigue en vuelo todavía no hay TxnID que voidear.
+    // NO se encadena con `depends_on`: la fila hija nacería sin `qb_txn_id` y
+    // `runWakeDependentsPass` no lo copia del padre, así que despertaría para
+    // morir en `resubmit-by-step` con "missing qb_txn_id — cannot void". Además
+    // un padre `skipped`/`failed` no despierta a nadie nunca.
+    //
+    // La intención ya es durable (`pos_credit_memo.status='voided'`) y
+    // `enqueueVoidIfAlreadyVoided` la materializa en el confirm del ADD, que es
+    // el primer momento en que se conoce el TxnID. Acá sólo se deja rastro.
     if (wasCompleted && !creditMemo.qb_txn_id) {
       try {
         const inFlight = await findInFlightQbRowsByRef(id, "credit_memo", [
           "credit_memo",
         ]);
-        for (const inFlightRow of inFlight) {
-          await writePipelineRow({
-            referenceId: id,
-            referenceType: "credit_memo",
-            step: "void_credit_memo",
-            status: "waiting",
-            dependsOn: inFlightRow.id,
-            medusaRefNumber: creditMemo.credit_memo_number ?? null,
-          });
+        if (inFlight.length > 0) {
           logger.info(
-            `[void CM] ⏳ Chained void_credit_memo (waiting) on in-flight row ${inFlightRow.id}`
+            `[void CM] ⏳ Void diferido — el create de ${creditMemo.credit_memo_number ?? id} sigue en vuelo ` +
+              `(${inFlight.map((r: any) => `${r.step}:${r.status}`).join(", ")}); ` +
+              `se materializará al confirmar el ADD (ver pipeline/void-intent.ts)`
           );
         }
       } catch (chainErr: any) {

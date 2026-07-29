@@ -45,6 +45,15 @@ import { handlePaymentCustomerTransfer } from "../handlers/handle-payment-custom
 import { handlePosPaymentApplied } from "../handlers/handle-pos-payment-applied";
 import { handleSalesReceiptCreated } from "../handlers/handle-sales-receipt-created";
 import { failOrRetryPipelineRow, failPipelineRow } from "../qb-pipeline";
+import {
+  describeBlockers,
+  findVoidBlockers,
+  hasWaitedTooLong,
+  QUIESCENCE_MAX_WAIT_MS,
+  QUIESCENCE_RECHECK_SECONDS,
+  type QuiescenceBlocker,
+} from "../pipeline/document-quiescence";
+import { deferPipelineRow } from "../pipeline/row-mutations";
 import { handleDraftOrderCreated } from "../../../subscribers/qb-draft-order-subscriber";
 import {
   processCustomerPipelineRow,
@@ -70,6 +79,67 @@ export type ResubmitRow = {
   retry_count?: number | null;
   payload?: Record<string, unknown> | null;
 };
+
+/**
+ * Gate de quiescencia para la familia VOID.
+ *
+ * Un void despachado mientras una mutación del mismo documento sigue encolada
+ * la corre en carrera — el mismo patrón que mató a CM-1105 → Invoice 21215 con
+ * QB 3210. Corre en CADA intento, justo antes del bridge: una respuesta
+ * calculada al encolar ya estaría vieja.
+ *
+ * Devuelve `true` si el caller debe ABORTAR el dispatch. Nunca despacha a
+ * ciegas al vencer el tope: falla visible, porque forzar un void contra un
+ * documento que está cambiando cambia un bloqueo visible por un riesgo contable.
+ */
+async function voidBlockedByLiveMutation(
+  row: ResubmitRow,
+  logger: any
+): Promise<boolean> {
+  let blockers: QuiescenceBlocker[];
+  try {
+    blockers = await findVoidBlockers(getDbPool(), {
+      voidStep: row.step,
+      rowId: row.id,
+      referenceId: row.reference_id,
+      orderId: row.order_id,
+    });
+  } catch (qErr: any) {
+    // El gate jamás puede ser el que rompe el pipeline: si falla, se loguea y
+    // se despacha igual (el comportamiento previo a este gate).
+    logger.warn(
+      `${LOG_PREFIX} Quiescence check de ${row.step} falló (${qErr?.message}) — despachando sin él`
+    );
+    return false;
+  }
+
+  if (blockers.length === 0) return false;
+
+  const detail = describeBlockers(blockers);
+  const { deferredSince } = await deferPipelineRow(
+    row.id,
+    `⏸️ Esperando que asienten las ediciones en vuelo de QuickBooks: ${detail}`,
+    QUIESCENCE_RECHECK_SECONDS
+  );
+
+  if (hasWaitedTooLong(deferredSince)) {
+    const minutes = Math.round(QUIESCENCE_MAX_WAIT_MS / 60000);
+    await failPipelineRow(
+      row.id,
+      `${row.step} esperó ${minutes}min por ediciones en vuelo de QB: ${detail}. ` +
+        `NO se despachó — voidear un documento mientras cambia produce 3200/3210. ` +
+        `Resolver esas operaciones y después Retry.`
+    );
+    logger.error(
+      `${LOG_PREFIX} ⛔ ${row.step} ${row.id} se rindió tras ${minutes}min esperando a: ${detail}`
+    );
+  } else {
+    logger.info(
+      `${LOG_PREFIX} ⏸️ ${row.step} ${row.id} diferido — documento no quieto: ${detail}`
+    );
+  }
+  return true;
+}
 
 /**
  * Retry-aware failure for the VOID/DEL step family (void_check,
@@ -433,6 +503,7 @@ export async function resubmitByStep(
       }
 
       case "estimate_deactivate": {
+        if (await voidBlockedByLiveMutation(row, logger)) break;
         // Deactivate (IsActive=false) the QB Estimate that was converted into
         // this order's Sales Order. QBXML has no SO↔Estimate link, so the SO is
         // rebuilt from scratch and the original Estimate would otherwise linger
@@ -636,6 +707,7 @@ export async function resubmitByStep(
       }
 
       case "void_credit_memo": {
+        if (await voidBlockedByLiveMutation(row, logger)) break;
         if (!row.qb_txn_id) {
           await failPipelineRow(
             row.id,
@@ -680,6 +752,7 @@ export async function resubmitByStep(
 
       case "void_invoice":
       case "void_sales_receipt": {
+        if (await voidBlockedByLiveMutation(row, logger)) break;
         if (!row.qb_txn_id) {
           await failPipelineRow(
             row.id,
@@ -720,6 +793,7 @@ export async function resubmitByStep(
       }
 
       case "void_sales_order": {
+        if (await voidBlockedByLiveMutation(row, logger)) break;
         let soTxnId = row.qb_txn_id ?? null;
         if (!soTxnId && row.order_id) {
           const soPool = getDbPool();
@@ -1607,6 +1681,7 @@ export async function resubmitByStep(
       }
 
       case "void_inventory_adjustment": {
+        if (await voidBlockedByLiveMutation(row, logger)) break;
         if (!row.qb_txn_id) {
           await failPipelineRow(row.id, "void_inventory_adjustment: missing qb_txn_id");
           break;

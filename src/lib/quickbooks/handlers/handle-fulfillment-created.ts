@@ -9,6 +9,7 @@ import {
   buildQbOrderDiscountLines,
   getEffectiveOrderDiscount,
 } from "../order-flow-core";
+import { enqueueVoidIfAlreadyVoided } from "../pipeline/void-intent";
 import { parseSalesRepInitials } from "../parse-sales-rep";
 import { invoiceLineDiscountCents } from "../force-sync-doc-payload";
 import {
@@ -856,6 +857,23 @@ export async function handleFulfillmentCreated(
       logger.warn(
         `${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`
       );
+    }
+
+    // Este es el camino INLINE de confirmación: escribe la fila directamente
+    // como 'confirmed', así que el consolidator nunca la ve en 'submitted' y su
+    // guard de void-before-create no corre. Fue exactamente el hueco por el que
+    // se escapó la POS Invoice 21246 (voideada 95 s antes de que su ADD
+    // confirmara), que quedó viva en QB con $18.917,94 de balance.
+    if (result.txnId) {
+      await enqueueVoidIfAlreadyVoided({
+        createStep: "invoice",
+        referenceId: invoiceReferenceId,
+        orderId,
+        qbTxnId: result.txnId,
+        qbRefNumber: result.refNumber || null,
+        medusaRefNumber: invoiceMedusaRefNumber,
+        logger,
+      });
     }
 
     if (result.editSequence && result.txnId) {

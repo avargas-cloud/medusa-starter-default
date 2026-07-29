@@ -125,12 +125,15 @@ export async function findInFlightQbRowsByRef(
   referenceId: string,
   referenceType: string,
   steps: PipelineStep[]
-): Promise<Array<{ id: string; step: PipelineStep }>> {
+): Promise<Array<{ id: string; step: PipelineStep; status: PipelineStatus }>> {
   if (steps.length === 0) return [];
   const pool = getDbPool();
   const placeholders = steps.map((_, i) => `$${i + 3}`).join(", ");
+  // `status` viaja además del id porque los callers lo reportan al operador:
+  // "sigue en vuelo" es accionable sólo si dice EN QUÉ estado. Igual que el
+  // findInFlightQbRows hermano, que ya lo devolvía.
   const { rows } = await pool.query(
-    `SELECT id, step FROM qb_order_pipeline
+    `SELECT id, step, status FROM qb_order_pipeline
          WHERE reference_id = $1
            AND reference_type = $2
            AND step IN (${placeholders})
@@ -141,6 +144,7 @@ export async function findInFlightQbRowsByRef(
   return rows.map((r) => ({
     id: r.id as string,
     step: r.step as PipelineStep,
+    status: r.status as PipelineStatus,
   }));
 }
 

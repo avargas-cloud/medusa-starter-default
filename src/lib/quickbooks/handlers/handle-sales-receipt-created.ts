@@ -9,6 +9,7 @@ import {
   buildQbOrderDiscountLines,
   getEffectiveOrderDiscount,
 } from "../order-flow-core";
+import { enqueueVoidIfAlreadyVoided } from "../pipeline/void-intent";
 import { parseSalesRepInitials } from "../parse-sales-rep";
 import { resolveQbPaymentMethodForPayment } from "../payment-method-sanitizer";
 import {
@@ -626,6 +627,21 @@ export async function handleSalesReceiptCreated(
       logger.warn(
         `${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`
       );
+    }
+
+    // Camino INLINE de confirmación — ver pipeline/void-intent.ts. Si el SR fue
+    // voideado mientras su ADD estaba en vuelo, este es el primer momento en que
+    // se conoce el TxnID y por lo tanto el único punto de reintento correcto.
+    if (result.txnId) {
+      await enqueueVoidIfAlreadyVoided({
+        createStep: "sales_receipt",
+        referenceId: data.invoice_id || null,
+        orderId,
+        qbTxnId: result.txnId,
+        qbRefNumber: result.refNumber || null,
+        medusaRefNumber: result.refNumber || null,
+        logger,
+      });
     }
 
     if (result.editSequence && result.txnId) {

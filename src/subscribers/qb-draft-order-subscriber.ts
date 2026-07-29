@@ -29,6 +29,7 @@ import {
   getEffectiveOrderDiscount,
   processEstimateInQb,
 } from "../lib/quickbooks/order-flow-core";
+import { enqueueVoidIfAlreadyVoided } from "../lib/quickbooks/pipeline/void-intent";
 import { parseSalesRepInitials } from "../lib/quickbooks/parse-sales-rep";
 import { buildEstimatePatch } from "../lib/quickbooks/qb-metadata-types";
 import {
@@ -415,6 +416,20 @@ export async function handleDraftOrderCreated(
       logger.warn(
         `${LOG_PREFIX} ⚠️ Could not write pipeline row: ${pErr.message}`
       );
+    }
+
+    // Camino INLINE de confirmación — ver pipeline/void-intent.ts. Cubre el
+    // draft order cancelado mientras su Estimate todavía se creaba en QB.
+    if (result.txnId) {
+      await enqueueVoidIfAlreadyVoided({
+        createStep: "estimate",
+        referenceId: null,
+        orderId: draftOrderId,
+        qbTxnId: result.txnId,
+        qbRefNumber: result.refNumber || null,
+        medusaRefNumber: result.refNumber || null,
+        logger,
+      });
     }
 
     try {

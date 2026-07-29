@@ -1,5 +1,6 @@
 import { getDbPool } from "../../../api/utils/db-pool";
 import { FINANCE_MODULE } from "../../../modules/finance";
+import { findInFlightQbRows } from "../pipeline/in-flight";
 import { writePipelineRow } from "../qb-pipeline";
 import { QbSyncLogger } from "../qb-sync-logger";
 
@@ -38,6 +39,53 @@ export async function handleInvoiceVoided(
   }
 
   if (!targetInv?.txn_id) {
+    // Dos situaciones muy distintas comparten esta rama, y confundirlas es lo
+    // que costó la POS Invoice 21246:
+    //
+    //   (a) el documento nunca fue a QB          → no hay nada que voidear
+    //   (b) su ADD está EN VUELO ahora mismo     → el TxnID todavía no existe,
+    //       pero el documento SÍ va a existir en QB dentro de unos segundos
+    //
+    // El evento `pos.invoice.voided` dispara una sola vez, así que en el caso
+    // (b) un return mudo deja la factura viva y abierta en QB para siempre.
+    // La intención de void NO se pierde: `pos_invoice.status='voided'` ya está
+    // persistido, y `enqueueVoidIfAlreadyVoided` la materializa en el confirm
+    // del ADD, que es el primer momento en que se conoce el TxnID.
+    //
+    // Acá sólo hace falta dejar rastro: sin esto el evento parece exitoso y la
+    // divergencia es invisible hasta que alguien mira QuickBooks.
+    let inFlight: Array<{ id: string; step: string; status: string }> = [];
+    try {
+      inFlight = await findInFlightQbRows(order_id, [
+        "invoice",
+        "sales_receipt",
+      ]);
+    } catch (e: any) {
+      logger.warn(
+        `${LOG_PREFIX} ⚠️ Could not check in-flight rows for ${order_id}: ${e.message}`
+      );
+    }
+
+    if (inFlight.length > 0) {
+      logger.info(
+        `${LOG_PREFIX} ⏳ Void diferido — el create de ${invoice_id ?? order_id} sigue en vuelo ` +
+          `(${inFlight.map((r) => `${r.step}:${r.status}`).join(", ")}); ` +
+          `se materializará al confirmar el ADD (ver pipeline/void-intent.ts)`
+      );
+      try {
+        await QbSyncLogger.start({
+          operation: "void_invoice",
+          orderId: order_id,
+          orderDisplayId: order.display_id,
+          eventType: "pos.invoice.voided",
+          message: `Void diferido: el documento todavía se está creando en QB — se encolará al confirmar`,
+        });
+      } catch {
+        /* el log no puede bloquear el flujo */
+      }
+      return;
+    }
+
     logger.info(
       `${LOG_PREFIX} Order ${order_id} has no matching QB invoice to void.`
     );
