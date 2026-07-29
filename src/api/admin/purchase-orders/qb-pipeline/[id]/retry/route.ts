@@ -39,6 +39,13 @@ async function rearmDelegatedOperation(
   requireExistenceCheck = false
 ): Promise<void> {
   if (!orderPipelineId) return;
+  // The ?::boolean / ?::text casts are load-bearing: jsonb_build_object is
+  // VARIADIC "any", so Postgres cannot infer the type of a bare parameter and
+  // rejects the statement at PREPARE time ("could not determine data type of
+  // parameter"). It failed for every caller, not just some payloads — and
+  // because the caller already committed its own row update, the retry left
+  // the pipeline row 'waiting' with its delegated operation still 'failed',
+  // so nothing ever dispatched (2026-07-28, the four vendor bills).
   await knex.raw(
     `UPDATE qb_order_pipeline operation
         SET status = CASE
@@ -51,9 +58,9 @@ async function rearmDelegatedOperation(
               THEN 'pending'
               ELSE 'waiting'
             END,
-            payload = CASE WHEN ?
+            payload = CASE WHEN ?::boolean
               THEN COALESCE(operation.payload, '{}'::jsonb) ||
-                   jsonb_build_object(?, true)
+                   jsonb_build_object(?::text, true)
               ELSE operation.payload
             END,
             bridge_op_id = NULL, submitted_at = NULL,
