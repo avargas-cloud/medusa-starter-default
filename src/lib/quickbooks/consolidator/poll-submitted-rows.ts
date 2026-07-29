@@ -553,15 +553,26 @@ export async function pollSubmittedRows(
 
           if (row.order_id) {
             try {
+              // Clears a stale 'voided' as well as a stale 'error'. An order
+              // whose child document just synced is demonstrably alive, so a
+              // leftover terminal flag is wrong by observation. This is what
+              // self-heals the S11179 case: invoice voided, order stamped
+              // terminal, then correctly re-invoiced — the re-invoice now
+              // clears the flag instead of leaving the order invisible.
+              //
+              // Guarded on status: a canceled order can legitimately carry
+              // 'voided', and nothing should resurrect it.
               await pool.query(
                 `UPDATE "order"
                                  SET metadata = metadata || '{"qb_sync_status":"child_synced"}'::jsonb
-                                 WHERE id = $1 AND metadata->>'qb_sync_status' = 'error'`,
+                                 WHERE id = $1
+                                   AND metadata->>'qb_sync_status' IN ('error', 'voided')
+                                   AND status <> 'canceled'`,
                 [row.order_id]
               );
             } catch (ordErr: any) {
               logger.warn(
-                `${LOG_PREFIX} ⚠️ Could not clear stale qb_sync_status='error' on order ${row.order_id}: ${ordErr.message}`
+                `${LOG_PREFIX} ⚠️ Could not clear stale qb_sync_status on order ${row.order_id}: ${ordErr.message}`
               );
             }
           }
@@ -592,20 +603,25 @@ export async function pollSubmittedRows(
               `${LOG_PREFIX} ⚠️ Could not update pos_invoice voided metadata: ${posInvErr.message}`
             );
           }
-          if (row.order_id) {
-            try {
-              await pool.query(
-                `UPDATE "order"
-                                 SET metadata = metadata || '{"qb_sync_status":"voided"}'::jsonb
-                                 WHERE id = $1`,
-                [row.order_id]
-              );
-            } catch (ordErr: any) {
-              logger.warn(
-                `${LOG_PREFIX} ⚠️ Could not stamp order qb_sync_status='voided' on ${row.order_id}: ${ordErr.message}`
-              );
-            }
-          }
+          // The ORDER is deliberately NOT stamped 'voided' here.
+          //
+          // void_invoice and void_sales_receipt are voids of a CHILD document.
+          // Voiding an invoice returns its order to pre-invoiced — it does not
+          // annul the order — and order.metadata.qb_sync_status='voided' is a
+          // TERMINAL order state, written by handle-order-canceled and the two
+          // close/cancel flows in api/admin/pos/sync. Nothing ever cleared it,
+          // so a child void made the order terminal forever.
+          //
+          // S11179 is what that cost: invoiced in full by mistake, the invoice
+          // voided, then correctly re-invoiced in part 2 hours later — and the
+          // order kept the flag. The orders list drops is_voided from every tab
+          // unless "Show Cancelled" is on, so an open order holding $16,776.23
+          // of live deposit and $2,141.71 invoiced was invisible. 29 orders
+          // carry the flag; 27 are genuinely canceled or closed, and that one
+          // was the only live casualty.
+          //
+          // An order-level void has its own steps (void_sales_order,
+          // void_estimate) and its own handlers. Those stay untouched.
         }
 
         // Revert-refund: the $0 apply ReceivePayment was deleted in QB — the
