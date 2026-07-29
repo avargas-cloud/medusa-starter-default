@@ -203,6 +203,15 @@ const VOID_BLOCKING_STEPS: Record<string, readonly string[]> = {
   void_sales_order: ["sales_order", "so_close", "so_reopen"],
   void_estimate: ["estimate", "estimate_cancel", "estimate_deactivate"],
   void_inventory_adjustment: ["inventory_adjustment"],
+  // El borrado de un ReceivePayment espera a que el pago quede quieto: borrarlo
+  // mientras un cambio de método o de fecha viaja hacia el mismo documento
+  // deja la mutación apuntando a un TxnID que ya no existe.
+  void_payment: [
+    "payment",
+    "payment_method_change",
+    "payment_txndate_change",
+    "transfer_payment",
+  ],
   // `estimate_deactivate` es el void efectivo de un Estimate en el camino de
   // order-canceled (QB no tiene void real de Estimate: se desactiva). Bloquea
   // sobre el ADD del estimate, no sobre `void_estimate` — que si existiera sería

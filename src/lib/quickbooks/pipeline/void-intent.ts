@@ -51,6 +51,7 @@ export const MATERIALIZABLE_VOID_STEPS = [
   "void_sales_order",
   "void_estimate",
   "void_inventory_adjustment",
+  "void_payment",
 ] as const;
 
 export type MaterializableVoidStep =
@@ -162,6 +163,35 @@ const VOID_INTENT_SPECS: Record<string, VoidIntentSpec> = {
         voidStep: "void_estimate" as const,
         referenceId: null,
         referenceType: null,
+        orderId,
+      };
+    },
+  },
+
+  payment: {
+    resolve: async ({ referenceId, orderId }) => {
+      if (!referenceId) return null;
+      const row = await queryOne(
+        `SELECT metadata->>'qb_sync_status'        AS sync_status,
+                metadata->>'qb_void_operation_id'  AS void_op,
+                metadata->>'qb_source'             AS source
+           FROM customer_payment WHERE id = $1`,
+        [referenceId]
+      );
+      if (!row) return null;
+      // El pago está voideado en Medusa PERO nunca se emitió el borrado en QB.
+      // `qb_void_operation_id` es la prueba de que el TxnDel sí salió: el camino
+      // directo lo estampa al confirmar. Sin esa key, el pago quedó voideado
+      // acá y vivo en QuickBooks — que es exactamente la carrera.
+      if (row.sync_status !== "voided") return null;
+      if (row.void_op) return null;
+      // Un pago embebido en un Sales Receipt no es un ReceivePayment propio: se
+      // quita voideando el SR, nunca borrando un documento que no existe.
+      if (row.source === "sales_receipt") return null;
+      return {
+        voidStep: "void_payment" as const,
+        referenceId,
+        referenceType: "customer_payment",
         orderId,
       };
     },

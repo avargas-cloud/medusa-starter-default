@@ -27,6 +27,7 @@ const INLINE_CONFIRM_PATHS = [
   "lib/quickbooks/handlers/handle-fulfillment-created.ts",
   "lib/quickbooks/handlers/handle-sales-receipt-created.ts",
   "lib/quickbooks/handlers/handle-order-placed.ts",
+  "lib/quickbooks/handlers/handle-pos-payment-created.ts",
   "subscribers/qb-draft-order-subscriber.ts",
 ];
 
@@ -62,9 +63,16 @@ for (const rel of [...INLINE_CONFIRM_PATHS, CONSOLIDATOR_CONFIRM]) {
 // de arriba, o es cobertura faltante o hay que agregarlo a la lista a propósito.
 const TERNARY = /\?\s*"submitted"\s*:\s*"confirmed"/;
 const KNOWN = new Set([...INLINE_CONFIRM_PATHS]);
-/** Documentan pagos, que no tienen step de void materializable (ver plan v1). */
+/**
+ * `handle-payment-captured` es la captura web a nivel ORDEN: su fila de
+ * pipeline no lleva `reference_id` porque no hay un `customer_payment` que
+ * referenciar, así que no hay clave sobre la que materializar un void. Es un
+ * límite estructural, no cobertura faltante.
+ *
+ * (`handle-pos-payment-created` SÍ llama al hook desde el delta v2 y por eso
+ * salió de esta lista.)
+ */
 const PAYMENT_PATHS = new Set([
-  "lib/quickbooks/handlers/handle-pos-payment-created.ts",
   "lib/quickbooks/handlers/handle-payment-captured.ts",
 ]);
 
@@ -127,11 +135,37 @@ const voidCases = [...resubmit.matchAll(/case "(void_[a-z_]+)":/g)].map(
  */
 const GATE_EXEMPT = new Set(["void_check"]);
 
+/**
+ * Cuerpo de un `case` del switch: desde su etiqueta hasta la siguiente.
+ *
+ * Se scanea hasta el próximo `case "` en vez de usar una ventana de N
+ * caracteres. Una ventana fija ya dio un falso positivo — un comentario de
+ * ~470 chars empujó la llamada al gate fuera de los 400 que se miraban — y un
+ * verificador que grita sin motivo se termina ignorando, que es exactamente
+ * como pierde su valor.
+ *
+ * Los case apilados (`case "void_invoice": case "void_sales_receipt": {`)
+ * dejan un cuerpo vacío para el primero: en ese caso se sigue hasta el
+ * siguiente, que es donde vive el código compartido.
+ */
+function caseBody(src: string, step: string): string {
+  let from = src.indexOf(`case "${step}":`);
+  if (from < 0) return "";
+  for (let i = 0; i < 4; i++) {
+    const rest = src.slice(from + 1);
+    const nextRel = rest.indexOf('case "');
+    const body = nextRel < 0 ? rest : rest.slice(0, nextRel);
+    // Cuerpo real (no un case apilado sobre otro).
+    if (body.trim().replace(/^\{?\s*/, "").length > 40) return body;
+    if (nextRel < 0) return body;
+    from = from + 1 + nextRel;
+  }
+  return src.slice(from, from + 2000);
+}
+
 for (const step of [...new Set(voidCases)]) {
   if (GATE_EXEMPT.has(step)) continue;
-  // El gate se llama en la primera línea del case; se busca dentro del bloque.
-  const caseIdx = resubmit.indexOf(`case "${step}":`);
-  const window = resubmit.slice(caseIdx, caseIdx + 400);
+  const window = caseBody(resubmit, step);
   if (!window.includes(GATE)) {
     failures.push(
       `case "${step}" de resubmit-by-step no llama a ${GATE}() — ` +
@@ -140,6 +174,24 @@ for (const step of [...new Set(voidCases)]) {
   } else {
     notes.push(`✓ case "${step}" pasa por el gate`);
   }
+}
+
+// ── 4 · El poller de PO re-arma su fila cuando el PO ya estaba voideado ─────
+// No usa el ternario submitted/confirmed ni `writePipelineRow` — vive en otra
+// tabla con un unique index de UNA fila por PO, así que su guard es un
+// UPDATE in-place y ninguna de las heurísticas de arriba lo ve. Se chequea por
+// nombre.
+const poPoller = read("jobs/qb-purchase-order-poller.ts");
+if (
+  !/status\s*=\s*'voided'/.test(poPoller) ||
+  !/is_void:\s*true/.test(poPoller)
+) {
+  failures.push(
+    "jobs/qb-purchase-order-poller.ts perdió el guard de void-before-create — " +
+      "un PO voideado mientras su create viajaba quedaría abierto en QuickBooks"
+  );
+} else {
+  notes.push("✓ el poller de PO re-arma la fila si el PO ya estaba voideado");
 }
 
 // ── Reporte ──────────────────────────────────────────────────────────────────

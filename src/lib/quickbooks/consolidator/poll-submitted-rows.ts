@@ -699,6 +699,36 @@ export async function pollSubmittedRows(
           }
         }
 
+        // void_payment confirmado → el ReceivePayment ya no existe en QB.
+        // Se estampa el resultado en el pago para que la UI y cualquier lector
+        // posterior sepan que el borrado SÍ salió — sin esta marca, el
+        // reconciliador y el propio void-intent lo verían como pendiente para
+        // siempre y lo re-encolarían en cada confirm.
+        if (row.step === "void_payment" && row.reference_id) {
+          try {
+            await pool.query(
+              `UPDATE customer_payment
+                  SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+                      qb = COALESCE(qb, '{}'::jsonb) || '{"status":"voided"}'::jsonb
+                WHERE id = $1`,
+              [
+                row.reference_id,
+                JSON.stringify({
+                  qb_sync_status: "voided",
+                  qb_void_operation_id: row.bridge_op_id,
+                }),
+              ]
+            );
+            logger.info(
+              `${LOG_PREFIX} ✅ void_payment confirmado → customer_payment ${row.reference_id} borrado en QB (op ${row.bridge_op_id})`
+            );
+          } catch (vpErr: any) {
+            logger.warn(
+              `${LOG_PREFIX} ⚠️ Could not stamp void_payment result on ${row.reference_id}: ${vpErr.message}`
+            );
+          }
+        }
+
         // Drop any healed line order once a MOD lands. `qbLineOrder` is a
         // snapshot of how QB held the lines BEFORE this MOD; the MOD itself may
         // have appended, removed or re-created lines (subtotal/discount are

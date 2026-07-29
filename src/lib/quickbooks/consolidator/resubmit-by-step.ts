@@ -1680,6 +1680,47 @@ export async function resubmitByStep(
         break;
       }
 
+      case "void_payment": {
+        // TxnDel de un ReceivePayment que se creó DESPUÉS de que el usuario ya
+        // había voideado el pago (su ADD estaba en vuelo al momento del void).
+        // Antes esto no existía: el handler escribía la fila como 'confirmed'
+        // sin borrar nada y el pago quedaba vivo en QuickBooks para siempre.
+        //
+        // Un TxnDel es más seguro de reintentar que un ADD — borrar dos veces
+        // devuelve error, nunca duplica — así que va por failVoidFamilyRow
+        // (transitorios reintentan con backoff).
+        if (await voidBlockedByLiveMutation(row, logger)) break;
+        if (!row.qb_txn_id) {
+          await failPipelineRow(
+            row.id,
+            "void_payment: missing qb_txn_id — cannot delete the ReceivePayment"
+          );
+          break;
+        }
+        const vpResult = await voidPaymentInQb(row.qb_txn_id);
+        if (vpResult.success && vpResult.data?.operationId) {
+          const vpPool = getDbPool();
+          await vpPool.query(
+            `UPDATE qb_order_pipeline
+                  SET status = 'submitted',
+                      bridge_op_id = $2,
+                      submitted_at = NOW(),
+                      updated_at = NOW()
+                WHERE id = $1`,
+            [row.id, vpResult.data.operationId]
+          );
+          logger.info(
+            `${LOG_PREFIX} ✅ void_payment ${row.id} submitted op=${vpResult.data.operationId}`
+          );
+        } else {
+          await failVoidFamilyRow(
+            row,
+            vpResult.error ?? "voidPaymentInQb failed"
+          );
+        }
+        break;
+      }
+
       case "void_inventory_adjustment": {
         if (await voidBlockedByLiveMutation(row, logger)) break;
         if (!row.qb_txn_id) {

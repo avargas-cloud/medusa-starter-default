@@ -23,6 +23,10 @@ export type PipelineStep =
   | "credit_memo_mod"
   | "void_credit_memo"
   | "void_check"
+  // Borrado (TxnDel) de un ReceivePayment cuyo ADD seguía en vuelo cuando el
+  // usuario voideó el pago. QuickBooks rechaza TxnVoid sobre ReceivePayment con
+  // error 3110, así que quitarlo es borrarlo. Ver pipeline/void-intent.ts.
+  | "void_payment"
   | "payment_method_change"
   | "payment_txndate_change"
   | "transfer_customer"

@@ -110,24 +110,22 @@ export async function handlePosPaymentVoided({
     });
 
     if (paymentInFlight.length > 0) {
+      // El ReceivePaymentAdd sigue en vuelo: el TxnDel todavía no tiene a qué
+      // apuntar. NO se toca la fila del create — marcarla 'confirmed' sería
+      // registrar un void que no ocurrió, y marcarla 'failed' rompería el
+      // create, que va a terminar bien.
+      //
+      // La intención de void ya quedó persistida arriba
+      // (`qb_sync_status='voided'` sin `qb_void_operation_id`), y
+      // `enqueueVoidIfAlreadyVoided` la materializa como `void_payment` cuando
+      // el ADD confirma — el primer instante con TxnID.
       const detail = paymentInFlight
         .map((r) => `${r.step}:${r.status}`)
         .join(", ");
-      logger.error(
-        `${LOG_PREFIX} ❌ Payment ${payment_id} fue voideado mientras su create seguía en vuelo (${detail}) — ` +
-          `el ReceivePayment puede existir en QuickBooks y necesita un TxnDel manual`
+      logger.info(
+        `${LOG_PREFIX} ⏳ Void diferido — el create del pago ${payment_id} sigue en vuelo (${detail}); ` +
+          `se emitirá el TxnDel al confirmar el ADD (ver pipeline/void-intent.ts)`
       );
-      if (orderId) {
-        await writePipelineRow({
-          orderId,
-          referenceId: payment_id,
-          step: "payment",
-          status: "failed",
-          error:
-            `Voideado mientras su ReceivePaymentAdd estaba en vuelo (${detail}). ` +
-            `El pago puede haberse creado en QuickBooks después del void — verificar y borrarlo a mano (TxnDel).`,
-        }).catch(() => {});
-      }
       return;
     }
 

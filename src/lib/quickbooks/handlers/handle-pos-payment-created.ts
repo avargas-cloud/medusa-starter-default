@@ -4,6 +4,7 @@ import { Modules, ContainerRegistrationKeys } from "@medusajs/utils";
 import { computeBatchDay, getBatchCutoff } from "../../finance/batch-day";
 import { FINANCE_MODULE } from "../../../modules/finance";
 import { createCreditMemoInQb } from "../client";
+import { enqueueVoidIfAlreadyVoided } from "../pipeline/void-intent";
 import {
   processPaymentCaptureInQb,
   ensureCustomerInQb,
@@ -470,6 +471,23 @@ export async function handlePosPaymentCreated({
         logger.warn(
           `${LOG_PREFIX} ⚠️ Could not confirm pipeline row: ${pErr.message}`
         );
+      }
+
+      // Camino INLINE de confirmación — ver pipeline/void-intent.ts. Si el pago
+      // se voideó mientras su ReceivePaymentAdd estaba en vuelo, este es el
+      // primer momento con TxnID y por lo tanto el único punto donde se puede
+      // emitir el TxnDel. Antes no se emitía nunca: el handler de void escribía
+      // la fila como 'confirmed' y el pago quedaba vivo en QuickBooks.
+      if (result.txnId) {
+        await enqueueVoidIfAlreadyVoided({
+          createStep: "payment",
+          referenceId: paymentId,
+          orderId: pipelineOrderId,
+          qbTxnId: result.txnId,
+          qbRefNumber: result.refNumber || null,
+          medusaRefNumber: result.refNumber || null,
+          logger,
+        });
       }
       // Cache EditSequence so future ReceivePaymentMod ops (e.g. payment method change)
       // don't need a separate GET round-trip to QB.

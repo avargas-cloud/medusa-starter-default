@@ -410,6 +410,148 @@ async function main() {
     JSON.stringify(dead)
   );
 
+  // ── 4 · Delta v2 · void_payment ──────────────────────────────────────────
+  console.log("\n4 · void_payment (delta v2)\n");
+
+  const { rows: payRows } = await q(
+    `SELECT id, metadata FROM customer_payment
+      WHERE deleted_at IS NULL
+        AND COALESCE(metadata->>'qb_source','') <> 'sales_receipt'
+      LIMIT 1`
+  );
+  if (payRows[0]) {
+    const payId = payRows[0].id as string;
+    const payMetaBefore = payRows[0].metadata ?? {};
+
+    // Voideado en Medusa, SIN operación de borrado en QB = la carrera.
+    await q(
+      `UPDATE customer_payment
+          SET metadata = COALESCE(metadata,'{}'::jsonb) || '{"qb_sync_status":"voided"}'::jsonb
+                       - 'qb_void_operation_id'
+        WHERE id = $1`,
+      [payId]
+    );
+    const payVoidId = await enqueueVoidIfAlreadyVoided({
+      createStep: "payment",
+      referenceId: payId,
+      orderId: null,
+      qbTxnId: "TXN-E2E-PAY",
+      medusaRefNumber: `${TAG}-PAY`,
+      logger: silent,
+    });
+    const payVoid = (
+      await q(`SELECT step, status, qb_txn_id FROM qb_order_pipeline WHERE id = $1`, [
+        payVoidId,
+      ])
+    ).rows[0];
+    check(
+      "pago voideado con su ADD en vuelo → se materializa void_payment (TxnDel)",
+      payVoid?.step === "void_payment" && payVoid?.qb_txn_id === "TXN-E2E-PAY",
+      JSON.stringify(payVoid)
+    );
+
+    // Con la operación de borrado ya estampada, NO se re-encola: el TxnDel
+    // ya salió y repetirlo pegaría contra un documento que no existe.
+    await q(
+      `DELETE FROM qb_order_pipeline WHERE reference_id = $1 AND step = 'void_payment'`,
+      [payId]
+    );
+    await q(
+      `UPDATE customer_payment
+          SET metadata = COALESCE(metadata,'{}'::jsonb) || '{"qb_void_operation_id":"op-ya-borrado"}'::jsonb
+        WHERE id = $1`,
+      [payId]
+    );
+    const alreadyDeleted = await enqueueVoidIfAlreadyVoided({
+      createStep: "payment",
+      referenceId: payId,
+      orderId: null,
+      qbTxnId: "TXN-E2E-PAY",
+      medusaRefNumber: `${TAG}-PAY2`,
+      logger: silent,
+    });
+    check(
+      "un pago cuyo TxnDel YA salió no se vuelve a borrar",
+      alreadyDeleted === null,
+      `devolvió ${alreadyDeleted}`
+    );
+
+    // Un pago embebido en un Sales Receipt no tiene ReceivePayment propio.
+    await q(
+      `UPDATE customer_payment
+          SET metadata = COALESCE(metadata,'{}'::jsonb)
+                       || '{"qb_sync_status":"voided","qb_source":"sales_receipt"}'::jsonb
+                       - 'qb_void_operation_id'
+        WHERE id = $1`,
+      [payId]
+    );
+    const srPay = await enqueueVoidIfAlreadyVoided({
+      createStep: "payment",
+      referenceId: payId,
+      orderId: null,
+      qbTxnId: "TXN-E2E-PAY",
+      medusaRefNumber: `${TAG}-PAY3`,
+      logger: silent,
+    });
+    check(
+      "un pago embebido en un Sales Receipt NO se borra (se voidea el SR)",
+      srPay === null,
+      `devolvió ${srPay}`
+    );
+
+    await q(`UPDATE customer_payment SET metadata = $2::jsonb WHERE id = $1`, [
+      payId,
+      JSON.stringify(payMetaBefore),
+    ]);
+  } else {
+    console.log("  ⏭️  sin customer_payment en el sandbox — caso omitido");
+  }
+
+  // ── 5 · Delta v2 · el gate del void_payment ──────────────────────────────
+  console.log("\n5 · Gate del void_payment\n");
+
+  const { rows: gateRows } = await q(
+    `SELECT id FROM customer_payment WHERE deleted_at IS NULL LIMIT 1`
+  );
+  if (gateRows[0]) {
+    const gPayId = gateRows[0].id as string;
+    await q(`DELETE FROM qb_order_pipeline WHERE medusa_ref_number LIKE $1`, [
+      `${TAG}%`,
+    ]);
+    const { rows: vp } = await q(
+      `INSERT INTO qb_order_pipeline
+         (id, order_id, reference_id, reference_type, step, status, qb_txn_id,
+          medusa_ref_number, created_at, updated_at)
+       VALUES (gen_random_uuid(), NULL, $1, 'customer_payment', 'void_payment',
+               'pending', 'TXN-G', $2, NOW(), NOW())
+       RETURNING id`,
+      [gPayId, `${TAG}-GATE`]
+    );
+    const vpRowId = vp[0].id as string;
+
+    await q(
+      `INSERT INTO qb_order_pipeline
+         (id, order_id, reference_id, reference_type, step, status,
+          medusa_ref_number, created_at, updated_at)
+       VALUES (gen_random_uuid(), NULL, $1, 'customer_payment',
+               'payment_method_change', 'submitted', $2,
+               NOW() - INTERVAL '1 hour', NOW())`,
+      [gPayId, `${TAG}-PMC`]
+    );
+    const payBlockers = await findVoidBlockers(pool, {
+      voidStep: "void_payment",
+      rowId: vpRowId,
+      referenceId: gPayId,
+      orderId: null,
+    });
+    check(
+      "un payment_method_change en vuelo bloquea el TxnDel del pago",
+      payBlockers.length === 1 &&
+        payBlockers[0].step === "payment_method_change",
+      JSON.stringify(payBlockers)
+    );
+  }
+
   // ── Limpieza ─────────────────────────────────────────────────────────────
   await cleanup();
   const leftovers = Number(

@@ -941,6 +941,65 @@ export default async function qbPurchaseOrderPoller(
         continue;
       }
 
+      // VOID-BEFORE-CREATE RACE GUARD (delta v2).
+      //
+      // El route de void (`admin/purchase-orders/[id]/void`) sólo encola el
+      // cierre en QB si el PO ya tiene `qb_purchase_order_list_id` — y ese ID
+      // recién existe DESPUÉS de que QuickBooks confirmó la creación. Voidear
+      // mientras el PO viaja (ventana medida: ~15 min) hacía que ese bloque se
+      // salteara mudo: el PO quedaba voided en Medusa y abierto en QB para
+      // siempre. Misma clase de bug que la POS Invoice 21246.
+      //
+      // El confirm es el primer instante en que se conoce el ListID, así que es
+      // el punto de reintento correcto. Acá NO se puede encolar una fila nueva
+      // como en el pipeline de ventas: `qb_purchase_order_pipeline` tiene un
+      // unique index sobre purchase_order_id (UNA fila por PO), así que se
+      // RE-ARMA la misma fila con el payload de void — el mismo patrón
+      // UPDATE-in-place que ya usa el route.
+      const [voidedPo] = await knex.raw(
+        `SELECT id, number, status, qb_edit_sequence,
+                vendor_qb_list_id_snapshot, vendor_name_snapshot
+           FROM purchase_order
+          WHERE id = ? AND status = 'voided' AND deleted_at IS NULL
+          LIMIT 1`,
+        [row.purchase_order_id]
+      ).then((r: { rows: any[] }) => r.rows);
+
+      if (voidedPo && !pl.is_void) {
+        const voidPayload = {
+          is_void: true,
+          txn_id: txnId,
+          // EditSequence fresco del propio confirm: le ahorra al dispatcher la
+          // vuelta de query-antes-de-void.
+          edit_sequence: editSequence ?? voidedPo.qb_edit_sequence ?? null,
+          po_id: voidedPo.id,
+          po_number: voidedPo.number,
+          vendor_qb_list_id: voidedPo.vendor_qb_list_id_snapshot,
+          vendor_name: voidedPo.vendor_name_snapshot,
+        };
+        await knex.raw(
+          `UPDATE qb_purchase_order_pipeline
+              SET status          = 'waiting',
+                  qb_list_id      = ?,
+                  qb_txn_number   = COALESCE(?, qb_txn_number),
+                  qb_operation_id = NULL,
+                  payload         = ?,
+                  retries         = 0,
+                  last_error      = NULL,
+                  next_retry_at   = NULL,
+                  synced_at       = NULL,
+                  updated_at      = NOW()
+            WHERE id = ?`,
+          [txnId, refNumber, JSON.stringify(voidPayload), row.id]
+        );
+        resolved++;
+        logger.warn(
+          `${TAG} ⚠️ PO ${voidedPo.number} fue voideado antes de que su create confirmara — ` +
+            `fila re-armada como void con TxnID=${txnId} (si no, quedaba abierto en QB)`
+        );
+        continue;
+      }
+
       // Normal add/mod completion — mark synced
       await knex.raw(
         `UPDATE qb_purchase_order_pipeline
